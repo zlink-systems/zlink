@@ -114,7 +114,6 @@ test('an observed remote request registers once without a registry Promise', asy
   runtime.router = {
     request(_target, parts) {
       replyParts = parts;
-      return new Promise(() => {});
     }
   };
   runtime.topology.admittedPeer = () => ({ descriptor: { nodeRoutingId: 'target' } });
@@ -192,3 +191,149 @@ test('registry and liveness report their next management deadline', () => {
   assert.deepEqual(liveness.tick(16_000).timedOutNodes, ['peer']);
   assert.equal(liveness.nextDeadlineMs(), Number.POSITIVE_INFINITY);
 });
+
+function runtimeWithBinding(t, submit) {
+  const zlink = require('@zlink-systems/zlink');
+  const {
+    ZLinkNodeRawBindingPort
+  } = require('../../packages/framework/dist/runtime/backend/node/node-raw-binding-port');
+  const context = zlink.createContext();
+  const createRouter = zlink.createRouterSocket;
+  t.mock.method(zlink, 'createRouterSocket', (ctx) => {
+    const socket = createRouter(ctx);
+    t.mock.method(socket, 'request', () => ({
+      message() { return this; },
+      timeout() { return this; },
+      submit
+    }));
+    return socket;
+  });
+  const runtime = createRuntime();
+  const host = new ZLinkNodeRawBindingPort(context).createHost();
+  runtime.router = host.createRouter();
+  runtime.topology.admittedPeer = () => ({ descriptor: { nodeRoutingId: 'target' } });
+  t.after(() => {
+    runtime.mailbox.close();
+    host.close();
+    context.close();
+  });
+  return runtime;
+}
+
+// Hot path §4.3 and Submit and completion §11 require the caller's new turn,
+// but do not require a second Promise reaction between binding ownership and
+// the operation owner's wire terminal.
+test('binding reply ownership and the remote terminal share one Promise continuation', async (t) => {
+  const { createHook } = require('node:async_hooks');
+  const zlink = require('@zlink-systems/zlink');
+  const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
+  let releaseReply;
+  let replyId;
+  let callbacks = 0;
+  const descendants = new Set();
+  const hook = createHook({
+    init(id, type, trigger) {
+      if (type !== 'PROMISE') return;
+      if (replyId === undefined) replyId = id;
+      else if (trigger === replyId || descendants.has(trigger)) descendants.add(id);
+    },
+    before(id) {
+      if (descendants.has(id)) callbacks++;
+    }
+  });
+  hook.enable();
+  const reply = new Promise((resolve) => { releaseReply = resolve; });
+  hook.disable();
+  const runtime = runtimeWithBinding(t, () => ({
+    result: zlink.SubmitResult.Ok,
+    admitted: Promise.resolve(),
+    reply
+  }));
+  let complete;
+  const done = new Promise((resolve) => { complete = resolve; });
+  let terminal;
+  try {
+    hook.enable();
+    runtime.requestToNode('target', payload(), 1000, undefined, {
+      operationCompleted(_id, value) {
+        terminal = value;
+        hook.disable();
+        complete();
+      },
+      operationFailed(_id, error) {
+        hook.disable();
+        complete();
+        assert.fail(error);
+      }
+    }, 1);
+    releaseReply([
+      zlink.Message.from(wire.encodeReplyHeader(1n)),
+      zlink.Message.from(payload())
+    ]);
+    await done;
+    assert.equal(terminal.terminalResult, 0);
+    assert.equal(callbacks, 1, 'reply ownership and terminal must not repeat the same result');
+  } finally {
+    hook.disable();
+  }
+});
+
+
+for (const failureAt of ['binding', 'protocol', 'submit', 'admission', 'receive', 'retain', 'terminal']) {
+  test(`remote terminal observes ${failureAt} failure without a rejected internal continuation`, async (t) => {
+    const zlink = require('@zlink-systems/zlink');
+    const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
+    const failure = new Error(`${failureAt} failed`);
+    let releaseReply;
+    let rejectReply;
+    const reply = new Promise((resolve, reject) => { releaseReply = resolve; rejectReply = reject; });
+    const runtime = runtimeWithBinding(t, () => {
+      if (failureAt === 'submit') throw failure;
+      return { result: zlink.SubmitResult.Ok, admitted: Promise.resolve(), reply };
+    });
+    runtime.topology.admittedPeer = () => ({
+      descriptor: { nodeRoutingId: 'target' },
+      liveness: { recordReceived() { if (failureAt === 'receive') throw failure; } }
+    });
+    let notify;
+    const done = new Promise((resolve) => { notify = resolve; });
+    const events = [];
+    let returned = false;
+    runtime.requestToNode('target', payload(), 1000,
+      () => { if (failureAt === 'admission') throw failure; }, {
+        operationCompleted(id, value) {
+          events.push({ id, value, returned });
+          notify();
+          if (failureAt === 'terminal') throw failure;
+        },
+        operationFailed(id, error) {
+          events.push({ id, error, returned });
+          notify();
+        }
+      }, 1);
+    returned = true;
+    let closes = 0;
+    if (failureAt === 'binding') rejectReply(failure);
+    else if (!['submit', 'admission'].includes(failureAt)) {
+      const replies = failureAt === 'protocol' ? [zlink.Message.from(Buffer.from('invalid'))] : [
+        zlink.Message.from(wire.encodeReplyHeader(1n)), zlink.Message.from(payload())
+      ];
+      for (const message of replies) {
+        const close = message.close.bind(message);
+        t.mock.method(message, 'close', () => { closes++; close(); });
+      }
+      if (failureAt === 'retain') t.mock.method(replies[0], 'data', () => { throw failure; });
+      releaseReply(replies);
+    }
+    await done;
+    // Flush error observation; node:test rejects any unhandled rejection.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(events.length, 1);
+    assert.equal(events[0].returned, true, 'operation id is returned before its terminal');
+    if (failureAt === 'terminal') assert.equal(events[0].value.terminalResult, 0);
+    else if (failureAt === 'protocol') assert.equal(events[0].error.name, 'ServiceWireProtocolError');
+    else assert.equal(events[0].error, failure);
+    assert.equal(runtime.operations.size, 0);
+    assert.equal(closes, ['protocol'].includes(failureAt) ? 1 : ['receive', 'retain', 'terminal'].includes(failureAt) ? 2 : 0);
+  });
+}

@@ -36,7 +36,7 @@ function fixture(request, disconnectOnFailure = true) {
     receive: () => incoming.shift(), send: async () => {},
     submitSend: () => ({ result: SubmitResult.Ok, admitted: Promise.resolve() }),
     routesSnapshot: () => [...routes].map(([routingId, routeGeneration]) => ({ routingId, routeGeneration })),
-    request: async (rid, parts, timeoutMs, _recordReceived, onAdmitted) => {
+    request: (rid, parts, timeoutMs, onReply, onFailed, _recordReceived, onAdmitted) => (async () => {
       const record = parts[0][3] === 28 ? decodeActorJoin28(parts) : wire.decodeStatefulHeader(parts[0]);
       const attempt = { rid, parts, timeoutMs, record };
       attempts.push(attempt);
@@ -51,7 +51,7 @@ function fixture(request, disconnectOnFailure = true) {
         }
         throw error;
       }
-    }
+    })().then(onReply, onFailed)
   };
   const raw = new RawServiceMeshRuntime({
     descriptor: descriptor('source-node'),
@@ -244,7 +244,7 @@ test('raw binding request maps the installed binding failure through the existin
   try {
     router.setRoutingId('typed-source');
     router.bind('tcp://127.0.0.1:0');
-    await assert.rejects(router.request('absent-peer', [Buffer.from('request')], 20), error => {
+    await assert.rejects(new Promise((resolve, reject) => router.request('absent-peer', [Buffer.from('request')], 20, resolve, reject)), error => {
       assert(error instanceof ZLinkBackendResultError);
       assert(error.cause instanceof zlink.SubmitError);
       assert.equal(error.operation, 'submit');

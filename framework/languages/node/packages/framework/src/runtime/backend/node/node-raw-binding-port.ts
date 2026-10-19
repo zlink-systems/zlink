@@ -315,13 +315,15 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     return submitBindingSend(this.socket.send(this.preparedRoutingId(targetRid)), parts);
   }
 
-  request(
+  request<T>(
     targetRid: string,
     parts: readonly Uint8Array[],
     timeoutMs: number,
+    onReply: (parts: readonly Buffer[]) => T,
+    onFailed: (error: unknown) => T,
     recordReceived?: () => void,
     onAdmitted?: () => void
-  ): Promise<readonly Buffer[]> {
+  ): Promise<T> {
     let submission: ReturnType<RequestSubmitOperation['submit']>;
     const deadlineMs = performance.now() + timeoutMs;
     try {
@@ -330,9 +332,9 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
         .timeout(timeoutMs)
         .submit();
     } catch (error) {
-      return Promise.reject(translateBindingResultError(error, 'submit'));
+      throw translateBindingResultError(error, 'submit');
     }
-    return requestReply(submission, deadlineMs, recordReceived, onAdmitted);
+    return requestReply(submission, deadlineMs, onReply, onFailed, recordReceived, onAdmitted);
   }
 
   routesSnapshot(): readonly ZLinkRawRouterRoute[] {
@@ -375,10 +377,17 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
     try {
       this.requireOpen();
       submission = appendRequestParts(this.socket.request(), parts).timeout(timeoutMs).submit();
+      return requestReply(
+        submission,
+        deadlineMs,
+        (parts) => parts,
+        rethrowCompletion,
+        undefined,
+        onAdmitted
+      );
     } catch (error) {
       return Promise.reject(translateBindingResultError(error, 'submit'));
     }
-    return requestReply(submission, deadlineMs, undefined, onAdmitted);
   }
 
   receive(dontWait = false): ZLinkRawReceivedRecord | undefined {
@@ -529,39 +538,58 @@ function receiveRecord(
  * confirmed in this turn; a backpressured submission keeps the admission
  * wait that bounds it by the request deadline.
  */
-function requestReply(
+function requestReply<T>(
   submission: ReturnType<RequestSubmitOperation['submit']>,
   deadlineMs: number,
+  onReply: (parts: readonly Buffer[]) => T,
+  onFailed: (error: unknown) => T,
   recordReceived: (() => void) | undefined,
   onAdmitted: (() => void) | undefined
-): Promise<readonly Buffer[]> {
+): Promise<T> {
   if (submission.result === SubmitResult.Backpressured) {
-    return bindingRequestReply(submission, deadlineMs, recordReceived, onAdmitted).then(
-      retainAndClose,
-      rejectCompletion
+    return observeRequestReply(
+      bindingRequestReply(submission, deadlineMs, recordReceived, onAdmitted),
+      onReply,
+      onFailed
     );
   }
   try {
     onAdmitted?.();
   } catch (error) {
-    return Promise.reject(translateBindingResultError(error, 'completion'));
+    throw translateBindingResultError(error, 'completion');
   }
-  return submission.reply.then((replies) => {
-    try {
-      recordReceived?.();
-      return retainAndClose(replies);
-    } catch (error) {
-      throw translateBindingResultError(error, 'completion');
-    }
-  }, rejectCompletion);
+  return observeRequestReply(submission.reply, onReply, onFailed, recordReceived);
 }
 
-function rejectCompletion(error: unknown): never {
-  throw translateBindingResultError(error, 'completion');
+/** Consumes the binding reply and notifies its terminal in this continuation. */
+function observeRequestReply<T>(
+  reply: Promise<readonly Message[]>,
+  onReply: (parts: readonly Buffer[]) => T,
+  onFailed: (error: unknown) => T,
+  recordReceived?: () => void
+): Promise<T> {
+  return reply.then(
+    (replies) => {
+      try {
+        return onReply(retainAndClose(replies, recordReceived));
+      } catch (error) {
+        return onFailed(translateBindingResultError(error, 'completion'));
+      }
+    },
+    (error) => onFailed(translateBindingResultError(error, 'completion'))
+  );
 }
 
-function retainAndClose(messages: readonly Message[]): readonly Buffer[] {
+function rethrowCompletion(error: unknown): never {
+  throw error;
+}
+
+function retainAndClose(
+  messages: readonly Message[],
+  recordReceived?: () => void
+): readonly Buffer[] {
   try {
+    recordReceived?.();
     return messages.map((message) => ZLinkBufferMessage.retainPayload(message));
   } finally {
     for (const message of messages) message.close();
