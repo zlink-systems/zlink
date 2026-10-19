@@ -161,6 +161,11 @@ class raw_mesh_node_owner_t
                           const std::string &endpoint) noexcept;
     void expect_peer (service_node_descriptor_t expected_descriptor,
                       std::shared_ptr<const mesh_node_descriptor_t> discovered = {});
+    // The auto-connect owner's per-peer reconcile request (MeshNode 7.1). While it is
+    // configured, discovery supplies the source original of every object peer.
+    using peer_reconcile_t = std::function<void (const std::vector<std::uint8_t> &)>;
+    void configure_peer_reconcile (peer_reconcile_t request);
+    peer_reconcile_t peer_reconcile () const;
     task_t<std::optional<request_source_t>>
     source_identity (std::vector<std::uint8_t> rid,
                      std::uint64_t generation,
@@ -503,6 +508,13 @@ class raw_mesh_node_owner_t
                                     std::uint64_t generation) const;
     void refresh_admission_due_on_lane ();
     void submit_pending_hellos_on_lane ();
+    // The one admission of a HELLO, ADMIT or UPDATE received on a selected route.
+    raw_mesh_pump_result_t
+    admit_descriptor_record (const std::vector<std::uint8_t> &source_routing_id,
+                             std::uint64_t route_generation,
+                             protocol::command kind,
+                             std::span<const std::uint8_t> bytes,
+                             service_liveness_registry_t::clock_t::time_point now);
     bool route_current_locked (const std::vector<std::uint8_t> &node_routing_id,
                                std::uint64_t route_generation) const;
     void
@@ -548,11 +560,14 @@ class raw_mesh_node_owner_t
     };
     std::map<std::vector<std::uint8_t>, expected_peer_t, raw_mesh_byte_vector_less_t>
       _expected_peers;
+    peer_reconcile_t _peer_reconcile;
     struct selected_route_t
     {
         std::uint64_t generation;
         // The admission exchange retains its first HELLO until ADMIT or route end.
         std::vector<std::uint8_t> hello;
+        // Remote HELLO/ADMIT awaiting this node's discovery original for the peer.
+        std::map<protocol::command, std::vector<std::uint8_t>> awaiting_discovery;
     };
     std::map<std::vector<std::uint8_t>, selected_route_t, raw_mesh_byte_vector_less_t> _routes;
     std::set<std::string> _outbound_endpoints;

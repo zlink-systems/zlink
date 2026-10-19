@@ -670,7 +670,14 @@ task_t<bool> settle_handoff_packet (std::shared_ptr<detail::spot_node_builder_st
                                     result_t<zlink::message_t> completed)
 {
     if (record && record->native_reply) {
-        if (!request)
+        // Native terminal shape belongs to the accepted wire record. A Session
+        // command relay can carry a request terminal without an application reply.
+        const bool native_request = runtime::stateful::with_accepted_application (
+          *record->payload, [] (auto kind, const auto &) {
+              return kind == runtime::protocol::frozen_record_kind_t::actor_request
+                     || kind == runtime::protocol::frozen_record_kind_t::spot_request;
+          });
+        if (!native_request)
             co_return record->complete_native (std::nullopt);
         auto header = runtime::stateful::with_accepted_application (
           *record->payload, [] (auto, const auto &application) {
@@ -12807,9 +12814,9 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
     }
     if (message_kind == stream_message_kind_t::send && application_record
         && application_record->admission.durable () && application_record->native_reply) {
-        // An ordinary native send can also own a durable FIFO position. Its
-        // accepted terminal belongs to the completed handler, just as in replay.
-        (void) application_record->complete_native (std::nullopt);
+        // Ordinary delivery and replay use the same native terminal owner.
+        (void) co_await settle_handoff_packet (state_owner, application_record, false, std::nullopt,
+                                               invoked);
     }
     if (!invoked) {
         if (dedup_operation && request_claim == runtime::exactly_once_claim_state::claimed)
