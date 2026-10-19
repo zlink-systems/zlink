@@ -61,6 +61,14 @@ export type ZLinkBackendObjectPlacement =
   | { readonly kind: 'capacity' }
   | { readonly kind: 'unavailable' };
 
+export type ZLinkBackendRequestSourceAcceptance = (
+  nodeRid: string,
+  nodeGeneration: bigint
+) =>
+  | import('../../locations/request-source-resolver').ZLinkRequestSourceFence
+  | undefined
+  | Promise<import('../../locations/request-source-resolver').ZLinkRequestSourceFence | undefined>;
+
 export interface ZLinkBackendMeshNode {
   readonly routingId?: RoutingId;
   cancelPendingOperations?(reason: unknown): void;
@@ -185,6 +193,11 @@ export interface ZLinkBackendMeshNode {
     readonly securityIdentity?: string;
     readonly lifecycleGeneration: bigint;
   }): void;
+  /**
+   * Installs the source request owner check the first accepting owner runs on Actor and Spot
+   * ingress (Location runtime §9.3). Undefined from the check ends the request Unavailable.
+   */
+  setRequestSourceAcceptance?(acceptance: ZLinkBackendRequestSourceAcceptance): void;
   isObjectClientNodeDirectTarget?(targetRid: unknown): boolean;
   observePeerRoute?(
     targetRid: unknown

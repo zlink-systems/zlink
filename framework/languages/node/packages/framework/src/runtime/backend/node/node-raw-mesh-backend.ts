@@ -237,6 +237,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
   private dispatchErrors?: ZLinkDispatchErrorReporter;
+  private requestSourceAcceptance?: import('../contracts').ZLinkBackendRequestSourceAcceptance;
   private readonly peerDisconnectedHandlers = new Set<(endpoint: string) => void>();
   constructor(
     private readonly meshName: string,
@@ -445,6 +446,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       this.stateful.setMailboxDropHandler(this.mailboxRecordDropped);
     }
     this.stateful.setMessageFollowHandler((record) => this.messageFollowHandler?.(record));
+    if (this.requestSourceAcceptance !== undefined) {
+      this.stateful.setRequestSourceAcceptance(this.requestSourceAcceptance);
+    }
     this.runtime = runtime;
     try {
       runtime.setReadableHandler(this.onReadable);
@@ -557,6 +561,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
           })
     });
     return intent;
+  }
+
+  setRequestSourceAcceptance(
+    acceptance: import('../contracts').ZLinkBackendRequestSourceAcceptance
+  ): void {
+    this.requestSourceAcceptance = acceptance;
+    this.stateful?.setRequestSourceAcceptance(acceptance);
   }
 
   expectPeer(peer: {

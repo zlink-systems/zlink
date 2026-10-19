@@ -980,6 +980,14 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     return live.map((row) => ({ ...row, endpoint: normalizeEndpoint(row.endpoint) }));
   }
 
+  /** Remaining exact owner lease from the same tracker that filters live descriptors. */
+  remainingOwnerTokenLeaseMs(
+    owner: ZLinkLocationOwnerToken,
+    signal?: AbortSignal
+  ): Promise<number> {
+    return this.leaseTracker.remainingOwnerTokenLeaseMs(owner, signal);
+  }
+
   async listMeshNodeDescriptors(
     meshName: string,
     page?: ZLinkPageRequest,
