@@ -47,10 +47,12 @@ on:
 #       - "framework/languages/dotnet/cross-language/**"
   workflow_dispatch:
 
-# The framework consumes the released @zlink-systems/zlink package. Platforms
-# without a prebuilt addon in that package build it from source against the
-# verified Core release archive (scripts/local-package/core/fetch-release.sh),
-# which is also the runtime the tests load.
+env:
+  PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/framework/languages/node/.cache/ms-playwright
+
+# The framework consumes a checkout-built @zlink-systems/zlink package with a
+# platform prebuild and its verified Core release runtime. Package construction
+# is owned by .github/actions/node-binding-package.
 
 # One run per ref: a newer push to the same branch/PR cancels the run still in
 # progress, so consecutive pushes do not pile up matrix jobs and starve the
@@ -83,6 +85,10 @@ jobs:
           - name: darwin-arm64
             runner: macos-15
             core_platform: macos-arm64
+
+    env:
+      # Node 20 exposes the platform WebSocket API behind this flag.
+      NODE_OPTIONS: ${{ matrix.node-version == 20 && '--experimental-websocket' || '' }}
 
     steps:
       - name: Checkout repository
@@ -156,13 +162,9 @@ jobs:
           echo "binding_version=${binding_version}" >> "${GITHUB_OUTPUT}"
 
       - name: Build the checkout Node binding package
-        shell: bash
-        run: |
-          version="${{ steps.core.outputs.binding_version }}"
-          mkdir -p .artifacts/wsl/npm
-          (cd bindings/node && npm ci --ignore-scripts && npm run build)
-          npm pack --silent ./bindings/node --pack-destination .artifacts/wsl/npm
-          test -f ".artifacts/wsl/npm/zlink-systems-zlink-${version}.tgz"
+        uses: ./.github/actions/node-binding-package
+        with:
+          core-prefix: ${{ steps.core.outputs.prefix }}
 
       - name: Build the local-package pin of @zlink-systems/http-client used by the workspace manifest
         shell: bash
@@ -198,30 +200,11 @@ jobs:
         working-directory: framework/languages/node
         run: npm ci
 
-      - name: Place the Core runtime beside a source-built addon
-        shell: bash
-        run: |
-          # Platforms without a prebuilt addon in the published package build
-          # it from source; the addon links libzlink through @loader_path /
-          # the addon directory, so copy the runtime next to it.
-          addon_dir=framework/languages/node/node_modules/@zlink-systems/zlink/build/Release
-          if [ ! -f "${addon_dir}/zlink.node" ]; then
-            echo "prebuilt addon in use; nothing to place"
-            exit 0
-          fi
-          prefix="${{ steps.core.outputs.prefix }}"
-          case "${{ matrix.target.core_platform }}" in
-            windows-*) cp "$(cygpath -u "${prefix}")"/bin/*.dll "${addon_dir}/" ;;
-            macos-*) cp "${prefix}"/lib/libzlink*.dylib "${addon_dir}/" ;;
-            *) cp -P "${prefix}"/lib/libzlink.so* "${addon_dir}/" ;;
-          esac
-          ls -la "${addon_dir}"
-
       - name: Cache Chromium for browser connector E2E
         if: matrix.node-version == 22 && (matrix.target.name == 'linux-x64' || matrix.target.name == 'win-x64')
         uses: actions/cache@v5
         with:
-          path: framework/languages/node/.cache/ms-playwright
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
           key: playwright-${{ runner.os }}-${{ hashFiles('framework/languages/node/package-lock.json') }}
 
       - name: Install Chromium and Linux dependencies
@@ -239,7 +222,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/zlink/emsdk
-          key: emsdk-3.1.38-${{ runner.os }}-${{ runner.arch }}
+          key: emsdk-3.1.38-manifest-3.1.38-${{ runner.os }}-${{ runner.arch }}
 
       - name: Install emsdk for the Unity WebGL adapter link
         if: matrix.node-version == 22 && matrix.target.name == 'linux-x64'
@@ -252,7 +235,9 @@ jobs:
           # 3.1.38-unity, so pin upstream 3.1.38. Without emsdk the test skips.
           root="${HOME}/.cache/zlink/emsdk"
           if [ ! -x "${root}/upstream/emscripten/emcc" ]; then
-            git clone --depth 1 https://github.com/emscripten-core/emsdk.git "${root}"
+            # The matching SDK manifest names the historical .tbz2 archive;
+            # current emsdk main requests a .tar.xz that was never published.
+            git clone --branch 3.1.38 --depth 1 https://github.com/emscripten-core/emsdk.git "${root}"
             "${root}/emsdk" install 3.1.38
             "${root}/emsdk" activate 3.1.38
             # The tarballs are only needed during install; dropping them keeps the
@@ -336,13 +321,9 @@ jobs:
           echo "ZLinkLocalPackageRoot=${package_root}" >> "${GITHUB_ENV}"
 
       - name: Build the checkout Node binding package
-        shell: bash
-        run: |
-          version="${{ steps.core.outputs.binding_version }}"
-          mkdir -p .artifacts/wsl/npm
-          (cd bindings/node && npm ci --ignore-scripts && npm run build)
-          npm pack --silent ./bindings/node --pack-destination .artifacts/wsl/npm
-          test -f ".artifacts/wsl/npm/zlink-systems-zlink-${version}.tgz"
+        uses: ./.github/actions/node-binding-package
+        with:
+          core-prefix: ${{ steps.core.outputs.prefix }}
 
       - name: Build the local-package pin of @zlink-systems/http-client used by the workspace manifest
         shell: bash
@@ -380,7 +361,7 @@ jobs:
       - name: Cache Chromium for browser connector E2E
         uses: actions/cache@v5
         with:
-          path: framework/languages/node/.cache/ms-playwright
+          path: ${{ env.PLAYWRIGHT_BROWSERS_PATH }}
           key: playwright-${{ runner.os }}-${{ hashFiles('framework/languages/node/package-lock.json') }}
 
       - name: Install Chromium and Linux dependencies

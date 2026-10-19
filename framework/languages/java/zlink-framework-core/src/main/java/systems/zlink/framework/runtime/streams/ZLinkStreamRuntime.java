@@ -125,18 +125,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private volatile boolean draining;
 
     private <T> T inStateLane(Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (java.util.concurrent.CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return stateLane.awaitTurn(work);
     }
 
     public ZLinkStreamRuntime(
@@ -414,26 +403,25 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         return spotNodes.values().stream().findFirst().orElse(null);
     }
 
-    public ZLinkSessionActorsRuntime sessionActors(
-            String streamNodeName, RoutingId sessionRid, ZLinkActorRuntime actors) {
+    public ZLinkSessionActorsRuntime sessionActors(String streamNodeName, RoutingId sessionRid) {
         ZLinkBackendStreamSocket stream = streamsByName.get(streamNodeName);
         if (stream == null) {
             throw new ZLinkConfigurationException("stream node is not running: " + streamNodeName);
         }
-        return new ZLinkSessionActorsRuntime(
-                        streamSessionRelaySpotNodes.get(streamNodeName),
-                        stream,
-                        sessionRid,
-                        actors,
-                        serializer,
-                        localActorDispatcher,
-                        streamSessionRelayAttached.getOrDefault(streamNodeName, false),
-                        defaultCodec,
-                        flow,
-                        sessionRelocationSealTimeout,
-                        sessionBindingGenerations::incrementAndGet)
-                .metadataPolicy(
-                        metadataPolicy.sessionToActorKeys(), metadataPolicy.actorToSessionKeys());
+        StreamNodeRegistration streamNode =
+                registration.streamNodes().stream()
+                        .filter(node -> node.name().equals(streamNodeName))
+                        .findFirst()
+                        .orElseThrow(
+                                () ->
+                                        new ZLinkConfigurationException(
+                                                "stream node is not configured: "
+                                                        + streamNodeName));
+        var state = getOrCreateSessionState(streamNode, stream, sessionRid);
+        if (state.actorRuntime() == null)
+            throw new ZLinkConfigurationException(
+                    "stream node has no Actor binding runtime: " + streamNodeName);
+        return state.actorRuntime();
     }
 
     /** Returns the advertised endpoint of a bound STREAM listener, or null when it has none. */
@@ -521,6 +509,23 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             return CompletableFuture.failedFuture(
                     new ZLinkConfigurationException(
                             "command 42 transport source differs from the sender fence"));
+        }
+        ZLinkInternalMeshNode receivingNode = meshNodes.get(resolveActorDispatchMeshName());
+        var session = command.session();
+        if (receivingNode == null
+                || receivingNode
+                        .localSessionOwner()
+                        .filter(
+                                owner ->
+                                        owner.identifies(
+                                                session.nodeRid(),
+                                                session.nodeGeneration(),
+                                                session.ownerId(),
+                                                session.ownerLeaseGeneration()))
+                        .isEmpty()) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkConfigurationException(
+                            "command 42 names a different Session owner identity"));
         }
         SealRecordKey key =
                 new SealRecordKey(command.relocation(), command.actor().actor().actorId());
@@ -714,6 +719,48 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 ZLinkServiceM6AWireCodec.ApplicationPayload payload) {
             return runtime.acceptBoundSessionSendAsync(command, payload);
         }
+    }
+
+    public CompletionStage<Void> handleBoundSessionClose(
+            RoutingId receivingNodeRid,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .BoundSessionClose
+                    request) {
+        SessionState state =
+                inStateLane(
+                        () ->
+                                sessions.values().stream()
+                                        .filter(
+                                                candidate ->
+                                                        receivingNodeRid.equals(
+                                                                        candidate.ownerNodeRid)
+                                                                && candidate
+                                                                        .routingId()
+                                                                        .equals(
+                                                                                request.session()
+                                                                                        .sessionRid()))
+                                        .findFirst()
+                                        .orElse(null));
+        if (state == null || state.actorRuntime() == null)
+            return CompletableFuture.failedFuture(
+                    new systems.zlink.framework.errors.ZLinkFrameworkException(
+                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "Session owner is unavailable"));
+        return state.actorRuntime()
+                .closeCurrentBinding(
+                        request,
+                        () ->
+                                state.matchesOwner(request.session())
+                                        && !state.matchesReplacement(
+                                                new ReplacementIdentity(
+                                                        request.actorId(),
+                                                        request.session().sessionRid(),
+                                                        request.session()
+                                                                .retiredBindingGeneration())),
+                        () -> {
+                            state.stream().disconnectPeer(state.routingId());
+                            return CompletableFuture.completedFuture(null);
+                        });
     }
 
     /**
@@ -1387,12 +1434,15 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                                 .metadataPolicy(
                                         metadataPolicy.sessionToActorKeys(),
                                         metadataPolicy.actorToSessionKeys());
-        ZLinkInternalMeshNode ownerNode = actors == null ? null : meshNodes.get(actors.meshName());
+        ZLinkInternalSpotNode sessionOwner = streamSessionRelaySpotNodes.get(streamNode.name());
+        ZLinkInternalMeshNode ownerNode =
+                sessionOwner == null
+                        ? (actors == null ? null : meshNodes.get(actors.meshName()))
+                        : meshNodes.values().stream()
+                                .filter(node -> node.routingId().equals(sessionOwner.routingId()))
+                                .findFirst()
+                                .orElse(null);
         RoutingId ownerNodeRid = ownerNode == null ? null : ownerNode.routingId();
-        long ownerNodeGeneration = ownerNode == null ? 0L : ownerNode.lifecycleGeneration();
-        String ownerId = ownerNode == null ? null : ownerNode.localAuthorityOwnerId();
-        long ownerLeaseGeneration =
-                ownerNode == null ? 0L : ownerNode.localAuthorityLeaseGeneration();
         ZLinkStreamSessionContextState context =
                 new ZLinkStreamSessionContextState(
                         streamNode.name(),
@@ -1444,9 +1494,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     stream,
                     routingId,
                     ownerNodeRid,
-                    ownerNodeGeneration,
-                    ownerId,
-                    ownerLeaseGeneration,
+                    ownerNode,
                     sessionActors,
                     connectedNanos,
                     nanoTime.getAsLong());
@@ -1791,12 +1839,9 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         private final ZLinkBackendStreamSocket stream;
         private final RoutingId routingId;
         private final RoutingId ownerNodeRid;
-        private final long ownerNodeGeneration;
-        private final String ownerId;
-        private final long ownerLeaseGeneration;
+        private final ZLinkInternalMeshNode ownerNode;
         private final ZLinkSessionActorsRuntime actorRuntime;
         private final Set<ReplacementIdentity> replacements = ConcurrentHashMap.newKeySet();
-        private final AtomicBoolean replacementClosing = new AtomicBoolean();
         private final AtomicBoolean closeScheduled = new AtomicBoolean();
         private final AtomicBoolean closeMetricRecorded = new AtomicBoolean();
         private long lastApplicationNanos;
@@ -1810,9 +1855,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 ZLinkBackendStreamSocket stream,
                 RoutingId routingId,
                 RoutingId ownerNodeRid,
-                long ownerNodeGeneration,
-                String ownerId,
-                long ownerLeaseGeneration,
+                ZLinkInternalMeshNode ownerNode,
                 ZLinkSessionActorsRuntime actorRuntime,
                 long connectedNanos,
                 long createdNanos) {
@@ -1824,9 +1867,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             this.stream = stream;
             this.routingId = routingId;
             this.ownerNodeRid = ownerNodeRid;
-            this.ownerNodeGeneration = ownerNodeGeneration;
-            this.ownerId = ownerId;
-            this.ownerLeaseGeneration = ownerLeaseGeneration;
+            this.ownerNode = ownerNode;
             this.actorRuntime = actorRuntime;
             lastInboundNanos = connectedNanos;
             lastApplicationNanos = createdNanos;
@@ -1857,7 +1898,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
 
         boolean replacementClosing() {
-            return replacementClosing.get();
+            return !replacements.isEmpty();
         }
 
         AtomicBoolean closeScheduled() {
@@ -1868,32 +1909,26 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                                 .RetiredSessionRouteFence
                         retired) {
-            // ownerNodeGeneration is a node lifecycle-generation opaque
-            // equality token (.NET ulong, spec 01-glossary "Lifecycle
-            // generation"): full range, only zero is unassigned. `> 0`
-            // wrongly treats a legitimate negative-as-long value as unset.
-            // ownerLeaseGeneration is spec-bounded to a positive `long`
-            // ("OwnerLeaseGeneration"), so `> 0` is correct for it.
-            return ownerNodeRid != null
-                    && ownerNodeRid.equals(retired.sessionOwnerNodeRid())
-                    && ownerNodeGeneration != 0
-                    && ownerNodeGeneration == retired.sessionOwnerNodeGeneration()
-                    && ownerId != null
-                    && ownerId.equals(retired.sessionOwnerId())
-                    && ownerLeaseGeneration > 0
-                    && ownerLeaseGeneration == retired.sessionOwnerLeaseGeneration();
+            // Session-Actor binding §4: compare with the owner host's current identity.
+            return ownerNode != null
+                    && ownerNode
+                            .localSessionOwner()
+                            .filter(
+                                    owner ->
+                                            owner.identifies(
+                                                    retired.sessionOwnerNodeRid(),
+                                                    retired.sessionOwnerNodeGeneration(),
+                                                    retired.sessionOwnerId(),
+                                                    retired.sessionOwnerLeaseGeneration()))
+                            .isPresent();
         }
 
         boolean beginReplacement(ReplacementIdentity identity) {
-            if (!replacements.add(identity)) {
-                return false;
-            }
-            replacementClosing.set(true);
-            return true;
+            return replacements.add(identity);
         }
 
         boolean matchesReplacement(ReplacementIdentity identity) {
-            return replacementClosing.get() && replacements.contains(identity);
+            return replacements.contains(identity);
         }
 
         long lastApplicationNanos() {

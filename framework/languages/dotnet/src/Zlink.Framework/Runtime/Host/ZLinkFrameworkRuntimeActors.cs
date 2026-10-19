@@ -3096,13 +3096,79 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkEntrySpotActivation? EntrySpot
     );
 
-    internal ValueTask<ZLinkRemoteSessionBindResponse> BindRemoteBoundSessionRouteAsync(
+    internal async ValueTask<ZLinkRemoteSessionBindResponse> BindRemoteBoundSessionRouteAsync(
         ZLinkRemoteSessionBindRequest request,
         RoutingId sourceNodeRid,
         CancellationToken cancellationToken
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var sessionOwner = await ResolveSessionOwnerAsync(
+                GetSpotNodeRuntime(RoutingId.From(request.TargetNodeRid)),
+                request.MeshName,
+                RoutingId.From(request.SessionNodeRid),
+                request.SessionOwnerNodeGeneration,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        return BindRemoteBoundSessionRoute(request, sourceNodeRid, sessionOwner);
+    }
+
+    /// <summary>
+    /// Session-Actor binding §4: the Session owner identity is the owner host's MeshNode
+    /// descriptor value. It is this node's own descriptor, or the admitted peer descriptor
+    /// of that exact lifecycle that passed the Location runtime §4.1 owner lease check.
+    /// </summary>
+    private async ValueTask<ZLinkServiceWireCodec.RequestSourceFence> ResolveSessionOwnerAsync(
+        ZLinkSpotNodeRuntime nodeRuntime,
+        string meshName,
+        RoutingId sessionNodeRid,
+        ulong sessionNodeGeneration,
+        CancellationToken cancellationToken
+    )
+    {
+        if (sessionNodeRid == nodeRuntime.Node.RoutingId)
+            return
+                nodeRuntime.LocalSessionOwner is { } local
+                && local.NodeGeneration == sessionNodeGeneration
+                ? local
+                : throw SessionOwnerUnavailable(sessionNodeRid);
+        if (
+            !HasExactAdmittedNodeLifecycle(nodeRuntime.Node, sessionNodeRid, sessionNodeGeneration)
+            || Services.GetService(typeof(IZLinkMeshNodeLocationResolver))
+                is not IZLinkMeshNodeLocationResolver resolver
+        )
+            throw SessionOwnerUnavailable(sessionNodeRid);
+        var descriptor =
+            (
+                await resolver
+                    .ListLiveMeshNodesAsync(meshName, cancellationToken)
+                    .ConfigureAwait(false)
+            ).FirstOrDefault(candidate =>
+                candidate.Rid == sessionNodeRid
+                && candidate.LifecycleGeneration == sessionNodeGeneration
+            ) ?? throw SessionOwnerUnavailable(sessionNodeRid);
+        return new(
+            descriptor.OwnerId,
+            checked((ulong)descriptor.LeaseGeneration),
+            sessionNodeRid,
+            sessionNodeGeneration
+        );
+    }
+
+    private static ZLinkFrameworkException SessionOwnerUnavailable(RoutingId sessionNodeRid) =>
+        new(
+            ZLinkFrameworkErrorKind.Unavailable,
+            $"Session owner '{sessionNodeRid}' has no live MeshNode descriptor for its lifecycle.",
+            ZLinkRetryAdvice.RetryAfterBackoff
+        );
+
+    private ZLinkRemoteSessionBindResponse BindRemoteBoundSessionRoute(
+        ZLinkRemoteSessionBindRequest request,
+        RoutingId sourceNodeRid,
+        ZLinkServiceWireCodec.RequestSourceFence sessionOwner
+    )
+    {
         var targetNodeRid = RoutingId.From(request.TargetNodeRid);
         var sessionNodeRid = RoutingId.From(request.SessionNodeRid);
         var sessionRid = RoutingId.From(request.SessionRid);
@@ -3138,8 +3204,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             )
             || authorityOwnerGeneration == 0
             || ownerLeaseGeneration == 0
-            || string.IsNullOrWhiteSpace(request.SessionOwnerId)
-            || request.SessionOwnerLeaseGeneration == 0
         )
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.Unavailable,
@@ -3174,10 +3238,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 stagedRoute.OwnerLeaseGeneration,
                 stagedRoute.SessionOwnerNodeGeneration,
                 stagedRoute.AcceptedHighWater,
-                stagedRoute.SessionOwnerId ?? stagedRoute.NodeRid!.Value.ToHex(),
-                stagedRoute.SessionOwnerLeaseGeneration == 0
-                    ? stagedRoute.SessionOwnerNodeGeneration
-                    : stagedRoute.SessionOwnerLeaseGeneration
+                stagedRoute.SessionOwnerId ?? "",
+                stagedRoute.SessionOwnerLeaseGeneration
             );
         }
         ZLinkFrameworkDebugLog.SpotDiscovery(
@@ -3196,8 +3258,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             ownerLeaseGeneration,
             request.SessionOwnerNodeGeneration,
             request.AcceptedHighWater,
-            request.SessionOwnerId,
-            request.SessionOwnerLeaseGeneration,
+            sessionOwner.OwnerId,
+            sessionOwner.LeaseGeneration,
             state =>
                 EnsureSessionReplacementAuthorityCurrent(
                     state,
@@ -3217,18 +3279,15 @@ internal sealed partial class ZLinkFrameworkRuntime
                     sessionNodeRid,
                     request.SessionOwnerNodeGeneration,
                     sessionRid,
-                    request.SessionOwnerId,
-                    request.SessionOwnerLeaseGeneration
+                    sessionOwner.OwnerId,
+                    sessionOwner.LeaseGeneration
                 )
+                // Command 51 carries the retired binding's stored identity unchanged; a
+                // binding without one has nothing to notify.
+                && !string.IsNullOrEmpty(previous.SessionOwnerId)
+                && previous.SessionOwnerLeaseGeneration != 0
             )
             {
-                var previousOwnerId = string.IsNullOrWhiteSpace(previous.SessionOwnerId)
-                    ? previousSessionNodeRid.ToHex()
-                    : previous.SessionOwnerId;
-                var previousOwnerLease =
-                    previous.SessionOwnerLeaseGeneration == 0
-                        ? previous.SessionOwnerNodeGeneration
-                        : previous.SessionOwnerLeaseGeneration;
                 var notification = new ZLinkServiceWireCodec.BoundSessionReplacedRecord(
                     new ZLinkServiceWireCodec.BoundSessionReplacedActorAuthority(
                         request.ActorId,
@@ -3241,8 +3300,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                     new ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession(
                         previousSessionNodeRid,
                         previous.SessionOwnerNodeGeneration,
-                        previousOwnerId,
-                        previousOwnerLease,
+                        previous.SessionOwnerId,
+                        previous.SessionOwnerLeaseGeneration,
                         previous.SessionRid,
                         previous.BindingGeneration
                     )
@@ -3257,16 +3316,14 @@ internal sealed partial class ZLinkFrameworkRuntime
                 );
             }
         }
-        return ValueTask.FromResult(
-            new ZLinkRemoteSessionBindResponse(
-                true,
-                request.ObjectGeneration,
-                localMeshName,
-                targetNodeRid.ToBytes().ToArray(),
-                currentNodeGeneration,
-                authorityOwnerGeneration,
-                ownerLeaseGeneration
-            )
+        return new ZLinkRemoteSessionBindResponse(
+            true,
+            request.ObjectGeneration,
+            localMeshName,
+            targetNodeRid.ToBytes().ToArray(),
+            currentNodeGeneration,
+            authorityOwnerGeneration,
+            ownerLeaseGeneration
         );
     }
 
@@ -5259,6 +5316,17 @@ internal sealed partial class ZLinkFrameworkRuntime
             cancellationToken
         );
     }
+
+    internal ValueTask CloseSessionBindingAsync(
+        ZLinkServiceWireCodec.RequestSourceFence? sessionOwner,
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionClose54 request,
+        CancellationToken cancellationToken
+    ) =>
+        _actorBoundSessionCoordinator.CloseSessionBindingAsync(
+            sessionOwner,
+            request,
+            cancellationToken
+        );
 
     internal ValueTask CloseActorBoundSessionAsync(
         string actorId,

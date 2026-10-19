@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const { ZLinkSpotCreateState } = require('../../packages/framework/dist');
 
 const {
   ZLinkRuntimeTaskErrorSink,
@@ -37,7 +38,9 @@ const {
   serviceRelocationAuthorityApplicationPayload
 } = require('../../packages/framework/dist/runtime/foundation/service-relocation-runtime');
 const { ZLinkExecutionBarrier } = require('../../packages/framework/dist/runtime/execution');
-const { ZLinkSpotSerialTurnExecutor } = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
+const {
+  ZLinkSpotSerialTurnExecutor
+} = require('../../packages/framework/dist/runtime/spots/spot-serial-turn-executor');
 const { ZLinkRuntimeAdmissionGate } = require('../../packages/framework/dist/runtime/admission');
 const protocol = require('../../packages/framework/dist/runtime/channels/channel-envelope');
 
@@ -137,7 +140,10 @@ async function createOwner(given) {
 
   let coordinator;
   class PingHandler {
-    handle() { counters.handler++; return 'handled'; }
+    handle() {
+      counters.handler++;
+      return 'handled';
+    }
   }
   const manager = new framework.DefaultZLinkSpotManager({
     detachedTaskRunner: detachedTaskRunner,
@@ -195,7 +201,12 @@ async function createOwner(given) {
   const join = async (actorId, nodeRid = NODE_RID) => {
     const request = zlink.Message.from(JSON.stringify('join'));
     try {
-      return await manager.admitActorJoin(spotId, joiningActor(actorId, nodeRid), request, () => undefined);
+      return await manager.admitActorJoin(
+        spotId,
+        joiningActor(actorId, nodeRid),
+        request,
+        () => undefined
+      );
     } finally {
       request.close();
     }
@@ -257,6 +268,9 @@ const scenarios = {
       assert.equal((await owner.join(`member-${index}`)).accepted, true);
     }
     const result = await outcome(() => owner.spots.close(owner.ref));
+    const existing = await owner.spots.getOrCreate(owner.spotId, 'room').inMesh(MESH).submit();
+    assert.equal(existing.state, ZLinkSpotCreateState.Existing);
+    assert.equal(existing.spot.objectGeneration, owner.ref.objectGeneration);
     return {
       result,
       authority: await owner.authority(),
@@ -315,8 +329,7 @@ const scenarios = {
       onClosingCalls: owner.counters.onClosing,
       diagnostics: owner.diagnosticKinds()
     };
-  },
-
+  }
 };
 
 test('Spot Close runtime satisfies every scenario of the shared spot-close fixture', async (t) => {
@@ -372,7 +385,10 @@ test('Close processes a turn and message admitted before its local seal', async 
   });
   const messageHandled = deferred();
   await serial.postOneWay(
-    () => { events.push('message'); messageHandled.resolve(); },
+    () => {
+      events.push('message');
+      messageHandled.resolve();
+    },
     (error) => assert.fail(`accepted message failed: ${error}`)
   );
   const seal = barrier.seal('close');
@@ -386,19 +402,33 @@ test('Close processes a turn and message admitted before its local seal', async 
 test('Closing DirectSpot request terminates as NotFound without running the old handler', async () => {
   const owner = await createOwner({ authority: 'Ready', holdOnClosing: true });
   const close = owner.spots.close(owner.ref);
-  const parts = protocol.encodeChannelEnvelopeParts(1, 'spot', 'Ping', {}).map((part) => zlink.Message.from(part));
+  const parts = protocol
+    .encodeChannelEnvelopeParts(1, 'spot', 'Ping', {})
+    .map((part) => zlink.Message.from(part));
   const replies = [];
   try {
     await owner.closingEntered.promise;
     assert.equal(await owner.authority(), 'Closing');
-    const request = owner.manager.dispatchMeshSpot(MESH, { spotId: owner.spotId }, {
-      kind: framework.ReceiveKind.SpotRequest, operationKind: framework.OperationKind.SpotRequest, parts,
-      reply: (response) => { replies.push(response.map((part) => zlink.Message.from(part))); return zlink.SubmitResult.Ok; }
-    });
+    const request = owner.manager.dispatchMeshSpot(
+      MESH,
+      { spotId: owner.spotId },
+      {
+        kind: framework.ReceiveKind.SpotRequest,
+        operationKind: framework.OperationKind.SpotRequest,
+        parts,
+        reply: (response) => {
+          replies.push(response.map((part) => zlink.Message.from(part)));
+          return zlink.SubmitResult.Ok;
+        }
+      }
+    );
     owner.finishClosing.resolve();
     await request;
     assert.equal(replies.length, 1);
-    assert.throws(() => protocol.decodeChannelReply(replies[0]), (error) => errorKindName(error) === 'NotFound');
+    assert.throws(
+      () => protocol.decodeChannelReply(replies[0]),
+      (error) => errorKindName(error) === 'NotFound'
+    );
     assert.equal(owner.counters.handler, 0);
   } finally {
     owner.finishClosing.resolve();
@@ -432,7 +462,10 @@ test('completed Close rejects lifecycle submission without retaining work', asyn
   await activation.serial.whenIdle();
   let ran = false;
   await assert.rejects(
-    () => activation.serial.executeLifecycleOperation(() => { ran = true; }),
+    () =>
+      activation.serial.executeLifecycleOperation(() => {
+        ran = true;
+      }),
     (error) => errorKindName(error) === 'Rejected'
   );
   assert.equal(activation.serial.hasPendingWork, false);
@@ -446,7 +479,9 @@ test('membership makes Close false without rejecting admission', async () => {
   await new Promise((resolve) => setImmediate(resolve));
   const close = owner.spots.close(owner.ref);
   let closeSettled = false;
-  void close.finally(() => { closeSettled = true; });
+  void close.finally(() => {
+    closeSettled = true;
+  });
   const arrived = owner.manager.executeOnSpot(owner.RoomSpot, owner.spotId, () => 'arrived');
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(closeSettled, false);
@@ -474,8 +509,12 @@ test('Join lifecycle submission precedes same-turn Close control submission', as
   const activation = owner.manager.activations.activationForClose(MESH, owner.spotId);
   assert.notEqual(activation, undefined);
   const events = [];
-  const joining = activation.serial.executeLifecycleOperation(() => { events.push('join'); });
-  const closing = activation.serial.executeControlLifecycleOperation(() => { events.push('close'); });
+  const joining = activation.serial.executeLifecycleOperation(() => {
+    events.push('join');
+  });
+  const closing = activation.serial.executeControlLifecycleOperation(() => {
+    events.push('close');
+  });
   await Promise.all([joining, closing]);
   assert.deepEqual(events, ['join', 'close']);
 });
@@ -515,10 +554,13 @@ test('host Draining gate rejects new admission as ShuttingDown', () => {
   const gate = new ZLinkRuntimeAdmissionGate();
   gate.register(MESH);
   gate.close();
-  assert.throws(() => gate.claim(MESH, 'Spot message'), (error) => {
-    assert.equal(errorKindName(error), 'ShuttingDown');
-    return true;
-  });
+  assert.throws(
+    () => gate.claim(MESH, 'Spot message'),
+    (error) => {
+      assert.equal(errorKindName(error), 'ShuttingDown');
+      return true;
+    }
+  );
 });
 
 test('relocation seal holds ingress until its result is known', async () => {
@@ -529,7 +571,10 @@ test('relocation seal holds ingress until its result is known', async () => {
   const events = [];
   const handled = deferred();
   const ingress = serial.postOneWay(
-    () => { events.push('handled'); handled.resolve(); },
+    () => {
+      events.push('handled');
+      handled.resolve();
+    },
     (error) => assert.fail(`held ingress failed: ${error}`)
   );
   await Promise.resolve();

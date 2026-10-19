@@ -32,6 +32,31 @@ final class GeneratedServiceWireCommandCodecConformanceTest {
             new ServiceWireCodec.DecoderContext(null, null, null, 0xffff_ffffL, 4_294_966_774L);
 
     @Test
+    void boundSessionCloseUsesSharedCrossLanguageBytes() throws Exception {
+        var shared = fixture("bound-session-close-v1.json");
+        var bytes = hex(shared.path("canonical"));
+        var decoded = ServiceWireCodec.decodeCommand(List.of(bytes), CONTEXT);
+        assertEquals(54, decoded.id());
+        assertArrayEquals(bytes, ServiceWireCodec.encodeCommand(decoded, CONTEXT));
+        var adapter = new ZLinkServiceM6BWireCodec();
+        var reply = new ZLinkServiceM6AWireCodec().encodeReplyHeader(1, 0, 0);
+        assertEquals(1, adapter.decodeBoundSessionCloseReply(reply).correlation());
+        assertThrows(
+                ZLinkServiceWireException.class,
+                () -> adapter.decodeBoundSessionCloseReply(Arrays.copyOf(reply, reply.length + 1)));
+        assertEquals("player", adapter.decodeBoundSessionClose(bytes).actorId());
+        assertArrayEquals(
+                bytes, adapter.encodeBoundSessionClose(adapter.decodeBoundSessionClose(bytes)));
+        for (var malformed : shared.path("malformed"))
+            assertThrows(
+                    IOException.class,
+                    () -> ServiceWireCodec.decodeCommand(List.of(hex(malformed)), CONTEXT));
+        assertThrows(
+                IOException.class,
+                () -> ServiceWireCodec.decodeCommand(List.of(bytes, new byte[0]), CONTEXT));
+    }
+
+    @Test
     void weightEncoderAcceptsBothBoundsAndRejectsValuesOutsideTheContract() throws Exception {
         for (int weight : new int[] {0, 10_000}) {
             var entry =

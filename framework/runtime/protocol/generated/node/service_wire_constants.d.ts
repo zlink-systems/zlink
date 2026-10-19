@@ -45,6 +45,7 @@ export declare const ServiceWireCommand: {
     readonly boundSessionReplaced: 51;
     readonly relocationState: 52;
     readonly relocationFailed: 53;
+    readonly boundSessionClose: 54;
 };
 export declare const ServiceWireFlag: {
     readonly metadata: 1;

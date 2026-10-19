@@ -8,7 +8,7 @@ import type { Message } from '../../contracts/Common/Message';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import type { ZLinkBackendReceived as BackendReceived } from '../backend/runtime-values';
 import { decodeChannelEnvelope } from '../channels/channel-envelope';
-import { decodeRoutingId as decodeWireRoutingId } from '../routing-id';
+import { decodeRoutingId as decodeWireRoutingId, routingIdsEqual } from '../routing-id';
 import {
   REMOTE_ACTOR_JOIN_PACKET,
   type ZLinkRemoteActorJoinWirePayload
@@ -176,7 +176,14 @@ export function decodeHandoffBacklog(value: unknown): readonly ZLinkActorHandoff
           BigInt(source.ownerLeaseGeneration) <= 0n ||
           source.nodeRid.length === 0 ||
           BigInt(source.nodeGeneration) <= 0n ||
-          source.replyRouteId !== messageFollowContext.replyRouteId)) ||
+          source.replyRouteId !==
+            (packet.messageFollowOrigin !== undefined &&
+            routingIdsEqual(
+              decodeWireRoutingId(source.nodeRid, source.nodeRidHex),
+              packet.messageFollowOrigin.sourceNodeRid
+            )
+              ? packet.messageFollowOrigin.originalReplyRouteId.toString()
+              : messageFollowContext.replyRouteId))) ||
       (!packet.returnResponse && source !== undefined)
     ) {
       throw new Error('Remote actor handoff request source fence is invalid.');

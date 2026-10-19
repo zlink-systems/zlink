@@ -186,6 +186,27 @@ struct retired_bound_session_route_fence_t
                             const retired_bound_session_route_fence_t &) = default;
 };
 
+/* Session-Actor binding §4: the receiving Session owner compares the Session
+ * owner identity a command carries with its current values exactly. */
+inline bool same_session_owner_identity (const retired_bound_session_route_fence_t &carried,
+                                         const retired_bound_session_route_fence_t &current)
+{
+    return carried.session_owner_node_routing_id == current.session_owner_node_routing_id
+           && carried.session_owner_node_generation == current.session_owner_node_generation
+           && carried.session_owner_id == current.session_owner_id
+           && carried.session_owner_lease_generation == current.session_owner_lease_generation;
+}
+
+struct bound_session_close_t
+{
+    std::uint64_t correlation = 0;
+    std::string actor_id;
+    std::uint64_t object_generation = 0;
+    retired_bound_session_route_fence_t session;
+};
+std::vector<std::uint8_t> encode_bound_session_close (const bound_session_close_t &record);
+bound_session_close_t decode_bound_session_close (std::span<const std::uint8_t> bytes);
+
 struct bound_session_replaced_t
 {
     actor_route_fence_t actor_authority;

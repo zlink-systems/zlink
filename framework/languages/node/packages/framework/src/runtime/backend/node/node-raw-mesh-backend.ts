@@ -89,6 +89,7 @@ import {
   type ServiceAsyncInstanceActivationAuthority,
   type ServiceInstanceApplicationLifecycle,
   type ServicePendingInstanceActivation,
+  type ServiceSessionOwnerDescriptors,
   type ServiceSpotMessageFollowSeal,
   type ServiceStatefulMailboxData,
   type ServiceStatefulPendingOperation,
@@ -237,6 +238,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     record: import('../../foundation/service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
   private dispatchErrors?: ZLinkDispatchErrorReporter;
+  private requestSourceAcceptance?: import('../contracts').ZLinkBackendRequestSourceAcceptance;
+  private sessionOwnerDescriptors?: ServiceSessionOwnerDescriptors;
   private readonly peerDisconnectedHandlers = new Set<(endpoint: string) => void>();
   constructor(
     private readonly meshName: string,
@@ -291,6 +294,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   setDispatchErrorReporter(reporter: ZLinkDispatchErrorReporter): void {
     this.dispatchErrors = reporter;
     this.stateful?.setDispatchErrorReporter(reporter, this.meshName);
+  }
+
+  setSessionOwnerDescriptors(source: ServiceSessionOwnerDescriptors): void {
+    this.sessionOwnerDescriptors = source;
+    this.stateful?.setSessionOwnerDescriptors(source);
   }
 
   setProtocolErrorHandler(
@@ -441,10 +449,16 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     if (this.dispatchErrors !== undefined) {
       this.stateful.setDispatchErrorReporter(this.dispatchErrors, this.meshName);
     }
+    if (this.sessionOwnerDescriptors !== undefined) {
+      this.stateful.setSessionOwnerDescriptors(this.sessionOwnerDescriptors);
+    }
     if (this.mailboxRecordDropped !== undefined) {
       this.stateful.setMailboxDropHandler(this.mailboxRecordDropped);
     }
     this.stateful.setMessageFollowHandler((record) => this.messageFollowHandler?.(record));
+    if (this.requestSourceAcceptance !== undefined) {
+      this.stateful.setRequestSourceAcceptance(this.requestSourceAcceptance);
+    }
     this.runtime = runtime;
     try {
       runtime.setReadableHandler(this.onReadable);
@@ -476,6 +490,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   async shutdown(_timeoutMs: number): Promise<RequestResultValue> {
     await this.close();
     return RequestResult.Ok;
+  }
+
+  cancelPendingOperations(reason: unknown): void {
+    this.stateful?.cancelPendingOperations(reason);
+    this.runtime?.cancelPendingOperations(reason);
   }
 
   async publishDraining(): Promise<void> {
@@ -552,6 +571,13 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
           })
     });
     return intent;
+  }
+
+  setRequestSourceAcceptance(
+    acceptance: import('../contracts').ZLinkBackendRequestSourceAcceptance
+  ): void {
+    this.requestSourceAcceptance = acceptance;
+    this.stateful?.setRequestSourceAcceptance(acceptance);
   }
 
   expectPeer(peer: {
@@ -972,7 +998,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   }
 
   waitForInstanceApplicationQuiescence(spotId: string, signal?: AbortSignal): Promise<void> {
-    return this.requireStateful().waitForInstanceApplicationQuiescence(spotId, signal);
+    // Closing the stateful owner terminalizes its operations and clears these waiters.
+    return this.stateful?.waitForInstanceApplicationQuiescence(spotId, signal) ?? Promise.resolve();
   }
 
   restoreUserSpotAuthority(
@@ -1409,6 +1436,14 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     );
   }
 
+  acceptRelocatedActorTerminal(
+    operation: { readonly high: bigint; readonly low: bigint },
+    replyRouteId: bigint,
+    result: import('../../foundation/service-stateful-runtime').ServiceStatefulResult
+  ): 'terminalReceived' | 'alreadyTerminal' | undefined {
+    return this.requireStateful().acceptRelocatedActorTerminal(operation, replyRouteId, result);
+  }
+
   async actorSendToActor(
     source: ZLinkBackendActorRef,
     target: ZLinkBackendActorRef,
@@ -1458,18 +1493,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     expectedBindingGeneration: bigint,
     timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
-    const binding = this.requireStateful().registry.binding(actor);
-    if (binding === undefined) {
-      return this.observeImmediateFailure(OperationKind.StreamUnbind, RequestResult.NotFound);
-    }
     return this.observeStateful(
       OperationKind.StreamUnbind,
-      this.requireStateful().unbindSession(
-        binding.sessionRid,
-        actor,
-        expectedBindingGeneration,
-        timeoutMs
-      )
+      this.requireStateful().closeBoundSession(actor, expectedBindingGeneration, timeoutMs)
     );
   }
 
@@ -1635,29 +1661,47 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   private pump(): void {
     if (this.closed || this.pumpTask !== undefined) return;
-    this.pumpTask = this.runPump(this.requireRuntime());
+    const runtime = this.requireRuntime();
+    let complete!: () => void;
+    let fail!: (error: unknown) => void;
+    // Publish the join owner before receive can signal readiness or start close.
+    // The receive turn itself needs no startup Promise continuation.
+    this.pumpTask = new Promise<void>((resolve, reject) => {
+      complete = resolve;
+      fail = reject;
+    });
+    void this.runPump(runtime, complete, fail);
   }
 
-  private async runPump(runtime: RawServiceMeshRuntime): Promise<void> {
-    // Publish pumpTask before any callback can signal readiness or begin close.
-    await Promise.resolve();
+  private async runPump(
+    runtime: RawServiceMeshRuntime,
+    complete: () => void,
+    fail: (error: unknown) => void
+  ): Promise<void> {
     try {
-      do {
-        const ready = this.readable;
-        this.readable = 0;
-        const more = await runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
-        if (more) {
-          // Yield only after actual progress, retaining readiness across the
-          // existing batch limits until receive reports no data.
-          this.readable |= 1;
-          await yieldToIO();
-        }
-      } while (!this.closed && this.readable !== 0);
+      try {
+        do {
+          const ready = this.readable;
+          this.readable = 0;
+          const batch = runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
+          const more = batch instanceof Promise ? await batch : batch;
+          if (more) {
+            // Yield only after actual progress, retaining readiness across the
+            // existing batch limits until receive reports no data.
+            this.readable |= 1;
+            await yieldToIO();
+          }
+        } while (!this.closed && this.readable !== 0);
+      } catch (error) {
+        runtime.reportInfrastructureFailure(error);
+      } finally {
+        this.pumpTask = undefined;
+        this.scheduleMaintenance();
+      }
+      complete();
     } catch (error) {
-      runtime.reportInfrastructureFailure(error);
-    } finally {
-      this.pumpTask = undefined;
-      this.scheduleMaintenance();
+      // Forward reporting and maintenance failures to the published join owner.
+      fail(error);
     }
   }
 
@@ -1716,15 +1760,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       (error) => this.deliverCompletion(id, operationKind, requestFailureResult(error))
     );
     return id;
-  }
-
-  private observeImmediateFailure(operationKind: number, terminalResult: number): MeshOperationId {
-    const low = this.nextPeerIntent++;
-    return this.observeCompletion(
-      low,
-      operationKind,
-      Promise.resolve({ terminalResult, failureCode: 0 })
-    );
   }
 
   private deliverCompletion(
@@ -2046,7 +2081,8 @@ class RawStreamSessionService implements StreamSessionService {
       retiredSession: ServiceRetiredBoundSessionRouteFence,
       actor: ServiceActorRef
     ) => void,
-    actorAuthority?: StreamSessionActorAuthorityFence
+    actorAuthority?: StreamSessionActorAuthorityFence,
+    close?: () => Promise<void>
   ): MeshOperationId {
     this.requireStarted();
     const sessionKey = String(sessionRid);
@@ -2059,7 +2095,8 @@ class RawStreamSessionService implements StreamSessionService {
         timeoutMs,
         (_targetSessionRid, payloadFrame) => this.deliver(sessionKey, actor.actorId, payloadFrame),
         onBindingReplaced,
-        actorAuthority
+        actorAuthority,
+        close
       )
     );
   }
@@ -2471,6 +2508,7 @@ function decodeStatefulRecord(
   const ingressLifecycle = receiveIngressLifecycle(record);
   return {
     kind: stateful.receiveKind,
+    requestSource: record.requestSource,
     domain: readyDomain(record.domain),
     sourceNodeRid: (record.sourceRoutingId as RoutingId | undefined) ?? null,
     sourceSpotId: (stateful.sourceSpotId as RoutingId | undefined) ?? null,

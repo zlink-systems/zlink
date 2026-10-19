@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.binding;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -11,6 +12,7 @@ import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.eventing.MonitorEventType;
 import systems.zlink.contracts.messaging.Message;
+import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
@@ -36,9 +38,41 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkJavaStreamSocketAsyncTerminalTest {
+    @Test
+    void idleReceiveAndSubmitDoNotPostSocketOwnerTasks() throws Exception {
+        try (var context = Zlink.createContext();
+                var stream = new ZLinkJavaStreamSocket(context.createStreamSocket(), null);
+                Message payload = Message.from(new byte[0])) {
+            stream.bind("tcp://127.0.0.1:0");
+            AtomicInteger postedTasks = new AtomicInteger();
+            Field laneField = ZLinkJavaStreamSocket.class.getDeclaredField("stateLane");
+            laneField.setAccessible(true);
+            laneField.set(
+                    stream,
+                    new ZLinkStateLane(
+                            command -> {
+                                postedTasks.incrementAndGet();
+                                command.run();
+                            }));
+
+            assertNull(stream.recv());
+            assertEquals(0, postedTasks.get(), "idle receive must not post a socket owner task");
+            assertThrows(
+                    ZlinkSubmitException.class,
+                    () ->
+                            stream.send(
+                                    RoutingId.from("missing-peer"),
+                                    "packet",
+                                    List.of(payload),
+                                    SendFlags.DONT_WAIT));
+            assertEquals(0, postedTasks.get(), "idle submit must not post a socket owner task");
+        }
+    }
+
     @Test
     void connectionReadyIsObservedBeforeFirstInboundFrame() throws Exception {
         var ready = new CompletableFuture<RoutingId>();
@@ -383,6 +417,9 @@ final class ZLinkJavaStreamSocketAsyncTerminalTest {
                 var node = new ZLinkJavaRawMeshNode(context, "mesh");
                 var stream = new ZLinkJavaStreamSocket(context.createStreamSocket(), node)) {
             node.setRoutingId(nodeRid);
+            node.setBind("inproc://" + nodeRid + "-" + System.nanoTime());
+            node.start();
+            ZLinkTestSessionOwners.install(node);
             ZLinkBackendSpot entry = node.spotNode().entrySpot();
             entry.onDispatchEvent(
                     info -> {
@@ -438,6 +475,9 @@ final class ZLinkJavaStreamSocketAsyncTerminalTest {
                 var node = new ZLinkJavaRawMeshNode(context, "mesh");
                 var stream = new ZLinkJavaStreamSocket(context.createStreamSocket(), node)) {
             node.setRoutingId(nodeRid);
+            node.setBind("inproc://" + nodeRid + "-" + System.nanoTime());
+            node.start();
+            ZLinkTestSessionOwners.install(node);
             ZLinkBackendSpot entry = node.spotNode().entrySpot();
             entry.onDispatchEvent(
                     info -> {

@@ -139,7 +139,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private final AtomicReference<ZLinkFrameworkTerminationResult> lastTerminationResult =
             new AtomicReference<>();
     private final AtomicBoolean drainStarted = new AtomicBoolean(false);
-    private final AtomicBoolean drainTerminalStarted = new AtomicBoolean(false);
+    private final CompletableFuture<Throwable> forcedDrain = new CompletableFuture<>();
     private final ZLinkCloseGate closeGate = new ZLinkCloseGate();
     private final CompletableFuture<InternalDrainResult> drained = new CompletableFuture<>();
     // Shared, runtime-mutable message-flow mode cell, installed into the diagnostics
@@ -459,6 +459,15 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                     .values()
                     .forEach(
                             node ->
+                                    node.setBoundSessionCloseHandler(
+                                            request ->
+                                                    this.streams.handleBoundSessionClose(
+                                                            node.routingId(), request)));
+            this.meshNodes
+                    .nodesByName()
+                    .values()
+                    .forEach(
+                            node ->
                                     node.setBoundSessionReplacedHandler(
                                             this.streams::handleBoundSessionReplaced));
         }
@@ -488,7 +497,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 this.registration
                                         .locations()
                                         .options()
-                                        .sessionRelocationSealTimeout())
+                                        .sessionRelocationSealTimeout(),
+                                this.meshDrains::isSealed)
                         : null;
 
         if (this.spotRetire != null) {
@@ -1014,7 +1024,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         if (streams == null) {
             throw new ZLinkConfigurationException("Stream runtime is not configured");
         }
-        return streams.sessionActors(streamNodeName, sessionRid, actors);
+        return streams.sessionActors(streamNodeName, sessionRid);
     }
 
     ZLinkFrameworkRuntimeState state() {
@@ -2128,7 +2138,31 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         // Close completion admission after accepted runtime components have
         // finished their teardown, so graceful drain can still publish the
         // replies it already accepted.
-        shutdown.defer("executor_close", this::closeHandlerExecutor);
+        shutdown.deferCloseStage(
+                "executor_close",
+                () -> {
+                    CompletionStage<Void> applicationCleanup =
+                            spots == null
+                                    ? CompletableFuture.completedFuture(null)
+                                    : spots.applicationCleanup();
+                    CompletionStage<Void> executorClose =
+                            applicationCleanup
+                                    .handle((ignored, failure) -> null)
+                                    .thenRunAsync(
+                                            this::closeHandlerExecutor,
+                                            ZLinkTeardownExecutor::execute);
+                    executorClose.whenComplete(
+                            (ignored, failure) -> {
+                                if (failure != null)
+                                    Logger.getLogger(ZLinkFrameworkRuntime.class.getName())
+                                            .log(
+                                                    java.util.logging.Level.SEVERE,
+                                                    "Framework executor cleanup failed",
+                                                    failure);
+                            });
+                    return CompletableFuture.anyOf(executorClose.toCompletableFuture(), forcedDrain)
+                            .thenApply(ignored -> null);
+                });
         if (backendContext != null) {
             shutdown.defer("context_close", this::closeBackendContext);
         }
@@ -2154,7 +2188,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                     "spot_close",
                     () -> {
                         if (spotRuntimeStopped.compareAndSet(false, true)) {
-                            return spots.closeAsync();
+                            return spots.closeAsync(forcedDrain);
                         }
                         return CompletableFuture.completedFuture(null);
                     });
@@ -2463,7 +2497,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     private void completeDrain() {
-        if (!drainTerminalStarted.compareAndSet(false, true)) {
+        if (drained.isDone()) {
             return;
         }
         ZLinkTeardownExecutor.execute(this::completeDrainOnTeardownThread);
@@ -2494,9 +2528,17 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     }
 
     private void forceStop(InternalDrainForceReason reason, Throwable failure) {
-        if (!drainTerminalStarted.compareAndSet(false, true)) {
+        if (drained.isDone() || forcedDrain.isDone()) {
             return;
         }
+        meshNodes.nodesByName().values().forEach(ZLinkInternalMeshNode::cancelPendingOperations);
+        Throwable cause =
+                reason == InternalDrainForceReason.DEADLINE_EXCEEDED
+                        ? new TimeoutException("host shutdown deadline expired")
+                        : failure != null
+                                ? failure
+                                : new IllegalStateException("host teardown failed");
+        if (!forcedDrain.complete(cause)) return;
         ZLinkTeardownExecutor.execute(() -> forceStopOnTeardownThread(reason, failure));
     }
 

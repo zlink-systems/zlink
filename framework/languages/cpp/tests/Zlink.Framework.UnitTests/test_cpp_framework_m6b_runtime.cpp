@@ -1610,6 +1610,7 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
     session_owner->configure_bound_session_operations (host::bound_session_operations_t{
       .bind =
         [] (const protocol::bound_session_bind_t &, const zlink::routing_id_t &, std::uint64_t,
+            const zlink::framework::location_owner_token_t &,
             std::function<bool ()> submit_terminal_reply) {
             (void) submit_terminal_reply ();
             return host::bound_session_bind_operation_result_t{};
@@ -1693,6 +1694,7 @@ void verify_bound_session_push_admission_uses_only_session_owned_fields ()
     session_owner->configure_bound_session_operations (host::bound_session_operations_t{
       .bind =
         [] (const protocol::bound_session_bind_t &, const zlink::routing_id_t &, std::uint64_t,
+            const zlink::framework::location_owner_token_t &,
             std::function<bool ()> submit_terminal_reply) {
             (void) submit_terminal_reply ();
             return host::bound_session_bind_operation_result_t{};
@@ -7324,7 +7326,11 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
                 request.target.object_generation = ready.object_generation;
                 request.target.authority_owner_generation =
                   ready.authority_owner_generation + (injected_activation_failure ? 0 : 1);
-                request.target.owner_id = ready.owner.owner_id;
+                // Keep the fixture's ownerFence=mismatch across a public cold
+                // activation too: an authority token from an older incarnation
+                // alone no longer represents a current owner mismatch.
+                request.target.owner_id =
+                  ready.owner.owner_id + (injected_activation_failure ? "" : "-stale");
                 request.target.owner_lease_generation =
                   static_cast<std::uint64_t> (ready.owner.lease_generation);
                 request.target.store_version = ready.store_version;
@@ -7738,6 +7744,129 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
         verify_ready_route_cases ("Ready", *after_recovery_snapshot);
     }
     injected_activation_failure.reset ();
+
+    // Reincarnate issues a new object/authority pair while keeping the same owner.
+    // A Ready route resolved before that transition must reach the new incarnation.
+    const auto request_recreated = [&] (protocol::instance_spot_activation_header_t request) {
+        request.operation = {123, ready_case_operation++};
+        instance_reply_header.reset ();
+        instance_reply_payload.reset ();
+        assert (
+          source
+            ->activate_instance_spot_remote (
+              target->status ().routing_id (), request,
+              std::vector<std::uint8_t>{1, 1, 5, 't', 'r', 'a', 'c', 'e', 0, 3, 'a', 'b', 'c'},
+              {"quest.start", "application/json", {'{', '}'}}, 5s,
+              [&] (foundation::operation_terminal_t terminal, protocol::reply_header_t header,
+                   std::optional<protocol::application_payload_t> payload) {
+                  assert (terminal == foundation::operation_terminal_t::completed);
+                  instance_reply_header = header;
+                  instance_reply_payload = std::move (payload);
+              })
+            .result ()
+            .value ());
+        const auto until = std::chrono::steady_clock::now () + 5s;
+        while (!instance_reply_header && std::chrono::steady_clock::now () < until) {
+            (void) target->dispatch_ready (dispatch);
+            (void) source->dispatch_ready (dispatch);
+            std::this_thread::sleep_for (1ms);
+        }
+        assert (instance_reply_header);
+        return *instance_reply_header;
+    };
+    auto recreated_request = replay_instance_request;
+    recreated_request.target.spot_id = "instance-recreated";
+    recreated_request.target.deadline_unix_ms =
+      static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (
+                                    std::chrono::system_clock::now ().time_since_epoch () + 5s)
+                                    .count ());
+    assert (request_recreated (recreated_request).terminal_result == 0);
+    const auto recreated_key = runtime::spot_authority_key (recreated_request.target.spot_id);
+    const auto old_read = store->read_authority (recreated_key).result ().value ();
+    const auto old_ready = std::get<authority_snapshot_t> (old_read);
+    const auto close_recreated =
+      target
+        ->begin_instance_spot_close (recreated_request.target.stable_type,
+                                     recreated_request.target.spot_id, old_ready.object_generation,
+                                     old_ready.authority_owner_generation)
+        .result ();
+    assert (close_recreated && close_recreated.value ().reincarnate);
+    const auto fresh_ready = close_recreated.value ().reincarnate ().result ().value ();
+    assert (fresh_ready.object_generation > old_ready.object_generation);
+    assert (fresh_ready.authority_owner_generation != old_ready.authority_owner_generation);
+    assert (fresh_ready.owner.owner_id == old_ready.owner.owner_id);
+    recreated_request.target.object_generation = old_ready.object_generation;
+    recreated_request.target.authority_owner_generation = old_ready.authority_owner_generation;
+    recreated_request.target.owner_id = old_ready.owner.owner_id;
+    recreated_request.target.owner_lease_generation = old_ready.owner.lease_generation;
+    recreated_request.target.store_version = old_ready.store_version;
+    recreated_request.target.deadline_unix_ms = 0;
+    recreated_request.target.instance_intent = true;
+    const auto recreated_handlers_before = instance_activation_count;
+    assert (request_recreated (recreated_request).terminal_result == 0);
+    assert (instance_activation_count == recreated_handlers_before + 1);
+
+    // A direct existing-only call uses the current Ready incarnation as well.
+    recreated_request.target.instance_intent = false;
+    assert (request_recreated (recreated_request).terminal_result == 0);
+    assert (instance_activation_count == recreated_handlers_before + 2);
+    const auto delivered_before_refusals = instance_activation_count;
+    enum class route_mismatch_t
+    {
+        owner,
+        lease,
+        authority,
+        same_incarnation_owner,
+        future
+    };
+    for (const auto mismatch :
+         {route_mismatch_t::owner, route_mismatch_t::lease, route_mismatch_t::authority,
+          route_mismatch_t::same_incarnation_owner, route_mismatch_t::future}) {
+        auto refused = recreated_request;
+        switch (mismatch) {
+            case route_mismatch_t::owner:
+                refused.target.owner_id += "-other";
+                break;
+            case route_mismatch_t::lease:
+                ++refused.target.owner_lease_generation;
+                break;
+            case route_mismatch_t::authority:
+                refused.target.object_generation = fresh_ready.object_generation;
+                // Same incarnation with an old authority generation must still be refused.
+                break;
+            case route_mismatch_t::same_incarnation_owner:
+                refused.target.object_generation = fresh_ready.object_generation;
+                refused.target.authority_owner_generation = fresh_ready.authority_owner_generation;
+                refused.target.owner_id += "-other";
+                break;
+            case route_mismatch_t::future:
+                refused.target.object_generation = fresh_ready.object_generation + 1;
+                break;
+        }
+        const auto refusal = request_recreated (refused);
+        assert (refusal.terminal_result
+                == static_cast<std::uint32_t> (protocol::request_terminal_result::conflict));
+        assert (
+          refusal.failure_code
+          == static_cast<std::uint32_t> (mismatch == route_mismatch_t::future
+                                           ? protocol::framework_error_code::spotGenerationStale
+                                           : protocol::framework_error_code::spotMoving));
+        assert (instance_activation_count == delivered_before_refusals);
+    }
+    const auto final_recreated_read = store->read_authority (recreated_key).result ().value ();
+    const auto final_recreated = std::get<authority_snapshot_t> (final_recreated_read);
+    const auto release_recreated =
+      target
+        ->begin_instance_spot_close (
+          recreated_request.target.stable_type, recreated_request.target.spot_id,
+          final_recreated.object_generation, final_recreated.authority_owner_generation)
+        .result ();
+    assert (release_recreated && release_recreated.value ().release);
+    assert (release_recreated.value ().release ().result ().value ());
+    const auto released_refusal = request_recreated (recreated_request);
+    assert (released_refusal.failure_code
+            == static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving));
+    assert (instance_activation_count == delivered_before_refusals);
 
     const auto unix_deadline =
       static_cast<std::uint64_t> (std::chrono::duration_cast<std::chrono::milliseconds> (

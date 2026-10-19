@@ -103,6 +103,8 @@ type RawServiceChannelTargetSelection =
 type ServiceApplicationPayloadInput = ServiceApplicationPayload | Buffer;
 
 export interface RawServiceIngressRecord {
+  /** Source identity recorded once by the first accepting owner (Location runtime §9.3). */
+  requestSource?: import('../locations/request-source-resolver').ZLinkRequestSourceFence;
   readonly onAdmitted?: () => void;
   readonly command: number;
   readonly flags: number;
@@ -767,13 +769,21 @@ export class RawServiceMeshRuntime {
     onAdmitted?: () => void
   ): Promise<readonly Buffer[]> {
     const admission = this.topology.admittedPeer(targetNodeRoutingId)?.liveness;
-    return this.requireStarted().request(
-      targetNodeRoutingId,
-      parts,
-      timeoutMs,
-      admission?.recordReceived,
-      onAdmitted
-    );
+    try {
+      return this.requireStarted().request(
+        targetNodeRoutingId,
+        parts,
+        timeoutMs,
+        (reply) => reply,
+        (error) => {
+          throw error;
+        },
+        admission?.recordReceived,
+        onAdmitted
+      );
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   replyService(
@@ -839,9 +849,19 @@ export class RawServiceMeshRuntime {
   }
 
   /** Returns whether a receive budget ended before no-data; idle ticks only maintain peers. */
-  async pumpBatch(receiveReady = true, routeReady = false): Promise<boolean> {
-    this.observeInfrastructureFailure();
-    if (routeReady) await this.observeSelectedRoutes();
+  pumpBatch(receiveReady = true, routeReady = false): boolean | Promise<boolean> {
+    try {
+      this.observeInfrastructureFailure();
+      if (routeReady) {
+        return this.observeSelectedRoutes().then(() => this.receiveBatch(receiveReady));
+      }
+      return this.receiveBatch(receiveReady);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  private receiveBatch(receiveReady: boolean): boolean | Promise<boolean> {
     const startedAtMs = performance.now();
     let messages = 0;
     let bytes = 0;
@@ -853,30 +873,49 @@ export class RawServiceMeshRuntime {
       'remote'
     ));
     if (receiveReady) rotation.reserve();
-    try {
-      while (receiveReady && messages < RAW_MESH_RECEIVE_RECORD_BUDGET && !this.closed) {
-        const received = this.receiveOne(performance.now(), observe, rotation);
-        const result = received instanceof Promise ? await received : received;
-        if (result === 'noData') {
-          receiveReady = false;
-          break;
+    // The same loop owns both immediate receives and a suspended receive's
+    // continuation; only the latter needs a Promise and retains this frame.
+    const drain = (received?: RawServicePumpResult): boolean | Promise<boolean> => {
+      try {
+        while (
+          received !== undefined ||
+          (receiveReady && messages < RAW_MESH_RECEIVE_RECORD_BUDGET && !this.closed)
+        ) {
+          if (received === undefined) {
+            const pending = this.receiveOne(performance.now(), observe, rotation);
+            if (pending instanceof Promise) {
+              return pending.then(drain, (error) => {
+                rotation.releaseUnused();
+                throw error;
+              });
+            }
+            received = pending;
+          }
+          if (received === 'noData') {
+            receiveReady = false;
+            break;
+          }
+          messages += 1;
+          received = undefined;
+          // Core owns the per-peer fair-queue cursor. The Framework limit bounds
+          // the entire round, so changing peers does not renew its byte/count budget.
+          if (
+            bytes >= RAW_MESH_RECEIVE_BYTE_BUDGET ||
+            performance.now() - startedAtMs >= RAW_MESH_RECEIVE_TIME_BUDGET_MS
+          )
+            break;
         }
-        messages += 1;
-        // Core owns the per-peer fair-queue cursor. The Framework limit bounds
-        // the entire round, so changing peers does not renew its byte/count budget.
-        if (
-          bytes >= RAW_MESH_RECEIVE_BYTE_BUDGET ||
-          performance.now() - startedAtMs >= RAW_MESH_RECEIVE_TIME_BUDGET_MS
-        )
-          break;
+      } catch (error) {
+        rotation.releaseUnused();
+        throw error;
       }
-    } finally {
       rotation.releaseUnused();
-    }
-    if (!this.closed) {
-      this.tickLiveness();
-    }
-    return receiveReady && messages > 0;
+      if (!this.closed) {
+        this.tickLiveness();
+      }
+      return receiveReady && messages > 0;
+    };
+    return drain();
   }
 
   private receiveOne(
@@ -1318,6 +1357,10 @@ export class RawServiceMeshRuntime {
     return this.operations.size;
   }
 
+  cancelPendingOperations(reason: unknown): void {
+    this.operations.failAll(reason);
+  }
+
   /**
    * The next management deadline of this node (spec 08 §4.2): request expiry,
    * liveness probe or timeout, or an owned HELLO exchange still awaiting
@@ -1518,57 +1561,53 @@ export class RawServiceMeshRuntime {
       return pending;
     }
     const parts = [header, encodedPayload];
-    let request: Promise<readonly Uint8Array[]>;
     try {
-      request = this.requireStarted().request(
+      this.requireStarted().request(
         selectedTargetNodeRoutingId,
         parts,
         timeoutMs,
+        (replyParts) => {
+          try {
+            if (replyParts.length < 1 || replyParts.length > 2) {
+              throw new ServiceWireProtocolError('Invalid reply parts.');
+            }
+            const reply = decodeReplyHeader(replyParts[0]!);
+            if (reply.correlation !== correlation)
+              throw new ServiceWireProtocolError('Reply correlation mismatch.');
+            if (reply.tail.byteLength !== 0) {
+              throw new ServiceWireProtocolError(
+                'Generic node/channel reply carries an operation-specific tail.'
+              );
+            }
+            if (reply.terminalResult === 0 && replyParts.length !== 2) {
+              throw new ServiceWireProtocolError('Successful reply omits its payload.');
+            }
+            if (reply.terminalResult !== 0 && replyParts.length !== 1) {
+              throw new ServiceWireProtocolError('Failed reply carries a payload.');
+            }
+            const result: RawServiceRequestResult = {
+              terminalResult: reply.terminalResult,
+              failureCode: reply.failureCode
+            };
+            this.operations.complete(
+              pending.id,
+              reply.terminalResult === 0
+                ? { ...result, payload: decodeApplicationPayloadView(replyParts[1]!) }
+                : result
+            );
+          } catch (error) {
+            this.operations.fail(pending.id, error);
+          }
+        },
+        (error) => {
+          this.operations.fail(pending.id, error);
+        },
         selectedPeer.liveness?.recordReceived,
         onAdmitted
       );
     } catch (error) {
       this.failRequest(pending, error);
-      return pending;
     }
-    void request.then(
-      (replyParts) => {
-        try {
-          if (replyParts.length < 1 || replyParts.length > 2) {
-            throw new ServiceWireProtocolError('Invalid reply parts.');
-          }
-          const reply = decodeReplyHeader(replyParts[0]!);
-          if (reply.correlation !== correlation)
-            throw new ServiceWireProtocolError('Reply correlation mismatch.');
-          if (reply.tail.byteLength !== 0) {
-            throw new ServiceWireProtocolError(
-              'Generic node/channel reply carries an operation-specific tail.'
-            );
-          }
-          if (reply.terminalResult === 0 && replyParts.length !== 2) {
-            throw new ServiceWireProtocolError('Successful reply omits its payload.');
-          }
-          if (reply.terminalResult !== 0 && replyParts.length !== 1) {
-            throw new ServiceWireProtocolError('Failed reply carries a payload.');
-          }
-          const result: RawServiceRequestResult = {
-            terminalResult: reply.terminalResult,
-            failureCode: reply.failureCode
-          };
-          this.operations.complete(
-            pending.id,
-            reply.terminalResult === 0
-              ? { ...result, payload: decodeApplicationPayloadView(replyParts[1]!) }
-              : result
-          );
-        } catch (error) {
-          this.operations.fail(pending.id, error);
-        }
-      },
-      (error) => {
-        this.operations.fail(pending.id, error);
-      }
-    );
     return pending;
   }
 

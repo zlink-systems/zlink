@@ -73,6 +73,7 @@ import type {
 import { ZLinkSpotLifecycleMetrics } from './spot-lifecycle-metrics';
 
 interface ZLinkEntrySpotActivationOptions {
+  readonly admission?: import('../admission').ZLinkRuntimeAdmissionGate;
   readonly entrySpotType: Type<ZLinkEntrySpot>;
   readonly timerHandlers?: readonly ZLinkEntrySpotTimerHandlerRegistration[];
   readonly packetHandlers?: readonly ZLinkEntrySpotPacketHandlerRegistration[];
@@ -192,6 +193,7 @@ export class ZLinkEntrySpotActivation {
       dispatchErrors: options.dispatchErrors
     });
     this.actorPacketDispatch = new ZLinkSpotActorPacketDispatch({
+      admission: this.options.admission,
       spot: () => this.entrySpot as unknown as ZLinkSpot,
       spotId: () => String(this.options.nativeSpot.routingId),
       registry: this.actorHandlers,

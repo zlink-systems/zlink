@@ -302,6 +302,7 @@ struct observations_t
     int instances = 0;
     creation_case_t creation_case = creation_case_t::accepted;
     int creation_callbacks = 0;
+    int disconnect_callbacks = 0;
     bool fail_remote_factory = false;
     int remote_factory_failure_count = 0;
     std::vector<int> destroyed;
@@ -362,6 +363,12 @@ struct probe_t
     int value{};
 };
 NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (probe_t, value)
+struct close_session_t
+{
+    static constexpr const char *packet_name = "bound-session-close";
+    int value{};
+};
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (close_session_t, value)
 struct ready_t
 {
     static constexpr const char *packet_name = "maintenance-join-ready";
@@ -465,6 +472,7 @@ class entry_t final : public fw::entry_spot_t<actor_t>
     {
         _context.handlers ().add_actor_send<&entry_t::move> ();
         _context.handlers ().add_actor_request<&entry_t::probe> ();
+        _context.handlers ().add_actor_request<&entry_t::close_session> ();
         _context.handlers ().add_actor_send<&entry_t::view> ();
         _context.handlers ().add_actor_send<&entry_t::record> ();
     }
@@ -475,6 +483,21 @@ class entry_t final : public fw::entry_spot_t<actor_t>
             observations->recorded.push_back (request.value);
         }
         observations->changed.notify_all ();
+    }
+    fw::task_t<void> on_disconnect_actor (actor_t &) override
+    {
+        {
+            std::lock_guard lock (observations->mutex);
+            ++observations->disconnect_callbacks;
+        }
+        observations->changed.notify_all ();
+        co_return;
+    }
+    fw::task_t<probe_t>
+    close_session (actor_t &actor, fw::message_context_t &, const close_session_t &request)
+    {
+        co_await actor.context ().bound_session ().disconnect ();
+        co_return probe_t{request.value};
     }
     fw::task_t<void> view (actor_t &actor, fw::message_context_t &, const view_request_t &)
     {
@@ -566,10 +589,26 @@ class room_t final : public fw::spot_t<actor_t>
     {
         _context.handlers ().add_actor_send<&room_t::move> ();
         _context.handlers ().add_actor_request<&room_t::probe> ();
+        _context.handlers ().add_actor_request<&room_t::close_session> ();
         _context.handlers ().add_actor_send<&room_t::push> ();
         _context.handlers ().add_actor_send<&room_t::view> ();
         _context.handlers ().add_handler<&room_t::ready> ();
         _context.handlers ().add_handler<&room_t::ordinary_probe> ();
+    }
+    fw::task_t<void> on_disconnect_actor (actor_t &) override
+    {
+        {
+            std::lock_guard lock (observations->mutex);
+            ++observations->disconnect_callbacks;
+        }
+        observations->changed.notify_all ();
+        co_return;
+    }
+    fw::task_t<probe_t>
+    close_session (actor_t &actor, fw::message_context_t &, const close_session_t &request)
+    {
+        co_await actor.context ().bound_session ().disconnect ();
+        co_return probe_t{request.value};
     }
     fw::task_t<void> view (actor_t &actor, fw::message_context_t &, const view_request_t &)
     {
@@ -1025,6 +1064,13 @@ class view_client_t
         options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
         options.reconnect.enabled = false;
         _connector = zlink::stream_connector::connector_factory_t::create (options);
+        _closed_subscription = _connector.on_disconnected ([this] (auto) {
+            {
+                std::lock_guard lock (_mutex);
+                _closed = true;
+            }
+            _changed.notify_all ();
+        });
         _subscription = _connector.on<view_t> ([this] (const auto &message) {
             {
                 std::lock_guard lock (_mutex);
@@ -1035,6 +1081,11 @@ class view_client_t
     }
     ~view_client_t () { (void) _connector.close (); }
     bool connect () { return static_cast<bool> (_connector.connect ()); }
+    bool wait_closed ()
+    {
+        std::unique_lock lock (_mutex);
+        return _changed.wait_for (lock, wait_budget, [&] { return _closed; });
+    }
     // Sends one View request on this connection and returns the View it produced.
     std::optional<int> view ()
     {
@@ -1051,6 +1102,8 @@ class view_client_t
   private:
     zlink::stream_connector::connector_t _connector;
     zlink::stream_connector::subscription_t _subscription;
+    zlink::stream_connector::subscription_t _closed_subscription;
+    bool _closed = false;
     std::mutex _mutex;
     std::condition_variable _changed;
     std::vector<int> _views;
@@ -1624,6 +1677,87 @@ TEST (ActorMaintenanceJoin, ConsecutiveDeferredJoinsDoNotHoldTargetSpotDuringCap
               << " failed_kind=" << (failed ? static_cast<int> (failed->error_kind) : -1);
         }
     }
+}
+
+void actor_handler_closes_physical_session (bool remote, bool join)
+{
+    observations_t evidence;
+    observations = &evidence;
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t owner, session;
+    configure (owner, first_rid, store, relocations);
+    if (!remote)
+        owner.app.add_zlink_framework ()
+          .add_stream_node (stream_name)
+          .bind ("tcp://127.0.0.1:0")
+          .register_session<relay_session_t> ();
+    owner.start ();
+    ASSERT_TRUE (ready (owner));
+    auto services = owner.app.advanced ().services ().build_provider ();
+    auto &actors = services.get_required<fw::actor_manager_t> ();
+    ASSERT_TRUE (actors.get_or_create (fw::actor_id_t (actor_id), actor_type).async ().result ());
+    host_t *session_owner = &owner;
+    if (remote) {
+        configure_session (session, store, relocations);
+        session.start ();
+        ASSERT_TRUE (ready (session));
+        session_owner = &session;
+    }
+    auto session_services = session_owner->app.advanced ().services ().build_provider ();
+    if (remote) {
+        ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
+        ASSERT_TRUE (peer_ready (session_services.get_required<fw::route_mesh_runtime_t> ()));
+    }
+    view_client_t client (session_services.get_required<fw::framework_runtime_t> ()
+                            .listener_status (fw::listener_kind_t::stream, stream_name)
+                            .endpoint);
+    ASSERT_TRUE (client.connect ());
+    ASSERT_TRUE (client.view ().has_value ());
+    auto &sender = services.get_required<fw::actor_client_t> ();
+    if (join) {
+        ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
+                       .get_or_create (fw::spot_id_t (local_spot), room_type)
+                       .async ()
+                       .result ());
+        ASSERT_TRUE (move_to (sender, evidence, local_spot, 1));
+    }
+    const auto closed =
+      sender.request (fw::actor_id_t (actor_id), close_session_t{37}).async<probe_t> ().result ();
+    ASSERT_TRUE (closed) << (closed.error () ? closed.error ()->what () : "close request failed");
+    EXPECT_EQ (37, closed.value ().value);
+    EXPECT_TRUE (client.wait_closed ());
+    {
+        std::unique_lock lock (evidence.mutex);
+        ASSERT_TRUE (evidence.changed.wait_for (
+          lock, wait_budget, [&] { return evidence.disconnect_callbacks == 1; }));
+        EXPECT_EQ (1, evidence.disconnect_callbacks);
+    }
+    auto &gateway = services.get_required<fw::detail::actor_gateway_runtime_t> ();
+    const auto cleanup_deadline = std::chrono::steady_clock::now () + wait_budget;
+    while (gateway.actor_bound (actor_id) && std::chrono::steady_clock::now () < cleanup_deadline)
+        std::this_thread::yield ();
+    ASSERT_FALSE (gateway.actor_bound (actor_id));
+    const auto absent =
+      sender.request (fw::actor_id_t (actor_id), close_session_t{37}).async<probe_t> ().result ();
+    EXPECT_FALSE (absent);
+    EXPECT_EQ (fw::framework_error_kind_t::invalid_operation, absent.error_kind ());
+}
+TEST (BoundSessionClose, EntryLocal)
+{
+    actor_handler_closes_physical_session (false, false);
+}
+TEST (BoundSessionClose, UserLocal)
+{
+    actor_handler_closes_physical_session (false, true);
+}
+TEST (BoundSessionClose, EntryRemote)
+{
+    actor_handler_closes_physical_session (true, false);
+}
+TEST (BoundSessionClose, UserRemote)
+{
+    actor_handler_closes_physical_session (true, true);
 }
 
 TEST (ActorMaintenanceJoin, JoinedActorSendCanDeferNextJoin)

@@ -18,7 +18,6 @@ import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.Executors;
 
 final class ZLinkChannelSpotTerminalTest {
     @ParameterizedTest
@@ -109,12 +108,10 @@ final class ZLinkChannelSpotTerminalTest {
             boolean missing,
             RuntimeException terminal) {
         var probe = new SpotTerminalProbe(terminal, missing);
-        var scheduler = Executors.newSingleThreadScheduledExecutor();
         var runtime =
                 new ZLinkChannelCallRuntime(
                         new ZLinkMessageFlowTracer(
                                 new ZLinkDispatchOptionsRegistration(), null, Runnable::run),
-                        scheduler,
                         null,
                         (channel, node, spot, generation, authority, lease, parts) -> {
                             probe.submissions++;
@@ -206,7 +203,6 @@ final class ZLinkChannelSpotTerminalTest {
             assertEquals(missing ? 1 : 0, probe.activations);
         } finally {
             runtime.beginClose();
-            scheduler.shutdownNow();
         }
     }
 }

@@ -442,7 +442,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 1,
                 Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
                 true,
-                RouteContext: replyRoute
+                RouteContext: replyRoute,
+                RequestSource: AcceptedRequestSource(RoutingId.From("source-node"))
             ),
             new ZLinkBackendActorPart(
                 actorRef,
@@ -452,7 +453,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 1,
                 Message.From(ZLinkEnvelopeCodec.EncodeJsonBytes("exact", typeof(string))),
                 false,
-                RouteContext: replyRoute
+                RouteContext: replyRoute,
+                RequestSource: AcceptedRequestSource(RoutingId.From("source-node"))
             ),
         ];
     }

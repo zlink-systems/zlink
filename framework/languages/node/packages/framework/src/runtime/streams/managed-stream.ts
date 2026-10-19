@@ -226,7 +226,8 @@ export class ZLinkManagedStream implements ZLinkStream {
                 : (_actorId, retiredSession, replacedActor) => {
                     onBindingReplaced(replacedActor, retiredSession);
                   },
-              toStreamSessionActorAuthorityFence(authorityFence)
+              toStreamSessionActorAuthorityFence(authorityFence),
+              () => this.close()
             ),
           signal
         ),

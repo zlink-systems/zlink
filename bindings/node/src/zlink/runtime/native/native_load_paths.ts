@@ -5,19 +5,6 @@ import * as path from 'node:path';
 
 import type { NativeBinding } from './binding';
 
-function linuxSoname(abiSoversion: string): string {
-  return `libzlink.so.${abiSoversion}`;
-}
-
-function abiSoversionFromProvenance(abiMajor: unknown): string {
-  if (typeof abiMajor !== 'number'
-      || !Number.isSafeInteger(abiMajor)
-      || abiMajor < 0) {
-    throw new Error(`Invalid Core ABI major: ${String(abiMajor)}`);
-  }
-  return String(abiMajor);
-}
-
 function sourceTreeAbiSoversion(packageRoot: string): string {
   const version = fs.readFileSync(
     path.join(packageRoot, '..', '..', 'VERSION'),
@@ -81,7 +68,7 @@ export function prepareDevelopmentRuntimeLink(packageRoot: string): void {
   const runtimeDirs = [localDir, releaseDir, coreDir, coreAltDir].filter(
     (entry): entry is string => entry !== undefined
   );
-  const soname = linuxSoname(sourceTreeAbiSoversion(packageRoot));
+  const soname = `libzlink.so.${sourceTreeAbiSoversion(packageRoot)}`;
   refreshAddonRuntimeLink(
     path.join(addonDir, soname),
     runtimeDirs.map((entry) => path.join(entry, soname))
@@ -90,32 +77,6 @@ export function prepareDevelopmentRuntimeLink(packageRoot: string): void {
 }
 
 export function preparePrebuiltRuntimePath(prebuiltDir: string): void {
-  if (process.platform === 'linux') {
-    const packageRoot = path.dirname(path.dirname(prebuiltDir));
-    try {
-      const provenance = JSON.parse(
-        fs.readFileSync(
-          path.join(packageRoot, 'provenance', 'core-package-provenance.json'),
-          'utf8'
-        )
-      ) as { version?: string; abiMajor?: unknown };
-      if (provenance.version !== undefined) {
-        const soname = path.join(
-          prebuiltDir,
-          linuxSoname(abiSoversionFromProvenance(provenance.abiMajor))
-        );
-        const versionedLibrary = path.join(prebuiltDir, `libzlink.so.${provenance.version}`);
-        if (!fs.existsSync(soname) && fs.existsSync(versionedLibrary)) {
-          fs.symlinkSync(versionedLibrary, soname);
-        }
-      }
-    } catch {
-      // The normal package path has Core provenance. If it is unavailable,
-      // leave native loading to the development fallback below.
-    }
-    prependLibraryPath([prebuiltDir]);
-    return;
-  }
   if (process.platform !== 'win32') {
     return;
   }

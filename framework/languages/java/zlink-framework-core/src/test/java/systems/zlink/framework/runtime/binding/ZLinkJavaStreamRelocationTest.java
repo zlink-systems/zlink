@@ -216,6 +216,9 @@ final class ZLinkJavaStreamRelocationTest {
 
         Fixture() {
             node.setRoutingId(RoutingId.from("relocation-session-owner"));
+            node.setBind("inproc://relocation-session-owner-" + System.nanoTime());
+            node.start();
+            ZLinkTestSessionOwners.install(node);
             try (var create = Message.from("create")) {
                 target = node.spotNode().createActor("player", create);
             }

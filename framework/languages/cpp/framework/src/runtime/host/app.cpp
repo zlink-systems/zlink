@@ -1621,8 +1621,7 @@ void app_t::_apply_zlink_framework ()
                                                          relocation_limits);
             }
             mesh_node->configure_bound_session_relocation_resolver (
-              [actor_gateway_runtime, &location_store,
-               mesh_name = mesh_node->mesh_name ()] (const runtime::stateful::object_ref_t &source)
+              [actor_gateway_runtime] (const runtime::stateful::object_ref_t &source)
                 -> task_t<std::optional<detail::bound_session_relocation_route_t>> {
                   if (source.kind != runtime::stateful::object_kind_t::actor
                       || source.object_generation == 0 || source.authority_owner_generation == 0)
@@ -1641,30 +1640,19 @@ void app_t::_apply_zlink_framework ()
                       throw std::runtime_error ("Bound Session relocation route is stale");
                   }
 
-                  location_page_request_t page;
-                  do {
-                      auto listed = co_await location_store.list_mesh_nodes (mesh_name, page);
-                      const auto owner = std::find_if (
-                        listed.items.begin (), listed.items.end (),
-                        [&route] (const mesh_node_descriptor_t &descriptor) {
-                            return descriptor.rid == route->node_rid
-                                   && descriptor.lifecycle_generation == route->node_generation;
-                        });
-                      if (owner != listed.items.end ()) {
-                          if (owner->owner_id.empty () || owner->lease_generation <= 0) {
-                              throw std::runtime_error (
-                                "Bound Session owner has no exact lease fence");
-                          }
-                          co_return detail::bound_session_relocation_route_t{
-                            route->node_rid,
-                            route->node_generation,
-                            {owner->owner_id, owner->lease_generation},
-                            *route->session_rid,
-                            route->binding_generation};
-                      }
-                      page.continuation_token = std::move (listed.continuation_token);
-                  } while (page.continuation_token);
-                  throw std::runtime_error ("Bound Session owner descriptor was not found");
+                  // Session-Actor binding §4: command 42 carries the Session owner
+                  // identity stored at bind unchanged.
+                  if (route->session_owner_id.empty ()
+                      || route->session_owner_lease_generation == 0)
+                      throw std::runtime_error (
+                        "Bound Session route has no Session owner identity");
+                  co_return detail::bound_session_relocation_route_t{
+                    route->node_rid,
+                    route->node_generation,
+                    {route->session_owner_id,
+                     static_cast<std::int64_t> (route->session_owner_lease_generation)},
+                    *route->session_rid,
+                    route->binding_generation};
               });
         }
         if (!_state->services.contains (std::type_index (typeid (actor_manager_t))))
@@ -2329,6 +2317,23 @@ void app_t::_apply_zlink_framework ()
             // and binding generation, so it performs the remote bind.
             return result_t<void>::success ();
         });
+        actor_gateway_runtime.on_bound_session_close (
+          [application_mesh] (actor_ref_t actor, detail::actor_bound_session_route_t route) {
+              // Session-Actor binding §4: command 54 carries the stored identity unchanged.
+              if (route.session_owner_id.empty () || route.session_owner_lease_generation == 0)
+                  return task_t<void> (
+                    result_t<void>::failure (framework_error_kind_t::unavailable,
+                                             "Bound Session route has no Session owner identity"));
+              return application_mesh->native_node ().transport ().request_bound_session_close (
+                runtime::protocol::bound_session_close_t{
+                  0,
+                  std::string (actor.actor_id ().value ()),
+                  actor.object_generation (),
+                  {route.node_rid.to_bytes (), route.node_generation, route.session_owner_id,
+                   route.session_owner_lease_generation, route.session_rid->to_bytes (),
+                   route.binding_generation}},
+                application_mesh->default_request_timeout ());
+          });
         actor_gateway_runtime.on_bound_session_send (
           [application_mesh, actor_gateway_runtime, stream_runtime] (
             const actor_ref_t &actor, std::uint64_t expected_binding_generation,
@@ -2608,9 +2613,31 @@ void app_t::_apply_zlink_framework ()
           });
         application_mesh->configure_bound_session_operations (
           runtime::host::bound_session_operations_t{
+            [descriptors =
+               _state->services.build_provider ().get<runtime::store_location_resolvers_t> (),
+             mesh_name = application_mesh->mesh_name ()] (
+              const zlink::routing_id_t &node_rid,
+              std::uint64_t node_generation) -> task_t<std::optional<location_owner_token_t>> {
+                // Session-Actor binding §4: the admitted peer descriptor of this
+                // lifecycle that passed the Location runtime §4.1 owner lease check.
+                if (!descriptors)
+                    co_return std::nullopt;
+                auto live = co_await runtime::await_result (
+                  descriptors->get ().list_live_mesh_nodes (mesh_name));
+                if (!live.has_value ())
+                    co_return std::nullopt;
+                for (const auto &descriptor : live.value ()) {
+                    if (descriptor.rid == node_rid
+                        && descriptor.lifecycle_generation == node_generation)
+                        co_return location_owner_token_t{descriptor.owner_id,
+                                                         descriptor.lease_generation};
+                }
+                co_return std::nullopt;
+            },
             [actor_gateway_runtime, application_mesh, stream_runtime] (
               const runtime::protocol::bound_session_bind_t &bind,
               const zlink::routing_id_t &session_owner, std::uint64_t session_owner_generation,
+              const location_owner_token_t &session_owner_token,
               std::function<bool ()> submit_terminal_reply) mutable {
                 const auto actor = detail::actor_ref_access_t::make (
                   node_rid_t::from_string (
@@ -2694,7 +2721,9 @@ void app_t::_apply_zlink_framework ()
                   detail::actor_bound_session_route_t{
                     session_owner, session_rid, bind.actor.object_generation,
                     session_owner_generation, bind.actor.authority_owner_generation,
-                    bind.actor.owner_lease_generation, bind.binding.generation, 0, 0},
+                    bind.actor.owner_lease_generation, bind.binding.generation, 0, 0, false,
+                    session_owner_token.owner_id,
+                    static_cast<std::uint64_t> (session_owner_token.lease_generation)},
                   stream_codec_t::message_pack, std::move (submit_terminal_reply));
                 if (!transition) {
                     return runtime::host::bound_session_bind_operation_result_t{
@@ -2724,12 +2753,15 @@ void app_t::_apply_zlink_framework ()
                 }
                 if (change.changed && change.previous && change.previous->session_rid
                     && change.previous->node_generation != 0
-                    && change.previous->binding_generation != 0) {
+                    && change.previous->binding_generation != 0
+                    && !change.previous->session_owner_id.empty ()
+                    && change.previous->session_owner_lease_generation != 0) {
                     replacement = runtime::protocol::bound_session_replaced_t{
                       bind.actor,
                       runtime::protocol::retired_bound_session_route_fence_t{
                         change.previous->node_rid.to_bytes (), change.previous->node_generation,
-                        change.previous->node_rid.to_string (), change.previous->node_generation,
+                        change.previous->session_owner_id,
+                        change.previous->session_owner_lease_generation,
                         change.previous->session_rid->to_bytes (),
                         change.previous->binding_generation}};
                 }

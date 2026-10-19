@@ -676,6 +676,27 @@ struct close_room_timer_handler_t
     }
 };
 
+class close_other_room_spot_t final : public zf::spot_t<member_actor_t>
+{
+  public:
+    explicit close_other_room_spot_t (zf::spot_context_t context) : _context (std::move (context))
+    {
+    }
+    zf::spot_context_t &context () noexcept override { return _context; }
+    const zf::spot_context_t &context () const noexcept override { return _context; }
+    void configure () override {}
+    zf::task_t<zf::spot_actor_join_result_t> on_actor_join (std::string_view,
+                                                            const zf::message_t &) override
+    {
+        co_return zf::spot_actor_join_result_t::accept ();
+    }
+    zf::task_t<void> on_actor_joined (member_actor_t &) override { co_return; }
+    zf::task_t<void> on_leave_actor (member_actor_t &) override { co_return; }
+
+  private:
+    zf::spot_context_t _context;
+};
+
 class close_room_spot_t final : public zf::spot_t<member_actor_t>
 {
   public:
@@ -1432,6 +1453,46 @@ class scenario_client_t final : public zf::hosted_service_t
             current ().cross_join_active.store (false);
             return;
         }
+        if (act == "getOrCreateDuringClose") {
+            auto &manager = services.get_required<zf::spot_manager_t> ();
+            auto entered = current ().closing_entered.get_future ();
+            auto closing =
+              std::async (std::launch::async, [&] { return manager_close (services, *ref); });
+            const std::shared_ptr<void> release_on_exit (nullptr, [&] (void *) {
+                current ().closing_released.complete (zf::result_t<void>::success ());
+            });
+            if (entered.wait_for (3s) != std::future_status::ready)
+                throw std::runtime_error ("OnClosing did not start");
+            const auto mismatch = manager.get_or_create (zf::spot_id_t (spot_id), "other-room")
+                                    .timeout (3s)
+                                    .async ()
+                                    .result ();
+            EXPECT_FALSE (mismatch);
+            EXPECT_EQ (mismatch.error_kind (), zf::framework_error_kind_t::type_mismatch);
+            auto pending = manager.get_or_create (zf::spot_id_t (spot_id), "room")
+                             .timeout (given.value ("deadlineExpires", false) ? 100ms : 3s)
+                             .async ();
+            if (given.value ("deadlineExpires", false)) {
+                const auto result = pending.result ();
+                actual["deadlineExceeded"] =
+                  !result && result.error_kind () == zf::framework_error_kind_t::deadline_exceeded;
+            } else {
+                actual["completedBeforeRelease"] = pending.await_ready ();
+                current ().closing_released.complete (zf::result_t<void>::success ());
+                const auto closed = closing.get ();
+                actual["closeSucceeded"] = closed && closed.value ();
+                const auto result = pending.result ();
+                actual["created"] =
+                  result && result.value ().state == zf::spot_create_state_t::created;
+                actual["newIncarnation"] =
+                  result && result.value ().spot.object_generation () != ref->object_generation ();
+                return;
+            }
+            current ().closing_released.complete (zf::result_t<void>::success ());
+            const auto closed = closing.get ();
+            actual["closeSucceeded"] = closed && closed.value ();
+            return;
+        }
         if (act == "directRequestDuringClose") {
             // The first request installs the Ready route in the source cache,
             // so the second one reaches the owner while its Close runs.
@@ -1553,6 +1614,17 @@ class scenario_client_t final : public zf::hosted_service_t
                 current ().factory_calls = 0;
             }
             actual["result"] = close_result (manager_close (services, close_ref));
+            if (given.value ("members", 0) > 0) {
+                auto &manager = services.get_required<zf::spot_manager_t> ();
+                const auto existing = manager.get_or_create (zf::spot_id_t (spot_id), "room")
+                                        .timeout (3s)
+                                        .async ()
+                                        .result ();
+                ASSERT_TRUE (existing);
+                EXPECT_EQ (existing.value ().state, zf::spot_create_state_t::existing);
+                EXPECT_EQ (existing.value ().spot.object_generation (),
+                           close_ref.object_generation ());
+            }
         } else if (act == "managerCloseThenManagerCloseAgain") {
             const auto first = manager_close (services, close_ref);
             actual["results"] = nlohmann::json::array (
@@ -1685,6 +1757,12 @@ nlohmann::json run_scenario (const nlohmann::json &scenario, std::string &failur
                 return std::make_shared<close_room_spot_t> (std::move (context));
             },
             [] (auto &factory) { factory.disable_relocation (); })
+          .add_spot_factory<close_other_room_spot_t> (
+            "other-room",
+            [] (zf::spot_context_t context) {
+                return std::make_shared<close_other_room_spot_t> (std::move (context));
+            },
+            [] (auto &factory) { factory.disable_relocation (); })
           .add_instance_spot_factory<close_session_spot_t> (
             "session",
             [] (zf::instance_spot_context_t context) {
@@ -1740,6 +1818,27 @@ void run_and_check (const nlohmann::json &scenario)
         }
         EXPECT_EQ (value, actual.at (key)) << key << ": " << actual.dump ();
     }
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, GetOrCreateWaitsForClosing)
+{
+    run_and_check (nlohmann::json{{"name", "get-or-create-closing"},
+                                  {"given", {{"authority", "Ready"}, {"onClosing", "blocks"}}},
+                                  {"act", "getOrCreateDuringClose"},
+                                  {"expect",
+                                   {{"completedBeforeRelease", false},
+                                    {"closeSucceeded", true},
+                                    {"created", true},
+                                    {"newIncarnation", true}}}});
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, GetOrCreateClosingDeadline)
+{
+    run_and_check (nlohmann::json{
+      {"name", "get-or-create-closing-deadline"},
+      {"given", {{"authority", "Ready"}, {"onClosing", "blocks"}, {"deadlineExpires", true}}},
+      {"act", "getOrCreateDuringClose"},
+      {"expect", {{"deadlineExceeded", true}, {"closeSucceeded", true}}}});
 }
 
 TEST (ZLinkFrameworkSpotCloseConformance, ShutdownJoinsExplicitCloseBeforeOwnerCleanup)

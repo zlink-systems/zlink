@@ -214,6 +214,7 @@ import { ZLinkInstanceActivationAuthority } from './instance-activation-authorit
 import { ZLinkLocationRuntimeOwner } from './location-runtime-owner';
 import { MeshRouterResolver } from './mesh-router-resolver';
 import {
+  type ZLinkDrainForceReason,
   ZLinkDrainingStatePublishError,
   ZLinkRetiringRollbackError,
   ZLinkRouteMeshRuntimeCoordinator
@@ -721,13 +722,6 @@ export class ZLinkFrameworkRuntimeHost
       actorHandoff: this.actorHandoff,
       authorityStore: () => this.locationOwner.currentStores?.locationStore,
       currentOwner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
-      liveDescriptors: (meshName, signal) => {
-        const runtime = this.locationOwner.currentRuntime;
-        if (runtime === undefined) {
-          throw new Error('Session owner liveness is unavailable without a Location runtime.');
-        }
-        return runtime.listLiveMeshNodes(meshName, signal);
-      },
       sessionRelocationWire: () => this.serviceRelocation,
       clearRemoteActorPacketTarget: (actorId) =>
         this.boundSessionRelay.clearRemoteActorPacketTarget(actorId),
@@ -861,7 +855,8 @@ export class ZLinkFrameworkRuntimeHost
         this.performMeshDrain(meshName, signal, stopStartingSignal),
       shutdownResources: (meshName, signal) => this.performMeshShutdown(meshName, signal),
       cleanupHostResources: (signal) => this.cleanupOwnerForDrain(signal),
-      forceStopResources: (meshName) => this.forceStopMesh(meshName)
+      forceStopResources: (meshName, reason, signal) =>
+        this.performMeshShutdown(meshName, signal, reason)
     });
     this.metricRegistrations.push(
       this.metrics.registerHostState(() => runtimeStateMetricName(this.runtimeState)),
@@ -1880,8 +1875,24 @@ export class ZLinkFrameworkRuntimeHost
     );
   }
 
-  private async performMeshShutdown(meshName: string, signal: AbortSignal): Promise<void> {
-    await awaitWithDrainSignal(this.serviceRelocation.drainActorJoinSources(meshName), signal);
+  private async performMeshShutdown(
+    meshName: string,
+    signal: AbortSignal,
+    forceReason?: ZLinkDrainForceReason
+  ): Promise<void> {
+    if (forceReason !== undefined) {
+      this.spotNodeRuntime
+        ?.meshNode(meshName)
+        ?.cancelPendingOperations?.(
+          createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RuntimeShutdown,
+            'The host stopped before the request completed.'
+          )
+        );
+      await waitForForcedSessionNotification(this.streamRuntime?.notifyServerDrain(meshName));
+    } else {
+      await awaitWithDrainSignal(this.serviceRelocation.drainActorJoinSources(meshName), signal);
+    }
     await this.spotManager?.drainForShutdown(meshName, signal, this.runtimeDeadline);
     await awaitWithDrainSignal(this.streamRuntime?.notifyServerDrain(meshName), signal);
   }
@@ -2033,11 +2044,6 @@ export class ZLinkFrameworkRuntimeHost
     } catch (error) {
       throw new ZLinkOwnerCleanupError(error);
     }
-  }
-
-  private async forceStopMesh(meshName: string): Promise<void> {
-    await waitForForcedSessionNotification(this.streamRuntime?.notifyServerDrain(meshName));
-    await this.spotManager?.drainForShutdown(meshName, undefined, this.runtimeDeadline);
   }
 
   private registerInstanceApplicationLifecycle(
@@ -2843,6 +2849,7 @@ export class ZLinkFrameworkRuntimeHost
     }).create();
     return {
       ...options,
+      admission: this.admission,
       errorSink: this.runtimeOrPreStartErrorSink,
       peerAdmissionSealed: (meshName: string) => !this.admission.accepts(meshName),
       messageFollowReceiver: (record: ServiceMessageFollowRecord) => {
@@ -3028,7 +3035,7 @@ export class ZLinkFrameworkRuntimeHost
     // of new application admission. Disconnect callbacks still use their owner gate.
     if (record.domain === ReadyDomain.Infrastructure) return dispatch();
     if (
-      !this.admission.accepts(meshName) &&
+      !this.admission.accepts(meshName, record.kind) &&
       (record.kind === ReceiveKind.NodeSend ||
         record.kind === ReceiveKind.NodeRequest ||
         record.kind === ReceiveKind.SpotSend ||
@@ -3047,7 +3054,7 @@ export class ZLinkFrameworkRuntimeHost
         return dispatch();
       }
     }
-    return this.admission.run(meshName, operation, dispatch);
+    return this.admission.run(meshName, operation, dispatch, record.kind);
   }
 
   private async dispatchMeshActorBinding(
@@ -3162,13 +3169,21 @@ export class ZLinkFrameworkRuntimeHost
   ) {
     const state = this.executionState;
     const channelRuntime = this.channelRuntime;
-    if (state === undefined || channelRuntime === undefined || !this.admission.accepts(meshName)) {
+    if (
+      state === undefined ||
+      channelRuntime === undefined ||
+      !this.admission.accepts(meshName, ReceiveKind.NodeSend)
+    ) {
       return { status: ZLinkSubmitStatus.Shutdown } as const;
     }
     if (!channelRuntime.canDispatchLocalMeshRoute(meshName)) {
       return { status: ZLinkSubmitStatus.TargetNotFound } as const;
     }
-    const claim = this.admission.claim(meshName, 'RouteMesh local node dispatch');
+    const claim = this.admission.claim(
+      meshName,
+      'RouteMesh local node dispatch',
+      ReceiveKind.NodeSend
+    );
     const ownedParts: RuntimeMessage[] = [];
     try {
       for (const part of parts) {

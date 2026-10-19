@@ -20,6 +20,81 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class DrainCoordinatorTests : RegistrationValidationSupport
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Force_cleanup_uses_the_coordinators_token_for_every_owner(bool expired)
+    {
+        var probe = new DrainExecutionProbe();
+        using var bound = new CancellationTokenSource();
+        if (expired)
+            bound.Cancel();
+        var observed = new List<CancellationToken>();
+        var executor = new ZLinkFrameworkDrainExecutor(
+            new AuditRuntimeFailureReporter(),
+            probe.Operations with
+            {
+                StopAutoConnect = token =>
+                {
+                    observed.Add(token);
+                    return ValueTask.CompletedTask;
+                },
+                ForceStopRuntime = token =>
+                {
+                    observed.Add(token);
+                    return ValueTask.CompletedTask;
+                },
+                CleanupOwner = token =>
+                {
+                    observed.Add(token);
+                    return ValueTask.CompletedTask;
+                },
+                StopLocation = token =>
+                {
+                    observed.Add(token);
+                    return ValueTask.CompletedTask;
+                },
+            },
+            new ZLinkLocationOptions()
+        );
+        executor.RequestShutdown(TimeSpan.FromMinutes(1));
+        await executor.ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded, bound.Token);
+        Assert.Equal(4, observed.Count);
+        Assert.All(observed, token => Assert.Equal(bound.Token, token));
+    }
+
+    [Fact]
+    public async Task Force_cleanup_preserves_independent_failures_for_the_coordinator()
+    {
+        var probe = new DrainExecutionProbe();
+        using var bound = new CancellationTokenSource();
+        var first = new OperationCanceledException(bound.Token);
+        var second = new OperationCanceledException(bound.Token);
+        var executor = new ZLinkFrameworkDrainExecutor(
+            new AuditRuntimeFailureReporter(),
+            probe.Operations with
+            {
+                StopAutoConnect = _ =>
+                {
+                    bound.Cancel();
+                    return ValueTask.FromException(first);
+                },
+                ForceStopRuntime = _ => ValueTask.FromException(second),
+            },
+            new ZLinkLocationOptions()
+        );
+        // An expired shutdown deadline made the executor replace an aggregate
+        // with a new cancellation exception, losing the original failures.
+        executor.RequestShutdown(TimeSpan.FromMilliseconds(1));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            Task.Delay(Timeout.InfiniteTimeSpan, executor.ShutdownCancellationToken)
+        );
+        var failure = await Assert.ThrowsAsync<AggregateException>(() =>
+            executor.ForceStopAsync(ZLinkDrainForceReason.DeadlineExceeded, bound.Token).AsTask()
+        );
+        Assert.Equal(new Exception[] { first, second }, failure.InnerExceptions);
+    }
+
     [Fact]
     public async Task Startup_Cancellation_Waits_For_Host_Lease_Cleanup_Beyond_Renew_Timeout()
     {

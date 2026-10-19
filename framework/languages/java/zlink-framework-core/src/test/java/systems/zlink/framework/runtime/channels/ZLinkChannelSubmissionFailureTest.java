@@ -49,10 +49,9 @@ final class ZLinkChannelSubmissionFailureTest {
         ZLinkBackendPublisherSocket publisher =
                 publisherThatWaitsForCapacity(publishEntered, queueCapacity);
 
-        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-                var caller = Executors.newSingleThreadExecutor();
+        try (var caller = Executors.newSingleThreadExecutor();
                 Message payload = Message.from("fanout-payload")) {
-            ZLinkChannelCallRuntime runtime = runtime(scheduler);
+            ZLinkChannelCallRuntime runtime = runtime();
             try {
                 CompletableFuture<Void> completion =
                         CompletableFuture.runAsync(
@@ -78,9 +77,8 @@ final class ZLinkChannelSubmissionFailureTest {
         ZLinkBackendPublisherSocket publisher =
                 publisherThatThrows(new ZlinkSubmitException(SubmitResult.BACKPRESSURED));
 
-        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-                Message payload = Message.from("fanout-timeout")) {
-            ZLinkChannelCallRuntime runtime = runtime(scheduler);
+        try (Message payload = Message.from("fanout-timeout")) {
+            ZLinkChannelCallRuntime runtime = runtime();
             try {
                 CompletionException failure =
                         assertThrows(
@@ -105,9 +103,8 @@ final class ZLinkChannelSubmissionFailureTest {
         IllegalStateException rejection = new IllegalStateException("route rejected");
         ZLinkBackendRouterSocket router = routerThatThrows(rejection, new AtomicInteger());
 
-        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-                Message payload = Message.from("route-payload")) {
-            ZLinkChannelCallRuntime runtime = runtime(scheduler);
+        try (Message payload = Message.from("route-payload")) {
+            ZLinkChannelCallRuntime runtime = runtime();
             try {
                 CompletionException failure =
                         assertThrows(
@@ -143,9 +140,8 @@ final class ZLinkChannelSubmissionFailureTest {
         ZLinkBackendRouterSocket router =
                 routerThatThrows(new IllegalStateException("route rejected"), attempts);
 
-        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-                Message payload = Message.from("route-capacity-payload")) {
-            ZLinkChannelCallRuntime runtime = runtime(scheduler);
+        try (Message payload = Message.from("route-capacity-payload")) {
+            ZLinkChannelCallRuntime runtime = runtime();
             List<CompletableFuture<Void>> pending = List.of();
             try {
                 pending = exhaustCapacity(runtime);
@@ -184,9 +180,8 @@ final class ZLinkChannelSubmissionFailureTest {
         IllegalStateException rejection = new IllegalStateException("channel rejected");
         ZLinkInternalSpotNode node = channelNodeThatThrows(rejection, new AtomicInteger());
 
-        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-                Message payload = Message.from("channel-payload")) {
-            ZLinkChannelCallRuntime runtime = runtime(scheduler);
+        try (Message payload = Message.from("channel-payload")) {
+            ZLinkChannelCallRuntime runtime = runtime();
             try {
                 CompletionException failure =
                         assertThrows(
@@ -217,9 +212,8 @@ final class ZLinkChannelSubmissionFailureTest {
         AtomicInteger attempts = new AtomicInteger();
         ZLinkInternalSpotNode node = channelNodeThatUsesCallerRegistry(attempts);
 
-        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-                Message payload = Message.from("channel-capacity-payload")) {
-            ZLinkChannelCallRuntime runtime = runtime(scheduler);
+        try (Message payload = Message.from("channel-capacity-payload")) {
+            ZLinkChannelCallRuntime runtime = runtime();
             List<CompletableFuture<Void>> pending = List.of();
             try {
                 pending = exhaustCapacity(runtime);
@@ -254,9 +248,8 @@ final class ZLinkChannelSubmissionFailureTest {
         AtomicInteger attempts = new AtomicInteger();
         ZLinkInternalSpotNode node = nodeSendThatThrows(rejection, attempts);
 
-        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-                Message payload = Message.from("node-send-payload")) {
-            ZLinkChannelCallRuntime runtime = runtime(scheduler);
+        try (Message payload = Message.from("node-send-payload")) {
+            ZLinkChannelCallRuntime runtime = runtime();
             try {
                 IllegalStateException failure =
                         assertSubmitFailure(
@@ -290,9 +283,8 @@ final class ZLinkChannelSubmissionFailureTest {
         CompletionStage<Void> admitted = ZLinkOneWayCalls.immediateAdmission();
         ZLinkInternalSpotNode node = nodeSendThatAdmitsImmediately(admitted);
 
-        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-                Message payload = Message.from("node-send-immediate")) {
-            ZLinkChannelCallRuntime runtime = runtime(scheduler);
+        try (Message payload = Message.from("node-send-immediate")) {
+            ZLinkChannelCallRuntime runtime = runtime();
             try {
                 ZLinkChannelSocketRegistry registry = sockets(node);
                 var laneField = ZLinkChannelSocketRegistry.class.getDeclaredField("stateLane");
@@ -335,9 +327,8 @@ final class ZLinkChannelSubmissionFailureTest {
         AtomicInteger attempts = new AtomicInteger();
         ZLinkInternalSpotNode node = channelSendThatThrows(rejection, attempts);
 
-        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-                Message payload = Message.from("channel-send-payload")) {
-            ZLinkChannelCallRuntime runtime = runtime(scheduler);
+        try (Message payload = Message.from("channel-send-payload")) {
+            ZLinkChannelCallRuntime runtime = runtime();
             try {
                 IllegalStateException failure =
                         assertSubmitFailure(
@@ -375,13 +366,12 @@ final class ZLinkChannelSubmissionFailureTest {
         return sockets;
     }
 
-    private static ZLinkChannelCallRuntime runtime(
-            java.util.concurrent.ScheduledExecutorService scheduler) {
+    private static ZLinkChannelCallRuntime runtime() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         ZLinkMessageFlowTracer flow =
                 new ZLinkMessageFlowTracer(
                         options.registration().dispatchOptions(), null, Runnable::run);
-        return new ZLinkChannelCallRuntime(flow, scheduler, null, null, null);
+        return new ZLinkChannelCallRuntime(flow, null, null, null);
     }
 
     private static List<CompletableFuture<Void>> exhaustCapacity(ZLinkChannelCallRuntime runtime) {

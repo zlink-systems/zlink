@@ -203,6 +203,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
     requestTerminal?: (response: unknown) => Promise<void> | void
   ): Promise<unknown> {
     return new ZLinkSpotActorPacketDispatch({
+      admission: this.options.admission,
       spot: activation.spot,
       spotId: () => String(activation.spotId),
       registry: activation.actorHandlers,

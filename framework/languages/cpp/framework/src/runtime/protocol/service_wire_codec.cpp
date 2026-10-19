@@ -943,6 +943,38 @@ void from_generated_session (Record &record, const service_wire_pilot_session_id
 void validate_session_relocation_route (const session_relocation_route_t &record);
 }
 
+std::vector<std::uint8_t> encode_bound_session_close (const bound_session_close_t &record)
+{
+    namespace codec = generated::detail;
+    auto frames = generated_codec_call ([&] {
+        const auto &s = record.session;
+        return codec::encode_boundSessionClose_54_frames (
+          {0,
+           {record.correlation},
+           {{record.actor_id}, {record.object_generation}},
+           {{s.session_owner_node_routing_id},
+            {s.session_owner_node_generation},
+            {s.session_owner_id},
+            {s.session_owner_lease_generation},
+            {s.session_routing_id},
+            {s.retired_binding_generation}}});
+    });
+    return std::move (frames.front ());
+}
+
+bound_session_close_t decode_bound_session_close (std::span<const std::uint8_t> bytes)
+{
+    auto decoded = generated_codec_call (
+      [&] { return generated::detail::decode_boundSessionClose_54_frames ({wire_bytes (bytes)}); });
+    const auto &s = decoded.session;
+    return {decoded.correlation.value,
+            decoded.actor.actorId.value,
+            decoded.actor.objectGeneration.value,
+            {s.sessionOwnerNodeRid.value, s.sessionOwnerNodeGeneration.value,
+             s.sessionOwnerId.value, s.sessionOwnerLeaseGeneration.value, s.sessionRid.value,
+             s.retiredBindingGeneration.value}};
+}
+
 std::vector<std::uint8_t> encode_session_relocation_route (const session_relocation_route_t &record)
 {
     validate_session_relocation_route (record);

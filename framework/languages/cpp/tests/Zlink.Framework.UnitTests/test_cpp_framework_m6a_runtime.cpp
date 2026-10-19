@@ -203,6 +203,69 @@ void complete_bound_session_bind (
     assert (reply.terminal_result == 0 && reply.failure_code == 0);
 }
 
+void verify_bound_session_close_reply_grammar ()
+{
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("close-reply-source"),
+      .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("close-reply-target"),
+      .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
+    source.start ();
+    target.start ();
+    const auto owner = target.topology ().local_descriptor ();
+    admit_pair (source, target, owner);
+    enum class reply_case_t
+    {
+        canonical,
+        payload,
+        correlation_mismatch
+    };
+    for (const auto reply_case :
+         {reply_case_t::canonical, reply_case_t::payload, reply_case_t::correlation_mismatch}) {
+        auto close = source.request_bound_session_close (
+          {0,
+           "close-actor",
+           1,
+           {owner.node_routing_id, owner.lifecycle_generation, "owner", 1, bytes ("session"), 1}},
+          2s);
+        std::optional<mesh::service_mailbox_claim_t> claim;
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        while (!claim && std::chrono::steady_clock::now () < deadline) {
+            (void) await_task (
+              target.pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
+            claim =
+              target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+        }
+        assert (claim && claim->records.size () == 1);
+        auto &request = claim->records.front ();
+        const auto decoded =
+          protocol::decode_bound_session_close (protocol::message_bytes (request.parts.front ()));
+        assert (decoded.actor_id == "close-actor");
+        if (reply_case == reply_case_t::correlation_mismatch)
+            request.correlation = *request.correlation + 1;
+        if (reply_case == reply_case_t::payload)
+            assert (target.reply (request, {"forbidden", "application/json", bytes ("{}")}));
+        else
+            assert (target.reply_bound_session_bind (request, 0, 0));
+        assert (target.mailbox ().release (*claim));
+        while (!close.await_ready () && std::chrono::steady_clock::now () < deadline)
+            (void) await_task (
+              source.pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
+        assert (close.await_ready ());
+        const auto terminal = close.result ();
+        if (reply_case == reply_case_t::canonical)
+            assert (terminal);
+        else {
+            assert (!terminal);
+            assert (terminal.error ()->kind ()
+                    == zlink::framework::framework_error_kind_t::protocol_error);
+        }
+    }
+    source.close ();
+    target.close ();
+}
+
 void verify_bound_session_bind_retries_until_route_is_admitted ()
 {
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
@@ -4075,6 +4138,8 @@ int main (int argc, char **argv)
                 verify_durable_attempt_waits_for_admit (protocol::command::actorJoin);
             else if (name == "retries")
                 verify_bound_session_bind_retries_until_route_is_admitted ();
+            else if (name == "close-reply")
+                verify_bound_session_close_reply_grammar ();
             else if (name == "silent")
                 verify_unadmitted_route (false);
             else if (name == "prepare")
@@ -4155,6 +4220,7 @@ int main (int argc, char **argv)
     verify_durable_attempt_waits_for_admit (protocol::command::actorCreate);
     verify_durable_attempt_waits_for_admit (protocol::command::actorJoin);
     verify_actor_create_command_49_roundtrip ();
+    verify_bound_session_close_reply_grammar ();
     verify_bound_session_bind_retries_until_route_is_admitted ();
     verify_bound_session_bind_exposes_only_accepted_attempt ();
     verify_bound_session_bind_unadmitted_deadline_fails_both_stages ();

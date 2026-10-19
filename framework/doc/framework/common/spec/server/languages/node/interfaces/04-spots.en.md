@@ -296,9 +296,8 @@ option twice, or calling terminal `submit(...)` twice, is
 `InvalidOperation`. User Spot's `create` has the framework issue a new
 global Spot ID. `getOrCreate` returns a ready Spot of the same User
 kind/[stable type](../../../00-foundation/02-glossary.en.md#stable-type) as
-`existing`. If Creating, it waits for the authority change; once Ready,
-`existing`; if it becomes Missing through cleanup, it competes for a
-new reservation. If kind or type differs, `TypeMismatch`; if the
+`existing`. Waiting on a Creating or Closing authority and the steps
+after it follow [Spot address messaging §3.2](../../../03-spot-actor/06-spot-address-messaging.en.md#32-convergence-of-concurrent-requests). If kind or type differs, `TypeMismatch`; if the
 terminal state isn't reached within the
 [deadline](../../../00-foundation/02-glossary.en.md#deadline), `DeadlineExceeded`.
 

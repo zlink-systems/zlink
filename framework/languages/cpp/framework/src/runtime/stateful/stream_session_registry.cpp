@@ -60,11 +60,42 @@ stream_session_registry_t::stream_session_registry_t (authority_resolver_t resol
     }
 }
 
+task_t<void>
+stream_session_registry_t::close_current (protocol::bound_session_close_t request,
+                                          protocol::retired_bound_session_route_fence_t owner)
+{
+    auto terminal =
+      co_await _lane.run_task ([this, request = std::move (request), owner = std::move (owner)] {
+          const auto &session = request.session;
+          const auto found =
+            _connections.find (zlink::routing_id_t::from (session.session_routing_id).to_hex ());
+          const auto indexed = _actor_bindings.find (request.actor_id);
+          if (!protocol::same_session_owner_identity (session, owner)
+              || found == _connections.end () || indexed == _actor_bindings.end ()
+              || indexed->second.connection != found->second.connection
+              || indexed->second.binding_generation != session.retired_binding_generation
+              || !found->second.physical_close)
+              return result_t<void>::failure (framework_error_kind_t::unavailable,
+                                              "Session binding is no longer current");
+          const auto aggregate = found->second.bindings.find (request.actor_id);
+          if (aggregate == found->second.bindings.end ()
+              || aggregate->second.binding.actor.object_generation != request.object_generation)
+              return result_t<void>::failure (framework_error_kind_t::unavailable,
+                                              "Session binding is no longer current");
+          found->second.physical_close ();
+          return result_t<void>::success ();
+      });
+    if (!terminal)
+        throw *terminal.error ();
+    co_return;
+}
+
 stream_connection_t
 stream_session_registry_t::open (std::string connection_id,
                                  std::function<void ()> close_connection,
                                  std::optional<zlink::routing_id_t> owner_node_rid,
-                                 std::uint64_t owner_node_generation)
+                                 std::uint64_t owner_node_generation,
+                                 std::function<void ()> physical_close)
 {
     if (connection_id.empty ()) {
         throw std::invalid_argument ("stream connection id is empty");
@@ -73,6 +104,7 @@ stream_session_registry_t::open (std::string connection_id,
       _lane
         .run ([this, connection_id = std::move (connection_id),
                close_connection = std::move (close_connection),
+               physical_close = std::move (physical_close),
                owner_node_rid = std::move (owner_node_rid), owner_node_generation] () mutable {
             std::vector<stream_held_relay_t> displaced;
             const auto generation = ++_last_connection_generation[connection_id];
@@ -92,8 +124,8 @@ stream_session_registry_t::open (std::string connection_id,
                         displaced.push_back (std::move (settle));
                 }
             }
-            _connections[connection.connection_id] =
-              connection_state_t{connection, {}, std::move (close_connection)};
+            _connections[connection.connection_id] = connection_state_t{
+              connection, {}, std::move (close_connection), std::move (physical_close)};
             notify_changed ();
             return std::make_pair (std::move (connection), std::move (displaced));
         })

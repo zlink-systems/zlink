@@ -240,6 +240,21 @@ final class InstanceSpotRuntimeIntegrationTest {
     }
 
     @Test
+    void instanceIntentAdmissionReadBeforeCloseCompletionRetainsPayload() throws Exception {
+        verifyCloseFailure(CloseScenario.CREATING_ADMISSION_BEFORE_CLOSE);
+    }
+
+    @Test
+    void instanceIntentAdmissionReadCrossingCloseCompletionRetainsPayload() throws Exception {
+        verifyCloseFailure(CloseScenario.CREATING_ADMISSION_AFTER_CLOSE);
+    }
+
+    @Test
+    void instanceIntentAuthorityReadCrossingCloseCompletionRetainsPayload() throws Exception {
+        verifyCloseFailure(CloseScenario.CREATING_AUTHORITY_AFTER_CLOSE);
+    }
+
+    @Test
     void creatingIntentCrossingClosePendingCutRetainsPayloadUntilSuccessorCompletes()
             throws Exception {
         verifyCloseFailure(CloseScenario.CREATING_RETAINED);
@@ -273,6 +288,9 @@ final class InstanceSpotRuntimeIntegrationTest {
         CREATING_RELEASED,
         CREATING_REPLACED,
         CREATING_RETAINED,
+        CREATING_ADMISSION_BEFORE_CLOSE,
+        CREATING_ADMISSION_AFTER_CLOSE,
+        CREATING_AUTHORITY_AFTER_CLOSE,
         DOUBLE_RELEASE,
         COMMIT_APPLIED_FAILURE,
         COMMIT_APPLIED_READ_FAILURE
@@ -287,10 +305,18 @@ final class InstanceSpotRuntimeIntegrationTest {
         boolean creating =
                 failureStage == CloseScenario.CREATING
                         || failureStage == CloseScenario.CREATING_RETAINED
+                        || failureStage == CloseScenario.CREATING_ADMISSION_BEFORE_CLOSE
+                        || failureStage == CloseScenario.CREATING_ADMISSION_AFTER_CLOSE
+                        || failureStage == CloseScenario.CREATING_AUTHORITY_AFTER_CLOSE
                         || failureStage == CloseScenario.CREATING_SEALED
                         || failureStage == CloseScenario.CREATING_RELEASED
                         || failureStage == CloseScenario.CREATING_REPLACED;
-        boolean retainedBoundary = failureStage == CloseScenario.CREATING_RETAINED;
+        boolean admissionBoundary =
+                failureStage == CloseScenario.CREATING_ADMISSION_BEFORE_CLOSE
+                        || failureStage == CloseScenario.CREATING_ADMISSION_AFTER_CLOSE
+                        || failureStage == CloseScenario.CREATING_AUTHORITY_AFTER_CLOSE;
+        boolean retainedBoundary =
+                failureStage == CloseScenario.CREATING_RETAINED || admissionBoundary;
         boolean replacedBoundary = failureStage == CloseScenario.CREATING_REPLACED;
         boolean releasedBoundary = failureStage == CloseScenario.CREATING_RELEASED;
         boolean sealedBoundary = failureStage == CloseScenario.CREATING_SEALED || releasedBoundary;
@@ -369,7 +395,7 @@ final class InstanceSpotRuntimeIntegrationTest {
         targetOptions.addLocationStore(store);
         targetOptions.addRelocationStore(new InMemoryRelocationStore());
         targetOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
-        if (failureStage == CloseScenario.CALLBACK || sealedBoundary) {
+        if (failureStage == CloseScenario.CALLBACK || sealedBoundary || retainedBoundary) {
             targetOptions
                     .configureDispatch()
                     .messageFlow(
@@ -388,6 +414,12 @@ final class InstanceSpotRuntimeIntegrationTest {
         var sourceOptions = new DefaultZLinkFrameworkOptions();
         sourceOptions.addLocationStore(store);
         sourceOptions.configureLocations().setPollingInterval(Duration.ofMillis(20));
+        if (retainedBoundary) {
+            sourceOptions
+                    .configureDispatch()
+                    .messageFlow(
+                            systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
+        }
         var sourceNode = sourceOptions.addRouteMesh("game");
         sourceNode
                 .listen("tcp://127.0.0.1:0")
@@ -472,7 +504,8 @@ final class InstanceSpotRuntimeIntegrationTest {
                         return;
                     }
                     if (retainedBoundary || sealedBoundary) {
-                        if (retainedBoundary) SourceEntrySpot.afterCloseStart.complete(null);
+                        if (retainedBoundary && !admissionBoundary)
+                            SourceEntrySpot.afterCloseStart.complete(null);
                         SourceEntrySpot.beforeClose.get(5, TimeUnit.SECONDS);
                         try (var boundary = new RetainedAdmissionBoundary(target, spotId)) {
                             if (!sealedBoundary) {
@@ -528,6 +561,50 @@ final class InstanceSpotRuntimeIntegrationTest {
                             boundary.resumeAdmission.complete(null);
                             boundary.admitted.get(5, TimeUnit.SECONDS);
                             assertEquals(0, boundary.releases.get());
+                            if (admissionBoundary) {
+                                try (var readBoundary =
+                                        new InstanceAdmissionReadBoundary(
+                                                target,
+                                                spotId,
+                                                failureStage
+                                                        == CloseScenario
+                                                                .CREATING_AUTHORITY_AFTER_CLOSE)) {
+                                    SourceEntrySpot.afterCloseStart.complete(null);
+                                    readBoundary.reached.get(5, TimeUnit.SECONDS);
+                                    if (failureStage
+                                            == CloseScenario.CREATING_ADMISSION_BEFORE_CLOSE) {
+                                        readBoundary.resume.complete(null);
+                                        readBoundary.received.get(5, TimeUnit.SECONDS);
+                                    }
+                                    readBoundary.logger.info(
+                                            "test_lifecycle=resume_close spot=" + spotId);
+                                    boundary.resumeClose.complete(null);
+                                    assertEquals(
+                                            "echo:retained",
+                                            boundary.reply.get(5, TimeUnit.SECONDS));
+                                    assertTrue(
+                                            EchoInstanceSpot.closeCompleted.get(
+                                                    5, TimeUnit.SECONDS));
+                                    assertEquals(
+                                            List.of(EchoInstanceSpot.generations.getLast()),
+                                            EchoInstanceSpot.retainedCalls);
+                                    assertNotEquals(
+                                            EchoInstanceSpot.generations.getFirst(),
+                                            EchoInstanceSpot.retainedCalls.getFirst());
+                                    readBoundary.logger.info(
+                                            "test_lifecycle=close_completed spot="
+                                                    + spotId
+                                                    + " generations="
+                                                    + EchoInstanceSpot.generations);
+                                    boundary.released.get(5, TimeUnit.SECONDS);
+                                    assertEquals(1, boundary.releases.get());
+                                    readBoundary.resume.complete(null);
+                                    assertEquals(
+                                            "echo:hello|echo:again|echo:after-close",
+                                            SourceEntrySpot.reply.get(5, TimeUnit.SECONDS));
+                                }
+                                return;
+                            }
                             boundary.resumeClose.complete(null);
                             assertEquals("echo:retained", boundary.reply.get(5, TimeUnit.SECONDS));
                             assertEquals(
@@ -709,6 +786,103 @@ final class InstanceSpotRuntimeIntegrationTest {
                 EchoInstanceSpot.closingFailure = null;
                 diagnosticLogger.removeHandler(diagnosticHandler);
             }
+        }
+    }
+
+    /** Holds target authority reads or their completion while Close replaces the incarnation. */
+    private static final class InstanceAdmissionReadBoundary implements AutoCloseable {
+        // SourceEntrySpot sends Warmup, hello and again before its after-close request.
+        private static final String AFTER_CLOSE_CORRELATION = "corr=4";
+        final CompletableFuture<Void> reached = new CompletableFuture<>();
+        final CompletableFuture<Void> resume = new CompletableFuture<>();
+        final CompletableFuture<Void> received = new CompletableFuture<>();
+        final String spotId;
+        final Object spotNode;
+        final java.lang.reflect.Field resolverField;
+        final systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode
+                        .SpotAdmissionResolver
+                original;
+        final java.util.logging.Logger logger =
+                java.util.logging.Logger.getLogger(
+                        systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer.class
+                                .getName());
+        final java.util.logging.Handler listener =
+                new java.util.logging.Handler() {
+                    @Override
+                    public void publish(java.util.logging.LogRecord record) {
+                        if (record.getMessage().contains("phase=received")
+                                && record.getMessage().contains(AFTER_CLOSE_CORRELATION)
+                                && record.getMessage().contains("spot=" + spotId + " "))
+                            received.complete(null);
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+
+        InstanceAdmissionReadBoundary(
+                ZLinkFrameworkRuntime runtime, String targetSpotId, boolean holdBeforeRead)
+                throws Exception {
+            this.spotId = targetSpotId;
+            var spotsField = ZLinkFrameworkRuntime.class.getDeclaredField("spots");
+            spotsField.setAccessible(true);
+            Object spots = spotsField.get(runtime);
+            var meshesField = spots.getClass().getDeclaredField("routeMeshNodesByName");
+            meshesField.setAccessible(true);
+            var mesh =
+                    (systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode)
+                            ((java.util.Map<?, ?>) meshesField.get(spots)).get("game");
+            spotNode = mesh.spotNode();
+            resolverField = spotNode.getClass().getDeclaredField("spotAdmissionResolver");
+            resolverField.setAccessible(true);
+            original =
+                    (systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode
+                                    .SpotAdmissionResolver)
+                            resolverField.get(spotNode);
+            logger.addHandler(listener);
+            resolverField.set(
+                    spotNode,
+                    (systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode
+                                    .SpotAdmissionResolver)
+                            (spotId, ownerGeneration, intent, present, route) -> {
+                                if (holdBeforeRead) {
+                                    logger.info(
+                                            "test_lifecycle=before_authority_read owner_generation="
+                                                    + ownerGeneration);
+                                    reached.complete(null);
+                                    return resume.thenCompose(
+                                            ignored ->
+                                                    original.resolve(
+                                                            spotId,
+                                                            ownerGeneration,
+                                                            intent,
+                                                            present,
+                                                            route));
+                                }
+                                return original.resolve(
+                                                spotId, ownerGeneration, intent, present, route)
+                                        .thenCompose(
+                                                rejection -> {
+                                                    if (rejection != null)
+                                                        return CompletableFuture.completedFuture(
+                                                                rejection);
+                                                    logger.info(
+                                                            "test_lifecycle=admission_read owner_generation="
+                                                                    + ownerGeneration);
+                                                    reached.complete(null);
+                                                    return resume.thenApply(ignored -> rejection);
+                                                });
+                            });
+        }
+
+        @Override
+        public void close() throws IllegalAccessException {
+            resume.complete(null);
+            resolverField.set(spotNode, original);
+            logger.removeHandler(listener);
         }
     }
 

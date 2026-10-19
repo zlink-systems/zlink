@@ -101,6 +101,7 @@ public sealed partial class EntrySpotActorDispatchTests
                             7
                         )
                 ),
+                requestSource: AcceptedRequestSource(RoutingId.From("message-follow-hop")),
                 directReply: parts =>
                 {
                     replies.Add(parts.Single().AsReadOnlySpan().ToArray());
@@ -2358,11 +2359,54 @@ public sealed partial class EntrySpotActorDispatchTests
         );
     }
 
+    /// <summary>
+    /// Session-Actor binding §4: the live MeshNode descriptors of the admitted peers
+    /// publish this owner token, so the Actor owner can take a Session owner identity
+    /// from them.
+    /// </summary>
+    private sealed class AdmittedPeerDescriptors(
+        IZLinkMeshNodeLocationResolver inner,
+        CapturingSpotNode node,
+        string ownerId,
+        long leaseGeneration
+    ) : IZLinkMeshNodeLocationResolver
+    {
+        public async ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ListLiveMeshNodesAsync(
+            string meshName,
+            CancellationToken cancellationToken = default
+        ) =>
+            [
+                .. await inner
+                    .ListLiveMeshNodesAsync(meshName, cancellationToken)
+                    .ConfigureAwait(false),
+                .. node.AdmittedMeshPeers.Select(peer => new ZLinkMeshNodeDescriptor(
+                    meshName,
+                    peer.RoutingId,
+                    peer.LifecycleGeneration,
+                    peer.DescriptorRevision,
+                    peer.Endpoint,
+                    new Dictionary<string, int>(),
+                    "",
+                    ownerId,
+                    leaseGeneration,
+                    DateTimeOffset.UnixEpoch
+                )),
+            ];
+    }
+
     [Fact]
     public async Task RemoteSessionBindPublication_OldCleanup_Cannot_Interrupt_The_Owner_Turn()
     {
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            meshResolverWrapper: resolver => new AdmittedPeerDescriptors(
+                resolver,
+                node,
+                "session-owner",
+                71
+            )
+        );
         try
         {
             RegisterProbeActor(runtime, actorRef);
@@ -2393,9 +2437,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actorRef.Generation,
                 "entry",
                 61,
-                0,
-                SessionOwnerId: "session-owner",
-                SessionOwnerLeaseGeneration: 71
+                0
             );
             await runtime.BindRemoteBoundSessionRouteAsync(
                 request,
@@ -2441,7 +2483,15 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task RemoteSessionBindPublication_IgnoresOwnerLeaseChange()
     {
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            meshResolverWrapper: resolver => new AdmittedPeerDescriptors(
+                resolver,
+                node,
+                "session-owner",
+                71
+            )
+        );
         try
         {
             RegisterProbeActor(runtime, actorRef);
@@ -2477,9 +2527,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actorRef.Generation,
                 "entry",
                 61,
-                0,
-                SessionOwnerId: "session-owner",
-                SessionOwnerLeaseGeneration: 71
+                0
             );
 
             var response = await runtime.BindRemoteBoundSessionRouteAsync(
@@ -2506,7 +2554,15 @@ public sealed partial class EntrySpotActorDispatchTests
     )
     {
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            meshResolverWrapper: resolver => new AdmittedPeerDescriptors(
+                resolver,
+                node,
+                "session-owner",
+                71
+            )
+        );
         try
         {
             RegisterProbeActor(runtime, actorRef);
@@ -2537,9 +2593,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actorRef.Generation,
                 "entry",
                 61,
-                0,
-                SessionOwnerId: "session-owner",
-                SessionOwnerLeaseGeneration: 71
+                0
             );
             await runtime.BindRemoteBoundSessionRouteAsync(
                 request,
@@ -2607,7 +2661,15 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task RemoteSessionBindPublication_StillRejectsAuthorityChange()
     {
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            meshResolverWrapper: resolver => new AdmittedPeerDescriptors(
+                resolver,
+                node,
+                "session-owner",
+                71
+            )
+        );
         try
         {
             RegisterProbeActor(runtime, actorRef);
@@ -2642,9 +2704,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actorRef.Generation,
                 "entry",
                 61,
-                0,
-                SessionOwnerId: "session-owner",
-                SessionOwnerLeaseGeneration: 71
+                0
             );
 
             var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
@@ -2661,12 +2721,21 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    [Fact]
-    public async Task RemoteActorFrameRelay_ExecutesSameActorFramesInArrivalOrderWhileTheFirstAwaits()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RemoteActorFrameRelay_ExecutesSameActorFramesInArrivalOrderWhileTheFirstAwaits(
+        bool ownerExpired
+    )
     {
         var probe = new DispatchProbe();
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, dispatchProbe: probe);
+        var time = new ManualTimeProvider();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            dispatchProbe: probe,
+            locationTimeProvider: time
+        );
         try
         {
             RegisterProbeActor(runtime, actorRef);
@@ -2750,6 +2819,14 @@ public sealed partial class EntrySpotActorDispatchTests
                         CancellationToken.None
                     )
                     .AsTask();
+
+            if (ownerExpired)
+            {
+                time.AdvanceMonotonicOnly(TimeSpan.FromMinutes(1));
+                await Assert.ThrowsAsync<InvalidOperationException>(() => Relay("second", 1));
+                Assert.Empty(probe.Events);
+                return;
+            }
 
             // The second frame for the same Actor arrives through the relay
             // route while the first frame's handler awaits (spec 23 §10.2).
@@ -4927,6 +5004,65 @@ public sealed partial class EntrySpotActorDispatchTests
             {
                 operation.Dispose();
             }
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OwnerLeaseAdmission_NodeAndChannelHandlersBypassExpiredOwnerButNotShutdown(
+        bool countAsRequest
+    )
+    {
+        var time = new ManualTimeProvider();
+        ZLinkLocationRuntime? locations = null;
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            new CapturingSpotNode(),
+            locationTimeProvider: time,
+            locationRuntimeCapture: value => locations = value
+        );
+        try
+        {
+            time.AdvanceMonotonicOnly(TimeSpan.FromMinutes(1));
+            Assert.False(Assert.IsType<ZLinkLocationRuntime>(locations).IsOwnerAdmissionOpen);
+            Assert.Throws<InvalidOperationException>(() => runtime.EnterOperation(countAsRequest));
+
+            // Node and Channel handlers share this non-object admission path.
+            // Spot and Actor work keeps the owner fence (Location runtime §5).
+            var handlerReadsBefore = time.TimestampReadCount;
+            for (var index = 0; index < 1024; index++)
+            {
+                var handler = runtime.TryEnterInboundOperation(
+                    countAsRequest,
+                    ownsObjectWork: false
+                );
+                Assert.True(handler.Accepted);
+                handler.Lease.Dispose();
+            }
+            Assert.Equal(0, time.TimestampReadCount - handlerReadsBefore);
+
+            var objectReadsBefore = time.TimestampReadCount;
+            for (var index = 0; index < 1024; index++)
+            {
+                var objectWork = runtime.TryEnterInboundOperation(
+                    countAsRequest,
+                    ownsObjectWork: true
+                );
+                Assert.False(objectWork.Accepted);
+            }
+            Assert.Equal(1024, time.TimestampReadCount - objectReadsBefore);
+
+            runtime.DrainAdmission.ClaimShutdown();
+            Assert.False(
+                runtime.TryEnterInboundOperation(countAsRequest, ownsObjectWork: false).Accepted
+            );
+            Assert.False(
+                runtime.TryEnterInboundOperation(countAsRequest, ownsObjectWork: true).Accepted
+            );
         }
         finally
         {
@@ -11949,7 +12085,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 flags,
                 Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
                 true,
-                RouteContext: replyRoute
+                RouteContext: replyRoute,
+                RequestSource: AcceptedRequestSource(sourceNode)
             ),
             new ZLinkBackendActorPart(
                 actorRef,
@@ -11961,10 +12098,17 @@ public sealed partial class EntrySpotActorDispatchTests
                     ? Message.From("{")
                     : Message.From(ZLinkEnvelopeCodec.EncodeJsonBytes(value, typeof(string))),
                 false,
-                RouteContext: replyRoute
+                RouteContext: replyRoute,
+                RequestSource: AcceptedRequestSource(sourceNode)
             ),
         ];
     }
+
+    // The dispatch pump records the sender's source owner values when this owner accepts the
+    // frame (Location runtime §9.3); parts injected in its place carry the recorded values.
+    private static ZLinkServiceWireCodec.RequestSourceFence AcceptedRequestSource(
+        RoutingId sourceNode
+    ) => new("accepted-source-owner", 1, sourceNode, 1);
 
     private static bool IsDisposed(Message message)
     {
@@ -13888,6 +14032,14 @@ public sealed partial class EntrySpotActorDispatchTests
             _requestSources.TryGetValue((sourceNodeRid, sourceNodeGeneration), out var source)
                 ? source
                 : null;
+
+        public void SetRequestSourceAcceptance(IZLinkBackendRequestSourceAcceptance acceptance) { }
+
+        public ValueTask<ZLinkServiceWireCodec.RequestSourceFence?> AcceptRequestSourceAsync(
+            RoutingId sourceNodeRid,
+            ulong sourceNodeGeneration,
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(ResolveRequestSourceFence(sourceNodeRid, sourceNodeGeneration));
 
         public void ObserveActorAuthority(
             ZLinkBackendActorRef actor,

@@ -1246,10 +1246,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         attempt,
                         _admissionStop.Token
                     );
-                _requestTasks.RemoveAll(static candidate =>
-                    candidate.IsCompletedSuccessfully || candidate.IsCanceled
-                );
-                _requestTasks.Add(admissionTask);
+                RegisterRequestTask(admissionTask);
             });
         }
 
@@ -1495,10 +1492,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         if (received.ReplyToken is not null)
                             ReplyOwned(received, ack);
                         else
-                            SendOwnedAsync(ack, cancellationToken)
-                                .AsTask()
-                                .GetAwaiter()
-                                .GetResult();
+                            StartControlAck(ack);
                         continue;
                     }
                     if (
@@ -1535,12 +1529,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 }
                 catch (Exception exception)
                 {
-                    RunState(() =>
-                    {
-                        _ready = false;
-                        _diagnostics = $"control:{exception.GetType().Name}:{exception.Message}";
-                        PublishReadyTargetUnderLock();
-                    });
+                    RunState(() => ApplyControlFailureUnderState(exception));
                     throw;
                 }
             }
@@ -1594,10 +1583,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                         cancellationToken
                     )
                 );
-            _requestTasks.RemoveAll(static candidate =>
-                candidate.IsCompletedSuccessfully || candidate.IsCanceled
-            );
-            _requestTasks.Add(requestTask);
+            RegisterRequestTask(requestTask);
             delay = _liveness.TimeUntilNextActivity(_time.GetTimestamp());
             return false;
         }
@@ -1789,6 +1775,84 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 _diagnostics = _ready ? "ready" : "update:not-ready";
                 PublishReadyTargetUnderLock();
             });
+        }
+
+        private void RegisterRequestTask(Task task)
+        {
+            _requestTasks.RemoveAll(static candidate =>
+                candidate.IsCompletedSuccessfully || candidate.IsCanceled
+            );
+            _requestTasks.Add(task);
+        }
+
+        private void StartControlAck(Message message)
+        {
+            if (
+                !_lane.TryPost(() =>
+                {
+                    if (IsDisposing)
+                    {
+                        message.Dispose();
+                        return;
+                    }
+                    // Submit once in the registration turn. Only observation of a pending
+                    // or failed admission leaves the lane; binding owns WRITABLE retry.
+                    var cancellationToken = _admissionStop.Token;
+                    using (ExecutionContext.SuppressFlow())
+                    {
+                        var send = SendOwnedAsync(message, cancellationToken);
+                        if (send.IsCompletedSuccessfully)
+                            return;
+                        RegisterRequestTask(
+                            send.AsTask()
+                                .ContinueWith(
+                                    completed =>
+                                        ObserveControlAckAsync(completed, cancellationToken),
+                                    CancellationToken.None,
+                                    TaskContinuationOptions.None,
+                                    TaskScheduler.Default
+                                )
+                                .Unwrap()
+                        );
+                    }
+                })
+            )
+                message.Dispose();
+        }
+
+        private async Task ObserveControlAckAsync(Task send, CancellationToken cancellationToken)
+        {
+            try
+            {
+                await send.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                return;
+            }
+            catch (Exception exception)
+            {
+                await _lane
+                    .RunAsync(() => ApplyControlFailureUnderState(exception))
+                    .ConfigureAwait(false);
+                _errorSink.ReportRuntimeTaskException(
+                    $"client-server-control:{_channelName}",
+                    exception
+                );
+                // Disposal joins this observer. Publish shutdown without awaiting our own join.
+                ZLinkUnawaitedSubmit.Observe(
+                    DisposeAsync(),
+                    $"client-server-control-dispose:{_channelName}",
+                    _errorSink
+                );
+            }
+        }
+
+        private void ApplyControlFailureUnderState(Exception exception)
+        {
+            _ready = false;
+            _diagnostics = $"control:{exception.GetType().Name}:{exception.Message}";
+            PublishReadyTargetUnderLock();
         }
 
         private async ValueTask SendOwnedAsync(Message message, CancellationToken cancellationToken)

@@ -475,3 +475,19 @@ test('command 43 generated codec accepts both seal results and rejects malformed
     );
   }
 });
+
+test('boundSessionClose uses shared cross-language bytes', () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(path.join(protocolRoot, 'golden/bound-session-close-v1.json'), 'utf8')
+  );
+  const bytes = Buffer.from(fixture.canonical.hex, 'hex');
+  const decoded = codec.decodeBoundSessionCloseCommand([bytes], context);
+  assert.equal(decoded.actor.actorId, 'player');
+  assert.deepEqual(Buffer.from(codec.encodeBoundSessionCloseCommand(decoded, context)[0]), bytes);
+  for (const malformed of fixture.malformed)
+    assert.throws(
+      () => codec.decodeBoundSessionCloseCommand([Buffer.from(malformed.hex, 'hex')], context),
+      malformed.name
+    );
+  assert.throws(() => codec.decodeBoundSessionCloseCommand([bytes, Buffer.alloc(0)], context));
+});

@@ -55,6 +55,110 @@ public sealed class StateLaneTests
         Assert.Null(ZLinkStateLane.Current);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task IdleSynchronousTurn_ReusesTheCallersExecutionContext(bool fail)
+    {
+        await using var lane = new ZLinkStateLane();
+        var ambient = new AsyncLocal<object?> { Value = new object() };
+        var context = ExecutionContext.Capture();
+        var value = ambient.Value;
+
+        var failure = new InvalidOperationException("inline failure");
+        var operation = lane.RunAsync(() =>
+        {
+            Assert.Same(value, ambient.Value);
+            Assert.Same(lane, ZLinkStateLane.Current);
+            if (fail)
+                throw failure;
+            return 42;
+        });
+        if (fail)
+            Assert.Same(
+                failure,
+                await Assert.ThrowsAsync<InvalidOperationException>(async () => await operation)
+            );
+        else
+            Assert.Equal(42, await operation);
+
+        Assert.Same(context, ExecutionContext.Capture());
+        Assert.Same(value, ambient.Value);
+        Assert.Null(ZLinkStateLane.Current);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SuppressedFlow_NestedInlineTurn_RestoresOuterLaneAndSuppression(bool fail)
+    {
+        await using var outer = new ZLinkStateLane();
+        await using var inner = new ZLinkStateLane();
+        using (ExecutionContext.SuppressFlow())
+        {
+            var operation = outer.RunAsync(() =>
+            {
+                Assert.True(ExecutionContext.IsFlowSuppressed());
+                var nested = inner.RunAsync(() =>
+                {
+                    Assert.Same(inner, ZLinkStateLane.Current);
+                    if (fail)
+                        throw new InvalidOperationException("suppressed inner failure");
+                    return 42;
+                });
+                if (fail)
+                    Assert.Throws<InvalidOperationException>(() => nested.GetAwaiter().GetResult());
+                else
+                    Assert.Equal(42, nested.GetAwaiter().GetResult());
+                Assert.Same(outer, ZLinkStateLane.Current);
+                Assert.Throws<InvalidOperationException>(() => outer.RunAsync(static () => 0));
+                return 42;
+            });
+            Assert.True(operation.IsCompletedSuccessfully);
+            Assert.Equal(42, operation.Result);
+            Assert.True(ExecutionContext.IsFlowSuppressed());
+            Assert.Null(ZLinkStateLane.Current);
+            Assert.True(outer.TryPost(static () => { }));
+            Assert.Null(ZLinkStateLane.Current);
+            Assert.True(ExecutionContext.IsFlowSuppressed());
+        }
+    }
+
+    [Fact]
+    public async Task SuspendedTurn_PreservesLaneAcrossAwaitAndNestedLaneReentrancy()
+    {
+        await using var outer = new ZLinkStateLane();
+        await using var inner = new ZLinkStateLane();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var operation = outer.RunAsync(async () =>
+        {
+            entered.SetResult();
+            Assert.Same(outer, ZLinkStateLane.Current);
+            await release.Task.ConfigureAwait(false);
+            Assert.Same(outer, ZLinkStateLane.Current);
+            Assert.Throws<InvalidOperationException>(() => outer.RunAsync(static () => 0));
+            await inner.RunAsync(() =>
+            {
+                Assert.Same(inner, ZLinkStateLane.Current);
+                Assert.Throws<InvalidOperationException>(() => inner.RunAsync(static () => 0));
+                return 42;
+            });
+            Assert.Same(outer, ZLinkStateLane.Current);
+        });
+        try
+        {
+            await entered.Task;
+            Assert.Null(ZLinkStateLane.Current);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await operation;
+        }
+        Assert.Null(ZLinkStateLane.Current);
+    }
+
     // ---- 기본 동작 -------------------------------------------------------------------
 
     [Fact]
