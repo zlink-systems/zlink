@@ -27,6 +27,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         (RoutingId NodeRid, ulong NodeGeneration),
         ZLinkServiceWireCodec.RequestSourceFence
     > _requestSources = new();
+    private IZLinkBackendRequestSourceAcceptance? _requestSourceAcceptance;
 
     private Func<
         IReadOnlyList<ZLinkBackendRouteReceived>,
@@ -75,6 +76,29 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         _requestSources.TryGetValue((sourceNodeRid, sourceNodeGeneration), out var source)
             ? source
             : null;
+
+    internal void SetRequestSourceAcceptance(IZLinkBackendRequestSourceAcceptance acceptance) =>
+        Volatile.Write(ref _requestSourceAcceptance, acceptance);
+
+    // Location runtime §9.3: the first accepting owner reads the source owner values once.
+    // The polled descriptors answer first; a sender they do not contain is read from the
+    // Store once and kept with them, so later requests do not read the Store again.
+    internal async ValueTask<ZLinkServiceWireCodec.RequestSourceFence?> AcceptRequestSourceAsync(
+        RoutingId sourceNodeRid,
+        ulong sourceNodeGeneration,
+        CancellationToken cancellationToken
+    )
+    {
+        var polled = ResolveRequestSourceFence(sourceNodeRid, sourceNodeGeneration);
+        if (Volatile.Read(ref _requestSourceAcceptance) is not { } acceptance)
+            return polled;
+        var accepted = await acceptance
+            .AcceptAsync(polled, sourceNodeRid, sourceNodeGeneration, cancellationToken)
+            .ConfigureAwait(false);
+        if (polled is null && accepted is { } read)
+            ObserveRequestSourceFence(read);
+        return accepted;
+    }
 
     public void EnsureStarted()
     {
@@ -424,9 +448,20 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             {
                 for (var record = 0; record < receiveBatch.Count; record++)
                 {
+                    var current = receiveBatch[record];
+                    var requestSource = AcceptsRequestSource(current.Kind)
+                        ? await AcceptRequestSourceAsync(
+                                current.SourceNodeRid,
+                                current.SourceBindingGeneration,
+                                cancellationToken
+                            )
+                            .ConfigureAwait(false)
+                        : null;
                     DispatchRecord(
                         receiveBatch,
                         record,
+                        current,
+                        requestSource,
                         ownerSpotId,
                         readyRecord.Actor,
                         ref nodeRoutes,
@@ -478,9 +513,18 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         }
     }
 
+    private static bool AcceptsRequestSource(MeshRecordKind kind) =>
+        kind
+            is MeshRecordKind.SpotSend
+                or MeshRecordKind.SpotRequest
+                or MeshRecordKind.ActorSend
+                or MeshRecordKind.ActorRequest;
+
     private void DispatchRecord(
         MeshReceiveBatch batch,
         int index,
+        MeshReceiveRecord record,
+        ZLinkServiceWireCodec.RequestSourceFence? requestSource,
         string ownerSpotId,
         ActorRef ownerActor,
         ref List<ZLinkBackendRouteReceived>? nodeRoutes,
@@ -488,7 +532,6 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         ref SpotDispatchState? routeDispatch
     )
     {
-        var record = batch[index];
         switch (record.Kind)
         {
             case MeshRecordKind.Completion:
@@ -502,7 +545,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 return;
             case MeshRecordKind.SpotSend:
             case MeshRecordKind.SpotRequest:
-                EnqueueRoute(batch, index, record, ownerSpotId, ref routeDispatch);
+                EnqueueRoute(batch, index, record, requestSource, ownerSpotId, ref routeDispatch);
                 return;
             case MeshRecordKind.SpotMulticast:
                 EnqueueSubscribe(batch, index, record, ownerSpotId, pending);
@@ -512,7 +555,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 return;
             case MeshRecordKind.ActorSend:
             case MeshRecordKind.ActorRequest:
-                EnqueueActor(batch, index, record, ownerSpotId, ownerActor, pending);
+                EnqueueActor(batch, index, record, requestSource, ownerSpotId, ownerActor, pending);
                 return;
         }
     }
@@ -527,6 +570,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         MeshReceiveBatch batch,
         int index,
         MeshReceiveRecord record,
+        ZLinkServiceWireCodec.RequestSourceFence? requestSource,
         string ownerSpotId,
         ref SpotDispatchState? routeDispatch
     )
@@ -547,10 +591,6 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 or MeshRecordKind.SpotRequest
             ? new Func<IReadOnlyList<Message>, SubmitResult>(parts => replyRecord.Reply(parts))
             : null;
-        var requestSource = ResolveRequestSourceFence(
-            record.SourceNodeRid,
-            record.SourceBindingGeneration
-        );
         var parts = RetainParts(batch, index);
         var payloadOwner = batch.TakePayloadOwner(index);
         var route = new ZLinkBackendRouteReceived(
@@ -740,6 +780,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         MeshReceiveBatch batch,
         int index,
         MeshReceiveRecord record,
+        ZLinkServiceWireCodec.RequestSourceFence? requestSource,
         string ownerSpotId,
         ActorRef ownerActor,
         List<Task> pending
@@ -748,10 +789,6 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         var requestId = record.Kind == MeshRecordKind.ActorRequest ? record.ReplyRouteId : 0;
         var state = ResolveSpotState(
             string.IsNullOrEmpty(ownerSpotId) ? record.SourceSpotId : ownerSpotId
-        );
-        var requestSource = ResolveRequestSourceFence(
-            record.SourceNodeRid,
-            record.SourceBindingGeneration
         );
         var directReply = requestId == 0 ? null : record.CaptureReplyRoute();
         var parts = ZLinkMeshRecordAdapters.ToActorParts(

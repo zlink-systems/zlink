@@ -46,6 +46,7 @@
         <Compile Include="Runtime/MeshLivenessPhysicalCloseTests.cs"/>
         <Compile Include="Runtime/RequestAdmissionStageTests.cs"/>
         <Compile Include="Runtime/SpotRequestSourceDiscoveryTests.cs"/>
+        <Compile Include="Runtime/SourceRequestOwnerContractTests.cs"/>
         <Compile Include="Runtime/HostRelocationSealStageTests.cs"/>
         <Compile Include="Runtime/StartupStoreStallTests.cs"/>
         <Compile Include="Runtime/PreReadyLogicalMulticastTests.cs"/>

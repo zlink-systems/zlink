@@ -58,6 +58,32 @@ internal interface IZLinkBackendRequestSourceFenceObserver
         RoutingId sourceNodeRid,
         ulong sourceNodeGeneration
     );
+
+    void SetRequestSourceAcceptance(IZLinkBackendRequestSourceAcceptance acceptance);
+
+    /// <summary>
+    /// Reads the source request owner values once when this owner first accepts a request
+    /// (Location runtime §9.3). Returns null when the admitted sender has no live descriptor.
+    /// </summary>
+    ValueTask<ZLinkServiceWireCodec.RequestSourceFence?> AcceptRequestSourceAsync(
+        RoutingId sourceNodeRid,
+        ulong sourceNodeGeneration,
+        CancellationToken cancellationToken
+    );
+}
+
+/// <summary>
+/// Validates a polled source descriptor, or reads the Store once when the polled descriptors do not
+/// contain the sender (Session·Actor binding §4, Location runtime §4.1).
+/// </summary>
+internal interface IZLinkBackendRequestSourceAcceptance
+{
+    ValueTask<ZLinkServiceWireCodec.RequestSourceFence?> AcceptAsync(
+        ZLinkServiceWireCodec.RequestSourceFence? polled,
+        RoutingId sourceNodeRid,
+        ulong sourceNodeGeneration,
+        CancellationToken cancellationToken
+    );
 }
 
 internal interface IZLinkBackendLocalActorAuthorityReader
