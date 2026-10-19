@@ -66,18 +66,16 @@ void stateful_object_runtime_t::move_held_application_locked (object_record_t &o
     queue.held_application_bytes = 0;
 }
 
-void stateful_object_runtime_t::notify_quiescence () noexcept
+void stateful_object_runtime_t::notify_quiescence ()
 {
-    _quiescence_epoch.fetch_add (1, std::memory_order_release);
-    _quiescence.notify_all ();
-}
-
-void stateful_object_runtime_t::wait_for_quiescence_change (std::uint64_t observed)
-{
-    std::unique_lock lock (_quiescence_mutex);
-    _quiescence.wait (lock, [this, observed] {
-        return _quiescence_epoch.load (std::memory_order_acquire) != observed;
-    });
+    if (_quiescence_waiters.empty ())
+        return;
+    // Resume a waiting seal off this lane; it re-checks the participants in its own turn.
+    for (auto &waiter : std::exchange (_quiescence_waiters, {})) {
+        auto wake = [waiter] { waiter->complete (result_t<void>::success ()); };
+        if (!_lane_executor.try_submit_internal (wake))
+            wake ();
+    }
 }
 
 void stateful_object_runtime_t::configure_relocation_state (relocation_state_capture_t capture,
@@ -842,65 +840,60 @@ std::pair<stateful_error_t, bool> stateful_object_runtime_t::close_spot (const o
       .get ();
 }
 
+stateful_object_runtime_t::posted_enqueue_t stateful_object_runtime_t::post_enqueue (
+  const object_ref_t &owner, turn_domain_t domain, turn_record_t record, bool restored)
+{
+    return _lane.run ([this, &owner, domain, record = std::move (record),
+                       restored] () mutable -> enqueue_outcome_t {
+        enqueue_outcome_t outcome;
+        auto *object = find_record_locked (owner, outcome.error);
+        if (object == nullptr)
+            return outcome;
+        if (domain == turn_domain_t::application) {
+            const auto token = relocation_source_seal_on_lane (*object);
+            const auto seal = token ? _relocation_seals.find (*token) : _relocation_seals.end ();
+            if (seal != _relocation_seals.end ()) {
+                auto &attempt = seal->second;
+                const auto source =
+                  std::find (attempt.sources.begin (), attempt.sources.end (), owner);
+                const auto index = static_cast<std::size_t> (source - attempt.sources.begin ());
+                if (source == attempt.sources.end ()) {
+                    outcome.error = stateful_error_t::conflict;
+                    return outcome;
+                }
+                if (attempt.deliver)
+                    outcome.delivery = [forward = attempt.deliver, owner, record] {
+                        forward (owner, record);
+                    };
+                if (attempt.ingress_phase != relocation_ingress_phase_t::follow_only) {
+                    attempt.boundary_application[index].push_back (std::move (record));
+                }
+                outcome.relocation_handoff = true;
+                return outcome;
+            }
+            if (object->state == object_state_t::recovering && object->restore_identity)
+                outcome.relocation_handoff = true;
+            // Saved work and the verified boundary precede ordinary ingress
+            // held by the recovering object's existing execution gate.
+            if (restored && object->state == object_state_t::recovering) {
+                object->queue.application_bytes += retained_bytes (record);
+                object->queue.application.push_back (std::move (record));
+                return outcome;
+            }
+        }
+        outcome.error = enqueue_locked (*object, domain, std::move (record));
+        return outcome;
+    });
+}
+
 stateful_error_t stateful_object_runtime_t::enqueue (const object_ref_t &owner,
                                                      turn_domain_t domain,
-                                                     turn_record_t record,
-                                                     std::function<void ()> *accepted_delivery,
-                                                     bool restored,
-                                                     bool *relocation_handoff)
+                                                     turn_record_t record)
 {
-    if (relocation_handoff)
-        *relocation_handoff = false;
-    std::function<void ()> deliver;
-    const auto result =
-      _lane
-        .run ([&, this] () -> stateful_error_t {
-            stateful_error_t error = stateful_error_t::none;
-            auto *object = find_record_locked (owner, error);
-            if (object == nullptr) {
-                return error;
-            }
-            if (domain == turn_domain_t::application) {
-                const auto token = relocation_source_seal_on_lane (*object);
-                const auto seal =
-                  token ? _relocation_seals.find (*token) : _relocation_seals.end ();
-                if (seal != _relocation_seals.end ()) {
-                    auto &attempt = seal->second;
-                    const auto source =
-                      std::find (attempt.sources.begin (), attempt.sources.end (), owner);
-                    const auto index = static_cast<std::size_t> (source - attempt.sources.begin ());
-                    if (source == attempt.sources.end ())
-                        return stateful_error_t::conflict;
-                    if (attempt.deliver)
-                        deliver = [forward = attempt.deliver, owner, record] {
-                            forward (owner, record);
-                        };
-                    if (attempt.ingress_phase != relocation_ingress_phase_t::follow_only) {
-                        attempt.boundary_application[index].push_back (std::move (record));
-                    }
-                    if (relocation_handoff)
-                        *relocation_handoff = true;
-                    return stateful_error_t::none;
-                }
-                if (object->state == object_state_t::recovering && object->restore_identity
-                    && relocation_handoff)
-                    *relocation_handoff = true;
-                // Saved work and the verified boundary precede ordinary ingress
-                // held by the recovering object's existing execution gate.
-                if (restored && object->state == object_state_t::recovering) {
-                    object->queue.application_bytes += retained_bytes (record);
-                    object->queue.application.push_back (std::move (record));
-                    return stateful_error_t::none;
-                }
-            }
-            return enqueue_locked (*object, domain, std::move (record));
-        })
-        .get ();
-    if (accepted_delivery)
-        *accepted_delivery = std::move (deliver);
-    else if (deliver)
-        deliver ();
-    return result;
+    auto outcome = post_enqueue (owner, domain, std::move (record), false).get ();
+    if (outcome.delivery)
+        outcome.delivery ();
+    return outcome.error;
 }
 
 stateful_error_t stateful_object_runtime_t::enqueue_locked (object_record_t &object,
@@ -1332,187 +1325,174 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
         }
     }
 
-    _lane
-      .run ([&, this] {
-          if (_next_relocation_token == 0)
-              return;
-          plan.keys.reserve (plan.sources.size ());
-          for (auto &participant : plan.sources) {
-              const auto key = key_for (participant);
-              if (std::find (plan.keys.begin (), plan.keys.end (), key) != plan.keys.end ()) {
-                  plan.error = stateful_error_t::invalid;
-                  return;
-              }
-              stateful_error_t error = stateful_error_t::none;
-              auto *object = find_record_locked (participant, error);
-              if (object == nullptr || object->state != object_state_t::ready) {
-                  plan.error = object == nullptr ? error : stateful_error_t::moving;
-                  return;
-              }
-              plan.keys.push_back (key);
-              participant = object->reference;
-          }
-          plan.token = _next_relocation_token++;
-          try {
-              relocation_seal_state_t seal{plan.keys, plan.sources, {}};
-              seal.boundary_application.resize (plan.keys.size ());
-              _relocation_seals.emplace (plan.token, std::move (seal));
-          }
-          catch (...) {
-              plan.token = 0;
-              return;
-          }
-          for (const auto &key : plan.keys) {
-              auto &object = _objects.find (key)->second;
-              object.state = object_state_t::moving;
-              object.barrier_generation = plan.token;
-          }
-          plan.capture = _relocation_state_capture;
-          plan.error = stateful_error_t::none;
-      })
-      .get ();
+    co_await _lane.run_task ([&, this] {
+        if (_next_relocation_token == 0)
+            return;
+        plan.keys.reserve (plan.sources.size ());
+        for (auto &participant : plan.sources) {
+            const auto key = key_for (participant);
+            if (std::find (plan.keys.begin (), plan.keys.end (), key) != plan.keys.end ()) {
+                plan.error = stateful_error_t::invalid;
+                return;
+            }
+            stateful_error_t error = stateful_error_t::none;
+            auto *object = find_record_locked (participant, error);
+            if (object == nullptr || object->state != object_state_t::ready) {
+                plan.error = object == nullptr ? error : stateful_error_t::moving;
+                return;
+            }
+            plan.keys.push_back (key);
+            participant = object->reference;
+        }
+        plan.token = _next_relocation_token++;
+        try {
+            relocation_seal_state_t seal{plan.keys, plan.sources, {}};
+            seal.boundary_application.resize (plan.keys.size ());
+            _relocation_seals.emplace (plan.token, std::move (seal));
+        }
+        catch (...) {
+            plan.token = 0;
+            return;
+        }
+        for (const auto &key : plan.keys) {
+            auto &object = _objects.find (key)->second;
+            object.state = object_state_t::moving;
+            object.barrier_generation = plan.token;
+        }
+        plan.capture = _relocation_state_capture;
+        plan.error = stateful_error_t::none;
+    });
     if (plan.error != stateful_error_t::none)
         co_return result_t<aggregate_relocation_seal_attempt_t>::success ({plan.error, {}});
 
-    const auto release = [this, &plan] { (void) abort_relocation_before_cutover (plan.token); };
+    // Every failure after the seal binds aborts the whole aggregate through its one token.
+    const auto conflict = [this, &plan] () -> task_t<aggregate_relocation_seal_attempt_t> {
+        (void) co_await abort_relocation_before_cutover (plan.token);
+        co_return result_t<aggregate_relocation_seal_attempt_t>::success (
+          {stateful_error_t::conflict, {}});
+    };
     while (true) {
-        const auto observed = _quiescence_epoch.load (std::memory_order_acquire);
-        const auto quiescent =
-          _lane
-            .run ([this, &plan] {
-                for (std::size_t index = 0; index != plan.keys.size (); ++index) {
-                    const auto found = _objects.find (plan.keys[index]);
-                    if (found == _objects.end () || found->second.state != object_state_t::moving
-                        || found->second.barrier_generation != plan.token
-                        || !same_exact_ref (found->second.reference, plan.sources[index]))
-                        return std::pair{false, false};
-                    if (found->second.queue.application_active
-                        || found->second.queue.infrastructure_active
-                        || found->second.queue.yielded_continuation)
-                        return std::pair{true, false};
-                }
-                return std::pair{true, true};
-            })
-            .get ();
-        if (!quiescent.first) {
-            release ();
-            co_return result_t<aggregate_relocation_seal_attempt_t>::success (
-              {stateful_error_t::conflict, {}});
-        }
-        if (quiescent.second)
+        // The wait registers in the same lane turn that observes an active turn, so the
+        // next quiescence change cannot be missed. The caller is not held meanwhile.
+        const auto [owned, waiter] = co_await _lane.run_task (
+          [this, &plan] () -> std::pair<bool, std::shared_ptr<task_completion_source_t<void>>> {
+              for (std::size_t index = 0; index != plan.keys.size (); ++index) {
+                  const auto found = _objects.find (plan.keys[index]);
+                  if (found == _objects.end () || found->second.state != object_state_t::moving
+                      || found->second.barrier_generation != plan.token
+                      || !same_exact_ref (found->second.reference, plan.sources[index]))
+                      return {false, nullptr};
+                  if (found->second.queue.application_active
+                      || found->second.queue.infrastructure_active
+                      || found->second.queue.yielded_continuation) {
+                      auto changed = std::make_shared<task_completion_source_t<void>> ();
+                      _quiescence_waiters.push_back (changed);
+                      return {true, std::move (changed)};
+                  }
+              }
+              return {true, nullptr};
+          });
+        if (!owned)
+            co_return co_await conflict ();
+        if (!waiter)
             break;
-        wait_for_quiescence_change (observed);
+        co_await waiter->task ();
     }
 
     std::vector<frozen_object_state_t> application_states (plan.sources.size ());
     if (plan.capture) {
         for (std::size_t index = 0; index != plan.sources.size (); ++index) {
+            bool captured = false;
             try {
-                application_states[index] = co_await plan.capture (
-                  plan.sources[index],
-                  _lane
-                    .run ([this, &plan, index] {
-                        const auto found = _objects.find (plan.keys[index]);
-                        return found == _objects.end () ? std::string{} : found->second.stable_type;
-                    })
-                    .get (),
-                  cancellation);
+                const auto stable_type = co_await _lane.run_task ([this, &plan, index] {
+                    const auto found = _objects.find (plan.keys[index]);
+                    return found == _objects.end () ? std::string{} : found->second.stable_type;
+                });
+                application_states[index] =
+                  co_await plan.capture (plan.sources[index], stable_type, cancellation);
+                captured = true;
             }
             catch (...) {
-                release ();
-                co_return result_t<aggregate_relocation_seal_attempt_t>::success (
-                  {stateful_error_t::conflict, {}});
             }
+            if (!captured)
+                co_return co_await conflict ();
             // The native source queue receives the exported Actor suffix
             // before seal validation. Abort therefore restores this same owner.
-            _lane
-              .run_checked ([this, &plan, &application_states, index] {
-                  auto &pending = application_states[index].pending_application;
-                  if (pending.empty ())
-                      return;
-                  std::stable_sort (pending.begin (), pending.end (),
+            co_await _lane.run_task ([this, &plan, &application_states, index] {
+                auto &pending = application_states[index].pending_application;
+                if (pending.empty ())
+                    return;
+                std::stable_sort (pending.begin (), pending.end (),
+                                  [] (const turn_record_t &left, const turn_record_t &right) {
+                                      return left.sequence < right.sequence;
+                                  });
+                auto &object = _objects.at (plan.keys[index]);
+                auto &queue = object.queue.application;
+                const auto boundary = queue.size ();
+                for (const auto &turn : pending)
+                    object.queue.application_bytes += retained_bytes (turn);
+                queue.insert (queue.end (), std::make_move_iterator (pending.begin ()),
+                              std::make_move_iterator (pending.end ()));
+                std::inplace_merge (queue.begin (), queue.begin () + boundary, queue.end (),
                                     [] (const turn_record_t &left, const turn_record_t &right) {
                                         return left.sequence < right.sequence;
                                     });
-                  auto &object = _objects.at (plan.keys[index]);
-                  auto &queue = object.queue.application;
-                  const auto boundary = queue.size ();
-                  for (const auto &turn : pending)
-                      object.queue.application_bytes += retained_bytes (turn);
-                  queue.insert (queue.end (), std::make_move_iterator (pending.begin ()),
-                                std::make_move_iterator (pending.end ()));
-                  std::inplace_merge (queue.begin (), queue.begin () + boundary, queue.end (),
-                                      [] (const turn_record_t &left, const turn_record_t &right) {
-                                          return left.sequence < right.sequence;
-                                      });
-                  pending.clear ();
-              })
-              .get ();
-            if (application_states[index].application_state.size () > max_application_state_bytes) {
-                release ();
-                co_return result_t<aggregate_relocation_seal_attempt_t>::success (
-                  {stateful_error_t::conflict, {}});
-            }
+                pending.clear ();
+            });
+            if (application_states[index].application_state.size () > max_application_state_bytes)
+                co_return co_await conflict ();
         }
     }
 
-    auto result =
-      _lane
-        .run ([this, &plan, &application_states] {
-            std::vector<frozen_object_state_t> frozen_participants;
-            try {
-                frozen_participants.reserve (plan.keys.size ());
-                for (std::size_t index = 0; index != plan.keys.size (); ++index) {
-                    const auto found = _objects.find (plan.keys[index]);
-                    if (found == _objects.end () || found->second.state != object_state_t::moving
-                        || found->second.barrier_generation != plan.token
-                        || !same_exact_ref (found->second.reference, plan.sources[index]))
-                        throw std::runtime_error ("relocation capture lost ownership");
-                    auto &object = found->second;
-                    frozen_object_state_t frozen{
-                      .owner = object.reference,
-                      .stable_type = object.stable_type,
-                      .application_state = std::move (application_states[index].application_state),
-                      .pending_application = {},
-                      .timers = {}};
-                    frozen.timers.reserve (object.timers.size ());
-                    for (const auto &[_, timer] : object.timers)
-                        frozen.timers.push_back (timer);
-                    frozen.pending_application.reserve (object.queue.application.size ());
-                    for (const auto &pending : object.queue.application) {
-                        auto saved = pending;
-                        if (saved.application_record) {
-                            saved.frozen_record = protocol::encode_frozen_application_record (
-                              *saved.application_record);
-                            saved.payload = saved.frozen_record->canonical_bytes;
-                        }
-                        frozen.pending_application.push_back (std::move (saved));
+    auto result = co_await _lane.run_task ([this, &plan, &application_states] {
+        std::vector<frozen_object_state_t> frozen_participants;
+        try {
+            frozen_participants.reserve (plan.keys.size ());
+            for (std::size_t index = 0; index != plan.keys.size (); ++index) {
+                const auto found = _objects.find (plan.keys[index]);
+                if (found == _objects.end () || found->second.state != object_state_t::moving
+                    || found->second.barrier_generation != plan.token
+                    || !same_exact_ref (found->second.reference, plan.sources[index]))
+                    throw std::runtime_error ("relocation capture lost ownership");
+                auto &object = found->second;
+                frozen_object_state_t frozen{
+                  .owner = object.reference,
+                  .stable_type = object.stable_type,
+                  .application_state = std::move (application_states[index].application_state),
+                  .pending_application = {},
+                  .timers = {}};
+                frozen.timers.reserve (object.timers.size ());
+                for (const auto &[_, timer] : object.timers)
+                    frozen.timers.push_back (timer);
+                frozen.pending_application.reserve (object.queue.application.size ());
+                for (const auto &pending : object.queue.application) {
+                    auto saved = pending;
+                    if (saved.application_record) {
+                        saved.frozen_record =
+                          protocol::encode_frozen_application_record (*saved.application_record);
+                        saved.payload = saved.frozen_record->canonical_bytes;
                     }
-                    frozen_participants.push_back (std::move (frozen));
+                    frozen.pending_application.push_back (std::move (saved));
                 }
-                _relocation_seals.at (plan.token).frozen = frozen_participants;
-                for (const auto &key : plan.keys) {
-                    auto &queue = _objects.find (key)->second.queue;
-                    queue.application.clear ();
-                    queue.application_bytes = 0;
-                }
-                return aggregate_relocation_seal_attempt_t{
-                  stateful_error_t::none,
-                  aggregate_relocation_seal_t{plan.token, std::move (frozen_participants)}};
+                frozen_participants.push_back (std::move (frozen));
             }
-            catch (...) {
-                return aggregate_relocation_seal_attempt_t{stateful_error_t::conflict, {}};
+            _relocation_seals.at (plan.token).frozen = frozen_participants;
+            for (const auto &key : plan.keys) {
+                auto &queue = _objects.find (key)->second.queue;
+                queue.application.clear ();
+                queue.application_bytes = 0;
             }
-        })
-        .get ();
+            return aggregate_relocation_seal_attempt_t{
+              stateful_error_t::none,
+              aggregate_relocation_seal_t{plan.token, std::move (frozen_participants)}};
+        }
+        catch (...) {
+            return aggregate_relocation_seal_attempt_t{stateful_error_t::conflict, {}};
+        }
+    });
     if (result.error != stateful_error_t::none)
-        release ();
+        co_return co_await conflict ();
     co_return result_t<aggregate_relocation_seal_attempt_t>::success (std::move (result));
-}
-
-stateful_error_t stateful_object_runtime_t::abort_relocation (std::uint64_t token)
-{
-    return abort_relocation_before_cutover (token);
 }
 
 std::pair<stateful_error_t, relocation_ingress_batch_t>
@@ -1560,46 +1540,45 @@ stateful_object_runtime_t::begin_relocation_boundary (
       .get ();
 }
 
-stateful_error_t stateful_object_runtime_t::abort_relocation_before_cutover (std::uint64_t token)
+task_t<stateful_error_t>
+stateful_object_runtime_t::abort_relocation_before_cutover (std::uint64_t token)
 {
-    return _lane
-      .run ([&, this] () -> stateful_error_t {
-          const auto seal = _relocation_seals.find (token);
-          if (seal == _relocation_seals.end ()) {
-              return stateful_error_t::not_found;
-          }
-          if (seal->second.ingress_phase == relocation_ingress_phase_t::follow_only)
-              return stateful_error_t::conflict;
-          for (std::size_t index = 0; index != seal->second.keys.size (); ++index) {
-              const auto object = _objects.find (seal->second.keys[index]);
-              if (object == _objects.end () || object->second.state != object_state_t::moving
-                  || object->second.barrier_generation != token
-                  || !same_exact_ref (object->second.reference, seal->second.sources[index]))
-                  return stateful_error_t::conflict;
-          }
-          for (std::size_t index = 0; index != seal->second.keys.size (); ++index) {
-              auto &record = _objects.find (seal->second.keys[index])->second;
-              if (index < seal->second.frozen.size ()) {
-                  for (auto &pending : seal->second.frozen[index].pending_application) {
-                      record.queue.application_bytes += retained_bytes (pending);
-                      record.queue.application.push_back (std::move (pending));
-                  }
-              }
-              if (index < seal->second.boundary_application.size ()) {
-                  for (auto &pending : seal->second.boundary_application[index]) {
-                      record.queue.application_bytes += retained_bytes (pending);
-                      record.queue.application.push_back (std::move (pending));
-                  }
-              }
-              move_held_application_locked (record);
-              record.state = object_state_t::ready;
-              record.barrier_generation = 0;
-          }
-          _relocation_seals.erase (seal);
-          notify_quiescence ();
-          return stateful_error_t::none;
-      })
-      .get ();
+    return _lane.run_task ([this, token] () -> stateful_error_t {
+        const auto seal = _relocation_seals.find (token);
+        if (seal == _relocation_seals.end ()) {
+            return stateful_error_t::not_found;
+        }
+        if (seal->second.ingress_phase == relocation_ingress_phase_t::follow_only)
+            return stateful_error_t::conflict;
+        for (std::size_t index = 0; index != seal->second.keys.size (); ++index) {
+            const auto object = _objects.find (seal->second.keys[index]);
+            if (object == _objects.end () || object->second.state != object_state_t::moving
+                || object->second.barrier_generation != token
+                || !same_exact_ref (object->second.reference, seal->second.sources[index]))
+                return stateful_error_t::conflict;
+        }
+        for (std::size_t index = 0; index != seal->second.keys.size (); ++index) {
+            auto &record = _objects.find (seal->second.keys[index])->second;
+            if (index < seal->second.frozen.size ()) {
+                for (auto &pending : seal->second.frozen[index].pending_application) {
+                    record.queue.application_bytes += retained_bytes (pending);
+                    record.queue.application.push_back (std::move (pending));
+                }
+            }
+            if (index < seal->second.boundary_application.size ()) {
+                for (auto &pending : seal->second.boundary_application[index]) {
+                    record.queue.application_bytes += retained_bytes (pending);
+                    record.queue.application.push_back (std::move (pending));
+                }
+            }
+            move_held_application_locked (record);
+            record.state = object_state_t::ready;
+            record.barrier_generation = 0;
+        }
+        _relocation_seals.erase (seal);
+        notify_quiescence ();
+        return stateful_error_t::none;
+    });
 }
 
 stateful_error_t stateful_object_runtime_t::finalize_relocation_cutover (

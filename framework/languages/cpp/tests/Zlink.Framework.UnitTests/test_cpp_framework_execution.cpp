@@ -8554,8 +8554,8 @@ bool verify_source_suffix_native_order_and_rollback ()
         std::cout << "suffix-native seal_error=" << int (sealed.error) << '\n';
         return false;
     }
-    bool passed =
-      objects.abort_relocation_before_cutover (sealed.seal.token) == stateful_error_t::none;
+    bool passed = objects.abort_relocation_before_cutover (sealed.seal.token).result ().value ()
+                  == stateful_error_t::none;
     std::cout << "suffix-native abort=" << passed
               << " pending=" << objects.pending (actor, turn_domain_t::application)
               << " bytes=" << objects.pending_bytes (actor, turn_domain_t::application)
@@ -10521,7 +10521,8 @@ bool verify_async_capture_releases_state_owner ()
     const auto sealed = sealing.result ().value ();
     const bool passed =
       suspended && owner_available && sealed.error == stateful_error_t::none
-      && objects.abort_relocation_before_cutover (sealed.seal.token) == stateful_error_t::none;
+      && objects.abort_relocation_before_cutover (sealed.seal.token).result ().value ()
+           == stateful_error_t::none;
     std::cout << "async-capture suspended=" << suspended << " owner=" << owner_available
               << " passed=" << passed << '\n';
     return passed;

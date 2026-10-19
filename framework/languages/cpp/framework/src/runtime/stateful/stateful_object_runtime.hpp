@@ -11,13 +11,11 @@
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
 #include <array>
-#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <map>
-#include <mutex>
 #include <memory>
 #include <tuple>
 #include <optional>
@@ -256,8 +254,12 @@ struct retained_relocation_source_t
     protocol::request_source_fence_t fence;
 };
 
+struct stateful_object_runtime_test_access_t;
+
 class stateful_object_runtime_t
 {
+    friend struct stateful_object_runtime_test_access_t;
+
   public:
     using relocation_state_capture_t = std::function<task_t<frozen_object_state_t> (
       const object_ref_t &, const std::string &, std::stop_token)>;
@@ -348,12 +350,22 @@ class stateful_object_runtime_t
     std::pair<stateful_error_t, bool> close_spot (const object_ref_t &spot);
     std::pair<stateful_error_t, bool> can_close_spot (const object_ref_t &spot) const;
 
-    stateful_error_t enqueue (const object_ref_t &owner,
-                              turn_domain_t domain,
-                              turn_record_t record,
-                              std::function<void ()> *accepted_delivery = nullptr,
-                              bool restored = false,
-                              bool *relocation_handoff = nullptr);
+    stateful_error_t
+    enqueue (const object_ref_t &owner, turn_domain_t domain, turn_record_t record);
+    struct enqueue_outcome_t
+    {
+        stateful_error_t error = stateful_error_t::none;
+        std::function<void ()> delivery;
+        bool relocation_handoff = false;
+    };
+    using posted_enqueue_t =
+      runtime::state_lane_internal::result_bridge_t<enqueue_outcome_t>::future_t;
+    // Posts the turn to the state lane in caller order without waiting for it. The
+    // caller keeps owner alive until it reads the outcome.
+    posted_enqueue_t post_enqueue (const object_ref_t &owner,
+                                   turn_domain_t domain,
+                                   turn_record_t record,
+                                   bool restored);
     std::pair<stateful_error_t, std::optional<turn_record_t>>
     try_claim (const object_ref_t &owner, turn_domain_t domain, std::string *stable_type = nullptr);
     stateful_error_t complete_claim (const object_ref_t &owner, turn_domain_t domain);
@@ -384,14 +396,13 @@ class stateful_object_runtime_t
       std::function<void (const object_ref_t &, const turn_record_t &)> deliver = {},
       protocol::request_source_fence_t source_fence = {});
     // Only an exact target abort before Cutover may reopen source dispatch.
-    stateful_error_t abort_relocation_before_cutover (std::uint64_t token);
+    task_t<stateful_error_t> abort_relocation_before_cutover (std::uint64_t token);
     // Makes the source permanently follow-only once Cutover has been queued
     // (or its enqueue outcome is uncertain).
     stateful_error_t finalize_relocation_cutover (
       std::uint64_t token,
       std::optional<std::function<void (const object_ref_t &, const turn_record_t &)>> deliver =
         std::nullopt);
-    stateful_error_t abort_relocation (std::uint64_t token);
     std::pair<stateful_error_t, std::vector<object_ref_t>>
     commit_relocation_aggregate (std::uint64_t token, std::string target_node_id);
     task_t<stateful_error_t>
@@ -502,8 +513,7 @@ class stateful_object_runtime_t
     static std::size_t retained_bytes (const turn_record_t &record) noexcept;
     void move_held_application_locked (object_record_t &object);
     void release_pending_capacity_locked (const object_record_t &record);
-    void notify_quiescence () noexcept;
-    void wait_for_quiescence_change (std::uint64_t observed);
+    void notify_quiescence ();
 
     std::shared_ptr<detail::actor_transfer_coordinator_t> _actor_transfers =
       std::make_shared<detail::actor_transfer_coordinator_t> ();
@@ -511,9 +521,8 @@ class stateful_object_runtime_t
 
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
-    std::mutex _quiescence_mutex;
-    std::condition_variable _quiescence;
-    std::atomic_uint64_t _quiescence_epoch = 0;
+    // Lane-owned waiters of a seal; empty unless a seal waits for active turns.
+    std::vector<std::shared_ptr<task_completion_source_t<void>>> _quiescence_waiters;
     std::vector<placement_candidate_t> _candidates;
     std::map<object_key_t, object_record_t> _objects;
     std::map<object_key_t, std::uint64_t> _last_generation;

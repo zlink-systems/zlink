@@ -55,19 +55,41 @@ struct public_host_runtime_test_access_t
         auto retained = zlink::framework::test::retained_ingress_snapshot (host._objects, target);
         if constexpr (std::is_same_v<Header, protocol::actor_message_header_t>)
             return host._stateful_dispatch
-              ->accepted_actor_authority (target, header, std::move (source), 1, false,
-                                          std::move (retained))
+              ->accepted_actor_authority (target, header, std::move (source), 1, std::nullopt,
+                                          false, std::move (retained))
               .result ()
               .value ();
         else
             return host._stateful_dispatch
-              ->accepted_spot_authority (target, header, std::move (source), 1,
+              ->accepted_spot_authority (target, header, std::move (source), 1, std::nullopt,
                                          std::move (retained))
               .result ()
               .value ();
     }
 };
 } // namespace zlink::framework::runtime::host
+
+namespace zlink::framework::runtime::stateful
+{
+struct stateful_object_runtime_test_access_t
+{
+    // Holds the object state lane in one turn until the returned promise is set.
+    static std::promise<void> hold_lane (stateful_object_runtime_t &objects)
+    {
+        std::promise<void> release;
+        std::promise<void> entered;
+        auto held = release.get_future ().share ();
+        auto running = entered.get_future ();
+        if (!objects._lane.try_post ([held, &entered] {
+                entered.set_value ();
+                held.wait ();
+            }))
+            throw std::runtime_error ("object lane is closed");
+        running.wait ();
+        return release;
+    }
+};
+} // namespace zlink::framework::runtime::stateful
 
 namespace
 {
@@ -864,7 +886,7 @@ TEST (FrameworkRelocationSealContract, session_seal_ack_precedes_source_dispatch
         EXPECT_EQ (error, stateful::stateful_error_t::moving);
         EXPECT_FALSE (claim);
     }
-    EXPECT_EQ (objects.abort_relocation_before_cutover (result.seal.token),
+    EXPECT_EQ (objects.abort_relocation_before_cutover (result.seal.token).result ().value (),
                stateful::stateful_error_t::none);
 
     const auto refused = objects
@@ -904,7 +926,7 @@ TEST (FrameworkRelocationSealContract, session_seal_ack_precedes_source_dispatch
         EXPECT_EQ (error, stateful::stateful_error_t::moving);
         EXPECT_FALSE (claim);
     }
-    EXPECT_EQ (objects.abort_relocation_before_cutover (captured.seal.token),
+    EXPECT_EQ (objects.abort_relocation_before_cutover (captured.seal.token).result ().value (),
                stateful::stateful_error_t::none);
 }
 
@@ -1272,7 +1294,7 @@ TEST (FrameworkRelocationSealContract, retained_follow_rejects_previous_object_g
     header.target = {object.key, object.object_generation, {1}, 1, 1, 3};
     EXPECT_EQ (dispatch
                  .accepted_actor_authority (
-                   object, header, {1}, 1, false,
+                   object, header, {1}, 1, std::nullopt, false,
                    zlink::framework::test::retained_ingress_snapshot (objects, object))
                  .result ()
                  .value ()
@@ -1281,7 +1303,7 @@ TEST (FrameworkRelocationSealContract, retained_follow_rejects_previous_object_g
     --header.target.object_generation;
     EXPECT_EQ (dispatch
                  .accepted_actor_authority (
-                   object, header, {1}, 1, false,
+                   object, header, {1}, 1, std::nullopt, false,
                    zlink::framework::test::retained_ingress_snapshot (objects, object))
                  .result ()
                  .value ()
@@ -1320,7 +1342,7 @@ TEST (FrameworkRelocationSealContract, retained_spot_rejects_previous_object_gen
     header.target = {object.key, object.object_generation, {1}, 1, 1, 3};
     EXPECT_EQ (dispatch
                  .accepted_spot_authority (
-                   object, header, {1}, 1,
+                   object, header, {1}, 1, std::nullopt,
                    zlink::framework::test::retained_ingress_snapshot (objects, object))
                  .result ()
                  .value ()
@@ -1329,7 +1351,7 @@ TEST (FrameworkRelocationSealContract, retained_spot_rejects_previous_object_gen
     --header.target.object_generation;
     EXPECT_EQ (dispatch
                  .accepted_spot_authority (
-                   object, header, {1}, 1,
+                   object, header, {1}, 1, std::nullopt,
                    zlink::framework::test::retained_ingress_snapshot (objects, object))
                  .result ()
                  .value ()
@@ -1339,6 +1361,146 @@ TEST (FrameworkRelocationSealContract, retained_spot_rejects_previous_object_gen
 }
 
 // Location §7.3 and relocation §10 require native Follow without a fresh Store read.
+// A raw ingress or claim waits for the object state lane without holding the raw dispatch
+// mutex, so pending-entry work for another owner continues meanwhile.
+TEST (FrameworkRelocationSealContract, raw_dispatch_waits_for_state_lane_outside_its_mutex)
+{
+    using namespace std::chrono_literals;
+    using access_t = stateful::stateful_object_runtime_test_access_t;
+    for (const bool ingest : {false, true}) {
+        SCOPED_TRACE (ingest ? "ingress commit" : "claim");
+        auto host = std::make_shared<host::public_host_runtime_t> (
+          host::host_options_t{mesh::raw_mesh_node_options_t{
+            .descriptor = test_descriptor ("lane-wait"),
+            .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+        auto &objects = host->objects ();
+        const stateful::object_ref_t object{
+          stateful::object_kind_t::actor, "lane-owner", 1, 1, "mesh", "source"};
+        const auto created = objects.begin_reserved_object (object, "actor", {});
+        ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+        ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
+        const protocol::request_source_fence_t fence{"source-owner", 3, {2}, 1};
+        stateful::raw_stateful_dispatch_t dispatch (
+          objects, host->transport (),
+          [&] (const auto &) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+              co_return stateful::accepted_record_authority_t{fence, 3};
+          });
+        std::optional<mesh::service_mailbox_t::claim_handle_t> slot;
+        std::optional<stateful::retained_relocation_source_t> retained;
+        if (ingest) {
+            const protocol::actor_route_fence_t route{object.key, 1, {1}, 1, 1, 3};
+            mesh::service_mailbox_record_t record;
+            record.source_routing_id = {2};
+            record.source_node_generation = 1;
+            record.parts = detail::backend::materialize_binding_parts (
+              {protocol::encode_actor_message_header (protocol::command::actorSend, std::nullopt,
+                                                      route, {1, 1}),
+               protocol::encode_application_payload ({"Probe", "application/json", {'{', '}'}})});
+            slot = zlink::framework::test::publish_stateful_claim (host->transport (), object,
+                                                                   std::move (record));
+            retained = zlink::framework::test::retained_ingress_snapshot (objects, object);
+        }
+        auto release = access_t::hold_lane (objects);
+        auto waiting = std::async (std::launch::async, [&] {
+            if (ingest)
+                return dispatch.ingest_claimed (object, *slot, retained).result ().value ();
+            return dispatch.try_claim (object).first;
+        });
+        // The waiting call has reached the held lane.
+        std::this_thread::sleep_for (100ms);
+        const stateful::object_ref_t other{
+          stateful::object_kind_t::actor, "other-owner", 1, 1, "mesh", "source"};
+        auto unrelated =
+          std::async (std::launch::async, [&] { dispatch.release_relocated_payloads (other); });
+        EXPECT_EQ (unrelated.wait_for (2s), std::future_status::ready);
+        release.set_value ();
+        unrelated.get ();
+        EXPECT_EQ (waiting.get (), stateful::stateful_error_t::none);
+        host->close ();
+    }
+}
+
+// A seal that waits for an active turn returns to its caller; the turn's terminal resumes it.
+TEST (FrameworkRelocationSealContract, seal_waiting_for_active_turn_does_not_hold_its_caller)
+{
+    using namespace std::chrono_literals;
+    stateful::stateful_object_runtime_t objects;
+    objects.replace_placement_candidates ({{.mesh_name = "mesh",
+                                            .node_id = "source",
+                                            .stable_types = {"actor"},
+                                            .active_capacity = 1,
+                                            .pending_capacity = 1}});
+    const auto created = objects.begin_create ({.kind = stateful::object_kind_t::actor,
+                                                .key = "busy",
+                                                .stable_type = "actor",
+                                                .mesh_name = std::string ("mesh"),
+                                                .exclusive = true});
+    ASSERT_EQ (created.status, stateful::create_status_t::reserved);
+    ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
+    ASSERT_EQ (objects.enqueue (created.object, stateful::turn_domain_t::application, {1, {1}}),
+               stateful::stateful_error_t::none);
+    ASSERT_TRUE (objects.try_claim (created.object, stateful::turn_domain_t::application).second);
+    auto started = std::async (
+      std::launch::async, [&] { return objects.try_seal_relocation_aggregate ({created.object}); });
+    EXPECT_EQ (started.wait_for (2s), std::future_status::ready);
+    EXPECT_EQ (objects.complete_claim (created.object, stateful::turn_domain_t::application),
+               stateful::stateful_error_t::none);
+    auto seal = started.get ();
+    const auto sealed = seal.result ().value ();
+    EXPECT_EQ (sealed.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (sealed.seal.participants.size (), 1u);
+    EXPECT_EQ (sealed.seal.participants.front ().pending_application.size (), 0u);
+}
+
+// One failed participant capture aborts the aggregate: every participant returns to Ready
+// with its own queued turn.
+TEST (FrameworkRelocationSealContract, aggregate_participant_failure_aborts_every_participant)
+{
+    stateful::stateful_object_runtime_t objects;
+    objects.replace_placement_candidates ({{.mesh_name = "mesh",
+                                            .node_id = "source",
+                                            .stable_types = {"actor"},
+                                            .active_capacity = 2,
+                                            .pending_capacity = 2}});
+    std::vector<stateful::object_ref_t> participants;
+    for (const auto *key : {"first", "second"}) {
+        const auto created = objects.begin_create ({.kind = stateful::object_kind_t::actor,
+                                                    .key = key,
+                                                    .stable_type = "actor",
+                                                    .mesh_name = std::string ("mesh"),
+                                                    .exclusive = true});
+        ASSERT_EQ (created.status, stateful::create_status_t::reserved);
+        ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
+        ASSERT_EQ (objects.enqueue (created.object, stateful::turn_domain_t::application, {1, {1}}),
+                   stateful::stateful_error_t::none);
+        participants.push_back (created.object);
+    }
+    int captures = 0;
+    objects.configure_relocation_state (
+      [&] (const stateful::object_ref_t &owner, const std::string &stable_type,
+           std::stop_token) -> task_t<stateful::frozen_object_state_t> {
+          ++captures;
+          if (owner.key == "second")
+              throw std::runtime_error ("second participant capture failed");
+          co_return stateful::frozen_object_state_t{.owner = owner, .stable_type = stable_type};
+      },
+      [] (const auto &, const auto &, std::stop_token) { return true; });
+    const auto sealed = objects.try_seal_relocation_aggregate (participants).result ().value ();
+    EXPECT_EQ (sealed.error, stateful::stateful_error_t::conflict);
+    EXPECT_EQ (captures, 2);
+    for (const auto &participant : participants) {
+        SCOPED_TRACE (participant.key);
+        const auto [error, turn] =
+          objects.try_claim (participant, stateful::turn_domain_t::application);
+        EXPECT_EQ (error, stateful::stateful_error_t::none);
+        ASSERT_TRUE (turn);
+        EXPECT_EQ (turn->sequence, 1u);
+    }
+    for (const auto &participant : participants)
+        EXPECT_EQ (objects.complete_claim (participant, stateful::turn_domain_t::application),
+                   stateful::stateful_error_t::none);
+}
+
 TEST (FrameworkRelocationSealContract, local_follow_uses_retained_source_without_store)
 {
     auto host = std::make_shared<host::public_host_runtime_t> (
@@ -1365,11 +1527,12 @@ TEST (FrameworkRelocationSealContract, local_follow_uses_retained_source_without
     // Ordinary Ready delivery keeps the existing current-object normalization.
     std::optional<stateful::retained_relocation_source_t> retained;
     ASSERT_TRUE (objects.find (object.kind, object.key, std::nullopt, &retained));
-    EXPECT_EQ (dispatch.accepted_actor_authority (object, header, {2}, 1, false, retained)
-                 .result ()
-                 .value ()
-                 .first,
-               stateful::stateful_error_t::none);
+    EXPECT_EQ (
+      dispatch.accepted_actor_authority (object, header, {2}, 1, std::nullopt, false, retained)
+        .result ()
+        .value ()
+        .first,
+      stateful::stateful_error_t::none);
     EXPECT_EQ (reads, 1);
     const auto sealed = objects.try_seal_relocation_aggregate ({object}).result ().value ();
     ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
@@ -1383,7 +1546,8 @@ TEST (FrameworkRelocationSealContract, local_follow_uses_retained_source_without
     header.target.object_generation = 7;
     reads = 0;
     const auto accept = [&] {
-        return dispatch.accepted_actor_authority (object, header, {2}, 1, false, retained)
+        return dispatch
+          .accepted_actor_authority (object, header, {2}, 1, std::nullopt, false, retained)
           .result ()
           .value ();
     };

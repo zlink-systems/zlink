@@ -1017,10 +1017,25 @@ void public_host_runtime_t::configure_stateful_dispatch (
 void public_host_runtime_t::configure_stateful_dispatch (
   std::function<std::shared_ptr<const location_owner_token_t> ()> owner)
 {
-    configure_stateful_dispatch (
-      [this, owner = std::move (owner)] (stateful::accepted_record_authority_query_t query) {
-          return accepted_record_authority (query, owner ());
-      });
+    if (!owner)
+        throw std::invalid_argument ("stateful dispatch owner observation must not be empty");
+    _lifecycle_configuration_lane
+      .run ([&] {
+          if (_started || _stateful_dispatch)
+              throw std::logic_error (
+                "stateful dispatch must be configured once before host start");
+          _local_lease_observation = std::move (owner);
+      })
+      .get ();
+    configure_stateful_dispatch ([this] (stateful::accepted_record_authority_query_t query) {
+        // A local record was accepted under the lease observation it was published with;
+        // a peer record is accepted under the current one.
+        const auto *local = query.source_original
+                              ? std::get_if<mesh::local_request_source_t> (&*query.source_original)
+                              : nullptr;
+        auto owner = local ? local->lease : _local_lease_observation ();
+        return accepted_record_authority (std::move (query), std::move (owner));
+    });
 }
 
 task_t<std::optional<stateful::accepted_record_authority_t>>
@@ -1031,8 +1046,10 @@ public_host_runtime_t::accepted_record_authority (
     using authority_t = std::optional<stateful::accepted_record_authority_t>;
     authority_t accepted;
     const auto &local = _options.mesh.descriptor;
-    if (owner && !owner->owner_id.empty ()
-        && owner->lease_generation > 0
+    // The source is the original read when the record was published (Location §9.3);
+    // a later discovery change does not reach a record that is already accepted.
+    if (owner && !owner->owner_id.empty () && owner->lease_generation > 0
+        && query.source_original
         // A Spot mailbox facade can outlive an incarnation. Its execution
         // owner validates the current fence; Actor admission uses the exact
         // native object authority here.
@@ -1041,27 +1058,21 @@ public_host_runtime_t::accepted_record_authority (
                  == query.target.authority_owner_generation)
         && query.target_node_routing_id == local.node_routing_id
         && query.target_node_generation == local.lifecycle_generation) {
-        auto original = co_await _transport->source_identity (
-          query.source_node_routing_id, query.source_node_generation,
-          {owner,
-           std::shared_ptr<const mesh::service_node_descriptor_t> (shared_from_this (), &local)});
-        if (original) {
-            auto source = std::visit (
-              [&query] (const auto &reference) -> protocol::request_source_fence_t {
-                  using reference_t = std::decay_t<decltype (reference)>;
-                  if constexpr (std::is_same_v<reference_t, mesh::local_request_source_t>)
-                      return {reference.lease->owner_id,
-                              static_cast<std::uint64_t> (reference.lease->lease_generation),
-                              query.source_node_routing_id, query.source_node_generation};
-                  else
-                      return {reference->owner_id,
-                              static_cast<std::uint64_t> (reference->lease_generation),
-                              query.source_node_routing_id, query.source_node_generation};
-              },
-              *original);
-            accepted = stateful::accepted_record_authority_t{
-              std::move (source), static_cast<std::uint64_t> (owner->lease_generation)};
-        }
+        auto source = std::visit (
+          [&query] (const auto &reference) -> protocol::request_source_fence_t {
+              using reference_t = std::decay_t<decltype (reference)>;
+              if constexpr (std::is_same_v<reference_t, mesh::local_request_source_t>)
+                  return {reference.lease->owner_id,
+                          static_cast<std::uint64_t> (reference.lease->lease_generation),
+                          query.source_node_routing_id, query.source_node_generation};
+              else
+                  return {reference->owner_id,
+                          static_cast<std::uint64_t> (reference->lease_generation),
+                          query.source_node_routing_id, query.source_node_generation};
+          },
+          *query.source_original);
+        accepted = stateful::accepted_record_authority_t{
+          std::move (source), static_cast<std::uint64_t> (owner->lease_generation)};
     }
     co_return accepted;
 }
@@ -6993,7 +7004,9 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
 {
     // Stateful originals stay in their slot across the authority suspension; every
     // other original transfers in the same boundary step that classifies it.
-    using kept_t = std::variant<stateful::claimed_ingress_t, local_application_dispatch_t>;
+    using kept_local_t =
+      std::pair<local_application_dispatch_t, std::optional<mesh::request_source_t>>;
+    using kept_t = std::variant<stateful::claimed_ingress_t, kept_local_t>;
     std::size_t count = 0;
     trace_mesh_host ("mailbox-claim",
                      std::string ("records=") + std::to_string (claim->claimed_messages));
@@ -7015,7 +7028,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                       const auto &record = original.application->record;
                       if (record.application_record || !is_stateful_application (record.kind))
                           return std::nullopt;
-                      return kept_t{local_application_query (*original.application)};
+                      return kept_t{kept_local_t{local_application_query (*original.application),
+                                                 original.source_original}};
                   }
                   const auto kind = record_kind (
                     protocol::decode_header (protocol::message_bytes (original.parts.front ()))
@@ -7027,9 +7041,9 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
             if (std::holds_alternative<std::monostate> (step))
                 continue;
             if (auto *kept = std::get_if<kept_t> (&step)) {
-                if (auto *local = std::get_if<local_application_dispatch_t> (kept)) {
-                    const auto object =
-                      co_await accept_local_application (slot, std::move (*local), entry.original);
+                if (auto *local = std::get_if<kept_local_t> (kept)) {
+                    const auto object = co_await accept_local_application (
+                      slot, std::move (local->first), std::move (local->second), entry.original);
                     if (object) {
                         (void) co_await dispatch_stateful_owner (*object, dispatch);
                         ++count;
@@ -7752,6 +7766,12 @@ void public_host_runtime_t::publish_local_application (local_application_dispatc
       std::pair{dispatch.record.operation_id.high, dispatch.record.operation_id.low};
     if (is_request (dispatch.record.kind))
         record.correlation = dispatch.record.reply_route_id;
+    record.source_original = mesh::raw_mesh_node_owner_t::accepted_source (
+      record.source_routing_id, _options.mesh.descriptor.lifecycle_generation,
+      {_local_lease_observation ? _local_lease_observation () : nullptr,
+       std::shared_ptr<const mesh::service_node_descriptor_t> (shared_from_this (),
+                                                               &_options.mesh.descriptor)},
+      nullptr);
     record.application = std::make_shared<local_application_dispatch_t> (std::move (dispatch));
     if (!_transport->mailbox ().try_enqueue (std::move (record)))
         throw protocol::service_wire_error_t ("local application mailbox is closed");
@@ -7760,6 +7780,7 @@ void public_host_runtime_t::publish_local_application (local_application_dispatc
 task_t<std::optional<stateful::object_ref_t>> public_host_runtime_t::accept_local_application (
   mesh::service_mailbox_t::claim_handle_t slot,
   local_application_dispatch_t dispatch,
+  std::optional<mesh::request_source_t> source_original,
   std::optional<mesh::service_mailbox_record_t> &original)
 {
     const bool actor = is_actor_application (dispatch.record.kind);
@@ -7798,11 +7819,13 @@ task_t<std::optional<stateful::object_ref_t>> public_host_runtime_t::accept_loca
                                        protocol::actor_message_header_t>)
               return _stateful_dispatch->accepted_actor_authority (
                 *owner, value, dispatch.record.source_node_rid.to_bytes (),
-                _options.mesh.descriptor.lifecycle_generation, false, std::move (retained));
+                _options.mesh.descriptor.lifecycle_generation, std::move (source_original), false,
+                std::move (retained));
           else
               return _stateful_dispatch->accepted_spot_authority (
                 *owner, value, dispatch.record.source_node_rid.to_bytes (),
-                _options.mesh.descriptor.lifecycle_generation, std::move (retained));
+                _options.mesh.descriptor.lifecycle_generation, std::move (source_original),
+                std::move (retained));
       },
       header);
     original = _transport->mailbox ().take (slot);

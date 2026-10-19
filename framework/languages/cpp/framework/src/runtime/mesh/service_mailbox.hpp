@@ -20,8 +20,27 @@
 #include "runtime/dispatch/application_record.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
+namespace zlink::framework
+{
+struct location_owner_token_t;
+struct mesh_node_descriptor_t;
+} // namespace zlink::framework
+
 namespace zlink::framework::runtime::mesh
 {
+
+struct service_node_descriptor_t;
+
+struct local_request_source_t
+{
+    std::shared_ptr<const location_owner_token_t> lease;
+    std::shared_ptr<const service_node_descriptor_t> node;
+};
+
+// Location runtime §9.3: the source original accepted with a record. A peer's is the
+// discovery original bound to its admission; a local one is this node's lease observation.
+using request_source_t =
+  std::variant<local_request_source_t, std::shared_ptr<const mesh_node_descriptor_t>>;
 
 enum class service_mailbox_domain_t
 {
@@ -76,6 +95,8 @@ struct service_mailbox_record_t
     std::shared_ptr<host::local_application_dispatch_t> application;
     messaging::envelope_header_t envelope_header;
     service_mailbox_settlement_t transferred;
+    // Read once by the publication owner before the mailbox accepts the record.
+    std::optional<request_source_t> source_original = std::nullopt;
 };
 
 // A claimed slot: the claim and the slot's position in the claimed prefix.

@@ -891,23 +891,22 @@ raw_mesh_node_owner_t::peer_reconcile_t raw_mesh_node_owner_t::peer_reconcile ()
     return _peer_reconcile;
 }
 
-task_t<std::optional<request_source_t>> raw_mesh_node_owner_t::source_identity (
-  std::vector<std::uint8_t> rid, std::uint64_t generation, local_request_source_t local) const
+std::optional<request_source_t>
+raw_mesh_node_owner_t::accepted_source (const std::vector<std::uint8_t> &rid,
+                                        std::uint64_t generation,
+                                        const local_request_source_t &local,
+                                        const admitted_peer_t *peer)
 {
-    return _lane.run_task ([this, rid = std::move (rid), generation,
-                            local = std::move (local)] () -> std::optional<request_source_t> {
-        if (local.node && rid == local.node->node_routing_id) {
-            if (generation != local.node->lifecycle_generation || !local.lease
-                || local.lease->owner_id.empty () || local.lease->lease_generation <= 0)
-                return std::nullopt;
-            return request_source_t{std::move (local)};
-        }
-        const auto peer = _topology.peer (rid);
-        if (!peer || !peer->ready || peer->descriptor.lifecycle_generation != generation
-            || !peer->source_original)
+    if (local.node && rid == local.node->node_routing_id) {
+        if (generation != local.node->lifecycle_generation || !local.lease
+            || local.lease->owner_id.empty () || local.lease->lease_generation <= 0)
             return std::nullopt;
-        return request_source_t{peer->source_original};
-    });
+        return request_source_t{local};
+    }
+    if (!peer || !peer->ready || peer->descriptor.lifecycle_generation != generation
+        || !peer->source_original)
+        return std::nullopt;
+    return request_source_t{peer->source_original};
 }
 
 void raw_mesh_node_owner_t::forget_peer (const std::vector<std::uint8_t> &node_routing_id,
@@ -3488,6 +3487,7 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
         std::optional<std::uint64_t> correlation;
         std::optional<std::pair<std::uint64_t, std::uint64_t>> operation;
         std::optional<service_bound_session_source_t> bound_session_source;
+        std::optional<request_source_t> source_original;
         if (header.kind == protocol::command::nodeSend
             || header.kind == protocol::command::nodeRequest) {
             if (header.kind == protocol::command::nodeSend
@@ -3537,6 +3537,9 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
             }
             correlation = spot.correlation;
             operation = std::pair{spot.operation.high, spot.operation.low};
+            source_original =
+              accepted_source (received->source_routing_id,
+                               admitted->descriptor.lifecycle_generation, {}, admitted.get ());
             mailbox_owner =
               service_mailbox_t::application_owner (host::owner_kind_t::spot, spot.target.spot_id);
         } else {
@@ -3552,6 +3555,9 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
             }
             correlation = actor.correlation;
             operation = std::pair{actor.operation.high, actor.operation.low};
+            source_original =
+              accepted_source (received->source_routing_id,
+                               admitted->descriptor.lifecycle_generation, {}, admitted.get ());
             if (actor.bound_session_source) {
                 bound_session_source = service_bound_session_source_t{
                   std::move (actor.bound_session_source->session_routing_id),
@@ -3561,13 +3567,17 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
             mailbox_owner = service_mailbox_t::application_owner (host::owner_kind_t::actor,
                                                                   actor.target.actor_id);
         }
-        auto result = enqueue_received (
-          service_mailbox_record_t{std::move (mailbox_owner), service_mailbox_domain_t::application,
-                                   std::move (received->parts),
-                                   std::move (received->source_routing_id), received->reply_token,
-                                   correlation, admitted->descriptor.lifecycle_generation,
-                                   operation, std::move (bound_session_source)},
-          raw_mesh_pump_result_t::application);
+        service_mailbox_record_t record{std::move (mailbox_owner),
+                                        service_mailbox_domain_t::application,
+                                        std::move (received->parts),
+                                        std::move (received->source_routing_id),
+                                        received->reply_token,
+                                        correlation,
+                                        admitted->descriptor.lifecycle_generation,
+                                        operation,
+                                        std::move (bound_session_source)};
+        record.source_original = std::move (source_original);
+        auto result = enqueue_received (std::move (record), raw_mesh_pump_result_t::application);
         trace_mesh (
           "application-enqueue result=" + std::to_string (static_cast<int> (result)) + " pending="
           + std::to_string (_mailbox.pending_messages (service_mailbox_domain_t::application)));

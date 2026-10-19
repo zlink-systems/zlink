@@ -962,6 +962,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::shared_ptr<mesh::raw_mesh_node_owner_t> _transport;
     std::unique_ptr<stateful::raw_relocation_replay_coordinator_t> _relocation_wire;
     std::unique_ptr<stateful::raw_stateful_dispatch_t> _stateful_dispatch;
+    // The lease observation of this node; local publication reads its source original from it.
+    std::function<std::shared_ptr<const location_owner_token_t> ()> _local_lease_observation;
     stateful::stateful_object_runtime_t _objects;
     stateful::stream_session_registry_t _sessions;
     std::unique_ptr<stateful::maintenance_runtime_t> _maintenance;
@@ -1254,6 +1256,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<std::optional<stateful::object_ref_t>>
     accept_local_application (mesh::service_mailbox_t::claim_handle_t slot,
                               local_application_dispatch_t dispatch,
+                              std::optional<mesh::request_source_t> source_original,
                               std::optional<mesh::service_mailbox_record_t> &original);
     void
     admit_local_application (local_application_dispatch_t dispatch,

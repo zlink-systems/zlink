@@ -4739,10 +4739,12 @@ void verify_discovery_owner_metadata_preserved ()
     auto &topology = transport.topology ();
     auto source = descriptor ("metadata-source");
     assert (topology.admit (source, {1}) == mesh::peer_admission_result_t::admitted);
+    const auto source_identity = [&] (const auto &rid, std::uint64_t generation) {
+        return mesh::raw_mesh_node_owner_t::accepted_source (rid, generation, {},
+                                                             topology.peer (rid).get ());
+    };
     // Wire admission alone cannot invent a source owner while discovery is late.
-    assert (!transport.source_identity (source.node_routing_id, source.lifecycle_generation)
-               .result ()
-               .value ());
+    assert (!source_identity (source.node_routing_id, source.lifecycle_generation));
     auto original = std::make_shared<const mesh_node_descriptor_t> (
       mesh_node_descriptor_t{.mesh_name = source.mesh_name,
                              .rid = zlink::routing_id_t::from (source.node_routing_id),
@@ -4756,9 +4758,7 @@ void verify_discovery_owner_metadata_preserved ()
     transport.expect_peer (source, original);
     assert (topology_changes.load () == 0); // expect does not enter the topology lane.
     assert (topology.peer (source.node_routing_id)->admission_epoch == epoch);
-    auto retained = transport.source_identity (source.node_routing_id, source.lifecycle_generation)
-                      .result ()
-                      .value ();
+    auto retained = source_identity (source.node_routing_id, source.lifecycle_generation);
     assert (retained
             && std::get<std::shared_ptr<const mesh_node_descriptor_t>> (*retained) == original);
     assert (topology.admit (source, {1}, source)
@@ -4769,9 +4769,7 @@ void verify_discovery_owner_metadata_preserved ()
                             protocol::command::update)
             == mesh::peer_admission_result_t::admitted);
     assert (std::get<std::shared_ptr<const mesh_node_descriptor_t>> (
-              *transport.source_identity (source.node_routing_id, source.lifecycle_generation)
-                 .result ()
-                 .value ())
+              *source_identity (source.node_routing_id, source.lifecycle_generation))
             == original);
     auto replacement_value = *original;
     replacement_value.lease_generation = 8;
@@ -4779,16 +4777,12 @@ void verify_discovery_owner_metadata_preserved ()
       std::make_shared<const mesh_node_descriptor_t> (std::move (replacement_value));
     transport.expect_peer (source, replacement);
     assert (std::get<std::shared_ptr<const mesh_node_descriptor_t>> (
-              *transport.source_identity (source.node_routing_id, source.lifecycle_generation)
-                 .result ()
-                 .value ())
+              *source_identity (source.node_routing_id, source.lifecycle_generation))
             == replacement);
     assert (std::get<std::shared_ptr<const mesh_node_descriptor_t>> (*retained)->lease_generation
             == 7);
     transport.forget_peer (source.node_routing_id, source.advertised_endpoint);
-    assert (!transport.source_identity (source.node_routing_id, source.lifecycle_generation)
-               .result ()
-               .value ());
+    assert (!source_identity (source.node_routing_id, source.lifecycle_generation));
     assert (std::get<std::shared_ptr<const mesh_node_descriptor_t>> (*retained)->owner_id
               == "metadata-owner"
             && std::get<std::shared_ptr<const mesh_node_descriptor_t>> (*retained)->lease_generation
@@ -4796,9 +4790,7 @@ void verify_discovery_owner_metadata_preserved ()
     source.lifecycle_generation++;
     assert (topology.admit (source, {2}, source) == mesh::peer_admission_result_t::admitted);
     transport.expect_peer (source, original);
-    assert (!transport.source_identity (source.node_routing_id, source.lifecycle_generation)
-               .result ()
-               .value ());
+    assert (!source_identity (source.node_routing_id, source.lifecycle_generation));
     topology.set_change_handler ({});
 }
 
@@ -4919,6 +4911,9 @@ void verify_memory_accepted_record_authority ()
                 record.source_routing_id = remote ? source.node_routing_id : target.node_routing_id;
                 record.source_node_generation =
                   remote ? source.lifecycle_generation : target.lifecycle_generation;
+                // Local publication reads this node's lease observation before acceptance.
+                if (!remote)
+                    record.source_original = mesh::request_source_t{local_source};
                 record.parts = detail::backend::materialize_binding_parts (
                   {header, protocol::encode_application_payload (
                              {"Memory", "application/json", {'{', '}'}})});
@@ -4941,10 +4936,8 @@ void verify_memory_accepted_record_authority ()
                 assert (store->owner_lease_reads == 0);
             }
     const auto read_source = [&] (const auto &rid, std::uint64_t generation) {
-        return native->transport ()
-          .source_identity (rid, generation, local_source)
-          .result ()
-          .value ();
+        return mesh::raw_mesh_node_owner_t::accepted_source (
+          rid, generation, local_source, native->transport ().topology ().peer (rid).get ());
     };
     const auto saved_remote = read_source (source.node_routing_id, source.lifecycle_generation);
     const auto saved_local = read_source (target.node_routing_id, target.lifecycle_generation);
@@ -6355,7 +6348,7 @@ void verify_relocation_ingress_boundary_owns_saved_and_follow_only_work ()
 
     // Before Cutover, exact abort restores each source-owned segment once:
     // saved prefix, transferred boundary batch, then later held ingress.
-    assert (runtime.abort_relocation_before_cutover (seal.token)
+    assert (runtime.abort_relocation_before_cutover (seal.token).result ().value ()
             == stateful::stateful_error_t::none);
     for (const auto expected : {1ull, 2ull, 3ull}) {
         const auto [claim_error, record] =
@@ -6380,7 +6373,7 @@ void verify_relocation_ingress_boundary_owns_saved_and_follow_only_work ()
       runtime.enqueue (actor, stateful::turn_domain_t::application, {5, bytes ("follow-only")})
       == stateful::stateful_error_t::none);
     assert (runtime.finalize_relocation_cutover (second.token) == stateful::stateful_error_t::none);
-    assert (runtime.abort_relocation_before_cutover (second.token)
+    assert (runtime.abort_relocation_before_cutover (second.token).result ().value ()
             == stateful::stateful_error_t::conflict);
     const auto [claim_error, record] =
       runtime.try_claim (actor, stateful::turn_domain_t::application);

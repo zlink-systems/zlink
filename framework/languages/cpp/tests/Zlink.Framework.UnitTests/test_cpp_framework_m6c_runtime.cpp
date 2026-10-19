@@ -2213,7 +2213,8 @@ void test_generation_barrier_quiesces_yield_spot_and_timer (test_context_t &test
     test.require (objects.enqueue (actor, turn_domain_t::application, {21, {21}})
                     == stateful_error_t::none,
                   "sealed ingress must be retained for same-generation abort");
-    test.require (objects.abort_relocation (seal.token) == stateful_error_t::none,
+    test.require (objects.abort_relocation_before_cutover (seal.token).result ().value ()
+                    == stateful_error_t::none,
                   "same-generation abort must reopen the seal");
     test.require (objects.commit_relocation_aggregate (seal.token, "node-b").first
                     == stateful_error_t::not_found,
@@ -2235,9 +2236,11 @@ void test_generation_barrier_quiesces_yield_spot_and_timer (test_context_t &test
     const auto [second_error, second_seal] =
       await_task (objects.try_seal_relocation_aggregate ({actor, spot}));
     test.require (second_error == stateful_error_t::none
-                    && objects.abort_relocation (seal.token) == stateful_error_t::not_found,
+                    && objects.abort_relocation_before_cutover (seal.token).result ().value ()
+                         == stateful_error_t::not_found,
                   "stale abort must not reopen a newer generation");
-    test.require (objects.abort_relocation (second_seal.token) == stateful_error_t::none
+    test.require (objects.abort_relocation_before_cutover (second_seal.token).result ().value ()
+                      == stateful_error_t::none
                     && objects.enqueue (actor, turn_domain_t::application, {22, {22}})
                          == stateful_error_t::none,
                   "the current pre-Cutover abort must reopen application ingress");
@@ -4918,7 +4921,7 @@ void test_boundary_preserve_restores_acceptance_order (test_context_t &test)
                     && boundary.second.participants.front ().records.front ().sequence == 2
                     && forwarded == std::vector<std::uint64_t>{3, 4},
                   "boundary prefix must remain immutable while late acceptance forwards once");
-    test.require (objects.abort_relocation_before_cutover (sealed.seal.token)
+    test.require (objects.abort_relocation_before_cutover (sealed.seal.token).result ().value ()
                     == stateful_error_t::none,
                   "Preserve must restore accepted ingress");
     for (std::uint64_t expected : {1u, 2u, 3u, 4u}) {
@@ -7777,9 +7780,11 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
                       "aggregate hold count test must release its active turn");
     }
     count_sealing.join ();
-    test.require (count_error == stateful_error_t::none
-                    && count_limited.abort_relocation (count_seal.token) == stateful_error_t::none,
-                  "aggregate hold count test must close its relocation generation");
+    test.require (
+      count_error == stateful_error_t::none
+        && count_limited.abort_relocation_before_cutover (count_seal.token).result ().value ()
+             == stateful_error_t::none,
+      "aggregate hold count test must close its relocation generation");
     bool source_abort_fifo = count_error == stateful_error_t::none;
     for (std::uint64_t sequence = 1; sequence <= 2049; ++sequence) {
         const auto [claim_error, claimed] =
@@ -7863,9 +7868,11 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
                       "aggregate hold byte test must release its active turn");
     }
     byte_sealing.join ();
-    test.require (byte_error == stateful_error_t::none
-                    && byte_limited.abort_relocation (byte_seal.token) == stateful_error_t::none,
-                  "aggregate hold byte test must close its relocation generation");
+    test.require (
+      byte_error == stateful_error_t::none
+        && byte_limited.abort_relocation_before_cutover (byte_seal.token).result ().value ()
+             == stateful_error_t::none,
+      "aggregate hold byte test must close its relocation generation");
 
     stateful_object_runtime_t target_hold;
     std::mutex target_mutex;

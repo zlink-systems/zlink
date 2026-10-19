@@ -1102,10 +1102,12 @@ struct relay_peer_pair_t
       std::make_shared<const fw::location_owner_token_t> (
         fw::location_owner_token_t{"target-owner", 1});
 
-    explicit relay_peer_pair_t (fw::runtime::mesh::service_object_role_t source_role =
-                                  fw::runtime::mesh::service_object_role_t::server,
-                                fw::runtime::mesh::service_object_role_t target_role =
-                                  fw::runtime::mesh::service_object_role_t::server)
+    explicit relay_peer_pair_t (
+      fw::runtime::mesh::service_object_role_t source_role =
+        fw::runtime::mesh::service_object_role_t::server,
+      fw::runtime::mesh::service_object_role_t target_role =
+        fw::runtime::mesh::service_object_role_t::server,
+      fw::runtime::stateful::accepted_record_authority_resolver_t authority = {})
     {
         const auto make = [] (const char *rid, std::uint64_t generation,
                               fw::runtime::mesh::service_object_role_t role) {
@@ -1126,7 +1128,10 @@ struct relay_peer_pair_t
         };
         source = make ("relay-source", 7, source_role);
         target = make ("relay-target", 11, target_role);
-        target->configure_stateful_dispatch ([token = lease] { return token; });
+        if (authority)
+            target->configure_stateful_dispatch (std::move (authority));
+        else
+            target->configure_stateful_dispatch ([token = lease] { return token; });
         source->start ();
         target->start ();
         source_wire = source->transport ().topology ().local_descriptor ();
@@ -1150,6 +1155,14 @@ struct relay_peer_pair_t
                                      .endpoint = wire.advertised_endpoint,
                                      .owner_id = owner,
                                      .lease_generation = 1});
+    }
+    // The source original a raw receive turn on the target reads for the source peer.
+    std::optional<fw::runtime::mesh::request_source_t>
+    accepted_source (std::uint64_t generation) const
+    {
+        return fw::runtime::mesh::raw_mesh_node_owner_t::accepted_source (
+          source_wire.node_routing_id, generation, {},
+          target->transport ().topology ().peer (source_wire.node_routing_id).get ());
     }
     void pump ()
     {
@@ -1183,11 +1196,7 @@ TEST (RelayAdmission, ManualWirePeersDoNotRequireDiscovery)
         SCOPED_TRACE (static_cast<int> (target_role));
         relay_peer_pair_t pair (role_t::none, target_role);
         ASSERT_TRUE (pair.await_ready ());
-        EXPECT_FALSE (pair.target->transport ()
-                        .source_identity (pair.source_wire.node_routing_id,
-                                          pair.source_wire.lifecycle_generation)
-                        .result ()
-                        .value ());
+        EXPECT_FALSE (pair.accepted_source (pair.source_wire.lifecycle_generation));
     }
 }
 
@@ -1237,21 +1246,13 @@ TEST (RelayAdmission, MissingOrInvalidDiscoveryDoesNotPublishReady)
             EXPECT_FALSE (peer && peer->ready);
             std::this_thread::sleep_for (1ms);
         }
-        EXPECT_FALSE (pair.target->transport ()
-                        .source_identity (pair.source_wire.node_routing_id,
-                                          pair.source_wire.lifecycle_generation)
-                        .result ()
-                        .value ());
+        EXPECT_FALSE (pair.accepted_source (pair.source_wire.lifecycle_generation));
         if (source_case != source_case_t::missing)
             continue;
         // A late discovery original admits the held peer through the HELLO resend.
         pair.target->transport ().expect_peer (pair.source_wire, pair.original);
         ASSERT_TRUE (pair.await_ready ());
-        const auto accepted = pair.target->transport ()
-                                .source_identity (pair.source_wire.node_routing_id,
-                                                  pair.source_wire.lifecycle_generation)
-                                .result ()
-                                .value ();
+        const auto accepted = pair.accepted_source (pair.source_wire.lifecycle_generation);
         ASSERT_TRUE (accepted);
         EXPECT_EQ (std::get<std::shared_ptr<const fw::mesh_node_descriptor_t>> (*accepted),
                    pair.original);
@@ -1265,10 +1266,7 @@ TEST (RelayAdmission, AcceptedOriginalKeepsHandleAndRejectsWrongFences)
     pair.target->transport ().expect_peer (pair.source_wire, pair.original);
     ASSERT_TRUE (pair.await_ready ());
     const auto identity = [&] {
-        return pair.target->transport ()
-          .source_identity (pair.source_wire.node_routing_id, pair.source_wire.lifecycle_generation)
-          .result ()
-          .value ();
+        return pair.accepted_source (pair.source_wire.lifecycle_generation);
     };
     auto accepted = identity ();
     ASSERT_TRUE (accepted);
@@ -1319,8 +1317,8 @@ TEST (RelayAdmission, AcceptedOriginalKeepsHandleAndRejectsWrongFences)
       protocol::actor_message_header_t::bound_session_source_t{{0, 0, 0, 1}, 1, 1};
     const auto authority = [&] (auto h, std::uint64_t generation) {
         return dispatch
-          .accepted_actor_authority (actor, h, pair.source_wire.node_routing_id, generation, true,
-                                     std::nullopt)
+          .accepted_actor_authority (actor, h, pair.source_wire.node_routing_id, generation,
+                                     pair.accepted_source (generation), true, std::nullopt)
           .result ()
           .value ();
     };
@@ -1341,6 +1339,94 @@ TEST (RelayAdmission, AcceptedOriginalKeepsHandleAndRejectsWrongFences)
     ++bad.target.target_node_generation;
     denied (bad, pair.source_wire.lifecycle_generation);
     denied (header, pair.source_wire.lifecycle_generation + 1);
+}
+
+// Location runtime §9.3: a record keeps the source original that was valid when it was
+// accepted. A discovery UPDATE or delete before its claim reads the source does not change
+// the four source values.
+TEST (RelayAdmission, AcceptedRecordKeepsSourceOriginalAcrossDiscoveryChange)
+{
+    using namespace fw::runtime;
+    for (const bool removed : {false, true}) {
+        SCOPED_TRACE (removed ? "discovery delete" : "discovery update");
+        std::optional<stateful::accepted_record_authority_query_t> query;
+        fw::task_completion_source_t<std::optional<stateful::accepted_record_authority_t>> held;
+        relay_peer_pair_t pair (mesh::service_object_role_t::server,
+                                mesh::service_object_role_t::server,
+                                [&] (stateful::accepted_record_authority_query_t value) {
+                                    query = std::move (value);
+                                    return held.task ();
+                                });
+        pair.target->transport ().expect_peer (pair.source_wire, pair.original);
+        ASSERT_TRUE (pair.await_ready ());
+        stateful::object_ref_t actor{
+          stateful::object_kind_t::actor, actor_id, 1, 1, mesh_name, "relay-target"};
+        const auto created = pair.target->objects ().begin_reserved_object (actor, actor_type, {});
+        ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+        ASSERT_EQ (pair.target->objects ().commit_create (created.attempt),
+                   stateful::stateful_error_t::none);
+        const protocol::actor_route_fence_t fence{
+          actor_id, 1, pair.target_wire.node_routing_id, pair.target_wire.lifecycle_generation,
+          1,        1};
+        auto sent = pair.source->transport ().send_to_actor (
+          pair.target_wire.node_routing_id, std::nullopt, fence,
+          {"Probe", "application/json", {'{', '}'}}, std::nullopt,
+          protocol::wire_operation_id_t{pair.source_wire.lifecycle_generation, 41});
+        // A held dispatch turn keeps referring to its callbacks, so they outlive it.
+        const std::function<void (const host::ready_record_t &, const host::receive_record_t &,
+                                  std::vector<zlink::message_t>)>
+          discard = [] (const auto &, const auto &, auto) {};
+        const std::function<bool ()> no_next_receive;
+        std::optional<fw::task_t<std::size_t>> turn;
+        // Settles the held claim and its dispatch turn before the hosts close.
+        struct release_t
+        {
+            fw::task_completion_source_t<std::optional<stateful::accepted_record_authority_t>>
+              &source;
+            std::optional<fw::task_t<std::size_t>> &turn;
+            ~release_t ()
+            {
+                source.complete (
+                  fw::result_t<std::optional<stateful::accepted_record_authority_t>>::success (
+                    std::nullopt));
+                if (turn)
+                    (void) turn->result ();
+            }
+        } release{held, turn};
+        const auto deadline = std::chrono::steady_clock::now () + wait_budget;
+        while (!query && std::chrono::steady_clock::now () < deadline) {
+            pair.source->dispatch_ready (discard).result ().value ();
+            auto next = pair.target->dispatch_ready (discard, true, no_next_receive);
+            if (!next.await_ready ()) {
+                turn.emplace (std::move (next));
+                break;
+            }
+            next.result ().value ();
+            std::this_thread::sleep_for (1ms);
+        }
+        ASSERT_TRUE (sent.result ().value ());
+        ASSERT_TRUE (query);
+        // The record is in the target mailbox and its claim waits for authority.
+        if (removed) {
+            pair.target->transport ().forget_peer (pair.source_wire.node_routing_id,
+                                                   pair.source_wire.advertised_endpoint);
+        } else {
+            auto replacement = *pair.original;
+            replacement.lease_generation = 2;
+            pair.target->transport ().expect_peer (
+              pair.source_wire,
+              std::make_shared<const fw::mesh_node_descriptor_t> (std::move (replacement)));
+        }
+        const auto authority =
+          pair.target->accepted_record_authority (*query, pair.lease).result ().value ();
+        ASSERT_TRUE (authority);
+        EXPECT_EQ (authority->source.owner_id, pair.original->owner_id);
+        EXPECT_EQ (authority->source.lease_generation, 1u);
+        EXPECT_EQ (authority->source.node_routing_id, pair.source_wire.node_routing_id);
+        EXPECT_EQ (authority->source.node_generation, pair.source_wire.lifecycle_generation);
+        held.complete (
+          fw::result_t<std::optional<stateful::accepted_record_authority_t>>::success (authority));
+    }
 }
 
 TEST (RelayAdmission, FirstBoundSessionRequest)
@@ -2062,6 +2148,10 @@ struct native_intake_fixture_t
         record.domain = mesh::service_mailbox_domain_t::application;
         record.source_routing_id = zlink::routing_id_t::from (source_id).to_bytes ();
         record.source_node_generation = 1;
+        // The raw receive turn reads the admitted source before the mailbox accepts it.
+        record.source_original = mesh::raw_mesh_node_owner_t::accepted_source (
+          record.source_routing_id, record.source_node_generation, {},
+          host->transport ().topology ().peer (record.source_routing_id).get ());
         const wire::actor_route_fence_t fence{actor_id, 1, rid, 1, authority_generation, 1};
         wire::application_payload_t::multipart_t parts;
         fw::runtime::messaging::envelope_header_t envelope;

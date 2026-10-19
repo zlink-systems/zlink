@@ -115,15 +115,6 @@ struct actor_join_wire_outcome_t
     actor_join_wire_failure_t failure = actor_join_wire_failure_t::unavailable;
 };
 
-struct local_request_source_t
-{
-    std::shared_ptr<const location_owner_token_t> lease;
-    std::shared_ptr<const service_node_descriptor_t> node;
-};
-
-using request_source_t =
-  std::variant<local_request_source_t, std::shared_ptr<const mesh_node_descriptor_t>>;
-
 class raw_mesh_node_owner_t
 {
   public:
@@ -166,10 +157,12 @@ class raw_mesh_node_owner_t
     using peer_reconcile_t = std::function<void (const std::vector<std::uint8_t> &)>;
     void configure_peer_reconcile (peer_reconcile_t request);
     peer_reconcile_t peer_reconcile () const;
-    task_t<std::optional<request_source_t>>
-    source_identity (std::vector<std::uint8_t> rid,
-                     std::uint64_t generation,
-                     local_request_source_t local = {}) const;
+    // The single source-original reader (Location runtime §9.3). Publication owners call
+    // it once before the mailbox accepts a record; the record then keeps the result.
+    static std::optional<request_source_t> accepted_source (const std::vector<std::uint8_t> &rid,
+                                                            std::uint64_t generation,
+                                                            const local_request_source_t &local,
+                                                            const admitted_peer_t *peer);
     void forget_peer (const std::vector<std::uint8_t> &node_routing_id,
                       const std::string &endpoint);
     peer_admission_result_t admit_peer (service_node_descriptor_t descriptor,

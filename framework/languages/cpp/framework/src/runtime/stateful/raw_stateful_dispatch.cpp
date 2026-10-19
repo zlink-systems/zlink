@@ -359,28 +359,52 @@ stateful_error_t raw_stateful_dispatch_t::commit_accepted_ingress (const object_
         return stateful_error_t::backpressured;
     }
 
-    stateful_error_t enqueued = stateful_error_t::none;
-    std::function<void ()> deliver;
-    bool relocation_handoff = false;
+    // The state lane takes posted turns in order, so the sequence order holds without
+    // waiting for the lane under this mutex.
+    std::optional<stateful_object_runtime_t::posted_enqueue_t> posted;
     try {
-        enqueued = _objects->enqueue (owner, turn_domain_t::application, std::move (turn), &deliver,
-                                      restored, &relocation_handoff);
+        posted.emplace (
+          _objects->post_enqueue (owner, turn_domain_t::application, std::move (turn), restored));
     }
     catch (...) {
-        enqueued = stateful_error_t::backpressured;
-    }
-    if (enqueued != stateful_error_t::none) {
         _pending.erase (pending_entry);
         if (inserted_sequence)
             _next_sequence.erase (next_sequence);
-        return enqueued;
+        return stateful_error_t::backpressured;
     }
-
     if (allocate_sequence)
         ++next_sequence->second;
-    auto claim = relocation_handoff ? std::move (pending_entry->second.mailbox_claim)
-                                    : accepted_mailbox_reservation_t{};
     lock.unlock ();
+
+    stateful_object_runtime_t::enqueue_outcome_t outcome;
+    try {
+        outcome = posted->get ();
+    }
+    catch (...) {
+        outcome.error = stateful_error_t::backpressured;
+    }
+    accepted_mailbox_reservation_t claim;
+    if (outcome.error != stateful_error_t::none || outcome.relocation_handoff) {
+        lock.lock ();
+        const auto entry = _pending.find (pending_key);
+        if (outcome.error != stateful_error_t::none) {
+            if (entry != _pending.end ())
+                _pending.erase (entry);
+            // A rejected turn returns its sequence while it is still the latest one.
+            const auto next = _next_sequence.find (sequence_key);
+            if (allocate_sequence && next != _next_sequence.end ()
+                && next->second == pending_key.sequence + 1) {
+                if (inserted_sequence)
+                    _next_sequence.erase (next);
+                else
+                    --next->second;
+            }
+            return outcome.error;
+        }
+        if (entry != _pending.end ())
+            claim = std::move (entry->second.mailbox_claim);
+        lock.unlock ();
+    }
     {
         // Relocation owns the accepted record; _pending keeps the original
         // reply token while the ordinary mailbox permit is returned.
@@ -433,8 +457,8 @@ stateful_error_t raw_stateful_dispatch_t::commit_accepted_ingress (const object_
             return event;
         });
     }
-    if (deliver)
-        deliver ();
+    if (outcome.delivery)
+        outcome.delivery ();
     return stateful_error_t::none;
 }
 
@@ -548,6 +572,7 @@ claimed_ingress_t claimed_ingress_t::prepare (const mesh::service_mailbox_record
     claimed_ingress_t query;
     query.source_routing_id = original.source_routing_id;
     query.source_node_generation = original.source_node_generation;
+    query.source_original = original.source_original;
     query.bound_session = original.bound_session_source.has_value ();
     if (original.parts.size () == 2) {
         query.header.emplace (original.parts.front ().copy ());
@@ -605,7 +630,8 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
                 auto actor = protocol::decode_actor_message_header (header_bytes, header.kind);
                 auto [error, authority] = co_await accepted_actor_authority (
                   owner, actor, std::move (prepared->source_routing_id),
-                  prepared->source_node_generation, prepared->bound_session, std::move (retained));
+                  prepared->source_node_generation, std::move (prepared->source_original),
+                  prepared->bound_session, std::move (retained));
                 validation = error;
                 if (validation == stateful_error_t::none) {
                     application_command = header.kind;
@@ -621,7 +647,8 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
                 auto spot = protocol::decode_spot_message_header (header_bytes, header.kind);
                 auto [error, authority] = co_await accepted_spot_authority (
                   owner, spot, std::move (prepared->source_routing_id),
-                  prepared->source_node_generation, std::move (retained));
+                  prepared->source_node_generation, std::move (prepared->source_original),
+                  std::move (retained));
                 validation = error;
                 if (validation == stateful_error_t::none) {
                     application_command = header.kind;
@@ -753,13 +780,15 @@ raw_stateful_dispatch_t::try_claim (const object_ref_t &owner,
                                     std::function<void ()> *before_application_handler,
                                     std::string *stable_type)
 {
-    std::lock_guard lock (_mutex);
+    // The claim is the state lane's decision; this mutex guards only the pending entry.
     auto [error, turn] = _objects->try_claim (owner, turn_domain_t::application, stable_type);
     if (error != stateful_error_t::none || !turn) {
         return {error, std::nullopt};
     }
+    std::unique_lock lock (_mutex);
     auto pending = _pending.find (delivery_key (owner, turn->sequence));
     if (pending == _pending.end ()) {
+        lock.unlock ();
         (void) release_application_claim (owner);
         return {stateful_error_t::conflict, std::nullopt};
     }
@@ -806,6 +835,7 @@ raw_stateful_dispatch_t::accepted_actor_authority (
   protocol::actor_message_header_t actor,
   std::vector<std::uint8_t> source_node_routing_id,
   std::uint64_t source_node_generation,
+  std::optional<mesh::request_source_t> source_original,
   bool bound_session_routed,
   std::optional<retained_relocation_source_t> retained) const
 {
@@ -824,6 +854,7 @@ raw_stateful_dispatch_t::accepted_actor_authority (
     query.requested_object_generation = actor.target.object_generation;
     query.source_node_routing_id = std::move (source_node_routing_id);
     query.source_node_generation = source_node_generation;
+    query.source_original = std::move (source_original);
     query.target_node_routing_id = std::move (actor.target.target_node_routing_id);
     query.target_node_generation = actor.target.target_node_generation;
     query.source_kind = actor.bound_session_source ? protocol::frozen_source_kind_t::bound_session
@@ -846,6 +877,7 @@ raw_stateful_dispatch_t::accepted_spot_authority (
   protocol::spot_message_header_t spot,
   std::vector<std::uint8_t> source_node_routing_id,
   std::uint64_t source_node_generation,
+  std::optional<mesh::request_source_t> source_original,
   std::optional<retained_relocation_source_t> retained) const
 {
     if (!matches_application_route (owner, spot.target))
@@ -858,6 +890,7 @@ raw_stateful_dispatch_t::accepted_spot_authority (
     query.target.object_generation = spot.target.object_generation;
     query.source_node_routing_id = std::move (source_node_routing_id);
     query.source_node_generation = source_node_generation;
+    query.source_original = std::move (source_original);
     query.target_node_routing_id = std::move (spot.target.target_node_routing_id);
     query.target_node_generation = spot.target.target_node_generation;
     query.source_kind = spot.source_spot_id.empty () ? protocol::frozen_source_kind_t::node
@@ -1213,8 +1246,8 @@ stateful_error_t raw_stateful_dispatch_t::discard_pending (const object_ref_t &o
             return stateful_error_t::conflict;
         claim = std::move (found->second.mailbox_claim);
         _pending.erase (found);
-        object_error = _objects->discard_application (owner, sequence);
     }
+    object_error = _objects->discard_application (owner, sequence);
     mailbox_claim_release_guard_t release (std::move (claim));
     return object_error == stateful_error_t::not_found ? stateful_error_t::none : object_error;
 }

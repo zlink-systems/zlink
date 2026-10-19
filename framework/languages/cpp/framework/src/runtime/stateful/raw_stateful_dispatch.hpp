@@ -34,6 +34,8 @@ struct accepted_record_authority_query_t
     object_ref_t target;
     std::vector<std::uint8_t> source_node_routing_id;
     std::uint64_t source_node_generation = 0;
+    // The source original the publication owner read when the record was accepted.
+    std::optional<mesh::request_source_t> source_original;
     std::vector<std::uint8_t> target_node_routing_id;
     std::uint64_t target_node_generation = 0;
     protocol::frozen_source_kind_t source_kind = protocol::frozen_source_kind_t::node;
@@ -75,6 +77,7 @@ struct claimed_ingress_t
     std::optional<zlink::message_t> header;
     std::vector<std::uint8_t> source_routing_id;
     std::uint64_t source_node_generation = 0;
+    std::optional<mesh::request_source_t> source_original;
     bool bound_session = false;
     std::size_t body_bytes = 0;
     std::exception_ptr error;
@@ -123,6 +126,7 @@ class raw_stateful_dispatch_t
                               protocol::actor_message_header_t header,
                               std::vector<std::uint8_t> source_node_routing_id,
                               std::uint64_t source_node_generation,
+                              std::optional<mesh::request_source_t> source_original,
                               bool bound_session_routed,
                               std::optional<retained_relocation_source_t> retained) const;
     task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
@@ -130,6 +134,7 @@ class raw_stateful_dispatch_t
                              protocol::spot_message_header_t header,
                              std::vector<std::uint8_t> source_node_routing_id,
                              std::uint64_t source_node_generation,
+                             std::optional<mesh::request_source_t> source_original,
                              std::optional<retained_relocation_source_t> retained) const;
     task_t<bool> forward_accepted (object_ref_t owner,
                                    turn_record_t turn,

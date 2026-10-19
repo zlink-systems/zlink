@@ -445,7 +445,7 @@ bool maintenance_runtime_t::register_terminal_source (
 task_t<stateful_error_t> maintenance_runtime_t::abort_relocation_before_cutover (
   std::uint64_t token, const eligible_relocation_unit_t::canonical_wire_context_t &context)
 {
-    const auto aborted = _objects.abort_relocation_before_cutover (token);
+    const auto aborted = co_await _objects.abort_relocation_before_cutover (token);
     if (aborted == stateful_error_t::none && _relocation_wire)
         co_await _relocation_wire->unregister_terminal_sources (context.relocation);
     co_return aborted;
@@ -819,7 +819,7 @@ maintenance_runtime_t::relocate_terminal (std::shared_ptr<relocation_terminal_st
         release_reservation ();
         co_return std::move (*state->result);
     }
-    if (!relocate_encode (state)) {
+    if (!co_await relocate_encode (state)) {
         release_reservation ();
         co_return std::move (*state->result);
     }
@@ -894,47 +894,41 @@ maintenance_runtime_t::relocate_seal (std::shared_ptr<relocation_terminal_state_
     co_return true;
 }
 
-bool maintenance_runtime_t::relocate_encode (
-  const std::shared_ptr<relocation_terminal_state_t> &state)
+task_t<bool>
+maintenance_runtime_t::relocate_encode (std::shared_ptr<relocation_terminal_state_t> state)
 {
     /* The captured payload stays only in source memory: it is chunked onto
      * the wire and retained until authority settles. Nothing is
      * written to the Relocation Store on this path. */
+    std::optional<std::pair<relocation_terminal_t, relocation_reason_t>> failed;
     try {
         if (state->context.augment_frozen
             && !state->context.augment_frozen (state->seal_attempt.seal.participants)) {
-            (void) _objects.abort_relocation (state->seal_attempt.seal.token);
-            state->result.emplace (finish (
-              {relocation_terminal_t::blocked, relocation_reason_t::restore_failed, std::nullopt}));
-            return false;
+            failed.emplace (relocation_terminal_t::blocked, relocation_reason_t::restore_failed);
+        } else {
+            state->payload =
+              encode_envelope (state->seal_attempt.seal.participants, state->context.relocation,
+                               state->context.application_version, state->context.session_bindings);
+            if (!state->payload.empty () && state->payload.size () <= state->encoded_upper_bound)
+                state->manifest =
+                  plan_relocation_payload (state->payload, state->effective_chunk_limit);
         }
-        state->payload =
-          encode_envelope (state->seal_attempt.seal.participants, state->context.relocation,
-                           state->context.application_version, state->context.session_bindings);
-        if (state->payload.empty () || state->payload.size () > state->encoded_upper_bound) {
-            (void) _objects.abort_relocation (state->seal_attempt.seal.token);
-            state->result.emplace (
-              finish ({relocation_terminal_t::blocked, relocation_reason_t::payload_bound_exceeded,
-                       std::nullopt}));
-            return false;
-        }
-        state->manifest = plan_relocation_payload (state->payload, state->effective_chunk_limit);
     }
     catch (...) {
-        (void) _objects.abort_relocation (state->seal_attempt.seal.token);
-        state->result.emplace (finish ({relocation_terminal_t::store_failed,
-                                        relocation_reason_t::store_write_failed, std::nullopt}));
-        return false;
+        failed.emplace (relocation_terminal_t::store_failed,
+                        relocation_reason_t::store_write_failed);
     }
-    if (state->payload.empty () || state->manifest.chunk_count > protocol::relocationChunkCount
-        || state->manifest.total_length > protocol::relocationLogicalBytes) {
-        (void) _objects.abort_relocation (state->seal_attempt.seal.token);
-        state->result.emplace (
-          finish ({relocation_terminal_t::blocked, relocation_reason_t::payload_bound_exceeded,
-                   std::nullopt}));
-        return false;
-    }
-    return true;
+    if (!failed
+        && (state->payload.empty () || state->payload.size () > state->encoded_upper_bound
+            || state->manifest.chunk_count > protocol::relocationChunkCount
+            || state->manifest.total_length > protocol::relocationLogicalBytes))
+        failed.emplace (relocation_terminal_t::blocked,
+                        relocation_reason_t::payload_bound_exceeded);
+    if (!failed)
+        co_return true;
+    (void) co_await _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
+    state->result.emplace (finish ({failed->first, failed->second, std::nullopt}));
+    co_return false;
 }
 
 task_t<bool>
