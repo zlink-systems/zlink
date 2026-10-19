@@ -3,6 +3,7 @@ import {
   createInternalFrameworkException
 } from './framework-errors-internal';
 import { isPromiseLike } from './abort';
+import { ReceiveKind, type ReceiveRecord } from './foundation/service-runtime-contracts';
 const BACKING_ARRAY_COMPACTION_MIN_HEAD = 1024;
 
 /** 소비한 배열 prefix가 정리 조건에 도달했는지 판정합니다. */
@@ -40,8 +41,8 @@ export class ZLinkRuntimeAdmissionGate {
     }
   }
 
-  accepts(meshName: string): boolean {
-    return this.ownerAdmissionOpen() && !this.requireState(meshName).sealed;
+  accepts(meshName: string, kind?: ReceiveRecord['kind']): boolean {
+    return this.isOpen(this.requireState(meshName), kind);
   }
 
   pending(meshName: string): number {
@@ -64,8 +65,12 @@ export class ZLinkRuntimeAdmissionGate {
     }
   }
 
-  claim(meshName: string, operation: string): ZLinkApplicationWorkClaim {
-    const state = this.enter(meshName, operation);
+  claim(
+    meshName: string,
+    operation: string,
+    kind?: ReceiveRecord['kind']
+  ): ZLinkApplicationWorkClaim {
+    const state = this.enter(meshName, operation, kind);
     let closed = false;
     return {
       close: () => {
@@ -81,11 +86,16 @@ export class ZLinkRuntimeAdmissionGate {
    * admission in the same turn; asynchronous work leaves it from the single
    * continuation on its result.
    */
-  run<T>(meshName: string, operation: string, work: () => T | Promise<T>): T | Promise<T> {
+  run<T>(
+    meshName: string,
+    operation: string,
+    work: () => T | Promise<T>,
+    kind?: ReceiveRecord['kind']
+  ): T | Promise<T> {
     let state: ZLinkMeshAdmissionState;
     let result: T | Promise<T>;
     try {
-      state = this.enter(meshName, operation);
+      state = this.enter(meshName, operation, kind);
     } catch (error) {
       // A closed admission and a failing dispatch stay asynchronous rejections.
       return Promise.reject(error);
@@ -112,9 +122,24 @@ export class ZLinkRuntimeAdmissionGate {
     );
   }
 
-  private enter(meshName: string, operation: string): ZLinkMeshAdmissionState {
+  private isOpen(state: ZLinkMeshAdmissionState, kind?: ReceiveRecord['kind']): boolean {
+    return (
+      !state.sealed &&
+      (kind === ReceiveKind.NodeSend ||
+        kind === ReceiveKind.NodeRequest ||
+        kind === ReceiveKind.ChannelSend ||
+        kind === ReceiveKind.ChannelRequest ||
+        this.ownerAdmissionOpen())
+    );
+  }
+
+  private enter(
+    meshName: string,
+    operation: string,
+    kind?: ReceiveRecord['kind']
+  ): ZLinkMeshAdmissionState {
     const state = this.requireState(meshName);
-    if (this.ownerAdmissionOpen() && !state.sealed) {
+    if (this.isOpen(state, kind)) {
       state.active += 1;
       return state;
     }

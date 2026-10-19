@@ -77,7 +77,13 @@ internal sealed class ZLinkChannelReceiveLoop(
                         );
                         if (ZLinkClientServerControlProtocol.IsControl(received.Parts))
                         {
-                            ReplyClientServerControl(router, received, identity, cancellationToken);
+                            ReplyClientServerControl(
+                                router,
+                                received,
+                                identity,
+                                errorSink,
+                                cancellationToken
+                            );
                             continue;
                         }
                         if (!admitted.Found)
@@ -201,6 +207,7 @@ internal sealed class ZLinkChannelReceiveLoop(
         IRouterSocket router,
         Received received,
         ZLinkClientServerServerIdentity identity,
+        IZLinkRuntimeFailureReporter errorSink,
         CancellationToken cancellationToken
     )
     {
@@ -222,10 +229,11 @@ internal sealed class ZLinkChannelReceiveLoop(
             if (received.ReplyToken is not null)
                 ReplyOwned(router, sourceRid, received.ReplyToken, ack);
             else
-                SendOwnedAsync(router, sourceRid, ack, cancellationToken)
-                    .AsTask()
-                    .GetAwaiter()
-                    .GetResult();
+                ZLinkUnawaitedSubmit.Observe(
+                    SendOwnedAsync(router, sourceRid, ack, cancellationToken),
+                    nameof(ReplyClientServerControl),
+                    errorSink
+                );
             return;
         }
         var snapshot = AwaitStateLane(identity.ReadAsync());
