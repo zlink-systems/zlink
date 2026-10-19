@@ -1642,7 +1642,8 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       do {
         const ready = this.readable;
         this.readable = 0;
-        const more = await runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
+        const batch = runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
+        const more = batch instanceof Promise ? await batch : batch;
         if (more) {
           // Yield only after actual progress, retaining readiness across the
           // existing batch limits until receive reports no data.
