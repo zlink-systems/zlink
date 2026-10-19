@@ -696,6 +696,27 @@ public sealed class BoundSessionReplacementLifecycleTests
     }
 
     [Fact]
+    public async Task Grace_Timer_After_Session_Dispose_Leaves_The_Closed_Session_Untouched()
+    {
+        await using var fixture = await ReplacementFixture.CreateAsync(
+            ReplacementCallbackBehavior.Success
+        );
+        fixture.BindRetiredSessionActor("actor-a");
+
+        Assert.True(fixture.NotifyReplacement("actor-a"));
+        await fixture.Lifetime.CallbackTerminal.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await fixture.Time.TimerScheduled.Task.WaitAsync(TimeSpan.FromSeconds(2));
+        await WaitUntilAsync(() => fixture.Time.ActiveTimerCount == 1);
+        await fixture.Session.DisposeAsync();
+        var disconnectsAfterDispose = fixture.Socket.DisconnectCount;
+
+        fixture.Time.Advance(TimeSpan.FromMilliseconds(100));
+        await WaitUntilAsync(() => fixture.Time.ActiveTimerCount == 0);
+        await Task.Yield();
+        Assert.Equal(disconnectsAfterDispose, fixture.Socket.DisconnectCount);
+    }
+
+    [Fact]
     public async Task Physical_Close_Cleans_All_Retired_Actors_And_Preserves_The_Replacement()
     {
         await using var fixture = await ReplacementFixture.CreateAsync(
