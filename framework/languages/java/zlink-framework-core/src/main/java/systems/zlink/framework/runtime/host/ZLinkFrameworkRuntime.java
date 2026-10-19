@@ -107,7 +107,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     private final systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
             applicationJobQueue;
     private final ZLinkStateLane capacityStateLane = new ZLinkStateLane();
-    private AutoCloseable objectCapacityMetricRegistration = () -> {};
+    private ZLinkRuntimeMetrics.Registration objectCapacityMetricRegistration = () -> {};
     private final List<ZLinkRuntimeMetrics.Registration> activationMetricRegistrations =
             new ArrayList<>();
     private ZLinkRuntimeMetrics.Registration hostStateMetricRegistration = () -> {};
@@ -2191,15 +2191,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
         capacityMetricRegistration.close();
         applicationJobQueuePressureMetricRegistration.close();
         meshTopologyMetricRegistration.close();
-        try {
-            objectCapacityMetricRegistration.close();
-        } catch (Exception metricFailure) {
-            Logger.getLogger(ZLinkFrameworkRuntime.class.getName())
-                    .log(
-                            java.util.logging.Level.WARNING,
-                            "Capacity metric source release failed",
-                            metricFailure);
-        }
+        objectCapacityMetricRegistration.close();
         for (var registration : activationMetricRegistrations) {
             registration.close();
         }

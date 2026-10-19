@@ -67,11 +67,11 @@ final class ZLinkProviderAuthorityRepository {
 
     private volatile boolean capacityObservationRegistered;
 
-    AutoCloseable registerCapacityObservation() {
+    ZLinkRuntimeMetrics.Registration registerCapacityObservation() {
         capacityObservationRegistered = true;
         return () -> {
             capacityObservationRegistered = false;
-            capacityMetrics.values().forEach(CapacityMetricSource::close);
+            capacityMetrics.keySet().forEach(this::removeCapacityMetrics);
             capacityMetrics.clear();
         };
     }
@@ -81,52 +81,49 @@ final class ZLinkProviderAuthorityRepository {
         ZLinkStoreKey key =
                 capacityKey(
                         new ZLinkMeshNodeDescriptorKey(descriptor.meshName(), descriptor.rid()));
-        CapacityMetricSource source = capacityMetrics.get(key);
-        if (source != null) {
-            source.descriptor = descriptor;
-            return;
-        }
-        CapacityMetricSource created = new CapacityMetricSource(descriptor);
-        source = capacityMetrics.putIfAbsent(key, created);
-        if (source == null) created.register();
+        capacityMetrics.compute(
+                key,
+                (ignored, source) -> {
+                    if (source == null) return new CapacityMetricSource(descriptor);
+                    source.descriptor = descriptor;
+                    return source;
+                });
     }
 
-    CompletionStage<systems.zlink.framework.locations.ZLinkLocationPage<ZLinkMeshNodeDescriptor>>
-            refreshCapacityMetrics(
-                    systems.zlink.framework.locations.ZLinkLocationPage<ZLinkMeshNodeDescriptor>
-                            page) {
-        CompletionStage<Void> refreshed = CompletableFuture.completedFuture(null);
-        for (var descriptor : page.items()) {
-            ZLinkStoreKey key =
-                    capacityKey(
-                            new ZLinkMeshNodeDescriptorKey(
-                                    descriptor.meshName(), descriptor.rid()));
-            if (capacityMetrics.containsKey(key))
-                refreshed =
-                        refreshed.thenCompose(
-                                ignored -> {
-                                    // This read refreshes telemetry only; descriptor success is
-                                    // already decided.
-                                    try {
-                                        return provider.read(key, () -> false)
-                                                .handle((read, metricFailure) -> null);
-                                    } catch (RuntimeException metricFailure) {
-                                        return CompletableFuture.completedFuture(null);
-                                    }
-                                });
-        }
-        return refreshed.thenApply(ignored -> page);
+    CompletionStage<Void> refreshCapacityMetrics(ZLinkMeshNodeDescriptorKey descriptor) {
+        ZLinkStoreKey key = capacityKey(descriptor);
+        if (!capacityMetrics.containsKey(key)) return CompletableFuture.completedFuture(null);
+        return provider.read(key, () -> false).thenAccept(ignored -> {});
+    }
+
+    private void updateCapacityMetrics(ZLinkStoreKey key, CapacityRecord confirmed) {
+        capacityMetrics.computeIfPresent(
+                key,
+                (ignored, source) -> {
+                    boolean firstConfirmation = source.current == null;
+                    source.current = confirmed;
+                    if (firstConfirmation) source.register();
+                    return source;
+                });
     }
 
     void removeCapacityMetrics(ZLinkMeshNodeDescriptorKey descriptor) {
-        CapacityMetricSource source = capacityMetrics.remove(capacityKey(descriptor));
-        if (source != null) source.close();
+        removeCapacityMetrics(capacityKey(descriptor));
+    }
+
+    private void removeCapacityMetrics(ZLinkStoreKey key) {
+        capacityMetrics.computeIfPresent(
+                key,
+                (ignored, source) -> {
+                    source.close();
+                    return null;
+                });
     }
 
     private final class CapacityMetricSource {
         private volatile ZLinkMeshNodeDescriptor descriptor;
-        private volatile CapacityRecord current = CapacityRecord.empty();
-        private final List<AutoCloseable> registrations = new ArrayList<>();
+        private volatile CapacityRecord current;
+        private final List<ZLinkRuntimeMetrics.Registration> registrations = new ArrayList<>();
 
         CapacityMetricSource(ZLinkMeshNodeDescriptor descriptor) {
             this.descriptor = descriptor;
@@ -217,13 +214,8 @@ final class ZLinkProviderAuthorityRepository {
         }
 
         private void close() {
-            current = CapacityRecord.empty();
-            for (var registration : registrations) {
-                try {
-                    registration.close();
-                } catch (Exception ignored) {
-                }
-            }
+            registrations.forEach(ZLinkRuntimeMetrics.Registration::close);
+            registrations.clear();
         }
     }
 
@@ -241,12 +233,12 @@ final class ZLinkProviderAuthorityRepository {
             return delegate.read(key, cancellation)
                     .thenApply(
                             result -> {
-                                CapacityMetricSource source = capacityMetrics.get(key);
-                                if (source != null)
-                                    source.current =
+                                if (capacityMetrics.containsKey(key))
+                                    updateCapacityMetrics(
+                                            key,
                                             result instanceof ZLinkStoreReadFound found
                                                     ? decodeCapacity(found.value().bytes())
-                                                    : CapacityRecord.empty();
+                                                    : CapacityRecord.empty());
                                 return result;
                             });
         }
@@ -260,17 +252,16 @@ final class ZLinkProviderAuthorityRepository {
                             result -> {
                                 if (result instanceof ZLinkStoreWriteApplied) {
                                     for (var mutation : request.mutations()) {
-                                        CapacityMetricSource source =
-                                                capacityMetrics.get(
-                                                        mutation instanceof ZLinkStorePut put
-                                                                ? put.key()
-                                                                : ((ZLinkStoreDelete) mutation)
-                                                                        .key());
-                                        if (source != null)
-                                            source.current =
+                                        ZLinkStoreKey key =
+                                                mutation instanceof ZLinkStorePut put
+                                                        ? put.key()
+                                                        : ((ZLinkStoreDelete) mutation).key();
+                                        if (capacityMetrics.containsKey(key))
+                                            updateCapacityMetrics(
+                                                    key,
                                                     mutation instanceof ZLinkStorePut put
                                                             ? decodeCapacity(put.bytes())
-                                                            : CapacityRecord.empty();
+                                                            : CapacityRecord.empty());
                                     }
                                 }
                                 return result;

@@ -19,6 +19,11 @@ public interface ZLinkLocationRepository {
     CompletionStage<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> listMeshNodes(
             String meshName, ZLinkPageRequest page);
 
+    /** Refreshes the confirmed metric record for one local descriptor polling cycle. */
+    default CompletionStage<Void> refreshCapacityMetrics(ZLinkMeshNodeDescriptorKey local) {
+        return CompletableFuture.completedFuture(null);
+    }
+
     CompletionStage<ZLinkLocationWriteResult> updateClientServer(
             ZLinkClientServerServerDescriptor descriptor, ZLinkLocationWriteIntent intent);
 
