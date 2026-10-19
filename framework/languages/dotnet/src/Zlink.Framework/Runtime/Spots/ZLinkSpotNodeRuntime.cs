@@ -111,12 +111,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         if (node is IZLinkBackendBoundSessionClose boundSessionClose)
             boundSessionClose.SetBoundSessionCloseHandler(
                 (request, cancellationToken) =>
-                    runtime.CloseSessionBindingAsync(
-                        Node.RoutingId,
-                        Node.MeshStatus().LifecycleGeneration,
-                        request,
-                        cancellationToken
-                    )
+                    runtime.CloseSessionBindingAsync(LocalSessionOwner, request, cancellationToken)
             );
         if (locationLifecycle is not null)
         {
@@ -305,10 +300,17 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     }
 
     internal ZLinkServiceWireCodec.RequestSourceFence LocalRequestSource =>
-        Volatile.Read(ref _localRequestSource)?.Value
+        LocalSessionOwner
         ?? throw new InvalidOperationException(
             "The MeshNode does not have a Location Store owner fence."
         );
+
+    /// <summary>
+    /// Session-Actor binding §4: this host's Session owner identity from its own
+    /// MeshNode descriptor, or null while the node has no Location Store owner fence.
+    /// </summary>
+    internal ZLinkServiceWireCodec.RequestSourceFence? LocalSessionOwner =>
+        Volatile.Read(ref _localRequestSource)?.Value;
 
     internal ZLinkMeshNodeStartupState? StartupState { get; private set; }
 

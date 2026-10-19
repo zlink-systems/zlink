@@ -104,7 +104,7 @@ for (const kind of ['Router', 'Dealer']) {
     const socket = host[`create${kind}`]();
     const result =
       kind === 'Router'
-        ? await socket.request('target', [Buffer.from('request')], 1000)
+        ? await new Promise((resolve, reject) => socket.request('target', [Buffer.from('request')], 1000, resolve, reject))
         : await socket.request([Buffer.from('request')], 1000);
     assert.equal(closes, replies.length);
     assert.equal(result[0], views[0]);
@@ -114,3 +114,50 @@ for (const kind of ['Router', 'Dealer']) {
     assert.equal(result[1][0], 7);
   });
 }
+
+test('service and Dealer request boundaries retain one Framework Promise allocation', async (t) => {
+  const {
+    RawServiceMeshRuntime
+  } = require('../../packages/framework/dist/runtime/foundation/raw-service-mesh-runtime');
+  const context = zlink.createContext();
+  const submission = { result: zlink.SubmitResult.Ok, admitted: Promise.resolve(), reply: Promise.resolve([]) };
+  for (const kind of ['Router', 'Dealer']) {
+    const name = `create${kind}Socket`;
+    const factory = zlink[name];
+    t.mock.method(zlink, name, (ctx) => {
+      const socket = factory(ctx);
+      t.mock.method(socket, 'request', () => ({
+        message() { return this; },
+        timeout() { return this; },
+        submit() { return submission; }
+      }));
+      return socket;
+    });
+  }
+  const host = new ZLinkNodeRawBindingPort(context).createHost();
+  const runtime = Object.create(RawServiceMeshRuntime.prototype);
+  runtime.router = host.createRouter();
+  runtime.topology = { admittedPeer() { return undefined; } };
+  const dealer = host.createDealer();
+  try {
+    for (const [name, request] of [
+      ['service', () => runtime.requestService('target', [Buffer.from('request')], 1000)],
+      ['Dealer', () => dealer.request([Buffer.from('request')], 1000)]
+    ]) {
+      let promises = 0;
+      const hook = createHook({ init(_id, type) { if (type === 'PROMISE') promises++; } });
+      let pending;
+      try {
+        hook.enable();
+        pending = request();
+      } finally {
+        hook.disable();
+      }
+      assert.equal(promises, 1, `${name} must reuse the binding reply reaction Promise`);
+      assert.deepEqual(await pending, []);
+    }
+  } finally {
+    host.close();
+    context.close();
+  }
+});

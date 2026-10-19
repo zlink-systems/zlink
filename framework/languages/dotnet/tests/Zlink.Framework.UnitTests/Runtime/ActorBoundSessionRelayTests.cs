@@ -417,8 +417,14 @@ public sealed class ActorBoundSessionRelayTests
         Assert.False(binding.IsSamePhysicalSessionOwner(nodeRid, 11, sessionRid, "owner-b", 13));
         Assert.False(binding.IsSamePhysicalSessionOwner(nodeRid, 11, sessionRid, "owner-a", 14));
 
-        var legacyIdentity = binding with { SessionOwnerId = "", SessionOwnerLeaseGeneration = 0 };
-        Assert.True(
+        // Session-Actor binding §4: an identity without descriptor values is not guessed
+        // from the node RID and lifecycle generation.
+        var legacyIdentity = binding with
+        {
+            SessionOwnerId = "",
+            SessionOwnerLeaseGeneration = 0,
+        };
+        Assert.False(
             legacyIdentity.IsSamePhysicalSessionOwner(nodeRid, 11, sessionRid, nodeRid.ToHex(), 11)
         );
         Assert.False(

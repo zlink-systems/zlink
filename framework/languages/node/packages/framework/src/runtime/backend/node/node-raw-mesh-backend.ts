@@ -89,6 +89,7 @@ import {
   type ServiceAsyncInstanceActivationAuthority,
   type ServiceInstanceApplicationLifecycle,
   type ServicePendingInstanceActivation,
+  type ServiceSessionOwnerDescriptors,
   type ServiceSpotMessageFollowSeal,
   type ServiceStatefulMailboxData,
   type ServiceStatefulPendingOperation,
@@ -238,6 +239,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   ) => void;
   private dispatchErrors?: ZLinkDispatchErrorReporter;
   private requestSourceAcceptance?: import('../contracts').ZLinkBackendRequestSourceAcceptance;
+  private sessionOwnerDescriptors?: ServiceSessionOwnerDescriptors;
   private readonly peerDisconnectedHandlers = new Set<(endpoint: string) => void>();
   constructor(
     private readonly meshName: string,
@@ -292,6 +294,11 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
   setDispatchErrorReporter(reporter: ZLinkDispatchErrorReporter): void {
     this.dispatchErrors = reporter;
     this.stateful?.setDispatchErrorReporter(reporter, this.meshName);
+  }
+
+  setSessionOwnerDescriptors(source: ServiceSessionOwnerDescriptors): void {
+    this.sessionOwnerDescriptors = source;
+    this.stateful?.setSessionOwnerDescriptors(source);
   }
 
   setProtocolErrorHandler(
@@ -441,6 +448,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     );
     if (this.dispatchErrors !== undefined) {
       this.stateful.setDispatchErrorReporter(this.dispatchErrors, this.meshName);
+    }
+    if (this.sessionOwnerDescriptors !== undefined) {
+      this.stateful.setSessionOwnerDescriptors(this.sessionOwnerDescriptors);
     }
     if (this.mailboxRecordDropped !== undefined) {
       this.stateful.setMailboxDropHandler(this.mailboxRecordDropped);
@@ -1651,30 +1661,47 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   private pump(): void {
     if (this.closed || this.pumpTask !== undefined) return;
-    this.pumpTask = this.runPump(this.requireRuntime());
+    const runtime = this.requireRuntime();
+    let complete!: () => void;
+    let fail!: (error: unknown) => void;
+    // Publish the join owner before receive can signal readiness or start close.
+    // The receive turn itself needs no startup Promise continuation.
+    this.pumpTask = new Promise<void>((resolve, reject) => {
+      complete = resolve;
+      fail = reject;
+    });
+    void this.runPump(runtime, complete, fail);
   }
 
-  private async runPump(runtime: RawServiceMeshRuntime): Promise<void> {
-    // Publish pumpTask before any callback can signal readiness or begin close.
-    await Promise.resolve();
+  private async runPump(
+    runtime: RawServiceMeshRuntime,
+    complete: () => void,
+    fail: (error: unknown) => void
+  ): Promise<void> {
     try {
-      do {
-        const ready = this.readable;
-        this.readable = 0;
-        const batch = runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
-        const more = batch instanceof Promise ? await batch : batch;
-        if (more) {
-          // Yield only after actual progress, retaining readiness across the
-          // existing batch limits until receive reports no data.
-          this.readable |= 1;
-          await yieldToIO();
-        }
-      } while (!this.closed && this.readable !== 0);
+      try {
+        do {
+          const ready = this.readable;
+          this.readable = 0;
+          const batch = runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
+          const more = batch instanceof Promise ? await batch : batch;
+          if (more) {
+            // Yield only after actual progress, retaining readiness across the
+            // existing batch limits until receive reports no data.
+            this.readable |= 1;
+            await yieldToIO();
+          }
+        } while (!this.closed && this.readable !== 0);
+      } catch (error) {
+        runtime.reportInfrastructureFailure(error);
+      } finally {
+        this.pumpTask = undefined;
+        this.scheduleMaintenance();
+      }
+      complete();
     } catch (error) {
-      runtime.reportInfrastructureFailure(error);
-    } finally {
-      this.pumpTask = undefined;
-      this.scheduleMaintenance();
+      // Forward reporting and maintenance failures to the published join owner.
+      fail(error);
     }
   }
 

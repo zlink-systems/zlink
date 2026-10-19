@@ -118,6 +118,7 @@
         <Compile Include="Runtime/ChannelOutboundTerminalTests.cs"/>
         <Compile Include="Runtime/ChannelApplicationDispatchQueueShutdownTests.cs"/>
         <Compile Include="Runtime/ClientServerChannelRuntimeTests.cs"/>
+        <Compile Include="Runtime/ChannelEnvelopeHandoffTests.cs"/>
         <Compile Include="Runtime/ClientServerLivenessLaneTests.cs"/>
         <Compile Include="Runtime/ClientServerClientAckTests.cs"/>
         <Compile Include="Runtime/ClientServerLoopOwnershipTests.cs"/>
@@ -154,6 +155,7 @@
         <Compile Include="Runtime/GeneratedNodeIdentityTests.cs"/>
         <Compile Include="Runtime/GeneratedRelocationCodecConformanceTests.cs"/>
         <Compile Include="Runtime/GeneratedServiceWireCommandCodecConformanceTests.cs"/>
+        <Compile Include="Runtime/SessionOwnerIdentityContractTests.cs"/>
         <Compile Include="Runtime/GenerationTokenRangeTests.cs"/>
         <Compile Include="Runtime/FrameworkJsonProfileTests.cs"/>
         <Compile Include="Runtime/ConnectorJsonProfileTests.cs"/>

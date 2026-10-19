@@ -375,19 +375,16 @@ internal sealed class ZLinkSessionActorCoordinator(
                 ZLinkFrameworkErrorKind.InvalidOperation,
                 "Session owner lifecycle generation is unavailable."
             );
-        string sessionOwnerId;
-        ulong sessionOwnerLeaseGeneration;
-        try
-        {
-            var owner = runtime.GetMeshNodeRuntime(actor.MeshName).LocalRequestSource;
-            sessionOwnerId = owner.OwnerId;
-            sessionOwnerLeaseGeneration = owner.LeaseGeneration;
-        }
-        catch (InvalidOperationException)
-        {
-            sessionOwnerId = sessionNodeRid.ToHex();
-            sessionOwnerLeaseGeneration = sessionOwnerNodeGeneration;
-        }
+        // Session-Actor binding §4: this host's Session owner identity comes from its
+        // own MeshNode descriptor. Without one the bind is rejected.
+        var sessionOwner =
+            runtime.GetMeshNodeRuntime(actor.MeshName).LocalSessionOwner
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "Session owner has no live MeshNode descriptor."
+            );
+        var sessionOwnerId = sessionOwner.OwnerId;
+        var sessionOwnerLeaseGeneration = sessionOwner.LeaseGeneration;
         var bindingToken = ZLinkActorBoundSessionBindingToken.Canonical(
             sessionNodeRid,
             sessionOwnerNodeGeneration,
@@ -406,9 +403,7 @@ internal sealed class ZLinkSessionActorCoordinator(
             actor.ObjectGeneration,
             actor.MeshName,
             sessionOwnerNodeGeneration,
-            AcceptedHighWater: 0,
-            SessionOwnerId: sessionOwnerId,
-            SessionOwnerLeaseGeneration: sessionOwnerLeaseGeneration
+            AcceptedHighWater: 0
         );
         var response =
             actor.NodeRid == sessionNodeRid

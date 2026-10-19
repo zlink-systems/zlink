@@ -136,9 +136,9 @@ test('generic channel send writes one valid multipart application frame before s
       sentParts = parts;
       return { result: SubmitResult.Ok, admitted: Promise.resolve() };
     },
-    request: async (_target, parts) => [
+    request: (_target, parts, _timeout, onReply, onFailed) => Promise.resolve([
       encodeReplyHeader(decodeNodeRequestHeader(parts[0])), replyFrame
-    ]
+    ]).then(onReply, onFailed)
   };
   const raw = new RawServiceMeshRuntime({
     descriptor: descriptor('source-node', [{ name: 'orders', weight: 100 }]),

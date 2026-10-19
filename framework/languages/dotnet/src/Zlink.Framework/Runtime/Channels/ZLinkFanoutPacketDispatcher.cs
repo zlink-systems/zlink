@@ -45,33 +45,17 @@ internal sealed class ZLinkFanoutPacketDispatcher
     public async Task DispatchEventMessageAsync(
         string channelName,
         TopicMessage topicMessage,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        (ZLinkEnvelopeHeader? Header, ZLinkEnvelopeProtocolException? Error)? decodedEnvelope = null
     )
     {
-        if (topicMessage.Parts.Count == 0)
-        {
-            ReportPublishProtocolError(
-                channelName,
-                topicMessage,
-                ZLinkEnvelopeCodec.MissingHeader()
-            );
-            return;
-        }
-
-        ZLinkEnvelopeHeader header;
-        try
-        {
-            header = ZLinkEnvelopeCodec.DecodeHeader(
-                topicMessage.Parts,
-                _dispatchErrors.Flow.CaptureEnabled
-            );
-            ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
-        }
-        catch (ZLinkEnvelopeProtocolException protocolError)
+        var envelope = decodedEnvelope ?? ReadHeader(topicMessage.Parts);
+        if (envelope.Error is { } protocolError)
         {
             ReportPublishProtocolError(channelName, topicMessage, protocolError);
             return;
         }
+        var header = envelope.Header!;
 
         var admission = _runtime is null
             ? new ZLinkInboundOperationAdmission(
@@ -99,6 +83,28 @@ internal sealed class ZLinkFanoutPacketDispatcher
             await _publishPipeline
                 .DispatchAsync(channelName, topicMessage, header, cancellationToken)
                 .ConfigureAwait(false);
+        }
+    }
+
+    internal (ZLinkEnvelopeHeader? Header, ZLinkEnvelopeProtocolException? Error) ReadHeader(
+        IReadOnlyList<Message> parts
+    )
+    {
+        if (parts.Count == 0)
+            return (null, ZLinkEnvelopeCodec.MissingHeader());
+
+        try
+        {
+            var header = ZLinkEnvelopeCodec.DecodeHeader(
+                parts,
+                _dispatchErrors.Flow.CaptureEnabled
+            );
+            ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
+            return (header, null);
+        }
+        catch (ZLinkEnvelopeProtocolException error)
+        {
+            return (null, error);
         }
     }
 

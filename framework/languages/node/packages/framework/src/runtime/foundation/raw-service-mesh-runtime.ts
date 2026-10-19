@@ -769,13 +769,21 @@ export class RawServiceMeshRuntime {
     onAdmitted?: () => void
   ): Promise<readonly Buffer[]> {
     const admission = this.topology.admittedPeer(targetNodeRoutingId)?.liveness;
-    return this.requireStarted().request(
-      targetNodeRoutingId,
-      parts,
-      timeoutMs,
-      admission?.recordReceived,
-      onAdmitted
-    );
+    try {
+      return this.requireStarted().request(
+        targetNodeRoutingId,
+        parts,
+        timeoutMs,
+        (reply) => reply,
+        (error) => {
+          throw error;
+        },
+        admission?.recordReceived,
+        onAdmitted
+      );
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   replyService(
@@ -1553,57 +1561,53 @@ export class RawServiceMeshRuntime {
       return pending;
     }
     const parts = [header, encodedPayload];
-    let request: Promise<readonly Uint8Array[]>;
     try {
-      request = this.requireStarted().request(
+      this.requireStarted().request(
         selectedTargetNodeRoutingId,
         parts,
         timeoutMs,
+        (replyParts) => {
+          try {
+            if (replyParts.length < 1 || replyParts.length > 2) {
+              throw new ServiceWireProtocolError('Invalid reply parts.');
+            }
+            const reply = decodeReplyHeader(replyParts[0]!);
+            if (reply.correlation !== correlation)
+              throw new ServiceWireProtocolError('Reply correlation mismatch.');
+            if (reply.tail.byteLength !== 0) {
+              throw new ServiceWireProtocolError(
+                'Generic node/channel reply carries an operation-specific tail.'
+              );
+            }
+            if (reply.terminalResult === 0 && replyParts.length !== 2) {
+              throw new ServiceWireProtocolError('Successful reply omits its payload.');
+            }
+            if (reply.terminalResult !== 0 && replyParts.length !== 1) {
+              throw new ServiceWireProtocolError('Failed reply carries a payload.');
+            }
+            const result: RawServiceRequestResult = {
+              terminalResult: reply.terminalResult,
+              failureCode: reply.failureCode
+            };
+            this.operations.complete(
+              pending.id,
+              reply.terminalResult === 0
+                ? { ...result, payload: decodeApplicationPayloadView(replyParts[1]!) }
+                : result
+            );
+          } catch (error) {
+            this.operations.fail(pending.id, error);
+          }
+        },
+        (error) => {
+          this.operations.fail(pending.id, error);
+        },
         selectedPeer.liveness?.recordReceived,
         onAdmitted
       );
     } catch (error) {
       this.failRequest(pending, error);
-      return pending;
     }
-    void request.then(
-      (replyParts) => {
-        try {
-          if (replyParts.length < 1 || replyParts.length > 2) {
-            throw new ServiceWireProtocolError('Invalid reply parts.');
-          }
-          const reply = decodeReplyHeader(replyParts[0]!);
-          if (reply.correlation !== correlation)
-            throw new ServiceWireProtocolError('Reply correlation mismatch.');
-          if (reply.tail.byteLength !== 0) {
-            throw new ServiceWireProtocolError(
-              'Generic node/channel reply carries an operation-specific tail.'
-            );
-          }
-          if (reply.terminalResult === 0 && replyParts.length !== 2) {
-            throw new ServiceWireProtocolError('Successful reply omits its payload.');
-          }
-          if (reply.terminalResult !== 0 && replyParts.length !== 1) {
-            throw new ServiceWireProtocolError('Failed reply carries a payload.');
-          }
-          const result: RawServiceRequestResult = {
-            terminalResult: reply.terminalResult,
-            failureCode: reply.failureCode
-          };
-          this.operations.complete(
-            pending.id,
-            reply.terminalResult === 0
-              ? { ...result, payload: decodeApplicationPayloadView(replyParts[1]!) }
-              : result
-          );
-        } catch (error) {
-          this.operations.fail(pending.id, error);
-        }
-      },
-      (error) => {
-        this.operations.fail(pending.id, error);
-      }
-    );
     return pending;
   }
 

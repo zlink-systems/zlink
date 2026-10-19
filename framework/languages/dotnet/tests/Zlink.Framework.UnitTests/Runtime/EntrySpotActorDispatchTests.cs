@@ -2359,11 +2359,54 @@ public sealed partial class EntrySpotActorDispatchTests
         );
     }
 
+    /// <summary>
+    /// Session-Actor binding §4: the live MeshNode descriptors of the admitted peers
+    /// publish this owner token, so the Actor owner can take a Session owner identity
+    /// from them.
+    /// </summary>
+    private sealed class AdmittedPeerDescriptors(
+        IZLinkMeshNodeLocationResolver inner,
+        CapturingSpotNode node,
+        string ownerId,
+        long leaseGeneration
+    ) : IZLinkMeshNodeLocationResolver
+    {
+        public async ValueTask<IReadOnlyList<ZLinkMeshNodeDescriptor>> ListLiveMeshNodesAsync(
+            string meshName,
+            CancellationToken cancellationToken = default
+        ) =>
+            [
+                .. await inner
+                    .ListLiveMeshNodesAsync(meshName, cancellationToken)
+                    .ConfigureAwait(false),
+                .. node.AdmittedMeshPeers.Select(peer => new ZLinkMeshNodeDescriptor(
+                    meshName,
+                    peer.RoutingId,
+                    peer.LifecycleGeneration,
+                    peer.DescriptorRevision,
+                    peer.Endpoint,
+                    new Dictionary<string, int>(),
+                    "",
+                    ownerId,
+                    leaseGeneration,
+                    DateTimeOffset.UnixEpoch
+                )),
+            ];
+    }
+
     [Fact]
     public async Task RemoteSessionBindPublication_OldCleanup_Cannot_Interrupt_The_Owner_Turn()
     {
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            meshResolverWrapper: resolver => new AdmittedPeerDescriptors(
+                resolver,
+                node,
+                "session-owner",
+                71
+            )
+        );
         try
         {
             RegisterProbeActor(runtime, actorRef);
@@ -2394,9 +2437,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actorRef.Generation,
                 "entry",
                 61,
-                0,
-                SessionOwnerId: "session-owner",
-                SessionOwnerLeaseGeneration: 71
+                0
             );
             await runtime.BindRemoteBoundSessionRouteAsync(
                 request,
@@ -2442,7 +2483,15 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task RemoteSessionBindPublication_IgnoresOwnerLeaseChange()
     {
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            meshResolverWrapper: resolver => new AdmittedPeerDescriptors(
+                resolver,
+                node,
+                "session-owner",
+                71
+            )
+        );
         try
         {
             RegisterProbeActor(runtime, actorRef);
@@ -2478,9 +2527,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actorRef.Generation,
                 "entry",
                 61,
-                0,
-                SessionOwnerId: "session-owner",
-                SessionOwnerLeaseGeneration: 71
+                0
             );
 
             var response = await runtime.BindRemoteBoundSessionRouteAsync(
@@ -2507,7 +2554,15 @@ public sealed partial class EntrySpotActorDispatchTests
     )
     {
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            meshResolverWrapper: resolver => new AdmittedPeerDescriptors(
+                resolver,
+                node,
+                "session-owner",
+                71
+            )
+        );
         try
         {
             RegisterProbeActor(runtime, actorRef);
@@ -2538,9 +2593,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actorRef.Generation,
                 "entry",
                 61,
-                0,
-                SessionOwnerId: "session-owner",
-                SessionOwnerLeaseGeneration: 71
+                0
             );
             await runtime.BindRemoteBoundSessionRouteAsync(
                 request,
@@ -2608,7 +2661,15 @@ public sealed partial class EntrySpotActorDispatchTests
     public async Task RemoteSessionBindPublication_StillRejectsAuthorityChange()
     {
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node);
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            meshResolverWrapper: resolver => new AdmittedPeerDescriptors(
+                resolver,
+                node,
+                "session-owner",
+                71
+            )
+        );
         try
         {
             RegisterProbeActor(runtime, actorRef);
@@ -2643,9 +2704,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 actorRef.Generation,
                 "entry",
                 61,
-                0,
-                SessionOwnerId: "session-owner",
-                SessionOwnerLeaseGeneration: 71
+                0
             );
 
             var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>

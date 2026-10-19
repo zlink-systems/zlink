@@ -225,11 +225,6 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         return 0L;
     }
 
-    /** Exact local authority owner used by bound-Session relocation command 42. */
-    default String localAuthorityOwnerId() {
-        return "";
-    }
-
     /** Node lifecycle generation currently known for this Actor route. */
     default long actorNodeGeneration(ZLinkBackendActorRef actor) {
         return 0L;

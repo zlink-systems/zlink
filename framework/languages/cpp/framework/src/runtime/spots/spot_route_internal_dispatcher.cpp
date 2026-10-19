@@ -597,7 +597,8 @@ void spot_route_internal_dispatcher_t::dispatch_actor_commit_request (
                   route.session_owner_node_generation, committed_authority_owner_generation,
                   request.target_owner_lease_generation, route.binding_generation, 0,
                   /*session_sequence=*/0,
-                  /*session_sequence_baseline_unknown=*/true);
+                  /*session_sequence_baseline_unknown=*/true, route.session_owner_id,
+                  route.session_owner_lease_generation);
                 if (!staged) {
                     complete (detail::propagate_failure<zlink::message_t> (
                       staged, "target bound Session route staging failed"));
@@ -719,7 +720,8 @@ void spot_route_internal_dispatcher_t::dispatch_actor_commit_request (
                             route.session_owner_node_generation, target_authority_owner_generation,
                             target_owner_lease_generation, route.binding_generation, 0,
                             /*session_sequence=*/0,
-                            /*session_sequence_baseline_unknown=*/true);
+                            /*session_sequence_baseline_unknown=*/true, route.session_owner_id,
+                            route.session_owner_lease_generation);
                           if (!recorded) {
                               complete (detail::propagate_failure<zlink::message_t> (
                                 recorded, "target bound Session route publication failed"));
