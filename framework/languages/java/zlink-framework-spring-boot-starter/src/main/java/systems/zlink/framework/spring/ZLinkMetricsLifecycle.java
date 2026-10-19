@@ -11,7 +11,7 @@ import java.util.List;
 
 final class ZLinkMetricsLifecycle implements SmartLifecycle {
     private final MeterRegistry registry;
-    private AutoCloseable registration;
+    private ZLinkRuntimeMetrics.Registration registration;
     private volatile boolean running;
 
     ZLinkMetricsLifecycle(MeterRegistry registry, List<ZLinkMetricsCustomizer> customizers) {
@@ -39,10 +39,7 @@ final class ZLinkMetricsLifecycle implements SmartLifecycle {
     @Override
     public void stop() {
         if (registration != null) {
-            try {
-                registration.close();
-            } catch (Exception ignored) {
-            }
+            registration.close();
         }
         Metrics.removeRegistry(registry);
         running = false;

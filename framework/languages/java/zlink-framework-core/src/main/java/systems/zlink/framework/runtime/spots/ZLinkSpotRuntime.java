@@ -206,8 +206,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             CompletableFuture.completedFuture(null);
     private volatile boolean draining;
     private volatile boolean relocating;
-    private int drainInitialUserSpots;
-    private final AtomicBoolean drainRoomsMetricRecorded = new AtomicBoolean();
     private final ZLinkWorkerPool workerPool;
     private final ScheduledExecutorService timerExecutor =
             Executors.newScheduledThreadPool(
@@ -2181,7 +2179,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
 
     public CompletionStage<Void> beginDrain() {
         draining = true;
-        drainInitialUserSpots = spotLifecycle.userSpotCount();
         spotLifecycle.sealApplicationAdmission();
         return CompletableFuture.completedFuture(null);
     }
@@ -2229,8 +2226,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                         ZLinkInternalSpotNode
                                                                 ::awaitPendingActorRequests)
                                                 .map(CompletionStage::toCompletableFuture)
-                                                .toArray(CompletableFuture[]::new)))
-                .thenRun(this::recordDrainedRoomsIfComplete);
+                                                .toArray(CompletableFuture[]::new)));
     }
 
     private volatile Runnable countChanged = () -> {};
@@ -2437,21 +2433,8 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     public boolean drainComplete() {
-        boolean complete =
-                spotLifecycle.userSpotsDrained()
-                        && nodes.stream().noneMatch(ZLinkInternalSpotNode::hasPendingActorRequests);
-        if (complete) {
-            recordDrainedRoomsIfComplete();
-        }
-        return complete;
-    }
-
-    private void recordDrainedRoomsIfComplete() {
-        if (!spotLifecycle.userSpotsDrained()
-                || !drainRoomsMetricRecorded.compareAndSet(false, true)) {
-            return;
-        }
-        for (int index = 0; index < drainInitialUserSpots; index++) {}
+        return spotLifecycle.userSpotsDrained()
+                && nodes.stream().noneMatch(ZLinkInternalSpotNode::hasPendingActorRequests);
     }
 
     private void requireAcceptingNewState() {
@@ -3341,30 +3324,20 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         .thenCompose(
                                                 released -> {
                                                     if (released)
-                                                        return reserveInstanceSpotTarget(envelope)
-                                                                .whenComplete(
-                                                                        (route, failure) ->
-                                                                                ZLinkRuntimeMetrics
-                                                                                        .recordInstanceTakeover(
-                                                                                                envelope
-                                                                                                        .targetMeshName(),
-                                                                                                envelope
-                                                                                                        .stableType(),
-                                                                                                failure
-                                                                                                                == null
-                                                                                                        ? ZLinkRuntimeMetrics
-                                                                                                                .TakeoverOutcome
-                                                                                                                .CLAIMED
-                                                                                                        : ZLinkRuntimeMetrics
-                                                                                                                .TakeoverOutcome
-                                                                                                                .FAILED));
+                                                        return reserveInstanceSpotTarget(envelope);
                                                     return CompletableFuture.failedFuture(
                                                             ZLinkFrameworkErrorOrigin.framework(
                                                                     ZLinkFrameworkErrorKind
                                                                             .UNAVAILABLE,
                                                                     "Cold activation target is not"
                                                                             + " the current owner"));
-                                                });
+                                                })
+                                        .whenComplete(
+                                                (route, failure) ->
+                                                        ZLinkRuntimeMetrics.recordInstanceTakeover(
+                                                                envelope.targetMeshName(),
+                                                                envelope.stableType(),
+                                                                failure));
                             }
                             return store.listMeshNodes(
                                             envelope.targetMeshName(),

@@ -102,6 +102,30 @@ final class ZLinkStreamRuntimeIngressTest {
     private ZLinkFrameworkRegistration lastRegistration;
 
     @Test
+    void streamMetricsUseStartupTlsRegistrationInsteadOfEndpointScheme() throws Exception {
+        var stream = new FakeStream();
+        try (var metrics =
+                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                        .install()) {
+            var runtime =
+                    start(
+                            stream,
+                            0,
+                            65536,
+                            registration ->
+                                    registration
+                                            .streamNodes()
+                                            .getFirst()
+                                            .setTlsServer("certificate.pem", "key.pem", false));
+            runtimes.add(runtime);
+            stream.enqueue(PEER_A, frame("initial", "{}"));
+            TestSession.connected.get(5, TimeUnit.SECONDS);
+            assertEquals(
+                    "tls", metrics.only("zlink.stream.connections.opened").tags().get("transport"));
+        }
+    }
+
+    @Test
     void heartbeatContractConnectionWithoutInboundClosesAtTimeout() throws Exception {
         FakeStream stream = new FakeStream();
         var clock = new java.util.concurrent.atomic.AtomicLong();

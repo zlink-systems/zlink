@@ -9,13 +9,13 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Registration-bounded Instance Spot accounting, independent of status subscriptions. */
-public final class ZLinkInstanceSpotMetrics implements AutoCloseable {
+public final class ZLinkInstanceSpotMetrics implements ZLinkRuntimeMetrics.Registration {
     private final Map<String, String> tags;
     private final Map<Outcome, Map<String, String>> outcomes;
     private final AtomicLong messages = new AtomicLong();
     private final AtomicLong bytes = new AtomicLong();
-    private final AutoCloseable messageRegistration;
-    private final AutoCloseable byteRegistration;
+    private final ZLinkRuntimeMetrics.Registration messageRegistration;
+    private final ZLinkRuntimeMetrics.Registration byteRegistration;
 
     private enum Outcome {
         READY,
@@ -109,13 +109,7 @@ public final class ZLinkInstanceSpotMetrics implements AutoCloseable {
 
     @Override
     public void close() {
-        try {
-            messageRegistration.close();
-        } catch (Exception ignored) {
-        }
-        try {
-            byteRegistration.close();
-        } catch (Exception ignored) {
-        }
+        messageRegistration.close();
+        byteRegistration.close();
     }
 }

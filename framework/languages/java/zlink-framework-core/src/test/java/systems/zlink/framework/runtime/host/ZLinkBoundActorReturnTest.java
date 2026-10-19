@@ -526,6 +526,7 @@ final class ZLinkBoundActorReturnTest {
             runtime.shutdown(WAIT)
                     .toCompletableFuture()
                     .get(2 * WAIT.toSeconds(), TimeUnit.SECONDS);
+            runtime.close();
         }
     }
 

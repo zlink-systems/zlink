@@ -129,13 +129,13 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
 
     @Override
     public CompletionStage<ZLinkOwnerLeaseReadResult> readOwnerLease(String ownerId) {
-        return owners.read(ownerId);
+        return observeStore(LocationOperation.READ, () -> owners.read(ownerId));
     }
 
     @Override
     public CompletionStage<ZLinkOwnerLeaseRenewResult> renewOwnerLease(
             ZLinkLocationOwnerToken token, Duration leaseTtl) {
-        return observeStore(LocationOperation.READ, () -> owners.renew(token, leaseTtl));
+        return observeStore(LocationOperation.LEASE_RENEW, () -> owners.renew(token, leaseTtl));
     }
 
     @Override
@@ -328,7 +328,7 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
 
     @Override
     public CompletionStage<Long> removeAllByOwner(ZLinkLocationOwnerToken owner) {
-        return authority.removeAllByOwner(owner);
+        return observeStore(LocationOperation.RELEASE, () -> authority.removeAllByOwner(owner));
     }
 
     @Override
@@ -356,7 +356,11 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
     }
 
     private static void recordStoreFailure(LocationOperation operation, Throwable failure) {
-        while ((failure instanceof CompletionException || failure instanceof ExecutionException)
+        while (!(failure instanceof ZLinkLocationStoreFailure)
+                && (failure instanceof CompletionException
+                        || failure instanceof ExecutionException
+                        || failure instanceof ZLinkFrameworkException framework
+                                && framework.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE)
                 && failure.getCause() != null) failure = failure.getCause();
         if (failure instanceof ZLinkLocationStoreFailure) {
             operation.failure();

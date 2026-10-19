@@ -12,6 +12,25 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkHostStateOwnersTest {
     @Test
+    void hostStateExportReadsOneSnapshotForAllStateSeries() {
+        var registry = new io.micrometer.core.instrument.simple.SimpleMeterRegistry();
+        try {
+            var sink = new ZLinkMicrometerMetricSink(registry);
+            var calls = new java.util.concurrent.atomic.AtomicInteger();
+            sink.observeHostStates(
+                    () -> {
+                        calls.incrementAndGet();
+                        return java.util.Map.of("stopped", 1L);
+                    });
+            assertEquals(1, calls.get());
+            assertEquals(
+                    1d, registry.get("zlink.host.state").tag("state", "stopped").gauge().value());
+        } finally {
+            registry.close();
+        }
+    }
+
+    @Test
     void hostStatesAggregateLiveOwnersAndRetireExactly() throws Exception {
         var registry = new SimpleMeterRegistry();
         var firstState = new AtomicReference<>("preparing");

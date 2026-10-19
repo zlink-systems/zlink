@@ -43,11 +43,10 @@ final class ZLinkUserSpotRetireScheduler {
         return switch (settlement) {
             case TARGET_COMMITTED -> {
                 yield ZLinkRelocationHandOff.completeSourceCleanup(
-                                List.of(
-                                        source::completeSourceBarrierCommit,
-                                        () -> request.sourceCleanup().cleanup(),
-                                        source::discardInitialAfterCommit))
-                        .thenRun(() -> recordActorHandoffs(stage));
+                        List.of(
+                                source::completeSourceBarrierCommit,
+                                () -> request.sourceCleanup().cleanup(),
+                                source::discardInitialAfterCommit));
             }
             case SOURCE_PRESERVED ->
                     source.abortPrecommit()
@@ -106,14 +105,6 @@ final class ZLinkUserSpotRetireScheduler {
     private static CompletionException withSuppressed(Throwable original, Throwable suppressed) {
         original.addSuppressed(suppressed);
         return new CompletionException(original);
-    }
-
-    private static void recordActorHandoffs(ZLinkSpotRetireControl.StageRequest stage) {
-        long count =
-                stage.participants().stream()
-                        .filter(participant -> participant.objectKind() == 1)
-                        .count();
-        for (long index = 0; index < count; index++) {}
     }
 
     record RemoteRequest(
