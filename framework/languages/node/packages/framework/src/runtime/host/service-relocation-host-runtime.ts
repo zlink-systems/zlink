@@ -1,3 +1,13 @@
+import { encodeActorReply } from '../actors/actor-reply';
+import { ZLinkStreamMessageKind } from '../streams/protocol';
+import {
+  decodeApplicationPayloadView,
+  encodeMultipartApplicationPayload
+} from '../foundation/service-wire-m6a-codec';
+import {
+  SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
+  SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
+} from '../foundation/service-wire-constants.generated';
 import { OperationTimeoutError } from '../foundation/operation-registry';
 import { durableRequestCanReplay } from '../foundation/durable-service-request';
 import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
@@ -361,7 +371,7 @@ interface SourceActorJoinProfile {
 }
 
 interface PendingRelocationReplyRelay {
-  readonly ackTargetNodeRid: string;
+  readonly ackTargetNodeRid: RoutingId;
   readonly identityKey: string;
   readonly request: ServiceMaintenanceReplyRelay;
   readonly expectedRequestSource: ServiceWireRequestSourceFence;
@@ -393,7 +403,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   private readonly terminalTargets = new BoundedReplayMap<string, string>(
     RELOCATION_TARGET_TOMBSTONE_LIMIT
   );
-  private readonly relocationAuthorityKeys = new Map<string, string>();
   private readonly targetPrepareOperations = new Map<string, TargetPrepareOperation>();
   private readonly pendingReplyRelays = new Map<string, PendingRelocationReplyRelay>();
   private readonly pendingSessionRelocations = new Map<string, PendingSessionRelocation>();
@@ -583,7 +592,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     await this.drainActorJoinSources();
     this.terminalActorJoinSourceLeaves.clear();
     await this.options.boundSessionRelocation?.clear?.();
-    this.relocationAuthorityKeys.clear();
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, 'Relocation runtime stop failed.');
   }
@@ -2394,13 +2402,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     // attempt even when it reuses the same routing id.
     const targetAttemptGeneration = target.lifecycleGeneration;
     const relayAuthorityId = wireIdText(relocationWireId(captured.envelope.aggregateId));
-    const relayAuthorityKey = primaryKey(captured.envelope);
-    if (this.relocationAuthorityKeys.has(relayAuthorityId)) {
-      throw new Error(
-        `Relocation reply relay authority '${relayAuthorityId}' is already registered.`
-      );
-    }
-    this.relocationAuthorityKeys.set(relayAuthorityId, relayAuthorityKey);
     // The captured payload stays in source memory: this copy is the only
     // handoff original until the cutover submit terminal and the
     // retransmission window end (spec 28 §4.2).
@@ -2629,9 +2630,6 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         // Only an explicit failure before the Ready reply becomes accepted
         // restores the source from the memory payload (spec 28 §9).
         await captured.abortSource().catch(() => undefined);
-      }
-      if (this.relocationAuthorityKeys.get(relayAuthorityId) === relayAuthorityKey) {
-        this.relocationAuthorityKeys.delete(relayAuthorityId);
       }
     }
   }
@@ -3557,48 +3555,52 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       throw new Error('Relocation reply relay has no authenticated target node.');
     }
     await this.requireAdmittedPeer(meshName, sourceNodeRid, relay.coordinator, signal);
-    const relocationId = wireIdText(relay.relocation);
-    const authorityKey = this.relocationAuthorityKeys.get(relocationId);
-    if (authorityKey === undefined) {
-      throw new Error('Relocation reply relay has no registered durable authority.');
-    }
-    const authority = await requireAuthority(
-      this.requireLocationStore(),
-      { value: authorityKey } as ZLinkAuthorityKey,
-      signal
-    );
-    if (
-      authority.storeVersion.value !== relay.coordinator.expectedAuthorityStoreVersion ||
-      authority.ownerId !== relay.coordinator.ownerId ||
-      authority.ownerLeaseGeneration !== relay.coordinator.leaseGeneration ||
-      !routingIdsEqual(authority.allocation.descriptor.rid, relay.coordinator.nodeRid) ||
-      authority.allocation.descriptorLifecycleGeneration !== relay.coordinator.nodeGeneration
-    ) {
-      throw new Error('Relocation reply relay coordinator authority fence is stale.');
-    }
-    const accepted = this.options.actorTransfer.relayCanonicalMaintenanceTerminal(
-      wireIdText(relay.operation),
-      relay.replyRouteId.toString(),
-      handoffResultFromRelay(relay),
-      sourceNodeRid
-    );
-    if (
-      (accepted.status !== 'terminalReceived' && accepted.status !== 'alreadyTerminal') ||
-      accepted.source === undefined
-    ) {
-      throw new Error('Canonical relocation reply relay collided with another source route.');
-    }
-    const requestSource = handoffSourceFence(accepted.source);
-    const localStatus = this.requireMeshNode(meshName).status();
+    const node = this.requireMeshNode(meshName);
+    const localStatus = node.status();
     const localOwner = this.options.currentOwner();
-    if (
-      localOwner === undefined ||
-      requestSource.ownerId !== localOwner.ownerId ||
-      requestSource.leaseGeneration !== localOwner.leaseGeneration ||
-      !routingIdsEqual(requestSource.nodeRid, localStatus.routingId) ||
-      requestSource.nodeGeneration !== localStatus.lifecycleGeneration
-    ) {
-      throw new Error('Relocation reply relay request-source fence changed after capture.');
+    if (localOwner === undefined)
+      throw new Error('Relocation requester owner lease is unavailable.');
+    let status = node.acceptRelocatedActorTerminal?.(relay.operation, relay.replyRouteId, {
+      terminalResult: relay.terminalResult,
+      failureCode: relay.failureCode,
+      ...(relay.payload === undefined
+        ? {}
+        : {
+            payload: {
+              packetName: relay.payload.packetName,
+              contentType: relay.payload.contentType,
+              payload: Buffer.from(relay.payload.bytes)
+            }
+          })
+    });
+    let requestSource: ServiceWireRequestSourceFence = {
+      ownerId: localOwner.ownerId,
+      leaseGeneration: localOwner.leaseGeneration,
+      nodeRid: localStatus.routingId,
+      nodeGeneration: localStatus.lifecycleGeneration
+    };
+    if (status === undefined) {
+      const accepted = this.options.actorTransfer.relayCanonicalMaintenanceTerminal(
+        relay.operation.high.toString(16).padStart(16, '0') +
+          relay.operation.low.toString(16).padStart(16, '0'),
+        relay.replyRouteId.toString(),
+        handoffResultFromRelay(relay),
+        sourceNodeRid
+      );
+      if (accepted.status === 'notAcknowledged' || accepted.source === undefined) {
+        throw new Error('Canonical relocation reply relay collided with another source route.');
+      }
+      requestSource = handoffSourceFence(accepted.source);
+      if (
+        !sameRequestSource(requestSource, {
+          ownerId: localOwner.ownerId,
+          leaseGeneration: localOwner.leaseGeneration,
+          nodeRid: localStatus.routingId,
+          nodeGeneration: localStatus.lifecycleGeneration
+        })
+      )
+        throw new Error('Relocation reply relay request-source fence changed after capture.');
+      status = accepted.status;
     }
     const ack: ServiceMaintenanceReplyRelayAck = {
       relocation: relay.relocation,
@@ -3606,7 +3608,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       operation: relay.operation,
       replyRouteId: relay.replyRouteId,
       requestSource,
-      status: accepted.status
+      status
     };
     if (
       (await this.sendInfrastructureControl(
@@ -3626,9 +3628,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     expectedRequestSource: ServiceWireRequestSourceFence,
     signal?: AbortSignal
   ): Promise<RelocationTerminalDelivery> {
-    const targetRid = String(ackTargetNodeRid);
     const identityKey = replyRelayIdentityKey(request);
-    const key = replyRelayPendingKey(targetRid, request);
+    const key = replyRelayPendingKey(ackTargetNodeRid, request);
     if (this.pendingReplyRelays.has(key)) {
       throw new Error(`Relocation reply relay ACK '${key}' is already pending.`);
     }
@@ -3641,7 +3642,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         action();
       };
       const pending: PendingRelocationReplyRelay = {
-        ackTargetNodeRid: targetRid,
+        ackTargetNodeRid,
         identityKey,
         request,
         expectedRequestSource,
@@ -3686,8 +3687,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
     signal?: AbortSignal
   ): Promise<void> {
     const identityKey = replyRelayIdentityKey(ack);
-    const exactKey =
-      sourceNodeRid === null ? undefined : replyRelayPendingKey(String(sourceNodeRid), ack);
+    const exactKey = sourceNodeRid === null ? undefined : replyRelayPendingKey(sourceNodeRid, ack);
     const pending = exactKey === undefined ? undefined : this.pendingReplyRelays.get(exactKey);
     if (pending === undefined) {
       const collision = [...this.pendingReplyRelays.values()].find(
@@ -3784,11 +3784,19 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       source: packet.source,
       result
     };
+    const source = handoffSourceFence(packet.source);
     await this.sendReplyRelay(
       meshName,
-      packet.source.nodeRid as RoutingId,
-      maintenanceReplyRelay(stage, coordinator, participantId, completion),
-      handoffSourceFence(packet.source),
+      source.nodeRid,
+      maintenanceReplyRelay(
+        stage,
+        coordinator,
+        participantId,
+        completion,
+        packet,
+        this.options.registration.messageSerializers
+      ),
+      source,
       signal
     );
   }
@@ -5290,6 +5298,22 @@ export function decodeQueuedHandoffPacket(
       ...(messageFollowOrigin === undefined ? {} : { messageFollowOrigin })
     }
   ])[0]!;
+  const requestSource =
+    decoded.source === undefined ? undefined : handoffSourceFence(decoded.source);
+  if (
+    messageFollowOrigin !== undefined &&
+    requestSource !== undefined &&
+    routingIdsEqual(messageFollowOrigin.sourceNodeRid, requestSource.nodeRid)
+  ) {
+    return {
+      ...decoded,
+      index: index as number,
+      messageFollowOrigin: {
+        ...messageFollowOrigin,
+        requestSource
+      }
+    };
+  }
   return { ...decoded, index: index as number };
 }
 
@@ -5464,16 +5488,6 @@ export function createServiceRelocationId(
   }
 }
 
-function operationWireId(value: string): { readonly high: bigint; readonly low: bigint } {
-  const match = /^(\d+):(\d+)$/.exec(value);
-  if (match === null) throw new Error(`Actor handoff operation '${value}' is not canonical.`);
-  const result = { high: BigInt(match[1]!), low: BigInt(match[2]!) };
-  if (result.high === 0n && result.low === 0n) {
-    throw new Error('Actor handoff operation identity must not be zero.');
-  }
-  return result;
-}
-
 function sameWireId(
   left: { readonly high: bigint; readonly low: bigint },
   right: { readonly high: bigint; readonly low: bigint }
@@ -5488,7 +5502,7 @@ function sameCoordinator(
   return (
     left.ownerId === right.ownerId &&
     BigInt(left.leaseGeneration) === right.leaseGeneration &&
-    left.nodeRid === right.nodeRid &&
+    routingIdsEqual(left.nodeRid, right.nodeRid) &&
     BigInt(left.nodeGeneration) === right.nodeGeneration &&
     left.expectedAuthorityStoreVersion === right.expectedAuthorityStoreVersion
   );
@@ -5499,7 +5513,7 @@ function sameRelocationTarget(
   right: ServiceWireRelocationTarget
 ): boolean {
   return (
-    left.nodeRid === right.nodeRid &&
+    routingIdsEqual(left.nodeRid, right.nodeRid) &&
     BigInt(left.nodeGeneration) === right.nodeGeneration &&
     left.ownerId === right.ownerId &&
     BigInt(left.ownerLeaseGeneration) === right.ownerLeaseGeneration
@@ -5598,7 +5612,7 @@ function sameRequestSource(
   return (
     left.ownerId === right.ownerId &&
     left.leaseGeneration === right.leaseGeneration &&
-    left.nodeRid === right.nodeRid &&
+    routingIdsEqual(left.nodeRid, right.nodeRid) &&
     left.nodeGeneration === right.nodeGeneration
   );
 }
@@ -5609,7 +5623,7 @@ function handoffSourceFence(
   return {
     ownerId: value.ownerId,
     leaseGeneration: BigInt(value.ownerLeaseGeneration),
-    nodeRid: value.nodeRid,
+    nodeRid: decodeRoutingId(value.nodeRid, value.nodeRidHex),
     nodeGeneration: BigInt(value.nodeGeneration)
   };
 }
@@ -5618,14 +5632,32 @@ function maintenanceReplyRelay(
   stage: LocalStage,
   coordinator: ServiceWireRelocationCoordinatorFence,
   participantId: bigint,
-  completion: RelocationTerminalCompletion
+  completion: RelocationTerminalCompletion,
+  packet: ZLinkActorHandoffPacket,
+  serializers: Parameters<typeof encodeActorReply>[3]
 ): ServiceMaintenanceReplyRelay {
   const value = completion.result.ok ? completion.result.response : undefined;
+  const direct = packet.messageFollowOrigin?.requestSource !== undefined;
+  const application =
+    direct && completion.result.ok
+      ? decodeApplicationPayloadView(
+          encodeMultipartApplicationPayload(
+            encodeActorReply(
+              Buffer.from(packet.header, 'base64'),
+              ZLinkStreamMessageKind.Response,
+              value,
+              serializers
+            ),
+            SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
+            SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
+          )
+        )
+      : undefined;
   return {
     relocation: relocationWireId(stage.staging.envelope.aggregateId),
     targetAttemptGeneration: stage.offer.prepare.targetAttemptGeneration,
     coordinator,
-    operation: operationWireId(completion.operationId),
+    operation: parseHandoffOperationId(completion.operationId),
     replyRouteId: BigInt(completion.source.replyRouteId),
     participantId,
     sequence: BigInt(completion.index + 1),
@@ -5633,15 +5665,23 @@ function maintenanceReplyRelay(
     failureCode: completion.result.ok
       ? ServiceWireFrameworkErrorCode.none
       : ServiceWireFrameworkErrorCode.requestFailed,
-    ...(value === undefined
-      ? {}
-      : {
+    ...(application !== undefined
+      ? {
           payload: {
-            packetName: SERVICE_RELOCATION_REPLY_PACKET_NAME,
-            contentType: ZlinkStreamContentType.Json,
-            bytes: Buffer.from(JSON.stringify(value), 'utf8')
+            packetName: application.packetName,
+            contentType: application.contentType,
+            bytes: application.payload
           }
-        })
+        }
+      : value === undefined
+        ? {}
+        : {
+            payload: {
+              packetName: SERVICE_RELOCATION_REPLY_PACKET_NAME,
+              contentType: ZlinkStreamContentType.Json,
+              bytes: Buffer.from(JSON.stringify(value), 'utf8')
+            }
+          })
   };
 }
 
@@ -5889,12 +5929,7 @@ function canonicalQueuedFrozenRecord(
   const source =
     packet.source === undefined
       ? coordinatorSource(coordinator)
-      : {
-          ownerId: packet.source.ownerId,
-          leaseGeneration: BigInt(packet.source.ownerLeaseGeneration),
-          nodeRid: packet.source.nodeRid,
-          nodeGeneration: BigInt(packet.source.nodeGeneration)
-        };
+      : handoffSourceFence(packet.source);
   const operationId = parseHandoffOperationId(packet.messageFollowContext.operationId);
   if (packet.returnResponse && packet.source === undefined) {
     throw new Error('Captured Actor request has no exact request-source fence.');
@@ -6098,17 +6133,20 @@ function replyRelayIdentityKey(value: {
     value.relocation.low.toString(),
     value.coordinator.ownerId,
     value.coordinator.leaseGeneration.toString(),
-    value.coordinator.nodeRid,
+    encodeRoutingIdStorageHex(value.coordinator.nodeRid),
     value.coordinator.nodeGeneration.toString(),
     value.coordinator.expectedAuthorityStoreVersion
   ]);
 }
 
 function replyRelayPendingKey(
-  ackTargetNodeRid: string,
+  ackTargetNodeRid: RoutingId,
   value: Parameters<typeof replyRelayIdentityKey>[0]
 ): string {
-  return JSON.stringify([ackTargetNodeRid, replyRelayIdentityKey(value)]);
+  return JSON.stringify([
+    encodeRoutingIdStorageHex(ackTargetNodeRid),
+    replyRelayIdentityKey(value)
+  ]);
 }
 
 export function encodeHandoffQueuedMessages(

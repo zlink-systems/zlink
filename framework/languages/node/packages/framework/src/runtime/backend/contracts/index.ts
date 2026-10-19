@@ -70,6 +70,11 @@ export type ZLinkBackendRequestSourceAcceptance = (
   | Promise<import('../../locations/request-source-resolver').ZLinkRequestSourceFence | undefined>;
 
 export interface ZLinkBackendMeshNode {
+  acceptRelocatedActorTerminal?(
+    operation: { readonly high: bigint; readonly low: bigint },
+    replyRouteId: bigint,
+    result: import('../../foundation/service-stateful-runtime').ServiceStatefulResult
+  ): 'terminalReceived' | 'alreadyTerminal' | undefined;
   readonly routingId?: RoutingId;
   cancelPendingOperations?(reason: unknown): void;
   completeClosedInstance?(spotId: string, objectGeneration: bigint): void;
