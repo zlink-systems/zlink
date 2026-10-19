@@ -225,12 +225,6 @@ class spot_node_builder_state_t
     std::function<task_t<zlink::submit_result_t> (const zlink::routing_id_t &,
                                                   std::vector<zlink::message_t>)>
       actor_leave_notification_sender;
-    // Requests currently dispatched to each actor and not yet replied. Sampled
-    // once per transfer right at the moving transition (runtime-metrics §4.3
-    // pending_requests). The node state lane owns both dispatch updates and
-    // transfer samples, so the token can settle this counter with its lifecycle
-    // claim in one terminal turn.
-    std::map<std::string, std::size_t> actor_pending_requests;
     struct pending_remote_source_cleanup_t
     {
         actor_ref_t source_actor;

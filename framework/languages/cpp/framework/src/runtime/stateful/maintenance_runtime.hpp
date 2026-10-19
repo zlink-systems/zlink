@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/protocol/relocation_envelope_codec.hpp"
+#include "runtime/diagnostics/relocation_metrics.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/stateful/relocation_transfer.hpp"
@@ -352,6 +353,7 @@ struct eligible_relocation_unit_t
         std::chrono::steady_clock::time_point restore_deadline{};
         // Core selected generation and admission readiness, observed by MeshNode.
         std::function<std::pair<std::uint64_t, bool> ()> target_route;
+        std::optional<detail::factory_relocation_kind_t> metric_policy;
         // This is valid only after an exact target failure and before a
         // Cutover enqueue.  It fences source admission restoration.
         std::function<bool ()> abort_target_before_cutover;
@@ -522,6 +524,10 @@ class maintenance_runtime_t
     void attach_unavailable_terminal (std::function<void (const object_ref_t &)> terminal) noexcept;
     void attach_committed_terminal (committed_terminal_t terminal) noexcept;
 
+    void configure_metrics (std::shared_ptr<runtime::relocation_metrics_t> metrics)
+    {
+        _metrics = std::move (metrics);
+    }
     relocation_gate_snapshot_t gate_snapshot () const;
 
     /* Optional source-local metric (25 §"zlink.relocation.route_convergence"):
@@ -575,6 +581,27 @@ class maintenance_runtime_t
     compute_inventory_digest (const std::vector<object_ref_t> &participants);
 
   private:
+    task_t<relocation_result_t> relocate_unobserved (
+      const object_ref_t &source,
+      std::string target_node_id,
+      location_owner_token_t target_owner,
+      std::size_t encoded_upper_bound,
+      inventory_digest_t inventory_digest,
+      const std::optional<eligible_relocation_unit_t::canonical_wire_context_t> &canonical_wire,
+      std::stop_token cancellation,
+      std::uint64_t advertised_receive_chunk_limit_bytes);
+    task_t<aggregate_relocation_result_t> relocate_aggregate_unobserved (
+      const std::vector<object_ref_t> &sources,
+      std::string target_node_id,
+      location_owner_token_t target_owner,
+      std::size_t encoded_upper_bound,
+      inventory_digest_t inventory_digest,
+      const std::optional<eligible_relocation_unit_t::canonical_wire_context_t> &canonical_wire =
+        std::nullopt,
+      std::stop_token cancellation = {},
+      std::uint64_t advertised_receive_chunk_limit_bytes = 0);
+    std::shared_ptr<runtime::relocation_metrics_t> _metrics;
+
     struct relocation_terminal_state_t;
 
     class permit_t

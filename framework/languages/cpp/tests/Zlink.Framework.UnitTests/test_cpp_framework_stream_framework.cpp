@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/runtime_metric_contract.hpp"
 
 #include <zlink/framework.hpp>
 #include <zlink/stream_connector.hpp>
@@ -1066,6 +1067,7 @@ int core_connected_rejection_cleanup ()
 
 int main (int argc, char **argv)
 {
+    metric_test::provider_t metric_provider;
     using zlink::framework::framework_error_kind_t;
     using zlink::framework::stream_codec_t;
     using zlink::framework::detail::stream_header_flags_t;
@@ -2924,5 +2926,23 @@ int main (int argc, char **argv)
     }
     error_close_stop_thread.join ();
     error_close_mesh->stop ();
+    const auto metric_data = metric_provider.collect ();
+    try {
+        metric_test::validate_metric_contract (metric_data);
+        for (const auto &metric : metric_data) {
+            if (metric.instrument_descriptor.name_ != "zlink.stream.connections.active")
+                continue;
+            for (const auto &point : metric.point_data_attr_) {
+                const auto &sum =
+                  opentelemetry::nostd::get<metric_test::sdk::SumPointData> (point.point_data);
+                if (opentelemetry::nostd::get<double> (sum.value_) < 0)
+                    throw std::runtime_error ("STREAM connection count underflow");
+            }
+        }
+    }
+    catch (const std::exception &error) {
+        std::cerr << error.what () << '\n';
+        return 321;
+    }
     return 0;
 }

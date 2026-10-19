@@ -879,6 +879,7 @@ void mesh_node_runtime_t::start ()
     if (_relocation_authority && _relocation_store)
         node->configure_relocation (_relocation_authority, _relocation_store,
                                     _aggregate_relocation_authority, _relocation_limits);
+    _state->spot_state->activation_admission->configure_metrics (_state->mesh_name);
     node->start ();
     if (_instance_spot_materializer)
         (void) node->recover_instance_spot_activations ();
@@ -1272,6 +1273,30 @@ runtime::protocol::session_relocation_route_t mesh_node_runtime_t::make_session_
        .current_authority_owner_generation = checkpoint.source.authority_owner_generation}};
 }
 
+namespace
+{
+std::optional<factory_relocation_kind_t>
+relocation_metric_policy (const std::shared_ptr<spot_node_builder_state_t> &state,
+                          runtime::stateful::object_kind_t kind,
+                          const std::string &stable_type)
+{
+    return state->lane
+      .run ([&] () -> std::optional<factory_relocation_kind_t> {
+          if (kind == runtime::stateful::object_kind_t::actor) {
+              const auto found = state->actor_factories.find (stable_type);
+              if (found != state->actor_factories.end ())
+                  return found->second.relocation.kind;
+          } else {
+              const auto found = state->spot_factory_relocations.find (stable_type);
+              if (found != state->spot_factory_relocations.end ())
+                  return found->second.kind;
+          }
+          return std::nullopt;
+      })
+      .get ();
+}
+} // namespace
+
 task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_application_actor (
   const actor_ref_t &actor,
   const mesh_node_descriptor_t &target,
@@ -1420,6 +1445,8 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
 
     const auto receive_chunk_limit_bytes =
       negotiated_receive_chunk_limit_bytes (actor).value_or (0);
+    wire.metric_policy =
+      relocation_metric_policy (_state->spot_state, source->kind, authority.allocation.stable_type);
     auto result = co_await maintenance->relocate (
       *source, target.rid.to_string (), {target.owner_id, target.lease_generation},
       256u * 1024u * 1024u, inventory_digest, wire, {}, receive_chunk_limit_bytes);
@@ -1664,6 +1691,8 @@ mesh_node_runtime_t::relocate_application_unit (
     for (std::size_t index = 0; index != digest.size (); ++index)
         digest[index] = std::to_integer<std::uint8_t> (public_digest[index]);
     const auto receive_chunk_limit_bytes = negotiated_receive_chunk_limit_bytes (sources);
+    wire.metric_policy =
+      relocation_metric_policy (_state->spot_state, sources.front ().kind, stable_types.front ());
     if (sources.size () == 1) {
         auto result = co_await maintenance->relocate (
           sources.front (), target.rid.to_string (), {target.owner_id, target.lease_generation},
@@ -3335,6 +3364,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       .abort_target_before_cutover = [] { return true; }};
     const auto inventory_digest =
       runtime::stateful::maintenance_runtime_t::compute_inventory_digest ({s->source_actor});
+    wire.metric_policy = relocation_metric_policy (
+      _state->spot_state, runtime::stateful::object_kind_t::actor, recovery.actor_type);
     const auto relocated = co_await maintenance->relocate (
       s->source_actor, s->target.node_rid.to_string (),
       {s->target.owner.owner_id, s->target.owner.lease_generation}, 256u * 1024u * 1024u,

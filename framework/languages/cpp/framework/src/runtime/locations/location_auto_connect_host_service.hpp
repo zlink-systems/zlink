@@ -332,6 +332,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                    std::function<void (const target_t &)> connect_target,
                    std::function<void (const target_t &)> disconnect_target)
     {
+        _runtime->register_metric_scope ("mesh", mesh_name);
         loop_t loop;
         loop.mesh_name = std::move (mesh_name);
         loop.local_rid = std::move (local_rid);
@@ -354,6 +355,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             for (auto &loop : _loops) {
                 try {
                     snapshots.emplace_back (&loop, read_descriptors (loop));
+                    if (loop.local_rid)
+                        (void) _store->refresh_capacity_metrics (loop.mesh_name, *loop.local_rid)
+                          .result ();
                 }
                 catch (const std::exception &error) {
                     handle_loop_failure (loop, "tick", error.what ());
@@ -398,11 +402,6 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         }
         catch (...) {
             trace_failure ("recovery-failed", loop.mesh_name, {}, "unknown exception");
-        }
-        try {
-            _runtime->record_store_error ();
-        }
-        catch (...) {
         }
     }
 
@@ -460,7 +459,6 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             if (target.accepting_work)
                 loop.last_desired.emplace (key, target);
         }
-        _runtime->observe_discovered_peers (loop.last_desired.size ());
         const bool defer_missing_target_removal =
           loop.recovery_started_at
           && std::chrono::steady_clock::now () - *loop.recovery_started_at

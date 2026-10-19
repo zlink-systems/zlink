@@ -949,6 +949,8 @@ public_host_runtime_t::public_host_runtime_t (host_options_t options) :
      * relocation replay wire; the host outlives the coordinator it owns. */
     _relocation_wire->set_flow_capture_provider ([this] { return capture_flow (); });
     const auto &descriptor = _options.mesh.descriptor;
+    _objects.configure_population_metrics (descriptor.mesh_name);
+    _relocation_metrics = std::make_shared<runtime::relocation_metrics_t> (descriptor.mesh_name);
     // This host's own object record is not a new target selection: the node placement weight
     // belongs to Framework placement (MeshNode §5.1), so the local candidate keeps the default
     // weight and weight 0 never blocks this node's own objects such as its Entry Spot.
@@ -1204,6 +1206,7 @@ void public_host_runtime_t::start ()
           if (_started || _closing) {
               return;
           }
+          _objects.configure_population_metrics (_options.mesh.descriptor.mesh_name);
           _transport->start ();
           _started = true;
       })
@@ -1250,6 +1253,7 @@ void public_host_runtime_t::close () noexcept
       .get ();
     _sessions.drop_held_relays (message_flow_reason_t::shutdown);
     _transport->close ();
+    _objects.retire_population_metrics ();
     _local_dispatch_completion_lane.run ([&] { _local_application_dispatches.clear (); }).get ();
     _lifecycle_configuration_lane.run ([&] { _closing = false; }).get ();
 }
@@ -1536,6 +1540,9 @@ void public_host_runtime_t::configure_instance_spot_operations (
           _session_relocations = relocations;
           _instance_spot_relocations = std::move (relocations);
           _instance_spot_owner = std::move (owner);
+          for (const auto &type : materializer.metric_types)
+              _instance_metrics.emplace (type, std::make_shared<runtime::instance_spot_metrics_t> (
+                                                 _options.mesh.descriptor.mesh_name, type));
           _instance_spot_materializer =
             std::make_shared<const instance_spot_activation_materializer_t> (
               std::move (materializer));
@@ -3344,6 +3351,8 @@ void public_host_runtime_t::poll_relocation_target_attempts ()
               if (!attempt.cutover_warned) {
                   attempt.cutover_warned = true;
                   ++cutover_warnings;
+                  if (_relocation_metrics && !attempt.sources.empty ())
+                      _relocation_metrics->timeout (attempt.sources.front ().kind);
               }
               set_relocation_finalize_at_on_lane (attempt,
                                                   now + dispatch_limits::management_retry_interval);
@@ -3914,6 +3923,13 @@ bool public_host_runtime_t::try_finalize_relocation_target (const relocation_att
     /* Metrics 25 §"zlink.relocation": target_resume is the target-local S2
      * (owner CAS confirmed) -> dispatch-open duration, emitted once on the
      * tick that completes the target terminal. */
+    if (_relocation_metrics && !attempt.sources.empty ()
+        && attempt.authority_committed_at != std::chrono::steady_clock::time_point{})
+        _relocation_metrics->resume (
+          attempt.sources.front ().kind,
+          std::chrono::duration<double> (std::chrono::steady_clock::now ()
+                                         - attempt.authority_committed_at)
+            .count ());
     if (_relocation_target_metrics.target_resume_seconds
         && attempt.authority_committed_at != std::chrono::steady_clock::time_point{}) {
         const auto elapsed = std::chrono::duration<double> (std::chrono::steady_clock::now ()
@@ -4829,6 +4845,37 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
           std::move (command), std::move (mailbox_record), std::move (done), nullptr, nullptr);
         co_return;
     }
+    const auto metric = _instance_metrics.find (command.activation.target.stable_type);
+    if (metric != _instance_metrics.end () && metric->second->enabled ()) {
+        const auto metrics = metric->second;
+        const auto payload_bytes = command.application_payload.payload_bytes ().size ();
+        const auto started = std::chrono::steady_clock::now ();
+        metrics->retain (payload_bytes);
+        const bool first_claim = !previous_admission;
+        auto observed_admission = operation->admission.task ();
+        detail::observe_task_terminal (
+          observed_admission, [metrics, payload_bytes, started, first_claim] (
+                                const result_t<instance_activation_admission_t> &result) {
+              metrics->release (payload_bytes);
+              if (!first_claim)
+                  return;
+              auto outcome = runtime::instance_spot_metrics_t::outcome_t::ready;
+              if (!result) {
+                  outcome = result.error ()
+                                && result.error ()->kind () == framework_error_kind_t::unavailable
+                              ? runtime::instance_spot_metrics_t::outcome_t::store_failure
+                            : result.error ()
+                              ? runtime::instance_spot_metrics_t::outcome (result.error ()->kind ())
+                              : runtime::instance_spot_metrics_t::outcome_t::rejected;
+              } else if (const auto *failure =
+                           std::get_if<instance_spot_activation_result_t> (&result.value ())) {
+                  const auto error = messaging::request_failure_mapper_t{}.reply_header_exception (
+                    failure->terminal_result, failure->failure_code, "Instance Spot activation");
+                  outcome = runtime::instance_spot_metrics_t::outcome (error.kind ());
+              }
+              metrics->terminal (started, outcome);
+          });
+    }
     auto admission = std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> (
       operation, &operation->admission);
     const auto result = co_await runtime::await_result (
@@ -4875,6 +4922,9 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
           instance_owner_resolver = _instance_spot_owner;
       })
       .get ();
+    const auto registered_metric = _instance_metrics.find (request.target.stable_type);
+    const auto instance_metric =
+      registered_metric == _instance_metrics.end () ? nullptr : registered_metric->second;
     const auto finish_admission = [admission] (instance_activation_admission_t result) {
         if (admission)
             admission->complete (
@@ -5063,6 +5113,9 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
                 || snapshot->allocation.target.node_rid.value ()
                      != zlink::routing_id_t::from (request.target.target_node_routing_id)
                           .to_string ()) {
+                if (instance_metric)
+                    instance_metric->conflict (
+                      runtime::instance_spot_metrics_t::conflict_reason_t::authority);
                 // Refused before admission: spotMoving tells the caller that no
                 // message was accepted (Spot address messaging §9, failover §4.4).
                 const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
@@ -5078,6 +5131,11 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
             co_return false;
         if (snapshot->allocation.object_kind != placement_object_kind_t::instance_spot
             || snapshot->allocation.stable_type != request.target.stable_type) {
+            if (instance_metric)
+                instance_metric->conflict (
+                  snapshot->allocation.object_kind != placement_object_kind_t::instance_spot
+                    ? runtime::instance_spot_metrics_t::conflict_reason_t::spot_kind
+                    : runtime::instance_spot_metrics_t::conflict_reason_t::spot_type);
             reply_terminal (
               {107, static_cast<std::uint32_t> (protocol::framework_error_code::spotTypeMismatch),
                std::nullopt});
@@ -5122,6 +5180,9 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
             if (ready_state->state == instance_spot_authority_state_t::closing
                 && request.target.authority_owner_generation != 0
                 && !request.target.instance_intent) {
+                if (instance_metric)
+                    instance_metric->conflict (
+                      runtime::instance_spot_metrics_t::conflict_reason_t::closing);
                 const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
                   framework_error_kind_t::not_found);
                 reply_terminal ({failure->terminal_result, failure->failure_code, std::nullopt});

@@ -662,6 +662,7 @@ void client_server_location_runtime_t::start ()
 void client_server_location_runtime_t::start_server (
   const channel_snapshot_t &channel, const std::optional<location_owner_token_t> &publication_owner)
 {
+    _locations->register_metric_scope ("channel", channel.name);
     protocol::client_server_server_admission_t admission;
     admission.channel_name = channel.name;
     admission.server_routing_id = server_routing_id (channel);
@@ -703,7 +704,6 @@ void client_server_location_runtime_t::start_server (
                 }));
           }
           catch (const std::exception &) {
-              _locations->record_store_error ();
               std::lock_guard lock (_server_progress_mutex);
               --_active_application_drains;
               _server_progress_changed.notify_all ();
@@ -712,7 +712,7 @@ void client_server_location_runtime_t::start_server (
           try {
               detail::observe_task_terminal (*task, [this] (const result_t<void> &result) {
                   if (!result)
-                      _locations->record_store_error ();
+
                   {
                       std::lock_guard lock (_server_progress_mutex);
                       --_active_application_drains;
@@ -721,7 +721,6 @@ void client_server_location_runtime_t::start_server (
               });
           }
           catch (const std::exception &) {
-              _locations->record_store_error ();
           }
       });
     raw->start ();
@@ -747,6 +746,7 @@ void client_server_location_runtime_t::start_server (
 
 void client_server_location_runtime_t::start_client (const channel_snapshot_t &channel)
 {
+    _locations->register_metric_scope ("channel", channel.name);
     auto entry = std::make_unique<client_channel_t> ();
     entry->snapshot = channel;
     entry->routing_id = client_routing_id (channel);
@@ -865,16 +865,16 @@ void client_server_location_runtime_t::run ()
             const bool published = result && result.value ();
             const bool reconcile_after_publish = serving.empty ();
             if (!result)
-                _locations->record_store_error ();
-            if (!reconcile_after_publish) {
-                {
-                    std::lock_guard lock (_server_progress_mutex);
-                    for (const auto &request : serving)
-                        request->completion.complete (result_t<bool>::success (published));
+
+                if (!reconcile_after_publish) {
+                    {
+                        std::lock_guard lock (_server_progress_mutex);
+                        for (const auto &request : serving)
+                            request->completion.complete (result_t<bool>::success (published));
+                    }
+                    serving.clear ();
+                    _server_progress_changed.notify_all ();
                 }
-                serving.clear ();
-                _server_progress_changed.notify_all ();
-            }
             if (reconcile_after_publish && result && !_stop->load (std::memory_order_acquire)) {
                 pending_reconcile = std::make_shared<task_t<void>> (
                   reconcile_task ([this] (std::function<void ()> work) {
@@ -890,8 +890,7 @@ void client_server_location_runtime_t::run ()
         }
         if (pending_reconcile && pending_reconcile->await_ready ()) {
             auto completed = std::move (pending_reconcile);
-            if (!completed->result ())
-                _locations->record_store_error ();
+            (void) completed->result ();
             next_reconcile =
               std::chrono::steady_clock::now () + _locations->options ().polling_interval;
         }
@@ -903,7 +902,6 @@ void client_server_location_runtime_t::run ()
             } else {
                 trace_client_server_runtime_failure ("runtime-loop-error",
                                                      result.error ()->what ());
-                _locations->record_store_error ();
             }
         }
         const auto now = std::chrono::steady_clock::now ();
@@ -954,19 +952,9 @@ void client_server_location_runtime_t::run ()
         }
         catch (const std::exception &error) {
             trace_client_server_runtime_failure ("runtime-loop-error", error.what ());
-            try {
-                _locations->record_store_error ();
-            }
-            catch (...) {
-            }
         }
         catch (...) {
             trace_client_server_runtime_failure ("runtime-loop-error", "unknown exception");
-            try {
-                _locations->record_store_error ();
-            }
-            catch (...) {
-            }
         }
         // The only exit. In-flight work references state that stop() releases after the
         // join, so the worker leaves only once that work has completed.
@@ -1236,8 +1224,6 @@ task_t<void> client_server_location_runtime_t::pump ()
                 current = server.pump_task;
             }
             if (const auto completed = take_completed (current)) {
-                if (!*completed)
-                    _locations->record_store_error ();
                 std::lock_guard dispatch_lock (_server_progress_mutex);
                 if (server.pump_task == current)
                     server.pump_task.reset ();
@@ -1283,8 +1269,6 @@ task_t<void> client_server_location_runtime_t::pump ()
             auto &connection =
               *_client_pump_snapshot[(start + offset) % _client_pump_snapshot.size ()];
             if (const auto completed = take_completed (connection.pump_task)) {
-                if (!*completed)
-                    _locations->record_store_error ();
                 connection.pump_task.reset ();
             }
             if (!connection.pump_task) {
@@ -1790,7 +1774,6 @@ void client_server_location_runtime_t::seal_application_dispatch () noexcept
             server->mailbox ().close ();
     }
     catch (const std::exception &) {
-        _locations->record_store_error ();
     }
 }
 
@@ -1852,7 +1835,6 @@ bool client_server_location_runtime_t::wait_for_accepted_callbacks_until (
         return settled ();
     }
     catch (const std::exception &) {
-        _locations->record_store_error ();
         return false;
     }
 }

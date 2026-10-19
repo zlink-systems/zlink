@@ -834,6 +834,9 @@ class stream_host_service_t::listener_t
                 std::function<void ()> deadline_changed) :
         _runtime (std::move (runtime)),
         _stream (std::move (stream)),
+        _metric_transport (stream_uses_websocket (_stream) ? "ws"
+                           : stream_uses_tls (_stream)     ? "tls"
+                                                           : "tcp"),
         _advertise_host (std::move (advertise_host)),
         _session_factory (std::move (session_factory)),
         _services (&services),
@@ -849,6 +852,17 @@ class stream_host_service_t::listener_t
         _acceptor (_io),
         _accept_retry_timer (_io)
     {
+        if (_monitoring && _monitoring->metric_meter) {
+            auto &meter = *_monitoring->metric_meter;
+            _opened_metric =
+              meter.CreateDoubleCounter ("zlink.stream.connections.opened", "", "{connection}");
+            _active_metric = meter.CreateDoubleUpDownCounter ("zlink.stream.connections.active", "",
+                                                              "{connection}");
+            _closed_metric =
+              meter.CreateDoubleCounter ("zlink.stream.connections.closed", "", "{connection}");
+            if (_active_metric)
+                _active_metric->Add (0, {{"transport", _metric_transport}});
+        }
     }
 
     using session_liveness_t = runtime::session_liveness_t;
@@ -1146,7 +1160,7 @@ class stream_host_service_t::listener_t
             case stream_close_reason_t::heartbeat_timeout:
                 return "heartbeat_timeout";
             case stream_close_reason_t::server_drain:
-                return "server_drain";
+                return "server_shutdown";
             case stream_close_reason_t::protocol_error:
                 return "protocol_error";
             default:
@@ -1156,21 +1170,19 @@ class stream_host_service_t::listener_t
 
     void record_connection_opened () const
     {
-        framework::runtime::runtime_metrics_t metrics (_monitoring);
-        if (metrics.enabled ()) {
-            metrics.counter ("zlink.stream.connections.opened", "{connection}", 1);
-            metrics.updown ("zlink.stream.connections.active", "{connection}", 1);
-        }
+        if (_opened_metric)
+            _opened_metric->Add (1, {{"transport", _metric_transport}});
+        if (_active_metric)
+            _active_metric->Add (1, {{"transport", _metric_transport}});
     }
 
     void record_connection_closed (const char *close_reason) const
     {
-        framework::runtime::runtime_metrics_t metrics (_monitoring);
-        if (metrics.enabled ()) {
-            metrics.counter ("zlink.stream.connections.closed", "{connection}", 1,
-                             {{"close_reason", close_reason}});
-            metrics.updown ("zlink.stream.connections.active", "{connection}", -1);
-        }
+        if (_closed_metric)
+            _closed_metric->Add (
+              1, {{"transport", _metric_transport}, {"close_reason", close_reason}});
+        if (_active_metric)
+            _active_metric->Add (-1, {{"transport", _metric_transport}});
     }
 
     bool draining () const noexcept
@@ -2396,9 +2408,8 @@ class stream_host_service_t::listener_t
                                                                        current->stream, finalize);
                 if (!submitted) {
                     finalize (submitted);
-                } else {
-                    record_connection_closed (close_reason);
                 }
+                record_connection_closed (close_reason);
             } else {
                 finalize (result_t<void>::success ());
             }
@@ -3572,6 +3583,7 @@ class stream_host_service_t::listener_t
                 }
             };
             if (_stop->load (std::memory_order_acquire)) {
+                record_connection_closed ("server_shutdown");
                 dispatch_disconnect ();
             } else {
                 trace_stream_host ("dispatch-disconnected-begin", _stream);
@@ -3657,6 +3669,10 @@ class stream_host_service_t::listener_t
 
     detail::stream_runtime_t _runtime;
     stream_snapshot_t _stream;
+    const char *_metric_transport;
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::Counter<double>> _opened_metric,
+      _closed_metric;
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::UpDownCounter<double>> _active_metric;
     std::optional<std::string> _advertise_host;
     detail::stream_session_factory_t _session_factory;
     service_provider_t *_services;

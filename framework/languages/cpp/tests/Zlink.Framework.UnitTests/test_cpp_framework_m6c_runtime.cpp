@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/committed_authority_fixture.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/runtime_metric_contract.hpp"
 #include "../support/stateful_ingress_fixture.hpp"
 #include "../support/request_admission_fixture.hpp"
 
@@ -3839,6 +3840,7 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
     namespace framework = zlink::framework;
     namespace protocol = zlink::framework::runtime::protocol;
 
+    metric_test::provider_t metric_provider;
     stateful_object_runtime_t objects;
     objects.configure_relocation_state (
       [] (const object_ref_t &, const std::string &, std::stop_token)
@@ -3855,6 +3857,8 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
     zlink::framework::detail::delay_owner_t delays (delay_mutex);
     maintenance_runtime_t relocation (objects, authority, roots);
     relocation.bind_delay_owner (delays);
+    relocation.configure_metrics (
+      std::make_shared<framework::runtime::relocation_metrics_t> ("source-metric-mesh"));
 
     auto target_terminal =
       std::make_shared<framework::task_completion_source_t<relocation_reason_t>> ();
@@ -3897,6 +3901,7 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
       },
       .abort_target_before_cutover = [] { return true; }};
 
+    wire.metric_policy = framework::detail::factory_relocation_kind_t::preserve_state;
     const auto result = await_task (relocation.relocate (
       actor, "target-node", {"target-owner", 9}, 1024 * 1024, digest_with (0x31), wire, {}, 16));
     const auto source_resumed = objects.enqueue (actor, turn_domain_t::application, {1, {0x41}});
@@ -3906,6 +3911,29 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
                     && source_resumed == stateful_error_t::none,
                   "an explicit target relocation failure must stop remaining state chunks, "
                   "preserve its reason, and unseal the source");
+    const auto data = metric_provider.collect ();
+    metric_test::validate_metric_contract (data);
+    const auto count = [&] (const std::string &name) {
+        double value = 0;
+        for (const auto &metric : data) {
+            if (metric.instrument_descriptor.name_ != name)
+                continue;
+            for (const auto &point : metric.point_data_attr_) {
+                if (const auto *sum = opentelemetry::nostd::get_if<metric_test::sdk::SumPointData> (
+                      &point.point_data))
+                    value += opentelemetry::nostd::get<double> (sum->value_);
+                if (const auto *histogram =
+                      opentelemetry::nostd::get_if<metric_test::sdk::HistogramPointData> (
+                        &point.point_data))
+                    value += histogram->count_;
+            }
+        }
+        return value;
+    };
+    test.require (
+      count ("zlink.relocation.started") == 1 && count ("zlink.relocation.completed") == 1
+        && count ("zlink.relocation.duration") == 1 && count ("zlink.relocation.bytes") == 1,
+      "one relocation terminal must record exactly one metric sample");
 }
 
 /* Scripted Location Store reading of one relocation unit (01 §6.1, §10). */
@@ -3976,6 +4004,7 @@ void test_source_settlement_after_subsequent_moves (test_context_t &test)
                              || scenario == "lower-generation" || scenario == "source-owner"
                              || scenario == "target-same-generation"
                              || scenario == "target-different-object";
+        metric_test::provider_t metric_provider;
         stateful_object_runtime_t objects;
         objects.configure_relocation_state (
           [] (const object_ref_t &, const std::string &, std::stop_token)
@@ -4003,6 +4032,8 @@ void test_source_settlement_after_subsequent_moves (test_context_t &test)
         framework::detail::delay_owner_t delays (delay_mutex);
         maintenance_runtime_t relocation (objects, authority, roots);
         relocation.bind_delay_owner (delays);
+        relocation.configure_metrics (
+          std::make_shared<framework::runtime::relocation_metrics_t> ("settlement-metric-mesh"));
         int committed = 0;
         int unavailable = 0;
         int cutover_calls = 0;
@@ -4081,6 +4112,7 @@ void test_source_settlement_after_subsequent_moves (test_context_t &test)
           },
           .restore_deadline = std::chrono::steady_clock::time_point::max (),
           .abort_target_before_cutover = [] { return true; }};
+        wire.metric_policy = framework::detail::factory_relocation_kind_t::preserve_state;
         const auto result = await_task (relocation.relocate (
           actor, "target-owner", {"target-owner", 2}, 1024 * 1024, digest_with (0x41), wire));
         std::cerr << "source-settlement " << scenario
@@ -4100,6 +4132,32 @@ void test_source_settlement_after_subsequent_moves (test_context_t &test)
           "source settlement must confirm a chain and reject an invalid tenure");
         test.require (committed == (invalid ? 0 : 1) && unavailable == (invalid ? 1 : 0),
                       "source settlement must apply exactly one committed or failed cleanup");
+        const auto metric_data = metric_provider.collect ();
+        metric_test::validate_metric_contract (metric_data);
+        bool terminal_recorded = false;
+        bool interruption_recorded = false;
+        for (const auto &metric : metric_data) {
+            for (const auto &point : metric.point_data_attr_) {
+                if (metric.instrument_descriptor.name_ == "zlink.relocation.completed") {
+                    const auto &sum =
+                      opentelemetry::nostd::get<metric_test::sdk::SumPointData> (point.point_data);
+                    terminal_recorded =
+                      opentelemetry::nostd::get<double> (sum.value_) == 1
+                      && opentelemetry::nostd::get<std::string> (point.attributes.at ("outcome"))
+                           == (invalid ? "failed" : "completed");
+                }
+                if (metric.instrument_descriptor.name_ == "zlink.relocation.interruption") {
+                    const auto &histogram =
+                      opentelemetry::nostd::get<metric_test::sdk::HistogramPointData> (
+                        point.point_data);
+                    interruption_recorded =
+                      histogram.count_ == 1
+                      && opentelemetry::nostd::get<double> (histogram.sum_) >= 0;
+                }
+            }
+        }
+        test.require (terminal_recorded && interruption_recorded,
+                      "settlement and cutover must record their own single terminal metric");
         (void) objects.enqueue (actor, turn_domain_t::application, {1, {0x42}});
         const auto claim = objects.try_claim (actor, turn_domain_t::application);
         test.require (claim.first != stateful_error_t::none || !claim.second,

@@ -652,8 +652,9 @@ void maintenance_runtime_t::retain_message_follow (
             _delay_owner, std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now))
         : task_t<void> (result_t<void>::success ()));
     detail::observe_task_terminal (
-      *retention, [retention, tracking, cutover_terminal_at,
-                   token = std::move (token)] (const result_t<void> &result) mutable {
+      *retention,
+      [retention, tracking, cutover_terminal_at, metrics = _metrics, kind = state->source.kind,
+       token = std::move (token)] (const result_t<void> &result) mutable {
           {
               std::lock_guard lock (tracking->metric_mutex);
               if (result && tracking->route_convergence_metric) {
@@ -662,6 +663,10 @@ void maintenance_runtime_t::retain_message_follow (
                   tracking->route_convergence_metric (elapsed.count ());
               }
           }
+          if (result && metrics)
+              metrics->convergence (kind, std::chrono::duration<double> (
+                                            std::chrono::steady_clock::now () - cutover_terminal_at)
+                                            .count ());
           token.reset ();
       });
 }
@@ -770,7 +775,106 @@ maintenance_runtime_t::apply_relocation_settlement (
     }
 }
 
+namespace
+{
+template <typename T>
+void record_relocation_terminal (const std::shared_ptr<runtime::relocation_metrics_t> &metrics,
+                                 const runtime::relocation_metrics_t::tags_t &tags,
+                                 std::chrono::steady_clock::time_point started,
+                                 const result_t<T> &result)
+{
+    const char *outcome = "failed";
+    if (result) {
+        switch (result.value ().terminal) {
+            case relocation_terminal_t::completed:
+                outcome = "completed";
+                break;
+            case relocation_terminal_t::blocked:
+            case relocation_terminal_t::conflict:
+                outcome = "aborted";
+                break;
+            default:
+                break;
+        }
+    } else if (result.error ()
+               && result.error ()->kind () == framework_error_kind_t::shutting_down) {
+        outcome = "shutdown";
+    }
+    if (!result && !result.error () && result.exception ()) {
+        // Inspect cancellation without replacing the original result returned
+        // by the caller. Non-standard failures keep their original exception.
+        try {
+            std::rethrow_exception (result.exception ());
+        }
+        catch (const std::system_error &error) {
+            if (detail::is_cancellation_exception (error))
+                outcome = "aborted";
+        }
+        catch (...) {
+            // The caller propagates the unchanged result below.
+        }
+    }
+    metrics->complete (
+      tags, outcome,
+      std::chrono::duration<double> (std::chrono::steady_clock::now () - started).count ());
+}
+} // namespace
+
 task_t<relocation_result_t> maintenance_runtime_t::relocate (
+  const object_ref_t &source,
+  std::string target_node_id,
+  location_owner_token_t target_owner,
+  std::size_t encoded_upper_bound,
+  inventory_digest_t inventory_digest,
+  const std::optional<eligible_relocation_unit_t::canonical_wire_context_t> &canonical_wire,
+  std::stop_token cancellation,
+  std::uint64_t advertised_receive_chunk_limit_bytes)
+{
+    const bool enabled =
+      _metrics && _metrics->enabled () && canonical_wire && canonical_wire->metric_policy;
+    runtime::relocation_metrics_t::tags_t tags;
+    std::chrono::steady_clock::time_point started{};
+    if (enabled) {
+        tags = _metrics->tags (source.kind, *canonical_wire->metric_policy);
+        started = std::chrono::steady_clock::now ();
+        _metrics->start (tags);
+    }
+    auto result = co_await await_result (relocate_unobserved (
+      source, std::move (target_node_id), std::move (target_owner), encoded_upper_bound,
+      inventory_digest, canonical_wire, cancellation, advertised_receive_chunk_limit_bytes));
+    if (enabled)
+        record_relocation_terminal (_metrics, tags, started, result);
+    co_return result;
+}
+
+task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate (
+  const std::vector<object_ref_t> &sources,
+  std::string target_node_id,
+  location_owner_token_t target_owner,
+  std::size_t encoded_upper_bound,
+  inventory_digest_t inventory_digest,
+  const std::optional<eligible_relocation_unit_t::canonical_wire_context_t> &canonical_wire,
+  std::stop_token cancellation,
+  std::uint64_t advertised_receive_chunk_limit_bytes)
+{
+    const bool enabled = _metrics && _metrics->enabled () && canonical_wire
+                         && canonical_wire->metric_policy && !sources.empty ();
+    runtime::relocation_metrics_t::tags_t tags;
+    std::chrono::steady_clock::time_point started{};
+    if (enabled) {
+        tags = _metrics->tags (sources.front ().kind, *canonical_wire->metric_policy);
+        started = std::chrono::steady_clock::now ();
+        _metrics->start (tags);
+    }
+    auto result = co_await await_result (relocate_aggregate_unobserved (
+      sources, std::move (target_node_id), std::move (target_owner), encoded_upper_bound,
+      inventory_digest, canonical_wire, cancellation, advertised_receive_chunk_limit_bytes));
+    if (enabled)
+        record_relocation_terminal (_metrics, tags, started, result);
+    co_return result;
+}
+
+task_t<relocation_result_t> maintenance_runtime_t::relocate_unobserved (
   const object_ref_t &source,
   std::string target_node_id,
   location_owner_token_t target_owner,
@@ -927,8 +1031,12 @@ maintenance_runtime_t::relocate_encode (std::shared_ptr<relocation_terminal_stat
             || state->manifest.total_length > protocol::relocationLogicalBytes))
         failed.emplace (relocation_terminal_t::blocked,
                         relocation_reason_t::payload_bound_exceeded);
-    if (!failed)
+    if (!failed) {
+        if (_metrics && _metrics->enabled () && state->context.metric_policy)
+            _metrics->bytes (_metrics->tags (state->source.kind, *state->context.metric_policy),
+                             static_cast<double> (state->payload.size ()));
         co_return true;
+    }
     (void) co_await _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
     state->result.emplace (finish ({failed->first, failed->second, std::nullopt}));
     co_return false;
@@ -1015,12 +1123,17 @@ maintenance_runtime_t::relocate_cutover (std::shared_ptr<relocation_terminal_sta
       state->context.coordinator, protocol::relocation_role_t::source, object};
     cutover.boundary_record_count = state->records->size ();
     cutover.boundary_checksum_crc32c = boundary_batch_checksum (*state->records);
-    co_await submit_cutover (state->context, cutover);
+    const auto cutover_result = co_await await_result (submit_cutover (state->context, cutover));
     const auto terminal_now = std::chrono::steady_clock::now ();
     state->cutover_terminal_at = terminal_now;
+    if (_metrics && state->sealed_at != std::chrono::steady_clock::time_point{})
+        _metrics->interruption (
+          state->source.kind,
+          std::chrono::duration<double> (terminal_now - state->sealed_at).count ());
     const auto stall = state->sealed_at != std::chrono::steady_clock::time_point{}
                          ? terminal_now - state->sealed_at
                          : std::chrono::steady_clock::duration::zero ();
+    cutover_result.value ();
     state->cutover_record = cutover;
     // The relocation execution permit ends at the cutover submit terminal.
     state->permit.reset ();
@@ -1125,7 +1238,7 @@ maintenance_runtime_t::recover_aggregate (const std::vector<object_ref_t> &sourc
     return {relocation_terminal_t::data_lost, relocation_reason_t::payload_missing, authority};
 }
 
-task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate (
+task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate_unobserved (
   const std::vector<object_ref_t> &sources,
   std::string target_node_id,
   location_owner_token_t target_owner,
@@ -1156,6 +1269,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
           relocation_terminal_t::blocked, relocation_reason_t::restore_failed, {}};
     }
     auto state = std::make_shared<relocation_terminal_state_t> ();
+    state->source = sources.front ();
     state->context = persisted_context;
     state->advertised_receive_chunk_limit_bytes = advertised_receive_chunk_limit_bytes;
     state->effective_chunk_limit =
@@ -1187,6 +1301,9 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
         co_return aggregate_relocation_result_t{
           relocation_terminal_t::blocked, relocation_reason_t::payload_bound_exceeded, {}};
     }
+    if (_metrics && _metrics->enabled () && state->context.metric_policy)
+        _metrics->bytes (_metrics->tags (state->source.kind, *state->context.metric_policy),
+                         static_cast<double> (state->payload.size ()));
     state->budget_reserved = std::min (state->effective_chunk_limit, effective_in_flight_budget ());
     co_await acquire_transfer_budget (state->budget_reserved);
     auto prepared = std::make_shared<task_t<relocation_reason_t>> (
@@ -1278,8 +1395,13 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
        root.owner.object_generation, root.owner.authority_owner_generation}};
     cutover.boundary_record_count = records->size ();
     cutover.boundary_checksum_crc32c = boundary_batch_checksum (*records);
-    co_await submit_cutover (*canonical_wire, cutover);
+    const auto cutover_result = co_await await_result (submit_cutover (*canonical_wire, cutover));
     state->cutover_terminal_at = std::chrono::steady_clock::now ();
+    if (_metrics)
+        _metrics->interruption (
+          state->source.kind,
+          std::chrono::duration<double> (state->cutover_terminal_at - state->sealed_at).count ());
+    cutover_result.value ();
     state->target_owner = target_owner;
     state->batch = batch;
     state->records = *records;
@@ -1878,6 +2000,7 @@ void public_host_runtime_t::configure_relocation (
     auto maintenance = std::make_unique<stateful::maintenance_runtime_t> (
       _objects, std::move (authority), std::move (relocations), limits,
       std::move (relocation_observer), std::move (aggregate_authority));
+    maintenance->configure_metrics (_relocation_metrics);
     attach_relocation_terminals (*maintenance);
     _maintenance = std::move (maintenance);
 }
@@ -1916,6 +2039,7 @@ void public_host_runtime_t::configure_maintenance (
     _relocation_cutover_wait = limits.cutover_wait_timeout;
     auto maintenance = std::make_unique<stateful::maintenance_runtime_t> (
       _objects, std::move (providers), limits, std::move (relocation_observer));
+    maintenance->configure_metrics (_relocation_metrics);
     attach_relocation_terminals (*maintenance);
     auto termination = std::make_unique<stateful::host_maintenance_runtime_t> (
       _objects, _sessions, [this] { return seal_relocation_targets (); });

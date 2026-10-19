@@ -2432,7 +2432,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                             request.target.spot_id, request.target.stable_type,
                             request.target.mesh_name, snapshot.object_generation,
                             snapshot.authority_owner_generation);
-                    }});
+                    },
+                    registration->spot_state->snapshot.instance_spot_names});
             }
         }
         auto &spot_resolver = services.get_required<spot_address_resolver_t> ();
