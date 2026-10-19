@@ -51,7 +51,7 @@ function descriptor(nodeRoutingId) {
   };
 }
 
-function selectedRouteRuntime(routes, submit) {
+function selectedRouteRuntime(routes, submit, options = {}) {
   const sent = [];
   const requested = [];
   const disconnected = [];
@@ -93,6 +93,7 @@ function selectedRouteRuntime(routes, submit) {
     close() {}
   };
   const runtime = new RawServiceMeshRuntime({
+    ...options,
     descriptor: descriptor('local'),
     onPeerDisconnected: (rid) => admissionsEnded.push(rid),
     applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration()),
@@ -816,5 +817,67 @@ test('maintenance preserves probe boundaries, ACK expiry and replacement admissi
     assert.deepEqual(h.disconnected, ['peer', 'peer']);
   } finally {
     h.runtime.close();
+  }
+});
+
+for (const initiallySealed of [false, true]) {
+  test(`HELLO maintenance resumes after admission reopens (initiallySealed=${initiallySealed})`, async (t) => {
+    t.mock.method(performance, 'now', () => 0);
+    let sealed = initiallySealed;
+    const h = selectedRouteRuntime(new Map([['peer', 11n]]), undefined, {
+      peerAdmissionSealed: () => sealed
+    });
+    const hellos = () =>
+      h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello);
+    try {
+      await h.runtime.observeSelectedRoutes();
+      const before = hellos().length;
+      sealed = true;
+      await h.runtime.updateLocalDescriptor({ channelName: 'alpha', channelWeight: 42 });
+      h.runtime.tickLiveness(0);
+      assert.equal(hellos().length, before);
+      assert.equal(h.runtime.nextMaintenanceDeadlineMs(0), Infinity);
+      sealed = false;
+      assert.equal(h.runtime.nextMaintenanceDeadlineMs(1000), 1000);
+      h.runtime.tickLiveness(1000);
+      assert.equal(hellos().length, before + 1);
+      if (before !== 0) assert.deepEqual(hellos()[1][2], hellos()[0][2]);
+    } finally {
+      h.runtime.close();
+    }
+  });
+}
+
+test('a HELLO submission completed while admission is sealed remains resumable', async (t) => {
+  t.mock.method(performance, 'now', () => 0);
+  let sealed = false;
+  let complete;
+  const h = selectedRouteRuntime(
+    new Map([['peer', 11n]]),
+    () => ({
+      result: SubmitResult.Backpressured,
+      admitted: new Promise((resolve) => {
+        complete = resolve;
+      })
+    }),
+    { peerAdmissionSealed: () => sealed }
+  );
+  try {
+    await h.runtime.observeSelectedRoutes();
+    sealed = true;
+    const pending = [...h.runtime.controlSends.values()][0].task;
+    h.runtime.tickLiveness(0);
+    assert.equal([...h.runtime.controlSends.values()][0]?.task, pending);
+    assert.equal(h.sent.length, 1);
+    complete();
+    await Promise.resolve();
+    await Promise.resolve();
+    sealed = false;
+    h.runtime.tickLiveness(1000);
+    assert.equal(h.sent.length, 2);
+  } finally {
+    h.runtime.close();
+    complete?.();
+    await Promise.resolve();
   }
 });

@@ -479,19 +479,19 @@ export class RawServiceMeshRuntime {
     if (generation === undefined) return false;
     const key = controlSendKey(nodeRoutingId, M6aServiceWireCommand.hello);
     if (!this.isPeerAnnouncementCurrent(nodeRoutingId, generation)) {
-      this.controlSends.delete(key);
       return false;
     }
-    const current = () => this.isPeerAnnouncementCurrent(nodeRoutingId, generation);
+    const current = () =>
+      this.isPeerAnnouncementCurrent(nodeRoutingId, generation) &&
+      this.peerAdmissionSealed?.() !== true;
     const existing = this.controlSends.get(key);
     const hello =
-      existing?.current?.() === true
-        ? existing.hello!
-        : encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor());
+      existing?.hello ??
+      encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor());
     return this.startControlSend(
       nodeRoutingId,
       M6aServiceWireCommand.hello,
-      () => this.submitControl(nodeRoutingId, [hello]),
+      () => current() && this.submitControl(nodeRoutingId, [hello]),
       current,
       hello
     );
@@ -504,8 +504,7 @@ export class RawServiceMeshRuntime {
       !(
         admission?.connectionId === routeConnectionId(generation) &&
         admission.remoteAdmitReceived === true
-      ) &&
-      this.peerAdmissionSealed?.() !== true
+      )
     );
   }
 
@@ -1718,11 +1717,7 @@ export class RawServiceMeshRuntime {
   ): boolean {
     const key = controlSendKey(target, command);
     const existing = this.controlSends.get(key);
-    if (
-      existing !== undefined &&
-      existing.task !== undefined &&
-      (command !== M6aServiceWireCommand.hello || existing.current?.() === true)
-    ) {
+    if (existing?.task !== undefined) {
       if (command !== M6aServiceWireCommand.hello) {
         existing.next = attempt;
         existing.current = current;
@@ -1738,7 +1733,7 @@ export class RawServiceMeshRuntime {
     const state: ControlSendState = { current, hello };
     const completeSend = () => {
       if (owner.controlSends.get(key) !== state) return;
-      if (hello !== undefined && current?.() === true) delete state.task;
+      if (hello !== undefined) delete state.task;
       else owner.controlSends.delete(key);
     };
     const task = first.then(function drain(accepted): boolean | Promise<boolean> {
