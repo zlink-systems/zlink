@@ -22,13 +22,23 @@ internal sealed class ZLinkSessionActorCoordinator(
 
     public IReadOnlyCollection<IZLinkSessionActor> BoundActors => _bindings.BoundActors;
 
+    /// <summary>
+    /// The Actor owner's acknowledgement of one bind, carrying the Session owner identity it
+    /// stored (Session-Actor binding §4). The runtime uses <see cref="ConfirmBindingAsync"/>.
+    /// </summary>
+    internal delegate ValueTask<ZLinkSessionBindingIdentity> BindingConfirmation(
+        ZLinkSessionContext context,
+        ActorRef actor,
+        CancellationToken cancellationToken
+    );
+
     public ValueTask<IZLinkSessionActor> BindActorAsync(
         ZLinkSessionContext context,
         ActorRef actor,
         CancellationToken cancellationToken
     )
     {
-        return BindActorSerializedAsync(context, actor, cancellationToken);
+        return BindActorSerializedAsync(context, actor, ConfirmBindingAsync, cancellationToken);
     }
 
     public ValueTask<IZLinkSessionActor> BindOrGetActorAsync(
@@ -37,12 +47,28 @@ internal sealed class ZLinkSessionActorCoordinator(
         CancellationToken cancellationToken
     )
     {
-        return BindActorSerializedAsync(context, actor, cancellationToken);
+        return BindActorSerializedAsync(context, actor, ConfirmBindingAsync, cancellationToken);
+    }
+
+    /// <summary>
+    /// Binds through the same serialization and replacement rules with another Actor owner
+    /// acknowledgement. Transport-level tests without a started runtime supply one built from a
+    /// MeshNode descriptor fixture.
+    /// </summary>
+    internal ValueTask<IZLinkSessionActor> BindOrGetActorAsync(
+        ZLinkSessionContext context,
+        ActorRef actor,
+        BindingConfirmation confirmation,
+        CancellationToken cancellationToken
+    )
+    {
+        return BindActorSerializedAsync(context, actor, confirmation, cancellationToken);
     }
 
     private async ValueTask<IZLinkSessionActor> BindActorSerializedAsync(
         ZLinkSessionContext context,
         ActorRef actor,
+        BindingConfirmation confirmation,
         CancellationToken cancellationToken
     )
     {
@@ -58,7 +84,7 @@ internal sealed class ZLinkSessionActorCoordinator(
         try
         {
             lease = await operation.AcquireAsync(cancellationToken).ConfigureAwait(false);
-            return await BindActorWithinGateAsync(context, actor, cancellationToken)
+            return await BindActorWithinGateAsync(context, actor, confirmation, cancellationToken)
                 .ConfigureAwait(false);
         }
         finally
@@ -199,115 +225,53 @@ internal sealed class ZLinkSessionActorCoordinator(
     private async ValueTask<IZLinkSessionActor> BindActorWithinGateAsync(
         ZLinkSessionContext context,
         ActorRef actor,
+        BindingConfirmation confirmation,
         CancellationToken cancellationToken
     )
     {
-        if (_bindings.FindActor(actor.ActorId) is { } existing)
-        {
-            if (ActorRefsEqual(existing.Ref, actor))
-                return existing;
+        if (
+            _bindings.FindActor(actor.ActorId) is { } existing
+            && ActorRefsEqual(existing.Ref, actor)
+        )
+            return existing;
 
-            IZLinkSessionActor replacement;
-            try
-            {
-                // BindAsync replaces the previous table entry only after the
-                // new exact owner has acknowledged. Until then the previous
-                // binding remains the terminal route for this session.
-                replacement = await BindActorCoreAsync(context, actor, cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (Exception replacementFailure)
-            {
-                // A started runtime never created a native session binding for
-                // the previous Actor. BindAsync has not replaced the table
-                // entry yet, so the existing framework route is already the
-                // complete rollback state.
-                if (runtime.IsStarted || !IsLocalActorRef(existing.Ref))
-                    throw;
-                try
-                {
-                    await BindNativeActorAsync(existing.Ref.ToBackend(), CancellationToken.None)
-                        .ConfigureAwait(false);
-                }
-                catch (Exception rollbackFailure)
-                {
-                    throw new AggregateException(replacementFailure, rollbackFailure);
-                }
-
-                throw;
-            }
-            return replacement;
-        }
-
-        return await BindActorCoreAsync(context, actor, cancellationToken).ConfigureAwait(false);
+        // BindAsync replaces a previous table entry only after the new exact owner has
+        // acknowledged. Until then the previous binding remains the terminal route for this
+        // session.
+        return await BindActorCoreAsync(context, actor, confirmation, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     private async ValueTask<IZLinkSessionActor> BindActorCoreAsync(
         ZLinkSessionContext context,
         ActorRef actor,
+        BindingConfirmation confirmation,
         CancellationToken cancellationToken
     )
     {
-        ZLinkSessionBindingIdentity? confirmedIdentity = null;
         EnsureConcreteActorRef(actor);
-        var actorRef = actor.ToBackend();
-        // A started runtime always confirms through the ActorRef MeshName so
-        // local and remote owners use one global authority route. Direct
-        // pre-start test contexts retain the native binding boundary.
-        var nativeBound = !runtime.IsStarted;
-        if (nativeBound)
-            await BindNativeActorAsync(actorRef, cancellationToken).ConfigureAwait(false);
-        try
-        {
-            var identity = await ConfirmBindingAsync(context, actor, cancellationToken)
-                .ConfigureAwait(false);
-            confirmedIdentity = identity;
-            return await _bindings
-                .BindAsync(
-                    context,
-                    actor,
-                    identity.BindingToken,
-                    identity.BindingGeneration,
-                    identity.AuthorityOwnerGeneration,
-                    identity.MeshName.Value,
-                    identity.TargetNodeGeneration,
-                    identity.OwnerLeaseGeneration,
-                    identity.SessionOwnerNodeGeneration,
-                    identity.SessionOwnerNodeRid,
-                    identity.SessionOwnerId,
-                    identity.SessionOwnerLeaseGeneration,
-                    // Remote acknowledgement publishes the Actor owner's
-                    // terminal binding. The source table must finish the
-                    // matching local commit even if caller cancellation races
-                    // that acknowledgement.
-                    CancellationToken.None
-                )
-                .ConfigureAwait(false);
-        }
-        catch (Exception bindingFailure)
-        {
-            try
-            {
-                if (!runtime.IsStarted && confirmedIdentity is { } localIdentity)
-                    runtime.UnbindActorSession(actor.ActorId, localIdentity.BindingToken);
-                if (nativeBound)
-                    await UnbindNativeActorAsync(actor.ActorId, CancellationToken.None)
-                        .ConfigureAwait(false);
-            }
-            catch (Exception rollbackFailure)
-            {
-                throw new AggregateException(bindingFailure, rollbackFailure);
-            }
-
-            throw;
-        }
-    }
-
-    private bool IsLocalActorRef(ActorRef actor)
-    {
-        if (!runtime.IsStarted)
-            return true;
-        return actor.NodeRid == runtime.GetMeshNodeRuntime(actor.MeshName).Node.RoutingId;
+        var identity = await confirmation(context, actor, cancellationToken).ConfigureAwait(false);
+        return await _bindings
+            .BindAsync(
+                context,
+                actor,
+                identity.BindingToken,
+                identity.BindingGeneration,
+                identity.AuthorityOwnerGeneration,
+                identity.MeshName.Value,
+                identity.TargetNodeGeneration,
+                identity.OwnerLeaseGeneration,
+                identity.SessionOwnerNodeGeneration,
+                identity.SessionOwnerNodeRid,
+                identity.SessionOwnerId,
+                identity.SessionOwnerLeaseGeneration,
+                // Remote acknowledgement publishes the Actor owner's
+                // terminal binding. The source table must finish the
+                // matching local commit even if caller cancellation races
+                // that acknowledgement.
+                CancellationToken.None
+            )
+            .ConfigureAwait(false);
     }
 
     private async ValueTask<ZLinkSessionBindingIdentity> ConfirmBindingAsync(
@@ -316,53 +280,14 @@ internal sealed class ZLinkSessionActorCoordinator(
         CancellationToken cancellationToken
     )
     {
-        // Contexts constructed before runtime startup are used only by the
-        // transport-level unit boundary; no remote route exists to confirm.
-        var bindingGeneration = runtime.NextSessionBindingGeneration();
+        // Session-Actor binding §4: the Session owner identity comes from its MeshNode
+        // descriptor. A runtime that has not started has none, so the bind is rejected.
         if (!runtime.IsStarted)
-        {
-            if (context.RoutingId is not { } localSessionRid)
-                throw new InvalidOperationException(
-                    "Actor session binding requires a stream routing id."
-                );
-            const ulong localGeneration = 1;
-            var localBindingToken = ZLinkActorBoundSessionBindingToken.Canonical(
-                localSessionRid,
-                localGeneration,
-                localSessionRid.ToHex(),
-                localGeneration,
-                localSessionRid,
-                bindingGeneration
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "Session owner has no live MeshNode descriptor."
             );
-            runtime.BindActorSession(
-                actor.ActorId,
-                null,
-                localSessionRid,
-                localBindingToken,
-                bindingGeneration,
-                actor.ObjectGeneration,
-                localGeneration,
-                actor.MeshName,
-                localGeneration,
-                localGeneration,
-                localGeneration,
-                0,
-                localSessionRid.ToHex(),
-                localGeneration
-            );
-            return new ZLinkSessionBindingIdentity(
-                localBindingToken,
-                bindingGeneration,
-                ZLinkMeshName.FromBoundary(actor.MeshName, nameof(actor.MeshName)),
-                TargetNodeGeneration: localGeneration,
-                OwnerLeaseGeneration: localGeneration,
-                AuthorityOwnerGeneration: localGeneration,
-                SessionOwnerNodeGeneration: localGeneration,
-                SessionOwnerNodeRid: localSessionRid,
-                SessionOwnerId: localSessionRid.ToHex(),
-                SessionOwnerLeaseGeneration: localGeneration
-            );
-        }
+        var bindingGeneration = runtime.NextSessionBindingGeneration();
         if (context.RoutingId is not { } sessionRid)
             throw new InvalidOperationException(
                 "Actor session binding requires a stream routing id."
@@ -898,36 +823,6 @@ internal sealed class ZLinkSessionActorCoordinator(
                 "Actor ref requires a target SpotNode routing id and concrete actor generation.",
                 ZLinkRetryAdvice.DoNotRetry
             );
-    }
-
-    private async ValueTask BindNativeActorAsync(
-        ZLinkBackendActorRef actorRef,
-        CancellationToken cancellationToken
-    )
-    {
-        await ZLinkNativeActorStreamBinding
-            .BindAsync(
-                stream,
-                actorRef,
-                runtime.Registration.DefaultRequestTimeout,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
-    }
-
-    private async ValueTask UnbindNativeActorAsync(
-        string actorId,
-        CancellationToken cancellationToken
-    )
-    {
-        await ZLinkNativeActorStreamBinding
-            .UnbindAsync(
-                stream,
-                actorId,
-                runtime.Registration.DefaultRequestTimeout,
-                cancellationToken
-            )
-            .ConfigureAwait(false);
     }
 }
 
