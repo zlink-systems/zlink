@@ -69,6 +69,7 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.IntConsumer;
 
 final class ZLinkCanonicalRelocationStateMachineTest {
+    private static final Duration PREPARE_REPLY_WAIT = Duration.ofSeconds(3);
     private static final java.time.Instant STAGE_DEADLINE =
             java.time.Instant.parse("2100-01-01T00:00:00Z");
     private static final ZLinkStoreCancellation OPEN = () -> false;
@@ -261,7 +262,26 @@ final class ZLinkCanonicalRelocationStateMachineTest {
 
     @Test
     void drainingTargetRepliesFailedWithoutAdmittingPrepare() throws Exception {
-        Fixture fixture = fixture();
+        assertTargetRefusesPrepare(false);
+    }
+
+    @Test
+    void hostSealedServingTargetRepliesFailedWithoutAdmittingPrepare() throws Exception {
+        assertTargetRefusesPrepare(true);
+    }
+
+    private void assertTargetRefusesPrepare(boolean hostSealed) throws Exception {
+        var drains =
+                new systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator(
+                        List.of("mesh"));
+        Fixture fixture =
+                fixture(
+                        null,
+                        new CountingEndpoint(),
+                        false,
+                        null,
+                        null,
+                        () -> drains.isSealed("mesh"));
         var request = fixture.request(new byte[] {1});
         fixture.source
                 .stage(fixture.targetRid, request, Duration.ofSeconds(2), STAGE_DEADLINE)
@@ -269,7 +289,8 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                 .join();
         Object attempt = targetAttempt(fixture.target, request.fence());
         var accepted = (ZLinkCanonicalRelocationProtocol.Prepare) attemptMember(attempt, "prepare");
-        fixture.targetState.set(MeshNodeState.DRAINING);
+        if (hostSealed) drains.sealAll();
+        else fixture.targetState.set(MeshNodeState.DRAINING);
         var late =
                 new ZLinkCanonicalRelocationProtocol.Prepare(
                         UUID.randomUUID(),
@@ -293,7 +314,9 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                                 ServiceWireConstants.COMMAND_RELOCATION_PREPARE,
                                 encoded)
                         .toCompletableFuture()
-                        .join();
+                        .get(
+                                PREPARE_REPLY_WAIT.toMillis(),
+                                java.util.concurrent.TimeUnit.MILLISECONDS);
         var failed = ZLinkCanonicalRelocationProtocol.decodeFailed(reply);
         assertEquals(late.id(), failed.id());
         assertEquals(
@@ -1095,6 +1118,22 @@ final class ZLinkCanonicalRelocationStateMachineTest {
             boolean disconnectFirstPrepare,
             CompletableFuture<Void> sessionRoute,
             List<Runnable> routeDeadlines) {
+        return fixture(
+                retentionScheduler,
+                endpoint,
+                disconnectFirstPrepare,
+                sessionRoute,
+                routeDeadlines,
+                () -> false);
+    }
+
+    private Fixture fixture(
+            ZLinkCanonicalRelocationStateMachine.RetentionScheduler retentionScheduler,
+            CountingEndpoint endpoint,
+            boolean disconnectFirstPrepare,
+            CompletableFuture<Void> sessionRoute,
+            List<Runnable> routeDeadlines,
+            java.util.function.BooleanSupplier targetAdmissionSealed) {
         RoutingId sourceRid = RoutingId.from("source-node");
         RoutingId targetRid = RoutingId.from("target-node");
         String actorId = "actor-a";
@@ -1238,7 +1277,8 @@ final class ZLinkCanonicalRelocationStateMachineTest {
                             "target-entry",
                             locations,
                             coordinator,
-                            endpoint));
+                            endpoint,
+                            targetAdmissionSealed));
         } else {
             source.set(
                     new ZLinkCanonicalRelocationStateMachine(
