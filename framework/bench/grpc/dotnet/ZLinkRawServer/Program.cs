@@ -30,11 +30,16 @@ using var commandRouter = context.CreateRouterSocket();
 // ignores these ids, so the legacy DEALER->ROUTER configuration still works.
 requestRouter.SetRoutingId(RoutingId.From(BenchRoutingIds.RawRequestServer));
 commandRouter.SetRoutingId(RoutingId.From(BenchRoutingIds.RawCommandServer));
+// A blocking Recv never returns by itself, so each receive returns NoData after
+// ReceivePollInterval and the loop stops once host shutdown begins.
+requestRouter.Options.ReceiveTimeout = RawServerTiming.ReceivePollInterval;
+commandRouter.Options.ReceiveTimeout = RawServerTiming.ReceivePollInterval;
 requestRouter.Bind(endpoint);
 commandRouter.Bind(commandEndpoint);
 
-var requestReceiver = Task.Run(() => RunRequestRouter(requestRouter, metrics));
-var commandReceiver = Task.Run(() => RunCommandRouter(commandRouter, metrics));
+var stopping = app.Lifetime.ApplicationStopping;
+var requestReceiver = Task.Run(() => RunRequestRouter(requestRouter, metrics, stopping));
+var commandReceiver = Task.Run(() => RunCommandRouter(commandRouter, metrics, stopping));
 
 await app.RunAsync();
 await Task.WhenAll(requestReceiver, commandReceiver);
@@ -46,10 +51,10 @@ static void ConfigureQuietLogging(WebApplicationBuilder builder)
     builder.Logging.SetMinimumLevel(LogLevel.Warning);
 }
 
-static void RunRequestRouter(IRouterSocket router, BenchServerMetrics metrics)
+static void RunRequestRouter(IRouterSocket router, BenchServerMetrics metrics, CancellationToken stopping)
 {
     using var received = Received.Create();
-    while (true)
+    while (!stopping.IsCancellationRequested)
     {
         try
         {
@@ -109,10 +114,10 @@ static void SendMultipart(Received received, BenchPayload payload)
         .Submit();
 }
 
-static void RunCommandRouter(IRouterSocket router, BenchServerMetrics metrics)
+static void RunCommandRouter(IRouterSocket router, BenchServerMetrics metrics, CancellationToken stopping)
 {
     using var received = Received.Create();
-    while (true)
+    while (!stopping.IsCancellationRequested)
     {
         try
         {
@@ -157,6 +162,11 @@ static string? ArgValue(string[] args, string name)
     }
 
     return null;
+}
+
+static class RawServerTiming
+{
+    public static readonly TimeSpan ReceivePollInterval = TimeSpan.FromMilliseconds(100);
 }
 
 static class RawEnvelopeHeaders

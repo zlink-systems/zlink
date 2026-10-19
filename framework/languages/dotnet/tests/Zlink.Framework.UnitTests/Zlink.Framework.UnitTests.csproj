@@ -117,6 +117,7 @@
         <Compile Include="Runtime/ChannelApplicationDispatchQueueShutdownTests.cs"/>
         <Compile Include="Runtime/ClientServerChannelRuntimeTests.cs"/>
         <Compile Include="Runtime/ClientServerLivenessLaneTests.cs"/>
+        <Compile Include="Runtime/ClientServerClientAckTests.cs"/>
         <Compile Include="Runtime/ClientServerLoopOwnershipTests.cs"/>
         <Compile Include="Runtime/ControllableTimeProvider.cs"/>
         <Compile Include="Runtime/CapacityMonitoringProjectionTests.cs"/>

@@ -730,10 +730,17 @@ internal sealed class ManualTimeProvider : TimeProvider
 {
     private DateTimeOffset _utcNow = new(2026, 7, 2, 0, 0, 0, TimeSpan.Zero);
     private long _timestamp;
+    private long _timestampReadCount;
+
+    internal long TimestampReadCount => Interlocked.Read(ref _timestampReadCount);
 
     public override DateTimeOffset GetUtcNow() => _utcNow;
 
-    public override long GetTimestamp() => _timestamp;
+    public override long GetTimestamp()
+    {
+        Interlocked.Increment(ref _timestampReadCount);
+        return _timestamp;
+    }
 
     public override long TimestampFrequency => TimeSpan.TicksPerSecond;
 
