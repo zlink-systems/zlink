@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.RepeatedTest;
@@ -943,9 +944,24 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             handlerTerminal.completeExceptionally(new IllegalStateException("test cleanup"));
             recoveredBackend.executor.drain();
             var closed = recoveredBackend.actorRuntime.closeAsync().toCompletableFuture();
-            recoveredBackend.executor.drain();
-            closed.join();
-            recoveredBackend.rawSession.close();
+            try {
+                assertTimeoutPreemptively(
+                        Duration.ofSeconds(5),
+                        () -> {
+                            // State-lane completions can submit lifecycle work after a drain
+                            // returns.
+                            // The fixture owns this executor until the runtime's terminal
+                            // completion.
+                            while (!closed.isDone() && !Thread.currentThread().isInterrupted()) {
+                                recoveredBackend.executor.drain();
+                                Thread.yield();
+                            }
+                            assertTrue(closed.isDone(), "Actor runtime cleanup did not complete");
+                            closed.join();
+                        });
+            } finally {
+                recoveredBackend.rawSession.close();
+            }
         }
     }
 
