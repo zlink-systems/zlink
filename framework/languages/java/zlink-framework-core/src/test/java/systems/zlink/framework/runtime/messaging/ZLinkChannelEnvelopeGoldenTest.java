@@ -634,6 +634,36 @@ final class ZLinkChannelEnvelopeGoldenTest {
     }
 
     @Test
+    void alternatingKindsKeepCanonicalNumericTokens() {
+        for (int kind : new int[] {2, 1, 3, 2, 5, 4, 1}) {
+            ZLinkChannelEnvelope.Header header =
+                    new ZLinkChannelEnvelope.Header(
+                            kind,
+                            "orders",
+                            "Request",
+                            "application/json",
+                            "corr-kinds",
+                            null,
+                            null,
+                            null,
+                            null,
+                            null,
+                            Map.of(),
+                            null,
+                            null);
+            String expected =
+                    new String(
+                                    canonicalRequestBytes("corr-kinds", null, Map.of(), null, null),
+                                    StandardCharsets.UTF_8)
+                            .replace("\"kind\":1,", "\"kind\":" + kind + ",");
+            try (Message encoded = ZLinkChannelEnvelope.encodeHeader(header)) {
+                assertArrayEquals(expected.getBytes(StandardCharsets.UTF_8), encoded.toByteArray());
+                assertEquals(kind, ZLinkChannelEnvelope.decodeHeader(encoded, false).kind());
+            }
+        }
+    }
+
+    @Test
     void aLaterHeaderDoesNotMutateAnEarlierReturnedMessage() {
         Map<String, String> firstMetadata = Map.of("tenant", "blue");
         ZLinkChannelEnvelope.Header first =
