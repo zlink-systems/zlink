@@ -2307,6 +2307,84 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         }
     }
 
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(1, true)]
+    [InlineData(2, true)]
+    [InlineData(3, true)]
+    [InlineData(3, false)]
+    [InlineData(1024, false)]
+    [InlineData(4096, false)]
+    [InlineData(1024, true)]
+    [InlineData(4096, true)]
+    public void ClientServerControlClassification_DoesNotCopyTheHeader(int length, bool prefix)
+    {
+        var bytes = new byte[length];
+        if (prefix)
+            Convert.FromHexString("5A4D01").AsSpan(0, Math.Min(length, 3)).CopyTo(bytes);
+        using var message = Message.From(bytes);
+        IReadOnlyList<Message> parts = new[] { message };
+        for (var index = 0; index < 128; index++)
+            _ = ZLinkClientServerControlProtocol.IsControl(parts);
+
+        const int iterations = 1000;
+        var matches = 0;
+        var start = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+            if (ZLinkClientServerControlProtocol.IsControl(parts))
+                matches++;
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - start;
+
+        output.WriteLine($"IsControl length={length} prefix={prefix}: {allocated} B/{iterations}");
+        Assert.Equal(prefix && length >= 3 ? iterations : 0, matches);
+        Assert.True(message.AsReadOnlySpan().SequenceEqual(bytes));
+        Assert.Equal(0, allocated);
+        Assert.False(ZLinkClientServerControlProtocol.IsControl(Array.Empty<Message>()));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ClientServerControlReaders_DoNotCopyFrames(bool valid)
+    {
+        using var probe = ZLinkClientServerControlProtocol.EncodeLivenessProbe(11);
+        using var ack = ZLinkClientServerControlProtocol.EncodeLivenessAck(11);
+        using var reject = ZLinkClientServerControlProtocol.EncodeReject(1);
+        if (!valid)
+        {
+            probe.AsSpan()[^1] = 0;
+            ack.AsSpan()[^1] = 0;
+            reject.AsSpan()[^1] = 0;
+        }
+        IReadOnlyList<Message> probes = new[] { probe };
+        IReadOnlyList<Message> acks = new[] { ack };
+        IReadOnlyList<Message> rejects = new[] { reject };
+        for (var index = 0; index < 128; index++)
+        {
+            _ = ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probes, out _);
+            _ = ZLinkClientServerControlProtocol.TryDecodeLivenessAck(acks, out _);
+            _ = ZLinkClientServerControlProtocol.TryDecodeReject(rejects, out _);
+        }
+
+        const int iterations = 1000;
+        var matches = 0;
+        var start = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+        {
+            if (ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probes, out var probeId))
+                matches += probeId == 11 ? 1 : 0;
+            if (ZLinkClientServerControlProtocol.TryDecodeLivenessAck(acks, out var ackId))
+                matches += ackId == 11 ? 1 : 0;
+            if (ZLinkClientServerControlProtocol.TryDecodeReject(rejects, out var reason))
+                matches += reason == 1 ? 1 : 0;
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - start;
+
+        output.WriteLine($"Control readers valid={valid}: {allocated} B/{iterations}");
+        Assert.Equal(valid ? iterations * 3 : 0, matches);
+        Assert.Equal(0, allocated);
+    }
+
     [Fact]
     public void ClientServerControlProtocol_UsesExactBinaryAdmissionRecords()
     {
