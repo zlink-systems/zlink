@@ -42,7 +42,6 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -394,7 +393,6 @@ final class ZLinkChannelBlockingSubmissionTest {
 
     private static final class Fixture implements AutoCloseable {
         final ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
-        final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
         final CompletableFuture<Void> admission = new CompletableFuture<>();
         final CompletableFuture<ZLinkBackendReceived> reply = new CompletableFuture<>();
         final AtomicInteger submissions = new AtomicInteger();
@@ -411,7 +409,6 @@ final class ZLinkChannelBlockingSubmissionTest {
                     new ZLinkChannelCallRuntime(
                             new ZLinkMessageFlowTracer(
                                     options.registration().dispatchOptions(), null, Runnable::run),
-                            scheduler,
                             new ZLinkChannelReplyDecoder(new ZLinkJsonMessageSerializer()),
                             null,
                             null);
@@ -511,7 +508,6 @@ final class ZLinkChannelBlockingSubmissionTest {
         @Override
         public void close() {
             runtime.beginClose();
-            scheduler.shutdownNow();
             if (reply.isDone() && !reply.isCompletedExceptionally()) {
                 reply.join().close();
             }

@@ -1479,10 +1479,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             awaitOutstandingApplicationLease(context, 0L);
 
             CompletableFuture<ZLinkBackendReceived> reply;
-            var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
             try (var caller =
                     new systems.zlink.framework.runtime.internal.service
-                            .ZLinkServiceOperationRegistry(scheduler)) {
+                            .ZLinkServiceOperationRegistry()) {
                 UUID operationId =
                         systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds
                                 .next();
@@ -1535,8 +1534,6 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     assertEquals("remote-reply", received.parts().getFirst().toUtf8String());
                 }
                 assertEquals(0, caller.pendingCount());
-            } finally {
-                scheduler.shutdownNow();
             }
             assertEquals(2, handlerCalls.get());
 

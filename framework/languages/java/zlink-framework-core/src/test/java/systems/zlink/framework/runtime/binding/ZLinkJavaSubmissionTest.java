@@ -693,7 +693,6 @@ final class ZLinkJavaSubmissionTest {
                 new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane();
         private final ZLinkServiceOperationRegistry operations =
                 new ZLinkServiceOperationRegistry(
-                        ZLinkProcessExecutionLanes.deadlines(),
                         ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
         private final ZLinkJavaRawServicePort port;
         private final RouterSocket router;

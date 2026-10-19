@@ -32,7 +32,6 @@ final class ZLinkJavaDealerSocket implements ZLinkBackendDealerSocket, ZLinkJava
     private final ZLinkJavaSocketReceivePoller receivePoller;
     private final ZLinkServiceOperationRegistry operations =
             new ZLinkServiceOperationRegistry(
-                    ZLinkProcessExecutionLanes.deadlines(),
                     ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
 
     ZLinkJavaDealerSocket(DealerSocket socket) {

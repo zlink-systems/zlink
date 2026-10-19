@@ -558,8 +558,7 @@ final class ZLinkStreamRuntimeIngressTest {
                     }
                 };
         runtimes.add(start(stream, 0));
-        try (var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
-                var completions = new ZLinkServiceOperationRegistry(scheduler)) {
+        try (var completions = new ZLinkServiceOperationRegistry()) {
             try {
                 checked.get(3, TimeUnit.SECONDS);
                 CompletableFuture<Void> terminal = new CompletableFuture<>();
