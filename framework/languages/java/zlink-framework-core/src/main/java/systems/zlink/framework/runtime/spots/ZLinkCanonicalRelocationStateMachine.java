@@ -88,6 +88,7 @@ final class ZLinkCanonicalRelocationStateMachine
     private final Map<Fence, TerminalTarget> terminalTargets = new HashMap<>();
     private final AtomicInteger openSourceQuiescenceWindows = new AtomicInteger();
     private Runnable sourceQuiescenceChanged = () -> {};
+    private final java.util.function.BooleanSupplier targetAdmissionSealed;
 
     void onSourceQuiescenceChanged(Runnable listener) {
         sourceQuiescenceChanged = Objects.requireNonNull(listener, "listener");
@@ -119,6 +120,26 @@ final class ZLinkCanonicalRelocationStateMachine
                 accepted.stream()
                         .map(entry -> entry.getValue().terminal())
                         .toArray(CompletableFuture[]::new));
+    }
+
+    ZLinkCanonicalRelocationStateMachine(
+            ZLinkInternalMeshNode node,
+            String meshName,
+            String entrySpotId,
+            ZLinkLocationRepository locations,
+            ZLinkAggregateRelocationCoordinator coordinator,
+            ZLinkSpotRetireControl.TargetEndpoint target,
+            java.util.function.BooleanSupplier targetAdmissionSealed) {
+        this(
+                node,
+                meshName,
+                entrySpotId,
+                locations,
+                coordinator,
+                target,
+                ZLinkCanonicalRelocationStateMachine::scheduleAt,
+                ZLinkRelocationPayloadTransfer.Options.defaults(),
+                targetAdmissionSealed);
     }
 
     ZLinkCanonicalRelocationStateMachine(
@@ -191,6 +212,58 @@ final class ZLinkCanonicalRelocationStateMachine
             ZLinkRelocationPayloadTransfer.Options transferOptions,
             LongSupplier monotonicNanos,
             DelayScheduler delayScheduler) {
+        this(
+                node,
+                meshName,
+                entrySpotId,
+                locations,
+                coordinator,
+                target,
+                retentionScheduler,
+                transferOptions,
+                monotonicNanos,
+                delayScheduler,
+                () -> false);
+    }
+
+    ZLinkCanonicalRelocationStateMachine(
+            ZLinkInternalMeshNode node,
+            String meshName,
+            String entrySpotId,
+            ZLinkLocationRepository locations,
+            ZLinkAggregateRelocationCoordinator coordinator,
+            ZLinkSpotRetireControl.TargetEndpoint target,
+            RetentionScheduler retentionScheduler,
+            ZLinkRelocationPayloadTransfer.Options transferOptions,
+            java.util.function.BooleanSupplier targetAdmissionSealed) {
+        this(
+                node,
+                meshName,
+                entrySpotId,
+                locations,
+                coordinator,
+                target,
+                retentionScheduler,
+                transferOptions,
+                System::nanoTime,
+                ZLinkCanonicalRelocationStateMachine::scheduleAfter,
+                targetAdmissionSealed);
+    }
+
+    private ZLinkCanonicalRelocationStateMachine(
+            ZLinkInternalMeshNode node,
+            String meshName,
+            String entrySpotId,
+            ZLinkLocationRepository locations,
+            ZLinkAggregateRelocationCoordinator coordinator,
+            ZLinkSpotRetireControl.TargetEndpoint target,
+            RetentionScheduler retentionScheduler,
+            ZLinkRelocationPayloadTransfer.Options transferOptions,
+            LongSupplier monotonicNanos,
+            DelayScheduler delayScheduler,
+            java.util.function.BooleanSupplier targetAdmissionSealed) {
+        this.targetAdmissionSealed =
+                Objects.requireNonNull(targetAdmissionSealed, "targetAdmissionSealed");
         this.node = Objects.requireNonNull(node, "node");
         this.meshName = requireText(meshName, "meshName");
         this.entrySpotId = entrySpotId;
@@ -634,7 +707,8 @@ final class ZLinkCanonicalRelocationStateMachine
                                         existing, null);
                             TargetAttempt created = new TargetAttempt(prepare);
                             MeshNodeState state = node.status().state();
-                            if (state == MeshNodeState.DRAINING
+                            if (targetAdmissionSealed.getAsBoolean()
+                                    || state == MeshNodeState.DRAINING
                                     || state == MeshNodeState.STOPPED
                                     || state == MeshNodeState.ERROR)
                                 return new java.util.AbstractMap.SimpleImmutableEntry<>(

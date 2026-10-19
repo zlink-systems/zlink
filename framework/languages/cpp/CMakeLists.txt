@@ -443,10 +443,10 @@ target_link_libraries(zlink_http_client PUBLIC
   zlink::framework
   nlohmann_json::nlohmann_json)
 target_link_libraries(zlink_http_client PRIVATE Threads::Threads)
-# All Boost consumers must resolve the same Boost checkout. Mixing Boost trees
-# in one binary (for example vendored asio with a system beast) is undefined
-# behavior at the ABI level, so the http client uses the shared helper instead
-# of its own include wiring.
+# Targets built in this tree must resolve one Boost checkout: mixing trees in a
+# single translation unit (for example vendored asio with a system beast) is
+# undefined behavior, so the http client uses the shared helper instead of its
+# own include wiring. The installed archive keeps its Boost to itself.
 zlink_framework_cpp_add_boost_headers(zlink_http_client)
 zlink_framework_cpp_add_asio_system_libraries(zlink_http_client)
 if(OpenSSL_FOUND)
@@ -680,6 +680,12 @@ if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
     zlink_http_client
     EXPORT zlink_http_client_cppTargets
     COMPONENT HttpClient)
+  zlink_framework_cpp_restrict_installed_static_archive(zlink_framework Framework)
+  zlink_framework_cpp_restrict_installed_static_archive(
+    zlink_framework_provider_abstractions Framework)
+  zlink_framework_cpp_restrict_installed_static_archive(
+    zlink_framework_locations_redis Framework)
+  zlink_framework_cpp_restrict_installed_static_archive(zlink_http_client HttpClient)
 endif()
 if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK
     AND ZLINK_FRAMEWORK_CPP_STAGE_STANDALONE_DEPENDENCIES
@@ -817,7 +823,6 @@ set(ZLINK_FRAMEWORK_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
 if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
   string(CONCAT ZLINK_FRAMEWORK_CPP_CONFIG_IMPLEMENTATION_DEPENDENCIES
     "find_dependency(opentelemetry-cpp CONFIG COMPONENTS api)\n"
-    "find_dependency(Boost)\n"
     "find_package(protobuf CONFIG QUIET)\n"
     "if(NOT protobuf_FOUND)\n"
     "  find_dependency(Protobuf MODULE)\n"
@@ -830,14 +835,12 @@ if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
     "set(CMAKE_MODULE_PATH \"\${_zlink_saved_module_path}\")\n"
     "unset(_zlink_saved_module_path)")
   string(CONCAT ZLINK_HTTP_CLIENT_CONFIG_IMPLEMENTATION_DEPENDENCIES
-    "find_dependency(Boost)\n"
     "${ZLINK_HTTP_CLIENT_EXPORT_OPENSSL_DEPENDENCY}")
   string(CONCAT ZLINK_FRAMEWORK_CONFIG_IMPLEMENTATION_DEPENDENCIES
     "find_package(protobuf CONFIG QUIET)\n"
     "if(NOT protobuf_FOUND)\n"
     "  find_dependency(Protobuf)\n"
-    "endif()\n"
-    "find_dependency(Boost)")
+    "endif()")
 endif()
 if(ZLINK_FRAMEWORK_CPP_INSTALL_FRAMEWORK)
   install(FILES "${CMAKE_CURRENT_LIST_DIR}/cmake/Findlz4.cmake"
@@ -2332,6 +2335,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       "-DZLINK_FRAMEWORK_CPP_DEPENDENCY_PREFIX_PATH=${ZLINK_FRAMEWORK_CPP_PACKAGE_DEPENDENCY_PREFIX_PATH}"
       -DZLINK_FRAMEWORK_CPP_EXPECT_REDIS_PLUS_PLUS=${ZLINK_FRAMEWORK_REDIS_EXPORTS_REDIS_PLUS_PLUS}
       -DZLINK_FRAMEWORK_CPP_EXPECT_LIBUV=${ZLINK_FRAMEWORK_REDIS_EXPORTS_LIBUV}
+      -DZLINK_FRAMEWORK_CPP_HIDES_STATIC_ARCHIVES=${ZLINK_FRAMEWORK_CPP_HIDES_STATIC_ARCHIVES}
+      "-DZLINK_FRAMEWORK_CPP_STATIC_ARCHIVES=$<TARGET_FILE_NAME:zlink_framework>;$<TARGET_FILE_NAME:zlink_framework_provider_abstractions>;$<TARGET_FILE_NAME:zlink_http_client>;$<TARGET_FILE_NAME:zlink_framework_locations_redis>;$<TARGET_FILE_NAME:zlink_stream_connector>"
+      -DZLINK_FRAMEWORK_CPP_STATIC_ARCHIVE_TOOLS_DIR=${ZLINK_STATIC_ARCHIVE_TOOLS_DIR}
+      -DZLINK_FRAMEWORK_CPP_SHARED_SYMBOLS_MAP=${CMAKE_CURRENT_LIST_DIR}/cmake/zlink-framework-shared-symbols.map
+      -DZLINK_FRAMEWORK_CPP_NM=${CMAKE_NM}
+      -DZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR=${ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR}
       -P
       ${CMAKE_CURRENT_LIST_DIR}/tests/Zlink.Framework.PackageTests/install_consumer.cmake
     LABELS "framework-package;framework-regression;connector-package"

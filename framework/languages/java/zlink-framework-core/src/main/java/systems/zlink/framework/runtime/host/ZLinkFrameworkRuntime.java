@@ -488,7 +488,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 this.registration
                                         .locations()
                                         .options()
-                                        .sessionRelocationSealTimeout())
+                                        .sessionRelocationSealTimeout(),
+                                this.meshDrains::isSealed)
                         : null;
 
         if (this.spotRetire != null) {
