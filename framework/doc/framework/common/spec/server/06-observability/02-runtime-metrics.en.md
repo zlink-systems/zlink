@@ -254,7 +254,8 @@ and don't substitute for each other — their values can differ.
 confirmed in the Location Store.** Active and reserved are the active and pending counts of that
 MeshNode's capacity record ([Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas)),
 and limit is the limit of the descriptor registered for that MeshNode. The value changes when a Store
-request that reads or changes the capacity record succeeds, and when the existing descriptor polling
+request that reads or changes the capacity record succeeds, and when the descriptor polling of
+[Location runtime §4](../05-location-relocation/01-location-runtime.en.md#4-finding-running-nodes-and-their-capabilities)
 reads the local capacity record once per cycle. Observable collection and application requests do not
 read the Store for these instruments. The instruments are not observed before the first confirmation,
 and a failed read keeps the last confirmed value.
