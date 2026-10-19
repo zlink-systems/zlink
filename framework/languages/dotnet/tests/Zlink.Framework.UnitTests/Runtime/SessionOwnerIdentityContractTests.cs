@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests.Runtime;
@@ -100,6 +101,33 @@ public sealed class SessionOwnerIdentityContractTests
 
     private static byte[] Hex(JsonElement commands, string field) =>
         Convert.FromHexString(commands.GetProperty(field).GetString()!);
+
+    [Fact]
+    public void A_missing_Session_owner_descriptor_travels_as_Unavailable()
+    {
+        using var fixture = JsonDocument.Parse(
+            File.ReadAllText(
+                Path.Combine(
+                    Zlink.Framework.Tests.Common.FrameworkTestEnvironment.GetRepoRoot(),
+                    "framework/runtime/protocol/fixtures/session-owner-identity-v1.json"
+                )
+            )
+        );
+        var unavailable = fixture.RootElement.GetProperty("descriptorUnavailable");
+        var terminal = int.Parse(unavailable.GetProperty("terminalResult").GetString()!);
+        var code = int.Parse(unavailable.GetProperty("failureCode").GetString()!);
+        Assert.Equal("Unavailable", unavailable.GetProperty("errorKind").GetString());
+
+        var (result, failureCode) = ZLinkRequestFailureMapper.TargetFailureReply(
+            new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Unavailable, "no descriptor")
+        );
+        Assert.Equal(terminal, (int)result);
+        Assert.Equal(code, (int)failureCode);
+        var received = Assert.IsType<ZLinkFrameworkException>(
+            ZLinkRequestFailureMapper.CreateCompletionException(result, code, "bind")
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, received.Kind);
+    }
 
     private static bool Identifies(
         ZLinkServiceWireCodec.RequestSourceFence local,

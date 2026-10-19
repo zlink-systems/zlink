@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.internal.service;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -10,8 +11,11 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkRequestFailureMapping;
 
 import java.nio.file.Path;
 import java.util.HexFormat;
@@ -87,6 +91,27 @@ class ZLinkSessionOwnerIdentityContractTest {
                     identifies(local, codec, rejected, "command54Hex"),
                     rejected.get("name").asText());
         }
+    }
+
+    @Test
+    void aMissingSessionOwnerDescriptorTravelsAsUnavailable() throws Exception {
+        JsonNode unavailable = fixture().get("descriptorUnavailable");
+        int terminal = Integer.parseInt(unavailable.get("terminalResult").asText());
+        int code = Integer.parseInt(unavailable.get("failureCode").asText());
+        assertEquals("Unavailable", unavailable.get("errorKind").asText());
+        assertArrayEquals(
+                new int[] {terminal, code},
+                ZLinkRequestFailureMapping.outgoing(ZLinkFrameworkErrorKind.UNAVAILABLE));
+        assertEquals(
+                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                ZLinkBackendRequestResult.fromWireTerminal(terminal).toFrameworkErrorKind(code));
+    }
+
+    private static JsonNode fixture() throws Exception {
+        return new ObjectMapper()
+                .readTree(
+                        Path.of("../../../runtime/protocol/fixtures/session-owner-identity-v1.json")
+                                .toFile());
     }
 
     private static boolean identifies(

@@ -7,6 +7,7 @@ import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
@@ -523,17 +524,23 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
         ZLinkInternalMeshNode receivingNode = meshNodes.get(resolveActorDispatchMeshName());
         var session = command.session();
-        if (receivingNode == null
-                || receivingNode
-                        .localSessionOwner()
-                        .filter(
-                                owner ->
-                                        owner.identifies(
-                                                session.nodeRid(),
-                                                session.nodeGeneration(),
-                                                session.ownerId(),
-                                                session.ownerLeaseGeneration()))
-                        .isEmpty()) {
+        // Session-Actor binding §4: without this host's own descriptor the seal is Unavailable.
+        if (receivingNode == null || receivingNode.localSessionOwner().isEmpty()) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "Session owner has no live MeshNode descriptor"));
+        }
+        if (receivingNode
+                .localSessionOwner()
+                .filter(
+                        owner ->
+                                owner.identifies(
+                                        session.nodeRid(),
+                                        session.nodeGeneration(),
+                                        session.ownerId(),
+                                        session.ownerLeaseGeneration()))
+                .isEmpty()) {
             return CompletableFuture.failedFuture(
                     new ZLinkConfigurationException(
                             "command 42 names a different Session owner identity"));
