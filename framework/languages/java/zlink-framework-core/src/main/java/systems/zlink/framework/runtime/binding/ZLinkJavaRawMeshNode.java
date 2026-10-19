@@ -3331,11 +3331,18 @@ final class ZLinkJavaRawMeshNode
                             }
                             ZLinkServiceM6AWireCodec.Reply reply =
                                     wire.decodeReplyHeader(replies.getFirst());
-                            if (reply.correlation() != correlation
-                                    || reply.terminalResult() != 0
-                                    || reply.failureCode() != 0) {
+                            if (reply.correlation() != correlation) {
                                 throw new IllegalArgumentException(
-                                        "bound session binding was rejected");
+                                        "bound session binding reply correlation");
+                            }
+                            if (reply.terminalResult() != 0 || reply.failureCode() != 0) {
+                                throw ZLinkRequestFailureMapping.receivedFailure(
+                                        ZLinkBackendRequestResult.fromWireTerminal(
+                                                        reply.terminalResult())
+                                                .toFrameworkErrorKind(reply.failureCode()),
+                                        "bound session binding was rejected",
+                                        reply.failureCode(),
+                                        java.util.Map.of());
                             }
                         });
     }
@@ -7041,8 +7048,13 @@ final class ZLinkJavaRawMeshNode
                             // Session-Actor binding §4: the identity comes from the admitted
                             // peer descriptor that passed the owner lease check, or the bind
                             // is rejected.
+                            // Without that descriptor the bind is Unavailable.
                             if (failure != null || authority == null || authority.isEmpty()) {
-                                replyBoundSessionBind(inbound, binding, false);
+                                replyBoundSessionBindFailure(
+                                        inbound,
+                                        binding,
+                                        ZLinkRequestFailureMapping.outgoing(
+                                                ZLinkFrameworkErrorKind.UNAVAILABLE));
                                 return null;
                             }
                             ZLinkInternalMeshNode.PeerAuthorityFence sessionOwner =
@@ -7065,13 +7077,33 @@ final class ZLinkJavaRawMeshNode
             ZLinkJavaRawServicePort.Inbound inbound,
             ZLinkServiceM6BWireCodec.BoundSessionBind binding,
             boolean accepted) {
+        if (accepted) {
+            port.reply(
+                    requireStarted(),
+                    inbound.source(),
+                    inbound.requestSequence(),
+                    List.of(wire.encodeReplyHeader(binding.correlation(), 0, 0)));
+            return;
+        }
+        replyBoundSessionBindFailure(
+                inbound,
+                binding,
+                ZLinkRequestFailureMapping.outgoing(
+                        ZLinkFrameworkErrorKind.NOT_FOUND,
+                        (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_ROUTE_NOT_FOUND));
+    }
+
+    private void replyBoundSessionBindFailure(
+            ZLinkJavaRawServicePort.Inbound inbound,
+            ZLinkServiceM6BWireCodec.BoundSessionBind binding,
+            int[] terminalAndCode) {
         port.reply(
                 requireStarted(),
                 inbound.source(),
                 inbound.requestSequence(),
                 List.of(
                         wire.encodeReplyHeader(
-                                binding.correlation(), accepted ? 0 : 102, accepted ? 0 : 1)));
+                                binding.correlation(), terminalAndCode[0], terminalAndCode[1])));
     }
 
     private void dispatchBoundSessionReplaced(ZLinkJavaRawServicePort.Inbound inbound) {

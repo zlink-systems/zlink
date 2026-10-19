@@ -146,14 +146,17 @@ struct route_mesh_runtime_service_t::state_t
         return found->first;
     }
 
-    const mesh_node_snapshot_t &publish_snapshot_locked (hub_t &hub, mesh_node_snapshot_t snapshot)
+    // Runtime monitoring §4·§6: a projection is published only from the status it was taken
+    // from. When another publication won the turn first, either projection may describe the
+    // later node state, so this returns nullptr and the caller projects again from the winner.
+    const mesh_node_snapshot_t *publish_snapshot_locked (hub_t &hub, mesh_node_snapshot_t snapshot)
     {
-        if (hub.last_snapshot
-            && (detail::topology_is_terminal (hub.last_snapshot->state)
-                || snapshot.sequence < hub.last_snapshot->sequence))
-            return *hub.last_snapshot;
+        if (hub.last_snapshot && detail::topology_is_terminal (hub.last_snapshot->state))
+            return &*hub.last_snapshot;
+        if (hub.last_snapshot && snapshot.sequence < hub.last_snapshot->sequence)
+            return nullptr;
         if (hub.last_snapshot && snapshot_equivalent (*hub.last_snapshot, snapshot))
-            return *hub.last_snapshot;
+            return &*hub.last_snapshot;
         snapshot.sequence = hub.last_snapshot ? hub.last_snapshot->sequence + 1 : 1;
         snapshot.observed_at = std::chrono::system_clock::now ();
         const bool terminal = detail::topology_is_terminal (snapshot.state);
@@ -167,7 +170,7 @@ struct route_mesh_runtime_service_t::state_t
             }
         }
         hub.observers.erase (write, hub.observers.end ());
-        return published;
+        return &published;
     }
 
     void publish_current_snapshot (hub_t &hub) noexcept
@@ -186,10 +189,13 @@ struct route_mesh_runtime_service_t::state_t
           *task, [state, owner, task] (const result_t<mesh_node_snapshot_t> &result) {
               if (!result)
                   return;
-              std::lock_guard lock (owner->mutex);
-              if (owner->stopped.load (std::memory_order_acquire))
-                  return;
-              state->publish_snapshot_locked (*owner, result.value ());
+              {
+                  std::lock_guard lock (owner->mutex);
+                  if (owner->stopped.load (std::memory_order_acquire)
+                      || state->publish_snapshot_locked (*owner, result.value ()) != nullptr)
+                      return;
+              }
+              state->publish_current_snapshot (*owner);
           });
     }
 
@@ -662,11 +668,31 @@ mesh_node_snapshot_t route_mesh_runtime_service_t::snapshot (std::string mesh_na
                 || detail::topology_is_terminal (hub->last_snapshot->state)))
             return *hub->last_snapshot;
     }
-    auto snapshot = build_snapshot (_state, std::move (mesh_name));
-    std::lock_guard lock (hub->mutex);
-    if (hub->last_snapshot && hub->stopped.load (std::memory_order_acquire))
-        return *hub->last_snapshot;
-    return _state->publish_snapshot_locked (*hub, std::move (snapshot));
+    return complete_query (mesh_name, query_projection (mesh_name));
+}
+
+mesh_node_snapshot_t
+route_mesh_runtime_service_t::query_projection (const std::string &mesh_name) const
+{
+    return build_snapshot (_state, mesh_name);
+}
+
+mesh_node_snapshot_t
+route_mesh_runtime_service_t::complete_query (const std::string &mesh_name,
+                                              mesh_node_snapshot_t projection) const
+{
+    const auto hub = _state->require_hub (mesh_name);
+    for (;;) {
+        {
+            std::lock_guard lock (hub->mutex);
+            if (hub->last_snapshot && hub->stopped.load (std::memory_order_acquire))
+                return *hub->last_snapshot;
+            if (const auto *published =
+                  _state->publish_snapshot_locked (*hub, std::move (projection)))
+                return *published;
+        }
+        projection = query_projection (mesh_name);
+    }
 }
 
 std::unique_ptr<mesh_runtime_observation_t> route_mesh_runtime_service_t::observe (

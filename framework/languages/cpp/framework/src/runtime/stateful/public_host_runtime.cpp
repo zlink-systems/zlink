@@ -5423,25 +5423,24 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                               return terminal_replied;
                           });
                     }
-                    const auto replied =
-                      terminal_replied
-                      || _transport->reply_bound_session_bind (
-                        mailbox_record,
-                        operation_result.error == stateful::stateful_error_t::none ? 0u
-                        : admission == bound_session_bind_admission_t::stale_route
-                          ? static_cast<std::uint32_t> (protocol::request_terminal_result::conflict)
-                        : admission == bound_session_bind_admission_t::actor_not_ready
-                          ? static_cast<std::uint32_t> (protocol::request_terminal_result::busy)
-                          : static_cast<std::uint32_t> (
-                              protocol::request_terminal_result::notFound),
-                        operation_result.error == stateful::stateful_error_t::none ? 0u
-                        : admission == bound_session_bind_admission_t::stale_route
-                          ? static_cast<std::uint32_t> (
-                              protocol::framework_error_code::actorLocationStale)
-                        : admission == bound_session_bind_admission_t::actor_not_ready
-                          ? 0u
-                          : static_cast<std::uint32_t> (
-                              protocol::framework_error_code::actorSessionNotBound));
+                    // One terminal per bind. Session-Actor binding §4: without the Session
+                    // owner descriptor the bind is Unavailable.
+                    using terminal_t = protocol::request_terminal_result;
+                    using code_t = protocol::framework_error_code;
+                    const auto [terminal, code] =
+                      operation_result.error == stateful::stateful_error_t::none
+                        ? std::pair{terminal_t::ok, code_t::none}
+                      : admission == bound_session_bind_admission_t::stale_route
+                        ? std::pair{terminal_t::conflict, code_t::actorLocationStale}
+                      : admission == bound_session_bind_admission_t::actor_not_ready
+                        ? std::pair{terminal_t::busy, code_t::none}
+                      : admission == bound_session_bind_admission_t::ready && !session_owner
+                        ? std::pair{terminal_t::internalError, code_t::routeNotConnected}
+                        : std::pair{terminal_t::notFound, code_t::actorSessionNotBound};
+                    const auto replied = terminal_replied
+                                         || _transport->reply_bound_session_bind (
+                                           mailbox_record, static_cast<std::uint32_t> (terminal),
+                                           static_cast<std::uint32_t> (code));
                     if (replied && operation_result.replacement) {
                         (void) co_await _transport->send_bound_session_replaced (
                           operation_result.replacement->retired_session

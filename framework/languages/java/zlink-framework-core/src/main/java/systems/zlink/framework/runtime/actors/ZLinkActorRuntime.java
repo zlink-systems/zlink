@@ -2957,32 +2957,21 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return context.hasBoundSession();
     }
 
-    public Optional<BoundSessionRouteSnapshot> boundSessionRoute(ZLinkActor actor) {
+    /**
+     * The Actor's current binding record, read from the SpotNode that owns it. Session-Actor
+     * binding §4: commands 42·51·54 send the Session owner identity stored there at bind.
+     */
+    public Optional<ZLinkInternalSpotNode.BoundSessionRoute> boundSessionRoute(ZLinkActor actor) {
         DefaultActorContext context = actorRegistry.context(actor);
         if (context == null) {
             throw new ZLinkConfigurationException(
                     "actor is not managed by this runtime: " + actor.context().actorId());
         }
-        ZLinkActorContextState.BoundSessionSource source = context.boundSessionSourceSnapshot();
-        if (source != null) {
-            return Optional.of(
-                    new BoundSessionRouteSnapshot(
-                            source.sourceNodeRid(),
-                            source.sourceSessionRid(),
-                            source.bindingGeneration()));
-        }
-        return Optional.empty();
-    }
-
-    public record BoundSessionRouteSnapshot(
-            RoutingId sessionOwnerNodeRid, RoutingId sessionRid, long bindingGeneration) {
-        public BoundSessionRouteSnapshot {
-            Objects.requireNonNull(sessionOwnerNodeRid, "sessionOwnerNodeRid");
-            Objects.requireNonNull(sessionRid, "sessionRid");
-            if (bindingGeneration <= 0) {
-                throw new IllegalArgumentException("bound Session route generation is invalid");
-            }
-        }
+        ZLinkInternalSpotNode bindingNode = context.state.bindingSpotNode();
+        ZLinkBackendActorRef actorRef = context.actorRef();
+        return bindingNode == null || actorRef == null
+                ? Optional.empty()
+                : bindingNode.boundSessionRoute(actorRef);
     }
 
     public boolean hasBoundSession(
@@ -4554,8 +4543,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     private DepartedStay departedStay(DefaultActorContext context) {
         ZLinkBackendActorRef actorRef = context.actorRef();
-        //  A remote Session binding lives only in the SpotNode record; a same-node one in the
-        //  context.
+        //  The SpotNode record holds the same-node and the remote binding; a binding without a
+        //  SpotNode record is known only to the context.
         RoutingId sessionRid =
                 actorRef == null
                         ? null

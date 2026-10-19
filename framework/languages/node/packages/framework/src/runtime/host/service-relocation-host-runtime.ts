@@ -1566,10 +1566,17 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
   ): void {
     const status = this.requireMeshNode(meshName).status();
     const owner = this.options.currentOwner();
+    // Session-Actor binding §4: without this host's own descriptor the command is Unavailable.
+    if (owner === undefined) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+        'Session owner has no live MeshNode descriptor.'
+      );
+    }
     if (
       !routingIdsEqual(status.routingId, session.sessionOwnerNodeRid) ||
       status.lifecycleGeneration !== session.sessionOwnerNodeGeneration ||
-      owner?.ownerId !== session.sessionOwnerId ||
+      owner.ownerId !== session.sessionOwnerId ||
       owner.leaseGeneration !== session.sessionOwnerLeaseGeneration
     ) {
       throw new ServiceWireProtocolError(

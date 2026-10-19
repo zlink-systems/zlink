@@ -1323,6 +1323,16 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
     assert (invalidations == 1);
     assert (route_resolutions == 0);
 
+    // Session-Actor binding §4: the Actor owner rejects a bind whose Session owner has no
+    // admitted, lease-verified descriptor with the Unavailable representative.
+    const auto session_owner_unavailable =
+      request_and_reply (protocol::request_terminal_result::internalError,
+                         protocol::framework_error_code::routeNotConnected);
+    assert (!session_owner_unavailable);
+    assert (session_owner_unavailable.error_kind () == framework_error_kind_t::unavailable);
+    assert (invalidations == 1);
+    assert (route_resolutions == 0);
+
     // The route snapshot exists but its owner route cannot be used. Routing
     // spec 08 §2 ends that operation as Unavailable; error model §5 reserves
     // DeadlineExceeded for an admitted request whose reply misses its deadline.

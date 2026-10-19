@@ -164,7 +164,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                 validateDirectSourceAndTarget(
                                                                         owned, descriptors, goal),
                                                                 directTarget(descriptors, goal),
-                                                                sessionRoute(owned, descriptors))))
+                                                                sessionRoute(owned))))
                 .thenCompose(
                         admission ->
                                 validateDirectTargetSpot(goal, cancellation)
@@ -226,7 +226,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                         owned,
                                                                         descriptors,
                                                                         targetPolicy),
-                                                                sessionRoute(owned, descriptors))));
+                                                                sessionRoute(owned))));
     }
 
     private CompletionStage<PreparedSource> sealAndCapture(
@@ -940,35 +940,23 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         return Optional.empty();
     }
 
-    private Optional<ZLinkSpotRetireControl.SessionRouteFence> sessionRoute(
-            Owned actor, List<ZLinkMeshNodeDescriptor> descriptors) {
-        var knownRoute = actors.boundSessionRoute(actor.actorId());
-        return knownRoute.map(
-                route -> {
-                    ZLinkMeshNodeDescriptor owner =
-                            descriptors.stream()
-                                    .filter(
-                                            value ->
-                                                    value.rid().equals(route.sessionOwnerNodeRid()))
-                                    .findFirst()
-                                    .orElseThrow(
-                                            () ->
-                                                    new IllegalStateException(
-                                                            "bound Session owner descriptor is"
-                                                                    + " unavailable: "
-                                                                    + route.sessionOwnerNodeRid()));
-                    return new ZLinkSpotRetireControl.SessionRouteFence(
-                            actor.actorId(),
-                            actor.snapshot().objectGeneration(),
-                            actor.snapshot().authorityOwnerGeneration(),
-                            actor.snapshot().storeVersion(),
-                            route.sessionOwnerNodeRid(),
-                            owner.lifecycleGeneration(),
-                            owner.ownerId(),
-                            owner.leaseGeneration(),
-                            route.sessionRid(),
-                            route.bindingGeneration());
-                });
+    // Session-Actor binding §4: command 42 carries the Session owner identity stored with the
+    // binding at bind; the relocation does not read the descriptor again.
+    private Optional<ZLinkSpotRetireControl.SessionRouteFence> sessionRoute(Owned actor) {
+        return actors.boundSessionRoute(actor.actorId())
+                .map(
+                        route ->
+                                new ZLinkSpotRetireControl.SessionRouteFence(
+                                        actor.actorId(),
+                                        actor.snapshot().objectGeneration(),
+                                        actor.snapshot().authorityOwnerGeneration(),
+                                        actor.snapshot().storeVersion(),
+                                        route.sessionOwnerNodeRid(),
+                                        route.sessionOwnerNodeGeneration(),
+                                        route.sessionOwnerId(),
+                                        route.sessionOwnerLeaseGeneration(),
+                                        route.sessionRid(),
+                                        route.bindingGeneration()));
     }
 
     static final class PreparedSource {
