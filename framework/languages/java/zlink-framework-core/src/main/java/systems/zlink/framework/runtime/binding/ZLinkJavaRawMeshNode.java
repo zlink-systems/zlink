@@ -139,6 +139,9 @@ final class ZLinkJavaRawMeshNode
     private static final long MAX_INFRASTRUCTURE_PAYLOAD_BYTES = 4_294_966_774L;
     private static final String RELOCATION_CONTROL_PACKET =
             "zlink.internal.spot.relocation.control.v1";
+    // Session·Actor binding §4: a request whose sender has no live descriptor ends Unavailable.
+    private static final int[] SOURCE_OWNER_UNAVAILABLE =
+            ZLinkRequestFailureMapping.outgoing(ZLinkFrameworkErrorKind.UNAVAILABLE);
     private static final long USER_SPOT_TERMINAL_RETENTION_NANOS = Duration.ofMinutes(5).toNanos();
 
     private final String meshName;
@@ -5828,7 +5831,11 @@ final class ZLinkJavaRawMeshNode
                                 try (ZLinkApplicationJobContext.Scope ignored =
                                         ZLinkApplicationJobContext.enterQueued(applicationJob)) {
                                     if (failure != null || authorities.isEmpty()) {
-                                        replySpotFailure(inbound, header, 107, 33);
+                                        replySpotFailure(
+                                                inbound,
+                                                header,
+                                                SOURCE_OWNER_UNAVAILABLE[0],
+                                                SOURCE_OWNER_UNAVAILABLE[1]);
                                         inbound.close();
                                         return;
                                     }
@@ -6860,7 +6867,11 @@ final class ZLinkJavaRawMeshNode
                                         ZLinkApplicationJobContext.enterQueued(applicationJob)) {
                                     if (failure != null || authorities.isEmpty()) {
                                         receivedMessages.forEach(Message::close);
-                                        replyActorFailure(inbound, header, 107, 21);
+                                        replyActorFailure(
+                                                inbound,
+                                                header,
+                                                SOURCE_OWNER_UNAVAILABLE[0],
+                                                SOURCE_OWNER_UNAVAILABLE[1]);
                                         inbound.close();
                                         return;
                                     }
