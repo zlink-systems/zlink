@@ -37,8 +37,11 @@
     </ItemGroup>
 
     <ItemGroup>
+        <Compile Include="Runtime/BoundSessionDisconnectTests.cs"/>
         <Compile Include="AssemblyInfo.cs"/>
+        <Compile Include="Runtime/InstanceReadyAdmissionTests.cs"/>
         <Compile Include="Runtime/SessionFailureClassificationTests.cs"/>
+        <Compile Include="Runtime/SpotShutdownExecutionTests.cs"/>
         <Compile Include="Runtime/MeshLivenessPhysicalCloseTests.cs"/>
         <Compile Include="Runtime/RequestAdmissionStageTests.cs"/>
         <Compile Include="Runtime/SpotRequestSourceDiscoveryTests.cs"/>

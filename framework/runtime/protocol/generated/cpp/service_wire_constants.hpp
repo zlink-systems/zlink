@@ -51,6 +51,7 @@ enum class command : std::uint8_t {
     boundSessionReplaced = 51,
     relocationState = 52,
     relocationFailed = 53,
+    boundSessionClose = 54,
 };
 enum class flag : std::uint8_t {
     metadata = 1,

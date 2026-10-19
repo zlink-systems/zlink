@@ -270,7 +270,10 @@ final class SpotActivation extends SpotActivationBase<DefaultSpotContext> {
                     CompletableFuture<ZLinkSpotActorJoinResult> response =
                             new CompletableFuture<>();
                     return context.enqueueJoinLifecycle(
-                                    () -> operation.get().thenAccept(response::complete))
+                                    () -> {
+                                        startSpotHandler();
+                                        return operation.get().thenAccept(response::complete);
+                                    })
                             .thenCompose(done -> response);
                 });
     }

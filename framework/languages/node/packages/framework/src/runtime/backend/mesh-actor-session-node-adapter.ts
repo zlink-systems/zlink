@@ -1,3 +1,4 @@
+import { wireReplyFailureException } from '../framework-errors-internal';
 import { classifySubmitResult } from '../messaging/submission-result';
 import type { ZLinkBackendActorSessionNode, ZLinkBackendMeshNode } from './contracts';
 import { closeMeshCompletion, type ZLinkMeshCompletionTable } from './mesh-completion-table';
@@ -26,9 +27,10 @@ export function meshActorSessionNodeAdapter(
       );
       try {
         if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
-          throw new Error(
-            `Actor '${actor.actorId}' bound-session close failed with result ` +
-              `'${completion.terminalResult}' and errno '${completion.failureErrno}'.`
+          throw wireReplyFailureException(
+            completion.terminalResult,
+            completion.failureErrno,
+            `Actor '${actor.actorId}' bound-session close failed.`
           );
         }
       } finally {

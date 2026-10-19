@@ -897,27 +897,6 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         CancellationToken cancellationToken
     )
     {
-        //  Staging makes this host a new owner, so it takes the drain gate's
-        //  new-owner admission (spec 30 §15 "create와 join"): any drain, the
-        //  relocation fence included, refuses it, and relocation rollback
-        //  waits for no accepted one.
-        if (!runtime.DrainAdmission.TryEnterActorAdmission(out var ownerAdmission))
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.ShuttingDown,
-                "SPOT relocation target admission is sealed for drain."
-            );
-        using var ownerAdmissionLease = ownerAdmission;
-        var admission = (
-            await runtime.TryAdmitInboundOperationAsync(countAsRequest: false).ConfigureAwait(false)
-        ).EnterInbound();
-        if (!admission.Accepted)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.ShuttingDown,
-                "SPOT relocation target admission is sealed for drain."
-            );
-        // The existing operation drain keeps an accepted prepare alive until
-        // its stage is registered; the target owner then settles the seal.
-        using var operationLease = admission.Lease;
         if (prepare.Object.Kind == 1)
             throw new InvalidOperationException(
                 "Standalone Actor relocation must be handled by the Actor maintenance owner."

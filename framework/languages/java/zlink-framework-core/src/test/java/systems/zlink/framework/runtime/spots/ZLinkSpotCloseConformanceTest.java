@@ -577,6 +577,20 @@ final class ZLinkSpotCloseConformanceTest {
                         store,
                         repository,
                         outcome);
+                if (given.path("members").asInt(0) > 0
+                        && scenario.path("act").asText().equals("managerClose")) {
+                    var existing =
+                            runtime.spotManager()
+                                    .getOrCreate(spotId, SPOT_TYPE)
+                                    .inMesh(meshName)
+                                    .submit()
+                                    .toCompletableFuture()
+                                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                    assertEquals(
+                            systems.zlink.framework.spots.ZLinkSpotCreateState.EXISTING,
+                            existing.state());
+                    assertEquals(ref.objectGeneration(), existing.spot().objectGeneration());
+                }
             } finally {
                 log.close();
                 handlerBlock.complete(null);

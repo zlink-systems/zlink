@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
 import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
@@ -68,6 +69,32 @@ final class ZLinkFrameworkRuntimeStatusPublicationTest {
                             });
             assertSame(reset, firstObserved.get(WAIT.toSeconds(), TimeUnit.SECONDS));
             assertSame(reset, runtime.status());
+        }
+    }
+
+    @Test
+    void applicationPermitReleaseIsPublishedByTheNextQuery() throws Exception {
+        var options = new DefaultZLinkFrameworkOptions();
+        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+            var permit =
+                    options.registration()
+                            .applicationJobQueue()
+                            .acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .get(WAIT.toSeconds(), TimeUnit.SECONDS);
+            var held = runtime.status();
+            assertEquals(1, held.capacity().applicationJobQueue().permitsInUse());
+            assertEquals(1, held.capacity().applicationJobQueue().reservedSupplyPermits());
+
+            permit.close();
+            var released = runtime.status();
+            assertEquals(held.sequence() + 1, released.sequence());
+            assertEquals(0, released.capacity().applicationJobQueue().permitsInUse());
+            assertEquals(0, released.capacity().applicationJobQueue().reservedSupplyPermits());
+            assertSame(released, runtime.status(), "unchanged queries reuse the published status");
         }
     }
 }

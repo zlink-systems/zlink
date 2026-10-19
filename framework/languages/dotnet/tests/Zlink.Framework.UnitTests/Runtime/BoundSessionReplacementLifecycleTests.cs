@@ -21,6 +21,114 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class BoundSessionReplacementLifecycleTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Close_command_rejects_stale_identity_and_closes_only_current_session(
+        bool remote
+    )
+    {
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        await using var target = await HostedReplacementFixture.CreateAsync(
+            RoutingId.From("close-target-" + suffix),
+            "tcp://127.0.0.1:0",
+            ReplacementCallbackBehavior.Success
+        );
+        await using var source = await HostedReplacementFixture.CreateAsync(
+            RoutingId.From("close-source-" + suffix),
+            "tcp://127.0.0.1:0",
+            ReplacementCallbackBehavior.Success
+        );
+        if (remote)
+        {
+            source.Node.ConnectPeer(target.Node.RoutingId, target.Endpoint);
+            await WaitUntilAsync(() =>
+                target.Node.MeshStatus().AdmittedPeerCount == 1
+                && source.Node.MeshStatus().AdmittedPeerCount == 1
+            );
+        }
+        target.BindRetiredSessionActor("actor-a");
+        var request = new ServiceWireCodec.BoundSessionClose54(
+            0,
+            new(1),
+            new(new("actor-a"), new(1)),
+            new(
+                new(target.SessionOwnerNodeRid.ToBytes().ToArray()),
+                new(target.SessionOwnerNodeGeneration),
+                new(target.SessionOwnerId),
+                new(target.SessionOwnerLeaseGeneration),
+                new(target.SessionRid.ToBytes().ToArray()),
+                new(target.BindingGeneration)
+            )
+        );
+        var sender = Assert.IsAssignableFrom<IZLinkBackendBoundSessionClose>(
+            (remote ? source : target).Node
+        );
+        var stale = new[]
+        {
+            request with
+            {
+                Actor = request.Actor with { ActorId = new("other-actor") },
+            },
+            request with
+            {
+                Actor = request.Actor with { ObjectGeneration = new(2) },
+            },
+            request with
+            {
+                Session = request.Session with
+                {
+                    SessionOwnerNodeGeneration = new(target.SessionOwnerNodeGeneration + 1),
+                },
+            },
+            request with
+            {
+                Session = request.Session with { SessionOwnerId = new("other-owner") },
+            },
+            request with
+            {
+                Session = request.Session with
+                {
+                    SessionOwnerLeaseGeneration = new(target.SessionOwnerLeaseGeneration + 1),
+                },
+            },
+            request with
+            {
+                Session = request.Session with
+                {
+                    SessionRid = new(RoutingId.From("other-session").ToBytes().ToArray()),
+                },
+            },
+            request with
+            {
+                Session = request.Session with
+                {
+                    RetiredBindingGeneration = new(target.BindingGeneration + 1),
+                },
+            },
+        };
+        foreach (var rejected in stale)
+        {
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await sender.CloseBoundSessionAsync(
+                    rejected,
+                    TimeSpan.FromSeconds(2),
+                    CancellationToken.None
+                )
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+            Assert.Equal(0, target.Socket.DisconnectCount);
+        }
+        await sender.CloseBoundSessionAsync(
+            request,
+            TimeSpan.FromSeconds(2),
+            CancellationToken.None
+        );
+        Assert.Equal(1, target.Socket.DisconnectCount);
+        await target.Session.DisposeAsync();
+        Assert.Empty(target.Lifetime.Context.Actors.Bound);
+    }
+
     private const int DisconnectShutdownStressIterations = 100;
 
     private static void AssertNoActorUnbound(ReplacementFixture fixture) =>
@@ -315,6 +423,28 @@ public sealed class BoundSessionReplacementLifecycleTests
                 retired.BindingGeneration
             );
         Assert.NotNull(ExactRetiredBinding());
+        var staleClose = new ServiceWireCodec.BoundSessionClose54(
+            0,
+            new(1),
+            new(new("actor-a"), new(1)),
+            new(
+                new(retired.SessionOwnerNodeRid.ToBytes().ToArray()),
+                new(retired.SessionOwnerNodeGeneration),
+                new(retired.SessionOwnerId),
+                new(retired.SessionOwnerLeaseGeneration),
+                new(retired.SessionRid.ToBytes().ToArray()),
+                new(retired.BindingGeneration)
+            )
+        );
+        var rejected = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await ((IZLinkBackendBoundSessionClose)retired.Node).CloseBoundSessionAsync(
+                staleClose,
+                TimeSpan.FromSeconds(2),
+                CancellationToken.None
+            )
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, rejected.Kind);
+        Assert.Equal(0, replacement.Socket.DisconnectCount);
 
         retired.Time.Advance(TimeSpan.FromMilliseconds(99));
         Assert.Equal(0, retired.Socket.DisconnectCount);

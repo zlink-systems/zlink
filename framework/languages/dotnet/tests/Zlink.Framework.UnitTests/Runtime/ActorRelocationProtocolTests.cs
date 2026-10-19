@@ -37,6 +37,7 @@ public sealed class ActorRelocationProtocolTests
         var owner = new ZLinkCanonicalRelocationTargetOwner(
             target,
             1,
+            new ZLinkDrainAdmissionGate(),
             awaitTargetReady: (_, token) =>
                 token.IsCancellationRequested
                     ? ValueTask.FromCanceled(token)

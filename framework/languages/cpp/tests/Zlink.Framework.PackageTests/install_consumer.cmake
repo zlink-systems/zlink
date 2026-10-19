@@ -51,6 +51,24 @@ foreach(path IN ITEMS
     message(FATAL_ERROR "installed package file is missing: ${path}")
   endif()
 endforeach()
+# A static archive carries the Boost it was compiled with as ordinary external
+# definitions unless the build rewrote it, and a consumer's own Boost then
+# collides with them at link time (issue #2133). Core's check is the one that
+# knows the allowed surface, so the installed archives go through it.
+if(ZLINK_FRAMEWORK_CPP_HIDES_STATIC_ARCHIVES)
+  foreach(archive_name IN LISTS ZLINK_FRAMEWORK_CPP_STATIC_ARCHIVES)
+    execute_process(
+      COMMAND "${CMAKE_COMMAND}" -E env "NM=${ZLINK_FRAMEWORK_CPP_NM}"
+              bash "${ZLINK_FRAMEWORK_CPP_STATIC_ARCHIVE_TOOLS_DIR}/check_static_archive_exports.sh"
+              "${consumer_install_prefix}/lib/${archive_name}"
+              "${ZLINK_FRAMEWORK_CPP_SHARED_SYMBOLS_MAP}"
+      RESULT_VARIABLE export_check_result)
+    if(NOT export_check_result EQUAL 0)
+      message(FATAL_ERROR "installed ${archive_name} exports more than the zlink:: surface")
+    endif()
+  endforeach()
+endif()
+
 file(READ "${framework_config_file}" framework_config_text)
 file(READ "${connector_config_file}" connector_config_text)
 file(READ "${framework_targets_file}" framework_targets_text)
@@ -153,7 +171,16 @@ find_package(zlink_framework_cpp CONFIG REQUIRED)
 find_package(zlink_http_client_cpp CONFIG REQUIRED)
 find_package(zlink_stream_connector_cpp CONFIG REQUIRED)
 
+# The consumer compiles its own Boost, which is not the one the archives were
+# built with. Without a Boost of its own the build tree's one stands in.
+find_package(Boost QUIET)
+
 add_executable(consumer main.cpp)
+if(TARGET Boost::headers)
+  target_link_libraries(consumer PRIVATE Boost::headers)
+else()
+  target_include_directories(consumer SYSTEM PRIVATE "${ZLINK_CONSUMER_BOOST_INCLUDE_DIR}")
+endif()
 target_link_libraries(consumer PRIVATE
   zlink::framework_provider_abstractions
   zlink::framework
@@ -177,6 +204,10 @@ file(WRITE "${consumer_source_dir}/main.cpp" [=[
 
 #include <nlohmann/json.hpp>
 
+#include <boost/asio.hpp>
+
+#include <chrono>
+#include <thread>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -184,6 +215,12 @@ file(WRITE "${consumer_source_dir}/main.cpp" [=[
 struct login_request_t
 {
   static constexpr const char *packet_name = "LoginRequest";
+};
+
+struct room_view_t
+{
+  static constexpr const char *packet_name = "RoomView";
+  int value = 0;
 };
 
 template <typename T>
@@ -220,6 +257,18 @@ to_json (nlohmann::json &json, const login_request_t &)
   json = nlohmann::json::object ();
 }
 
+void
+to_json (nlohmann::json &json, const room_view_t &view)
+{
+  json = nlohmann::json{{"value", view.value}};
+}
+
+void
+from_json (const nlohmann::json &json, room_view_t &view)
+{
+  view.value = json.value ("value", 0);
+}
+
 int
 main ()
 {
@@ -248,13 +297,31 @@ main ()
   auto connector =
     zlink::stream_connector::connector_factory_t::create (
       zlink::stream_connector::connector_options_t{});
+  // The consumer drives its own Boost.Asio next to the archives' copy. Handing
+  // work to the connector's delivery strand and to this io_context in one
+  // process must not fold the two copies together (issue #2133).
+  bool posted_ran = false;
+  bool stranded_ran = false;
+  boost::asio::io_context io;
+  boost::asio::strand<boost::asio::io_context::executor_type> strand (
+    io.get_executor ());
+  boost::asio::post (io, [&posted_ran] { posted_ran = true; });
+  boost::asio::post (strand, [&stranded_ran] { stranded_ran = true; });
+  io.run ();
+  auto subscription = connector.on<room_view_t> (
+    [] (const zlink::stream_connector::message_t<room_view_t> &) {});
+  std::this_thread::sleep_for (std::chrono::milliseconds (50));
+  (void) subscription;
   auto e2e_client = zlink::stream_e2e_client::use (connector);
   (void) e2e_client;
   auto throwing_connector =
     zlink::stream_connector_throwing::create (
       zlink::stream_connector::connector_options_t{});
   (void) throwing_connector;
-  return packet.name == login_request_t::packet_name ? 0 : 1;
+  return packet.name == login_request_t::packet_name && posted_ran
+             && stranded_ran
+           ? 0
+           : 1;
 }
 ]=])
 
@@ -266,7 +333,8 @@ string(REPLACE ";" "\;" consumer_prefix_path
   "${consumer_install_prefix};${ZLINK_FRAMEWORK_CPP_DEPENDENCY_PREFIX_PATH}")
 set(consumer_configure_command
   "${CMAKE_COMMAND}" -S "${consumer_source_dir}" -B "${consumer_build_dir}"
-  "-DCMAKE_PREFIX_PATH=${consumer_prefix_path}")
+  "-DCMAKE_PREFIX_PATH=${consumer_prefix_path}"
+  "-DZLINK_CONSUMER_BOOST_INCLUDE_DIR=${ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR}")
 if(NOT ZLINK_FRAMEWORK_CPP_IS_MULTI_CONFIG)
   list(APPEND consumer_configure_command
     "-DCMAKE_BUILD_TYPE=${ZLINK_FRAMEWORK_CPP_CONFIGURATION}")

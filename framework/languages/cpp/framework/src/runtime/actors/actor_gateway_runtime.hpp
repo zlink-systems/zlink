@@ -294,6 +294,7 @@ class actor_gateway_state_t
     disconnect_dispatcher_t disconnect_dispatcher;
     bound_session_registrar_t bound_session_registrar;
     bound_session_sender_t bound_session_sender;
+    std::function<task_t<void> (actor_ref_t, actor_bound_session_route_t)> bound_session_closer;
     membership_query_t membership_query;
     join_barrier_reserver_t join_barrier_reserver;
     serializer_registry_t *serializers = nullptr;
@@ -471,6 +472,8 @@ class actor_gateway_runtime_t
     void on_join_barrier (actor_gateway_state_t::join_barrier_reserver_t reserver);
     void on_disconnect (actor_gateway_state_t::disconnect_dispatcher_t dispatcher);
     void on_bound_session (actor_gateway_state_t::bound_session_registrar_t registrar);
+    void on_bound_session_close (
+      std::function<task_t<void> (actor_ref_t, actor_bound_session_route_t)> close);
     void on_bound_session_send (actor_gateway_state_t::bound_session_sender_t sender);
     std::shared_ptr<bound_session_delivery_fence_t>
     begin_join_completion_delivery_fence (const actor_ref_t &actor_ref);

@@ -279,13 +279,14 @@ export class ZLinkBoundSessionService {
   async disconnectNativeBoundSession(
     node: ZLinkBackendActorSessionNode,
     actorRef: ActorRef,
+    timeoutMs: number,
     signal?: AbortSignal
   ): Promise<void> {
     throwIfAborted(signal);
     await node.closeActorBoundSession(
-      actorRef as unknown as ZLinkBackendActorRef,
+      toBoundSessionSendActorRef(actorRef),
       requireBoundSessionGeneration(actorRef),
-      0,
+      timeoutMs,
       signal
     );
   }
@@ -293,14 +294,10 @@ export class ZLinkBoundSessionService {
   async disconnectBoundSession(actorId: string, signal?: AbortSignal): Promise<void> {
     throwIfAborted(signal);
     const route = await this.routes.requireRoute(actorId);
-    try {
-      await this.requireTransport().disconnect(actorId, {
-        bindingToken: route.bindingToken,
-        signal
-      });
-    } finally {
-      await this.routes.unbind(actorId, route.context, route.bindingToken);
-    }
+    await this.requireTransport().disconnect(actorId, {
+      bindingToken: route.bindingToken,
+      signal
+    });
   }
 
   /**

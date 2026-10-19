@@ -105,6 +105,54 @@ final class ZLinkActorJoinLifecycleAdmissionTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void joinReturnsCapacityBeforeCallbackAndResultPublication(boolean canonical) throws Exception {
+        try (var fixture = new Fixture<>(Room.class)) {
+            var entered = new CompletableFuture<Long>();
+            var release = new CompletableFuture<ZLinkSpotActorJoinResult>();
+            var published = new CountDownLatch(1);
+            var finishPublication = new CountDownLatch(1);
+            fixture.room.callback =
+                    id -> {
+                        entered.complete(fixture.jobs.snapshot().queuedApplicationJobs());
+                        return release;
+                    };
+            var result = (canonical ? fixture.canonical(1) : fixture.local()).toCompletableFuture();
+            var observation =
+                    result.thenRun(
+                            () -> {
+                                // Hold the result publisher before its lifecycle cleanup can run.
+                                published.countDown();
+                                try {
+                                    assertTrue(
+                                            finishPublication.await(
+                                                    COMPLETION_SECONDS, TimeUnit.SECONDS));
+                                } catch (InterruptedException interrupted) {
+                                    Thread.currentThread().interrupt();
+                                    throw new CompletionException(interrupted);
+                                }
+                            });
+            try {
+                entered.get(COMPLETION_SECONDS, TimeUnit.SECONDS);
+                CompletableFuture.runAsync(
+                        () -> release.complete(ZLinkSpotActorJoinResult.accept()));
+                assertTrue(published.await(COMPLETION_SECONDS, TimeUnit.SECONDS));
+                assertTrue(result.get(COMPLETION_SECONDS, TimeUnit.SECONDS).accepted());
+                assertEquals(0, fixture.jobs.snapshot().reservedSupplyPermits());
+                assertEquals(
+                        0,
+                        fixture.jobs.snapshot().queuedApplicationJobs(),
+                        "a published Join result must not retain a queued application job");
+                assertEquals(0L, entered.join(), "capacity must return before callback entry");
+            } finally {
+                finishPublication.countDown();
+                release.complete(ZLinkSpotActorJoinResult.accept());
+                observation.get(COMPLETION_SECONDS, TimeUnit.SECONDS);
+            }
+        }
+    }
+
     @Test
     void canonicalCapacityWaitDoesNotBlockInfrastructureAndPublishesInOrder() throws Exception {
         try (var fixture = new Fixture<>(Room.class)) {

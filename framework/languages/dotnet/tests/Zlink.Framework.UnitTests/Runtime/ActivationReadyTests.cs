@@ -669,6 +669,17 @@ public sealed class ActivationReadyTests
         bool rejected
     ) => CheckInitializationClose(mode, rejected ? 1 : 2, false, rejected, !rejected);
 
+    [Theory]
+    [InlineData(ZLinkUserSpotExecutionMode.SpotWide)]
+    [InlineData(ZLinkUserSpotExecutionMode.PerActor)]
+    public async Task Initialization_close_repeatedly_completes_public_creation(
+        ZLinkUserSpotExecutionMode mode
+    )
+    {
+        for (var iteration = 0; iteration < 20; iteration++)
+            await CheckInitializationClose(mode, 2, false, false, false);
+    }
+
     private static async Task CheckInitializationClose(
         ZLinkUserSpotExecutionMode mode,
         int phase,

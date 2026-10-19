@@ -84,8 +84,10 @@ public final class ZLinkUserSpotRetireRuntime {
             ZLinkRelocationAdapterRegistry adapters,
             long applicationVersion,
             Optional<String> maintenanceWave,
-            Duration sessionRelocationSealTimeout) {
+            Duration sessionRelocationSealTimeout,
+            java.util.function.Predicate<String> targetAdmissionSealed) {
         this.spots = Objects.requireNonNull(spots, "spots");
+        Objects.requireNonNull(targetAdmissionSealed, "targetAdmissionSealed");
         this.actors = Objects.requireNonNull(actors, "actors");
         Objects.requireNonNull(locationResolvers, "locationResolvers");
         if (applicationVersion < 0) {
@@ -216,7 +218,8 @@ public final class ZLinkUserSpotRetireRuntime {
                             coordinator,
                             target,
                             spots::scheduleRelocationCleanup,
-                            transferOptions);
+                            transferOptions,
+                            () -> targetAdmissionSealed.test(registration.meshName()));
             machines.add(relocationClient);
             new ZLinkCanonicalRelocationTransitionOwner(relocationClient).install(node);
             node.setRelocationReplyRelayHandler(target::relayCanonicalReply);
