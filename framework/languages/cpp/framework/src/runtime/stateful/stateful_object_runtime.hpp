@@ -263,6 +263,8 @@ struct retained_relocation_source_t
 struct relocation_seal_binding_t
 {
     std::atomic_bool bound{false};
+    // The Kernel invokes this outside StateLane after restoring or committing the source.
+    std::function<task_t<void> (bool)> finish;
 };
 
 struct stateful_object_runtime_test_access_t;
@@ -456,13 +458,11 @@ class stateful_object_runtime_t
     task_t<stateful_error_t> abort_relocation_before_cutover (std::uint64_t token);
     // Makes the source permanently follow-only once Cutover has been queued
     // (or its enqueue outcome is uncertain).
-    stateful_error_t finalize_relocation_cutover (
+    task_t<stateful_error_t> finalize_relocation_cutover (
       std::uint64_t token,
       std::optional<std::function<void (const object_ref_t &, const turn_record_t &)>> deliver =
         std::nullopt,
       relocation_ingress_batch_t *committed = nullptr);
-    std::pair<stateful_error_t, std::vector<object_ref_t>>
-    commit_relocation_aggregate (std::uint64_t token, std::string target_node_id);
     task_t<stateful_error_t>
     restore_relocation (frozen_object_state_t frozen,
                         object_ref_t target,

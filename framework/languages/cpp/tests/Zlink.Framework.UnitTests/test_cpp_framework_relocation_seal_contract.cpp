@@ -926,7 +926,7 @@ TEST (FrameworkRelocationSealContract, finalized_source_releases_capacity_and_re
                                              [&] (const auto &, const auto &) { ++followed; })
                  .first,
                stateful::stateful_error_t::none);
-    ASSERT_EQ (objects.finalize_relocation_cutover (sealed.seal.token),
+    ASSERT_EQ (objects.finalize_relocation_cutover (sealed.seal.token).result ().value (),
                stateful::stateful_error_t::none);
     const auto next = objects.begin_create ({.kind = stateful::object_kind_t::actor,
                                              .key = "next",
@@ -1891,7 +1891,10 @@ TEST (FrameworkRelocationSealContract, seal_cut_saves_each_unstarted_original_on
 // Relocation flow §4.2 step 10: when the second saved record fails its conversion, the attempt
 // aborts and every original returns to the same source FIFO in order, with no reply and with
 // its own mailbox credit still outstanding.
-void verify_native_spot_seal (bool fail_second, bool per_actor = false, bool detached = false)
+void verify_native_spot_seal (bool fail_second,
+                              bool per_actor = false,
+                              bool detached = false,
+                              bool without_ingress = false)
 {
     using namespace zlink::framework::runtime;
     using access_t = host::public_host_runtime_test_access_t;
@@ -1916,17 +1919,6 @@ void verify_native_spot_seal (bool fail_second, bool per_actor = false, bool det
       per_actor ? serial_lane_policy_t::per_actor_spot () : serial_lane_policy_t::spot_wide ());
     gate->set_application_start_policy ([] (const auto &) { return false; });
     auto located_gate = std::make_shared<std::shared_ptr<serial_execution_queue_t>> (gate);
-    host->configure_relocation_gate (
-      [located_gate] (const auto &) -> task_t<std::shared_ptr<serial_execution_queue_t>> {
-          co_return *located_gate;
-      },
-      [located_gate] (std::string, std::optional<protocol::spot_route_fence_t>)
-        -> task_t<std::shared_ptr<serial_application_target_t>> {
-          if (!*located_gate)
-              throw detail::make_framework_origin_exception (framework_error_kind_t::not_found,
-                                                             "source activation was retired");
-          co_return nullptr;
-      });
     std::vector<std::shared_ptr<serial_application_record_t>> accepted;
     int handlers = 0;
     std::vector<std::uint64_t> executed;
@@ -1959,6 +1951,18 @@ void verify_native_spot_seal (bool fail_second, bool per_actor = false, bool det
             },
             std::move (options)));
       };
+    host->configure_relocation_gate (
+      [located_gate] (const auto &) -> task_t<std::shared_ptr<serial_execution_queue_t>> {
+          co_return *located_gate;
+      },
+      [located_gate] (std::string, std::optional<protocol::spot_route_fence_t>)
+        -> task_t<std::shared_ptr<serial_application_target_t>> {
+          if (!*located_gate)
+              throw detail::make_framework_origin_exception (framework_error_kind_t::not_found,
+                                                             "source activation was retired");
+          co_return nullptr;
+      },
+      without_ingress ? publish : mesh::service_mailbox_t::application_dispatch_t{});
     for (std::uint64_t operation : {1u, 2u}) {
         const auto claim = zlink::framework::test::publish_stateful_claim (
           host->transport (), spot,
@@ -2017,22 +2021,35 @@ void verify_native_spot_seal (bool fail_second, bool per_actor = false, bool det
         ASSERT_EQ (objects.abort_relocation_before_cutover (sealed.seal.token).result ().value (),
                    stateful::stateful_error_t::none);
     }
-    // Fresh native ingress may not pass the originals restored by this abort.
-    const auto fresh = zlink::framework::test::publish_stateful_claim (
-      host->transport (), spot, native_wire (4, std::nullopt));
-    ASSERT_EQ (access_t::dispatch_claim (*host, fresh.claim, publish).result ().value (), 1u);
-    while (access_t::dispatch_owner (*host, spot, publish).result ().value ()) {
+    if (without_ingress) {
+        // A production host binds its mailbox dispatcher and has no inventory scan.
+        host->transport ().mailbox ().bind_application_dispatch ([] (auto &) {},
+                                                                 [] (const auto &) {});
+        (void) host->dispatch_ready (publish).result ().value ();
+    } else {
+        // Fresh native ingress may not pass the originals restored by this abort.
+        const auto fresh = zlink::framework::test::publish_stateful_claim (
+          host->transport (), spot, native_wire (4, std::nullopt));
+        ASSERT_EQ (access_t::dispatch_claim (*host, fresh.claim, publish).result ().value (), 1u);
+        while (access_t::dispatch_owner (*host, spot, publish).result ().value ()) {
+        }
     }
     gate->set_application_start_policy ([] (const auto &) { return true; });
     gate->drain ();
-    EXPECT_EQ (executed, fail_second ? (std::vector<std::uint64_t>{1, 2, 4})
-                                     : (std::vector<std::uint64_t>{1, 2, 3, 4}));
+    EXPECT_EQ (executed, without_ingress ? (std::vector<std::uint64_t>{1, 2, 3})
+                         : fail_second   ? (std::vector<std::uint64_t>{1, 2, 4})
+                                         : (std::vector<std::uint64_t>{1, 2, 3, 4}));
     EXPECT_EQ (objects.pending (spot, stateful::turn_domain_t::application), 0u);
     gate->close ();
     gate->drain ();
     worker.request_stop ();
     worker.drain ();
     host->close ();
+}
+
+TEST (FrameworkRelocationSealContract, native_spot_abort_executes_prefix_without_new_ingress)
+{
+    verify_native_spot_seal (false, false, false, true);
 }
 
 TEST (FrameworkRelocationSealContract,
@@ -2057,6 +2074,121 @@ TEST (FrameworkRelocationSealContract, per_actor_spot_abort_restores_originals_b
 {
     verify_native_spot_seal (false, true);
     verify_native_spot_seal (true, true);
+}
+
+TEST (FrameworkRelocationSealContract, native_spot_commit_releases_source_gate)
+{
+    using namespace zlink::framework::runtime;
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("native-commit"),
+        .runtime_failures = std::make_shared<runtime_failure_collector_t> ()}});
+    host->configure_stateful_dispatch (
+      [] (const auto &) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          co_return std::nullopt;
+      });
+    const stateful::object_ref_t spot{
+      stateful::object_kind_t::user_spot, "committed-spot", 1, 1, "mesh", "source"};
+    const auto created = host->objects ().begin_reserved_object (spot, "room", {});
+    ASSERT_EQ (host->objects ().commit_create (created.attempt), stateful::stateful_error_t::none);
+    offload_executor_t worker (1, "source-commit");
+    auto gate = std::make_shared<serial_execution_queue_t> (
+      worker, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},
+      serial_lane_policy_t::spot_wide ());
+    host->configure_relocation_gate (
+      [gate] (const auto &) -> task_t<std::shared_ptr<serial_execution_queue_t>> {
+          co_return gate;
+      });
+    const auto sealed = host->objects ().try_seal_relocation_aggregate ({spot}).result ().value ();
+    ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (host->objects ().begin_relocation_boundary (sealed.seal.token).first,
+               stateful::stateful_error_t::none);
+    ASSERT_EQ (host->objects ().finalize_relocation_cutover (sealed.seal.token).result ().value (),
+               stateful::stateful_error_t::none);
+    int executed = 0;
+    ASSERT_TRUE (gate->try_post ("ordinary-after-commit", [&] { ++executed; }));
+    std::promise<void> observed;
+    auto completed = observed.get_future ();
+    ASSERT_TRUE (worker.try_submit_internal ([&] { observed.set_value (); }));
+    completed.get ();
+    EXPECT_EQ (executed, 1);
+    gate->cancel_pending ();
+    gate->close ();
+    gate->drain ();
+    worker.request_stop ();
+    worker.drain ();
+    host->close ();
+}
+
+TEST (FrameworkRelocationSealContract, native_spot_fallback_rereads_remote_and_local_original)
+{
+    using namespace zlink::framework::runtime;
+    for (const bool local : {false, true}) {
+        for (const bool reject_first_authority : {false, true}) {
+            SCOPED_TRACE (local);
+            SCOPED_TRACE (reject_first_authority);
+            auto host = std::make_shared<host::public_host_runtime_t> (
+              host::host_options_t{mesh::raw_mesh_node_options_t{
+                .descriptor = test_descriptor ("native-fallback"),
+                .runtime_failures = std::make_shared<runtime_failure_collector_t> ()}});
+            const protocol::request_source_fence_t source{"requester", 3, {2}, 1};
+            int resolutions = 0;
+            host->configure_stateful_dispatch (
+              [&] (const stateful::accepted_record_authority_query_t &query)
+                -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+                  EXPECT_EQ (query.source_node_routing_id, (std::vector<std::uint8_t>{2}));
+                  ++resolutions;
+                  if (reject_first_authority && resolutions == 1)
+                      co_return std::nullopt;
+                  co_return stateful::accepted_record_authority_t{source, 3};
+              });
+            const stateful::object_ref_t spot{
+              stateful::object_kind_t::user_spot, "fallback-spot", 1, 1, "mesh", "source"};
+            const auto created = host->objects ().begin_reserved_object (spot, "room", {});
+            ASSERT_EQ (host->objects ().commit_create (created.attempt),
+                       stateful::stateful_error_t::none);
+            auto original = native_spot_record (*host, spot, 91, std::nullopt);
+            if (local) {
+                auto application = std::make_shared<host::local_application_dispatch_t> ();
+                application->owner.owner_kind = host::owner_kind_t::spot;
+                application->owner.spot_id = spot.key;
+                application->record.kind = host::record_kind_t::spot_send;
+                application->record.operation_id = {1, 91};
+                application->record.source_node_rid =
+                  zlink::routing_id_t::from (original.source_routing_id);
+                application->record.spot_route =
+                  protocol::spot_route_fence_t{spot.key, 1, {1}, 1, 1, 3};
+                application->parts =
+                  protocol::decode_application_parts (protocol::decode_application_payload (
+                    protocol::message_bytes (original.parts.back ())));
+                original.application = std::move (application);
+                original.parts.clear ();
+            }
+            const auto slot = zlink::framework::test::publish_stateful_claim (
+              host->transport (), spot, std::move (original));
+            int dispatched = 0;
+            EXPECT_EQ (host::public_host_runtime_test_access_t::dispatch_claim (
+                         *host, slot.claim,
+                         [&] (const auto &, const host::receive_record_t &record,
+                              std::vector<zlink::message_t> parts) {
+                             ++dispatched;
+                             EXPECT_EQ (record.operation_id.low, 91u);
+                             ASSERT_EQ (parts.size (), 2u);
+                             EXPECT_EQ (parts.back ().to_string (), "{}");
+                             if (record.complete_stateful_dispatch)
+                                 record.complete_stateful_dispatch ();
+                             if (record.release_mailbox_reservation)
+                                 record.release_mailbox_reservation ();
+                         })
+                         .result ()
+                         .value (),
+                       1u);
+            EXPECT_EQ (resolutions, 2);
+            EXPECT_EQ (dispatched, 1);
+            EXPECT_EQ (slot.claim->outstanding (), 0u);
+            host->close ();
+        }
+    }
 }
 
 TEST (FrameworkRelocationSealContract, native_spot_target_wait_keeps_original_and_gate_free)
@@ -2569,7 +2701,7 @@ TEST (FrameworkRelocationSealContract,
       objects.begin_relocation_boundary (sealed.seal.token, [] (const auto &, const auto &) {})
         .first,
       stateful::stateful_error_t::none);
-    ASSERT_EQ (objects.finalize_relocation_cutover (sealed.seal.token),
+    ASSERT_EQ (objects.finalize_relocation_cutover (sealed.seal.token).result ().value (),
                stateful::stateful_error_t::none);
     const auto retired = runtime.retire_relocation_source (sources).result ();
     // Shutdown's ordinary Actor destroy cannot reclaim a retained moving source.
@@ -2588,30 +2720,30 @@ TEST (FrameworkRelocationSealContract,
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
 TEST (FrameworkRelocationSealContract, source_capacity_underflow_is_an_invariant_failure)
 {
-    EXPECT_DEATH (([] {
-                      stateful::stateful_object_runtime_t objects;
-                      stateful::placement_candidate_t candidate{.mesh_name = "mesh",
-                                                                .node_id = "source",
-                                                                .stable_types = {"actor"},
-                                                                .active_capacity = 1,
-                                                                .pending_capacity = 1};
-                      objects.replace_placement_candidates ({candidate});
-                      const auto created =
-                        objects.begin_create ({.kind = stateful::object_kind_t::actor,
-                                               .key = "underflow",
-                                               .stable_type = "actor",
-                                               .mesh_name = std::string ("mesh"),
-                                               .exclusive = true});
-                      (void) objects.commit_create (created.attempt);
-                      // Fault injection: discard the live object's capacity accounting.
-                      objects.replace_placement_candidates ({candidate});
-                      const auto sealed =
-                        objects.try_seal_relocation_aggregate ({created.object}).result ().value ();
-                      (void) objects.begin_relocation_boundary (sealed.seal.token,
-                                                                [] (const auto &, const auto &) {});
-                      (void) objects.finalize_relocation_cutover (sealed.seal.token);
-                  }()),
-                  "active_count");
+    EXPECT_DEATH (
+      ([] {
+          stateful::stateful_object_runtime_t objects;
+          stateful::placement_candidate_t candidate{.mesh_name = "mesh",
+                                                    .node_id = "source",
+                                                    .stable_types = {"actor"},
+                                                    .active_capacity = 1,
+                                                    .pending_capacity = 1};
+          objects.replace_placement_candidates ({candidate});
+          const auto created = objects.begin_create ({.kind = stateful::object_kind_t::actor,
+                                                      .key = "underflow",
+                                                      .stable_type = "actor",
+                                                      .mesh_name = std::string ("mesh"),
+                                                      .exclusive = true});
+          (void) objects.commit_create (created.attempt);
+          // Fault injection: discard the live object's capacity accounting.
+          objects.replace_placement_candidates ({candidate});
+          const auto sealed =
+            objects.try_seal_relocation_aggregate ({created.object}).result ().value ();
+          (void) objects.begin_relocation_boundary (sealed.seal.token,
+                                                    [] (const auto &, const auto &) {});
+          (void) objects.finalize_relocation_cutover (sealed.seal.token).result ().value ();
+      }()),
+      "active_count");
 }
 
 #endif
@@ -2666,9 +2798,11 @@ TEST (FrameworkRelocationSealContract, committed_payload_release_keeps_later_fol
                  .first,
                stateful::stateful_error_t::none);
     stateful::relocation_ingress_batch_t committed;
-    ASSERT_EQ (
-      host->objects ().finalize_relocation_cutover (sealed.seal.token, std::nullopt, &committed),
-      stateful::stateful_error_t::none);
+    ASSERT_EQ (host->objects ()
+                 .finalize_relocation_cutover (sealed.seal.token, std::nullopt, &committed)
+                 .result ()
+                 .value (),
+               stateful::stateful_error_t::none);
     ASSERT_EQ (committed.participants.size (), 1u);
     EXPECT_EQ (operations_of (committed.participants.front ().records),
                (std::vector<std::uint64_t>{1}));

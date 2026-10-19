@@ -2561,6 +2561,18 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
               [registration] (std::string key, std::optional<protocol::spot_route_fence_t> route) {
                   return detail::spot_node_runtime_t (registration->spot_state)
                     .prepare_spot_dispatch (std::move (key), std::move (route));
+              },
+              [weak = std::weak_ptr (node), registration, services = _services,
+               serializers = _serializers, filters = _filters, options = _dispatch_options] (
+                const host::ready_record_t &owner, const host::receive_record_t &record,
+                std::vector<zlink::message_t> parts) {
+                  const auto node = weak.lock ();
+                  if (!node)
+                      return;
+                  node->application_work_enqueued ();
+                  node->application_work_started ();
+                  dispatch_application (node, registration, owner, record, std::move (parts), false,
+                                        services, serializers, filters, options);
               });
         }
         _published_mesh_nodes.clear ();

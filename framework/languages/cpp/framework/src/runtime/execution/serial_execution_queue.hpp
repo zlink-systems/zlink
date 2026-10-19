@@ -192,8 +192,9 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                              std::shared_ptr<stateful::relocation_seal_binding_t> binding = {});
     // The native handoff and relocation cut share the actual execution owner.
     task_t<std::shared_ptr<stateful::relocation_seal_binding_t>>
-    admit_native_application (std::function<void (bool)> publish,
-                              std::shared_ptr<stateful::relocation_seal_binding_t> restored = {});
+    admit_native_application (std::function<void (bool)> publish);
+    task_t<bool>
+    release_relocation_seal (std::shared_ptr<stateful::relocation_seal_binding_t> binding);
     bool try_post (std::string name, std::function<void ()> work);
     bool try_post (std::string name, std::function<void ()> work, serial_work_options_t options);
     bool try_post_async (std::string name, async_work_t work);

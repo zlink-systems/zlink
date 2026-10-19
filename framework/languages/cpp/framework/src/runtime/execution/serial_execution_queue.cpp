@@ -1431,19 +1431,15 @@ serial_execution_queue_t::take_application_suffix (
 }
 
 task_t<std::shared_ptr<stateful::relocation_seal_binding_t>>
-serial_execution_queue_t::admit_native_application (
-  std::function<void (bool)> publish, std::shared_ptr<stateful::relocation_seal_binding_t> restored)
+serial_execution_queue_t::admit_native_application (std::function<void (bool)> publish)
 {
     return control_async<std::shared_ptr<stateful::relocation_seal_binding_t>> (
-      [this, publish = std::move (publish), restored = std::move (restored)] {
+      [this, publish = std::move (publish)] {
           if (owns_shared_gate ())
               import_publications ();
           std::unique_lock lock (_mutex, std::defer_lock);
           if (!owns_shared_gate ())
               lock.lock ();
-          if (restored && _relocation_seal == restored
-              && !restored->bound.load (std::memory_order_acquire))
-              _relocation_seal.reset ();
           if (_relocation_seal && !_relocation_seal->bound.load (std::memory_order_acquire))
               return _relocation_seal;
           const bool sealed = bool (_relocation_seal);
@@ -1457,6 +1453,22 @@ serial_execution_queue_t::admit_native_application (
               import_publications ();
           return std::shared_ptr<stateful::relocation_seal_binding_t>{};
       });
+}
+
+task_t<bool> serial_execution_queue_t::release_relocation_seal (
+  std::shared_ptr<stateful::relocation_seal_binding_t> binding)
+{
+    return control_async<bool> ([this, binding = std::move (binding)] {
+        if (owns_shared_gate ())
+            import_publications ();
+        std::unique_lock lock (_mutex, std::defer_lock);
+        if (!owns_shared_gate ())
+            lock.lock ();
+        if (_relocation_seal != binding)
+            return false;
+        _relocation_seal.reset ();
+        return schedule_drain_locked ();
+    });
 }
 
 bool serial_execution_queue_t::try_post (std::string name, std::function<void ()> work)

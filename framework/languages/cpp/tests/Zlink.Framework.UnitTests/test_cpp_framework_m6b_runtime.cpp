@@ -6403,7 +6403,8 @@ void verify_relocation_ingress_boundary_owns_saved_and_follow_only_work ()
     assert (
       runtime.enqueue (actor, stateful::turn_domain_t::application, {5, bytes ("follow-only")})
       == stateful::stateful_error_t::none);
-    assert (runtime.finalize_relocation_cutover (second.token) == stateful::stateful_error_t::none);
+    assert (runtime.finalize_relocation_cutover (second.token).result ().value ()
+            == stateful::stateful_error_t::none);
     assert (runtime.abort_relocation_before_cutover (second.token).result ().value ()
             == stateful::stateful_error_t::conflict);
     const auto [claim_error, record] =

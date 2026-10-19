@@ -2217,7 +2217,7 @@ void test_generation_barrier_quiesces_yield_spot_and_timer (test_context_t &test
     test.require (objects.abort_relocation_before_cutover (seal.token).result ().value ()
                     == stateful_error_t::none,
                   "same-generation abort must reopen the seal");
-    test.require (objects.commit_relocation_aggregate (seal.token, "node-b").first
+    test.require (objects.finalize_relocation_cutover (seal.token).result ().value ()
                     == stateful_error_t::not_found,
                   "stale commit must not mutate an aborted generation");
 
@@ -2904,7 +2904,8 @@ void test_return_relocation_replaces_departed_remnant (test_context_t &test)
     test.require (objects.begin_relocation_boundary (sealed.seal.token).first
                     == stateful_error_t::none,
                   "departing Spot must cross the ingress boundary");
-    test.require (objects.finalize_relocation_cutover (sealed.seal.token) == stateful_error_t::none,
+    test.require (objects.finalize_relocation_cutover (sealed.seal.token).result ().value ()
+                    == stateful_error_t::none,
                   "cutover must finalize and leave the source record behind");
     test.require (objects.inventory ().size () == 1,
                   "the departed record stays on the source as a `moving` remnant");
@@ -4822,15 +4823,19 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
     relocation_ingress_batch_t committed;
     test.require (
       restored.commit_relocation_restore (relocated, identity) == stateful_error_t::none
-        && objects.finalize_relocation_cutover (
-             sealed.seal.token,
-             [&, no_follow] (const object_ref_t &owner, const turn_record_t &turn) {
-                 submissions.push_back (ingress.forward_accepted (
-                   owner, turn, dst.node_routing_id, dst.lifecycle_generation, 1, 5s,
-                   no_follow ? std::nullopt
-                             : std::optional<std::uint64_t>{relocated.authority_owner_generation}));
-             },
-             &committed)
+        && objects
+               .finalize_relocation_cutover (
+                 sealed.seal.token,
+                 [&, no_follow] (const object_ref_t &owner, const turn_record_t &turn) {
+                     submissions.push_back (ingress.forward_accepted (
+                       owner, turn, dst.node_routing_id, dst.lifecycle_generation, 1, 5s,
+                       no_follow
+                         ? std::nullopt
+                         : std::optional<std::uint64_t>{relocated.authority_owner_generation}));
+                 },
+                 &committed)
+               .result ()
+               .value ()
              == stateful_error_t::none,
       "owner commit must release the target queue and source retained copy");
     test.require (committed.participants.size () == 1, "source must return its committed prefix");

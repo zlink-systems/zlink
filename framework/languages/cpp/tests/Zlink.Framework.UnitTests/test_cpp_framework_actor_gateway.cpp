@@ -5255,7 +5255,7 @@ int early_zero_generation_leave_waits_for_source_transfer_completion (bool no_fo
         if (seal.error != stateful::stateful_error_t::none
             || objects.begin_relocation_boundary (seal.seal.token, {}).first
                  != stateful::stateful_error_t::none
-            || objects.finalize_relocation_cutover (seal.seal.token)
+            || objects.finalize_relocation_cutover (seal.seal.token).result ().value ()
                  != stateful::stateful_error_t::none)
             return finish (21);
     }

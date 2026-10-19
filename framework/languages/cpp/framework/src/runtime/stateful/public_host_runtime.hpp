@@ -863,7 +863,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     using native_spot_target_t =
       std::function<task_t<std::shared_ptr<runtime::serial_application_target_t>> (
         std::string, std::optional<protocol::spot_route_fence_t>)>;
-    void configure_relocation_gate (relocation_gate_t gate, native_spot_target_t target = {});
+    void configure_relocation_gate (relocation_gate_t gate,
+                                    native_spot_target_t target = {},
+                                    mesh::service_mailbox_t::application_dispatch_t resume = {});
 
   private:
     // Relocation flow §4.2 cut S of a source seal (stateful_object_runtime_t
@@ -1295,6 +1297,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::deque<local_application_dispatch_t> _local_application_dispatches;
     relocation_gate_t _relocation_gate;
     native_spot_target_t _native_spot_target;
+    mesh::service_mailbox_t::application_dispatch_t _relocation_resume;
     void publish_local_application (local_application_dispatch_t dispatch);
     task_t<void> ingest_cut_original (stateful::object_ref_t owner,
                                       mesh::service_mailbox_record_t original);

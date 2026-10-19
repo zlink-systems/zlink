@@ -229,7 +229,7 @@ void verify_bound_session_close_reply_grammar ()
            1,
            {owner.node_routing_id, owner.lifecycle_generation, "owner", 1, bytes ("session"), 1}},
           2s);
-        std::optional<mesh::service_mailbox_claim_t> claim;
+        std::shared_ptr<mesh::service_mailbox_claim_t> claim;
         const auto deadline = std::chrono::steady_clock::now () + 2s;
         while (!claim && std::chrono::steady_clock::now () < deadline) {
             (void) await_task (
@@ -238,7 +238,7 @@ void verify_bound_session_close_reply_grammar ()
               target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
         }
         assert (claim && claim->records.size () == 1);
-        auto &request = claim->records.front ();
+        auto &request = *claim->records.front ();
         const auto decoded =
           protocol::decode_bound_session_close (protocol::message_bytes (request.parts.front ()));
         assert (decoded.actor_id == "close-actor");

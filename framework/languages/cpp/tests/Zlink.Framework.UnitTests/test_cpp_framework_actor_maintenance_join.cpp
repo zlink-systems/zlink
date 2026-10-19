@@ -5857,7 +5857,7 @@ TEST (ActorMaintenanceJoin, ActiveInventoryExcludesCreatingRecoveringAndFinalize
     EXPECT_EQ (source_runtime.local_actor_refs ().size (), 1u);
     ASSERT_EQ (source.begin_relocation_boundary (sealed.seal.token).first,
                stateful::stateful_error_t::none);
-    ASSERT_EQ (source.finalize_relocation_cutover (sealed.seal.token),
+    ASSERT_EQ (source.finalize_relocation_cutover (sealed.seal.token).result ().value (),
                stateful::stateful_error_t::none);
     ASSERT_EQ (source.inventory ().size (), 1u);
     EXPECT_TRUE (

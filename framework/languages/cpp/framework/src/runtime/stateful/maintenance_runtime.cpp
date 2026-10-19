@@ -737,7 +737,7 @@ maintenance_runtime_t::apply_relocation_settlement (
     switch (settled.outcome) {
         case relocation_authority_t::target_committed: {
             relocation_ingress_batch_t committed;
-            (void) _objects.finalize_relocation_cutover (token, deliver, &committed);
+            (void) co_await _objects.finalize_relocation_cutover (token, deliver, &committed);
             if (_committed_terminal)
                 for (const auto &participant : committed.participants)
                     _committed_terminal (participant.owner, participant.records);
@@ -753,7 +753,7 @@ maintenance_runtime_t::apply_relocation_settlement (
         default:
             /* Expired-owner terminal: dispatch and Store changes stop for
              * good; each pending request gets Unavailable once. */
-            (void) _objects.finalize_relocation_cutover (token, deliver);
+            (void) co_await _objects.finalize_relocation_cutover (token, deliver);
             if (_unavailable_terminal) {
                 for (const auto &participant : participants) {
                     try {

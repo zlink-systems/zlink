@@ -6918,11 +6918,8 @@ task_t<bool> public_host_runtime_t::dispatch_stateful_owner (
         auto [error, delivery] =
           co_await _stateful_dispatch->try_claim_async (object, &before, &stable_type);
         if (error != stateful::stateful_error_t::none || !delivery) {
-            if (restoring) {
-                restoring = co_await gate->admit_native_application ({}, std::move (restoring));
-                if (restoring)
-                    continue;
-            }
+            if (restoring)
+                (void) co_await gate->release_relocation_seal (std::move (restoring));
             co_return dispatched;
         }
         dispatched = dispatch_stateful_delivery (object, std::move (*delivery), std::move (before),
@@ -8129,13 +8126,16 @@ void public_host_runtime_t::publish_local_application (local_application_dispatc
         throw protocol::service_wire_error_t ("local application mailbox is closed");
 }
 
-void public_host_runtime_t::configure_relocation_gate (relocation_gate_t gate,
-                                                       native_spot_target_t target)
+void public_host_runtime_t::configure_relocation_gate (
+  relocation_gate_t gate,
+  native_spot_target_t target,
+  mesh::service_mailbox_t::application_dispatch_t resume)
 {
     _lifecycle_configuration_lane
       .run ([&] {
           _relocation_gate = std::move (gate);
           _native_spot_target = std::move (target);
+          _relocation_resume = std::move (resume);
       })
       .get ();
 }
@@ -8145,8 +8145,8 @@ public_host_runtime_t::cut_relocation_source (
   std::vector<stateful::object_ref_t> participants,
   std::shared_ptr<stateful::relocation_seal_binding_t> binding)
 {
-    const auto locate =
-      co_await _lifecycle_configuration_lane.run_task ([this] { return _relocation_gate; });
+    const auto [locate, resume] = co_await _lifecycle_configuration_lane.run_task (
+      [this] { return std::pair{_relocation_gate, _relocation_resume}; });
     // Aggregate units contain one SpotWide Spot and its Actors. Actor FIFOs use
     // that Spot's shared gate; their own suffixes are captured by the Actor owner.
     const auto principal =
@@ -8157,6 +8157,20 @@ public_host_runtime_t::cut_relocation_source (
     std::shared_ptr<runtime::serial_execution_queue_t> gate;
     if (locate && principal != participants.end ())
         gate = co_await locate (*principal);
+    if (gate) {
+        binding->finish = [this, weak_gate = std::weak_ptr (gate), weak = std::weak_ptr (binding),
+                           owner = *principal, resume] (bool restored) -> task_t<void> {
+            const auto binding = weak.lock ();
+            const auto gate = weak_gate.lock ();
+            if (!binding || !gate)
+                co_return;
+            if (restored && resume) {
+                (void) co_await dispatch_stateful_owner (owner, resume);
+            } else if (!restored) {
+                (void) co_await gate->release_relocation_seal (binding);
+            }
+        };
+    }
     std::vector<std::string> owners;
     owners.reserve (participants.size ());
     for (const auto &participant : participants)
