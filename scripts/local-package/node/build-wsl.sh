@@ -35,7 +35,6 @@ package_version="$(node -p "require('$bindings_dir/package.json').version")"
   echo "Node package version $package_version does not match $binding_version" >&2
   exit 1
 }
-core_library="$core_prefix/lib/libzlink.so"
 manifest="$core_prefix/share/zlink/core-package-provenance.json"
 host_arch="$(uname -m)"
 case "$host_arch" in
@@ -54,7 +53,6 @@ mkdir -p "$artifact_root/npm"
   prebuild_dir="prebuilds/linux-$node_arch"
   mkdir -p "$prebuild_dir" provenance
   cp build/Release/zlink.node "$prebuild_dir/zlink.node"
-  cp "$core_library" "$prebuild_dir/libzlink.so.$core_version"
   cp "$core_prefix/lib/libzlink.so.0" "$prebuild_dir/libzlink.so.0"
   cp "$manifest" provenance/core-package-provenance.json
   ZLINK_CORE_VERSION="$core_version" npm run verify:prebuilds
