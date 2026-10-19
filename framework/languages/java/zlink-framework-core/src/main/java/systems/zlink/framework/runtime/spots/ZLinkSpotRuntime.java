@@ -851,6 +851,15 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             }
             for (Class<? extends ZLinkEntrySpot<?>> entrySpotType : entrySpotTypes) {
                 spotLifecycle.addEntrySpot(
+                        nodesByName.entrySet().stream()
+                                .filter(
+                                        entry ->
+                                                entry.getValue()
+                                                        .routingId()
+                                                        .equals(initialization.nodeRid()))
+                                .findFirst()
+                                .orElseThrow()
+                                .getKey(),
                         systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls.submit(
                                 () ->
                                         activationFactory.activateEntry(
@@ -2099,9 +2108,13 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 applicationClosing.whenComplete(
                         (ignored, failure) -> {
                             if (!instanceSpotActivations.isEmpty()) {
+                                instanceSpotActivations
+                                        .values()
+                                        .forEach(activation -> recordInstanceCount(activation, -1));
                                 instanceSpotActivations.clear();
                                 signalCountChanged();
                             }
+                            spotLifecycle.closePopulationMetrics();
                         });
         var observed = new CompletableFuture<Void>();
         applicationCleanup.whenComplete(
@@ -2438,9 +2451,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 || !drainRoomsMetricRecorded.compareAndSet(false, true)) {
             return;
         }
-        for (int index = 0; index < drainInitialUserSpots; index++) {
-            ZLinkRuntimeMetrics.increment("zlink.drain.rooms.drained", Map.of());
-        }
+        for (int index = 0; index < drainInitialUserSpots; index++) {}
     }
 
     private void requireAcceptingNewState() {
@@ -3279,6 +3290,11 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         userSpotAuthorities.decode(current.payload()).orElseThrow();
                                 if (authority.instance().isEmpty()
                                         || !authority.stableType().equals(envelope.stableType())) {
+                                    recordInstanceConflict(
+                                            envelope,
+                                            authority.instance().isEmpty()
+                                                    ? "spot_kind"
+                                                    : "spot_type");
                                     return CompletableFuture.failedFuture(
                                             ZLinkFrameworkErrorOrigin.framework(
                                                     ZLinkFrameworkErrorKind.TYPE_MISMATCH,
@@ -3325,7 +3341,23 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         .thenCompose(
                                                 released -> {
                                                     if (released)
-                                                        return reserveInstanceSpotTarget(envelope);
+                                                        return reserveInstanceSpotTarget(envelope)
+                                                                .whenComplete(
+                                                                        (route, failure) ->
+                                                                                ZLinkRuntimeMetrics
+                                                                                        .recordInstanceTakeover(
+                                                                                                envelope
+                                                                                                        .targetMeshName(),
+                                                                                                envelope
+                                                                                                        .stableType(),
+                                                                                                failure
+                                                                                                                == null
+                                                                                                        ? ZLinkRuntimeMetrics
+                                                                                                                .TakeoverOutcome
+                                                                                                                .CLAIMED
+                                                                                                        : ZLinkRuntimeMetrics
+                                                                                                                .TakeoverOutcome
+                                                                                                                .FAILED));
                                                     return CompletableFuture.failedFuture(
                                                             ZLinkFrameworkErrorOrigin.framework(
                                                                     ZLinkFrameworkErrorKind
@@ -3695,7 +3727,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     restoreFirst.apply(activation.backendSpot, admission),
                                     "first record terminal");
                             if (instanceSpotActivations.put(activation.context.spotId(), activation)
-                                    == null) signalCountChanged();
+                                    == null) {
+                                recordInstanceCount(activation, 1);
+                                signalCountChanged();
+                            }
                             activation.startIdleEviction(
                                     instanceSpotIdleTimeouts.getOrDefault(
                                             activation.context.meshName(), Duration.ZERO));
@@ -6424,9 +6459,29 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         }
     }
 
+    private void recordInstanceCount(ZLinkInstanceSpotActivation activation, long delta) {
+        spotLifecycle.recordSpotCount(
+                activation.context.meshName(), ZLinkRuntimeMetrics.SpotKind.INSTANCE, delta);
+    }
+
+    private static void recordInstanceConflict(
+            ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope, String reason) {
+        ZLinkRuntimeMetrics.increment(
+                ZLinkRuntimeMetrics.Metric.INSTANCE_SPOT_CLAIM_CONFLICTS.metricName(),
+                Map.of(
+                        ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
+                        envelope.targetMeshName(),
+                        ZLinkRuntimeMetrics.Tag.INSTANCE_SPOT_TYPE.wire(),
+                        envelope.stableType(),
+                        ZLinkRuntimeMetrics.Tag.REASON.wire(),
+                        reason));
+    }
+
     private void retireReleasedInstanceSpot(ZLinkInstanceSpotActivation activation) {
-        if (instanceSpotActivations.remove(activation.context.spotId(), activation))
+        if (instanceSpotActivations.remove(activation.context.spotId(), activation)) {
+            recordInstanceCount(activation, -1);
             signalCountChanged();
+        }
         ZLinkInternalMeshNode routeNode = routeMeshNodesByName.get(activation.context.meshName());
         if (routeNode != null) {
             routeNode.forgetInstanceIntent(activation.authorityRouteFence());
@@ -6434,8 +6489,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     }
 
     CompletionStage<Void> discardInstanceSpotActivation(ZLinkInstanceSpotActivation activation) {
-        if (instanceSpotActivations.remove(activation.context.spotId(), activation))
+        if (instanceSpotActivations.remove(activation.context.spotId(), activation)) {
+            recordInstanceCount(activation, -1);
             signalCountChanged();
+        }
         return activation
                 .closeResourcesAsync()
                 .whenComplete(

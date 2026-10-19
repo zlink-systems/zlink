@@ -22,6 +22,12 @@ final class ZLinkMetricsLifecycle implements SmartLifecycle {
     }
 
     @Override
+    public int getPhase() {
+        // Collect before Framework startup and through its terminal shutdown state.
+        return systems.zlink.framework.spring.internal.runtime.ZLinkFrameworkLifecycle.PHASE - 1;
+    }
+
+    @Override
     public void start() {
         if (!running) {
             Metrics.addRegistry(registry);

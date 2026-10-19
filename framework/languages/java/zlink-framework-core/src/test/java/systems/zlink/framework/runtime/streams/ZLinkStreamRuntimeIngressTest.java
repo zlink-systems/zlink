@@ -608,6 +608,18 @@ final class ZLinkStreamRuntimeIngressTest {
         }
     }
 
+    @Test
+    void cleanupKeepsPredecessorCompletionsOutOfTheNextConnectionProbe() throws Exception {
+        var stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("initial", "{}"));
+        runtimes.add(start(stream, 0));
+        var predecessor = TestSession.connected.get(5, TimeUnit.SECONDS);
+        // A completion from the retiring runtime still belongs to that runtime's probe.
+        predecessor.transportClosed.thenRun(() -> TestSession.connected.complete(predecessor));
+        resetSessionProbe();
+        assertFalse(TestSession.connected.isDone());
+    }
+
     @AfterEach
     void resetSessionProbe() {
         TestSession.holdFirstDispatch = false;
@@ -618,12 +630,13 @@ final class ZLinkStreamRuntimeIngressTest {
         TestSession.decodeWirePayload = false;
         TestSession.replyOnDispatch = false;
         TestSession.decodedWirePayload.set(null);
+        runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
+        runtimes.clear();
+        // Retiring callbacks finish before probes become visible to the next test.
         TestSession.created.clear();
         TestSession.createdCount.set(0);
         TestSession.lastSession.set(null);
         TestSession.connected = new CompletableFuture<>();
-        runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
-        runtimes.clear();
         lastRegistration = null;
     }
 

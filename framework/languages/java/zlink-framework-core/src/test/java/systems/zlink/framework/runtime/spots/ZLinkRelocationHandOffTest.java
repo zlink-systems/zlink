@@ -93,6 +93,39 @@ final class ZLinkRelocationHandOffTest {
         assertTrue(cutover.isCancelled());
     }
 
+    @Test
+    void recordsOneRelocationAndSourceLocalInterruptionAtCutoverTerminal() throws Exception {
+        try (var metrics =
+                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                        .install()) {
+            var cutover = new CompletableFuture<Void>();
+            var result =
+                    ZLinkRelocationHandOff.run(
+                            client(
+                                    new AtomicInteger(),
+                                    ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                                    cutover),
+                            request(),
+                            ignored -> CompletableFuture.completedFuture(null),
+                            Duration.ofSeconds(1),
+                            Instant.now(),
+                            System.nanoTime());
+            assertEquals(1, metrics.count("zlink.relocation.started"));
+            assertEquals(0, metrics.count("zlink.relocation.completed"));
+            assertEquals(0, metrics.count("zlink.relocation.interruption"));
+            cutover.complete(null);
+            assertEquals(
+                    ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                    result.toCompletableFuture().join());
+            assertEquals(
+                    "completed", metrics.only("zlink.relocation.completed").tags().get("outcome"));
+            assertEquals(1, metrics.count("zlink.relocation.duration"));
+            assertEquals(1, metrics.count("zlink.relocation.bytes"));
+            assertTrue(metrics.only("zlink.relocation.interruption").value() >= 0);
+            metrics.assertContractLabels();
+        }
+    }
+
     private static ZLinkSpotRetireControl.StageRequest request() {
         RoutingId source = RoutingId.from("source");
         RoutingId target = RoutingId.from("target");
