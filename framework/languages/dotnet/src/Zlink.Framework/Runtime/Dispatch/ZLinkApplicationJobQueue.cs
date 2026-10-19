@@ -205,14 +205,21 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         _receiveFlowController = new ZLinkReceiveFlowController(receiveFlowFailureReporter);
     }
 
-    internal async ValueTask<ZLinkApplicationJobQueueLease> AcquireAsync(
+    internal ValueTask<ZLinkApplicationJobQueueLease> AcquireAsync(
         CancellationToken cancellationToken,
         ZLinkApplicationJobOrigin origin
     )
     {
-        var reservation = await AcquireBatchAsync(1, cancellationToken, origin)
-            .ConfigureAwait(false);
-        return reservation.Claim()!;
+        // Queue-turn and failure-reporter exceptions keep their synchronous delivery.
+        return ClaimAsync(AcquireBatchAsync(1, cancellationToken, origin));
+
+        static async ValueTask<ZLinkApplicationJobQueueLease> ClaimAsync(
+            ValueTask<ZLinkApplicationJobQueueReservation> pending
+        )
+        {
+            var reservation = await pending.ConfigureAwait(false);
+            return reservation.Claim()!;
+        }
     }
 
     internal ValueTask<ZLinkApplicationJobQueueReservation> AcquireBatchAsync(

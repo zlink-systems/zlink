@@ -230,7 +230,9 @@ public sealed class ApplicationJobQueueTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task ReceiveRotation_TwoSourcesAtZeroCapacityWaitUntilCancellationOrClose(bool close)
+    public async Task ReceiveRotation_TwoSourcesAtZeroCapacityWaitUntilCancellationOrClose(
+        bool close
+    )
     {
         using var queue = new ZLinkApplicationJobQueue(
             new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
