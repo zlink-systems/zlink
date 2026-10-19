@@ -1,3 +1,4 @@
+import { encodeBoundSessionCloseCommand } from '../../packages/framework/src/runtime/protocol/service_wire_codec.generated';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
@@ -7888,3 +7889,100 @@ test('an unbound actor session fails at the send terminal, not while building th
     (error: Error) => /not bound/i.test(error.message)
   );
 });
+
+for (const remote of [false, true]) {
+  test(`bound Session close uses the physical close terminal and exact identity (remote=${remote})`, async () => {
+    let ingress: ((record: RawServiceIngressRecord) => Promise<unknown>) | undefined;
+    let physicalCloses = 0;
+    let resolveClose!: () => void;
+    const closeTerminal = new Promise<void>((resolve) => {
+      resolveClose = resolve;
+    });
+    const raw = {
+      topology: { peer: () => ({ descriptor: { lifecycleGeneration: 7n } }) },
+      observePeerRoute: () => ({ generation: 1n, ready: true }),
+      observePeerRouteChanged: () => () => {},
+      observePeerConnectionIntentRemoved: () => () => {},
+      setServiceIngress(handler: typeof ingress) {
+        ingress = handler;
+      },
+      reserveLocalIngress: async () => testIngressJobOwner(),
+      replyService(record: RawServiceIngressRecord, parts: readonly Buffer[]) {
+        record.reply?.(parts);
+      },
+      sendService: async () => true
+    } as unknown as RawServiceMeshRuntime;
+    const runtime = new ServiceStatefulRuntime(raw, 'session-owner', 7n);
+    const actor = runtime.createActor('close-actor').ref;
+    await runtime.bindSession(
+      'session-rid',
+      actor,
+      1_000,
+      async () => true,
+      undefined,
+      undefined,
+      async () => {
+        physicalCloses++;
+        await closeTerminal;
+      }
+    ).promise;
+    const binding = runtime.registry.binding(actor)!;
+    const request = {
+      command: 'boundSessionClose' as const,
+      flags: 0,
+      correlation: 17n,
+      actor: { actorId: actor.actorId, objectGeneration: actor.generation },
+      session: {
+        sessionOwnerNodeRid: Buffer.from('session-owner'),
+        sessionOwnerNodeGeneration: 7n,
+        sessionOwnerId: 'session-owner',
+        sessionOwnerLeaseGeneration: 7n,
+        sessionRid: Buffer.from('session-rid'),
+        retiredBindingGeneration: binding.bindingGeneration
+      }
+    };
+    async function send(value: typeof request): Promise<ReturnType<typeof decodeStatefulReply>> {
+      const frame = Buffer.from(encodeBoundSessionCloseCommand(value, {})[0]!);
+      return await new Promise((resolve, reject) => {
+        void ingress!(
+          withIngressOwner({
+            command: M6bServiceWireCommand.boundSessionClose,
+            flags: 0,
+            sourceRoutingId: remote ? 'actor-owner' : 'session-owner',
+            sourceNodeGeneration: 7n,
+            requestSequence: value.correlation,
+            parts: [frame],
+            reply: (parts: readonly Uint8Array[]) =>
+              resolve(decodeStatefulReply(parts[0]!, value.correlation, 'streamUnbind', false))
+          })
+        ).then((result) => {
+          if (result !== 'infrastructure') reject(new Error(`Close ingress rejected: ${result}`));
+        }, reject);
+      });
+    }
+    for (const session of [
+      { ...request.session, sessionOwnerNodeRid: Buffer.from('other-owner') },
+      { ...request.session, sessionOwnerNodeGeneration: 8n },
+      { ...request.session, sessionOwnerId: 'other-owner' },
+      { ...request.session, sessionOwnerLeaseGeneration: 8n },
+      { ...request.session, sessionRid: Buffer.from('other-session') },
+      { ...request.session, retiredBindingGeneration: binding.bindingGeneration + 1n }
+    ]) {
+      const result = await send({ ...request, session });
+      assert.notEqual(result.terminalResult, RequestResult.Ok);
+      assert.equal(physicalCloses, 0);
+    }
+    let replied = false;
+    const terminal = send(request).then((reply) => {
+      replied = true;
+      return reply;
+    });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(physicalCloses, 1);
+    assert.equal(replied, false, 'reply must follow transport close terminal');
+    resolveClose();
+    assert.equal((await terminal).terminalResult, RequestResult.Ok);
+    assert.notEqual(runtime.registry.binding(actor), undefined, 'close does not separately unbind');
+    runtime.close();
+  });
+}

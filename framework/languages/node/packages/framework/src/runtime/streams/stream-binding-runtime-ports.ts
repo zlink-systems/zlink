@@ -136,6 +136,7 @@ export interface ZLinkNativeFallbackBoundSessionPort {
   disconnectNativeBoundSession(
     node: ZLinkBackendActorSessionNode,
     actorRef: ActorRef,
+    timeoutMs: number,
     signal?: AbortSignal
   ): Promise<void>;
   disconnectBoundSession(actorId: string, signal?: AbortSignal): Promise<void>;

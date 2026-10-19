@@ -1464,18 +1464,9 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     expectedBindingGeneration: bigint,
     timeoutMs: number = DEFAULT_REQUEST_TIMEOUT_MS
   ): MeshOperationId {
-    const binding = this.requireStateful().registry.binding(actor);
-    if (binding === undefined) {
-      return this.observeImmediateFailure(OperationKind.StreamUnbind, RequestResult.NotFound);
-    }
     return this.observeStateful(
       OperationKind.StreamUnbind,
-      this.requireStateful().unbindSession(
-        binding.sessionRid,
-        actor,
-        expectedBindingGeneration,
-        timeoutMs
-      )
+      this.requireStateful().closeBoundSession(actor, expectedBindingGeneration, timeoutMs)
     );
   }
 
@@ -1722,15 +1713,6 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       (error) => this.deliverCompletion(id, operationKind, requestFailureResult(error))
     );
     return id;
-  }
-
-  private observeImmediateFailure(operationKind: number, terminalResult: number): MeshOperationId {
-    const low = this.nextPeerIntent++;
-    return this.observeCompletion(
-      low,
-      operationKind,
-      Promise.resolve({ terminalResult, failureCode: 0 })
-    );
   }
 
   private deliverCompletion(
@@ -2052,7 +2034,8 @@ class RawStreamSessionService implements StreamSessionService {
       retiredSession: ServiceRetiredBoundSessionRouteFence,
       actor: ServiceActorRef
     ) => void,
-    actorAuthority?: StreamSessionActorAuthorityFence
+    actorAuthority?: StreamSessionActorAuthorityFence,
+    close?: () => Promise<void>
   ): MeshOperationId {
     this.requireStarted();
     const sessionKey = String(sessionRid);
@@ -2065,7 +2048,8 @@ class RawStreamSessionService implements StreamSessionService {
         timeoutMs,
         (_targetSessionRid, payloadFrame) => this.deliver(sessionKey, actor.actorId, payloadFrame),
         onBindingReplaced,
-        actorAuthority
+        actorAuthority,
+        close
       )
     );
   }
