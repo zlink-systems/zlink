@@ -110,3 +110,114 @@ function wireValue(name) {
   assert.equal(new Set(found).size, 1, `wire name ${name}`);
   return found[0];
 }
+
+test('SourceRequestOwner propagates programming errors from Store reads', async () => {
+  const error = new TypeError('broken descriptor reader');
+  const resolver = new ZLinkRequestSourceResolver({
+    listLiveMeshNodes: async () => {
+      throw error;
+    },
+    remainingOwnerTokenLeaseMs: async () => 1000
+  });
+  await assert.rejects(resolver.accept('mesh', 'sender', 1n), (actual) => actual === error);
+});
+
+const {
+  ServiceStatefulRuntime
+} = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
+const {
+  encodeActorHeader,
+  M6bServiceWireCommand
+} = require('../../packages/framework/dist/runtime/foundation/service-stateful-wire-codec');
+const {
+  encodeApplicationPayload
+} = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
+
+test('SourceRequestOwner reports typed Store failure and retains its cause', async () => {
+  const cause = new Error('connection closed');
+  const error = new ZLinkFrameworkException(
+    ZLinkFrameworkErrorKind.Unavailable,
+    'Store offline',
+    cause
+  );
+  const resolver = new ZLinkRequestSourceResolver({
+    listLiveMeshNodes: async () => {
+      throw error;
+    },
+    remainingOwnerTokenLeaseMs: async () => 1000
+  });
+  await assert.rejects(resolver.accept('mesh', 'sender', 5n), (actual) => actual === error);
+  const events = [];
+  const replies = [];
+  const raw = {
+    setServiceIngress() {},
+    topology: { peer: () => ({ descriptor: { lifecycleGeneration: 5n } }) },
+    replyService: (_record, parts) => replies.push(parts)
+  };
+  const runtime = new ServiceStatefulRuntime(raw, 'local', 7n);
+  runtime.setDispatchErrorReporter(
+    { captureEnabled: () => true, report: (event) => events.push(event) },
+    'mesh'
+  );
+  runtime.setRequestSourceAcceptance((rid, generation) => resolver.accept('mesh', rid, generation));
+  assert.equal(
+    await runtime.ingress({
+      command: M6bServiceWireCommand.actorRequest,
+      flags: 0,
+      sourceRoutingId: 'sender',
+      requestSequence: 1n,
+      parts: [
+        encodeActorHeader(
+          'actorRequest',
+          {
+            actor: { nodeRid: 'local', actorId: 'actor', generation: 1n },
+            targetNodeGeneration: 7n,
+            authorityOwnerGeneration: 1n,
+            ownerLeaseGeneration: 1n
+          },
+          1n
+        ),
+        encodeApplicationPayload({
+          packetName: 'Probe',
+          contentType: 'application/json',
+          payload: Buffer.from('{}')
+        })
+      ]
+    }),
+    'infrastructure'
+  );
+  assert.equal(replies.length, 1);
+  assert.equal(events.length, 1);
+  assert.strictEqual(events[0].error, error);
+  assert.strictEqual(events[0].error.cause, cause);
+});
+
+for (const asynchronous of [false, true]) {
+  for (const local of [false, true]) {
+    test(`SourceRequestOwner records ingress once async=${asynchronous} local=${local}`, async () => {
+      const raw = {
+        setServiceIngress() {},
+        topology: { peer: () => ({ descriptor: { lifecycleGeneration: 5n } }) }
+      };
+      const runtime = new ServiceStatefulRuntime(raw, 'local', 7n);
+      const source = {
+        ownerId: 'owner',
+        leaseGeneration: 3n,
+        nodeRid: local ? 'local' : 'sender',
+        nodeGeneration: local ? 7n : 5n
+      };
+      let reads = 0;
+      runtime.setRequestSourceAcceptance((rid, generation) => {
+        reads++;
+        assert.equal(rid, source.nodeRid);
+        assert.equal(generation, source.nodeGeneration);
+        return asynchronous ? Promise.resolve(source) : source;
+      });
+      const ingress = { sourceRoutingId: source.nodeRid };
+      await runtime.acceptRequestSource(ingress);
+      assert.strictEqual(ingress.requestSource, source);
+      await runtime.acceptRequestSource(ingress);
+      assert.equal(reads, 1);
+    });
+  }
+}

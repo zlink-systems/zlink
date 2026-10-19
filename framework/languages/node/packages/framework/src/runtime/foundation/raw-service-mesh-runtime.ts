@@ -103,6 +103,8 @@ type RawServiceChannelTargetSelection =
 type ServiceApplicationPayloadInput = ServiceApplicationPayload | Buffer;
 
 export interface RawServiceIngressRecord {
+  /** Source identity recorded once by the first accepting owner (Location runtime §9.3). */
+  requestSource?: import('../locations/request-source-resolver').ZLinkRequestSourceFence;
   readonly onAdmitted?: () => void;
   readonly command: number;
   readonly flags: number;
