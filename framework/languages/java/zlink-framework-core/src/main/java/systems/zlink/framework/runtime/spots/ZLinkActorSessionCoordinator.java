@@ -13,6 +13,7 @@ import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalAct
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.spots.ZLinkSpot;
 
@@ -240,7 +241,7 @@ final class ZLinkActorSessionCoordinator {
         return requireActors().hasBoundSession(actor);
     }
 
-    Optional<ZLinkActorRuntime.BoundSessionRouteSnapshot> boundSessionRoute(String actorId) {
+    Optional<ZLinkInternalSpotNode.BoundSessionRoute> boundSessionRoute(String actorId) {
         ZLinkActor actor =
                 localActor(actorId)
                         .orElseThrow(

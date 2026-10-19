@@ -7,6 +7,7 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.spots.ZLinkSpot;
 
 import java.time.Duration;
@@ -157,6 +158,21 @@ final class ZLinkActorContextState {
         if (claim != null) {
             deferredJoinClaim.compareAndSet(claim, null);
         }
+    }
+
+    /**
+     * The SpotNode that holds this Actor's current binding record, or {@code null} when the binding
+     * has no SpotNode record. That record owns the binding facts, including the Session owner
+     * identity (Session-Actor binding §4).
+     */
+    ZLinkInternalSpotNode bindingSpotNode() {
+        if (boundSession instanceof ZLinkNativeBoundSessionRuntime runtime) {
+            return runtime.spotNode();
+        }
+        if (boundSession instanceof ZLinkBoundSessionRuntime runtime) {
+            return runtime.spotNode();
+        }
+        return null;
     }
 
     ZLinkBoundSession requireBoundSession() {

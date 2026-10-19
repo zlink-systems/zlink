@@ -175,8 +175,12 @@ final class EntrySpotActorDispatchTests {
                 backend.node.canonicalBoundSessionRoute =
                         Optional.of(
                                 new ZLinkInternalSpotNode.BoundSessionRoute(
-                                        RoutingId.from("binding-owner"), -1L,
-                                        RoutingId.from("bound-session"), 7L));
+                                        RoutingId.from("binding-owner"),
+                                        -1L,
+                                        "binding-owner-host",
+                                        1L,
+                                        RoutingId.from("bound-session"),
+                                        7L));
                 backend.node.announceSessionBinding(actors.currentRef(actor));
                 assertEquals(7L, actors.boundSessionRoute(actor).orElseThrow().bindingGeneration());
             }
@@ -622,6 +626,8 @@ final class EntrySpotActorDispatchTests {
                         new ZLinkInternalSpotNode.BoundSessionRoute(
                                 RoutingId.from("source-node"),
                                 17,
+                                "source-owner",
+                                1,
                                 RoutingId.from("source-session"),
                                 sessionOwnerBindingGeneration));
         try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
@@ -1820,6 +1826,8 @@ final class EntrySpotActorDispatchTests {
                 Optional.of(
                         new ZLinkInternalSpotNode.BoundSessionRoute(
                                 RoutingId.from("source-node"),
+                                1,
+                                "source-owner",
                                 1,
                                 RoutingId.from("source-session"),
                                 7));
