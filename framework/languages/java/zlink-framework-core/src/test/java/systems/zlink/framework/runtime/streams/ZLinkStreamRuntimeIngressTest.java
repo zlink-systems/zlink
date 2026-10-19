@@ -102,6 +102,30 @@ final class ZLinkStreamRuntimeIngressTest {
     private ZLinkFrameworkRegistration lastRegistration;
 
     @Test
+    void streamMetricsUseStartupTlsRegistrationInsteadOfEndpointScheme() throws Exception {
+        var stream = new FakeStream();
+        try (var metrics =
+                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                        .install()) {
+            var runtime =
+                    start(
+                            stream,
+                            0,
+                            65536,
+                            registration ->
+                                    registration
+                                            .streamNodes()
+                                            .getFirst()
+                                            .setTlsServer("certificate.pem", "key.pem", false));
+            runtimes.add(runtime);
+            stream.enqueue(PEER_A, frame("initial", "{}"));
+            TestSession.connected.get(5, TimeUnit.SECONDS);
+            assertEquals(
+                    "tls", metrics.only("zlink.stream.connections.opened").tags().get("transport"));
+        }
+    }
+
+    @Test
     void heartbeatContractConnectionWithoutInboundClosesAtTimeout() throws Exception {
         FakeStream stream = new FakeStream();
         var clock = new java.util.concurrent.atomic.AtomicLong();
@@ -608,8 +632,22 @@ final class ZLinkStreamRuntimeIngressTest {
         }
     }
 
+    @Test
+    void cleanupKeepsPredecessorCompletionsOutOfTheNextConnectionProbe() throws Exception {
+        var stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("initial", "{}"));
+        runtimes.add(start(stream, 0));
+        var predecessor = TestSession.connected.get(5, TimeUnit.SECONDS);
+        // A completion from the retiring runtime still belongs to that runtime's probe.
+        predecessor.transportClosed.thenRun(() -> TestSession.connected.complete(predecessor));
+        resetSessionProbe();
+        assertFalse(TestSession.connected.isDone());
+    }
+
     @AfterEach
     void resetSessionProbe() {
+        runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
+        runtimes.clear();
         TestSession.holdFirstDispatch = false;
         TestSession.failNextConstruction = false;
         TestSession.constructionHook = null;
@@ -618,12 +656,13 @@ final class ZLinkStreamRuntimeIngressTest {
         TestSession.decodeWirePayload = false;
         TestSession.replyOnDispatch = false;
         TestSession.decodedWirePayload.set(null);
+        runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
+        runtimes.clear();
+        // Retiring callbacks finish before probes become visible to the next test.
         TestSession.created.clear();
         TestSession.createdCount.set(0);
         TestSession.lastSession.set(null);
         TestSession.connected = new CompletableFuture<>();
-        runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
-        runtimes.clear();
         lastRegistration = null;
     }
 
@@ -632,7 +671,15 @@ final class ZLinkStreamRuntimeIngressTest {
     void reportsTransportCallbacksThroughPublicSessionMethods(String message) throws Exception {
         FakeStream stream = new FakeStream();
         stream.enqueue(PEER_A, frame("initial", "{}"));
-        runtimes.add(start(stream, 0));
+        runtimes.add(
+                start(
+                        stream,
+                        0,
+                        64 * 1024,
+                        registration ->
+                                registration
+                                        .dispatchOptions()
+                                        .messageFlow(ZLinkMessageFlowLogMode.NORMAL)));
         TestSession session = TestSession.connected.get(5, TimeUnit.SECONDS);
         stream.errorHandler.handle(
                 PEER_A,
@@ -648,6 +695,26 @@ final class ZLinkStreamRuntimeIngressTest {
                                         List.of("error:transport failure", "disconnected"))
                         .get(message);
         assertEquals(expected, session.transportClosed.get(5, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void cleanupKeepsSessionProbeUntilRuntimeCallbacksFinish() throws Exception {
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("initial", "{}"));
+        runtimes.add(start(stream, 0));
+        CompletableFuture<TestSession> probe = TestSession.connected;
+        TestSession session = probe.get(5, TimeUnit.SECONDS);
+        var observed =
+                session.transportClosed.thenRun(
+                        () ->
+                                assertSame(
+                                        probe,
+                                        TestSession.connected,
+                                        "runtime callbacks must finish before the shared probe resets"));
+
+        resetSessionProbe();
+
+        observed.join();
     }
 
     @Test

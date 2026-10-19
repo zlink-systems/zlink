@@ -101,6 +101,9 @@ final class ZLinkLocationRuntimeRecoveryTest {
                                                 }
                                             }
                                         })) {
+            runtime.metricScopes(
+                    java.util.List.of(
+                            java.util.Map.of("scope_kind", "mesh", "scope_name", "test-mesh")));
             runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
             assertTrue(submitted.await(3, TimeUnit.SECONDS));
             assertTrue(restarted.get());

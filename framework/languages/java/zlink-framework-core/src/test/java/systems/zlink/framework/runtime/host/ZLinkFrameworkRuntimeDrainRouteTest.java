@@ -34,102 +34,106 @@ final class ZLinkFrameworkRuntimeDrainRouteTest {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.addFanoutChannel("manual-events")
                 .enablePublisher("inproc://manual-events-" + UUID.randomUUID());
-        ZLinkFrameworkRuntime runtime =
+        try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
-                        options, new ZLinkJavaBackendAdapterFactory());
-        long readyDeadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
-        while (!runtime.isReady() && System.nanoTime() < readyDeadline) {
-            Thread.sleep(1);
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            long readyDeadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+            while (!runtime.isReady() && System.nanoTime() < readyDeadline) {
+                Thread.sleep(1);
+            }
+
+            ZLinkFrameworkRelocationResult result =
+                    runtime.relocate(
+                                    new ZLinkFrameworkRelocationOptions(
+                                            ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE,
+                                            null,
+                                            Duration.ofSeconds(1)))
+                            .toCompletableFuture()
+                            .get(2, TimeUnit.SECONDS);
+
+            assertEquals(ZLinkFrameworkRelocationOutcome.BLOCKED, result.outcome());
+            assertEquals(
+                    ZLinkFrameworkRelocationReason.MANUAL_TOPOLOGY_UNSUPPORTED, result.reason());
+            assertEquals(ZLinkFrameworkRuntimeState.SERVING, runtime.status().state());
+            runtime.shutdown(Duration.ofSeconds(1)).toCompletableFuture().get(2, TimeUnit.SECONDS);
         }
-
-        ZLinkFrameworkRelocationResult result =
-                runtime.relocate(
-                                new ZLinkFrameworkRelocationOptions(
-                                        ZLinkFrameworkRelocationMode.PLANNED_MAINTENANCE,
-                                        null,
-                                        Duration.ofSeconds(1)))
-                        .toCompletableFuture()
-                        .get(2, TimeUnit.SECONDS);
-
-        assertEquals(ZLinkFrameworkRelocationOutcome.BLOCKED, result.outcome());
-        assertEquals(ZLinkFrameworkRelocationReason.MANUAL_TOPOLOGY_UNSUPPORTED, result.reason());
-        assertEquals(ZLinkFrameworkRuntimeState.SERVING, runtime.status().state());
-        runtime.shutdown(Duration.ofSeconds(1)).toCompletableFuture().get(2, TimeUnit.SECONDS);
     }
 
     @Test
     void shutdownPublishesTheHostWideTerminalContract() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
-        ZLinkFrameworkRuntime runtime =
+        try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
-                        options, new ZLinkJavaBackendAdapterFactory());
-        long deadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
-        while (!runtime.isReady() && System.nanoTime() < deadline) {
-            Thread.sleep(1);
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            long deadline = System.nanoTime() + Duration.ofSeconds(1).toNanos();
+            while (!runtime.isReady() && System.nanoTime() < deadline) {
+                Thread.sleep(1);
+            }
+            CompletableFuture<ZLinkFrameworkTerminationResult> observed = new CompletableFuture<>();
+            runtime.observe()
+                    .subscribe(
+                            new Flow.Subscriber<>() {
+                                @Override
+                                public void onSubscribe(Flow.Subscription subscription) {
+                                    subscription.request(Long.MAX_VALUE);
+                                }
+
+                                @Override
+                                public void onNext(
+                                        systems.zlink.framework.monitoring.ZLinkObservedStatus<
+                                                        systems.zlink.framework.monitoring
+                                                                .ZLinkFrameworkRuntimeStatus>
+                                                observedStatus) {
+                                    observedStatus
+                                            .status()
+                                            .terminationResult()
+                                            .ifPresent(observed::complete);
+                                }
+
+                                @Override
+                                public void onError(Throwable throwable) {
+                                    observed.completeExceptionally(throwable);
+                                }
+
+                                @Override
+                                public void onComplete() {}
+                            });
+
+            ZLinkFrameworkTerminationResult result =
+                    runtime.shutdown(Duration.ofSeconds(1))
+                            .toCompletableFuture()
+                            .get(2, TimeUnit.SECONDS);
+
+            assertEquals(ZLinkFrameworkTerminationOutcome.STOPPED, result.outcome());
+            assertEquals(ZLinkFrameworkTerminationReason.NONE, result.reason());
+            assertEquals(ZLinkFrameworkRuntimeState.STOPPED, runtime.status().state());
+            assertEquals(result, runtime.status().terminationResult().orElseThrow());
+            assertEquals(result, observed.get(1, TimeUnit.SECONDS));
         }
-        CompletableFuture<ZLinkFrameworkTerminationResult> observed = new CompletableFuture<>();
-        runtime.observe()
-                .subscribe(
-                        new Flow.Subscriber<>() {
-                            @Override
-                            public void onSubscribe(Flow.Subscription subscription) {
-                                subscription.request(Long.MAX_VALUE);
-                            }
-
-                            @Override
-                            public void onNext(
-                                    systems.zlink.framework.monitoring.ZLinkObservedStatus<
-                                                    systems.zlink.framework.monitoring
-                                                            .ZLinkFrameworkRuntimeStatus>
-                                            observedStatus) {
-                                observedStatus
-                                        .status()
-                                        .terminationResult()
-                                        .ifPresent(observed::complete);
-                            }
-
-                            @Override
-                            public void onError(Throwable throwable) {
-                                observed.completeExceptionally(throwable);
-                            }
-
-                            @Override
-                            public void onComplete() {}
-                        });
-
-        ZLinkFrameworkTerminationResult result =
-                runtime.shutdown(Duration.ofSeconds(1))
-                        .toCompletableFuture()
-                        .get(2, TimeUnit.SECONDS);
-
-        assertEquals(ZLinkFrameworkTerminationOutcome.STOPPED, result.outcome());
-        assertEquals(ZLinkFrameworkTerminationReason.NONE, result.reason());
-        assertEquals(ZLinkFrameworkRuntimeState.STOPPED, runtime.status().state());
-        assertEquals(result, runtime.status().terminationResult().orElseThrow());
-        assertEquals(result, observed.get(1, TimeUnit.SECONDS));
     }
 
     @Test
     void synchronousDrainStartFailureCompletesConcurrentShutdownWithOneTerminal() throws Exception {
-        ZLinkFrameworkRuntime runtime =
+        try (ZLinkFrameworkRuntime runtime =
                 ZLinkFrameworkRuntimeTestAccess.start(
-                        new DefaultZLinkFrameworkOptions(), new ZLinkJavaBackendAdapterFactory());
-        long readyDeadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (!runtime.isReady() && System.nanoTime() < readyDeadline) {
-            Thread.sleep(1);
-        }
-        assertTrue(runtime.isReady());
-        var drainsField = ZLinkFrameworkRuntime.class.getDeclaredField("meshDrains");
-        drainsField.setAccessible(true);
-        drainsField.set(runtime, null);
+                        new DefaultZLinkFrameworkOptions(), new ZLinkJavaBackendAdapterFactory())) {
+            long readyDeadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
+            while (!runtime.isReady() && System.nanoTime() < readyDeadline) {
+                Thread.sleep(1);
+            }
+            assertTrue(runtime.isReady());
+            var drainsField = ZLinkFrameworkRuntime.class.getDeclaredField("meshDrains");
+            drainsField.setAccessible(true);
+            drainsField.set(runtime, null);
 
-        var first = runtime.shutdown(Duration.ofSeconds(2)).toCompletableFuture();
-        var concurrent = runtime.shutdown(Duration.ofSeconds(2)).toCompletableFuture();
-        var result = first.get(3, TimeUnit.SECONDS);
-        assertEquals(ZLinkFrameworkTerminationOutcome.FORCE_STOPPED, result.outcome());
-        assertEquals(ZLinkFrameworkTerminationReason.TEARDOWN_FAILED, result.reason());
-        assertEquals(result, concurrent.get(3, TimeUnit.SECONDS));
-        assertEquals(result, runtime.status().terminationResult().orElseThrow());
+            var first = runtime.shutdown(Duration.ofSeconds(2)).toCompletableFuture();
+            var concurrent = runtime.shutdown(Duration.ofSeconds(2)).toCompletableFuture();
+            var result = first.get(3, TimeUnit.SECONDS);
+            assertEquals(ZLinkFrameworkTerminationOutcome.FORCE_STOPPED, result.outcome());
+            assertEquals(ZLinkFrameworkTerminationReason.TEARDOWN_FAILED, result.reason());
+            assertEquals(result, concurrent.get(3, TimeUnit.SECONDS));
+            assertEquals(result, runtime.status().terminationResult().orElseThrow());
+        }
     }
 
     @Test

@@ -915,6 +915,215 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ValueTask
     >? _boundSessionCloseHandler;
 
+    private Func<
+        RoutingId,
+        ulong,
+        ServiceWireCodec.BoundSessionBind38,
+        Action,
+        CancellationToken,
+        ValueTask
+    >? _boundSessionBindHandler;
+
+    internal void SetBoundSessionBindHandler(
+        Func<
+            RoutingId,
+            ulong,
+            ServiceWireCodec.BoundSessionBind38,
+            Action,
+            CancellationToken,
+            ValueTask
+        > handler
+    ) => RunState(() => _boundSessionBindHandler = handler);
+
+    internal async ValueTask<ServiceWireCodec.RequestSpecificTailCase2?> BindBoundSessionAsync(
+        ServiceWireCodec.BoundSessionBind38 request,
+        TimeSpan timeout,
+        CancellationToken cancellationToken
+    )
+    {
+        var correlation = request.Correlation.Value;
+        var encoded = ServiceWireCodec.EncodeBoundSessionBind38(
+            request,
+            ServiceWireCodec.DecodeContext.Empty
+        );
+        var target = RoutingId.From(request.Actor.TargetNodeRid.Value);
+        if (target == _routingId)
+        {
+            try
+            {
+                await AcceptBoundSessionBindAsync(
+                        ServiceWireCodec.DecodeBoundSessionBind38(
+                            encoded,
+                            ServiceWireCodec.DecodeContext.Empty
+                        ),
+                        _routingId,
+                        _lifecycleGeneration,
+                        static () => { },
+                        cancellationToken
+                    )
+                    .AsTask()
+                    .WaitAsync(timeout, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            catch (TimeoutException error)
+            {
+                throw ZLinkRequestFailureMapper.CreateTimedOutRequestException(
+                    "Bound-session bind timed out.",
+                    error
+                );
+            }
+            catch (Exception error) when (error is not OperationCanceledException)
+            {
+                var failure = ZLinkRequestFailureMapper.TargetFailureReply(error);
+                throw ZLinkRequestFailureMapper.CreateCompletionException(
+                    failure.Result,
+                    (int)failure.FailureCode,
+                    "Bound-session bind"
+                );
+            }
+            return request.Binding is ServiceWireCodec.BoundSessionBindingTransitionCase0 active
+                ? new(active.BindingGeneration, request.Actor.ExpectedAuthorityOwnerGeneration)
+                : null;
+        }
+        using var lifetime = new NativeDurableRequestLifetime(this, target);
+        var replyParts = await RequestNativeDurableWireAsync(
+                target,
+                request.Actor.TargetNodeGeneration.Value,
+                encoded.Select(frame => (ReadOnlyMemory<byte>)frame).ToArray(),
+                _deadlineTimeProvider.GetTimestamp(),
+                timeout,
+                cancellationToken,
+                lifetime
+            )
+            .ConfigureAwait(false);
+        try
+        {
+            var context = ServiceWireCodec.DecodeContext.Empty with
+            {
+                OriginalOperationKind =
+                    request.Binding is ServiceWireCodec.BoundSessionBindingTransitionCase0
+                        ? ServiceWireCodec.MeshOperationKind.StreamBind
+                        : ServiceWireCodec.MeshOperationKind.StreamUnbind,
+            };
+            var reply = ServiceWireCodec.DecodeReply20(
+                replyParts.Select(part => part.ToArray()).ToArray(),
+                context
+            );
+            if (reply.Correlation.Value != correlation)
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.ProtocolError,
+                    "Invalid bound-session bind reply correlation."
+                );
+            if (reply.TerminalResult != ServiceWireCodec.RequestTerminalResult.Ok)
+                throw ZLinkRequestFailureMapper.CreateCompletionException(
+                    (RequestResult)reply.TerminalResult,
+                    checked((int)reply.FailureCode),
+                    "Bound-session bind"
+                );
+            return reply.Tail as ServiceWireCodec.RequestSpecificTailCase2;
+        }
+        catch (Exception error)
+            when (error is System.IO.InvalidDataException or System.IO.EndOfStreamException)
+        {
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                "Invalid bound-session bind reply.",
+                innerException: error
+            );
+        }
+        finally
+        {
+            DisposeParts(replyParts);
+        }
+    }
+
+    private ValueTask AcceptBoundSessionBindAsync(
+        ServiceWireCodec.BoundSessionBind38 request,
+        RoutingId source,
+        ulong sourceGeneration,
+        Action reply,
+        CancellationToken cancellationToken
+    )
+    {
+        var handler = RunState(() => _boundSessionBindHandler);
+        if (handler is null)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                "Actor binding owner is unavailable."
+            );
+        return handler(source, sourceGeneration, request, reply, cancellationToken);
+    }
+
+    private void ProcessBoundSessionBind(
+        RoutingId sourceRid,
+        ReplyOperation nativeReply,
+        ServiceWireCodec.BoundSessionBind38 request
+    )
+    {
+        var generation = ResolvePeerGeneration(sourceRid);
+        RunInboundOperation(async () =>
+        {
+            try
+            {
+                await AcceptBoundSessionBindAsync(
+                        request,
+                        sourceRid,
+                        generation,
+                        () => SendTerminal(RequestResult.Ok, 0),
+                        _stop?.Token ?? CancellationToken.None
+                    )
+                    .ConfigureAwait(false);
+            }
+            catch (ZlinkSubmitException error)
+            {
+                ZLinkFrameworkDebugLog.TaskFailure("bound-session-bind-terminal", error);
+                Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceRid);
+            }
+            catch (Exception error)
+            {
+                var failure = ZLinkRequestFailureMapper.TargetFailureReply(error);
+                SendTerminal(failure.Result, (uint)failure.FailureCode);
+            }
+        });
+        void SendTerminal(RequestResult result, uint failure)
+        {
+            var submitted = SendNativeInfrastructureTerminal(
+                sourceRid,
+                nativeReply,
+                new ReadOnlyMemory<byte>[]
+                {
+                    ServiceWireCodec.EncodeReply20(
+                        new(
+                            0,
+                            request.Correlation,
+                            (ServiceWireCodec.RequestTerminalResult)result,
+                            (ServiceWireCodec.FrameworkErrorCode)failure,
+                            result == RequestResult.Ok
+                            && request.Binding
+                                is ServiceWireCodec.BoundSessionBindingTransitionCase0 active
+                                ? new ServiceWireCodec.RequestSpecificTailCase2(
+                                    active.BindingGeneration,
+                                    request.Actor.ExpectedAuthorityOwnerGeneration
+                                )
+                                : new ServiceWireCodec.RequestSpecificTailOtherwise(),
+                            null
+                        ),
+                        ServiceWireCodec.DecodeContext.Empty with
+                        {
+                            OriginalOperationKind =
+                                request.Binding
+                                is ServiceWireCodec.BoundSessionBindingTransitionCase0
+                                    ? ServiceWireCodec.MeshOperationKind.StreamBind
+                                    : ServiceWireCodec.MeshOperationKind.StreamUnbind,
+                        }
+                    )[0],
+                }
+            );
+            if (submitted != SubmitResult.Ok)
+                throw new ZlinkSubmitException((ZlinkSubmitException.ErrorCode)(int)submitted);
+        }
+    }
+
     internal void SetBoundSessionCloseHandler(
         Func<ServiceWireCodec.BoundSessionClose54, CancellationToken, ValueTask> handler
     ) => RunState(() => _boundSessionCloseHandler = handler);
@@ -6051,6 +6260,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 or ServiceWireConstants.Command.MessageFollow
                 or ServiceWireConstants.Command.BoundSessionReplaced
                 or ServiceWireConstants.Command.BoundSessionClose
+                or ServiceWireConstants.Command.BoundSessionBind
                 or ServiceWireConstants.Command.SessionRelocationSeal
                 or ServiceWireConstants.Command.SessionRelocationSealed
                 or ServiceWireConstants.Command.SessionRelocationRoute;
@@ -6180,6 +6390,25 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         Func<SendOperation> captureSourceSend
     )
     {
+        if (head[3] == (byte)ServiceWireConstants.Command.BoundSessionBind)
+        {
+            if (replyToken is null)
+                return false;
+            ServiceWireCodec.BoundSessionBind38 request;
+            try
+            {
+                request = ServiceWireCodec.DecodeBoundSessionBind38(
+                    head,
+                    ServiceWireCodec.DecodeContext.Empty
+                );
+            }
+            catch (System.IO.InvalidDataException)
+            {
+                return false;
+            }
+            ProcessBoundSessionBind(sourceRid, captureNativeReply(), request);
+            return true;
+        }
         if (head[3] == (byte)ServiceWireConstants.Command.BoundSessionClose)
         {
             if (replyToken is null)

@@ -450,7 +450,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 await AdmitOperationAsync(countAsRequest: true).ConfigureAwait(false)
             ).Enter();
             var metric = ZLinkRuntimeMetrics.StartRequest(routerChannelId, "spot");
-            var outcome = "completed";
+            var outcome = ZLinkRuntimeMetrics.RequestCompleted;
             try
             {
                 await EnsureKnownRouteMeshPeerAsync(
@@ -479,19 +479,13 @@ internal sealed partial class ZLinkFrameworkRuntime
                     )
                     .ConfigureAwait(false);
             }
-            catch (TimeoutException)
+            catch (Exception error)
             {
-                outcome = "timed_out";
-                throw;
-            }
-            catch (OperationCanceledException)
-            {
-                outcome = "cancelled";
-                throw;
-            }
-            catch
-            {
-                outcome = "failed";
+                outcome = ZLinkRuntimeMetrics.RequestFailureOutcome(
+                    error,
+                    cancellationToken,
+                    this.ShutdownToken
+                );
                 throw;
             }
             finally

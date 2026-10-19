@@ -73,6 +73,23 @@ public final class StreamNodeRegistration {
         return sessionType;
     }
 
+    java.util.Map<String, String> metricTags() {
+        return tlsServer == null ? PLAIN_METRIC_TAGS : TLS_METRIC_TAGS;
+    }
+
+    private static final java.util.Map<String, String> PLAIN_METRIC_TAGS =
+            java.util.Map.of(
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Tag
+                            .TRANSPORT
+                            .wire(),
+                    "tcp");
+    private static final java.util.Map<String, String> TLS_METRIC_TAGS =
+            java.util.Map.of(
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Tag
+                            .TRANSPORT
+                            .wire(),
+                    "tls");
+
     public TlsServerRegistration tlsServer() {
         return tlsServer;
     }

@@ -59,13 +59,17 @@ public sealed class NodesAndServicesTests : RegistrationValidationSupport
 
         services.AddZLinkFramework(_ => { });
 
-        Assert.Contains(
+        Assert.DoesNotContain(
             services,
-            descriptor => descriptor.ServiceType == typeof(ZLinkRemoteSessionBindRouteHandler)
-        );
-        Assert.Contains(
-            services,
-            descriptor => descriptor.ServiceType == typeof(ZLinkRemoteSessionUnbindRouteHandler)
+            descriptor =>
+                descriptor.ServiceType.Name.StartsWith(
+                    "ZLinkRemoteSessionBind",
+                    StringComparison.Ordinal
+                )
+                || descriptor.ServiceType.Name.StartsWith(
+                    "ZLinkRemoteSessionUnbind",
+                    StringComparison.Ordinal
+                )
         );
         Assert.DoesNotContain(
             services,

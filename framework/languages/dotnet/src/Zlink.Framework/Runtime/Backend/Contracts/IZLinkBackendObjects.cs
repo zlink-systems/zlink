@@ -341,3 +341,22 @@ internal interface IZLinkBackendBoundSessionClose
         CancellationToken cancellationToken
     );
 }
+
+internal interface IZLinkBackendBoundSessionBind
+{
+    void SetBoundSessionBindHandler(
+        Func<
+            RoutingId,
+            ulong,
+            Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBind38,
+            Action,
+            CancellationToken,
+            ValueTask
+        > handler
+    );
+    ValueTask<Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.RequestSpecificTailCase2?> BindBoundSessionAsync(
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBind38 request,
+        TimeSpan timeout,
+        CancellationToken cancellationToken
+    );
+}

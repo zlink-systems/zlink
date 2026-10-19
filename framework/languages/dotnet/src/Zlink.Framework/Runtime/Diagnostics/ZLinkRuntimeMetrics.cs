@@ -14,6 +14,27 @@ internal static class ZLinkRuntimeMetrics
     internal const string RequestTimedOut = "timed_out";
     internal const string RequestCancelled = "cancelled";
     internal const string RequestFailed = "failed";
+    internal const string RequestShutdown = "shutdown";
+
+    internal static string RequestFailureOutcome(
+        Exception error,
+        CancellationToken caller,
+        CancellationToken shutdown
+    ) =>
+        error switch
+        {
+            TimeoutException => RequestTimedOut,
+            ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.DeadlineExceeded } =>
+                RequestTimedOut,
+            ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.ShuttingDown } =>
+                RequestShutdown,
+            OperationCanceledException cancelled
+                when shutdown.IsCancellationRequested && cancelled.CancellationToken == shutdown =>
+                RequestShutdown,
+            OperationCanceledException when caller.IsCancellationRequested => RequestCancelled,
+            OperationCanceledException when shutdown.IsCancellationRequested => RequestShutdown,
+            _ => RequestFailed,
+        };
 
     private const string TransportTag = "transport";
     private const string MeshNameTag = "mesh_name";
@@ -210,6 +231,10 @@ internal static class ZLinkRuntimeMetrics
             () => ObserveInstanceSpot(static instance => checked((long)instance.PendingBytes)),
             BytesUnit
         );
+    private static readonly Counter<long> InstanceSpotTakeovers = Meter.CreateCounter<long>(
+        "zlink.instance_spot.takeovers",
+        "{takeover}"
+    );
     private static readonly Counter<long> InstanceSpotClaimConflicts = Meter.CreateCounter<long>(
         "zlink.instance_spot.claim.conflicts",
         "{claim}"
@@ -632,6 +657,31 @@ internal static class ZLinkRuntimeMetrics
         return operation;
     }
 
+    internal static bool InstanceSpotTakeoversEnabled => InstanceSpotTakeovers.Enabled;
+
+    internal static void RecordInstanceSpotTakeover(
+        string meshName,
+        string instanceSpotType,
+        ZLinkInstanceSpotTakeoverOutcome outcome
+    )
+    {
+        var tags = new TagList
+        {
+            { MeshNameTag, meshName },
+            { InstanceSpotTypeTag, instanceSpotType },
+            {
+                OutcomeTag,
+                outcome switch
+                {
+                    ZLinkInstanceSpotTakeoverOutcome.Claimed => "claimed",
+                    ZLinkInstanceSpotTakeoverOutcome.Lost => "lost",
+                    _ => "failed",
+                }
+            },
+        };
+        SafeAdd(InstanceSpotTakeovers, 1, tags);
+    }
+
     public static void RecordInstanceSpotClaimConflict(
         string meshName,
         string instanceSpotType,
@@ -716,11 +766,15 @@ internal static class ZLinkRuntimeMetrics
                 ("spot", snapshot.SpotCapacity),
             }
         )
+        {
+            if (capacity is null)
+                continue;
             yield return new Measurement<long>(
                 Math.Max(0, select(capacity)),
                 new KeyValuePair<string, object?>(MeshNameTag, snapshot.MeshName),
                 new KeyValuePair<string, object?>("capacity_scope", scope)
             );
+        }
     }
 
     private static IEnumerable<Measurement<long>> ObserveSpotTypeCapacity(
@@ -1457,8 +1511,8 @@ internal sealed record ZLinkRuntimeMetricMeshSnapshot(
     long ConnectedPeers,
     long ReadyPeers,
     IReadOnlyList<ZLinkRuntimeMetricChannel> Channels,
-    ZLinkRuntimeMetricCapacity ActorCapacity,
-    ZLinkRuntimeMetricCapacity SpotCapacity,
+    ZLinkRuntimeMetricCapacity? ActorCapacity,
+    ZLinkRuntimeMetricCapacity? SpotCapacity,
     IReadOnlyList<ZLinkRuntimeMetricSpotTypeCapacity> SpotTypeCapacities,
     ZLinkRuntimeMetricActivation Activation,
     IReadOnlyList<ZLinkRuntimeMetricInstanceSpot> InstanceSpots
@@ -1483,3 +1537,10 @@ internal sealed record ZLinkRuntimeMetricInstanceSpot(
     ulong PendingMessages,
     ulong PendingBytes
 );
+
+internal enum ZLinkInstanceSpotTakeoverOutcome
+{
+    Claimed,
+    Lost,
+    Failed,
+}

@@ -330,6 +330,11 @@ final class ZLinkUserSpotRetireSourceBuilder {
             Admission admission,
             ZLinkStoreCancellation cancellation,
             CompletionStage<?> cancellationSignal) {
+        var metrics =
+                new ZLinkRelocationMetricOperation(
+                        meshName,
+                        systems.zlink.framework.locations.ZLinkPlacementObjectKind.USER_SPOT,
+                        isSnapshot(admission.inventory().spot().policy()));
         ZLinkUserSpotRelocationBarrier barrier =
                 spots.relocationBarrier(admission.inventory().spot().id(), actors);
         return barrier.sealForRelocation(
@@ -365,7 +370,12 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                     admission,
                                     cancellation,
                                     barrier,
-                                    sealedResult.orElseThrow());
+                                    sealedResult.orElseThrow(),
+                                    metrics);
+                        })
+                .whenComplete(
+                        (prepared, failure) -> {
+                            if (failure != null) metrics.complete(null, failure);
                         });
     }
 
@@ -374,7 +384,9 @@ final class ZLinkUserSpotRetireSourceBuilder {
             Admission admission,
             ZLinkStoreCancellation cancellation,
             ZLinkUserSpotRelocationBarrier barrier,
-            ZLinkUserSpotRelocationBarrier.Seal seal) {
+            ZLinkUserSpotRelocationBarrier.Seal seal,
+            ZLinkRelocationMetricOperation metrics) {
+        metrics.sealed(System.nanoTime());
         AtomicReference<List<SealedSessionRoute>> sealedSessions = new AtomicReference<>(List.of());
         return readInventory(
                         admission.inventory().spot().id(), seal.participantActorIds(), cancellation)
@@ -454,6 +466,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                                                 }
                                                 return CompletableFuture.completedFuture(
                                                         new PreparedSource(
+                                                                metrics,
                                                                 barrier,
                                                                 seal,
                                                                 exact,
@@ -1181,6 +1194,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
     }
 
     static final class PreparedSource {
+        final ZLinkRelocationMetricOperation metrics;
         private final ZLinkUserSpotRelocationBarrier barrier;
         private final ZLinkUserSpotRelocationBarrier.Seal seal;
         private final Captured captured;
@@ -1221,6 +1235,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
         }
 
         private PreparedSource(
+                ZLinkRelocationMetricOperation metrics,
                 ZLinkUserSpotRelocationBarrier barrier,
                 ZLinkUserSpotRelocationBarrier.Seal seal,
                 Captured captured,
@@ -1231,6 +1246,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                 List<SealedSessionRoute> sealedSessionRoutes,
                 UnresolvedPreparations unresolved,
                 ZLinkSpotRetireControl.StageRequest stageRequest) {
+            this.metrics = metrics;
             this.barrier = barrier;
             this.seal = seal;
             this.captured = captured;

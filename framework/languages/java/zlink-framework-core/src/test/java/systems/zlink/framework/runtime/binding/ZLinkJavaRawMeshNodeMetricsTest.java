@@ -606,6 +606,7 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                         .toCompletableFuture()
                         .get(2, TimeUnit.SECONDS);
                 sink.expectDrop("instance_spot", "no_handler");
+                sink.expectActivation("full", "rejected");
             }
             assertTrue(sink.events.isEmpty());
         }
@@ -648,6 +649,13 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                             case PROTOCOL_ERROR -> "decode_error";
                             case NOT_FOUND, TYPE_MISMATCH -> "stale_target";
                             default -> "no_handler";
+                        });
+                sink.expectActivation(
+                        type,
+                        switch (kind) {
+                            case SHUTTING_DOWN -> "shutdown";
+                            case TYPE_MISMATCH -> "conflict";
+                            default -> "rejected";
                         });
             }
             assertTrue(sink.events.isEmpty());
@@ -940,10 +948,27 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
 
     private static final class RecordingSink implements ZLinkRuntimeMetrics.Sink {
         final LinkedBlockingQueue<Event> events = new LinkedBlockingQueue<>();
+        final LinkedBlockingQueue<Event> activations = new LinkedBlockingQueue<>();
+
+        void expectActivation(String type, String outcome) throws Exception {
+            assertEquals(
+                    new Event(
+                            "zlink.instance_spot.activations",
+                            Map.of(
+                                    "mesh_name",
+                                    "mesh",
+                                    "instance_spot_type",
+                                    type,
+                                    "outcome",
+                                    outcome)),
+                    activations.poll(2, TimeUnit.SECONDS));
+            assertTrue(activations.isEmpty());
+        }
 
         @Override
         public void increment(String name, Map<String, String> tags) {
-            events.add(new Event(name, tags));
+            (name.equals("zlink.instance_spot.activations") ? activations : events)
+                    .add(new Event(name, tags));
         }
 
         void expectDrop(String surface, String reason) throws Exception {

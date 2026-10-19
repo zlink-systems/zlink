@@ -678,8 +678,11 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       metric?.complete('completed');
       return reply;
     } catch (error) {
-      metric?.complete(requestMetricOutcome(error));
-      if (requestMetricOutcome(error) === 'target_not_found') {
+      metric?.complete(requestMetricOutcome(error, signal));
+      if (
+        error instanceof ZLinkFrameworkException &&
+        internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
+      ) {
         this.metrics?.recordChannelSelectionFailure(meshName, channelName, 'no_ready_target');
       }
       throw error;
@@ -1244,14 +1247,18 @@ export function meshRequestFailure(
   return error;
 }
 
-function requestMetricOutcome(error: unknown): string {
+function requestMetricOutcome(error: unknown, signal?: AbortSignal): string {
   if (error instanceof ZLinkFrameworkException) {
-    if (internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound)
-      return 'target_not_found';
     if (internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.DeadlineExceeded)
       return 'timed_out';
     if (internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RuntimeShutdown)
       return 'shutdown';
   }
+  if (
+    signal?.aborted === true &&
+    (error === signal.reason ||
+      (error instanceof Error && (error.cause === signal.reason || error.name === 'AbortError')))
+  )
+    return 'cancelled';
   return 'failed';
 }

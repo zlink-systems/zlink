@@ -497,6 +497,10 @@ final class ZLinkSpotRetireControl {
             }
         }
 
+        int relocationPayloadSize() {
+            return relocationPayload.length;
+        }
+
         @Override
         public byte[] relocationPayload() {
             return relocationPayload.clone();

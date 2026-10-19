@@ -34,6 +34,27 @@ import java.util.function.Supplier;
 public final class ZLinkLocationRuntime implements AutoCloseable {
     private final ZLinkRegisteredLocationStores stores;
     private final String ownerId;
+    private java.util.List<Map<String, String>> metricScopes = java.util.List.of();
+
+    public void metricScopes(java.util.List<Map<String, String>> scopes) {
+        metricScopes = java.util.List.copyOf(scopes);
+    }
+
+    private void recordLeaseLateness(Duration lateness) {
+        for (var tags : metricScopes)
+            ZLinkRuntimeMetrics.record(
+                    ZLinkRuntimeMetrics.Metric.LOCATION_OWNER_LEASE_RENEW_LATENESS.metricName(),
+                    lateness,
+                    tags);
+    }
+
+    private void recordLeaseFailure() {
+        for (var tags : metricScopes)
+            ZLinkRuntimeMetrics.increment(
+                    ZLinkRuntimeMetrics.Metric.LOCATION_OWNER_LEASE_RENEW_FAILURES.metricName(),
+                    tags);
+    }
+
     private final Duration ownerLeaseTtl;
     private final Duration heartbeatInterval;
     private final Duration ownerLeaseRenewTimeout;
@@ -486,7 +507,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                     ownerLeaseOperationStartedNanos =
                                                             operationStartedNanos;
                                                     if (failure != null) {
-                                                        recordFailureCore(failureMessage(failure));
+                                                        recordRenewalFailureCore(
+                                                                failureMessage(failure));
                                                         return () ->
                                                                 CompletableFuture.completedFuture(
                                                                         false);
@@ -509,7 +531,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                                 admissionWasOpen)
                                                                         .thenApply(ignored -> true);
                                                     }
-                                                    recordFailureCore(
+                                                    recordRenewalFailureCore(
                                                             "owner lease renewal was stale");
                                                     ownerAdmissionDeadlineNanos = 0L;
                                                     return () ->
@@ -534,10 +556,15 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                         stateLane.runAsync(
                                 () -> {
                                     if (started && ownsStartupCore(lifecycle)) {
-                                        recordFailureCore(failureMessage(failure));
+                                        recordRenewalFailureCore(failureMessage(failure));
                                     }
                                     return false;
                                 }));
+    }
+
+    private void recordRenewalFailureCore(String message) {
+        recordFailureCore(message);
+        recordLeaseFailure();
     }
 
     private boolean ownsStartupCore(CompletableFuture<Void> completion) {
@@ -1010,10 +1037,8 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                             Supplier<CompletionStage<Boolean>> renewal =
                                     ownerLeaseRenewalCore(lifecycle);
                             return () -> {
-                                ZLinkRuntimeMetrics.record(
-                                        "zlink.location.owner_lease.renew.lateness",
-                                        Duration.ofNanos(Math.max(0L, firedNanos - scheduledAt)),
-                                        Map.of());
+                                recordLeaseLateness(
+                                        Duration.ofNanos(Math.max(0L, firedNanos - scheduledAt)));
                                 return renewal.get();
                             };
                         })
