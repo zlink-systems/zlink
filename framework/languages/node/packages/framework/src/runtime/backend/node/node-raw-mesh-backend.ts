@@ -1642,30 +1642,47 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
 
   private pump(): void {
     if (this.closed || this.pumpTask !== undefined) return;
-    this.pumpTask = this.runPump(this.requireRuntime());
+    const runtime = this.requireRuntime();
+    let complete!: () => void;
+    let fail!: (error: unknown) => void;
+    // Publish the join owner before receive can signal readiness or start close.
+    // The receive turn itself needs no startup Promise continuation.
+    this.pumpTask = new Promise<void>((resolve, reject) => {
+      complete = resolve;
+      fail = reject;
+    });
+    void this.runPump(runtime, complete, fail);
   }
 
-  private async runPump(runtime: RawServiceMeshRuntime): Promise<void> {
-    // Publish pumpTask before any callback can signal readiness or begin close.
-    await Promise.resolve();
+  private async runPump(
+    runtime: RawServiceMeshRuntime,
+    complete: () => void,
+    fail: (error: unknown) => void
+  ): Promise<void> {
     try {
-      do {
-        const ready = this.readable;
-        this.readable = 0;
-        const batch = runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
-        const more = batch instanceof Promise ? await batch : batch;
-        if (more) {
-          // Yield only after actual progress, retaining readiness across the
-          // existing batch limits until receive reports no data.
-          this.readable |= 1;
-          await yieldToIO();
-        }
-      } while (!this.closed && this.readable !== 0);
+      try {
+        do {
+          const ready = this.readable;
+          this.readable = 0;
+          const batch = runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
+          const more = batch instanceof Promise ? await batch : batch;
+          if (more) {
+            // Yield only after actual progress, retaining readiness across the
+            // existing batch limits until receive reports no data.
+            this.readable |= 1;
+            await yieldToIO();
+          }
+        } while (!this.closed && this.readable !== 0);
+      } catch (error) {
+        runtime.reportInfrastructureFailure(error);
+      } finally {
+        this.pumpTask = undefined;
+        this.scheduleMaintenance();
+      }
+      complete();
     } catch (error) {
-      runtime.reportInfrastructureFailure(error);
-    } finally {
-      this.pumpTask = undefined;
-      this.scheduleMaintenance();
+      // Forward reporting and maintenance failures to the published join owner.
+      fail(error);
     }
   }
 

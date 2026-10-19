@@ -25,17 +25,18 @@ test('pump progress reuses its owned async task without Promise wrapper chains',
 test('readiness raised inside a round retains the same pump task and close join', async () => {
   const f = fixture();
   let rounds = 0, owned;
+  await f.backend.pumpTask;
   f.runtime.pumpBatch = () => {
     rounds++;
+    owned ??= f.backend.pumpTask;
+    assert.ok(owned instanceof Promise, 'join owner is installed before receiving');
     assert.strictEqual(f.backend.pumpTask, owned);
     if (rounds === 1) f.readable(true, false);
     return false;
   };
   try {
     f.readable(true, false);
-    owned = f.backend.pumpTask;
-    assert.ok(owned instanceof Promise);
-    assert.equal(rounds, 0, 'callbacks begin after the task is installed');
+    assert.equal(rounds, 2, 'completed rotations stay in the readiness turn');
     await owned;
     assert.equal(rounds, 2);
     assert.equal(f.backend.pumpTask, undefined);
