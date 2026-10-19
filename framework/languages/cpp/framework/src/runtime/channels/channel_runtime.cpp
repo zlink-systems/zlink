@@ -127,10 +127,9 @@ spot_mesh_requester (const std::shared_ptr<channel_runtime_state_t> &state,
 bool has_route_channel (const std::shared_ptr<channel_runtime_state_t> &state,
                         const std::string &channel_name)
 {
-    return state->lane
-      .run_checked (
-        [&] { return state->route_channels.find (channel_name) != state->route_channels.end (); })
-      .get ();
+    const auto index =
+      std::atomic_load_explicit (&state->node_transports, std::memory_order_acquire);
+    return index->route_channels.contains (channel_name);
 }
 
 using route_reply_result_t = result_t<runtime::messaging::message_parts_t>;
