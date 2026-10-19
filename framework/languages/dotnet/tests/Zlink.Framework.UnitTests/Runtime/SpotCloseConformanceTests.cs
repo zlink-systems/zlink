@@ -34,6 +34,44 @@ public sealed class SpotCloseConformanceTests(Xunit.Abstractions.ITestOutputHelp
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task Close_retires_local_activation_before_authority_release(bool explicitClose)
+    {
+        await using var host = await SpotCloseHost.StartAsync();
+        var original = await host.CreateSpotAsync();
+        host.Store.HoldAuthorityDeleteFor = original.SpotId;
+        host.Store.HoldAfterAuthorityDelete = true;
+        var close = explicitClose
+            ? host.Manager.CloseAsync(original).AsTask()
+            : host
+                .Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName)
+                .Catalog.CloseAsync(original.SpotId, CancellationToken.None)
+                .AsTask();
+        try
+        {
+            await host.Store.AuthorityDeleteHeld.Task.WaitAsync(Wait);
+            var created = await host
+                .Manager.GetOrCreate(original.SpotId, SpotCloseHost.SpotType)
+                .InMesh(SpotCloseHost.MeshName)
+                .Async();
+            Assert.Equal(ZLinkSpotCreateState.Created, created.State);
+            Assert.NotEqual(original.ObjectGeneration, created.Spot.ObjectGeneration);
+            var catalog = host.Runtime.GetSpotNodeRuntime(SpotCloseHost.MeshName).Catalog;
+            Assert.NotNull(await catalog.GetAsync(original.SpotId, CancellationToken.None));
+            host.Store.ReleaseAuthorityDelete.TrySetResult();
+            Assert.True(await close.WaitAsync(Wait));
+            Assert.NotNull(await catalog.GetAsync(original.SpotId, CancellationToken.None));
+            Assert.Equal("handlerReply", await host.RequestAsync(original.SpotId));
+        }
+        finally
+        {
+            host.Store.ReleaseAuthorityDelete.TrySetResult();
+            await close.WaitAsync(Wait);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task GetOrCreate_waits_for_Closing_authority(bool expire)
     {
         await using var host = await SpotCloseHost.StartAsync();
@@ -2679,6 +2717,7 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
 
     // Holds the authority Delete of one Spot until the test releases it.
     internal string? HoldAuthorityDeleteFor { get; set; }
+    internal bool HoldAfterAuthorityDelete { get; set; }
     internal TaskCompletionSource AuthorityDeleteHeld { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal TaskCompletionSource ReleaseAuthorityDelete { get; } =
@@ -2713,14 +2752,14 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
             ReplayCursorHeld.TrySetResult();
             await ReleaseReplayCursor.Task.WaitAsync(cancellationToken);
         }
-        if (
+        var holdDelete =
             HoldAuthorityDeleteFor is { } deletedSpot
             && request.Mutations.Any(mutation =>
                 mutation is ZLinkStoreMutation.Delete delete
                 && delete.Key.Value.StartsWith("authority\0", StringComparison.Ordinal)
                 && delete.Key.Value.EndsWith("\0" + deletedSpot, StringComparison.Ordinal)
-            )
-        )
+            );
+        if (holdDelete && !HoldAfterAuthorityDelete)
         {
             AuthorityDeleteHeld.TrySetResult();
             await ReleaseAuthorityDelete.Task.WaitAsync(cancellationToken);
@@ -2766,6 +2805,11 @@ internal sealed class SpotCloseFaultStore(IZLinkLocationStore inner) : IZLinkLoc
             );
         }
         var written = await inner.WriteAsync(request, cancellationToken);
+        if (holdDelete && HoldAfterAuthorityDelete && written is ZLinkStoreWriteResult.Applied)
+        {
+            AuthorityDeleteHeld.TrySetResult();
+            await ReleaseAuthorityDelete.Task.WaitAsync(cancellationToken);
+        }
         if (
             written is ZLinkStoreWriteResult.Applied
             && ObserveAuthorityReleaseFor is { } releasedSpot
