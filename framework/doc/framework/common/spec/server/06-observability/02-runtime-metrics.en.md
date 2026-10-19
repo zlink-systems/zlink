@@ -194,6 +194,13 @@ aggregation.
 | `source` | `manual`, `redis`, `manual_and_redis` |
 | Selection failure `reason` | `no_member`, `not_ready`, `draining` |
 | `surface` | `node`, `channel`, `spot`, `instance_spot`, `actor` |
+| Request `outcome` | `completed`, `timed_out`, `cancelled`, `shutdown`, `failed` |
+
+Request `outcome` records the single terminal result of a request. A request that receives a success
+reply is `completed`, one whose deadline passes is `timed_out`, one the caller cancels is `cancelled`,
+one ended by runtime shutdown is `shutdown`, and every other terminal failure (error reply, missing
+target, transport failure, and so on) is `failed`. `zlink.mesh_node.request.timeouts` counts only the
+requests that end with `outcome=timed_out`.
 
 ## 5. One-Way Message Drop
 
