@@ -87,7 +87,6 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                 ownsContext,
                 stateLane,
                 new ZLinkServiceOperationRegistry(
-                        ZLinkProcessExecutionLanes.deadlines(),
                         ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN)));
     }
 

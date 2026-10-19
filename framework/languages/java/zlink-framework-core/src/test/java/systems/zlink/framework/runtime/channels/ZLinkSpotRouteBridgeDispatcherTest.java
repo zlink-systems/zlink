@@ -20,8 +20,6 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -53,9 +51,7 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
 
     @Test
     void channelCloseDoesNotResubmitPendingBindingSend() {
-        ScheduledExecutorService deadlines = Executors.newSingleThreadScheduledExecutor();
-        ZLinkChannelCallRuntime calls =
-                new ZLinkChannelCallRuntime(null, deadlines, null, null, null);
+        ZLinkChannelCallRuntime calls = new ZLinkChannelCallRuntime(null, null, null, null);
         DirectBridge bridge = new DirectBridge();
         CompletableFuture<Void> result = new CompletableFuture<>();
         try {
@@ -83,7 +79,6 @@ final class ZLinkSpotRouteBridgeDispatcherTest {
             assertEquals(1, bridge.sendAttempts.get());
         } finally {
             calls.beginClose();
-            deadlines.shutdownNow();
         }
     }
 

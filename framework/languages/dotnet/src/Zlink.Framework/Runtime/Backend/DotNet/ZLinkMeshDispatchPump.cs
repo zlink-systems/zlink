@@ -110,15 +110,17 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         if (_started || _disposed)
             return;
         _started = true;
-        _stop = new CancellationTokenSource();
+        _stop = CancellationTokenSource.CreateLinkedTokenSource(
+            _applicationTaskRunner?.ShutdownToken ?? CancellationToken.None
+        );
         _node.SetReadyHandler(OnReady);
         using (ExecutionContext.SuppressFlow())
         {
             var workers = new Task[Math.Max(MinimumApplicationWorkers, Environment.ProcessorCount)];
             for (var index = 0; index < workers.Length; index++)
                 workers[index] = _applicationTaskRunner is { } runner
-                    ? runner.Run("mesh-application-worker", ct => RunAsync(_stop.Token, ct))
-                    : Task.Run(() => RunAsync(_stop.Token, CancellationToken.None).AsTask());
+                    ? runner.Run("mesh-application-worker", _ => RunAsync(_stop.Token))
+                    : Task.Run(() => RunAsync(_stop.Token).AsTask());
             _loop = Task.WhenAll(workers);
         }
     }
@@ -277,10 +279,17 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
     private MeshReadyDomains TakePendingReadyDomains() =>
         (MeshReadyDomains)Interlocked.Exchange(ref _pendingReadyDomains, 0);
 
-    private async ValueTask RunAsync(CancellationToken stopToken, CancellationToken runtimeToken)
+    private async ValueTask RunAsync(CancellationToken cancellationToken)
     {
-        using var stop = CancellationTokenSource.CreateLinkedTokenSource(stopToken, runtimeToken);
-        var cancellationToken = stop.Token;
+        // One shared token becomes canceled before any waiter is released.
+        // Each worker then releases one waiter on shutdown; joining the workers
+        // precedes signal disposal.
+        // Keep cancellation registration with the worker lifetime instead of
+        // wrapping every readiness wait in a cancellable Task.
+        using var wakeOnStop = cancellationToken.UnsafeRegister(
+            static signal => ((SemaphoreSlim)signal!).Release(),
+            _signal
+        );
         using var readyBatch = new MeshReadyBatch { MaximumRecords = 1 };
         using var receiveBatch = new MeshReceiveBatch();
         // These are handler-returned asynchronous results, not another queue of
@@ -297,7 +306,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                     ObserveDispatchResult(pending[index]);
                     pending.RemoveAt(index);
                 }
-                await _signal.WaitAsync(cancellationToken).ConfigureAwait(false);
+                await _signal.WaitAsync().ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
                 await DrainResidueAsync(readyBatch, receiveBatch, pending, cancellationToken)
                     .ConfigureAwait(false);
             }
