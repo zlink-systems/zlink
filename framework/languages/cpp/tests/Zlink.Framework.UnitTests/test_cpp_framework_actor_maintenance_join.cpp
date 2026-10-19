@@ -1955,6 +1955,9 @@ void next_join_suffix (bool remote,
         ASSERT_TRUE (ready (initiator));
         ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), third_rid));
         initiator_services.emplace (initiator.app.advanced ().services ().build_provider ());
+        // MeshNode §7.1: each node is Ready on the ADMIT it receives; the sender needs its own.
+        ASSERT_TRUE (
+          peer_ready (initiator_services->get_required<fw::route_mesh_runtime_t> (), first_rid));
         initial_sender = &initiator_services->get_required<fw::actor_client_t> ();
     }
     const auto initial_sent =
