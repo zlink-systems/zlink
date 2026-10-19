@@ -1128,7 +1128,7 @@ stateful_error_t raw_stateful_dispatch_t::complete_with_claim (
                                                  : stateful_error_t::conflict;
 }
 
-stateful_error_t raw_stateful_dispatch_t::stage_relocated (
+task_t<stateful_error_t> raw_stateful_dispatch_t::stage_relocated (
   const object_ref_t &owner,
   turn_record_t turn,
   std::function<bool (const std::optional<protocol::application_payload_t> &)> terminal)
@@ -1140,7 +1140,7 @@ stateful_error_t raw_stateful_dispatch_t::stage_relocated (
          * observation-only — skip validation/materialization at Off. */
         frozen = protocol::decode_frozen_record (turn.payload, capture_flow ());
         if (!frozen.application)
-            return stateful_error_t::invalid;
+            co_return stateful_error_t::invalid;
         turn.application_payload_bytes =
           protocol::application_payload_hwm_bytes (*frozen.application);
         turn.frozen_record = frozen;
@@ -1148,7 +1148,7 @@ stateful_error_t raw_stateful_dispatch_t::stage_relocated (
         frozen.canonical_bytes.clear ();
     }
     catch (...) {
-        return stateful_error_t::invalid;
+        co_return stateful_error_t::invalid;
     }
     const auto request = frozen.reply_route_id.has_value ();
     pending_delivery_t pending{owner, std::move (frozen), {}, request, std::move (terminal), {}};
@@ -1159,17 +1159,15 @@ stateful_error_t raw_stateful_dispatch_t::stage_relocated (
     };
     ingress_admission_t admission;
     try {
-        auto outcome =
-          _objects
-            ->post_admitted (owner,
-                             admit_accepted_ingress (owner, turn, pending, take,
-                                                     stateful_error_t::already_exists, admission),
-                             true)
-            .get ();
-        return finish_accepted_ingress (owner, std::move (outcome), admission);
+        auto outcome = co_await _objects->enqueue_admitted (
+          owner,
+          admit_accepted_ingress (owner, turn, pending, take, stateful_error_t::already_exists,
+                                  admission),
+          true);
+        co_return finish_accepted_ingress (owner, std::move (outcome), admission);
     }
     catch (...) {
-        return stateful_error_t::backpressured;
+        co_return stateful_error_t::backpressured;
     }
 }
 

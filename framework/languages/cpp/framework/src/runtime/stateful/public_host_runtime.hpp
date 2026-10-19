@@ -1190,9 +1190,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                            const stateful::object_ref_t &target,
                                            const protocol::relocation_object_t &wire_object,
                                            std::uint64_t participant_id);
-    bool stage_relocation_record (const stateful::object_ref_t &target,
-                                  const protocol::relocation_data_t &data,
-                                  std::uint64_t participant_id);
+    task_t<bool> stage_relocation_record (const stateful::object_ref_t &target,
+                                          const protocol::relocation_data_t &data,
+                                          std::uint64_t participant_id);
     void poll_relocation_target_attempts ();
     static bool relocation_target_wire_ready (const relocation_target_attempt_t &attempt) noexcept;
     static bool relocation_target_terminal (const relocation_target_attempt_t &attempt);

@@ -533,40 +533,54 @@ stateful_object_runtime_t::find (object_kind_t kind,
                                  std::optional<object_state_t> required_state,
                                  std::optional<retained_relocation_source_t> *retained) const
 {
-    return _lane
-      .run ([&, this] () -> std::optional<object_ref_t> {
-          if (retained)
-              retained->reset ();
-          const auto record = _objects.find ({kind, std::move (key)});
-          if (record == _objects.end ()
-              || (required_state && state_on_lane (record->second) != *required_state)) {
-              return std::nullopt;
-          }
-          if (retained)
-              *retained = retained_relocation_source_on_lane (record->second);
-          return record->second.reference;
-      })
-      .get ();
+    return find_async (kind, std::move (key), required_state, retained).result ().value ();
 }
 
 std::optional<object_ref_t> stateful_object_runtime_t::resolve_spot (
   const std::string &key, std::optional<retained_relocation_source_t> *retained) const
 {
-    return _lane
-      .run ([&, this] () -> std::optional<object_ref_t> {
-          if (retained)
-              retained->reset ();
-          for (const auto kind : {object_kind_t::user_spot, object_kind_t::instance_spot}) {
-              const auto record = _objects.find ({kind, key});
-              if (record != _objects.end ()) {
-                  if (retained)
-                      *retained = retained_relocation_source_on_lane (record->second);
-                  return record->second.reference;
-              }
-          }
-          return std::nullopt;
-      })
-      .get ();
+    return resolve_spot_async (key, retained).result ().value ();
+}
+
+task_t<std::optional<object_ref_t>>
+stateful_object_runtime_t::find_async (object_kind_t kind,
+                                       std::string key,
+                                       std::optional<object_state_t> required_state,
+                                       std::optional<retained_relocation_source_t> *retained) const
+{
+    return _lane.run_task ([this, kind, key = std::move (key), required_state,
+                            retained] () mutable -> std::optional<object_ref_t> {
+        if (retained)
+            retained->reset ();
+        const auto record = _objects.find ({kind, std::move (key)});
+        if (record == _objects.end ()
+            || (required_state && state_on_lane (record->second) != *required_state)) {
+            return std::nullopt;
+        }
+        if (retained)
+            *retained = retained_relocation_source_on_lane (record->second);
+        return record->second.reference;
+    });
+}
+
+task_t<std::optional<object_ref_t>> stateful_object_runtime_t::resolve_spot_async (
+  std::string key, std::optional<retained_relocation_source_t> *retained) const
+{
+    return _lane.run_task ([this, key = object_key_t{object_kind_t::user_spot, std::move (key)},
+                            retained] () mutable -> std::optional<object_ref_t> {
+        if (retained)
+            retained->reset ();
+        for (const auto kind : {object_kind_t::user_spot, object_kind_t::instance_spot}) {
+            key.kind = kind;
+            const auto record = _objects.find (key);
+            if (record != _objects.end ()) {
+                if (retained)
+                    *retained = retained_relocation_source_on_lane (record->second);
+                return record->second.reference;
+            }
+        }
+        return std::nullopt;
+    });
 }
 
 stateful_error_t stateful_object_runtime_t::set_subscription (const object_ref_t &spot,
@@ -1446,10 +1460,16 @@ stateful_object_runtime_t::try_seal_relocation_aggregate (
     // that takes the participants' accepted, unstarted originals.
     if (plan.cut) {
         std::optional<std::vector<std::vector<turn_record_t>>> exported;
+        std::exception_ptr cut_error;
         try {
             exported = co_await plan.cut (plan.sources, plan.binding, cancellation);
         }
         catch (...) {
+            cut_error = std::current_exception ();
+        }
+        if (cut_error) {
+            (void) co_await conflict ();
+            std::rethrow_exception (cut_error);
         }
         if (!exported || !plan.binding->bound.load (std::memory_order_acquire))
             co_return co_await conflict ();

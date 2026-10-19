@@ -342,6 +342,14 @@ class stateful_object_runtime_t
     std::optional<object_ref_t>
     resolve_spot (const std::string &key,
                   std::optional<retained_relocation_source_t> *retained = nullptr) const;
+    task_t<std::optional<object_ref_t>>
+    find_async (object_kind_t kind,
+                std::string key,
+                std::optional<object_state_t> required_state = std::nullopt,
+                std::optional<retained_relocation_source_t> *retained = nullptr) const;
+    task_t<std::optional<object_ref_t>>
+    resolve_spot_async (std::string key,
+                        std::optional<retained_relocation_source_t> *retained = nullptr) const;
     stateful_error_t set_subscription (const object_ref_t &spot,
                                        const std::string &channel_name,
                                        const std::string &topic);

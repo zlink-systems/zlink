@@ -4027,7 +4027,7 @@ task_t<bool> public_host_runtime_t::restore_relocation_assembly (
         // saved payload together with its original terminal, before Ready.
         if (restored == stateful::stateful_error_t::none)
             for (const auto &[target, data, participant_id] : saved_application)
-                if (!stage_relocation_record (target, data, participant_id))
+                if (!co_await stage_relocation_record (target, data, participant_id))
                     throw framework_exception_t (framework_error_kind_t::internal_failure,
                                                  "Restored Actor application intake failed");
         if (restored == stateful::stateful_error_t::none
@@ -4739,30 +4739,32 @@ bool public_host_runtime_t::register_relocation_target_queue (
     }
 }
 
-bool public_host_runtime_t::stage_relocation_record (const stateful::object_ref_t &target,
-                                                     const protocol::relocation_data_t &data,
-                                                     std::uint64_t participant_id)
+task_t<bool>
+public_host_runtime_t::stage_relocation_record (const stateful::object_ref_t &target,
+                                                const protocol::relocation_data_t &data,
+                                                std::uint64_t participant_id)
 {
     const auto frozen_record = data.record;
-    return _stateful_dispatch
-           && _stateful_dispatch->stage_relocated (
-                target, {0, protocol::encode_frozen_record (frozen_record)},
-                [this, data, participant_id,
-                 frozen_record] (const std::optional<protocol::application_payload_t> &reply) {
-                    if (!frozen_record.reply_route_id)
-                        return true;
-                    auto relay = stateful::maintenance_runtime_t::terminal_identity (
-                      data.relocation, data.target_attempt_generation, data.coordinator,
-                      participant_id, frozen_record);
-                    relay.terminal_result = reply ? 0u : 105u;
-                    relay.failure_code = reply ? protocol::framework_error_code::none
-                                               : protocol::framework_error_code::requestFailed;
-                    return _relocation_wire->register_terminal_target (
-                      {relay, frozen_record.source, reply,
-                       [] (protocol::reply_relay_ack_status_t) { return true; },
-                       [] { return true; }, data.coordinator.node_routing_id});
-                })
-                == stateful::stateful_error_t::none;
+    co_return _stateful_dispatch &&co_await _stateful_dispatch->stage_relocated (
+      target, {0, protocol::encode_frozen_record (frozen_record)},
+      [this, data, participant_id,
+       frozen_record] (const std::optional<protocol::application_payload_t> &reply) {
+          if (!frozen_record.reply_route_id)
+              return true;
+          auto relay = stateful::maintenance_runtime_t::terminal_identity (
+            data.relocation, data.target_attempt_generation, data.coordinator, participant_id,
+            frozen_record);
+          relay.terminal_result =
+            reply ? 0u
+                  : static_cast<std::uint32_t> (protocol::request_terminal_result::internalError);
+          relay.failure_code = reply ? protocol::framework_error_code::none
+                                     : protocol::framework_error_code::requestFailed;
+          return _relocation_wire->register_terminal_target (
+            {relay, frozen_record.source, reply,
+             [] (protocol::reply_relay_ack_status_t) { return true; }, [] { return true; },
+             data.coordinator.node_routing_id});
+      })
+      == stateful::stateful_error_t::none;
 }
 
 task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
@@ -5868,7 +5870,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         bool staged = true;
                         for (const auto &[target, data, participant_id] : *verified)
                             staged =
-                              staged && stage_relocation_record (target, data, participant_id);
+                              staged
+                              && co_await stage_relocation_record (target, data, participant_id);
                         _relocation_session_terminal_lane
                           .run ([&] {
                               const auto found = _relocation_target_attempts.find (key);
@@ -7062,16 +7065,16 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                 std::optional<stateful::object_ref_t> native_owner;
                 std::optional<stateful::retained_relocation_source_t> retained;
                 if (claim->owner.starts_with (detail::activation_admission_t::actor_key_prefix))
-                    native_owner =
-                      _objects.find (stateful::object_kind_t::actor,
-                                     claim->owner.substr (
-                                       detail::activation_admission_t::actor_key_prefix.size ()),
-                                     std::nullopt, &retained);
+                    native_owner = co_await _objects.find_async (
+                      stateful::object_kind_t::actor,
+                      claim->owner.substr (
+                        detail::activation_admission_t::actor_key_prefix.size ()),
+                      std::nullopt, &retained);
                 else if (claim->owner.starts_with (
                            detail::activation_admission_t::spot_key_prefix)) {
                     const auto key =
                       claim->owner.substr (detail::activation_admission_t::spot_key_prefix.size ());
-                    native_owner = _objects.resolve_spot (key, &retained);
+                    native_owner = co_await _objects.resolve_spot_async (key, &retained);
                 }
                 if (native_owner) {
                     const auto accepted = co_await _stateful_dispatch->ingest_claimed (
@@ -7793,9 +7796,16 @@ public_host_runtime_t::cut_relocation_source (
 {
     const auto locate =
       co_await _lifecycle_configuration_lane.run_task ([this] { return _relocation_gate; });
+    // Aggregate units contain one SpotWide Spot and its Actors. Actor FIFOs use
+    // that Spot's shared gate; their own suffixes are captured by the Actor owner.
+    const auto principal =
+      std::find_if (participants.begin (), participants.end (), [] (const auto &owner) {
+          return owner.kind != stateful::object_kind_t::actor;
+      });
+    const auto gate_index = static_cast<std::size_t> (principal - participants.begin ());
     std::shared_ptr<runtime::serial_execution_queue_t> gate;
-    if (locate && !participants.empty ())
-        gate = co_await locate (participants.front ());
+    if (locate && principal != participants.end ())
+        gate = co_await locate (*principal);
     std::vector<std::string> owners;
     owners.reserve (participants.size ());
     for (const auto &participant : participants)
@@ -7844,9 +7854,9 @@ public_host_runtime_t::cut_relocation_source (
     for (auto &record : suffix) {
         if (!record->payload ())
             continue;
-        exported.front ().push_back (std::move (*record->payload ()));
+        exported[gate_index].push_back (std::move (*record->payload ()));
         record->payload ().reset ();
-        exported.front ().back ().accepted_owner = std::move (record);
+        exported[gate_index].back ().accepted_owner = std::move (record);
     }
     co_return exported;
 }
@@ -7862,11 +7872,12 @@ task_t<void> public_host_runtime_t::ingest_cut_original (stateful::object_ref_t 
     }
     std::optional<mesh::service_mailbox_record_t> taken;
     std::optional<messaging::request_wire_failure_t> failure;
+    taken.emplace (std::move (original));
     try {
-        auto query = local_application_query (*original.application);
-        std::shared_ptr<const local_application_dispatch_t> application = original.application;
-        auto source = original.source_original;
-        (void) co_await accept_local_application (std::move (original), std::move (query),
+        auto query = local_application_query (*taken->application);
+        std::shared_ptr<const local_application_dispatch_t> application = taken->application;
+        auto source = taken->source_original;
+        (void) co_await accept_local_application (std::move (*taken), std::move (query),
                                                   std::move (application), std::move (source),
                                                   taken);
         co_return;
@@ -7877,9 +7888,14 @@ task_t<void> public_host_runtime_t::ingest_cut_original (stateful::object_ref_t 
           static_cast<std::uint32_t> (protocol::framework_error_code::requestProtocolError)};
     }
     catch (const framework_exception_t &error) {
+        if (error.kind () == framework_error_kind_t::internal_failure)
+            _options.mesh.runtime_failures->report (std::current_exception ());
         failure = messaging::request_failure_mapper_t{}.target_failure_reply (error);
     }
     catch (...) {
+        _options.mesh.runtime_failures->report (std::current_exception ());
+        failure = messaging::request_failure_mapper_t{}.target_failure_reply (
+          framework_error_kind_t::internal_failure);
     }
     // A rejected original is answered once from the record this ingress still owns.
     if (!taken)
@@ -7903,11 +7919,12 @@ task_t<std::optional<stateful::object_ref_t>> public_host_runtime_t::accept_loca
         original.emplace (std::move (*owned));
     const bool actor = is_actor_application (dispatch.record.kind);
     std::optional<stateful::retained_relocation_source_t> retained;
-    const auto owner = actor
-                         ? _objects.find (stateful::object_kind_t::actor,
-                                          std::string (dispatch.owner.actor->actor_id ().value ()),
-                                          std::nullopt, &retained)
-                         : _objects.resolve_spot (dispatch.owner.spot_id, &retained);
+    const auto owner =
+      actor
+        ? co_await _objects.find_async (stateful::object_kind_t::actor,
+                                        std::string (dispatch.owner.actor->actor_id ().value ()),
+                                        std::nullopt, &retained)
+        : co_await _objects.resolve_spot_async (dispatch.owner.spot_id, &retained);
     if (!owner)
         throw protocol::service_wire_error_t ("local accepted owner is unavailable");
     std::variant<protocol::actor_message_header_t, protocol::spot_message_header_t> header;

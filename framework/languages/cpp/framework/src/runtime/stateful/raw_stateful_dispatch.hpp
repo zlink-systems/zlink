@@ -169,7 +169,7 @@ class raw_stateful_dispatch_t
     complete (const stateful_delivery_t &delivery,
               std::optional<protocol::application_payload_t> reply,
               const std::shared_ptr<runtime::serial_application_record_t> &accepted_record);
-    stateful_error_t stage_relocated (
+    task_t<stateful_error_t> stage_relocated (
       const object_ref_t &owner,
       turn_record_t turn,
       std::function<bool (const std::optional<protocol::application_payload_t> &)> terminal);

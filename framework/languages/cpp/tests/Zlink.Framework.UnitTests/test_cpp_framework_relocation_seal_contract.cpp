@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/manual_internal_scheduler.hpp"
+#include "runtime/execution/serial_application_record.hpp"
 #include "../support/stateful_ingress_fixture.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 
@@ -7,8 +9,8 @@
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
-#include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/locations/live_location_reader.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/accepted_actor_record.hpp"
@@ -59,6 +61,18 @@ struct public_host_runtime_test_access_t
     static stateful::raw_stateful_dispatch_t &dispatch (public_host_runtime_t &host)
     {
         return *host._stateful_dispatch;
+    }
+
+    static auto cut (public_host_runtime_t &host, std::vector<stateful::object_ref_t> owners)
+    {
+        return host.cut_relocation_source (
+          std::move (owners), std::make_shared<stateful::relocation_seal_binding_t> ());
+    }
+    static auto ingest_cut (public_host_runtime_t &host,
+                            stateful::object_ref_t owner,
+                            mesh::service_mailbox_record_t original)
+    {
+        return host.ingest_cut_original (std::move (owner), std::move (original));
     }
 
     static void stage_relay (public_host_runtime_t &host,
@@ -1510,10 +1524,6 @@ TEST (FrameworkRelocationSealContract, mailbox_cut_takes_each_untaken_original_o
     EXPECT_EQ (id_of (*next->records.front ()), 4);
 }
 
-// Relocation flow §4.2 cut S: an accepted, unstarted original is saved exactly once wherever it
-// waits — the source FIFO (B), a claim suspended on its source authority (C) or the mailbox
-// (D). The started turn (A) reaches its terminal on the source first, and a record published
-// after the cut (E) takes the ingress hold.
 TEST (FrameworkRelocationSealContract, source_store_reads_return_before_store_lane_completes)
 {
     runtime::in_memory_location_repository_t store;
@@ -1639,6 +1649,124 @@ TEST (FrameworkRelocationSealContract, unavailable_source_read_keeps_unavailable
     host->close ();
 }
 
+TEST (FrameworkRelocationSealContract, aggregate_cut_uses_spot_gate_after_actor)
+{
+    zlink::framework::test::manual_internal_scheduler_t worker;
+    auto gate = std::make_shared<runtime::serial_execution_queue_t> (
+      worker, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("aggregate-cut"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    host->configure_relocation_gate (
+      [gate] (const auto &owner) -> task_t<std::shared_ptr<runtime::serial_execution_queue_t>> {
+          co_return owner.kind == stateful::object_kind_t::actor ? nullptr : gate;
+      });
+    runtime::serial_execution_queue_t::async_completion_t finish;
+    ASSERT_TRUE (
+      gate->try_post_async ("active", [&] (auto complete) { finish = std::move (complete); }));
+    worker.run_all ();
+    ASSERT_TRUE (finish);
+    auto record = std::make_shared<runtime::serial_application_record_t> ();
+    record->payload ().emplace (stateful::turn_record_t{42, {1}});
+    runtime::serial_work_options_t options;
+    options.application_record = record;
+    bool ran = false;
+    ASSERT_TRUE (gate->try_post ("suffix", [&] { ran = true; }, std::move (options)));
+    worker.run_all ();
+    const stateful::object_ref_t actor{
+      stateful::object_kind_t::actor, "actor", 1, 1, "mesh", "source"};
+    const stateful::object_ref_t spot{
+      stateful::object_kind_t::user_spot, "spot", 1, 1, "mesh", "source"};
+    auto cutting = host::public_host_runtime_test_access_t::cut (*host, {actor, spot});
+    worker.run_until (cutting);
+    ASSERT_TRUE (cutting.await_ready ());
+    const auto exported = cutting.result ().value ();
+    ASSERT_TRUE (exported);
+    ASSERT_EQ (exported->size (), 2u);
+    EXPECT_TRUE ((*exported)[0].empty ());
+    ASSERT_EQ ((*exported)[1].size (), 1u);
+    EXPECT_EQ ((*exported)[1][0].sequence, 42u);
+    finish ([] {});
+    worker.run_all ();
+    EXPECT_FALSE (ran);
+    gate->drain ();
+    worker.run_all ();
+    host->close ();
+}
+
+TEST (FrameworkRelocationSealContract, cut_exception_preserves_cause_after_abort)
+{
+    stateful::stateful_object_runtime_t objects;
+    const stateful::object_ref_t spot{
+      stateful::object_kind_t::user_spot, "spot", 1, 1, "mesh", "source"};
+    const auto created = objects.begin_reserved_object (spot, "room", {});
+    ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
+    objects.configure_relocation_cut (
+      [] (auto, auto,
+          auto) -> task_t<std::optional<std::vector<std::vector<stateful::turn_record_t>>>> {
+          throw std::runtime_error ("source cut failed");
+          co_return std::nullopt;
+      });
+    const auto failed = objects.try_seal_relocation_aggregate ({spot}).result ();
+    ASSERT_FALSE (failed.has_value ());
+    try {
+        (void) failed.value ();
+        FAIL () << "cut failure must retain its exception";
+    }
+    catch (const std::runtime_error &error) {
+        EXPECT_STREQ (error.what (), "source cut failed");
+    }
+    EXPECT_TRUE (objects.find (spot.kind, spot.key, stateful::object_state_t::ready));
+}
+
+TEST (FrameworkRelocationSealContract, cut_local_exception_reports_original_cause)
+{
+    auto failures = std::make_shared<runtime::runtime_failure_collector_t> ();
+    int reports = 0;
+    failures->bind_runtime_reporter ([&] (std::exception_ptr cause) {
+        ++reports;
+        try {
+            std::rethrow_exception (cause);
+        }
+        catch (const std::runtime_error &error) {
+            EXPECT_STREQ (error.what (), "source lookup failed");
+        }
+    });
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("cut-error"), .runtime_failures = failures}});
+    host->configure_stateful_dispatch (
+      [] (const auto &) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          throw std::runtime_error ("source lookup failed");
+          co_return std::nullopt;
+      });
+    const stateful::object_ref_t spot{
+      stateful::object_kind_t::user_spot, "spot", 1, 1, "mesh", "source"};
+    const auto created = host->objects ().begin_reserved_object (spot, "room", {});
+    ASSERT_EQ (host->objects ().commit_create (created.attempt), stateful::stateful_error_t::none);
+    auto application = std::make_shared<host::local_application_dispatch_t> ();
+    application->owner.spot_id = spot.key;
+    application->record.kind = host::record_kind_t::spot_request;
+    application->record.spot_route = protocol::spot_route_fence_t{spot.key, 1, {1}, 1, 1, 3};
+    application->record.operation_id = {1, 1};
+    application->record.reply_route_id = 1;
+    mesh::service_mailbox_record_t original;
+    original.domain = mesh::service_mailbox_domain_t::application;
+    original.application = application;
+    ASSERT_TRUE (
+      host::public_host_runtime_test_access_t::ingest_cut (*host, spot, std::move (original))
+        .result ());
+    EXPECT_EQ (reports, 1);
+    host->close ();
+}
+
+// Relocation flow §4.2 cut S: an accepted, unstarted original is saved exactly once wherever it
+// waits — the source FIFO (B), a claim suspended on its source authority (C) or the mailbox
+// (D). The started turn (A) reaches its terminal on the source first, and a record published
+// after the cut (E) takes the ingress hold.
 TEST (FrameworkRelocationSealContract, seal_cut_saves_each_unstarted_original_once)
 {
     using namespace std::chrono_literals;
@@ -1790,6 +1918,61 @@ TEST (FrameworkRelocationSealContract, seal_conversion_failure_restores_fifo_onc
                    stateful::stateful_error_t::none);
     }
     EXPECT_EQ (order, (std::vector<std::uint64_t>{1, 2, 3}));
+    host->close ();
+}
+
+TEST (FrameworkRelocationSealContract, lookup_owner_ports_suspend_without_blocking)
+{
+    stateful::stateful_object_runtime_t objects;
+    const stateful::object_ref_t spot{
+      stateful::object_kind_t::user_spot, "spot", 1, 1, "mesh", "source"};
+    const auto created = objects.begin_reserved_object (spot, "room", {});
+    ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
+    auto release = stateful::stateful_object_runtime_test_access_t::hold_lane (objects);
+    auto find = objects.find_async (spot.kind, spot.key);
+    auto resolve = objects.resolve_spot_async (spot.key);
+    EXPECT_FALSE (find.await_ready ());
+    EXPECT_FALSE (resolve.await_ready ());
+    release.set_value ();
+    EXPECT_EQ (find.result ().value (), spot);
+    EXPECT_EQ (resolve.result ().value (), spot);
+}
+
+TEST (FrameworkRelocationSealContract, relocated_stage_returns_before_owner_lane_completes)
+{
+    using namespace std::chrono_literals;
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("async-stage"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    auto &objects = host->objects ();
+    const stateful::object_ref_t spot{
+      stateful::object_kind_t::user_spot, "spot", 1, 1, "mesh", "source"};
+    const auto created = objects.begin_reserved_object (spot, "room", {});
+    ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
+    stateful::raw_stateful_dispatch_t dispatch (objects, host->transport ());
+    protocol::spot_message_header_t header;
+    header.target = {spot.key, 1, {1}, 1, 1, 3};
+    header.operation = {1, 1};
+    const auto accepted = stateful::accepted_spot_record (
+      header, {"sender", 3, {2}, 1}, {"Probe", "application/json", {'{', '}'}}, false);
+    const auto as_task = []<typename T> (T value) -> task_t<stateful::stateful_error_t> {
+        if constexpr (std::is_same_v<T, task_t<stateful::stateful_error_t>>)
+            return std::move (value);
+        else
+            return task_t<stateful::stateful_error_t> (
+              result_t<stateful::stateful_error_t>::success (value));
+    };
+    auto release = stateful::stateful_object_runtime_test_access_t::hold_lane (objects);
+    auto returned = std::async (std::launch::async, [&] {
+        return as_task (dispatch.stage_relocated (
+          spot, {0, protocol::encode_frozen_application_record (accepted).canonical_bytes},
+          [] (const auto &) { return true; }));
+    });
+    EXPECT_EQ (returned.wait_for (100ms), std::future_status::ready);
+    release.set_value ();
+    auto completed = returned.get ();
+    EXPECT_EQ (completed.result ().value (), stateful::stateful_error_t::none);
     host->close ();
 }
 

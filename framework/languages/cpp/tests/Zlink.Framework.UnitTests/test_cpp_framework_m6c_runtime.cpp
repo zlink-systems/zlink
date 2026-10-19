@@ -4780,9 +4780,12 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
           {actor.key, actor.object_generation, dst.node_routing_id, dst.lifecycle_generation,
            relocated.authority_owner_generation, 1},
           {"ActorPacket", "application/json", {static_cast<std::uint8_t> (id)}}};
-        return destination.stage_relocated (
-          relocated, {0, protocol::encode_frozen_application_record (record).canonical_bytes},
-          [] (const auto &) { return true; });
+        return destination
+          .stage_relocated (
+            relocated, {0, protocol::encode_frozen_application_record (record).canonical_bytes},
+            [] (const auto &) { return true; })
+          .result ()
+          .value ();
     };
     test.require (stage (1) == stateful_error_t::none, "saved work must stage first");
     if (!request (77))
