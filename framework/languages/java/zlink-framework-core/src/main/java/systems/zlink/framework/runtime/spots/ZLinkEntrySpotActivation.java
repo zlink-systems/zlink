@@ -36,6 +36,7 @@ import java.util.function.Supplier;
 
 final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotContext> {
     private final ZLinkEntrySpot<?> entrySpot;
+    String metricMeshName;
 
     EntrySpotActivation(
             ZLinkSpotRuntime host,

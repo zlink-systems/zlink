@@ -107,7 +107,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     ZLinkJavaRawSpotNode(ZLinkJavaRawMeshNode owner) {
         this.owner = owner;
         this.instanceSpots =
-                new ZLinkJavaInstanceSpotRegistry(stateLane, owner::executeApplication);
+                new ZLinkJavaInstanceSpotRegistry(
+                        stateLane, owner::executeApplication, owner.name());
+    }
+
+    private static long pendingActivationBytes(ZLinkBackendReceived received) {
+        long bytes = received.applicationMetadataSize();
+        for (var part : received.parts()) bytes += part.size();
+        return bytes;
     }
 
     private <T> T inStateLane(Supplier<T> work) {
@@ -2612,7 +2619,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                                             terminal.complete(null);
                                                         else
                                                             terminal.completeExceptionally(failure);
-                                                    }))
+                                                    }),
+                            pendingActivationBytes(received))
                     .whenComplete(
                             (ignored, failure) -> {
                                 if (failure != null) {
@@ -2714,7 +2722,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                                             () ->
                                                                     instanceSpots.completed(
                                                                             cold.stableType(),
-                                                                            header))))
+                                                                            header)),
+                                            pendingActivationBytes(received)))
                     .whenComplete(
                             (activation, activationFailure) -> {
                                 if (activationFailure != null) {

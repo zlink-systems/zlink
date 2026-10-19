@@ -14,6 +14,7 @@ import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocationPolicy;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
@@ -61,6 +62,220 @@ final class ZLinkProviderAuthorityRepository {
     private static final int AGGREGATE_COUNTER_RETRY_LIMIT = 64;
     private static final Duration AGGREGATE_COUNTER_RETRY_WINDOW = Duration.ofSeconds(5);
     private final ZLinkLocationStore provider;
+    private final java.util.concurrent.ConcurrentHashMap<ZLinkStoreKey, CapacityMetricSource>
+            capacityMetrics = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private volatile boolean capacityObservationRegistered;
+
+    ZLinkRuntimeMetrics.Registration registerCapacityObservation() {
+        capacityObservationRegistered = true;
+        return () -> {
+            capacityObservationRegistered = false;
+            capacityMetrics.keySet().forEach(this::removeCapacityMetrics);
+            capacityMetrics.clear();
+        };
+    }
+
+    void registerCapacityMetrics(ZLinkMeshNodeDescriptor descriptor) {
+        if (!capacityObservationRegistered) return;
+        ZLinkStoreKey key =
+                capacityKey(
+                        new ZLinkMeshNodeDescriptorKey(descriptor.meshName(), descriptor.rid()));
+        capacityMetrics.compute(
+                key,
+                (ignored, source) -> {
+                    if (source == null) return new CapacityMetricSource(descriptor);
+                    source.descriptor = descriptor;
+                    return source;
+                });
+    }
+
+    CompletionStage<Void> refreshCapacityMetrics(ZLinkMeshNodeDescriptorKey descriptor) {
+        ZLinkStoreKey key = capacityKey(descriptor);
+        if (!capacityMetrics.containsKey(key)) return CompletableFuture.completedFuture(null);
+        return provider.read(key, () -> false).thenAccept(ignored -> {});
+    }
+
+    private void updateCapacityMetrics(ZLinkStoreKey key, CapacityRecord confirmed) {
+        capacityMetrics.computeIfPresent(
+                key,
+                (ignored, source) -> {
+                    boolean firstConfirmation = source.current == null;
+                    source.current = confirmed;
+                    if (firstConfirmation) source.register();
+                    return source;
+                });
+    }
+
+    void removeCapacityMetrics(ZLinkMeshNodeDescriptorKey descriptor) {
+        removeCapacityMetrics(capacityKey(descriptor));
+    }
+
+    private void removeCapacityMetrics(ZLinkStoreKey key) {
+        capacityMetrics.computeIfPresent(
+                key,
+                (ignored, source) -> {
+                    source.close();
+                    return null;
+                });
+    }
+
+    private final class CapacityMetricSource {
+        private volatile ZLinkMeshNodeDescriptor descriptor;
+        private volatile CapacityRecord current;
+        private final List<ZLinkRuntimeMetrics.Registration> registrations = new ArrayList<>();
+
+        CapacityMetricSource(ZLinkMeshNodeDescriptor descriptor) {
+            this.descriptor = descriptor;
+        }
+
+        private void register() {
+            var actors =
+                    Map.of(
+                            ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
+                            descriptor.meshName(),
+                            ZLinkRuntimeMetrics.Tag.CAPACITY_SCOPE.wire(),
+                            "actor");
+            var spots =
+                    Map.of(
+                            ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
+                            descriptor.meshName(),
+                            ZLinkRuntimeMetrics.Tag.CAPACITY_SCOPE.wire(),
+                            "spot");
+            observe(
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
+                            .OBJECT_CAPACITY_ACTIVE,
+                    actors,
+                    () -> current.actorActive());
+            observe(
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
+                            .OBJECT_CAPACITY_RESERVED,
+                    actors,
+                    () -> current.actorPending());
+            observe(
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
+                            .OBJECT_CAPACITY_LIMIT,
+                    actors,
+                    () -> descriptor.capacity().actors().limit());
+            observe(
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
+                            .OBJECT_CAPACITY_ACTIVE,
+                    spots,
+                    () -> current.spotActive());
+            observe(
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
+                            .OBJECT_CAPACITY_RESERVED,
+                    spots,
+                    () -> current.spotPending());
+            observe(
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
+                            .OBJECT_CAPACITY_LIMIT,
+                    spots,
+                    () -> descriptor.capacity().spots().limit());
+            for (var type : descriptor.capacity().spotTypes()) {
+                String kind =
+                        type.objectKind() == ZLinkPlacementObjectKind.INSTANCE_SPOT
+                                ? ZLinkRuntimeMetrics.SpotKind.INSTANCE.wire()
+                                : ZLinkRuntimeMetrics.SpotKind.USER.wire();
+                String typeKey = CapacityRecord.typeKey(type.objectKind(), type.stableType());
+                var tags =
+                        Map.of(
+                                ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
+                                descriptor.meshName(),
+                                ZLinkRuntimeMetrics.Tag.SPOT_KIND.wire(),
+                                kind,
+                                ZLinkRuntimeMetrics.Tag.STABLE_TYPE.wire(),
+                                type.stableType());
+                observe(
+                        systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
+                                .SPOT_TYPE_CAPACITY_ACTIVE,
+                        tags,
+                        () -> current.types().getOrDefault(typeKey, TypeCounter.ZERO).active());
+                observe(
+                        systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
+                                .SPOT_TYPE_CAPACITY_RESERVED,
+                        tags,
+                        () -> current.types().getOrDefault(typeKey, TypeCounter.ZERO).pending());
+                observe(
+                        systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric
+                                .SPOT_TYPE_CAPACITY_LIMIT,
+                        tags,
+                        () -> type.usage().limit());
+            }
+        }
+
+        private void observe(
+                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Metric metric,
+                Map<String, String> tags,
+                java.util.function.LongSupplier value) {
+            registrations.add(
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics
+                            .registerObservable(metric, tags, value));
+        }
+
+        private void close() {
+            registrations.forEach(ZLinkRuntimeMetrics.Registration::close);
+            registrations.clear();
+        }
+    }
+
+    private final class CapacityMetricProvider implements ZLinkLocationStore {
+        private final ZLinkLocationStore delegate;
+
+        CapacityMetricProvider(ZLinkLocationStore delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreReadResult> read(
+                ZLinkStoreKey key,
+                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            return delegate.read(key, cancellation)
+                    .thenApply(
+                            result -> {
+                                if (capacityMetrics.containsKey(key))
+                                    updateCapacityMetrics(
+                                            key,
+                                            result instanceof ZLinkStoreReadFound found
+                                                    ? decodeCapacity(found.value().bytes())
+                                                    : CapacityRecord.empty());
+                                return result;
+                            });
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreWriteResult> write(
+                ZLinkStoreWriteRequest request,
+                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            return delegate.write(request, cancellation)
+                    .thenApply(
+                            result -> {
+                                if (result instanceof ZLinkStoreWriteApplied) {
+                                    for (var mutation : request.mutations()) {
+                                        ZLinkStoreKey key =
+                                                mutation instanceof ZLinkStorePut put
+                                                        ? put.key()
+                                                        : ((ZLinkStoreDelete) mutation).key();
+                                        if (capacityMetrics.containsKey(key))
+                                            updateCapacityMetrics(
+                                                    key,
+                                                    mutation instanceof ZLinkStorePut put
+                                                            ? decodeCapacity(put.bytes())
+                                                            : CapacityRecord.empty());
+                                    }
+                                }
+                                return result;
+                            });
+        }
+
+        @Override
+        public CompletionStage<ZLinkStoreScanResult> scan(
+                ZLinkStoreScanRequest request,
+                systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
+            return delegate.scan(request, cancellation);
+        }
+    }
+
     private final ZLinkProviderDescriptorRepository descriptors;
     private final ZLinkAggregateInventoryStore aggregateInventory;
 
@@ -70,7 +285,7 @@ final class ZLinkProviderAuthorityRepository {
 
     ZLinkProviderAuthorityRepository(
             ZLinkLocationStore provider, ZLinkProviderDescriptorRepository descriptors) {
-        this.provider = Objects.requireNonNull(provider, "provider");
+        this.provider = new CapacityMetricProvider(Objects.requireNonNull(provider, "provider"));
         this.descriptors = Objects.requireNonNull(descriptors, "descriptors");
         this.aggregateInventory = new ZLinkAggregateInventoryStore(provider);
     }
@@ -4565,6 +4780,8 @@ final class ZLinkProviderAuthorityRepository {
     private record DecodedCapacityUsage(int actors, int spots, Map<String, Integer> spotTypes) {}
 
     private record TypeCounter(int active, int pending) {
+        private static final TypeCounter ZERO = new TypeCounter(0, 0);
+
         TypeCounter {
             if (active < 0 || pending < 0) {
                 throw new IllegalArgumentException("capacity type counters must be non-negative");
@@ -4648,13 +4865,17 @@ final class ZLinkProviderAuthorityRepository {
         }
 
         private static String typeKey(ZLinkSpotTypeCapacityDelta delta) {
+            return typeKey(delta.objectKind(), delta.stableType());
+        }
+
+        private static String typeKey(ZLinkPlacementObjectKind kind, String stableType) {
             String objectKind =
-                    switch (delta.objectKind()) {
+                    switch (kind) {
                         case ACTOR -> "actor";
                         case USER_SPOT -> "user_spot";
                         case INSTANCE_SPOT -> "instance_spot";
                     };
-            return objectKind + "\0" + delta.stableType();
+            return objectKind + "\0" + stableType;
         }
     }
 

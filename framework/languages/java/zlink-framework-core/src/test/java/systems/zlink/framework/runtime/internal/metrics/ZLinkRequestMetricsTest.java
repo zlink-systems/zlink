@@ -59,6 +59,31 @@ final class ZLinkRequestMetricsTest {
                     true);
             assertOutcome(
                     probe,
+                    ZLinkRequestMetrics.node("cancelled-outcome"),
+                    "cancelled-outcome",
+                    "node",
+                    new java.util.concurrent.CompletionException(
+                            new java.util.concurrent.CancellationException()),
+                    "cancelled",
+                    false);
+            assertOutcome(
+                    probe,
+                    ZLinkRequestMetrics.node("shutdown-outcome"),
+                    "shutdown-outcome",
+                    "node",
+                    new ZLinkFrameworkException(ZLinkFrameworkErrorKind.SHUTTING_DOWN, "shutdown"),
+                    "shutdown",
+                    false);
+            assertOutcome(
+                    probe,
+                    ZLinkRequestMetrics.node("transport-shutdown"),
+                    "transport-shutdown",
+                    "node",
+                    new ZlinkRequestException(RequestResult.TERMINATED),
+                    "shutdown",
+                    false);
+            assertOutcome(
+                    probe,
                     ZLinkRequestMetrics.actor("transport-outcome"),
                     "transport-outcome",
                     "actor",

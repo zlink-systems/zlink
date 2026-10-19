@@ -1390,9 +1390,14 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                             SessionState current = sessions.putIfAbsent(key, state);
                             if (current == null) {
                                 ZLinkRuntimeMetrics.add(
-                                        "zlink.stream.connections.active", 1, Map.of());
+                                        ZLinkRuntimeMetrics.Metric.STREAM_CONNECTIONS_ACTIVE
+                                                .metricName(),
+                                        1,
+                                        state.metricTags);
                                 ZLinkRuntimeMetrics.increment(
-                                        "zlink.stream.connections.opened", Map.of());
+                                        ZLinkRuntimeMetrics.Metric.STREAM_CONNECTIONS_OPENED
+                                                .metricName(),
+                                        state.metricTags);
                                 dispatchConnected(state);
                             }
                             return current;
@@ -1412,9 +1417,17 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         if (!state.closeMetricRecorded().compareAndSet(false, true)) {
             return;
         }
-        ZLinkRuntimeMetrics.add("zlink.stream.connections.active", -1, Map.of());
+        ZLinkRuntimeMetrics.add(
+                ZLinkRuntimeMetrics.Metric.STREAM_CONNECTIONS_ACTIVE.metricName(),
+                -1,
+                state.metricTags);
         ZLinkRuntimeMetrics.increment(
-                "zlink.stream.connections.closed", Map.of("close_reason", reason));
+                ZLinkRuntimeMetrics.Metric.STREAM_CONNECTIONS_CLOSED.metricName(),
+                Map.of(
+                        ZLinkRuntimeMetrics.Tag.TRANSPORT.wire(),
+                        state.metricTags.get(ZLinkRuntimeMetrics.Tag.TRANSPORT.wire()),
+                        ZLinkRuntimeMetrics.Tag.CLOSE_REASON.wire(),
+                        reason));
     }
 
     private SessionState createSessionState(
@@ -1850,6 +1863,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         private final ZLinkSessionActorsRuntime actorRuntime;
         private final Set<ReplacementIdentity> replacements = ConcurrentHashMap.newKeySet();
         private final AtomicBoolean closeScheduled = new AtomicBoolean();
+        private final Map<String, String> metricTags;
         private final AtomicBoolean closeMetricRecorded = new AtomicBoolean();
         private long lastApplicationNanos;
         private long lastInboundNanos;
@@ -1867,6 +1881,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 long connectedNanos,
                 long createdNanos) {
             this.streamNode = streamNode;
+            this.metricTags = streamNode.metricTags();
             lastHeartbeatPingNanos = connectedNanos;
             this.session = session;
             this.serials = serials;

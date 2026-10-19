@@ -287,6 +287,7 @@ final class ZLinkSpotCloseConformanceTest {
                             .toCompletableFuture()
                             .get(WAIT_SECONDS * 2, TimeUnit.SECONDS);
             assertEquals(ZLinkFrameworkTerminationOutcome.STOPPED, termination.outcome());
+            runtime.close();
         }
     }
 

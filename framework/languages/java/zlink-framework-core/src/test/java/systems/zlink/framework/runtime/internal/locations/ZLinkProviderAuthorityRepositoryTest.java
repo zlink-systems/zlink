@@ -70,6 +70,84 @@ final class ZLinkProviderAuthorityRepositoryTest {
         }
     }
 
+    @Test
+    void metricsReadOnlyConfirmedCapacityAndNeverQueryTheStoreDuringCollection() throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                repository
+                                        .claimOwnerLease("metrics-owner", Duration.ofHours(1))
+                                        .toCompletableFuture()
+                                        .join())
+                        .token();
+        var descriptor = capacityDescriptor(owner);
+        try (var observation = repository.registerCapacityObservation()) {
+            repository
+                    .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                    .toCompletableFuture()
+                    .join();
+            String key = ZLinkAuthorityKeyCodec.spot("metrics-spot");
+            var reservation =
+                    assertInstanceOf(
+                                    ZLinkObjectReserved.class,
+                                    repository
+                                            .reserve(
+                                                    capacityRequest(key, descriptor, owner),
+                                                    () -> false)
+                                            .toCompletableFuture()
+                                            .join())
+                            .reservation();
+            try (var metrics =
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                            .install()) {
+                var tags = Map.of("mesh_name", "game", "capacity_scope", "spot");
+                assertEquals(0, metrics.observable("zlink.object.capacity.active", tags));
+                assertEquals(1, metrics.observable("zlink.object.capacity.reserved", tags));
+                assertEquals(1, metrics.observable("zlink.object.capacity.limit", tags));
+                // Store confirmation moves one reserved slot to the active population.
+                assertEquals(
+                        ZLinkObjectCommitResult.COMMITTED,
+                        repository
+                                .commit(
+                                        reservation,
+                                        new systems.zlink.framework.runtime.locations
+                                                        .ZLinkServiceAuthorityPayloadCodec()
+                                                .encodeUser(
+                                                        systems.zlink.framework.runtime.locations
+                                                                .ZLinkServiceAuthorityPayloadCodec
+                                                                .State.READY,
+                                                        "room",
+                                                        "metrics-spot",
+                                                        owner.ownerId(),
+                                                        owner.leaseGeneration(),
+                                                        descriptor.meshName(),
+                                                        descriptor.rid(),
+                                                        descriptor.lifecycleGeneration()),
+                                        null,
+                                        () -> false)
+                                .toCompletableFuture()
+                                .join());
+                assertEquals(1, metrics.observable("zlink.object.capacity.active", tags));
+                assertEquals(0, metrics.observable("zlink.object.capacity.reserved", tags));
+                assertInstanceOf(
+                        ZLinkPlacementCapacityExhausted.class,
+                        repository
+                                .reserve(
+                                        capacityRequest(
+                                                ZLinkAuthorityKeyCodec.spot("overflow"),
+                                                descriptor,
+                                                owner),
+                                        () -> false)
+                                .toCompletableFuture()
+                                .join());
+                assertEquals(1, metrics.observable("zlink.object.capacity.active", tags));
+                assertEquals(0, metrics.observable("zlink.object.capacity.reserved", tags));
+            }
+        }
+    }
+
     @ParameterizedTest
     @org.junit.jupiter.params.provider.CsvSource({
         "expired,false",

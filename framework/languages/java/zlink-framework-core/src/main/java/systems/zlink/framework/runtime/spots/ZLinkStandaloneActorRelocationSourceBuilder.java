@@ -234,6 +234,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             Admission admission,
             ZLinkActorJoinRelocationPort.Goal directJoin,
             ZLinkStoreCancellation cancellation) {
+        var metrics =
+                new ZLinkRelocationMetricOperation(
+                        meshName,
+                        systems.zlink.framework.locations.ZLinkPlacementObjectKind.ACTOR,
+                        admission.owned().snapshotPolicy());
         return sealAtTurnBoundary(
                         admission.owned().actorId(),
                         directJoin == null ? null : directJoin.activeTurnSeal(),
@@ -245,6 +250,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                         new IllegalStateException(
                                                 "Actor relocation queue cannot be sealedResult"));
                             }
+                            long sealedNanos = System.nanoTime();
+                            metrics.sealed(sealedNanos);
                             ZLinkSerialExecutionQueue.RelocationSeal seal =
                                     sealedResult.orElseThrow();
                             byte[] timerEnvelope =
@@ -411,6 +418,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                         .thenApply(
                                                                 sessionRoute ->
                                                                         new PreparedSource(
+                                                                                metrics,
                                                                                 locations,
                                                                                 actors,
                                                                                 relocationReplies,
@@ -478,6 +486,10 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                         .thenCompose(
                                                                 ignored -> failed(unwrap(failure)));
                                             });
+                        })
+                .whenComplete(
+                        (prepared, failure) -> {
+                            if (failure != null) metrics.complete(null, failure);
                         });
     }
 
@@ -960,6 +972,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
     }
 
     static final class PreparedSource {
+        final ZLinkRelocationMetricOperation metrics;
         private final ZLinkLocationRepository locations;
         private final ZLinkActorSessionCoordinator actors;
         private final ZLinkSpotRuntime relocationReplies;
@@ -992,6 +1005,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                         retained) {}
 
         private PreparedSource(
+                ZLinkRelocationMetricOperation metrics,
                 ZLinkLocationRepository locations,
                 ZLinkActorSessionCoordinator actors,
                 ZLinkSpotRuntime relocationReplies,
@@ -1005,6 +1019,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 byte[] timerEnvelope,
                 ZLinkSpotRetireControl.StageRequest stageRequest,
                 String targetSpotId) {
+            this.metrics = metrics;
             this.locations = locations;
             this.actors = actors;
             this.relocationReplies = relocationReplies;
