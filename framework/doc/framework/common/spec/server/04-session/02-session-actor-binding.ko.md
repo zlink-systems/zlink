@@ -307,8 +307,14 @@ Bound-session API는 current binding으로 one-way push를 보내거나 connecti
 요청한다. 임의의 session을 지정하는 global proxy는 제공하지 않는다. Disconnect는
 binding을 해제하지만 Actor를 destroy하거나 Spot membership을 바꾸지 않는다.
 
+**Session owner identity는 Node RID·lifecycle generation·owner ID·owner lease generation 네 값이다.** Owner ID와 owner
+lease generation은 Session owner host의 `(OwnerId, LeaseGeneration)`([Location runtime §3.1](../05-location-relocation/01-location-runtime.ko.md#31-host-process가-다시-시작됐는지-구분한다))이며
+그 node의 MeshNode descriptor에 게시된 값과 같다. Actor owner는 bind를 수락할 때 Session owner peer의 수락된 descriptor에서
+네 값을 얻어 current binding에 저장하고, 이 identity를 담는 command는 저장한 값을 그대로 보낸다. Session owner는 받은 값을
+자기 현재 값과 정확히 비교한다.
+
 **Connection close는 Session owner가 수행한다.** Actor가 current binding의 close를 요청하면 Actor owner는 current
-binding이 가리키는 Session owner identity(Node RID·lifecycle generation), SessionRid, binding generation과
+binding이 가리키는 Session owner identity, SessionRid, binding generation과
 ActorId·ObjectGeneration을 보존해 `boundSessionClose(54)`에 담아 Session owner에 보낸다. Session owner가 같은
 process에 있어도 같은 판정을 거친다. Session owner의 binding aggregate는 §2의 binding 검증을 한 번 수행하고, 요청의
 전체 identity가 current binding과 일치할 때만 그 session의 physical connection close를 시작한다. 불일치는 `Unavailable`로
@@ -365,9 +371,8 @@ sequenceDiagram
 ```
 
 Framework는 교체된 이전 binding에 `boundSessionReplaced(51)` one-way record를
-최대 한 번 적용한다. Record는 Actor authority source fence와 이전 session owner의 Node
-RID·lifecycle generation·owner ID·owner lease generation·session RID·retired binding
-generation을 함께 전달한다. 보내는 node는 record의 Actor authority target과 일치해야
+최대 한 번 적용한다. Record는 Actor authority source fence와 이전 session owner의 Session
+owner identity(§5)·session RID·retired binding generation을 함께 전달한다. 보내는 node는 record의 Actor authority target과 일치해야
 한다. 받는 node는 이전 session owner identity의 모든 값이 현재 교체 대상과 일치할
 때만 session의 Actor 중복 연결 callback을 실행한다. Actor authority source fence는
 받는 node가 local Actor를 찾는 용도로 사용하지 않는다.

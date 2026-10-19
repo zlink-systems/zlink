@@ -366,8 +366,16 @@ requests a connection close. It doesn't provide a global proxy that
 specifies an arbitrary session. Disconnect releases the binding but doesn't
 destroy the Actor or change Spot membership.
 
+**The Session owner identity is four values: Node RID, lifecycle generation, owner ID and owner lease generation.**
+The owner ID and owner lease generation are the Session owner host's `(OwnerId, LeaseGeneration)`
+([Location runtime §3.1](../05-location-relocation/01-location-runtime.en.md#31-distinguishing-whether-the-host-process-restarted)),
+the same values that node publishes in its MeshNode descriptor. The Actor owner takes the four values from the Session
+owner peer's accepted descriptor when it accepts the bind and stores them in the current binding; every command that
+carries this identity sends the stored values unchanged. The Session owner compares the received values exactly with its
+own current values.
+
 **The Session owner performs the connection close.** When an Actor requests a close of its current binding, the Actor
-owner preserves the Session owner identity (Node RID and lifecycle generation), SessionRid, binding generation, ActorId
+owner preserves the Session owner identity, SessionRid, binding generation, ActorId
 and ObjectGeneration that the current binding names, and sends them in `boundSessionClose(54)` to the Session owner.
 The same decision applies when the Session owner is in the same process. The Session owner's binding aggregate runs the
 §2 binding check once and starts the physical connection close of that session only when the request's whole identity
@@ -433,9 +441,8 @@ sequenceDiagram
 
 The framework applies a `boundSessionReplaced(51)` one-way record at most
 once to the replaced previous binding. The record carries an Actor-authority
-source fence together with the previous session owner's Node RID, lifecycle
-generation, owner ID, owner lease generation, session RID, and retired
-binding generation. The sending node must match the record's Actor-authority
+source fence together with the previous session owner's Session owner
+identity (§5), session RID, and retired binding generation. The sending node must match the record's Actor-authority
 target. The receiving node runs the session's duplicate-Actor-connection
 callback only when every previous session-owner value matches the current
 replacement target exactly. The Actor-authority source fence isn't used by
