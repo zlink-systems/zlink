@@ -470,6 +470,7 @@ export class ServiceStatefulRuntime {
   private asyncInstanceAuthority?: ServiceAsyncInstanceActivationAuthority;
   private instanceApplicationLifecycle?: ServiceInstanceApplicationLifecycle;
   private userSpotOperationHandler?: ServiceUserSpotOperationHandler;
+  private requestSourceAcceptance?: import('../backend/contracts').ZLinkBackendRequestSourceAcceptance;
   private messageFollowHandler?: (
     record: import('./service-stateful-wire-codec').ServiceMessageFollowRecord
   ) => void;
@@ -1231,6 +1232,32 @@ export class ServiceStatefulRuntime {
     handler: (record: import('./service-stateful-wire-codec').ServiceMessageFollowRecord) => void
   ): void {
     this.messageFollowHandler = handler;
+  }
+
+  setRequestSourceAcceptance(
+    acceptance: import('../backend/contracts').ZLinkBackendRequestSourceAcceptance
+  ): void {
+    this.requestSourceAcceptance = acceptance;
+  }
+
+  /**
+   * Location runtime §9.3: the first accepting owner reads the sender's owner values once. A
+   * sender without a live descriptor ends the request Unavailable (Session·Actor binding §4). The
+   * polled descriptors answer without a promise; only a Store read returns one.
+   */
+  private acceptRequestSource(ingress: RawServiceIngressRecord): Promise<void> | undefined {
+    const acceptance = this.requestSourceAcceptance;
+    if (acceptance === undefined) return undefined;
+    const generation = this.tryPeerGeneration(ingress.sourceRoutingId);
+    const source =
+      generation === undefined ? undefined : acceptance(ingress.sourceRoutingId, generation);
+    if (source instanceof Promise) {
+      return source.then((read) => {
+        if (read === undefined) throw requestSourceUnavailable(ingress.sourceRoutingId);
+      });
+    }
+    if (source === undefined) throw requestSourceUnavailable(ingress.sourceRoutingId);
+    return undefined;
   }
 
   sealSpotMessageFollowIngress(
@@ -2410,6 +2437,8 @@ export class ServiceStatefulRuntime {
         const followed = this.holdOrRelaySpotMessage(ingress, record);
         if (followed !== undefined) return followed;
         this.validateDirectSpotFence(record.target);
+        const sourcePending = this.acceptRequestSource(ingress);
+        if (sourcePending !== undefined) await sourcePending;
         return this.enqueueApplicationFrame(
           ingress,
           `spot:${record.target.spot.spotId}`,
@@ -2429,6 +2458,8 @@ export class ServiceStatefulRuntime {
       }
       case 'actorSend':
       case 'actorRequest': {
+        const sourcePending = this.acceptRequestSource(ingress);
+        if (sourcePending !== undefined) await sourcePending;
         const actor =
           record.boundSession === undefined
             ? this.validateActorMessageFence(record.target)
@@ -5623,6 +5654,13 @@ function actorLocation(actor: ServiceActorState): ActorLocation {
     spotGeneration: actor.spot.generation,
     membershipEpoch: actor.membershipEpoch
   };
+}
+
+function requestSourceUnavailable(nodeRid: string): ZLinkFrameworkException {
+  return new ZLinkFrameworkException(
+    ZLinkFrameworkErrorKind.Unavailable,
+    `Request source '${nodeRid}' has no live MeshNode descriptor.`
+  );
 }
 
 function activationRefused(): ZLinkFrameworkException {

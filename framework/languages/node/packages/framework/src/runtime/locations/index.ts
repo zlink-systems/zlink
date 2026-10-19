@@ -6,6 +6,7 @@ export * from './in-memory-provider-location-store';
 export * from './location-store-repository';
 export * from './in-memory-authority-store';
 export * from './lease-tracker';
+export * from './request-source-resolver';
 export * from './lifecycle';
 export * from './resolvers';
 export * from './runtime';
