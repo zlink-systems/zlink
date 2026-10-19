@@ -1680,7 +1680,12 @@ int main (int argc, char **argv)
         runtime.attach_transport_writer (
           closing_stream, [&admission] (const auto &, const auto &) { return admission.task (); });
         bool physically_closed = false;
-        auto lifetime = std::make_shared<int> (0);
+        std::promise<void> lifetime_released;
+        auto lifetime_released_future = lifetime_released.get_future ();
+        auto lifetime = std::shared_ptr<int> (new int (0), [&lifetime_released] (int *value) {
+            delete value;
+            lifetime_released.set_value ();
+        });
         std::weak_ptr<int> retained = lifetime;
         runtime.send_session_closing (
           closing_stream, zlink::framework::stream_close_reason_t::heartbeat_timeout,
@@ -1694,6 +1699,8 @@ int main (int argc, char **argv)
           success ? zlink::framework::result_t<void>::success ()
                   : zlink::framework::result_t<void>::failure (
                       zlink::framework::framework_error_kind_t::unavailable, "send rejected"));
+        // The close callback runs in a new execution turn after complete() returns.
+        lifetime_released_future.wait ();
         if (!physically_closed || !retained.expired ())
             return 320;
     }
