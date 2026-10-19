@@ -45,6 +45,7 @@ import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobCont
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.StreamBindingCommit;
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
@@ -2647,10 +2648,16 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                     true,
                                     3),
                             accepted -> {});
-            CompletionStage<Void> local =
+            var local =
                     target.bindStreamSession(
                             localSessionRid, actor, 9, 1, null, Duration.ofSeconds(1));
-            target.publishStreamSession(localSessionRid, actor, 9, 1, null);
+            target.publishStreamSession(
+                    localSessionRid,
+                    actor,
+                    9,
+                    target.actorAuthorityOwnerGeneration(actor),
+                    1,
+                    null);
             release.complete(null);
             assertTrue(remote.toCompletableFuture().get(5, TimeUnit.SECONDS));
             local.toCompletableFuture().get(5, TimeUnit.SECONDS);
@@ -2743,12 +2750,13 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             var lifecycle =
                     new ZLinkJavaStreamSocket.BoundSessionLifecycle() {
                         @Override
-                        public CompletionStage<Void> bind(
+                        public CompletionStage<StreamBindingCommit> bind(
                                 RoutingId sessionRid,
                                 ZLinkBackendActorRef actor,
                                 long generation,
                                 Duration timeout) {
-                            return CompletableFuture.completedFuture(null);
+                            return CompletableFuture.completedFuture(
+                                    new StreamBindingCommit(generation, 1));
                         }
 
                         @Override
@@ -2800,14 +2808,15 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             ZLinkJavaStreamSocket.BoundSessionLifecycle lifecycle =
                     new ZLinkJavaStreamSocket.BoundSessionLifecycle() {
                         @Override
-                        public CompletionStage<Void> bind(
+                        public CompletionStage<StreamBindingCommit> bind(
                                 RoutingId sessionRid,
                                 systems.zlink.framework.runtime.internal.backend
                                                 .ZLinkBackendActorRef
                                         actor,
                                 long bindingGeneration,
                                 Duration timeout) {
-                            return CompletableFuture.completedFuture(null);
+                            return CompletableFuture.completedFuture(
+                                    new StreamBindingCommit(bindingGeneration, 1));
                         }
 
                         @Override

@@ -1,0 +1,6 @@
+<Project>
+  <ItemGroup Condition="'$(MSBuildProjectName)' == 'Zlink.Framework.UnitTests'">
+    <Compile Include="$(MSBuildThisFileDirectory)CanonicalSessionBindPeerTests.cs"
+             Link="Runtime/CanonicalSessionBindPeerTests.cs" />
+  </ItemGroup>
+</Project>

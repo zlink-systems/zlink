@@ -14,6 +14,7 @@
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/mesh/mesh_metadata_codec.hpp"
+#include "runtime/mesh/user_spot_terminal_mapping.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/failure_origin_wire.hpp"
@@ -3874,7 +3875,7 @@ mesh_node_runtime_t::wait_for_application_actor_route_change (
                                                : std::optional<runtime::spot_address_t>{};
 }
 
-request_task_t<application_actor_session_bind_outcome_t>
+request_task_t<application_actor_session_bind_result_t>
 mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
                                                      const zlink::routing_id_t &session_rid,
                                                      std::uint64_t binding_generation,
@@ -3886,12 +3887,12 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
             || actor_route.authority_owner_generation == 0
             || actor_route.owner.lease_generation <= 0
             || actor_route.object_generation != actor.object_generation ()) {
-            co_return result_t<application_actor_session_bind_outcome_t>::failure (
+            co_return result_t<application_actor_session_bind_result_t>::failure (
               framework_error_kind_t::invalid_operation,
               "Remote Actor session binding fence is invalid");
         }
-        auto completion =
-          std::make_shared<task_completion_source_t<runtime::protocol::reply_header_t>> ();
+        auto completion = std::make_shared<
+          task_completion_source_t<runtime::protocol::bound_session_bind_reply_t>> ();
         auto output = completion->task ();
         auto admitted = co_await detail::request_admission_source_t{};
         detail::observe_request_failure (output, admitted);
@@ -3913,34 +3914,38 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
           [completion] (runtime::foundation::operation_terminal_t terminal,
                         zlink::message_t payload) {
               if (terminal != runtime::foundation::operation_terminal_t::completed) {
-                  const auto kind = terminal == runtime::foundation::operation_terminal_t::timed_out
-                                      ? framework_error_kind_t::deadline_exceeded
-                                      : framework_error_kind_t::unavailable;
-                  completion->complete (result_t<runtime::protocol::reply_header_t>::failure (
-                    kind, "Remote Actor session binding did not complete successfully"));
+                  const auto kind = runtime::user_spot_terminal::map_user_spot_operation_failure (
+                    terminal, {}, false);
+                  completion->complete (
+                    result_t<runtime::protocol::bound_session_bind_reply_t>::failure (
+                      kind, "Remote Actor session binding did not complete successfully"));
                   return;
               }
               try {
-                  completion->complete (result_t<runtime::protocol::reply_header_t>::success (
-                    runtime::protocol::decode_reply_header (
-                      runtime::protocol::message_bytes (payload))));
+                  completion->complete (
+                    result_t<runtime::protocol::bound_session_bind_reply_t>::success (
+                      runtime::protocol::decode_bound_session_bind_reply (
+                        runtime::protocol::message_bytes (payload), true)));
               }
               catch (const runtime::protocol::service_wire_error_t &) {
-                  completion->complete (result_t<runtime::protocol::reply_header_t>::failure (
-                    framework_error_kind_t::protocol_error,
-                    "Remote Actor session binding reply decode failed"));
+                  completion->complete (
+                    result_t<runtime::protocol::bound_session_bind_reply_t>::failure (
+                      framework_error_kind_t::protocol_error,
+                      "Remote Actor session binding reply decode failed"));
               }
           },
           admitted);
         if (!submitted) {
-            co_return result_t<application_actor_session_bind_outcome_t>::failure (
+            co_return result_t<application_actor_session_bind_result_t>::failure (
               framework_error_kind_t::not_configured,
               "Remote Actor session binding was not accepted");
         }
-        const auto reply = co_await output;
+        const auto accepted = co_await output;
+        const auto &reply = accepted.header;
         if (reply.terminal_result == 0) {
-            co_return result_t<application_actor_session_bind_outcome_t>::success (
-              application_actor_session_bind_outcome_t::bound);
+            co_return result_t<application_actor_session_bind_result_t>::success (
+              {application_actor_session_bind_outcome_t::bound, accepted.binding_generation,
+               accepted.authority_owner_generation});
         }
         const auto stale_route =
           reply.terminal_result
@@ -3951,26 +3956,25 @@ mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
         if (stale_route) {
             if (_actor_route_invalidator)
                 _actor_route_invalidator (actor_fence);
-            co_return result_t<application_actor_session_bind_outcome_t>::success (
-              application_actor_session_bind_outcome_t::stale_route);
+            co_return result_t<application_actor_session_bind_result_t>::success (
+              {application_actor_session_bind_outcome_t::stale_route});
         }
         const auto actor_not_ready =
           reply.terminal_result
             == static_cast<std::uint32_t> (runtime::protocol::request_terminal_result::busy)
           && reply.failure_code == 0;
         if (actor_not_ready) {
-            co_return result_t<application_actor_session_bind_outcome_t>::success (
-              application_actor_session_bind_outcome_t::actor_not_ready);
+            co_return result_t<application_actor_session_bind_result_t>::success (
+              {application_actor_session_bind_outcome_t::actor_not_ready});
         }
-        co_return result_t<application_actor_session_bind_outcome_t>::failure (
+        co_return result_t<application_actor_session_bind_result_t>::failure (
           framework_error_kind_t::unavailable, "Remote Actor session binding was rejected");
     }
     catch (const framework_exception_t &error) {
-        co_return detail::result_access_t::failure<application_actor_session_bind_outcome_t> (
-          error);
+        co_return detail::result_access_t::failure<application_actor_session_bind_result_t> (error);
     }
     catch (const std::exception &error) {
-        co_return result_t<application_actor_session_bind_outcome_t>::failure (
+        co_return result_t<application_actor_session_bind_result_t>::failure (
           framework_error_kind_t::internal_failure, error.what ());
     }
 }
@@ -4007,7 +4011,7 @@ mesh_node_runtime_t::retire_application_actor_session (runtime::stateful::stream
       [completion] (runtime::foundation::operation_terminal_t terminal, zlink::message_t payload) {
           if (terminal != runtime::foundation::operation_terminal_t::completed) {
               completion->complete (result_t<runtime::protocol::reply_header_t>::failure (
-                framework_error_kind_t::unavailable,
+                runtime::user_spot_terminal::map_user_spot_operation_failure (terminal, {}, false),
                 "retired Actor session binding did not complete"));
               return;
           }

@@ -1176,6 +1176,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
 
   add_executable(test_cpp_framework_m6a_runtime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp)
+  if(UNIX)
+    add_executable(zlink_cpp_session_bind_host cross-language/session_bind_host.cpp)
+    target_compile_features(zlink_cpp_session_bind_host PRIVATE cxx_std_20)
+    target_include_directories(zlink_cpp_session_bind_host PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    target_link_libraries(zlink_cpp_session_bind_host PRIVATE
+      zlink_framework nlohmann_json::nlohmann_json Threads::Threads)
+  endif()
   target_compile_features(test_cpp_framework_m6a_runtime PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_m6a_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src

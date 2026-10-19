@@ -323,6 +323,8 @@ struct bound_session_bind_operation_result_t
 {
     stateful::stateful_error_t error = stateful::stateful_error_t::none;
     std::optional<protocol::bound_session_replaced_t> replacement;
+    std::uint64_t binding_generation = 0;
+    std::uint64_t authority_owner_generation = 0;
 };
 
 struct bound_session_operations_t

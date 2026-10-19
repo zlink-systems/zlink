@@ -18,6 +18,38 @@ final class ZLinkServiceM6BBoundSessionWireCodecTest {
     private final ZLinkServiceM6BWireCodec codec = new ZLinkServiceM6BWireCodec();
 
     @Test
+    void streamBindReplyRequiresTheSchemaTailOnlyOnBindSuccess() {
+        var bind =
+                new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                        7, route(), RoutingId.from("session"), true, 11);
+        byte[] frame = codec.encodeBoundSessionBindReply(bind);
+        var reply = codec.decodeBoundSessionBindReply(frame, true);
+        assertEquals(11, reply.binding().bindingGeneration());
+        assertEquals(
+                route().authorityOwnerGeneration(), reply.binding().authorityOwnerGeneration());
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> codec.decodeBoundSessionBindReply(Arrays.copyOf(frame, 21), true));
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        codec.decodeBoundSessionBindReply(
+                                Arrays.copyOf(frame, frame.length - 1), true));
+        assertThrows(
+                IllegalArgumentException.class,
+                () -> codec.decodeBoundSessionBindReply(frame, false));
+        byte[] unbind =
+                codec.encodeBoundSessionBindReply(
+                        new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                7, route(), RoutingId.from("session"), false, 11));
+        assertEquals(21, unbind.length);
+        assertEquals(0, codec.decodeBoundSessionBindReply(unbind, false).header().terminalResult());
+        byte[] rejected = new ZLinkServiceM6AWireCodec().encodeReplyHeader(7, 102, 1);
+        assertEquals(
+                102, codec.decodeBoundSessionBindReply(rejected, true).header().terminalResult());
+    }
+
+    @Test
     void requestHeadersAddOnlyCorrelationToSendHeaders() {
         var spotRoute =
                 new ZLinkServiceM6BWireCodec.SpotRouteFence(

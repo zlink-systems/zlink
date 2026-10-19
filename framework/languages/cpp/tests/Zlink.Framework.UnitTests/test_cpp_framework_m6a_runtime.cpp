@@ -21,6 +21,7 @@
 #include "runtime/protocol/service_wire_codec.hpp"
 
 #include <service_wire_pilot_codec.hpp>
+#include <service_wire_codec.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -186,7 +187,8 @@ void complete_bound_session_bind (
       protocol::decode_bound_session_bind (protocol::message_bytes (record.parts.front ()));
     assert (decoded.actor.actor_id == expected_actor);
     assert (record.correlation && decoded.correlation == *record.correlation);
-    assert (target.reply_bound_session_bind (record, 0, 0));
+    assert (target.reply_bound_session_bind (record, 0, 0, decoded.binding.generation,
+                                             decoded.actor.authority_owner_generation));
     assert (target.mailbox ().release (*claim));
 
     const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
@@ -199,12 +201,44 @@ void complete_bound_session_bind (
     assert (completion.wait_for (0ms) == std::future_status::ready);
     const auto settled = completion.get ();
     assert (settled.first == foundation::operation_terminal_t::completed);
+    const auto canonical = protocol::generated::detail::decode_reply_20_frames (
+      {settled.second}, protocol::generated::detail::mesh_operation_kind_t::streamBind, {});
+    assert (canonical);
+    const auto &tail = std::get<protocol::generated::detail::request_specific_tail_t::case_2_t> (
+      canonical.value.tail.value);
+    assert (tail.bindingGeneration.value == decoded.binding.generation);
+    assert (tail.authorityOwnerGeneration.value == decoded.actor.authority_owner_generation);
     const auto reply = protocol::decode_reply_header (settled.second);
     assert (reply.terminal_result == 0 && reply.failure_code == 0);
 }
 
 void verify_bound_session_close_reply_grammar ()
 {
+    const auto success = protocol::encode_bound_session_bind_reply (7, 0, 0, 11, 13, true);
+    const auto accepted = protocol::decode_bound_session_bind_reply (success, true);
+    assert (accepted.binding_generation == 11 && accepted.authority_owner_generation == 13);
+    const auto rejects = [] (const auto &bytes, bool active) {
+        try {
+            (void) protocol::decode_bound_session_bind_reply (bytes, active);
+        }
+        catch (const protocol::service_wire_error_t &) {
+            return true;
+        }
+        return false;
+    };
+    assert (rejects (protocol::encode_reply_header (7, 0, 0), true));
+    auto truncated = success;
+    truncated.pop_back ();
+    assert (rejects (truncated, true));
+    assert (rejects (success, false));
+    assert (protocol::decode_bound_session_bind_reply (
+              protocol::encode_bound_session_bind_reply (7, 0, 0, 11, 13, false), false)
+              .header.terminal_result
+            == 0);
+    assert (
+      protocol::decode_bound_session_bind_reply (protocol::encode_reply_header (7, 102, 1), true)
+        .header.terminal_result
+      == 102);
     mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
       .descriptor = descriptor ("close-reply-source"),
       .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
@@ -247,7 +281,7 @@ void verify_bound_session_close_reply_grammar ()
         if (reply_case == reply_case_t::payload)
             assert (target.reply (request, {"forbidden", "application/json", bytes ("{}")}));
         else
-            assert (target.reply_bound_session_bind (request, 0, 0));
+            assert (target.reply_bound_session_close (request, 0, 0));
         assert (target.mailbox ().release (*claim));
         while (!close.await_ready () && std::chrono::steady_clock::now () < deadline)
             (void) await_task (

@@ -5417,9 +5417,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     if (admission == bound_session_bind_admission_t::ready && session_owner) {
                         operation_result = bound_session_operations.bind (
                           bind, session_owner_rid, mailbox_record.source_node_generation,
-                          *session_owner, [this, &mailbox_record, &terminal_replied] {
-                              terminal_replied =
-                                _transport->reply_bound_session_bind (mailbox_record, 0u, 0u);
+                          *session_owner, [this, &mailbox_record, &terminal_replied, &bind] {
+                              terminal_replied = _transport->reply_bound_session_bind (
+                                mailbox_record, 0u, 0u, bind.binding.generation,
+                                bind.actor.authority_owner_generation);
                               return terminal_replied;
                           });
                     }
@@ -5437,10 +5438,12 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       : admission == bound_session_bind_admission_t::ready && !session_owner
                         ? std::pair{terminal_t::internalError, code_t::routeNotConnected}
                         : std::pair{terminal_t::notFound, code_t::actorSessionNotBound};
-                    const auto replied = terminal_replied
-                                         || _transport->reply_bound_session_bind (
-                                           mailbox_record, static_cast<std::uint32_t> (terminal),
-                                           static_cast<std::uint32_t> (code));
+                    const auto replied =
+                      terminal_replied
+                      || _transport->reply_bound_session_bind (
+                        mailbox_record, static_cast<std::uint32_t> (terminal),
+                        static_cast<std::uint32_t> (code), operation_result.binding_generation,
+                        operation_result.authority_owner_generation);
                     if (replied && operation_result.replacement) {
                         (void) co_await _transport->send_bound_session_replaced (
                           operation_result.replacement->retired_session
@@ -5471,7 +5474,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       closed ? std::optional<messaging::request_wire_failure_t>{}
                              : messaging::request_failure_mapper_t{}.target_failure_reply (
                                  *closed.error ());
-                    _transport->reply_bound_session_bind (
+                    _transport->reply_bound_session_close (
                       mailbox_record,
                       failure ? failure->terminal_result
                               : static_cast<std::uint32_t> (protocol::request_terminal_result::ok),

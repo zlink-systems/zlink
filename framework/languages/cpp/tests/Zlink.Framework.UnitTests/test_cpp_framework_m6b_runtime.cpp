@@ -1255,7 +1255,8 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
                                         target_descriptor.lifecycle_generation};
 
     const auto request_and_reply = [&] (protocol::request_terminal_result terminal,
-                                        protocol::framework_error_code failure) {
+                                        protocol::framework_error_code failure,
+                                        bool malformed = false) {
         auto result = std::async (std::launch::async, [&] {
             return source
               .bind_application_actor_session (
@@ -1280,9 +1281,14 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
                               protocol::message_bytes (claim->records.front ().parts.front ()))
                               .kind
                             == protocol::command::boundSessionBind);
-                    assert (target.native_node ().transport ().reply_bound_session_bind (
-                      claim->records.front (), static_cast<std::uint32_t> (terminal),
-                      static_cast<std::uint32_t> (failure)));
+                    if (malformed) {
+                        assert (target.native_node ().transport ().reply_bound_session_close (
+                          claim->records.front (), 0, 0));
+                    } else {
+                        assert (target.native_node ().transport ().reply_bound_session_bind (
+                          claim->records.front (), static_cast<std::uint32_t> (terminal),
+                          static_cast<std::uint32_t> (failure), 57, 61));
+                    }
                     assert (target.native_node ().transport ().mailbox ().release (*claim));
                     replied = true;
                 }
@@ -1298,7 +1304,8 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
     const auto stale = request_and_reply (protocol::request_terminal_result::conflict,
                                           protocol::framework_error_code::actorLocationStale);
     assert (stale);
-    assert (stale.value () == detail::application_actor_session_bind_outcome_t::stale_route);
+    assert (stale.value ().outcome
+            == detail::application_actor_session_bind_outcome_t::stale_route);
     assert (invalidations == 1);
     assert (invalidated);
     assert (invalidated->actor_id == "bound-actor");
@@ -1310,10 +1317,22 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
     const auto actor_not_ready = request_and_reply (protocol::request_terminal_result::busy,
                                                     protocol::framework_error_code::none);
     assert (actor_not_ready);
-    assert (actor_not_ready.value ()
+    assert (actor_not_ready.value ().outcome
             == detail::application_actor_session_bind_outcome_t::actor_not_ready);
     assert (invalidations == 1);
     assert (route_resolutions == 0);
+
+    const auto accepted = request_and_reply (protocol::request_terminal_result::ok,
+                                             protocol::framework_error_code::none);
+    assert (accepted);
+    assert (accepted.value ().outcome == detail::application_actor_session_bind_outcome_t::bound);
+    assert (accepted.value ().binding_generation == 57);
+    assert (accepted.value ().authority_owner_generation == 61);
+
+    const auto malformed = request_and_reply (protocol::request_terminal_result::ok,
+                                              protocol::framework_error_code::none, true);
+    assert (!malformed);
+    assert (malformed.error_kind () == framework_error_kind_t::protocol_error);
 
     const auto ordinary_conflict =
       request_and_reply (protocol::request_terminal_result::conflict,
@@ -7986,6 +8005,11 @@ void verify_relocation_failure_code_classification_is_distinct ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--bound-session-bind-reply") {
+        zlink::framework::runtime::install_host_context_hooks ();
+        verify_remote_bound_session_bind_classifies_retryable_outcomes ();
+        return 0;
+    }
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
     if (argc == 2 && std::string_view (argv[1]) == "--creating-subscription") {

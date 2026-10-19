@@ -3282,7 +3282,7 @@ final class ZLinkJavaRawMeshNode
                         });
     }
 
-    CompletionStage<Void> bindRemoteStreamSession(
+    CompletionStage<ZLinkServiceM6BWireCodec.StreamBindingCommit> bindRemoteStreamSession(
             RoutingId sessionRid,
             ZLinkBackendActorRef actor,
             long authorityOwnerGeneration,
@@ -3323,14 +3323,16 @@ final class ZLinkJavaRawMeshNode
                                                     bindingGeneration)));
                         },
                         timeout)
-                .thenAccept(
+                .thenApply(
                         replies -> {
                             if (replies.size() != 1) {
                                 throw new IllegalArgumentException(
                                         "bound session binding reply frame count");
                             }
-                            ZLinkServiceM6AWireCodec.Reply reply =
-                                    wire.decodeReplyHeader(replies.getFirst());
+                            var accepted =
+                                    statefulWire.decodeBoundSessionBindReply(
+                                            replies.getFirst(), active);
+                            var reply = accepted.header();
                             if (reply.correlation() != correlation) {
                                 throw new IllegalArgumentException(
                                         "bound session binding reply correlation");
@@ -3344,6 +3346,7 @@ final class ZLinkJavaRawMeshNode
                                         reply.failureCode(),
                                         java.util.Map.of());
                             }
+                            return accepted.binding();
                         });
     }
 
@@ -7082,7 +7085,7 @@ final class ZLinkJavaRawMeshNode
                     requireStarted(),
                     inbound.source(),
                     inbound.requestSequence(),
-                    List.of(wire.encodeReplyHeader(binding.correlation(), 0, 0)));
+                    List.of(statefulWire.encodeBoundSessionBindReply(binding)));
             return;
         }
         replyBoundSessionBindFailure(

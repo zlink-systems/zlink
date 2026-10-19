@@ -266,8 +266,13 @@ class raw_mesh_node_owner_t
     task_t<void> request_bound_session_close (protocol::bound_session_close_t record,
                                               std::chrono::milliseconds timeout);
     bool reply_bound_session_bind (const service_mailbox_record_t &request,
-                                   std::uint32_t terminal_result = 0,
-                                   std::uint32_t failure_code = 0);
+                                   std::uint32_t terminal_result,
+                                   std::uint32_t failure_code,
+                                   std::uint64_t binding_generation,
+                                   std::uint64_t authority_owner_generation);
+    bool reply_bound_session_close (const service_mailbox_record_t &request,
+                                    std::uint32_t terminal_result,
+                                    std::uint32_t failure_code);
     task_t<bool> request_user_spot_create (const std::vector<std::uint8_t> &target_routing_id,
                                            protocol::user_spot_create_header_t request,
                                            std::chrono::milliseconds timeout,

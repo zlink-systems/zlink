@@ -1927,7 +1927,7 @@ class stream_host_service_t::listener_t
               actor,
               detail::actor_bound_session_route_t{
                 *local_node, session_rid, actor.object_generation (),
-                local_status.lifecycle_generation (), actor_route->authority_owner_generation,
+                local_status.lifecycle_generation (), binding.actor.authority_owner_generation,
                 static_cast<std::uint64_t> (actor_route->owner.lease_generation),
                 binding.binding_generation, 0, 0, false, local_owner->owner_id,
                 static_cast<std::uint64_t> (local_owner->lease_generation)},
@@ -2004,19 +2004,23 @@ class stream_host_service_t::listener_t
                 const auto remote_binding =
                   co_await detail::request_submission (_mesh_node->bind_application_actor_session (
                     actor, session_rid, binding.binding_generation, *actor_route, remaining));
-                if (remote_binding
+                if (remote_binding.outcome
                     == detail::application_actor_session_bind_outcome_t::stale_route) {
-                    retryable_outcome = remote_binding;
+                    retryable_outcome = remote_binding.outcome;
                     recorded =
                       result_t<void>::failure (framework_error_kind_t::invalid_operation,
                                                "Remote Actor session binding route is stale");
-                } else if (remote_binding
+                } else if (remote_binding.outcome
                            == detail::application_actor_session_bind_outcome_t::actor_not_ready) {
-                    retryable_outcome = remote_binding;
+                    retryable_outcome = remote_binding.outcome;
                     recorded =
                       result_t<void>::failure (framework_error_kind_t::unavailable,
                                                "Remote Actor session binding owner is not ready");
                 } else {
+                    binding_generation = remote_binding.binding_generation;
+                    binding.binding_generation = remote_binding.binding_generation;
+                    binding.actor.authority_owner_generation =
+                      remote_binding.authority_owner_generation;
                     recorded = result_t<void>::success ();
                 }
             }

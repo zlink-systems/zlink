@@ -2766,7 +2766,9 @@ void app_t::_apply_zlink_framework ()
                         change.previous->binding_generation}};
                 }
                 return runtime::host::bound_session_bind_operation_result_t{
-                  runtime::stateful::stateful_error_t::none, std::move (replacement)};
+                  runtime::stateful::stateful_error_t::none, std::move (replacement),
+                  change.current ? change.current->binding_generation : 0,
+                  change.current ? change.current->authority_owner_generation : 0};
             },
             [actor_gateway_runtime,
              stream_runtime] (const runtime::protocol::bound_session_send_t &send,

@@ -2078,7 +2078,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return current;
     }
 
-    CompletionStage<Void> bindStreamSession(
+    CompletionStage<ZLinkServiceM6BWireCodec.StreamBindingCommit> bindStreamSession(
             RoutingId sessionRid,
             ZLinkBackendActorRef actor,
             long bindingGeneration,
@@ -2093,18 +2093,23 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             return CompletableFuture.failedFuture(
                     new IllegalArgumentException("Actor slot must be in 1..65535"));
         }
-        long authorityOwnerGeneration = actorAuthorityOwnerGeneration(actor);
         if (isCurrentActor(actor)) {
             return bindLocalSession(sessionRid, actor, bindingGeneration);
         }
         return owner.bindRemoteStreamSession(
-                sessionRid, actor, authorityOwnerGeneration, bindingGeneration, true, timeout);
+                sessionRid,
+                actor,
+                actorAuthorityOwnerGeneration(actor),
+                bindingGeneration,
+                true,
+                timeout);
     }
 
     void publishStreamSession(
             RoutingId sessionRid,
             ZLinkBackendActorRef actor,
             long bindingGeneration,
+            long authorityOwnerGeneration,
             int actorSlot,
             ZLinkJavaStreamSocket stream) {
         StreamBinding binding =
@@ -2112,7 +2117,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         sessionRid,
                         actor,
                         bindingGeneration,
-                        actorAuthorityOwnerGeneration(actor),
+                        authorityOwnerGeneration,
                         actorSlot,
                         stream);
         inStateLane(
@@ -2189,7 +2194,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
      * (its linearization point) before the Session owner commits and publishes its route, as a
      * command 38 reply does for a remote Session.
      */
-    private CompletionStage<Void> bindLocalSession(
+    private CompletionStage<ZLinkServiceM6BWireCodec.StreamBindingCommit> bindLocalSession(
             RoutingId sessionRid, ZLinkBackendActorRef actor, long bindingGeneration) {
         // Session-Actor binding §4: a same-node Session owner identity is this host's own
         // descriptor value, stored with the binding. Without a live descriptor there is no
@@ -2223,7 +2228,11 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             installActorBinding(candidate);
                             return true;
                         })
-                .thenApply(ignored -> null);
+                .thenApply(
+                        ignored ->
+                                new ZLinkServiceM6BWireCodec.StreamBindingCommit(
+                                        candidate.bindingGeneration(),
+                                        candidate.authorityOwnerGeneration()));
     }
 
     /**

@@ -1020,6 +1020,20 @@ std::vector<std::uint8_t> encode_reply_header (std::uint64_t correlation,
                                                std::uint32_t terminal_result,
                                                std::uint32_t failure_code);
 reply_header_t decode_reply_header (std::span<const std::uint8_t> bytes);
+struct bound_session_bind_reply_t
+{
+    reply_header_t header;
+    std::uint64_t binding_generation = 0;
+    std::uint64_t authority_owner_generation = 0;
+};
+std::vector<std::uint8_t> encode_bound_session_bind_reply (std::uint64_t correlation,
+                                                           std::uint32_t terminal_result,
+                                                           std::uint32_t failure_code,
+                                                           std::uint64_t binding_generation,
+                                                           std::uint64_t authority_owner_generation,
+                                                           bool active);
+bound_session_bind_reply_t decode_bound_session_bind_reply (std::span<const std::uint8_t> bytes,
+                                                            bool active);
 std::vector<std::uint8_t> encode_user_spot_create_reply (std::uint64_t correlation,
                                                          std::uint32_t terminal_result,
                                                          std::uint32_t failure_code,

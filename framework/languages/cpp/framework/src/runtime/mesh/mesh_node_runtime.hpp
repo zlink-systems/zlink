@@ -66,6 +66,13 @@ enum class application_actor_session_bind_attempt_t : std::uint8_t
     retry
 };
 
+struct application_actor_session_bind_result_t
+{
+    application_actor_session_bind_outcome_t outcome;
+    std::uint64_t binding_generation = 0;
+    std::uint64_t authority_owner_generation = 0;
+};
+
 /* Retries are bounded by the caller's binding deadline (not by attempt
  * count), matching the dotnet/java bind-vs-authority-convergence retry
  * loops: stale_route and actor_not_ready are transient outcomes that a
@@ -412,7 +419,7 @@ class mesh_node_runtime_t
       std::uint64_t reply_route_id,
       bool await_remote_admission = false,
       std::optional<bound_session_relay_source_t> bound_session_source = std::nullopt);
-    request_task_t<application_actor_session_bind_outcome_t>
+    request_task_t<application_actor_session_bind_result_t>
     bind_application_actor_session (const actor_ref_t &actor,
                                     const zlink::routing_id_t &session_rid,
                                     std::uint64_t binding_generation,

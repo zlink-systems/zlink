@@ -10,9 +10,19 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchEvent;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.StreamBindingCommit;
+import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
+import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import java.time.Duration;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -21,6 +31,95 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkJavaStreamRelocationTest {
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(1);
+
+    @Test
+    void sessionCommitAndPushUseTheAcceptedGenerations() throws Exception {
+        var accepted = new java.util.concurrent.atomic.AtomicReference<StreamBindingCommit>();
+        var deliveries = new AtomicInteger();
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            node.setRoutingId(RoutingId.from("accepted-binding-session-owner"));
+            node.setBind("inproc://accepted-binding-" + System.nanoTime());
+            node.start();
+            var actor =
+                    new ZLinkBackendActorRef(RoutingId.from("accepted-actor-owner"), "actor", 1);
+            var spots = (ZLinkJavaRawSpotNode) node.spotNode();
+            spots.rememberActorAuthority(actor, 3, 1);
+            var lifecycle =
+                    new ZLinkJavaStreamSocket.BoundSessionLifecycle() {
+                        @Override
+                        public CompletionStage<StreamBindingCommit> bind(
+                                RoutingId session,
+                                ZLinkBackendActorRef target,
+                                long generation,
+                                Duration timeout) {
+                            var commit = new StreamBindingCommit(generation + 1, 41);
+                            accepted.set(commit);
+                            return CompletableFuture.completedFuture(commit);
+                        }
+
+                        @Override
+                        public CompletionStage<Void> unbind(
+                                RoutingId session,
+                                ZLinkBackendActorRef target,
+                                long generation,
+                                Duration timeout) {
+                            assertEquals(accepted.get().bindingGeneration(), generation);
+                            return CompletableFuture.completedFuture(null);
+                        }
+                    };
+            try (var stream =
+                    new ZLinkJavaStreamSocket(
+                            context.createStreamSocket(),
+                            node,
+                            (session, parts, flags) -> {
+                                deliveries.incrementAndGet();
+                                return true;
+                            },
+                            lifecycle)) {
+                var session = RoutingId.from("accepted-session");
+                stream.startSessionService();
+                stream.bindActor(session, actor, 1)
+                        .submit(REQUEST_TIMEOUT)
+                        .toCompletableFuture()
+                        .join();
+                assertEquals(
+                        accepted.get().bindingGeneration(),
+                        stream.boundActorBindingGeneration(session, actor.actorId()));
+                stream.publishBoundActor(session, actor.actorId());
+                try (var payload =
+                        Message.from(
+                                ZLinkStreamFrameCodec.encode(
+                                        new ZLinkStreamHeader(
+                                                ZLinkStreamMessageKind.SEND,
+                                                ZLinkStreamCodec.RAW,
+                                                EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                                                Optional.empty(),
+                                                "push",
+                                                Map.of()),
+                                        new byte[] {1}))) {
+                    var acceptedRoute =
+                            new ZLinkServiceM6BWireCodec.ActorRouteFence(actor, 11, 41, 1);
+                    assertTrue(
+                            spots.acceptBoundSessionPush(
+                                    actor.nodeRid(),
+                                    11,
+                                    new ZLinkServiceM6BWireCodec.BoundSessionSend(
+                                            acceptedRoute, accepted.get().bindingGeneration()),
+                                    List.of(payload)));
+                    var cachedRoute = new ZLinkServiceM6BWireCodec.ActorRouteFence(actor, 11, 3, 1);
+                    assertFalse(
+                            spots.acceptBoundSessionPush(
+                                    actor.nodeRid(),
+                                    11,
+                                    new ZLinkServiceM6BWireCodec.BoundSessionSend(
+                                            cachedRoute, accepted.get().bindingGeneration()),
+                                    List.of(payload)));
+                }
+                assertEquals(1, deliveries.get());
+            }
+        }
+    }
 
     @Test
     void sameGenerationPublicationRejectsADifferentSession() {
@@ -33,6 +132,7 @@ final class ZLinkJavaStreamRelocationTest {
                                     RoutingId.from("another-session"),
                                     fixture.source,
                                     fixture.generation(),
+                                    spots.actorAuthorityOwnerGeneration(fixture.source),
                                     1,
                                     fixture.stream));
         }
@@ -49,6 +149,7 @@ final class ZLinkJavaStreamRelocationTest {
                                     fixture.session,
                                     fixture.source,
                                     fixture.generation(),
+                                    spots.actorAuthorityOwnerGeneration(fixture.source),
                                     2,
                                     fixture.stream));
         }
@@ -68,6 +169,7 @@ final class ZLinkJavaStreamRelocationTest {
                                     fixture.session,
                                     fixture.source,
                                     fixture.generation(),
+                                    spots.actorAuthorityOwnerGeneration(fixture.source),
                                     1,
                                     other));
         }
@@ -87,6 +189,7 @@ final class ZLinkJavaStreamRelocationTest {
                                     fixture.session,
                                     other,
                                     fixture.generation(),
+                                    spots.actorAuthorityOwnerGeneration(other),
                                     1,
                                     fixture.stream));
         }
@@ -102,6 +205,7 @@ final class ZLinkJavaStreamRelocationTest {
                                     fixture.session,
                                     fixture.target,
                                     fixture.generation(),
+                                    spots.actorAuthorityOwnerGeneration(fixture.target),
                                     1,
                                     fixture.stream));
         }
@@ -197,6 +301,7 @@ final class ZLinkJavaStreamRelocationTest {
                                     fixture.session,
                                     fixture.target,
                                     oldGeneration,
+                                    spots.actorAuthorityOwnerGeneration(fixture.target),
                                     1,
                                     fixture.stream));
         }
@@ -232,7 +337,7 @@ final class ZLinkJavaStreamRelocationTest {
                             null,
                             new ZLinkJavaStreamSocket.BoundSessionLifecycle() {
                                 @Override
-                                public CompletionStage<Void> bind(
+                                public CompletionStage<StreamBindingCommit> bind(
                                         RoutingId rid,
                                         ZLinkBackendActorRef actor,
                                         long generation,
@@ -244,8 +349,11 @@ final class ZLinkJavaStreamRelocationTest {
                                                         rid, actor, generation, 1, stream, timeout);
                                     }
                                     return actor.equals(source)
-                                            ? CompletableFuture.completedFuture(null)
-                                            : preparation;
+                                            ? CompletableFuture.completedFuture(
+                                                    new StreamBindingCommit(generation, 1))
+                                            : preparation.thenApply(
+                                                    ignored ->
+                                                            new StreamBindingCommit(generation, 1));
                                 }
 
                                 @Override

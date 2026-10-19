@@ -920,6 +920,61 @@ template <typename Action> auto generated_codec_call (Action &&action)
     }
 }
 
+} // namespace
+
+std::vector<std::uint8_t> encode_bound_session_bind_reply (std::uint64_t correlation,
+                                                           std::uint32_t terminal_result,
+                                                           std::uint32_t failure_code,
+                                                           std::uint64_t binding_generation,
+                                                           std::uint64_t authority_owner_generation,
+                                                           bool active)
+{
+    namespace codec = generated::detail;
+    codec::reply_20_t reply{};
+    reply.correlation.value = correlation;
+    reply.terminalResult = static_cast<codec::request_terminal_result_t> (terminal_result);
+    reply.failureCode = static_cast<codec::framework_error_code_t> (failure_code);
+    if (active && reply.terminalResult == codec::request_terminal_result_t::ok) {
+        reply.tail.tag = codec::request_specific_tail_t::tag_t::case_2;
+        reply.tail.value = codec::request_specific_tail_t::case_2_t{{binding_generation},
+                                                                    {authority_owner_generation}};
+    } else {
+        reply.tail.tag = codec::request_specific_tail_t::tag_t::otherwise;
+        reply.tail.value = codec::request_specific_tail_t::otherwise_t{};
+    }
+    auto frames = generated_codec_call ([&] {
+        return codec::encode_reply_20_frames (reply,
+                                              active ? codec::mesh_operation_kind_t::streamBind
+                                                     : codec::mesh_operation_kind_t::streamUnbind,
+                                              {});
+    });
+    return std::move (frames.front ());
+}
+
+bound_session_bind_reply_t decode_bound_session_bind_reply (std::span<const std::uint8_t> bytes,
+                                                            bool active)
+{
+    namespace codec = generated::detail;
+    const auto reply = generated_codec_call ([&] {
+        return codec::decode_reply_20_frames ({{bytes.begin (), bytes.end ()}},
+                                              active ? codec::mesh_operation_kind_t::streamBind
+                                                     : codec::mesh_operation_kind_t::streamUnbind,
+                                              {});
+    });
+    bound_session_bind_reply_t result{{reply.correlation.value,
+                                       static_cast<std::uint32_t> (reply.terminalResult),
+                                       static_cast<std::uint32_t> (reply.failureCode)}};
+    if (const auto *tail =
+          std::get_if<codec::request_specific_tail_t::case_2_t> (&reply.tail.value)) {
+        result.binding_generation = tail->bindingGeneration.value;
+        result.authority_owner_generation = tail->authorityOwnerGeneration.value;
+    }
+    return result;
+}
+
+namespace
+{
+
 std::vector<std::uint8_t> wire_bytes (std::span<const std::uint8_t> bytes);
 template <typename Record = service_wire_pilot_relocation_id>
 Record to_generated (const relocation_id_t &value);

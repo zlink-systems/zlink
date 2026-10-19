@@ -1965,17 +1965,12 @@ task_t<bool> raw_mesh_node_owner_t::request_bound_session_bind (
     co_return co_await submit_registered_infrastructure_request_with_retry (
       std::move (port), _topology.observe_peer (actor_owner_routing_id), operations, id,
       correlation, actor_owner_routing_id, std::move (request_parts),
-      [] (const detail::backend::raw_message_t &parts) {
+      [active = record.binding.state == protocol::bound_session_binding_state_t::active] (
+        const detail::backend::raw_message_t &parts) {
           if (parts.size () != 1)
               throw protocol::service_wire_error_t (
                 "bound Session bind reply must contain one header");
-          const auto reply = protocol::decode_reply_header (parts.front ());
-          if (!protocol::valid_terminal_failure (
-                reply.terminal_result,
-                static_cast<protocol::framework_error_code> (reply.failure_code))) {
-              throw protocol::service_wire_error_t (
-                "bound Session bind reply terminal is inconsistent");
-          }
+          (void) protocol::decode_bound_session_bind_reply (parts.front (), active);
           return parts.front ();
       },
       deadline, std::move (admitted));
@@ -2044,14 +2039,31 @@ raw_mesh_node_owner_t::request_bound_session_close (protocol::bound_session_clos
     co_await completion->task ();
 }
 
+bool raw_mesh_node_owner_t::reply_bound_session_close (const service_mailbox_record_t &request,
+                                                       std::uint32_t terminal_result,
+                                                       std::uint32_t failure_code)
+{
+    if (!request.correlation)
+        throw std::invalid_argument ("bound Session close reply requires a correlation");
+    return reply_infrastructure (
+      request, protocol::encode_reply_header (*request.correlation, terminal_result, failure_code));
+}
+
 bool raw_mesh_node_owner_t::reply_bound_session_bind (const service_mailbox_record_t &request,
                                                       std::uint32_t terminal_result,
-                                                      std::uint32_t failure_code)
+                                                      std::uint32_t failure_code,
+                                                      std::uint64_t binding_generation,
+                                                      std::uint64_t authority_owner_generation)
 {
     if (!request.correlation)
         throw std::invalid_argument ("bound Session bind reply requires a correlation");
+    const auto bind =
+      protocol::decode_bound_session_bind (protocol::message_bytes (request.parts.front ()));
     return reply_infrastructure (
-      request, protocol::encode_reply_header (*request.correlation, terminal_result, failure_code));
+      request, protocol::encode_bound_session_bind_reply (
+                 *request.correlation, terminal_result, failure_code, binding_generation,
+                 authority_owner_generation,
+                 bind.binding.state == protocol::bound_session_binding_state_t::active));
 }
 
 task_t<bool>

@@ -330,6 +330,66 @@ public final class ZLinkServiceM6BWireCodec {
             long objectGeneration,
             RetiredSessionRouteFence session) {}
 
+    public record StreamBindingCommit(long bindingGeneration, long authorityOwnerGeneration) {}
+
+    public record BoundSessionBindReply(
+            ZLinkServiceM6AWireCodec.Reply header, StreamBindingCommit binding) {}
+
+    public byte[] encodeBoundSessionBindReply(BoundSessionBind binding) {
+        try {
+            return ServiceWireCodec.encodeCommand(
+                    new ServiceWireCodec.ReplyCommand(
+                            0,
+                            new ServiceWireCodec.NonzeroU64(binding.correlation()),
+                            ServiceWireCodec.RequestTerminalResult.OK,
+                            ServiceWireCodec.FrameworkErrorCode.NONE,
+                            binding.active()
+                                    ? new ServiceWireCodec.RequestSpecificTailStreamBindOk(
+                                            new ServiceWireCodec.NonzeroU64(
+                                                    binding.bindingGeneration()),
+                                            new ServiceWireCodec.NonzeroU64(
+                                                    binding.actor().authorityOwnerGeneration()))
+                                    : new ServiceWireCodec.RequestSpecificTailOtherwise(),
+                            null),
+                    bindingReplyContext(binding.active()));
+        } catch (IOException failure) {
+            throw protocol("invalid boundSessionBind reply: " + failure.getMessage());
+        }
+    }
+
+    public BoundSessionBindReply decodeBoundSessionBindReply(byte[] frame, boolean active) {
+        try {
+            if (!(ServiceWireCodec.decodeCommand(List.of(frame), bindingReplyContext(active))
+                    instanceof ServiceWireCodec.ReplyCommand reply))
+                throw protocol("command is not a Session bind reply");
+            var header =
+                    new ZLinkServiceM6AWireCodec.Reply(
+                            reply.correlation().value(),
+                            (int) reply.terminalResult().wire,
+                            (int) reply.failureCode().wire);
+            return reply.tail() instanceof ServiceWireCodec.RequestSpecificTailStreamBindOk tail
+                    ? new BoundSessionBindReply(
+                            header,
+                            new StreamBindingCommit(
+                                    tail.bindingGeneration().value(),
+                                    tail.authorityOwnerGeneration().value()))
+                    : new BoundSessionBindReply(header, null);
+        } catch (IOException failure) {
+            throw protocol("invalid boundSessionBind reply: " + failure.getMessage());
+        }
+    }
+
+    private static ServiceWireCodec.DecoderContext bindingReplyContext(boolean active) {
+        return new ServiceWireCodec.DecoderContext(
+                active
+                        ? ServiceWireCodec.MeshOperationKind.STREAM_BIND
+                        : ServiceWireCodec.MeshOperationKind.STREAM_UNBIND,
+                null,
+                null,
+                MAX_U32_VALUE,
+                GENERATED_MAX_PAYLOAD_BYTES);
+    }
+
     public ZLinkServiceM6AWireCodec.Reply decodeBoundSessionCloseReply(byte[] frame) {
         try {
             if (!(ServiceWireCodec.decodeCommand(List.of(frame), generatedContext())
