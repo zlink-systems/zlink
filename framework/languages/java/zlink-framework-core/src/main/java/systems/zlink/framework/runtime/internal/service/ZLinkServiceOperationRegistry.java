@@ -22,6 +22,8 @@ import java.util.function.Supplier;
 public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private final ThreadFactory maintenanceFactory;
     private Thread maintenance;
+    // The worker's reserved wheel visit survives removal of the last pending request.
+    private long maintenanceTick = -1;
     private final LongSupplier nanoTime;
     private final Supplier<? extends Throwable> timeoutFailure;
     private final ZLinkServiceCompletionDispatcher completions =
@@ -245,6 +247,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     public void close() {
         Thread worker;
         synchronized (gate) {
+            if (closed) return;
             closed = true;
             worker = maintenance;
             gate.notifyAll();
@@ -438,11 +441,12 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                 synchronized (gate) {
                     while (!closed) {
                         long now = nanoTime.getAsLong();
-                        long next = nextOccupiedTick();
-                        if (next < 0) {
+                        maintenanceTick = nextOccupiedTick();
+                        if (maintenanceTick < 0) {
                             gate.wait();
                         } else {
-                            long remaining = next * DEADLINE_TICK_NANOS - (now - deadlineOrigin);
+                            long remaining =
+                                    maintenanceTick * DEADLINE_TICK_NANOS - (now - deadlineOrigin);
                             if (remaining <= 0) break;
                             TimeUnit.NANOSECONDS.timedWait(gate, remaining);
                         }
@@ -470,7 +474,6 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
             throw new IllegalArgumentException("operation identity is zero or already pending");
         }
         long targetTick = 0;
-        long previousTick = -1;
         if (kind == Kind.REQUEST) {
             if (maintenance == null) {
                 Thread worker = maintenanceFactory.newThread(this::maintainDeadlines);
@@ -478,8 +481,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                 maintenance = worker;
             }
             long elapsed = nanoTime.getAsLong() - deadlineOrigin;
-            previousTick = nextOccupiedTick();
-            if (previousTick < 0)
+            if (nextOccupiedTick() < 0)
                 deadlineTick = Math.max(deadlineTick, elapsed / DEADLINE_TICK_NANOS);
             targetTick =
                     elapsed / DEADLINE_TICK_NANOS
@@ -506,7 +508,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         pendingCount++;
         if (kind == Kind.REQUEST) {
             indexDeadline(entry, targetTick);
-            if (previousTick < 0 || nextOccupiedTick() < previousTick) {
+            if (maintenanceTick < 0 || nextOccupiedTick() < maintenanceTick) {
                 gate.notifyAll();
             }
         }

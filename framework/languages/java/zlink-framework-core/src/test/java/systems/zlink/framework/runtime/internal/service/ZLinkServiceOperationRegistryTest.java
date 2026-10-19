@@ -32,6 +32,52 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkServiceOperationRegistryTest {
     @Test
+    void repeatedCloseReturnsWhileTheFirstCloseJoinsMaintenance() throws Exception {
+        CountDownLatch workerExited = new CountDownLatch(1);
+        CountDownLatch releaseWorker = new CountDownLatch(1);
+        CountDownLatch repeatedCloseReturned = new CountDownLatch(1);
+        AtomicReference<Thread> worker = new AtomicReference<>();
+        var registry =
+                new ZLinkServiceOperationRegistry(
+                        command -> {
+                            Thread thread =
+                                    Thread.ofPlatform()
+                                            .unstarted(
+                                                    () -> {
+                                                        command.run();
+                                                        workerExited.countDown();
+                                                        await(releaseWorker);
+                                                    });
+                            worker.set(thread);
+                            return thread;
+                        });
+        registry.register(Duration.ofHours(1));
+        Thread firstClose = Thread.ofPlatform().start(registry::close);
+        Thread repeatedClose = null;
+        try {
+            assertTrue(workerExited.await(1, TimeUnit.SECONDS));
+            repeatedClose =
+                    Thread.ofPlatform()
+                            .start(
+                                    () -> {
+                                        registry.close();
+                                        repeatedCloseReturned.countDown();
+                                    });
+            assertTrue(repeatedCloseReturned.await(1, TimeUnit.SECONDS));
+            assertTrue(firstClose.isAlive());
+            assertEquals(0, registry.pendingCount());
+            assertThrows(
+                    IllegalStateException.class, () -> registry.register(Duration.ofSeconds(1)));
+        } finally {
+            releaseWorker.countDown();
+            firstClose.join();
+            if (repeatedClose != null) repeatedClose.join();
+            registry.close();
+        }
+        assertEquals(Thread.State.TERMINATED, worker.get().getState());
+    }
+
+    @Test
     void maintenanceParksWithoutClockPollingAndCloseJoinsItsWorker() throws Exception {
         AtomicReference<Thread> worker = new AtomicReference<>();
         AtomicReference<ZLinkServiceOperationRegistry> owner = new AtomicReference<>();
