@@ -231,7 +231,7 @@ void verify_client_server_claim_releases_after_one_shot_reply_terminal ()
                                                     mailbox_owner, 1, 1024);
     assert (claim && claim->records.size () == 1);
     const auto request = (*claim->records.front ());
-    auto retained_claim = std::make_shared<mesh::service_mailbox_claim_t> (std::move (*claim));
+    auto retained_claim = claim;
 
     std::atomic<int> terminal_count{0};
     auto completion = std::async (
@@ -298,7 +298,7 @@ void verify_stateful_ingest_rejection_releases_on_one_shot_terminal ()
         .result ()
         .value ()
       == stateful::stateful_error_t::invalid);
-    std::optional<mesh::service_mailbox_claim_t> released;
+    std::shared_ptr<mesh::service_mailbox_claim_t> released;
     const auto deadline = std::chrono::steady_clock::now () + 250ms;
     while (!released && std::chrono::steady_clock::now () < deadline) {
         released = target.mailbox ().try_claim_owner (mesh::service_mailbox_domain_t::application,
@@ -330,9 +330,9 @@ void verify_claim_original_remains_takeable ()
                                           "spot:canonical", 1, 4096);
     assert (claim);
     // This is the explicit barrier immediately after claim, before a source query.
-    auto sealed = mailbox.take (claim->records.front ());
+    auto sealed = mailbox.take ({claim, 0});
     assert (sealed && "claimed original must remain takeable by the mailbox owner");
-    assert (!mailbox.take (claim->records.front ()));
+    assert (!mailbox.take ({claim, 0}));
     assert (mailbox.release (*claim));
 }
 
@@ -386,13 +386,13 @@ void verify_source_wait_original (bool seal_first, bool reject, bool restore)
     auto value =
       target.mailbox ().try_claim_owner (mesh::service_mailbox_domain_t::application, key, 1, 4096);
     assert (value);
-    auto claim = std::make_shared<mesh::service_mailbox_claim_t> (std::move (*value));
-    auto pending = dispatch.ingest_claimed (owner, claim->records.front (), std::nullopt);
+    auto claim = value;
+    auto pending = dispatch.ingest_claimed (owner, {claim, 0}, std::nullopt);
     assert (queries == 1 && !pending.await_ready ());
     // The source resolver is now suspended at an explicit completion-source barrier.
     std::optional<mesh::service_mailbox_record_t> sealed;
     if (seal_first) {
-        sealed = target.mailbox ().take (claim->records.front ());
+        sealed = target.mailbox ().take ({claim, 0});
         assert (sealed && "source await must leave the original in its canonical slot");
         assert (permits == 0);
         if (restore) {
@@ -410,12 +410,12 @@ void verify_source_wait_original (bool seal_first, bool reject, bool restore)
         assert (result == stateful::stateful_error_t::not_found);
         assert (!objects.try_claim (owner, stateful::turn_domain_t::application).second);
         assert (permits == 0 && queries == 1);
-        assert (!target.mailbox ().take (claim->records.front ()));
+        assert (!target.mailbox ().take ({claim, 0}));
         if (restore) {
             auto restored = target.mailbox ().try_claim_owner (
               mesh::service_mailbox_domain_t::application, key, 1, 4096);
             assert (restored);
-            sealed = target.mailbox ().take (restored->records.front ());
+            sealed = target.mailbox ().take ({restored, 0});
             assert (sealed);
             assert (!target.mailbox ().release (*claim));
             assert (target.mailbox ().release (*restored));
@@ -425,7 +425,7 @@ void verify_source_wait_original (bool seal_first, bool reject, bool restore)
         assert (permits == 1);
     } else {
         assert (result == stateful::stateful_error_t::none);
-        assert (!target.mailbox ().take (claim->records.front ()));
+        assert (!target.mailbox ().take ({claim, 0}));
         std::function<void ()> before;
         auto [error, delivery] = dispatch.try_claim (owner, &before);
         assert (error == stateful::stateful_error_t::none && delivery);
@@ -461,17 +461,16 @@ void verify_partial_prefix_and_stale_claim (bool local)
       mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner, 3, 4096);
     assert (claim && claim->records.size () == 3);
     assert (!mailbox.try_claim_owner (claim->domain, owner, 3, 4096));
-    assert (!mailbox.take (claim->records[1])); // A handoff cannot skip the prefix.
-    auto gate = mailbox.take (claim->records[0]);
+    assert (!mailbox.take ({claim, 1})); // A handoff cannot skip the prefix.
+    auto gate = mailbox.take ({claim, 0});
     auto source =
-      mailbox.prepare (claim->records[1], [] (const auto &record) { return *record.operation; });
+      mailbox.prepare ({claim, 1}, [] (const auto &record) { return *record.operation; });
     assert (gate && source && source->second == 2 && permits == 0);
-    auto seal = mailbox.take (claim->records[1]);
-    auto suffix = mailbox.take (claim->records[2]);
+    auto seal = mailbox.take ({claim, 1});
+    auto suffix = mailbox.take ({claim, 2});
     assert (seal && suffix && seal->operation == source);
-    assert (
-      !mailbox.prepare (claim->records[1], [] (const auto &record) { return record.operation; }));
-    assert (!mailbox.take (claim->records[0]) && !mailbox.take (claim->records[1]));
+    assert (!mailbox.prepare ({claim, 1}, [] (const auto &record) { return record.operation; }));
+    assert (!mailbox.take ({claim, 0}) && !mailbox.take ({claim, 1}));
     gate->transferred (); // The first handoff settles only its own claim credit.
     assert (!mailbox.try_claim_owner (claim->domain, owner, 3, 4096));
     seal->transferred ();
@@ -483,9 +482,9 @@ void verify_partial_prefix_and_stale_claim (bool local)
     assert (mailbox.try_enqueue (std::move (*suffix)));
     auto restored = mailbox.try_claim_owner (claim->domain, owner, 2, 4096);
     assert (restored && restored->records.size () == 2);
-    assert (!mailbox.take (claim->records[1]) && !mailbox.release (*claim));
-    auto second = mailbox.take (restored->records[0]);
-    auto third = mailbox.take (restored->records[1]);
+    assert (!mailbox.take ({claim, 1}) && !mailbox.release (*claim));
+    auto second = mailbox.take ({restored, 0});
+    auto third = mailbox.take ({restored, 1});
     assert (second && third && second->operation->second == 2 && third->operation->second == 3);
     gate->before_application_handler ();
     second->before_application_handler ();
@@ -578,11 +577,11 @@ void verify_concurrent_gate_seal_take ()
         std::optional<mesh::service_mailbox_record_t> gate, seal;
         std::thread gate_owner ([&] {
             ready.arrive_and_wait ();
-            gate = mailbox.take (claim->records.front ());
+            gate = mailbox.take ({claim, 0});
         });
         std::thread seal_owner ([&] {
             ready.arrive_and_wait ();
-            seal = mailbox.take (claim->records.front ());
+            seal = mailbox.take ({claim, 0});
         });
         ready.arrive_and_wait ();
         gate_owner.join ();
@@ -605,7 +604,7 @@ void verify_claim_owner_can_expire ()
         auto claim = mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application,
                                               "spot:expired", 1, 4096);
         assert (claim);
-        owned = mailbox.take (claim->records.front ());
+        owned = mailbox.take ({claim, 0});
         assert (owned);
     }
     owned->transferred (); // The canonical source owner has already been destroyed.

@@ -4889,7 +4889,7 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
             settled.store (true, std::memory_order_release);
         });
 
-        std::optional<runtime::mesh::service_mailbox_claim_t> claim;
+        std::shared_ptr<runtime::mesh::service_mailbox_claim_t> claim;
         const auto claim_deadline = std::chrono::steady_clock::now () + 2s;
         while (!claim && std::chrono::steady_clock::now () < claim_deadline) {
             claim = target_owner.mailbox ().try_claim (

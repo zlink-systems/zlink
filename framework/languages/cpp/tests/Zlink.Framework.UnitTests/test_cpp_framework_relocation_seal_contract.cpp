@@ -1102,7 +1102,7 @@ TEST (FrameworkRelocationSealContract, native_follow_increments_wire_hop_and_sto
                                           std::chrono::seconds (1), 2)
                        .result ()
                        .value ());
-        std::optional<mesh::service_mailbox_claim_t> claim;
+        std::shared_ptr<mesh::service_mailbox_claim_t> claim;
         const auto receive_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
         while (!claim && std::chrono::steady_clock::now () < receive_deadline) {
             (void) target.pump_one (std::chrono::steady_clock::now ()).result ().value ();
@@ -1143,7 +1143,7 @@ TEST (FrameworkRelocationSealContract, native_follow_increments_wire_hop_and_sto
         EXPECT_FALSE (extra);
         // Drain an unexpected send so each regression row observes its own packet.
         if (extra) {
-            std::optional<mesh::service_mailbox_claim_t> unexpected;
+            std::shared_ptr<mesh::service_mailbox_claim_t> unexpected;
             const auto drain_deadline =
               std::chrono::steady_clock::now () + std::chrono::seconds (5);
             while (!unexpected && std::chrono::steady_clock::now () < drain_deadline) {

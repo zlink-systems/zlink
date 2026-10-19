@@ -394,8 +394,8 @@ void verify_not_required_peer_counts_as_configured ()
     require_metric (provider, "zlink.mesh_node.peers.ready", "gauge", "{peer}", peer_labels, 0);
 }
 
-std::optional<mesh::service_mailbox_claim_t> claim_request (mesh::raw_mesh_node_owner_t &target,
-                                                            mesh::service_mailbox_domain_t domain)
+std::shared_ptr<mesh::service_mailbox_claim_t> claim_request (mesh::raw_mesh_node_owner_t &target,
+                                                              mesh::service_mailbox_domain_t domain)
 {
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     while (std::chrono::steady_clock::now () < deadline) {
@@ -408,7 +408,7 @@ std::optional<mesh::service_mailbox_claim_t> claim_request (mesh::raw_mesh_node_
                  "raw request pump reported a protocol error");
         std::this_thread::yield ();
     }
-    return std::nullopt;
+    return nullptr;
 }
 
 using request_result_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;

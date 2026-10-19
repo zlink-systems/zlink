@@ -543,41 +543,37 @@ raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
     co_return sent;
 }
 
+claimed_ingress_t claimed_ingress_t::prepare (const mesh::service_mailbox_record_t &original)
+{
+    claimed_ingress_t query;
+    query.source_routing_id = original.source_routing_id;
+    query.source_node_generation = original.source_node_generation;
+    query.bound_session = original.bound_session_source.has_value ();
+    if (original.parts.size () == 2) {
+        query.header.emplace (original.parts.front ().copy ());
+        try {
+            query.body_bytes =
+              protocol::application_payload_hwm_bytes (protocol::message_bytes (original.parts[1]));
+        }
+        catch (...) {
+            query.error = std::current_exception ();
+        }
+    }
+    return query;
+}
+
 task_t<stateful_error_t>
 raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
                                          mesh::service_mailbox_t::claim_handle_t slot,
-                                         std::optional<retained_relocation_source_t> retained)
+                                         std::optional<retained_relocation_source_t> retained,
+                                         std::optional<claimed_ingress_t> prepared)
 {
     // Only immutable header/source values survive authority suspension. The body
     // stays in the canonical mailbox slot until the handoff wins its take.
-    struct query_t
-    {
-        mesh::service_mailbox_record_t header;
-        std::size_t body_bytes = 0;
-        std::exception_ptr error;
-    };
-    auto prepared = _transport->mailbox ().prepare (slot, [] (const auto &original) {
-        query_t query;
-        query.header.owner = original.owner;
-        query.header.domain = original.domain;
-        query.header.source_routing_id = original.source_routing_id;
-        query.header.source_node_generation = original.source_node_generation;
-        query.header.bound_session_source = original.bound_session_source;
-        if (original.parts.size () == 2) {
-            query.header.parts.push_back (original.parts.front ().copy ());
-            try {
-                query.body_bytes = protocol::application_payload_hwm_bytes (
-                  protocol::message_bytes (original.parts[1]));
-            }
-            catch (...) {
-                query.error = std::current_exception ();
-            }
-        }
-        return query;
-    });
+    if (!prepared)
+        prepared = _transport->mailbox ().prepare (slot, claimed_ingress_t::prepare);
     if (!prepared)
         co_return stateful_error_t::not_found;
-    auto record = std::move (prepared->header);
     stateful_error_t validation = stateful_error_t::none;
     protocol::frozen_application_record_t frozen;
     protocol::application_payload_t payload;
@@ -589,8 +585,8 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
     try {
         if (prepared->error)
             std::rethrow_exception (prepared->error);
-        if (record.parts.size () != 1 || !_authority_resolver || record.source_routing_id.empty ()
-            || !record.source_node_generation)
+        if (!prepared->header || !_authority_resolver || prepared->source_routing_id.empty ()
+            || !prepared->source_node_generation)
             validation = stateful_error_t::invalid;
         else {
             application_payload_bytes = prepared->body_bytes;
@@ -598,19 +594,18 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
 
         if (validation != stateful_error_t::none)
             throw protocol::service_wire_error_t ("invalid application wire record");
-        const auto header =
-          protocol::decode_header (protocol::message_bytes (record.parts.front ()));
+        const auto header_bytes = protocol::message_bytes (*prepared->header);
+        const auto header = protocol::decode_header (header_bytes);
 
         if (validation == stateful_error_t::none && owner.kind == object_kind_t::actor) {
             if (header.kind != protocol::command::actorSend
                 && header.kind != protocol::command::actorRequest) {
                 validation = stateful_error_t::invalid;
             } else {
-                auto actor = protocol::decode_actor_message_header (
-                  protocol::message_bytes (record.parts.front ()), header.kind);
+                auto actor = protocol::decode_actor_message_header (header_bytes, header.kind);
                 auto [error, authority] = co_await accepted_actor_authority (
-                  owner, actor, record.source_routing_id, record.source_node_generation,
-                  record.bound_session_source.has_value (), std::move (retained));
+                  owner, actor, std::move (prepared->source_routing_id),
+                  prepared->source_node_generation, prepared->bound_session, std::move (retained));
                 validation = error;
                 if (validation == stateful_error_t::none) {
                     application_command = header.kind;
@@ -623,11 +618,10 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
                 && header.kind != protocol::command::spotRequest) {
                 validation = stateful_error_t::invalid;
             } else {
-                auto spot = protocol::decode_spot_message_header (
-                  protocol::message_bytes (record.parts.front ()), header.kind);
+                auto spot = protocol::decode_spot_message_header (header_bytes, header.kind);
                 auto [error, authority] = co_await accepted_spot_authority (
-                  owner, spot, record.source_routing_id, record.source_node_generation,
-                  std::move (retained));
+                  owner, spot, std::move (prepared->source_routing_id),
+                  prepared->source_node_generation, std::move (retained));
                 validation = error;
                 if (validation == stateful_error_t::none) {
                     application_command = header.kind;
@@ -657,7 +651,7 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
     auto original = _transport->mailbox ().take (slot);
     if (!original)
         co_return stateful_error_t::not_found;
-    record = std::move (*original);
+    auto record = std::move (*original);
     accepted_mailbox_reservation_t reservation = std::exchange (record.transferred, {});
     mailbox_claim_release_guard_t claim_guard (reservation);
     if (validation != stateful_error_t::none) {
@@ -1409,7 +1403,7 @@ task_t<raw_relocation_replay_result_t> raw_relocation_replay_coordinator_t::pump
       mailbox_claim_byte_limit);
     if (!claim)
         co_return raw_relocation_replay_result_t::no_data;
-    auto record = _transport->mailbox ().take (claim->records.front ());
+    auto record = _transport->mailbox ().take ({claim, 0});
     auto result = raw_relocation_replay_result_t::no_data;
     if (record)
         result = co_await process (*record);

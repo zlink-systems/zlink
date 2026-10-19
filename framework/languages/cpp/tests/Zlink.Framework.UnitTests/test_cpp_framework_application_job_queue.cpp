@@ -37,7 +37,7 @@ namespace zlink::framework::runtime::host
 struct public_host_runtime_test_access_t
 {
     static task_t<std::size_t> dispatch_claim (public_host_runtime_t &host,
-                                               mesh::service_mailbox_claim_t claim)
+                                               std::shared_ptr<mesh::service_mailbox_claim_t> claim)
     {
         return host.dispatch_application_claim (std::move (claim),
                                                 [] (const auto &, const auto &, auto) {});
@@ -473,7 +473,7 @@ TEST (ZLinkFrameworkStatefulDispatch, RetainedIngressExceptionLeavesTerminalWith
     wire.source_node_generation = native->status ().lifecycle_generation ();
     wire.application.reset ();
     const auto dispatched =
-      host::public_host_runtime_test_access_t::dispatch_claim (*native, std::move (*claim))
+      host::public_host_runtime_test_access_t::dispatch_claim (*native, std::move (claim))
         .result ();
     EXPECT_EQ (1u, notifications);
     EXPECT_FALSE (dispatched);

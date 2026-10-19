@@ -1373,7 +1373,7 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
     if (!mailbox.begin_application_drain (owner_name))
         co_return result_t<void>::success ();
     const auto deadline = std::chrono::steady_clock::now () + dispatch_limits::owner_time_budget;
-    std::optional<mesh::service_mailbox_claim_t> active_claim;
+    std::shared_ptr<mesh::service_mailbox_claim_t> active_claim;
     try {
         for (;;) {
             active_claim =
@@ -1381,8 +1381,8 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                                        dispatch_limits::receive_batch_bytes);
             if (!active_claim)
                 break;
-            for (auto &slot : active_claim->records) {
-                auto original = mailbox.take (slot);
+            for (std::size_t index = 0; index < active_claim->claimed_messages; ++index) {
+                auto original = mailbox.take ({active_claim, index});
                 if (!original)
                     continue;
                 auto &record = *original;

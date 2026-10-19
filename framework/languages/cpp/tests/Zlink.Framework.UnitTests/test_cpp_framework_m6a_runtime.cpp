@@ -169,7 +169,7 @@ void complete_bound_session_bind (
   std::future<std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>> &completion,
   std::string_view expected_actor)
 {
-    std::optional<mesh::service_mailbox_claim_t> claim;
+    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
     const auto receive_deadline = std::chrono::steady_clock::now () + 2s;
     while (!claim && std::chrono::steady_clock::now () < receive_deadline) {
         claim =
@@ -444,32 +444,32 @@ void verify_bound_session_bind_replay_preserves_first_admission ()
         (void) await_task (target.pump_one (now));
     };
     const auto receive = [&] {
-        std::optional<mesh::service_mailbox_claim_t> claim;
+        std::shared_ptr<mesh::service_mailbox_claim_t> claim;
         while (!claim && std::chrono::steady_clock::now () < deadline) {
             pump ();
             claim =
               target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
         }
         assert (claim && claim->records.size () == 1);
-        return *claim;
+        return claim;
     };
     auto first = receive ();
     const auto header = protocol::decode_bound_session_bind (
-      protocol::message_bytes (first.records.front ()->parts.front ()));
+      protocol::message_bytes (first->records.front ()->parts.front ()));
     assert (admitted.await_ready () && admitted.result ());
     const auto *first_admission = &admitted.result ();
     observed.get ();
     assert (admission_completions == 1 && !request.await_ready ());
-    assert (target.mailbox ().release (first));
+    assert (target.mailbox ().release (*first));
     assert (target.connect_peer (source.endpoint (), local));
     auto replay = receive ();
     assert (protocol::decode_bound_session_bind (
-              protocol::message_bytes (replay.records.front ()->parts.front ()))
+              protocol::message_bytes (replay->records.front ()->parts.front ()))
             == header);
     assert (admitted.await_ready () && admitted.result ());
     assert (&admitted.result () == first_admission && admission_completions == 1);
     assert (!request.await_ready ());
-    assert (target.mailbox ().release (replay));
+    assert (target.mailbox ().release (*replay));
     // Withhold every reply: admission remains successful when the durable deadline expires.
     while (!request.await_ready () && std::chrono::steady_clock::now () < deadline)
         pump ();
@@ -588,7 +588,7 @@ void verify_actor_create_retries_until_route_is_admitted ()
     assert (completion.wait_for (0ms) == std::future_status::timeout);
     admit_pair (source, target, target_descriptor);
 
-    std::optional<mesh::service_mailbox_claim_t> claim;
+    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
     const auto receive_deadline = std::chrono::steady_clock::now () + 2s;
     while (!claim && std::chrono::steady_clock::now () < receive_deadline) {
         claim =
@@ -665,7 +665,7 @@ void verify_actor_create_intent_removal_ends_operation ()
               promise.set_value (terminal);
           })));
         if (removal_order != 0) {
-            std::optional<mesh::service_mailbox_claim_t> claim;
+            std::shared_ptr<mesh::service_mailbox_claim_t> claim;
             while (!claim && std::chrono::steady_clock::now () < deadline) {
                 pump ();
                 claim = target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure,
@@ -2986,7 +2986,7 @@ void verify_relocation_prepare_failed_reply_resolves_promptly_with_identity_fenc
         source_settled.store (true, std::memory_order_release);
     });
 
-    std::optional<mesh::service_mailbox_claim_t> claim;
+    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
     const auto receive_deadline = std::chrono::steady_clock::now () + 2s;
     while (!claim && std::chrono::steady_clock::now () < receive_deadline) {
         claim =
@@ -3063,9 +3063,10 @@ actor_join_request (const mesh::service_node_descriptor_t &source_descriptor,
                                    target_descriptor.lifecycle_generation, 21, 22}};
 }
 
-std::optional<mesh::service_mailbox_claim_t> claim_actor_join (mesh::raw_mesh_node_owner_t &target)
+std::shared_ptr<mesh::service_mailbox_claim_t>
+claim_actor_join (mesh::raw_mesh_node_owner_t &target)
 {
-    std::optional<mesh::service_mailbox_claim_t> claim;
+    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
     const auto receive_deadline = std::chrono::steady_clock::now () + 2s;
     while (!claim && std::chrono::steady_clock::now () < receive_deadline) {
         claim =
@@ -3118,28 +3119,28 @@ void verify_actor_join_durable_replay ()
         auto pending = source.request_actor_join (remote.node_routing_id, request, payload, 2s);
         assert (!pending.await_ready ());
         const auto receive = [&] {
-            std::optional<mesh::service_mailbox_claim_t> claim;
+            std::shared_ptr<mesh::service_mailbox_claim_t> claim;
             while (!claim && std::chrono::steady_clock::now () < deadline) {
                 pump ();
                 claim = target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure,
                                                      1, 4096);
             }
             assert (claim && claim->records.size () == 1);
-            return *claim;
+            return claim;
         };
         std::optional<mesh::service_mailbox_record_t> first;
         if (handover) {
             auto claim = receive ();
-            first = (*claim.records.front ());
+            first = (*claim->records.front ());
             assert (first->reply_token);
-            assert (target.mailbox ().release (claim));
+            assert (target.mailbox ().release (*claim));
             assert (!pending.await_ready ());
             assert (target.connect_peer (source.endpoint (), local));
         } else {
             assert (source.connect_peer (target.endpoint (), remote));
         }
         auto claim = receive ();
-        const auto &record = (*claim.records.front ());
+        const auto &record = (*claim->records.front ());
         const auto decoded = protocol::decode_actor_join_28 (
           zlink::framework::detail::backend::copy_binding_parts (record.parts));
         assert (decoded.correlation == request.correlation);
@@ -3150,7 +3151,7 @@ void verify_actor_join_durable_replay ()
         assert (target.reply_actor_join (record, protocol::actor_join_result_t::accepted,
                                          protocol::actor_join_reply_spot_ref_t{"join-spot", 9}, 3,
                                          8192, 0, 0, payload));
-        assert (target.mailbox ().release (claim));
+        assert (target.mailbox ().release (*claim));
         while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline)
             pump ();
         assert (pending.await_ready ());
@@ -3627,7 +3628,7 @@ void verify_relocation_prepare_failed_reply_with_mismatched_identity_is_fenced (
         source_settled.store (true, std::memory_order_release);
     });
 
-    std::optional<mesh::service_mailbox_claim_t> claim;
+    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
     const auto receive_deadline = std::chrono::steady_clock::now () + 2s;
     while (!claim && std::chrono::steady_clock::now () < receive_deadline) {
         claim =
@@ -3887,7 +3888,7 @@ void verify_prepare_replays_on_selected_route ()
     assert (source.connect_peer (target.endpoint (), remote));
     const auto deadline = std::chrono::steady_clock::now () + 2s;
     const auto receive = [&] {
-        std::optional<mesh::service_mailbox_claim_t> claim;
+        std::shared_ptr<mesh::service_mailbox_claim_t> claim;
         while (!claim && std::chrono::steady_clock::now () < deadline) {
             const auto now = std::chrono::steady_clock::now ();
             (void) await_task (source.pump_one (now));
@@ -3899,19 +3900,19 @@ void verify_prepare_replays_on_selected_route ()
         assert (std::get<protocol::relocation_prepare_t> (protocol::decode_relocation_control (
                   protocol::message_bytes (claim->records.front ()->parts.front ())))
                 == prepare);
-        return *claim;
+        return claim;
     };
     auto first = receive ();
-    assert (target.mailbox ().release (first));
+    assert (target.mailbox ().release (*first));
     assert (target.connect_peer (source.endpoint (), local));
     auto replay = receive ();
     assert (target.reply_relocation_failed (
-      (*replay.records.front ()),
+      (*replay->records.front ()),
       protocol::relocation_failed_t{
         prepare.relocation, prepare.target_attempt_generation, prepare.coordinator, prepare.target,
         prepare.object, protocol::relocation_role_t::target,
         static_cast<std::uint32_t> (protocol::framework_error_code::relocationDataLost)}));
-    assert (target.mailbox ().release (replay));
+    assert (target.mailbox ().release (*replay));
     while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline)
         (void) await_task (source.pump_one (std::chrono::steady_clock::now ()));
     assert (pending.await_ready ());

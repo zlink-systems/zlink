@@ -942,7 +942,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              zlink::message_t payload);
     task_t<std::size_t> dispatch_user_spot_operations ();
     task_t<std::size_t> dispatch_application_claim (
-      mesh::service_mailbox_claim_t claim,
+      std::shared_ptr<mesh::service_mailbox_claim_t> claim,
       const std::function<void (
         const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch);
     task_t<bool> notify_stateful_owner (const stateful::object_ref_t &owner);
@@ -1253,6 +1253,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     void publish_local_application (local_application_dispatch_t dispatch);
     task_t<std::optional<stateful::object_ref_t>>
     accept_local_application (mesh::service_mailbox_t::claim_handle_t slot,
+                              local_application_dispatch_t dispatch,
                               std::optional<mesh::service_mailbox_record_t> &original);
     void
     admit_local_application (local_application_dispatch_t dispatch,

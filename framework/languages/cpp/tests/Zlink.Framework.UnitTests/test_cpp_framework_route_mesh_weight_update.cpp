@@ -226,7 +226,7 @@ void expect_successful_channel_request (mesh::raw_mesh_node_owner_t &source,
                                      promise.set_value ({terminal, std::move (payload)});
                                  })));
 
-    std::optional<mesh::service_mailbox_claim_t> claim;
+    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
     const auto request_deadline = std::chrono::steady_clock::now () + 2s;
     while (!claim && std::chrono::steady_clock::now () < request_deadline) {
         claim =

@@ -66,7 +66,21 @@ accepted_record_authority_resolver_t
 make_location_store_authority_resolver (zlink::framework::location_repository_t &store);
 
 // The original carries the mailbox slot credit across each ownership transfer.
-using accepted_mailbox_reservation_t = std::function<void ()>;
+using accepted_mailbox_reservation_t = mesh::service_mailbox_settlement_t;
+
+// Immutable values of a claimed original that survive the authority suspension.
+// The header frame is shared; the body stays in the canonical slot until take.
+struct claimed_ingress_t
+{
+    std::optional<zlink::message_t> header;
+    std::vector<std::uint8_t> source_routing_id;
+    std::uint64_t source_node_generation = 0;
+    bool bound_session = false;
+    std::size_t body_bytes = 0;
+    std::exception_ptr error;
+
+    static claimed_ingress_t prepare (const mesh::service_mailbox_record_t &original);
+};
 
 struct stateful_delivery_t
 {
@@ -102,7 +116,8 @@ class raw_stateful_dispatch_t
 
     task_t<stateful_error_t> ingest_claimed (object_ref_t owner,
                                              mesh::service_mailbox_t::claim_handle_t slot,
-                                             std::optional<retained_relocation_source_t> retained);
+                                             std::optional<retained_relocation_source_t> retained,
+                                             std::optional<claimed_ingress_t> prepared = {});
     task_t<std::pair<stateful_error_t, std::optional<accepted_record_authority_t>>>
     accepted_actor_authority (object_ref_t owner,
                               protocol::actor_message_header_t header,

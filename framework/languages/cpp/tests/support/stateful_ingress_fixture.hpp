@@ -15,11 +15,11 @@ retained_ingress_snapshot (runtime::stateful::stateful_object_runtime_t &objects
     return retained;
 }
 
-inline runtime::mesh::service_mailbox_claim_t
+// Claims the published records as one prefix; outstanding () observes their settlement.
+inline std::shared_ptr<runtime::mesh::service_mailbox_claim_t>
 publish_stateful_claims (runtime::mesh::raw_mesh_node_owner_t &transport,
                          const runtime::stateful::object_ref_t &owner,
-                         std::vector<runtime::mesh::service_mailbox_record_t> records,
-                         std::function<void ()> released = {})
+                         std::vector<runtime::mesh::service_mailbox_record_t> records)
 {
     auto &mailbox = transport.mailbox ();
     const auto key = runtime::mesh::service_mailbox_t::application_owner (
@@ -37,29 +37,19 @@ publish_stateful_claims (runtime::mesh::raw_mesh_node_owner_t &transport,
       mailbox.try_claim_owner (runtime::mesh::service_mailbox_domain_t::application, key,
                                records.size (), runtime::dispatch_limits::receive_batch_bytes);
     mailbox.end_application_receive_turn ();
-    if (!claim || claim->records.size () != records.size ())
+    if (!claim || claim->claimed_messages != records.size ())
         throw std::runtime_error ("fixture mailbox claim failed");
-    for (auto &slot : claim->records) {
-        auto release = std::exchange (slot->transferred, {});
-        slot->transferred = [release = std::move (release), released] {
-            release ();
-            if (released)
-                released ();
-        };
-    }
-    return std::move (*claim);
+    return claim;
 }
 
 inline runtime::mesh::service_mailbox_t::claim_handle_t
 publish_stateful_claim (runtime::mesh::raw_mesh_node_owner_t &transport,
                         const runtime::stateful::object_ref_t &owner,
-                        runtime::mesh::service_mailbox_record_t record,
-                        std::function<void ()> released = {})
+                        runtime::mesh::service_mailbox_record_t record)
 {
     std::vector<runtime::mesh::service_mailbox_record_t> records;
     records.push_back (std::move (record));
-    return publish_stateful_claims (transport, owner, std::move (records), std::move (released))
-      .records.front ();
+    return {publish_stateful_claims (transport, owner, std::move (records)), 0};
 }
 
 inline task_t<runtime::stateful::stateful_error_t>
@@ -77,7 +67,7 @@ ingest_stateful_mailbox_record (runtime::stateful::stateful_object_runtime_t &ob
                                             key, 1, runtime::dispatch_limits::receive_batch_bytes);
     if (!claim)
         co_return runtime::stateful::stateful_error_t::not_found;
-    co_return co_await dispatch.ingest_claimed (owner, claim->records.front (),
+    co_return co_await dispatch.ingest_claimed (owner, {claim, 0},
                                                 retained_ingress_snapshot (objects, owner));
 }
 } // namespace zlink::framework::test

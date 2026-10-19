@@ -2530,23 +2530,23 @@ void verify_actor_create_replays_after_reciprocal_handover ()
                                        promise.set_value ({terminal, payload.to_bytes ()});
                                    })));
     const auto receive = [&] {
-        std::optional<mesh::service_mailbox_claim_t> claim;
+        std::shared_ptr<mesh::service_mailbox_claim_t> claim;
         while (!claim && std::chrono::steady_clock::now () < deadline) {
             pump ();
             claim =
               target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
         }
         assert (claim && claim->records.size () == 1);
-        return *claim;
+        return claim;
     };
     auto losing = receive ();
     const auto first = protocol::decode_actor_create_header (
-      protocol::message_bytes (losing.records.front ()->parts.front ()));
+      protocol::message_bytes (losing->records.front ()->parts.front ()));
     assert (first.operation == request.operation);
     assert (first.correlation != 0);
-    assert (losing.records.front ()->reply_token);
+    assert (losing->records.front ()->reply_token);
     assert (completion.wait_for (0ms) == std::future_status::timeout);
-    assert (target.mailbox ().release (losing));
+    assert (target.mailbox ().release (*losing));
 
     // Receipt proves admission on Z -> A. Withhold its reply, then let Core
     // select A -> Z; only the durable owner resubmits the operation.
@@ -2554,17 +2554,17 @@ void verify_actor_create_replays_after_reciprocal_handover ()
     assert (target.connect_peer (source.endpoint (), source_descriptor));
     auto survivor = receive ();
     const auto replay = protocol::decode_actor_create_header (
-      protocol::message_bytes (survivor.records.front ()->parts.front ()));
+      protocol::message_bytes (survivor->records.front ()->parts.front ()));
     assert (replay == first);
-    assert (survivor.records.front ()->correlation == first.correlation);
+    assert (survivor->records.front ()->correlation == first.correlation);
     assert (completion.wait_for (0ms) == std::future_status::timeout);
-    assert (target.reply_actor_create ((*survivor.records.front ()),
+    assert (target.reply_actor_create ((*survivor->records.front ()),
                                        {{replay.correlation, 0, 0},
                                         protocol::actor_create_result_t::created,
                                         target_descriptor.node_routing_id,
                                         replay.actor_id,
                                         1}));
-    assert (target.mailbox ().release (survivor));
+    assert (target.mailbox ().release (*survivor));
     while (completion.wait_for (0ms) != std::future_status::ready
            && std::chrono::steady_clock::now () < deadline)
         pump ();
@@ -4866,17 +4866,16 @@ void verify_memory_accepted_record_authority ()
           {protocol::encode_spot_message_header (protocol::command::spotSend, "memory-source-spot",
                                                  fence, {1, 900}),
            protocol::encode_application_payload ({"Memory", "application/json", {'{', '}'}})});
-        int releases = 0;
+        const auto slot =
+          test::publish_stateful_claim (native->transport (), object, std::move (record));
         const auto result =
           dispatch
-            .ingest_claimed (object,
-                             test::publish_stateful_claim (native->transport (), object,
-                                                           std::move (record), [&] { ++releases; }),
+            .ingest_claimed (object, slot,
                              test::retained_ingress_snapshot (native->objects (), object))
             .result ()
             .value ();
         assert (result == stateful::stateful_error_t::conflict);
-        assert (releases == 1);
+        assert (slot.claim->outstanding () == 0);
         assert (native->objects ().pending (object, stateful::turn_domain_t::application) == 0);
         assert (!dispatch.try_claim (object).second);
         assert (store->authority_reads == 0 && store->mesh_node_reads == 0
@@ -5978,7 +5977,7 @@ void verify_node_request_requires_remote_admission ()
         .result ()
         .value ());
 
-    std::optional<mesh::service_mailbox_claim_t> claim;
+    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
     while (!claim && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.observe_routes ();

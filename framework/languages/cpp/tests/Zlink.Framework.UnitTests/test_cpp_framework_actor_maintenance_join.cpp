@@ -87,7 +87,7 @@ struct public_host_runtime_test_access_t
 {
     static task_t<std::size_t>
     dispatch_claim (public_host_runtime_t &host,
-                    mesh::service_mailbox_claim_t claim,
+                    std::shared_ptr<mesh::service_mailbox_claim_t> claim,
                     const mesh::service_mailbox_t::application_dispatch_t &dispatch)
     {
         return host.dispatch_application_claim (std::move (claim), dispatch);
@@ -2118,10 +2118,10 @@ TEST (NativeIntake, LocalSourceAwaitKeepsCanonicalOriginalAndIgnoresStaleComplet
     auto claim =
       mailbox.try_claim_owner (rt::mesh::service_mailbox_domain_t::application, key, 1, 4096);
     ASSERT_TRUE (claim);
-    auto old = *claim;
+    auto old = claim;
     int dispatched = 0;
     auto pending = rt::host::public_host_runtime_test_access_t::dispatch_claim (
-      *host, std::move (*claim), [&] (const auto &, const auto &record, auto) {
+      *host, claim, [&] (const auto &, const auto &record, auto) {
           ++dispatched;
           ASSERT_TRUE (record.complete_stateful_dispatch);
           record.complete_stateful_dispatch ();
@@ -2129,24 +2129,24 @@ TEST (NativeIntake, LocalSourceAwaitKeepsCanonicalOriginalAndIgnoresStaleComplet
     ASSERT_EQ (queries, 1);
     EXPECT_EQ (observed_source, fixture.rid);
     ASSERT_FALSE (pending.await_ready ());
-    auto sealed = mailbox.take (old.records.front ());
+    auto sealed = mailbox.take ({old, 0});
     ASSERT_TRUE (sealed);
     ASSERT_TRUE (sealed->application);
     EXPECT_EQ (sealed->application->parts.size (), parts.size ());
-    ASSERT_TRUE (mailbox.release (old));
+    ASSERT_TRUE (mailbox.release (*old));
     ASSERT_TRUE (mailbox.try_enqueue (std::move (*sealed)));
     authority.complete (fw::result_t<std::optional<st::accepted_record_authority_t>>::success (
       st::accepted_record_authority_t{{fixture.source_id, 1, fixture.rid, 1}, 1}));
     ASSERT_EQ (pending.result ().value (), 0u);
     EXPECT_EQ (dispatched, 0);
     EXPECT_EQ (queries, 1);
-    EXPECT_FALSE (mailbox.take (old.records.front ()));
-    EXPECT_FALSE (mailbox.release (old));
+    EXPECT_FALSE (mailbox.take ({old, 0}));
+    EXPECT_FALSE (mailbox.release (*old));
     auto restored =
       mailbox.try_claim_owner (rt::mesh::service_mailbox_domain_t::application, key, 1, 4096);
     ASSERT_TRUE (restored);
     EXPECT_EQ (rt::host::public_host_runtime_test_access_t::dispatch_claim (
-                 *host, std::move (*restored),
+                 *host, std::move (restored),
                  [&] (const auto &, const auto &record, auto) {
                      ++dispatched;
                      ASSERT_TRUE (record.complete_stateful_dispatch);
@@ -2184,14 +2184,13 @@ TEST (NativeIntake, LocalSourceRejectionSettlesOnlyOwnedOriginal)
       rt::mesh::service_mailbox_t::application_owner (rt::host::owner_kind_t::actor, actor_id), 1,
       4096);
     ASSERT_TRUE (claim);
-    const auto old = *claim;
+    const auto old = claim;
     int dispatched = 0;
-    ASSERT_EQ (
-      rt::host::public_host_runtime_test_access_t::dispatch_claim (
-        *host, std::move (*claim), [&] (const auto &, const auto &, auto) { ++dispatched; })
-        .result ()
-        .value (),
-      0u);
+    ASSERT_EQ (rt::host::public_host_runtime_test_access_t::dispatch_claim (
+                 *host, claim, [&] (const auto &, const auto &, auto) { ++dispatched; })
+                 .result ()
+                 .value (),
+               0u);
     EXPECT_EQ (dispatched, 0);
     EXPECT_FALSE (host->transport ().operation_pending (operation.id));
     auto terminal = operation.completion->task ();
@@ -2202,8 +2201,8 @@ TEST (NativeIntake, LocalSourceRejectionSettlesOnlyOwnedOriginal)
     });
     ASSERT_EQ (ready.wait_for (wait_budget), std::future_status::ready);
     EXPECT_FALSE (ready.get ());
-    EXPECT_FALSE (mailbox.take (old.records.front ()));
-    EXPECT_FALSE (mailbox.release (old));
+    EXPECT_FALSE (mailbox.take ({old, 0}));
+    EXPECT_FALSE (mailbox.release (*old));
     host->close ();
 }
 
@@ -2231,13 +2230,20 @@ TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
         ASSERT_EQ (created.error, st::stateful_error_t::none);
         ASSERT_EQ (host->objects ().commit_create (created.attempt), st::stateful_error_t::none);
         st::raw_stateful_dispatch_t raw (host->objects (), host->transport (), fixture.resolver);
-        int releases = 0;
         std::vector<rt::mesh::service_mailbox_record_t> records;
         records.push_back (fixture.actor_record (1, 2));
         records.push_back (fixture.actor_record (2));
         records.push_back (fixture.actor_record (3));
-        auto claim = fw::test::publish_stateful_claims (host->transport (), object,
-                                                        std::move (records), [&] { ++releases; });
+        auto claim =
+          fw::test::publish_stateful_claims (host->transport (), object, std::move (records));
+        std::shared_ptr<rt::mesh::service_mailbox_claim_t> following_claim;
+        // Settled slot credits of both claims.
+        const auto releases = [&] {
+            std::size_t settled = claim->claimed_messages - claim->outstanding ();
+            if (following_claim)
+                settled += following_claim->claimed_messages - following_claim->outstanding ();
+            return settled;
+        };
         const auto ingest = [&] (auto slot, const st::object_ref_t &target) {
             const auto result =
               raw
@@ -2247,11 +2253,13 @@ TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
             EXPECT_TRUE (result);
             return result ? result.value () : st::stateful_error_t::invalid;
         };
-        EXPECT_NE (ingest (claim.records[0], object), st::stateful_error_t::none);
-        EXPECT_EQ (releases, 1);
+        EXPECT_NE (ingest (rt::mesh::service_mailbox_slot_t{claim, 0}, object),
+                   st::stateful_error_t::none);
+        EXPECT_EQ (releases (), 1u);
         EXPECT_TRUE (events.empty ());
         EXPECT_EQ (host->objects ().pending (object, st::turn_domain_t::application), 0u);
-        EXPECT_EQ (ingest (claim.records[1], object), st::stateful_error_t::none);
+        EXPECT_EQ (ingest (rt::mesh::service_mailbox_slot_t{claim, 1}, object),
+                   st::stateful_error_t::none);
         EXPECT_EQ (events.size (), mode == fw::message_flow_log_mode_t::normal ? 1u : 0u);
         if (!events.empty ()) {
             EXPECT_EQ (events.front ().outcome, fw::message_flow_outcome_t::admitted);
@@ -2263,8 +2271,9 @@ TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
         auto stale_object = object;
         ++stale_object.object_generation;
         // The valid route/body reaches commit; the actual Kernel owner rejects enqueue.
-        EXPECT_EQ (ingest (claim.records[2], stale_object), st::stateful_error_t::generation_stale);
-        EXPECT_EQ (releases, 2);
+        EXPECT_EQ (ingest (rt::mesh::service_mailbox_slot_t{claim, 2}, stale_object),
+                   st::stateful_error_t::generation_stale);
+        EXPECT_EQ (releases (), 2u);
         EXPECT_EQ (events.size (), mode == fw::message_flow_log_mode_t::normal ? 1u : 0u);
         EXPECT_EQ (host->objects ().pending (object, st::turn_domain_t::application), 1u);
         auto [error, delivery] = raw.try_claim (object);
@@ -2275,12 +2284,11 @@ TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
             EXPECT_EQ (delivery->frozen.operation.low, 2u);
             EXPECT_EQ (raw.complete (*delivery), st::stateful_error_t::none);
         }
-        EXPECT_EQ (releases, 3);
-        EXPECT_EQ (
-          ingest (fw::test::publish_stateful_claim (host->transport (), object,
-                                                    fixture.actor_record (4), [&] { ++releases; }),
-                  object),
-          st::stateful_error_t::none);
+        EXPECT_EQ (releases (), 3u);
+        const auto following_slot =
+          fw::test::publish_stateful_claim (host->transport (), object, fixture.actor_record (4));
+        following_claim = following_slot.claim;
+        EXPECT_EQ (ingest (following_slot, object), st::stateful_error_t::none);
         auto [following_error, following] = raw.try_claim (object);
         EXPECT_EQ (following_error, st::stateful_error_t::none);
         EXPECT_TRUE (following);
@@ -2291,7 +2299,7 @@ TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
         }
         EXPECT_EQ (events.size (), mode == fw::message_flow_log_mode_t::normal ? 2u : 0u);
         EXPECT_EQ (raw.discard_pending (object), st::stateful_error_t::none);
-        EXPECT_EQ (releases, 4);
+        EXPECT_EQ (releases (), 4u);
         EXPECT_EQ (host->objects ().pending (object, st::turn_domain_t::application), 0u);
         host->close ();
     }
@@ -2435,21 +2443,19 @@ TEST (NativeIntake, TypedControlMalformedWireAndKernelMetadata)
     EXPECT_EQ (controls, 1u);
     EXPECT_EQ (rejected, 1u);
     st::raw_stateful_dispatch_t raw (host->objects (), host->transport (), resolver);
-    int releases = 0;
     EXPECT_THROW (mailbox.try_enqueue ({owner, mesh::service_mailbox_domain_t::application, {}}),
                   std::invalid_argument);
     mesh::service_mailbox_record_t invalid_accepted{
       owner, mesh::service_mailbox_domain_t::application, {zlink::message_t::from ("invalid")}};
+    const auto invalid_slot =
+      fw::test::publish_stateful_claim (host->transport (), object, std::move (invalid_accepted));
     EXPECT_EQ (raw
-                 .ingest_claimed (object,
-                                  fw::test::publish_stateful_claim (host->transport (), object,
-                                                                    std::move (invalid_accepted),
-                                                                    [&] { ++releases; }),
+                 .ingest_claimed (object, invalid_slot,
                                   fw::test::retained_ingress_snapshot (host->objects (), object))
                  .result ()
                  .value (),
                st::stateful_error_t::invalid);
-    EXPECT_EQ (releases, 1);
+    EXPECT_EQ (invalid_slot.claim->outstanding (), 0u);
     auto valid = fixture.actor_record (1);
     ASSERT_TRUE (mailbox.try_enqueue (std::move (valid)));
     drain ();
