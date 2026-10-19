@@ -8001,6 +8001,49 @@ for (const remote of [false, true]) {
     assert.equal(malformed, 'protocolError');
     assert.equal(physicalCloses, 1);
 
+    const actorState = runtime.actor(actor.actorId)!;
+    const replaced = await ingress!(
+      withIngressOwner({
+        command: M6bServiceWireCommand.boundSessionReplaced,
+        flags: 0,
+        sourceRoutingId: actor.nodeRid,
+        sourceNodeGeneration: 7n,
+        parts: [
+          encodeBoundSessionReplacedHeader(
+            {
+              actor,
+              targetNodeGeneration: 7n,
+              authorityOwnerGeneration: actorState.authorityOwnerGeneration,
+              ownerLeaseGeneration: 7n
+            },
+            {
+              sessionOwnerNodeRid: binding.sessionOwnerNodeRid,
+              sessionOwnerNodeGeneration: binding.sessionOwnerNodeGeneration!,
+              sessionOwnerId: binding.sessionOwnerId!,
+              sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration!,
+              sessionRid: binding.sessionRid,
+              retiredBindingGeneration: binding.bindingGeneration
+            }
+          )
+        ]
+      })
+    );
+    assert.equal(replaced, 'infrastructure');
+    const retiredClose = await send(request);
+    assert.equal(
+      wireReplyFailureException(
+        retiredClose.terminalResult,
+        retiredClose.failureCode,
+        'retired close'
+      ).kind,
+      ZLinkFrameworkErrorKind.Unavailable
+    );
+    assert.equal(
+      physicalCloses,
+      1,
+      'a replacement notice retires close admission before its callback'
+    );
+
     let replacementCloses = 0;
     await runtime.bindSession(
       'replacement-rid',

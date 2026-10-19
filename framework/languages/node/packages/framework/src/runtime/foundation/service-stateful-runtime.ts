@@ -3655,6 +3655,9 @@ export class ServiceStatefulRuntime {
           : undefined;
     if (delivery === undefined) return 'infrastructure';
     this.appliedReplacementNotices.add(key);
+    if (delivery === current) {
+      this.sessionDeliveries.delete(deliveryKey);
+    }
     delivery.onBindingReplaced?.(actor.actorId, record.retiredSession, actor);
     if (retired !== undefined) {
       this.retiredSessionDeliveries.delete(sessionDeliveryKey(retired.binding));
