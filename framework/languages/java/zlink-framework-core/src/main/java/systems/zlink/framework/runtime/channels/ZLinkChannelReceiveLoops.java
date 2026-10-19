@@ -225,36 +225,48 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
 
         /** Returns false when this turn ended: the permit wait or a closed queue owns the loop. */
         private boolean receiveBatch(ZLinkApplicationJobQueue.Permit first) {
-            ZLinkApplicationJobQueue.Permit permit = first;
+            int remaining = 0;
             try {
                 batchBoundary();
-            } catch (RuntimeException | Error failure) {
-                if (permit != null) {
-                    permit.abandonReservation();
-                }
-                throw failure;
-            }
-            ZLinkReceiveBatchBudget batch = new ZLinkReceiveBatchBudget();
-            while (batch.canReceiveNext()) {
-                if (permit == null) {
-                    permit = reserveBeforeReceive(this);
-                    if (permit == null) {
+                remaining =
+                        applicationJobQueue.reserveRotationBudget(
+                                ZLinkReceiveBatchBudget.DEFAULT_MAX_MESSAGES
+                                        - (first == null ? 0 : 1));
+                if (first == null && remaining == 0) {
+                    first = reserveBeforeReceive(this);
+                    if (first == null) {
                         return false;
                     }
                 }
-                try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
-                    long bytes = receiveOne();
-                    if (bytes == NO_RECORD) {
-                        break;
+                ZLinkReceiveBatchBudget batch =
+                        new ZLinkReceiveBatchBudget(
+                                remaining + (first == null ? 0 : 1),
+                                ZLinkReceiveBatchBudget.DEFAULT_MAX_BYTES,
+                                ZLinkReceiveBatchBudget.DEFAULT_MAX_ELAPSED_NANOS);
+                while (!closed && batch.canReceiveNext()) {
+                    ZLinkApplicationJobQueue.Permit permit = first;
+                    first = null;
+                    if (permit == null) {
+                        remaining--;
+                        permit = applicationJobQueue.takeRotationPermit();
                     }
-                    batch.record(bytes);
-                } finally {
-                    permit.abandonReservation();
-                    permit = null;
+                    try (var ignored = ZLinkApplicationJobContext.enter(permit)) {
+                        long bytes = receiveOne();
+                        if (bytes == NO_RECORD) {
+                            break;
+                        }
+                        batch.record(bytes);
+                    } finally {
+                        permit.abandonReservation();
+                    }
                 }
+                return true;
+            } finally {
+                if (first != null) {
+                    first.abandonReservation();
+                }
+                applicationJobQueue.abandonRotationBudget(remaining);
             }
-            batchBoundary();
-            return true;
         }
 
         final void assertReceiveOwner() {

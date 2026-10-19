@@ -35,6 +35,110 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
     @Test
+    void rotationReservesCountBeforeClaimAndReturnsUnusedCountOnEveryExit() throws Exception {
+        for (String exit : List.of("no_data", "error", "close")) {
+            try (var queue =
+                    new ZLinkApplicationJobQueue(
+                            ZLinkApplicationJobQueueProfile.BALANCED,
+                            OptionalLong.of(3),
+                            new ZLinkApplicationJobQueue.ProcessorCandidates(
+                                    1, null, null, null))) {
+                ZLinkChannelReceiveLoops loops = new ZLinkChannelReceiveLoops(queue);
+                CompletableFuture<ZLinkApplicationJobQueue.Snapshot> atClaim =
+                        new CompletableFuture<>();
+                AtomicInteger boundaries = new AtomicInteger();
+                AtomicInteger failures = new AtomicInteger();
+                FakeRouter router =
+                        new FakeRouter() {
+                            @Override
+                            public boolean waitForReadable(Duration timeout) {
+                                return true;
+                            }
+
+                            @Override
+                            public ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
+                                atClaim.complete(queue.snapshot());
+                                if (exit.equals("error")) {
+                                    throw new IllegalStateException("injected receive failure");
+                                }
+                                loops.close();
+                                return exit.equals("close") ? received("close") : null;
+                            }
+                        };
+                try {
+                    loops.startRoute(
+                            router,
+                            new Object(),
+                            boundaries::incrementAndGet,
+                            ZLinkBackendReceived::close,
+                            failure -> {
+                                failures.incrementAndGet();
+                                loops.close();
+                            });
+                    var snapshot = atClaim.get(5, TimeUnit.SECONDS);
+                    loops.awaitTermination();
+                    assertEquals(3, snapshot.reservedSupplyPermits(), exit);
+                    assertEquals(1, boundaries.get(), exit);
+                    assertEquals(exit.equals("error") ? 1 : 0, failures.get(), exit);
+                    assertEquals(0, queue.snapshot().permitsInUse(), exit);
+                    assertEquals(0, queue.snapshot().reservedSupplyPermits(), exit);
+                } finally {
+                    loops.close();
+                    loops.awaitTermination();
+                }
+            }
+        }
+    }
+
+    @Test
+    void completionAndManagementRunWithoutCapacityWhileOrdinaryInputWaits() throws Exception {
+        try (var queue =
+                        new ZLinkApplicationJobQueue(
+                                ZLinkApplicationJobQueueProfile.BALANCED,
+                                OptionalLong.of(1),
+                                new ZLinkApplicationJobQueue.ProcessorCandidates(
+                                        1, null, null, null));
+                var held =
+                        queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                                .toCompletableFuture()
+                                .join()) {
+            var loops = new ZLinkChannelReceiveLoops(queue);
+            var managed = new CompletableFuture<Boolean>();
+            var router = new FakeRouter();
+            router.inbound.add(received("ordinary"));
+            try {
+                loops.startRoute(
+                        router,
+                        new Object(),
+                        () -> managed.complete(ZLinkApplicationJobContext.current().isEmpty()),
+                        ZLinkBackendReceived::close,
+                        managed::completeExceptionally);
+                assertTrue(managed.get(5, TimeUnit.SECONDS));
+                var terminal = new CompletableFuture<String>();
+                var delivered =
+                        systems.zlink.framework.runtime.internal.service
+                                .ZLinkServiceCompletionDispatcher.deliver(terminal);
+                var completion =
+                        delivered.thenApply(
+                                value ->
+                                        value
+                                                + ":"
+                                                + ZLinkApplicationJobContext.current().isEmpty());
+                terminal.complete("reply");
+                assertEquals(
+                        "reply:true", completion.toCompletableFuture().get(5, TimeUnit.SECONDS));
+                assertEquals(0, router.receiveCount.get());
+            } finally {
+                loops.close();
+                loops.awaitTermination();
+                router.inbound.forEach(ZLinkBackendReceived::close);
+            }
+            assertEquals(0, queue.snapshot().capacityWaiters());
+            assertEquals(1, queue.snapshot().permitsInUse());
+        }
+    }
+
+    @Test
     void topicByteCountMatchesUtf8EncodingIncludingMalformedSurrogates() {
         for (String topic :
                 List.of("", "ascii", "한글", "\uD83D\uDE00", "\uD800", "\uDC00", "a\uD800b\uDC00")) {
@@ -317,7 +421,7 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
         assertTrue(condition.getAsBoolean(), message);
     }
 
-    private static final class FakeRouter implements ZLinkBackendRouterSocket {
+    private static class FakeRouter implements ZLinkBackendRouterSocket {
         private final java.util.Queue<ZLinkBackendReceived> inbound =
                 new java.util.concurrent.ConcurrentLinkedQueue<>();
         private final AtomicInteger receiveCount = new AtomicInteger();
