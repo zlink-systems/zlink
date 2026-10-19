@@ -85,10 +85,10 @@ test('rotation accounting preserves exact INT32_MAX capacity and bigint snapshot
   const queue = new ApplicationJobQueue(
     resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: BigInt(count) }, () => 1n)
   );
-  queue.reserveReceiveRotation(count);
+  assert.equal(queue.tryReserveCount(count), count);
   assert.equal(queue.snapshot().reservedSupplyPermits, BigInt(count));
   assert.equal(queue.snapshot().pressureState, 'paused');
-  assert.equal(queue.receiveRotationCapacity(64), 0);
+  assert.equal(queue.tryReserveCount(64), undefined);
   queue.markQueued();
   assert.equal(queue.snapshot().queuedApplicationJobs, 1n);
   queue.release('queued');
@@ -97,7 +97,9 @@ test('rotation accounting preserves exact INT32_MAX capacity and bigint snapshot
   assert.equal(queue.snapshot().peakPermitsInUse, BigInt(count));
   queue.resetMetrics();
   assert.equal(queue.snapshot().peakPermitsInUse, BigInt(count) - 2n);
-  assert.equal(queue.receiveRotationCapacity(64), 2);
+  assert.equal(queue.tryReserveCount(64), 2);
+  queue.releaseUnusedReceiveRotation(count);
+  assert.equal(queue.snapshot().permitsInUse, 0n);
 });
 
 test('a synchronous permit turn does not allocate operation Promises', async () => {
