@@ -1874,14 +1874,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 long connectedNanos,
                 long createdNanos) {
             this.streamNode = streamNode;
-            String endpoint =
-                    streamNode.bindEndpoints().isEmpty()
-                            ? "tcp://"
-                            : streamNode.bindEndpoints().get(0);
-            this.metricTags =
-                    Map.of(
-                            ZLinkRuntimeMetrics.Tag.TRANSPORT.wire(),
-                            endpoint.substring(0, endpoint.indexOf("://")));
+            this.metricTags = streamNode.metricTags();
             lastHeartbeatPingNanos = connectedNanos;
             this.session = session;
             this.serials = serials;

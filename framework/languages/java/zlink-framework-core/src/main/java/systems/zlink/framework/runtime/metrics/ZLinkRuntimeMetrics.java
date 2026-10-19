@@ -380,7 +380,7 @@ public final class ZLinkRuntimeMetrics {
         }
     }
 
-    public enum TakeoverOutcome {
+    private enum TakeoverOutcome {
         CLAIMED,
         LOST,
         FAILED;
@@ -459,7 +459,26 @@ public final class ZLinkRuntimeMetrics {
             };
 
     public static void recordInstanceTakeover(
-            String meshName, String stableType, TakeoverOutcome outcome) {
+            String meshName, String stableType, Throwable failure) {
+        while (failure instanceof java.util.concurrent.CompletionException
+                && failure.getCause() != null) failure = failure.getCause();
+        TakeoverOutcome outcome =
+                failure == null
+                        ? TakeoverOutcome.CLAIMED
+                        : failure
+                                                instanceof
+                                                systems.zlink.framework.errors
+                                                                .ZLinkFrameworkException
+                                                        terminal
+                                        && terminal.kind()
+                                                == systems.zlink.framework.errors
+                                                        .ZLinkFrameworkErrorKind.UNAVAILABLE
+                                        && !(failure
+                                                instanceof
+                                                systems.zlink.framework.runtime.internal.locations
+                                                        .ZLinkLocationStoreFailure)
+                                ? TakeoverOutcome.LOST
+                                : TakeoverOutcome.FAILED;
         increment(
                 Metric.INSTANCE_SPOT_TAKEOVERS.metricName(),
                 Map.of(
@@ -513,28 +532,43 @@ public final class ZLinkRuntimeMetrics {
                 return List.copyOf(snapshots);
             };
 
+    /** A metric source registration owns no checked-failure resource. */
+    @FunctionalInterface
+    public interface Registration extends AutoCloseable {
+        @Override
+        void close();
+    }
+
+    private static void reportObservationFailure(RuntimeException failure) {
+        java.util.logging.Logger.getLogger(ZLinkRuntimeMetrics.class.getName())
+                .log(java.util.logging.Level.WARNING, "Runtime metric observation failed", failure);
+    }
+
     private ZLinkRuntimeMetrics() {}
 
-    public static AutoCloseable install(Sink replacement) {
+    public static Registration install(Sink replacement) {
         Sink previous = sink;
         sink = replacement == null ? NOOP : replacement;
         publishHostState();
         if (HOST_CAPACITY_SOURCE.get() != null) {
             try {
                 sink.registerHostCapacity(HOST_CAPACITY_PROJECTION);
-            } catch (RuntimeException ignored) {
+            } catch (RuntimeException failure) {
+                reportObservationFailure(failure);
             }
         }
         if (APPLICATION_JOB_QUEUE_PRESSURE_SOURCE.get() != null) {
             try {
                 sink.registerApplicationJobQueuePressure(APPLICATION_JOB_QUEUE_PRESSURE_PROJECTION);
-            } catch (RuntimeException ignored) {
+            } catch (RuntimeException failure) {
+                reportObservationFailure(failure);
             }
         }
         if (!MESH_TOPOLOGY_SOURCES.isEmpty()) {
             try {
                 sink.registerMeshTopology(MESH_TOPOLOGY_PROJECTION);
-            } catch (RuntimeException ignored) {
+            } catch (RuntimeException failure) {
+                reportObservationFailure(failure);
             }
         }
         OBSERVABLE_SOURCES
@@ -543,27 +577,29 @@ public final class ZLinkRuntimeMetrics {
                         key -> {
                             try {
                                 publishObservable(key);
-                            } catch (RuntimeException ignored) {
+                            } catch (RuntimeException failure) {
+                                reportObservationFailure(failure);
                             }
                         });
         return () -> sink = previous;
     }
 
-    public static AutoCloseable registerHostState(Supplier<String> source) {
+    public static Registration registerHostState(Supplier<String> source) {
         Object owner = new Object();
         HOST_STATE_SOURCES.put(owner, Objects.requireNonNull(source, "source"));
         publishHostState();
         return () -> {
-            HOST_STATE_SOURCES.remove(owner, source);
-            publishHostState();
+            if (HOST_STATE_SOURCES.remove(owner, source)) {
+                publishHostState();
+            }
         };
     }
 
     public static void publishHostState() {
-        if (HOST_STATE_SOURCES.isEmpty()) return;
         try {
             sink.observeHostStates(HOST_STATE_PROJECTION);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException failure) {
+            reportObservationFailure(failure);
         }
     }
 
@@ -572,52 +608,56 @@ public final class ZLinkRuntimeMetrics {
     }
 
     /** Registers the one host-capacity projection read by all ten instruments. */
-    public static AutoCloseable registerHostCapacity(Supplier<ZLinkHostCapacityStatus> source) {
+    public static Registration registerHostCapacity(Supplier<ZLinkHostCapacityStatus> source) {
         Objects.requireNonNull(source, "source");
         HOST_CAPACITY_SOURCE.set(source);
         try {
             sink.registerHostCapacity(HOST_CAPACITY_PROJECTION);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException failure) {
+            reportObservationFailure(failure);
         }
         return () -> HOST_CAPACITY_SOURCE.compareAndSet(source, null);
     }
 
     /** Registers metric-only application-queue pressure accounting. */
-    public static AutoCloseable registerApplicationJobQueuePressure(
+    public static Registration registerApplicationJobQueuePressure(
             Supplier<ZLinkApplicationJobQueuePressureMetrics> source) {
         Objects.requireNonNull(source, "source");
         APPLICATION_JOB_QUEUE_PRESSURE_SOURCE.set(source);
         try {
             sink.registerApplicationJobQueuePressure(APPLICATION_JOB_QUEUE_PRESSURE_PROJECTION);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException failure) {
+            reportObservationFailure(failure);
         }
         return () -> {
             if (APPLICATION_JOB_QUEUE_PRESSURE_SOURCE.compareAndSet(source, null)) {
                 try {
                     sink.observeApplicationJobQueuePressure(null);
-                } catch (RuntimeException ignored) {
+                } catch (RuntimeException failure) {
+                    reportObservationFailure(failure);
                 }
             }
         };
     }
 
     /** Registers host-owned RouteMesh state read only by observable metrics. */
-    public static AutoCloseable registerMeshTopology(Supplier<List<MeshTopologyMetrics>> source) {
+    public static Registration registerMeshTopology(Supplier<List<MeshTopologyMetrics>> source) {
         Objects.requireNonNull(source, "source");
         Object owner = new Object();
         MESH_TOPOLOGY_SOURCES.put(owner, source);
         try {
             sink.registerMeshTopology(MESH_TOPOLOGY_PROJECTION);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException failure) {
+            reportObservationFailure(failure);
         }
         return () -> MESH_TOPOLOGY_SOURCES.remove(owner, source);
     }
 
-    static AutoCloseable registerRequestInflight(Map<String, String> tags, LongSupplier value) {
+    static Registration registerRequestInflight(Map<String, String> tags, LongSupplier value) {
         return registerObservable(Metric.MESH_NODE_REQUESTS_INFLIGHT, tags, value);
     }
 
-    public static AutoCloseable registerObservable(
+    public static Registration registerObservable(
             Metric metric, Map<String, String> tags, LongSupplier value) {
         ObservableKey key = new ObservableKey(metric, Map.copyOf(tags));
         Object owner = new Object();
@@ -630,7 +670,8 @@ public final class ZLinkRuntimeMetrics {
                 });
         try {
             publishObservable(key);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException failure) {
+            reportObservationFailure(failure);
         }
         return () ->
                 OBSERVABLE_SOURCES.computeIfPresent(
@@ -662,28 +703,32 @@ public final class ZLinkRuntimeMetrics {
     public static void increment(String name, Map<String, String> tags) {
         try {
             sink.increment(name, tags);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException failure) {
+            reportObservationFailure(failure);
         }
     }
 
     public static void add(String name, long delta, Map<String, String> tags) {
         try {
             sink.add(name, delta, tags);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException failure) {
+            reportObservationFailure(failure);
         }
     }
 
     public static void record(String name, Duration duration, Map<String, String> tags) {
         try {
             sink.record(name, duration, tags);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException failure) {
+            reportObservationFailure(failure);
         }
     }
 
     public static void record(String name, double value, Map<String, String> tags) {
         try {
             sink.record(name, value, tags);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException failure) {
+            reportObservationFailure(failure);
         }
     }
 
@@ -691,7 +736,8 @@ public final class ZLinkRuntimeMetrics {
             ZLinkApplicationJobQueuePressureMetrics snapshot) {
         try {
             sink.observeApplicationJobQueuePressure(snapshot);
-        } catch (RuntimeException ignored) {
+        } catch (RuntimeException failure) {
+            reportObservationFailure(failure);
         }
     }
 

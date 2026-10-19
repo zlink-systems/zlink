@@ -58,6 +58,7 @@ final class ZLinkEmptyHostRelocationTest {
                     metrics.only("zlink.host.relocation.duration").tags().get("outcome"));
             runtime.shutdown(WAIT).toCompletableFuture().get(WAIT.toSeconds(), TimeUnit.SECONDS);
             assertEquals(1, metrics.count("zlink.host.shutdown.duration"));
+            assertEquals(java.util.Map.of("stopped", 1L), metrics.collectHostStates());
             assertEquals(
                     "stopped", metrics.only("zlink.host.shutdown.duration").tags().get("outcome"));
             assertEquals(
@@ -70,6 +71,8 @@ final class ZLinkEmptyHostRelocationTest {
                             "stopped"),
                     metrics.hostStates.stream().distinct().toList());
             metrics.assertContractLabels();
+            runtime.close();
+            assertEquals(java.util.Map.of(), metrics.collectHostStates());
         }
     }
 

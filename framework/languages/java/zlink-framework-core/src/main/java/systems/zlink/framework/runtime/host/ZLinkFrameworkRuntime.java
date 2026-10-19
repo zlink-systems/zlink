@@ -108,11 +108,13 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
             applicationJobQueue;
     private final ZLinkStateLane capacityStateLane = new ZLinkStateLane();
     private AutoCloseable objectCapacityMetricRegistration = () -> {};
-    private final List<AutoCloseable> activationMetricRegistrations = new ArrayList<>();
-    private AutoCloseable hostStateMetricRegistration = () -> {};
-    private AutoCloseable capacityMetricRegistration = () -> {};
-    private AutoCloseable applicationJobQueuePressureMetricRegistration = () -> {};
-    private AutoCloseable meshTopologyMetricRegistration = () -> {};
+    private final List<ZLinkRuntimeMetrics.Registration> activationMetricRegistrations =
+            new ArrayList<>();
+    private ZLinkRuntimeMetrics.Registration hostStateMetricRegistration = () -> {};
+    private ZLinkRuntimeMetrics.Registration capacityMetricRegistration = () -> {};
+    private ZLinkRuntimeMetrics.Registration applicationJobQueuePressureMetricRegistration =
+            () -> {};
+    private ZLinkRuntimeMetrics.Registration meshTopologyMetricRegistration = () -> {};
     private long capacityMeasurementEpoch;
     private systems.zlink.framework.monitoring.ZLinkCoreHwmStatus lastCoreHwmStatus;
     private final AtomicBoolean coreHwmContextActive = new AtomicBoolean(false);
@@ -592,7 +594,7 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     /** Runs the shutdown routine over what a failed start opened; its failures stay attached. */
     private void rollBackStartup(Throwable failure) {
         try {
-            closeAsync().toCompletableFuture().join();
+            close();
         } catch (RuntimeException closeFailure) {
             failure.addSuppressed(closeFailure);
         }
@@ -1730,10 +1732,6 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                     result instanceof InternalForceStopped forced
                                             ? forced.failure()
                                             : failure);
-                            try {
-                                hostStateMetricRegistration.close();
-                            } catch (Exception metricFailure) {
-                            }
                             completion.complete(terminal);
                         });
     }
@@ -2172,6 +2170,8 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                 throw runtimeError;
             }
             throw new ZLinkConfigurationException("framework shutdown failed", cause);
+        } finally {
+            hostStateMetricRegistration.close();
         }
     }
 
@@ -2188,30 +2188,20 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                     return null;
                 });
         applicationJobQueue.close();
-        try {
-            capacityMetricRegistration.close();
-        } catch (Exception ignored) {
-            // Metrics are observational and cannot make runtime teardown fail.
-        }
-        try {
-            applicationJobQueuePressureMetricRegistration.close();
-        } catch (Exception ignored) {
-            // Metrics are observational and cannot make runtime teardown fail.
-        }
-        try {
-            meshTopologyMetricRegistration.close();
-        } catch (Exception ignored) {
-            // Metrics are observational and cannot make runtime teardown fail.
-        }
+        capacityMetricRegistration.close();
+        applicationJobQueuePressureMetricRegistration.close();
+        meshTopologyMetricRegistration.close();
         try {
             objectCapacityMetricRegistration.close();
         } catch (Exception metricFailure) {
+            Logger.getLogger(ZLinkFrameworkRuntime.class.getName())
+                    .log(
+                            java.util.logging.Level.WARNING,
+                            "Capacity metric source release failed",
+                            metricFailure);
         }
         for (var registration : activationMetricRegistrations) {
-            try {
-                registration.close();
-            } catch (Exception ignored) {
-            }
+            registration.close();
         }
         activationMetricRegistrations.clear();
         backendContext.close();
@@ -2332,12 +2322,6 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
                                 publishRuntimeState(ZLinkFrameworkRuntimeState.STOPPED);
                             } else if (activeTermination.get() == null) {
                                 publishRuntimeState(ZLinkFrameworkRuntimeState.STOPPED);
-                            }
-                            if (activeTermination.get() == null) {
-                                try {
-                                    hostStateMetricRegistration.close();
-                                } catch (Exception metricFailure) {
-                                }
                             }
                         });
     }

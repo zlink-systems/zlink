@@ -69,13 +69,12 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
 
     @Override
     public void observeHostStates(Supplier<Map<String, Long>> source) {
+        Map<String, Long> snapshot = source.get();
         for (var state : systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState.values()) {
             String label = ZLinkRuntimeMetrics.wire(state);
             hostStates.compute(
                     label,
                     (key, current) -> {
-                        Map<String, Long> snapshot = source.get();
-                        if (snapshot.isEmpty()) return current;
                         long count = snapshot.getOrDefault(key, 0L);
                         if (count == 0) {
                             if (current != null) registry.remove(current.id());

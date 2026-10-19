@@ -23,6 +23,18 @@ public final class ZLinkRuntimeMetricProbe implements ZLinkRuntimeMetrics.Sink, 
         return probe;
     }
 
+    private java.util.function.Supplier<Map<String, Long>> hostStateSource = Map::of;
+
+    @Override
+    public void observeHostStates(java.util.function.Supplier<Map<String, Long>> source) {
+        hostStateSource = source;
+        source.get().keySet().forEach(this::observeHostState);
+    }
+
+    public Map<String, Long> collectHostStates() {
+        return hostStateSource.get();
+    }
+
     @Override
     public void observeHostState(String state) {
         hostStates.add(state);

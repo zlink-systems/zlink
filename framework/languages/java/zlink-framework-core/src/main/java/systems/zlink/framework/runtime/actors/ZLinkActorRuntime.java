@@ -197,10 +197,10 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                     String, systems.zlink.framework.runtime.internal.metrics.ZLinkPopulationMetrics>
             populationMetrics = new ConcurrentHashMap<>();
 
-    private void recordActorCount(long delta) {
+    private void recordActorCount(String actorMesh, long delta) {
         populationMetrics
                 .computeIfAbsent(
-                        meshName,
+                        actorMesh,
                         name ->
                                 new systems.zlink.framework.runtime.internal.metrics
                                         .ZLinkPopulationMetrics(
@@ -3275,8 +3275,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             if (failure != null) {
                 try {
                     failure.accept(new ZLinkFrameworkException(kind, message));
-                } catch (RuntimeException ignored) {
-                    // The retained source still owns and rejects the packet.
+                } catch (RuntimeException callbackFailure) {
+                    java.util.logging.Logger.getLogger(ZLinkActorRuntime.class.getName())
+                            .log(
+                                    java.util.logging.Level.WARNING,
+                                    "Retained Message Follow failure callback failed",
+                                    callbackFailure);
                 }
             }
         } finally {
@@ -4640,7 +4644,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                     byActor.remove(previous.actor());
                                 }
                                 byActor.put(actor, entry);
-                                if (previous == null) recordActorCount(1);
+                                if (previous == null) recordActorCount(context.meshName(), 1);
                                 return previous == null;
                             });
             if (added) signalCountChanged();
@@ -4743,7 +4747,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                 ActorEntry entry = byId.remove(actorId);
                                 if (entry != null) {
                                     byActor.remove(entry.actor());
-                                    recordActorCount(-1);
+                                    recordActorCount(entry.context().meshName(), -1);
                                     acceptedHandoffOperations.remove(actorId);
                                 }
                                 return entry;
@@ -4774,7 +4778,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             }
             byId.remove(actorId);
             byActor.remove(actor);
-            recordActorCount(-1);
+            recordActorCount(entry.context().meshName(), -1);
             acceptedHandoffOperations.remove(actorId);
             return true;
         }

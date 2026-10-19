@@ -1136,48 +1136,18 @@ final class ZLinkProviderAuthorityRepository {
                                                                     }
                                                                 }
                                                                 return members.thenCompose(
-                                                                                ended ->
-                                                                                        releaseEndedAuthority(
-                                                                                                authorityKey,
-                                                                                                authority,
-                                                                                                current,
-                                                                                                active,
-                                                                                                ownerEvidence
-                                                                                                        .ownerId(),
-                                                                                                lease,
-                                                                                                descriptorCondition,
-                                                                                                ended,
-                                                                                                cancellation))
-                                                                        .whenComplete(
-                                                                                (reclaimed,
-                                                                                        failure) -> {
-                                                                                    if (request
-                                                                                                    != null
-                                                                                            && request
-                                                                                                            .objectKind()
-                                                                                                    == ZLinkPlacementObjectKind
-                                                                                                            .INSTANCE_SPOT) {
-                                                                                        if (failure
-                                                                                                        != null
-                                                                                                || reclaimed
-                                                                                                        == StaleAuthorityReclaim
-                                                                                                                .CONFLICT)
-                                                                                            ZLinkRuntimeMetrics
-                                                                                                    .recordInstanceTakeover(
-                                                                                                            request.targetDescriptor()
-                                                                                                                    .meshName(),
-                                                                                                            request
-                                                                                                                    .stableType(),
-                                                                                                            failure
-                                                                                                                            != null
-                                                                                                                    ? ZLinkRuntimeMetrics
-                                                                                                                            .TakeoverOutcome
-                                                                                                                            .FAILED
-                                                                                                                    : ZLinkRuntimeMetrics
-                                                                                                                            .TakeoverOutcome
-                                                                                                                            .LOST);
-                                                                                    }
-                                                                                });
+                                                                        ended ->
+                                                                                releaseEndedAuthority(
+                                                                                        authorityKey,
+                                                                                        authority,
+                                                                                        current,
+                                                                                        active,
+                                                                                        ownerEvidence
+                                                                                                .ownerId(),
+                                                                                        lease,
+                                                                                        descriptorCondition,
+                                                                                        ended,
+                                                                                        cancellation));
                                                             }));
                 });
     }
