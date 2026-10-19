@@ -146,9 +146,21 @@ The session owner keeps the following information as one binding per Actor.
 | `ActorId`, `ObjectGeneration` | Used to avoid sending to a different Actor re-created under the same ID. |
 | `MeshName`, owner `NodeRid` | Used as the address to send relay and disconnect notifications to after bind. |
 | `NodeGeneration`, `AuthorityOwnerGeneration`, `OwnerLeaseGeneration` | Verified to avoid sending to a node before restart or a previous owner. |
-| Session owner RID and lifecycle generation, binding generation and token | Rejects late messages from a previous connection or a replaced binding. |
+| Session owner identity (defined below), binding generation and token | Rejects late messages from a previous connection or a replaced binding. |
 | [Session sequence](../00-foundation/02-glossary.en.md#session-sequence) | Preserves the order of messages accepted on the same session. |
 | Actor slot | A non-zero `u16` address that points at one binding within this STREAM session. Only a new binding is given the next value not yet issued, and a value is never reused within the same session. Binding the current binding of the same physical session again, or obtaining it with `BindOrGet`, keeps its existing slot. When a session that has issued up to `65535` needs a new binding, the bind ends as `InvalidOperation` without changing the existing bindings. |
+
+**The Session owner identity is four values: Node RID, lifecycle generation, owner ID and owner lease generation.**
+The owner ID and owner lease generation are the Session owner host's `(OwnerId, LeaseGeneration)`
+([Location runtime §3.1](../05-location-relocation/01-location-runtime.en.md#31-distinguishing-whether-the-host-process-restarted)),
+the values that node publishes in its MeshNode descriptor. The Actor owner takes them from a descriptor when it accepts the
+bind and stores them in the current binding. When the Session owner is another node, it uses the descriptor whose RID and
+lifecycle generation match that peer's [peer admission](../00-foundation/02-glossary.en.md#peer-admission) and that passed
+the owner-lease check of [Location runtime §4.1](../05-location-relocation/01-location-runtime.en.md#41-validating-a-target-descriptors-owner-lease);
+when it is the same node, it uses its own descriptor. Commands 42, 51 and 54, which carry this identity, send the stored
+values unchanged, and the receiving Session owner compares them exactly with its own current values. The binding identity
+below uses only the Node RID and lifecycle generation of these; the owner ID and owner lease generation are fence values
+for commands 42, 51 and 54.
 
 Binding identity uses the session owner Node RID, that node's lifecycle
 generation, and an owner-local binding generation together. Comparing
@@ -366,14 +378,6 @@ requests a connection close. It doesn't provide a global proxy that
 specifies an arbitrary session. Disconnect releases the binding but doesn't
 destroy the Actor or change Spot membership.
 
-**The Session owner identity is four values: Node RID, lifecycle generation, owner ID and owner lease generation.**
-The owner ID and owner lease generation are the Session owner host's `(OwnerId, LeaseGeneration)`
-([Location runtime §3.1](../05-location-relocation/01-location-runtime.en.md#31-distinguishing-whether-the-host-process-restarted)),
-the same values that node publishes in its MeshNode descriptor. The Actor owner takes the four values from the Session
-owner peer's accepted descriptor when it accepts the bind and stores them in the current binding; every command that
-carries this identity sends the stored values unchanged. The Session owner compares the received values exactly with its
-own current values.
-
 **The Session owner performs the connection close.** When an Actor requests a close of its current binding, the Actor
 owner preserves the Session owner identity, SessionRid, binding generation, ActorId
 and ObjectGeneration that the current binding names, and sends them in `boundSessionClose(54)` to the Session owner.
@@ -442,7 +446,7 @@ sequenceDiagram
 The framework applies a `boundSessionReplaced(51)` one-way record at most
 once to the replaced previous binding. The record carries an Actor-authority
 source fence together with the previous session owner's Session owner
-identity (§5), session RID, and retired binding generation. The sending node must match the record's Actor-authority
+identity (§4), session RID, and retired binding generation. The sending node must match the record's Actor-authority
 target. The receiving node runs the session's duplicate-Actor-connection
 callback only when every previous session-owner value matches the current
 replacement target exactly. The Actor-authority source fence isn't used by
