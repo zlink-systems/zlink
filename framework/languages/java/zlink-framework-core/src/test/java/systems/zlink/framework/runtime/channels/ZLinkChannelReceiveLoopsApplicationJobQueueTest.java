@@ -16,12 +16,14 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotRouteBridge;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.concurrent.CompletableFuture;
@@ -34,6 +36,122 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
+    @Test
+    void routeRotationDrainsBridgeRecordsBeforeTheNextReadableWait() {
+        try (var queue =
+                new ZLinkApplicationJobQueue(
+                        ZLinkApplicationJobQueueProfile.BALANCED,
+                        OptionalLong.of(1),
+                        new ZLinkApplicationJobQueue.ProcessorCandidates(1, null, null, null))) {
+            var loops = new ZLinkChannelReceiveLoops(queue);
+            AtomicInteger readableCalls = new AtomicInteger();
+            AtomicInteger drainCalls = new AtomicInteger();
+            AtomicInteger pendingRecords = new AtomicInteger();
+            AtomicInteger drainedRecords = new AtomicInteger();
+            AtomicInteger dispatchDrains = new AtomicInteger();
+            var failure = new java.util.concurrent.atomic.AtomicReference<Throwable>();
+            var bridge =
+                    new ZLinkBackendSpotRouteBridge() {
+                        @Override
+                        public void attachRouterChannel(
+                                String channelName, ZLinkBackendRouterSocket router) {}
+
+                        @Override
+                        public CompletionStage<Void> send(
+                                String channelName,
+                                RoutingId targetNodeRid,
+                                String targetSpotId,
+                                List<Message> parts) {
+                            throw new UnsupportedOperationException();
+                        }
+
+                        @Override
+                        public CompletionStage<List<Message>> request(
+                                String channelName,
+                                RoutingId targetNodeRid,
+                                String targetSpotId,
+                                List<Message> parts,
+                                Duration timeout,
+                                CompletableFuture<Void> requestAdmission) {
+                            throw new UnsupportedOperationException();
+                        }
+
+                        @Override
+                        public boolean handleRouterReceived(
+                                String channelName,
+                                RoutingId sourceNodeRid,
+                                long requestSeq,
+                                List<Message> parts) {
+                            throw new UnsupportedOperationException();
+                        }
+
+                        @Override
+                        public int drain() {
+                            drainCalls.incrementAndGet();
+                            int count = pendingRecords.getAndSet(0);
+                            drainedRecords.addAndGet(count);
+                            return count;
+                        }
+
+                        @Override
+                        public String name() {
+                            return "rotation-bridge";
+                        }
+
+                        @Override
+                        public void close() {}
+                    };
+            var drainer = new ZLinkSpotRouteBridgeDrainer(Map.of("route", bridge));
+            drainer.setDispatchDrainer(dispatchDrains::incrementAndGet);
+            var router =
+                    new FakeRouter() {
+                        @Override
+                        public boolean waitForReadable(Duration timeout) {
+                            if (readableCalls.incrementAndGet() == 1) return true;
+                            // End at the next wait entry without allowing a second readable.
+                            loops.close();
+                            return false;
+                        }
+
+                        @Override
+                        public ZLinkBackendReceived recv(ZLinkBackendRecvMode mode) {
+                            pendingRecords.incrementAndGet();
+                            return received("ordinary");
+                        }
+                    };
+            try {
+                loops.startRoute(
+                        router,
+                        new Object(),
+                        () -> drainer.drainNow("route"),
+                        ZLinkBackendReceived::close,
+                        error -> {
+                            failure.set(error);
+                            loops.close();
+                        });
+                loops.awaitTermination();
+                System.out.printf(
+                        "route rotation: readable=%d drainNow=%d bridgeRecords=%d pending=%d dispatchDrains=%d%n",
+                        readableCalls.get(),
+                        drainCalls.get(),
+                        drainedRecords.get(),
+                        pendingRecords.get(),
+                        dispatchDrains.get());
+                assertEquals(null, failure.get());
+                assertEquals(2, readableCalls.get());
+                assertEquals(2, drainCalls.get());
+                assertEquals(1, drainedRecords.get());
+                assertEquals(0, pendingRecords.get());
+                assertEquals(2, dispatchDrains.get());
+                assertEquals(0, queue.snapshot().reservedSupplyPermits());
+                assertEquals(0, queue.snapshot().permitsInUse());
+            } finally {
+                loops.close();
+                loops.awaitTermination();
+            }
+        }
+    }
+
     @Test
     void rotationReservesCountBeforeClaimAndReturnsUnusedCountOnEveryExit() throws Exception {
         for (String exit : List.of("no_data", "error", "close")) {
@@ -78,7 +196,7 @@ final class ZLinkChannelReceiveLoopsApplicationJobQueueTest {
                     var snapshot = atClaim.get(5, TimeUnit.SECONDS);
                     loops.awaitTermination();
                     assertEquals(3, snapshot.reservedSupplyPermits(), exit);
-                    assertEquals(1, boundaries.get(), exit);
+                    assertEquals(exit.equals("error") ? 1 : 2, boundaries.get(), exit);
                     assertEquals(exit.equals("error") ? 1 : 0, failures.get(), exit);
                     assertEquals(0, queue.snapshot().permitsInUse(), exit);
                     assertEquals(0, queue.snapshot().reservedSupplyPermits(), exit);

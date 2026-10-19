@@ -260,6 +260,7 @@ final class ZLinkChannelReceiveLoops implements AutoCloseable {
                         permit.abandonReservation();
                     }
                 }
+                batchBoundary();
                 return true;
             } finally {
                 if (first != null) {
