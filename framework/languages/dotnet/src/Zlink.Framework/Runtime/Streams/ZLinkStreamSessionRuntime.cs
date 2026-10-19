@@ -28,8 +28,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     private readonly TimeProvider _timeProvider;
     private readonly ZLinkStateLane _lane = new();
     private readonly HashSet<ActorBindingReplacementIdentity> _receivedBindingReplacements = [];
-    private readonly Dictionary<ActorBindingReplacementIdentity, ITimer> _replacementCloseTimers =
-    [];
     private readonly bool _requireConnectionReady;
     private readonly TaskCompletionSource<(
         string LocalAddr,
@@ -212,7 +210,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     private async Task DisposeCoreAsync()
     {
-        DisposeReplacementCloseTimers();
         var disposeOwnsDisconnect = ClaimCloseForDisposal();
         var failures = new List<Exception>();
         await CaptureAsync(_serial.DisposeAsync).ConfigureAwait(false);
@@ -920,38 +917,19 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             return;
         }
 
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (_replacementCloseTimers.ContainsKey(identity))
-                    return;
-                var timer = _timeProvider.CreateTimer(
-                    static state =>
-                    {
-                        var closure = (ReplacementCloseTimerState)state!;
-                        closure.Owner.OnReplacementCloseTimer(closure.Identity);
-                    },
-                    new ReplacementCloseTimerState(this, identity),
-                    ActorBindingReplacementCloseDelay,
-                    Timeout.InfiniteTimeSpan
-                );
-                _replacementCloseTimers.Add(identity, timer);
-            })
+        // The grace delay starts without the caller's ExecutionContext, so a
+        // state-lane marker never reaches the delayed close. The pending delay
+        // keeps itself alive until it fires; CloseRetiredSessionIfExactAsync is
+        // the only close decision, including after this session is disposed.
+        _ = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
+            CloseRetiredSessionAfterGraceAsync(identity)
         );
     }
 
-    private void OnReplacementCloseTimer(ActorBindingReplacementIdentity identity)
+    private async Task CloseRetiredSessionAfterGraceAsync(ActorBindingReplacementIdentity identity)
     {
-        var timer = AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (_replacementCloseTimers.Remove(identity, out var timer))
-                    return timer;
-                return null;
-            })
-        );
-        timer?.Dispose();
-        _ = CloseRetiredSessionIfExactAsync(identity);
+        await Task.Delay(ActorBindingReplacementCloseDelay, _timeProvider).ConfigureAwait(false);
+        await CloseRetiredSessionIfExactAsync(identity).ConfigureAwait(false);
     }
 
     private ValueTask CloseRetiredSessionIfExactAsync(ActorBindingReplacementIdentity identity)
@@ -981,20 +959,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         // occupies a serial turn while waiting.
         _ = CloseTransportAsync();
         return ValueTask.CompletedTask;
-    }
-
-    private void DisposeReplacementCloseTimers()
-    {
-        var timers = AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                var timers = _replacementCloseTimers.Values.ToArray();
-                _replacementCloseTimers.Clear();
-                return timers;
-            })
-        );
-        foreach (var timer in timers)
-            timer.Dispose();
     }
 
     private bool TryScheduleTerminal(
@@ -1326,10 +1290,5 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         ulong SessionOwnerLeaseGeneration,
         RoutingId SessionRid,
         ulong RetiredBindingGeneration
-    );
-
-    private sealed record ReplacementCloseTimerState(
-        ZLinkStreamSessionRuntime Owner,
-        ActorBindingReplacementIdentity Identity
     );
 }

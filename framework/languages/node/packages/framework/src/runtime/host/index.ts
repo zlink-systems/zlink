@@ -2849,6 +2849,7 @@ export class ZLinkFrameworkRuntimeHost
     }).create();
     return {
       ...options,
+      admission: this.admission,
       errorSink: this.runtimeOrPreStartErrorSink,
       peerAdmissionSealed: (meshName: string) => !this.admission.accepts(meshName),
       messageFollowReceiver: (record: ServiceMessageFollowRecord) => {
@@ -3034,7 +3035,7 @@ export class ZLinkFrameworkRuntimeHost
     // of new application admission. Disconnect callbacks still use their owner gate.
     if (record.domain === ReadyDomain.Infrastructure) return dispatch();
     if (
-      !this.admission.accepts(meshName) &&
+      !this.admission.accepts(meshName, record.kind) &&
       (record.kind === ReceiveKind.NodeSend ||
         record.kind === ReceiveKind.NodeRequest ||
         record.kind === ReceiveKind.SpotSend ||
@@ -3053,7 +3054,7 @@ export class ZLinkFrameworkRuntimeHost
         return dispatch();
       }
     }
-    return this.admission.run(meshName, operation, dispatch);
+    return this.admission.run(meshName, operation, dispatch, record.kind);
   }
 
   private async dispatchMeshActorBinding(
@@ -3168,13 +3169,21 @@ export class ZLinkFrameworkRuntimeHost
   ) {
     const state = this.executionState;
     const channelRuntime = this.channelRuntime;
-    if (state === undefined || channelRuntime === undefined || !this.admission.accepts(meshName)) {
+    if (
+      state === undefined ||
+      channelRuntime === undefined ||
+      !this.admission.accepts(meshName, ReceiveKind.NodeSend)
+    ) {
       return { status: ZLinkSubmitStatus.Shutdown } as const;
     }
     if (!channelRuntime.canDispatchLocalMeshRoute(meshName)) {
       return { status: ZLinkSubmitStatus.TargetNotFound } as const;
     }
-    const claim = this.admission.claim(meshName, 'RouteMesh local node dispatch');
+    const claim = this.admission.claim(
+      meshName,
+      'RouteMesh local node dispatch',
+      ReceiveKind.NodeSend
+    );
     const ownedParts: RuntimeMessage[] = [];
     try {
       for (const part of parts) {

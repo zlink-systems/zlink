@@ -2720,12 +2720,21 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    [Fact]
-    public async Task RemoteActorFrameRelay_ExecutesSameActorFramesInArrivalOrderWhileTheFirstAwaits()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task RemoteActorFrameRelay_ExecutesSameActorFramesInArrivalOrderWhileTheFirstAwaits(
+        bool ownerExpired
+    )
     {
         var probe = new DispatchProbe();
         var node = new CapturingSpotNode();
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, dispatchProbe: probe);
+        var time = new ManualTimeProvider();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            dispatchProbe: probe,
+            locationTimeProvider: time
+        );
         try
         {
             RegisterProbeActor(runtime, actorRef);
@@ -2809,6 +2818,14 @@ public sealed partial class EntrySpotActorDispatchTests
                         CancellationToken.None
                     )
                     .AsTask();
+
+            if (ownerExpired)
+            {
+                time.AdvanceMonotonicOnly(TimeSpan.FromMinutes(1));
+                await Assert.ThrowsAsync<InvalidOperationException>(() => Relay("second", 1));
+                Assert.Empty(probe.Events);
+                return;
+            }
 
             // The second frame for the same Actor arrives through the relay
             // route while the first frame's handler awaits (spec 23 §10.2).
@@ -4986,6 +5003,65 @@ public sealed partial class EntrySpotActorDispatchTests
             {
                 operation.Dispose();
             }
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task OwnerLeaseAdmission_NodeAndChannelHandlersBypassExpiredOwnerButNotShutdown(
+        bool countAsRequest
+    )
+    {
+        var time = new ManualTimeProvider();
+        ZLinkLocationRuntime? locations = null;
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            new CapturingSpotNode(),
+            locationTimeProvider: time,
+            locationRuntimeCapture: value => locations = value
+        );
+        try
+        {
+            time.AdvanceMonotonicOnly(TimeSpan.FromMinutes(1));
+            Assert.False(Assert.IsType<ZLinkLocationRuntime>(locations).IsOwnerAdmissionOpen);
+            Assert.Throws<InvalidOperationException>(() => runtime.EnterOperation(countAsRequest));
+
+            // Node and Channel handlers share this non-object admission path.
+            // Spot and Actor work keeps the owner fence (Location runtime §5).
+            var handlerReadsBefore = time.TimestampReadCount;
+            for (var index = 0; index < 1024; index++)
+            {
+                var handler = runtime.TryEnterInboundOperation(
+                    countAsRequest,
+                    ownsObjectWork: false
+                );
+                Assert.True(handler.Accepted);
+                handler.Lease.Dispose();
+            }
+            Assert.Equal(0, time.TimestampReadCount - handlerReadsBefore);
+
+            var objectReadsBefore = time.TimestampReadCount;
+            for (var index = 0; index < 1024; index++)
+            {
+                var objectWork = runtime.TryEnterInboundOperation(
+                    countAsRequest,
+                    ownsObjectWork: true
+                );
+                Assert.False(objectWork.Accepted);
+            }
+            Assert.Equal(1024, time.TimestampReadCount - objectReadsBefore);
+
+            runtime.DrainAdmission.ClaimShutdown();
+            Assert.False(
+                runtime.TryEnterInboundOperation(countAsRequest, ownsObjectWork: false).Accepted
+            );
+            Assert.False(
+                runtime.TryEnterInboundOperation(countAsRequest, ownsObjectWork: true).Accepted
+            );
         }
         finally
         {

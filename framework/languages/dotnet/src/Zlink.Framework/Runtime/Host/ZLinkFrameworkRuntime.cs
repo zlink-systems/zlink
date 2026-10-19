@@ -919,6 +919,8 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
                 //  shutdown) refuses it.
                 if (_drainAdmission.IsSealed)
                     return null;
+                if (!IsOwnerAdmissionOpen)
+                    throw NotAcceptingOperations("owner admission is closed");
                 return AdmitOperationOnLane(countAsRequest);
             })
             .ConfigureAwait(false);
@@ -1606,14 +1608,10 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     /// </summary>
     private ZLinkFrameworkComponentState AdmitOperationOnLane(bool countAsRequest)
     {
-        //  네 조건을 한 문장으로 뭉치면 호출자는 admission seal인지, 아직 기동
-        //  중인지, owner lease가 닫힌 것인지 구분할 수 없다. 조사할 때마다 여기에
-        //  계측을 다시 심게 되므로 어느 조건인지 메시지에 남긴다.
         var refusal =
             Volatile.Read(ref _lifecyclePhase) != (int)ZLinkRuntimeLifecyclePhase.Running
                 ? $"lifecycle phase is {(ZLinkRuntimeLifecyclePhase)Volatile.Read(ref _lifecyclePhase)}"
             : _state is null ? "runtime state is not created"
-            : !IsOwnerAdmissionOpen ? "owner admission is closed"
             : null;
         if (refusal is not null)
             throw NotAcceptingOperations(refusal);

@@ -167,20 +167,29 @@ internal sealed class ZLinkClientServerServerIdentity(
         foreach (var routingId in expired)
             failures.Capture(() => router.DisconnectRid(routingId));
         foreach (var probe in probes)
-            await failures
-                .CaptureAsync(async () =>
-                {
-                    await SendOwnedAsync(
-                            router,
-                            probe.RoutingId,
-                            ZLinkClientServerControlProtocol.EncodeLivenessProbe(probe.ProbeId),
-                            cancellationToken
-                        )
-                        .ConfigureAwait(false);
-                    Interlocked.Increment(ref _livenessProbeCount);
-                })
-                .ConfigureAwait(false);
+            ZLinkUnawaitedSubmit.Observe(
+                SendLivenessProbeAsync(router, probe.RoutingId, probe.ProbeId, cancellationToken),
+                nameof(TickLivenessAsync),
+                errorSink
+            );
         failures.ThrowIfAny();
+    }
+
+    private async ValueTask SendLivenessProbeAsync(
+        IRouterSocket router,
+        RoutingId routingId,
+        ulong probeId,
+        CancellationToken cancellationToken
+    )
+    {
+        await SendOwnedAsync(
+                router,
+                routingId,
+                ZLinkClientServerControlProtocol.EncodeLivenessProbe(probeId),
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        Interlocked.Increment(ref _livenessProbeCount);
     }
 
     private void PushUpdate(Snapshot snapshot)
