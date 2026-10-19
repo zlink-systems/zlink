@@ -168,6 +168,111 @@ public sealed class ApplicationJobQueueTests
         Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task ReceiveRotation_ReservesAvailableCountAndLeasesAtClaim(int capacity)
+    {
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, (ulong)capacity, 1, (ulong)capacity)
+        );
+        var reservation = await queue.AcquireBatchAsync(
+            ZLinkReceiveBatchBudget.MaximumRecords,
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        Assert.Equal(capacity, reservation.Count);
+        Assert.Equal((ulong)capacity, queue.GetStatus().ReservedSupplyPermits);
+        using var claimed = reservation.Claim()!;
+        Assert.Equal(capacity - 1, reservation.Count);
+        claimed.MarkQueued();
+        Assert.Equal(1UL, queue.GetStatus().QueuedApplicationJobs);
+        reservation.Dispose();
+        reservation.Dispose();
+        Assert.Equal(0UL, queue.GetStatus().ReservedSupplyPermits);
+        Assert.Equal(1UL, queue.GetStatus().PermitsInUse);
+        await claimed.ReleaseForHandlerStartAsync();
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+    }
+
+    [Fact]
+    public async Task ReceiveRotation_BulkReturnGrantsCountsInSourceFifoOrder()
+    {
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 3, 1, 3)
+        );
+        var held = await queue.AcquireBatchAsync(
+            3,
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        var first = queue.AcquireBatchAsync(
+            2,
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        var second = queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Local);
+        Assert.False(first.IsCompleted);
+        Assert.False(second.IsCompleted);
+        Assert.Equal(2UL, queue.GetStatus().CapacityWaiters);
+        Assert.Equal(0, queue.TryReserveBatch(3));
+        held.Dispose();
+        var granted = await first;
+        using var single = await second;
+        Assert.Equal(2, granted.Count);
+        Assert.Equal(3UL, queue.GetStatus().PermitsInUse);
+        Assert.Equal(0UL, queue.GetStatus().CapacityWaiters);
+        granted.Dispose();
+        single.Dispose();
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReceiveRotation_TwoSourcesAtZeroCapacityWaitUntilCancellationOrClose(bool close)
+    {
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        using var held = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        using var stop = new CancellationTokenSource();
+        var first = queue
+            .AcquireBatchAsync(
+                ZLinkReceiveBatchBudget.MaximumRecords,
+                stop.Token,
+                ZLinkApplicationJobOrigin.Remote
+            )
+            .AsTask();
+        var second = queue
+            .AcquireBatchAsync(
+                ZLinkReceiveBatchBudget.MaximumRecords,
+                stop.Token,
+                ZLinkApplicationJobOrigin.Remote
+            )
+            .AsTask();
+        Assert.Equal(2UL, queue.GetStatus().CapacityWaiters);
+        Assert.False(first.IsCompleted);
+        Assert.False(second.IsCompleted);
+        if (close)
+            queue.Dispose();
+        else
+            stop.Cancel();
+        foreach (var pending in new[] { first, second })
+        {
+            if (close)
+                await Assert.ThrowsAsync<ObjectDisposedException>(() => pending);
+            else
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        }
+        Assert.Equal(0UL, queue.GetStatus().CapacityWaiters);
+        held.Dispose();
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+    }
+
     [Fact]
     public async Task Reservation_LeasesOnlyClaimedPermitsAndReturnsTheRestExactlyOnce()
     {
