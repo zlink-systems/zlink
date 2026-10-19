@@ -249,6 +249,17 @@ MeshNode is currently running, while `zlink.object.capacity.*` and
 `zlink.spot.type.capacity.*` read the population the Location Store
 confirmed.** These two instruments have different aggregation boundaries
 and don't substitute for each other — their values can differ.
+
+**The capacity instruments read, for each local MeshNode, the one capacity record value last
+confirmed in the Location Store.** Active and reserved are the active and pending counts of that
+MeshNode's capacity record ([Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas)),
+and limit is the limit of the descriptor registered for that MeshNode. The value changes when a Store
+request that reads or changes the capacity record succeeds, and when the descriptor polling of
+[Location runtime §4](../05-location-relocation/01-location-runtime.en.md#4-finding-running-nodes-and-their-capabilities)
+reads the local capacity record once per cycle. Observable collection and application requests do not
+read the Store for these instruments. The instruments are not observed before the first confirmation,
+and a failed read keeps the last confirmed value.
+
 [Spot kind](../00-foundation/02-glossary.en.md#spot-kind), representing the Spot's kind,
 and [stable type](../00-foundation/02-glossary.en.md#stable-type), the type identity
 that doesn't change after startup registration, are only used in labels
