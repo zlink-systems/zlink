@@ -1486,6 +1486,14 @@ being on the target.
 `OperationId` and `ReplyRouteId` are non-zero and not reused within the same source host
 run. Exhausting all values is an error from which the runtime cannot proceed.
 
+**The `OwnerId` and `LeaseGeneration` of the source request information come from the
+MeshNode descriptor of the admitted peer that sent the request. The rule for choosing that
+descriptor and the result when none is found are the same as for the Session owner identity
+of a bind ([Session·Actor binding §4](../04-session/02-session-actor-binding.en.md#4-what-binding-connects-and-what-it-stores)).**
+The owner that first accepts the request reads these values once at acceptance and records
+them. A request handed over by relay or relocation keeps the recorded values and does not read
+the Store again. Peer admission does not wait to read this descriptor from the Store.
+
 The Framework stores each object's completion result in object order. It doesn't insert
 the same source request information and `OperationId` twice. **It stores the new
 completion result and payload in the Relocation Store first, then changes the Location

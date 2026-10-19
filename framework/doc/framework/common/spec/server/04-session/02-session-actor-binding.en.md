@@ -157,7 +157,8 @@ the values that node publishes in its MeshNode descriptor. The Actor owner takes
 bind and stores them in the current binding. When the Session owner is another node, it uses the descriptor whose RID and
 lifecycle generation match that peer's [peer admission](../00-foundation/02-glossary.en.md#peer-admission) and that passed
 the owner-lease check of [Location runtime §4.1](../05-location-relocation/01-location-runtime.en.md#41-validating-a-target-descriptors-owner-lease);
-when it is the same node, it uses its own descriptor. Commands 42, 51 and 54, which carry this identity, send the stored
+when it is the same node, it uses its own descriptor. Without such a descriptor, the
+operation is rejected with `Unavailable`. Commands 42, 51 and 54, which carry this identity, send the stored
 values unchanged, and the receiving Session owner compares them exactly with its own current values. The binding identity
 below uses only the Node RID and lifecycle generation of these; the owner ID and owner lease generation are fence values
 for commands 42, 51 and 54.
