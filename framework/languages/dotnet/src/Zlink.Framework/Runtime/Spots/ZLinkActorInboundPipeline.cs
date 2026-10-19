@@ -851,23 +851,6 @@ internal sealed class ZLinkActorInboundPipeline(
         try
         {
             if (
-                await ZLinkRemoteSessionBindingHandler
-                    .TryHandleAsync(
-                        runtime,
-                        actor,
-                        state,
-                        frame,
-                        boundSession,
-                        acknowledgeHandledFrame,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false)
-            )
-            {
-                return;
-            }
-
-            if (
                 frame.Header.Kind == ZlinkStreamMessageKind.Request
                 && frame.Header.RequestSeq is not null
             )

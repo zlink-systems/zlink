@@ -1785,6 +1785,26 @@ public sealed class SessionActorCoordinatorTests
     }
 
     [Fact]
+    public void Failed_bind_terminal_submission_keeps_the_previous_binding_current()
+    {
+        var state = new ZLinkActorRuntimeState("actor-terminal-rejected");
+        _ = BindActorSession(state, "old-token", "old-session", 1);
+        Assert.Throws<IOException>(() =>
+            ReplaceActorSessionBinding(
+                state,
+                "new-token",
+                "new-session",
+                2,
+                () => throw new IOException("Terminal submission failed.")
+            )
+        );
+        Assert.True(state.TryGetBoundSession(out var current));
+        Assert.Equal("old-token", current.BindingToken);
+        Assert.Equal(0, state.SessionBindingTombstoneCount);
+        Assert.True(ReplaceActorSessionBinding(state, "new-token", "new-session", 2).Changed);
+    }
+
+    [Fact]
     public void Cross_Owner_Rebind_Completes_After_New_Binding_Is_Published()
     {
         var state = new ZLinkActorRuntimeState("actor-order");
@@ -2853,7 +2873,9 @@ public sealed class SessionActorCoordinatorTests
             actor,
             bindingGeneration: 5,
             route,
-            sessionOwnerNodeGeneration: 7
+            sessionOwnerNodeGeneration: 7,
+            sessionOwnerId: "session-owner",
+            sessionOwnerLeaseGeneration: 11
         );
 
         await table.TombstoneAsync(
@@ -2879,7 +2901,9 @@ public sealed class SessionActorCoordinatorTests
             actor,
             bindingGeneration: 5,
             route,
-            sessionOwnerNodeGeneration: 7
+            sessionOwnerNodeGeneration: 7,
+            sessionOwnerId: "session-owner",
+            sessionOwnerLeaseGeneration: 11
         );
         Assert.NotNull(await table.GetBindingAsync(route.Ref.ActorId, actor.BindingToken));
         return;
@@ -2894,7 +2918,9 @@ public sealed class SessionActorCoordinatorTests
                     actor,
                     bindingGeneration: 5,
                     route,
-                    sessionOwnerNodeGeneration: 7
+                    sessionOwnerNodeGeneration: 7,
+                    sessionOwnerId: "session-owner",
+                    sessionOwnerLeaseGeneration: 11
                 )
             );
             Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, error.Kind);
@@ -2927,7 +2953,9 @@ public sealed class SessionActorCoordinatorTests
             actor,
             bindingGeneration: 5,
             route,
-            sessionOwnerNodeGeneration: 7
+            sessionOwnerNodeGeneration: 7,
+            sessionOwnerId: "session-owner",
+            sessionOwnerLeaseGeneration: 11
         );
         var reusedRidFromAnotherLifecycle = SessionBindingRoute(
             route.Ref.ActorId,
@@ -3012,7 +3040,9 @@ public sealed class SessionActorCoordinatorTests
             firstActor,
             bindingGeneration: 5,
             route,
-            sessionOwnerNodeGeneration: 7
+            sessionOwnerNodeGeneration: 7,
+            sessionOwnerId: "session-owner",
+            sessionOwnerLeaseGeneration: 11
         );
         var seal = new ZLinkSessionRouteSeal(
             route.Ref.ActorId,
@@ -3045,7 +3075,9 @@ public sealed class SessionActorCoordinatorTests
             reboundActor,
             bindingGeneration: 6,
             route,
-            sessionOwnerNodeGeneration: 7
+            sessionOwnerNodeGeneration: 7,
+            sessionOwnerId: "session-owner",
+            sessionOwnerLeaseGeneration: 11
         );
 
         // The late abort carries the pre-rebind binding identity and must not
@@ -3120,7 +3152,8 @@ public sealed class SessionActorCoordinatorTests
         ZLinkActorRuntimeState state,
         string bindingToken,
         string sessionRid,
-        ulong authorityOwnerGeneration
+        ulong authorityOwnerGeneration,
+        Action? beforePublish = null
     ) =>
         state.ReplaceSessionBinding(
             RoutingId.From("session-owner"),
@@ -3135,7 +3168,8 @@ public sealed class SessionActorCoordinatorTests
             sessionOwnerNodeGeneration: 1,
             acceptedHighWater: 0,
             sessionOwnerId: "session-owner",
-            sessionOwnerLeaseGeneration: 1
+            sessionOwnerLeaseGeneration: 1,
+            beforePublish: beforePublish
         );
 
     [Fact]

@@ -3,11 +3,14 @@ using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
 namespace Zlink.Framework.Runtime.Streams;
 
 using Microsoft.Extensions.DependencyInjection;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Identifiers;
+using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Messaging;
 
 internal sealed class ZLinkSessionActorCoordinator(
@@ -385,6 +388,48 @@ internal sealed class ZLinkSessionActorCoordinator(
             );
         var sessionOwnerId = sessionOwner.OwnerId;
         var sessionOwnerLeaseGeneration = sessionOwner.LeaseGeneration;
+        var rows = runtime.Services.GetService<ZLinkStoreLocationResolvers>();
+        var route = rows is null
+            ? null
+            : await rows.ResolveActorRowAsync(
+                    new ZLinkActorLocationKey(actor.ActorId),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        if (route is null || sessionNode is not IZLinkBackendBoundSessionBind sender)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{actor.ActorId}' binding route is unavailable."
+            );
+        var request = new ServiceWireCodec.BoundSessionBind38(
+            0,
+            new(bindingGeneration),
+            new(
+                new(new(actor.ActorId), new(actor.ObjectGeneration)),
+                new(actor.NodeRid.ToBytes().ToArray()),
+                new(route.OwnerNodeGeneration),
+                new(route.AuthorityOwnerGeneration),
+                new(checked((ulong)route.LeaseGeneration))
+            ),
+            new(sessionRid.ToBytes().ToArray()),
+            new ServiceWireCodec.BoundSessionBindingTransitionCase0(
+                ServiceWireCodec.BoundSessionBindingState.Active,
+                new(bindingGeneration)
+            )
+        );
+        var accepted =
+            await sender
+                .BindBoundSessionAsync(
+                    request,
+                    runtime.Registration.DefaultRequestTimeout,
+                    cancellationToken
+                )
+                .ConfigureAwait(false)
+            ?? throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                "Bound-session bind reply is missing its accepted identity."
+            );
+        bindingGeneration = accepted.BindingGeneration.Value;
         var bindingToken = ZLinkActorBoundSessionBindingToken.Canonical(
             sessionNodeRid,
             sessionOwnerNodeGeneration,
@@ -393,59 +438,13 @@ internal sealed class ZLinkSessionActorCoordinator(
             sessionRid,
             bindingGeneration
         );
-        var request = new ZLinkRemoteSessionBindRequest(
-            actor.ActorId,
-            actor.NodeRid.ToBytes().ToArray(),
-            sessionNodeRid.ToBytes().ToArray(),
-            sessionRid.ToBytes().ToArray(),
-            bindingToken,
-            bindingGeneration,
-            actor.ObjectGeneration,
-            actor.MeshName,
-            sessionOwnerNodeGeneration,
-            AcceptedHighWater: 0
-        );
-        var response =
-            actor.NodeRid == sessionNodeRid
-                ? await runtime
-                    .BindRemoteBoundSessionRouteAsync(request, sessionNodeRid, cancellationToken)
-                    .ConfigureAwait(false)
-                : await new ZLinkRouteRequestCall<ZLinkRemoteSessionBindRequest>(
-                    runtime,
-                    actor.MeshName,
-                    actor.NodeRid,
-                    request,
-                    durable: true
-                )
-                    .Timeout(runtime.Registration.DefaultRequestTimeout)
-                    .Async<ZLinkRemoteSessionBindResponse>(cancellationToken)
-                    .ConfigureAwait(false);
-
-        if (!response.Acknowledged)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InvalidOperation,
-                $"Actor '{actor.ActorId}' did not acknowledge its remote session binding."
-            );
-        var responseTargetNodeRid = RoutingId.From(response.TargetNodeRid);
-        if (
-            response.ObjectGeneration != actor.ObjectGeneration
-            || responseTargetNodeRid != actor.NodeRid
-            || !string.Equals(response.MeshName, actor.MeshName, StringComparison.Ordinal)
-            || response.TargetNodeGeneration == 0
-            || response.AuthorityOwnerGeneration == 0
-            || response.OwnerLeaseGeneration == 0
-        )
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                $"Actor '{actor.ActorId}' returned a different route during session bind."
-            );
         return new ZLinkSessionBindingIdentity(
             bindingToken,
             bindingGeneration,
-            ZLinkMeshName.FromBoundary(response.MeshName, nameof(response.MeshName)),
-            response.TargetNodeGeneration,
-            response.OwnerLeaseGeneration,
-            response.AuthorityOwnerGeneration,
+            ZLinkMeshName.FromBoundary(actor.MeshName, nameof(actor.MeshName)),
+            route.OwnerNodeGeneration,
+            checked((ulong)route.LeaseGeneration),
+            accepted.AuthorityOwnerGeneration.Value,
             sessionOwnerNodeGeneration,
             sessionNodeRid,
             sessionOwnerId,
@@ -498,14 +497,9 @@ internal sealed class ZLinkSessionActorCoordinator(
                 $"Actor '{actorRef.ActorId}' session binding is stale.",
                 ZLinkRetryAdvice.RetryAfterBackoff
             );
-        var isBindingControlFrame = string.Equals(
-            header.Name,
-            ZLinkRemoteSessionBindingProtocol.PacketName,
-            StringComparison.Ordinal
-        );
         var acceptedFrame = false;
         ulong acceptedHighWater = 0;
-        if (!isBindingControlFrame && header.Kind == ZlinkStreamMessageKind.Send)
+        if (header.Kind == ZlinkStreamMessageKind.Send)
         {
             var flow = runtime.Flow.CaptureEnabled ? ZLinkFlowContext.Current : null;
             var acceptance = await runtime
@@ -611,7 +605,7 @@ internal sealed class ZLinkSessionActorCoordinator(
             acceptedHighWater = acceptance.AcceptedHighWater;
             acceptedFrame = true;
         }
-        else if (!isBindingControlFrame)
+        else
         {
             // A relocation seal is an infrastructure boundary, not an
             // application rejection. Keep this frame in the current stream
@@ -689,10 +683,9 @@ internal sealed class ZLinkSessionActorCoordinator(
                 }
             }
 
-            if (!isBindingControlFrame)
-                (
-                    await runtime.GetOrCreateActorStateAsync(actorRef.ActorId).ConfigureAwait(false)
-                ).RecordBoundSessionAccepted(actorRef.BindingToken);
+            (
+                await runtime.GetOrCreateActorStateAsync(actorRef.ActorId).ConfigureAwait(false)
+            ).RecordBoundSessionAccepted(actorRef.BindingToken);
             await DispatchLocalAsync(actorRef, header, payload, replyRawAsync, cancellationToken)
                 .ConfigureAwait(false);
         }

@@ -60,7 +60,10 @@ public sealed partial class EntrySpotActorDispatchTests
                     1,
                     1
                 ),
-                11
+                11,
+                sessionOwnerNodeRid: node.RoutingId,
+                sessionOwnerId: "session-owner",
+                sessionOwnerLeaseGeneration: 1
             );
             var identity = new ZLinkRemoteSessionPushRelay(
                 actor.ActorId,
@@ -286,7 +289,10 @@ public sealed partial class EntrySpotActorDispatchTests
                     1,
                     1
                 ),
-                11
+                11,
+                sessionOwnerNodeRid: node.RoutingId,
+                sessionOwnerId: "session-owner",
+                sessionOwnerLeaseGeneration: 1
             );
             node.NodeSendResults.Enqueue(SubmitResult.Terminated);
             await context.ActorCoordinator.CleanupAsync(context, CancellationToken.None);
