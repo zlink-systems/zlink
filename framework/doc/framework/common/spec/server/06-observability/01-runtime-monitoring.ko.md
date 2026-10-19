@@ -164,6 +164,10 @@ event는 이전 또는 새 epoch 중 정확히 하나에만 포함되며 peak는
 [Runtime metric §3](02-runtime-metrics.ko.md#3-host-core-hwm과-application-job-queue)이
 정의하며, 이 문서는 한 시점에 무엇을 조회할 수 있는지만 다룬다.
 
+**Capacity 항목은 조회 시점의 값이며, capacity 값만 바뀐 것으로는 host status를 새로 게시하지 않는다.**
+Permit 반환이나 Core byte 변화처럼 message마다 일어나는 변화는 다음 조회나 다른 field의 변화로 게시되는
+status에 반영된다. Capacity를 계속 추적하려면 위 계기를 사용한다.
+
 이 status는 payload, Actor ID, Spot을 식별하는 전역 논리 주소인
 [Spot ID](../00-foundation/02-glossary.ko.md#spot-id), session ID, RID, endpoint, message type이나
 owner별 목록을 포함하지 않는다. Owner별 top-N은 public contract로 제공하지 않는다.
