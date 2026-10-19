@@ -1,3 +1,4 @@
+import { ZLinkProviderRelocationRepository } from '../locations/relocation-blob';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import { listAllMeshNodeDescriptors } from '../locations/location-store-pages';
@@ -340,6 +341,7 @@ export class ZLinkFrameworkRuntimeHost
   readonly routeMeshRuntime: ZLinkRouteMeshRuntime;
   readonly clientServerRuntime: ZLinkClientServerRuntime;
   readonly fanoutRuntime: ZLinkFanoutRuntime;
+  private readonly relocationStore?: import('../../contracts/Locations/RelocationStore').ZLinkRelocationStore;
   private readonly routeMeshCoordinator: ZLinkRouteMeshRuntimeCoordinator;
   constructor(
     readonly options: ZLinkFrameworkRuntimeHostOptions,
@@ -350,6 +352,11 @@ export class ZLinkFrameworkRuntimeHost
     this.runtimeEventPublisher =
       options.runtimeEventPublisher ?? new DefaultZLinkRuntimeEventPublisher();
     this.metrics = new ZLinkRuntimeMetrics(options.registration.metrics?.meterProvider);
+    const relocationProvider = options.registration.locations.relocationStoreInstance;
+    this.relocationStore =
+      relocationProvider === undefined
+        ? undefined
+        : new ZLinkProviderRelocationRepository(relocationProvider, this.metrics);
     const handlerStartGate = options.providerResolver?.get?.(
       ZLINK_INTERNAL_APPLICATION_JOB_QUEUE_HANDLER_START_GATE as unknown as Type<ZLinkInternalApplicationJobQueueHandlerStartGate>
     );
@@ -1758,7 +1765,7 @@ export class ZLinkFrameworkRuntimeHost
     return new ZLinkStatefulAuthorityRouteRuntime({
       store: locationStore,
       creationStore: locationStore,
-      relocationStore: this.options.registration.locations.relocationStoreInstance,
+      relocationStore: this.relocationStore,
       meshNodes: spotNodeRuntime.meshNodesByName,
       pollingIntervalMs:
         this.options.registration.locations.options.pollingIntervalMs ??
@@ -1816,7 +1823,7 @@ export class ZLinkFrameworkRuntimeHost
             this.options.registration.spotNodes.get(meshName)?.instanceSpotFactoryRegistrations?.[
               stableType
             ]?.relocation.kind,
-          relocationStore: this.options.registration.locations.relocationStoreInstance,
+          relocationStore: this.relocationStore,
           meshName,
           owner: () => this.locationOwner.currentRuntime?.currentOwnerToken,
           metrics: this.metrics,
