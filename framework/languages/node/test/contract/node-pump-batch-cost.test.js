@@ -31,14 +31,15 @@ test('synchronous batches retain the installed pump task across readiness reentr
   await f.backend.pumpTask;
   let owned, rounds = 0;
   f.runtime.pumpBatch = () => {
+    owned ??= f.backend.pumpTask;
+    assert.ok(owned instanceof Promise, 'join owner is installed before receiving');
     assert.equal(f.backend.pumpTask, owned);
     if (++rounds === 1) f.readable(true, false);
     return false;
   };
   try {
     f.readable(true, false);
-    owned = f.backend.pumpTask;
-    assert.equal(rounds, 0);
+    assert.equal(rounds, 2, 'completed rotations stay in the readiness turn');
     await owned;
     assert.equal(rounds, 2);
     assert.equal(f.backend.pumpTask, undefined);
