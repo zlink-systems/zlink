@@ -120,9 +120,9 @@
         <Compile Include="Runtime/ChannelOutboundTerminalTests.cs"/>
         <Compile Include="Runtime/ChannelApplicationDispatchQueueShutdownTests.cs"/>
         <Compile Include="Runtime/ClientServerChannelRuntimeTests.cs"/>
+        <Compile Include="Runtime/ChannelEnvelopeHandoffTests.cs"/>
 <<<<<<< HEAD
 =======
-        <Compile Include="Runtime/ChannelEnvelopeHandoffTests.cs"/>
         <Compile Include="Runtime/ChannelReceiveMessageFlowTests.cs"/>
 >>>>>>> 0502e75 (fix(framework): trace Channel receive and handler phases (#2412))
         <Compile Include="Runtime/ClientServerLivenessLaneTests.cs"/>
