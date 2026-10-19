@@ -182,7 +182,7 @@ final class ZLinkJavaRawMeshNode
     private final Executor applicationDispatch = ZLinkProcessExecutionLanes.applicationLane();
     private final ZLinkServiceOperationRegistry operations =
             new ZLinkServiceOperationRegistry(
-                    deadlines, ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
+                    ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
     private final ConcurrentLinkedQueue<PeerCloseRequest> pendingPeerCloseRequests =
             new ConcurrentLinkedQueue<>();
     // RID -> route generation Core selected, as last observed by the receive pump (the ROUTER's

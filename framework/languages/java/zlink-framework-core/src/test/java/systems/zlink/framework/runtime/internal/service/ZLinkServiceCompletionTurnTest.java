@@ -11,7 +11,6 @@ import systems.zlink.framework.runtime.internal.calls.ZLinkBlockingCalls;
 import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -115,8 +114,7 @@ final class ZLinkServiceCompletionTurnTest {
 
     @Test
     void mappedServiceResultReusesTheRegisteredCompletionTurn() throws Exception {
-        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-                var registry = new ZLinkServiceOperationRegistry(scheduler)) {
+        try (var registry = new ZLinkServiceOperationRegistry()) {
             var operation = registry.<String>register(Duration.ofHours(1));
             var mapped = operation.thenApply(value -> "mapped " + value);
             var caller = ZLinkSerialExecutionQueue.manageCurrent(mapped);
@@ -155,8 +153,7 @@ final class ZLinkServiceCompletionTurnTest {
         var release = new CompletableFuture<Void>();
         var entered = new CountDownLatch(1);
         var observed = new CountDownLatch(1);
-        try (var scheduler = Executors.newSingleThreadScheduledExecutor();
-                var registry = new ZLinkServiceOperationRegistry(scheduler)) {
+        try (var registry = new ZLinkServiceOperationRegistry()) {
             var first = registry.<String>register(Duration.ofHours(1));
             var second = registry.<String>register(Duration.ofHours(1));
             var firstCallback =

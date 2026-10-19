@@ -22,7 +22,6 @@ final class ZLinkJavaRouterSocket implements ZLinkBackendRouterSocket, ZLinkJava
     private final ZLinkJavaSocketReceivePoller receivePoller;
     private final ZLinkServiceOperationRegistry operations =
             new ZLinkServiceOperationRegistry(
-                    ZLinkProcessExecutionLanes.deadlines(),
                     ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
 
     ZLinkJavaRouterSocket(RouterSocket socket) {
