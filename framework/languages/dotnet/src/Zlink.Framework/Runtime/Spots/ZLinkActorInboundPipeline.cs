@@ -745,8 +745,11 @@ internal sealed class ZLinkActorInboundPipeline(
             }
             finally
             {
+                // Session-Actor binding §7: the Actor owner ends only its own binding here.
+                // The Session owner removes its entry in its own cleanup after this reply,
+                // also when both owners share one node.
                 if (bindingToken.Length != 0)
-                    runtime.RemoveActorSessionBinding(actor.Context.ActorId, bindingToken);
+                    runtime.UnbindActorSession(actor.Context.ActorId, bindingToken);
             }
         }
         else if (malformed && runtime.Flow.DispatchErrorsEnabled)

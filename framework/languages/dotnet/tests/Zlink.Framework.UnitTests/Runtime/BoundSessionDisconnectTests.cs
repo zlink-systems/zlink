@@ -105,6 +105,10 @@ public sealed class BoundSessionDisconnectTests
             );
             await client.Connect.Async();
             await client.Request(new DLogin(actor)).Async<Pong>();
+            // Session-Actor binding §9: after the server closes the connection the client may
+            // reconnect as a new physical session without a binding, which replaces
+            // DSession.Current. The cleanup below is observed on the session that bound.
+            var boundSession = DSession.Current;
             if (join)
                 await client.Request(new DMove(room)).Async<Pong>();
             var actors = app.Services.GetRequiredService<IZLinkActorClient>();
@@ -117,7 +121,7 @@ public sealed class BoundSessionDisconnectTests
             await DFactory.CurrentActor.Disconnected.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.Equal(1, DFactory.CurrentActor.DisconnectCount);
             using var cleanupDeadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-            while (DSession.Current.Actors.Bound.Count != 0)
+            while (boundSession.Actors.Bound.Count != 0)
                 await Task.Delay(10, cleanupDeadline.Token);
             var absent = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
                 await DFactory.Current.BoundSession.DisconnectAsync()
