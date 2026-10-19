@@ -1273,7 +1273,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     runtime::offload_executor_t _spot_actor_index_lane_executor;
     mutable runtime::state_lane_t _spot_actor_index_lane{_spot_actor_index_lane_executor};
     std::map<std::string, std::string> _peer_endpoints;
-    std::function<void (const std::vector<std::uint8_t> &)> _peer_reconcile;
     runtime::offload_executor_t _peer_endpoint_lane_executor;
     runtime::state_lane_t _peer_endpoint_lane{_peer_endpoint_lane_executor};
     std::atomic<std::uint64_t> _next_operation{1};

@@ -1201,7 +1201,7 @@ void public_host_runtime_t::close () noexcept
 void public_host_runtime_t::configure_peer_reconcile (
   std::function<void (const std::vector<std::uint8_t> &)> request)
 {
-    _lifecycle_configuration_lane.run ([&] { _peer_reconcile = std::move (request); }).get ();
+    _transport->configure_peer_reconcile (std::move (request));
 }
 
 bool public_host_runtime_t::connect_peer (const std::string &endpoint,
@@ -2194,12 +2194,9 @@ task_t<bool> public_host_runtime_t::seal_session_remote (
     if (local.routing_id ().to_bytes () == session_owner_node.to_bytes ()) {
         std::function<std::optional<location_owner_token_t> ()> owner_resolver;
         std::function<void (const std::vector<std::uint8_t> &)> reconcile;
-        _lifecycle_configuration_lane
-          .run ([&] {
-              owner_resolver = _session_route_owner_resolver;
-              reconcile = _peer_reconcile;
-          })
+        _lifecycle_configuration_lane.run ([&] { owner_resolver = _session_route_owner_resolver; })
           .get ();
+        reconcile = _transport->peer_reconcile ();
         if (local.lifecycle_generation () != seal.session_owner_node_generation || !owner_resolver)
             co_return false;
         const auto owner = owner_resolver ();
@@ -4149,8 +4146,7 @@ task_t<void> public_host_runtime_t::await_relocation_session_routes (
   const std::vector<protocol::session_relocation_route_t> &routes)
 {
     const auto local = _transport->topology ().local_descriptor ();
-    const auto reconcile =
-      co_await _lifecycle_configuration_lane.run_task ([this] { return _peer_reconcile; });
+    const auto reconcile = _transport->peer_reconcile ();
     using route_identity_t = std::pair<std::vector<std::uint8_t>, std::uint64_t>;
     std::map<route_identity_t, mesh::service_topology_registry_t::peer_observer_t> observers;
     for (const auto &route : routes) {
@@ -5908,8 +5904,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     const auto owner = session_route_owner_resolver ();
                     if (!owner)
                         continue;
-                    const auto reconcile = co_await _lifecycle_configuration_lane.run_task (
-                      [this] { return _peer_reconcile; });
+                    const auto reconcile = _transport->peer_reconcile ();
                     const auto [accepted, immediate] = admit_session_relocation_seal (
                       seal, *owner, mailbox_record.source_routing_id, {}, reconcile);
                     if (!accepted)

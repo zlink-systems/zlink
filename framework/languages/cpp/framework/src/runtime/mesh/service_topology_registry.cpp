@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/mesh/service_topology_registry.hpp"
+#include "runtime/locations/location_records.hpp"
 #include "runtime/mesh/service_channel_membership.hpp"
 #include "runtime/client_server/weighted_selector.hpp"
 #include <opentelemetry/metrics/provider.h>
@@ -243,6 +244,49 @@ service_topology_registry_t::publish_draining_snapshot ()
     return {std::move (std::get<0> (publication)), std::move (std::get<1> (publication))};
 }
 
+std::shared_ptr<const mesh_node_descriptor_t>
+service_topology_registry_t::accepted_source_original (
+  const service_node_descriptor_t &descriptor,
+  std::shared_ptr<const mesh_node_descriptor_t> original,
+  const std::shared_ptr<const mesh_node_descriptor_t> &bound)
+{
+    // The one validity rule of a peer's request source (Location runtime 9.3).
+    if (!original || original->rid != zlink::routing_id_t::from (descriptor.node_routing_id)
+        || original->lifecycle_generation != descriptor.lifecycle_generation
+        || original->owner_id.empty () || original->lease_generation <= 0)
+        return nullptr;
+    // The same source fence keeps the handle already bound.
+    if (bound && bound->owner_id == original->owner_id
+        && bound->lease_generation == original->lease_generation)
+        return bound;
+    return original;
+}
+
+void service_topology_registry_t::bind_source_original (
+  const std::vector<std::uint8_t> &node_routing_id,
+  std::shared_ptr<const mesh_node_descriptor_t> source_original)
+{
+    _lane
+      .run ([&, this] {
+          const auto topology =
+            std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
+          const auto found = topology->peers.find (node_routing_id);
+          if (found == topology->peers.end ())
+              return;
+          auto bound = accepted_source_original (
+            found->second.descriptor, std::move (source_original), found->second.source_original);
+          if (bound == found->second.source_original)
+              return;
+          auto next = std::make_shared<topology_state_t> (*topology);
+          next->peers.at (node_routing_id).source_original = std::move (bound);
+          // A source identity is not a topology observation; the change signal stays.
+          std::atomic_store_explicit (_topology.get (),
+                                      std::shared_ptr<const topology_state_t>{std::move (next)},
+                                      std::memory_order_release);
+      })
+      .get ();
+}
+
 std::function<void ()>
 service_topology_registry_t::publish_topology (std::shared_ptr<topology_state_t> next)
 {
@@ -299,9 +343,11 @@ peer_admission_result_t
 service_topology_registry_t::admit (service_node_descriptor_t descriptor,
                                     std::vector<std::uint8_t> connection_id,
                                     service_liveness_registry_t::clock_t::time_point now,
-                                    protocol::command command)
+                                    protocol::command command,
+                                    std::shared_ptr<const mesh_node_descriptor_t> source_original)
 {
-    return admit_impl (std::move (descriptor), std::move (connection_id), nullptr, now, command);
+    return admit_impl (std::move (descriptor), std::move (connection_id), nullptr, now, command,
+                       std::move (source_original));
 }
 
 peer_admission_result_t
@@ -309,18 +355,20 @@ service_topology_registry_t::admit (service_node_descriptor_t descriptor,
                                     std::vector<std::uint8_t> connection_id,
                                     const service_node_descriptor_t &expected_descriptor,
                                     service_liveness_registry_t::clock_t::time_point now,
-                                    protocol::command command)
+                                    protocol::command command,
+                                    std::shared_ptr<const mesh_node_descriptor_t> source_original)
 {
     return admit_impl (std::move (descriptor), std::move (connection_id), &expected_descriptor, now,
-                       command);
+                       command, std::move (source_original));
 }
 
-peer_admission_result_t
-service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
-                                         std::vector<std::uint8_t> connection_id,
-                                         const service_node_descriptor_t *expected_descriptor,
-                                         service_liveness_registry_t::clock_t::time_point now,
-                                         protocol::command command)
+peer_admission_result_t service_topology_registry_t::admit_impl (
+  service_node_descriptor_t descriptor,
+  std::vector<std::uint8_t> connection_id,
+  const service_node_descriptor_t *expected_descriptor,
+  service_liveness_registry_t::clock_t::time_point now,
+  protocol::command command,
+  std::shared_ptr<const mesh_node_descriptor_t> source_original)
 {
     if (!valid_descriptor (descriptor) || connection_id.empty ()) {
         return peer_admission_result_t::invalid_descriptor;
@@ -377,6 +425,23 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
                 return std::pair{peer_admission_result_t::not_required, std::move (changed)};
             }
 
+            // The source identity of a route is bound by its first admission; later
+            // records of the same route and lifecycle keep it, and discovery input
+            // reaches it only through bind_source_original.
+            if (admitted != topology->peers.end ()
+                && admitted->second.connection_id == connection_id
+                && admitted->second.descriptor.lifecycle_generation
+                     == descriptor.lifecycle_generation) {
+                source_original = admitted->second.source_original;
+            } else {
+                const bool offered = static_cast<bool> (source_original);
+                source_original =
+                  accepted_source_original (descriptor, std::move (source_original), nullptr);
+                if (offered && !source_original)
+                    return std::pair{peer_admission_result_t::invalid_descriptor,
+                                     std::function<void ()>{}};
+            }
+
             service_liveness_registry_t::connection_t connection =
               admitted != topology->peers.end () && admitted->second.connection_id == connection_id
                 ? admitted->second.liveness
@@ -406,8 +471,9 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
             const auto admission_epoch =
               same_admission ? admitted->second.admission_epoch : _topology_version;
             next->peers.insert_or_assign (
-              std::move (key), admitted_peer_t{std::move (descriptor), std::move (connection_id),
-                                               admission_epoch, ready, std::move (connection)});
+              std::move (key),
+              admitted_peer_t{std::move (descriptor), std::move (connection_id), admission_epoch,
+                              ready, std::move (connection), std::move (source_original)});
             auto changed = publish_topology (std::move (next));
             rebuild_channel_selections ();
             return std::pair{same_admission ? peer_admission_result_t::duplicate_connection

@@ -278,6 +278,7 @@ struct ordinary_spot_observation_t
 struct observations_t
 {
     std::shared_ptr<ordinary_spot_observation_t> ordinary_spot;
+    bool relay_completed = false;
 
     std::mutex mutex;
     std::condition_variable changed;
@@ -972,6 +973,11 @@ class relay_session_t final : public fw::packet_stream_session_t
             bound = stream.actors ().bound ();
         }
         co_await bound.front ().relay (std::string (dispatch.packet_name), payload);
+        {
+            std::lock_guard lock (observations->mutex);
+            observations->relay_completed = true;
+        }
+        observations->changed.notify_all ();
     }
 
   private:
@@ -1082,6 +1088,292 @@ bool peer_ready (fw::route_mesh_runtime_t &routes,
     while (!ready () && std::chrono::steady_clock::now () < deadline)
         std::this_thread::yield ();
     return ready ();
+}
+
+// Exercises the same raw admission boundary without a discovery scheduling race.
+struct relay_peer_pair_t
+{
+    using host_type = fw::runtime::host::public_host_runtime_t;
+    using descriptor_type = fw::runtime::mesh::service_node_descriptor_t;
+    std::shared_ptr<host_type> source, target;
+    descriptor_type source_wire, target_wire;
+    std::shared_ptr<const fw::mesh_node_descriptor_t> original;
+    std::shared_ptr<const fw::location_owner_token_t> lease =
+      std::make_shared<const fw::location_owner_token_t> (
+        fw::location_owner_token_t{"target-owner", 1});
+
+    explicit relay_peer_pair_t (fw::runtime::mesh::service_object_role_t source_role =
+                                  fw::runtime::mesh::service_object_role_t::server,
+                                fw::runtime::mesh::service_object_role_t target_role =
+                                  fw::runtime::mesh::service_object_role_t::server)
+    {
+        const auto make = [] (const char *rid, std::uint64_t generation,
+                              fw::runtime::mesh::service_object_role_t role) {
+            fw::runtime::host::host_options_t options;
+            options.mesh.descriptor.mesh_name = mesh_name;
+            options.mesh.descriptor.node_routing_id = zlink::routing_id_t::from (rid).to_bytes ();
+            options.mesh.descriptor.lifecycle_generation = generation;
+            options.mesh.descriptor.descriptor_revision = 1;
+            options.mesh.descriptor.advertised_endpoint = "tcp://127.0.0.1:0";
+            options.mesh.descriptor.object_role = role;
+            options.mesh.runtime_failures =
+              std::make_shared<fw::runtime::runtime_failure_collector_t> ();
+            auto host = std::make_shared<host_type> (std::move (options));
+            // An object node runs under an auto-connect owner (MeshNode 7.1).
+            if (role != fw::runtime::mesh::service_object_role_t::none)
+                host->configure_peer_reconcile ([] (const std::vector<std::uint8_t> &) {});
+            return host;
+        };
+        source = make ("relay-source", 7, source_role);
+        target = make ("relay-target", 11, target_role);
+        target->configure_stateful_dispatch ([token = lease] { return token; });
+        source->start ();
+        target->start ();
+        source_wire = source->transport ().topology ().local_descriptor ();
+        target_wire = target->transport ().topology ().local_descriptor ();
+        original = discovery (source_wire, "source-owner");
+        source->transport ().connect_peer (target_wire.advertised_endpoint, target_wire,
+                                           discovery (target_wire, "target-owner"));
+    }
+    ~relay_peer_pair_t ()
+    {
+        target->close ();
+        source->close ();
+    }
+    static std::shared_ptr<const fw::mesh_node_descriptor_t> discovery (const descriptor_type &wire,
+                                                                        const char *owner)
+    {
+        return std::make_shared<const fw::mesh_node_descriptor_t> (
+          fw::mesh_node_descriptor_t{.mesh_name = wire.mesh_name,
+                                     .rid = zlink::routing_id_t::from (wire.node_routing_id),
+                                     .lifecycle_generation = wire.lifecycle_generation,
+                                     .endpoint = wire.advertised_endpoint,
+                                     .owner_id = owner,
+                                     .lease_generation = 1});
+    }
+    void pump ()
+    {
+        const auto discard = [] (const auto &, const auto &, auto) {};
+        source->dispatch_ready (discard).result ().value ();
+        target->dispatch_ready (discard).result ().value ();
+    }
+    bool ready ()
+    {
+        const auto peer = target->transport ().topology ().peer (source_wire.node_routing_id);
+        const auto other = source->transport ().topology ().peer (target_wire.node_routing_id);
+        return peer && peer->ready && other && other->ready;
+    }
+    bool await_ready ()
+    {
+        const auto deadline = std::chrono::steady_clock::now () + wait_budget;
+        while (!ready () && std::chrono::steady_clock::now () < deadline) {
+            pump ();
+            std::this_thread::sleep_for (1ms);
+        }
+        return ready ();
+    }
+};
+
+TEST (RelayAdmission, ManualWirePeersDoNotRequireDiscovery)
+{
+    using role_t = fw::runtime::mesh::service_object_role_t;
+    // A manual or route-only member (object role None) publishes no descriptor and has no
+    // object runtime, so its wire admission never waits for a discovery original.
+    for (const auto target_role : {role_t::none, role_t::server}) {
+        SCOPED_TRACE (static_cast<int> (target_role));
+        relay_peer_pair_t pair (role_t::none, target_role);
+        ASSERT_TRUE (pair.await_ready ());
+        EXPECT_FALSE (pair.target->transport ()
+                        .source_identity (pair.source_wire.node_routing_id,
+                                          pair.source_wire.lifecycle_generation)
+                        .result ()
+                        .value ());
+    }
+}
+
+TEST (RelayAdmission, MissingOrInvalidDiscoveryDoesNotPublishReady)
+{
+    constexpr auto admission_observation_period = 150ms;
+    enum class source_case_t
+    {
+        missing,
+        wrong_generation,
+        wrong_rid,
+        missing_owner,
+        zero_lease
+    };
+    for (const auto source_case :
+         {source_case_t::missing, source_case_t::wrong_generation, source_case_t::wrong_rid,
+          source_case_t::missing_owner, source_case_t::zero_lease}) {
+        SCOPED_TRACE (static_cast<int> (source_case));
+        relay_peer_pair_t pair;
+        auto descriptor = *pair.original;
+        switch (source_case) {
+            case source_case_t::missing:
+                break;
+            case source_case_t::wrong_generation:
+                ++descriptor.lifecycle_generation;
+                break;
+            case source_case_t::wrong_rid:
+                descriptor.rid = zlink::routing_id_t::from ("wrong-source");
+                break;
+            case source_case_t::missing_owner:
+                descriptor.owner_id.clear ();
+                break;
+            case source_case_t::zero_lease:
+                descriptor.lease_generation = 0;
+                break;
+        }
+        pair.target->transport ().expect_peer (
+          pair.source_wire, source_case == source_case_t::missing
+                              ? std::shared_ptr<const fw::mesh_node_descriptor_t>{}
+                              : std::make_shared<const fw::mesh_node_descriptor_t> (descriptor));
+        // Each case drives its own first wire handshake, with no earlier admission.
+        const auto deadline = std::chrono::steady_clock::now () + admission_observation_period;
+        while (std::chrono::steady_clock::now () < deadline) {
+            pair.pump ();
+            const auto peer =
+              pair.target->transport ().topology ().peer (pair.source_wire.node_routing_id);
+            EXPECT_FALSE (peer && peer->ready);
+            std::this_thread::sleep_for (1ms);
+        }
+        EXPECT_FALSE (pair.target->transport ()
+                        .source_identity (pair.source_wire.node_routing_id,
+                                          pair.source_wire.lifecycle_generation)
+                        .result ()
+                        .value ());
+        if (source_case != source_case_t::missing)
+            continue;
+        // A late discovery original admits the held peer through the HELLO resend.
+        pair.target->transport ().expect_peer (pair.source_wire, pair.original);
+        ASSERT_TRUE (pair.await_ready ());
+        const auto accepted = pair.target->transport ()
+                                .source_identity (pair.source_wire.node_routing_id,
+                                                  pair.source_wire.lifecycle_generation)
+                                .result ()
+                                .value ();
+        ASSERT_TRUE (accepted);
+        EXPECT_EQ (std::get<std::shared_ptr<const fw::mesh_node_descriptor_t>> (*accepted),
+                   pair.original);
+    }
+}
+
+TEST (RelayAdmission, AcceptedOriginalKeepsHandleAndRejectsWrongFences)
+{
+    using namespace fw::runtime;
+    relay_peer_pair_t pair;
+    pair.target->transport ().expect_peer (pair.source_wire, pair.original);
+    ASSERT_TRUE (pair.await_ready ());
+    const auto identity = [&] {
+        return pair.target->transport ()
+          .source_identity (pair.source_wire.node_routing_id, pair.source_wire.lifecycle_generation)
+          .result ()
+          .value ();
+    };
+    auto accepted = identity ();
+    ASSERT_TRUE (accepted);
+    EXPECT_EQ (std::get<std::shared_ptr<const fw::mesh_node_descriptor_t>> (*accepted),
+               pair.original);
+    // Discovery with the same source fence keeps the bound handle.
+    pair.target->transport ().expect_peer (
+      pair.source_wire, std::make_shared<const fw::mesh_node_descriptor_t> (*pair.original));
+    accepted = identity ();
+    ASSERT_TRUE (accepted);
+    EXPECT_EQ (std::get<std::shared_ptr<const fw::mesh_node_descriptor_t>> (*accepted),
+               pair.original);
+    pair.source->transport ().publish_descriptor_update ([] (auto &descriptor) {
+        descriptor.state = mesh::service_node_state_t::serving;
+        ++descriptor.descriptor_revision;
+    });
+    const auto revision =
+      pair.source->transport ().topology ().local_descriptor ().descriptor_revision;
+    const auto deadline = std::chrono::steady_clock::now () + wait_budget;
+    const auto updated = [&] {
+        const auto peer =
+          pair.target->transport ().topology ().peer (pair.source_wire.node_routing_id);
+        return peer && peer->descriptor.descriptor_revision == revision;
+    };
+    while (!updated () && std::chrono::steady_clock::now () < deadline)
+        pair.pump ();
+    ASSERT_TRUE (updated ());
+    accepted = identity ();
+    ASSERT_TRUE (accepted);
+    EXPECT_EQ (std::get<std::shared_ptr<const fw::mesh_node_descriptor_t>> (*accepted),
+               pair.original);
+    stateful::object_ref_t actor{
+      stateful::object_kind_t::actor, actor_id, 1, 1, mesh_name, "relay-target"};
+    const auto created = pair.target->objects ().begin_reserved_object (actor, actor_type, {});
+    ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (pair.target->objects ().commit_create (created.attempt),
+               stateful::stateful_error_t::none);
+    stateful::raw_stateful_dispatch_t dispatch (
+      pair.target->objects (), pair.target->transport (),
+      [&] (stateful::accepted_record_authority_query_t q) {
+          return pair.target->accepted_record_authority (std::move (q), pair.lease);
+      });
+    protocol::actor_message_header_t header;
+    header.target = {
+      actor_id, 1, pair.target_wire.node_routing_id, pair.target_wire.lifecycle_generation, 1, 1};
+    header.operation = {1, 3};
+    header.bound_session_source =
+      protocol::actor_message_header_t::bound_session_source_t{{0, 0, 0, 1}, 1, 1};
+    const auto authority = [&] (auto h, std::uint64_t generation) {
+        return dispatch
+          .accepted_actor_authority (actor, h, pair.source_wire.node_routing_id, generation, true,
+                                     std::nullopt)
+          .result ()
+          .value ();
+    };
+    ASSERT_EQ (authority (header, pair.source_wire.lifecycle_generation).first,
+               stateful::stateful_error_t::none);
+    const auto denied = [&] (auto h, std::uint64_t generation) {
+        const auto result = authority (h, generation);
+        EXPECT_EQ (result.first, stateful::stateful_error_t::conflict);
+        EXPECT_FALSE (result.second);
+    };
+    auto bad = header;
+    ++bad.target.owner_lease_generation;
+    denied (bad, pair.source_wire.lifecycle_generation);
+    bad = header;
+    ++bad.target.authority_owner_generation;
+    denied (bad, pair.source_wire.lifecycle_generation);
+    bad = header;
+    ++bad.target.target_node_generation;
+    denied (bad, pair.source_wire.lifecycle_generation);
+    denied (header, pair.source_wire.lifecycle_generation + 1);
+}
+
+TEST (RelayAdmission, FirstBoundSessionRequest)
+{
+    observations_t evidence;
+    observations = &evidence;
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t entry, session;
+    release_callbacks_t release{evidence};
+    constexpr auto target_rid = "tableA-relay-admission";
+    configure (entry, target_rid, store, relocations);
+    entry.start ();
+    ASSERT_TRUE (ready (entry));
+    auto services = entry.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    configure_session (session, store, relocations);
+    session.start ();
+    ASSERT_TRUE (ready (session));
+    auto session_services = session.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (
+      peer_ready (session_services.get_required<fw::route_mesh_runtime_t> (), target_rid));
+    view_client_t client (session_services.get_required<fw::framework_runtime_t> ()
+                            .listener_status (fw::listener_kind_t::stream, stream_name)
+                            .endpoint);
+    ASSERT_TRUE (client.connect ());
+    EXPECT_EQ (client.view (), std::optional<int>{1});
+    std::unique_lock lock (evidence.mutex);
+    EXPECT_TRUE (
+      evidence.changed.wait_for (lock, wait_budget, [&] { return evidence.relay_completed; }));
 }
 
 void joined_actor_chain (bool send_after_close)
@@ -1753,8 +2045,10 @@ struct native_intake_fixture_t
                                      .owner_id = source_id,
                                      .lease_generation = 1});
         host->transport ().expect_peer (peer, original);
-        EXPECT_EQ (host->transport ().topology ().admit (peer, {1}),
-                   fw::runtime::mesh::peer_admission_result_t::admitted);
+        EXPECT_EQ (
+          host->transport ().topology ().admit (peer, {1}, std::chrono::steady_clock::now (),
+                                                fw::runtime::protocol::command::admit, original),
+          fw::runtime::mesh::peer_admission_result_t::admitted);
         host->start ();
     }
     fw::runtime::mesh::service_mailbox_record_t
