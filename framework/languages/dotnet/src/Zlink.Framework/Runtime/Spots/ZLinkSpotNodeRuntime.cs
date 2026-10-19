@@ -185,6 +185,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             _canonicalRelocationTargetOwner = new ZLinkCanonicalRelocationTargetOwner(
                 node.RoutingId,
                 canonicalStartup.Descriptor.LifecycleGeneration,
+                runtime.DrainAdmission,
                 targetRuntime: services.GetRequiredService<ZLinkSpotRetireTargetRuntime>(),
                 standaloneActorRuntime: runtime.StandaloneActorRelocationRuntime,
                 awaitTargetReady: async (envelope, cancellationToken) =>

@@ -175,6 +175,8 @@ install(TARGETS
   zlink_stream_connector_throwing
   EXPORT zlink_stream_connector_cppTargets
   COMPONENT StreamConnector)
+zlink_framework_cpp_restrict_installed_static_archive(
+  zlink_stream_connector StreamConnector)
 if(TARGET zlink_unreal_stream_connector)
   install(TARGETS zlink_unreal_stream_connector
     EXPORT zlink_stream_connector_cppTargets COMPONENT StreamConnector)
@@ -213,7 +215,6 @@ install(EXPORT zlink_stream_connector_cppTargets
 set(ZLINK_STREAM_CONNECTOR_CONFIG_IMPLEMENTATION_DEPENDENCIES "")
 if(NOT ZLINK_FRAMEWORK_CPP_SHARED)
   string(CONCAT ZLINK_STREAM_CONNECTOR_CONFIG_IMPLEMENTATION_DEPENDENCIES
-    "find_dependency(Boost)\n"
     "${ZLINK_STREAM_CONNECTOR_EXPORT_OPENSSL_DEPENDENCY}\n"
     "set(_zlink_saved_module_path \"\${CMAKE_MODULE_PATH}\")\n"
     "list(APPEND CMAKE_MODULE_PATH \"\${CMAKE_CURRENT_LIST_DIR}\")\n"

@@ -5,7 +5,8 @@ Usage: package-source.py <output-dir>
 
 Writes <output-dir>/zlink-framework-cpp-<VERSION>.tar.gz and prints its path.
 The archive holds framework/languages/cpp (as the top-level directory),
-framework/runtime (as runtime/) and framework/LICENSE.
+framework/runtime (as runtime/), framework/LICENSE and the three
+static-archive scripts of core/tools (as tools/).
 
 This is the only producer of the archive. scripts/dev/release-check.sh
 --write framework cpp runs it on the release branch to record the archive's
@@ -42,11 +43,18 @@ MAPPED_PATHS = (
     (CPP_DIR, ""),
     ("framework/runtime", "runtime"),
     ("framework/LICENSE", "LICENSE"),
+    # The static archives are restricted to the zlink:: surface by Core's
+    # tools (#2133); a checkout reads them in core/tools, the archive carries
+    # the same three scripts next to CMakeLists.txt.
+    ("core/tools/hide_static_archive_internals.sh", "tools/hide_static_archive_internals.sh"),
+    ("core/tools/static_archive_public_symbols.sh", "tools/static_archive_public_symbols.sh"),
+    ("core/tools/check_static_archive_exports.sh", "tools/check_static_archive_exports.sh"),
 )
 REQUIRED_FILES = (
     "CMakeLists.txt",
     "runtime/protocol/generated/cpp/service_wire_constants.hpp",
     "runtime/protocol/generated/cpp/service_wire_pilot_codec.hpp",
+    "tools/hide_static_archive_internals.sh",
     "LICENSE",
 )
 

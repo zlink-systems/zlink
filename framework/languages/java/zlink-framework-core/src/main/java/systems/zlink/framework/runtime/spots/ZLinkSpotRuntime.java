@@ -1380,11 +1380,17 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     return CompletableFuture.failedFuture(
                                             new IllegalStateException("User Spot already exists"));
                                 }
-                                return existingResult(exists.current(), spotId, stableType);
+                                var existing = existingResult(exists.current(), spotId, stableType);
+                                if (existing.isPresent()) {
+                                    return CompletableFuture.completedFuture(
+                                            existing.orElseThrow());
+                                }
                             }
                             if (result instanceof ZLinkObjectTypeMismatch) {
                                 return CompletableFuture.failedFuture(
-                                        new IllegalStateException("User Spot type does not match"));
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.TYPE_MISMATCH,
+                                                "User Spot type does not match"));
                             }
                             if (result instanceof ZLinkPlacementCapacityExhausted
                                     || result instanceof ZLinkObjectConflict conflict
@@ -1401,7 +1407,14 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         getOrCreate,
                                         excluding(excludedTargets, target));
                             }
-                            if (result instanceof ZLinkObjectConflict) {
+                            if (result instanceof ZLinkObjectConflict
+                                    || result instanceof ZLinkObjectAlreadyExists) {
+                                if (System.currentTimeMillis() >= deadline) {
+                                    return CompletableFuture.failedFuture(
+                                            new ZLinkFrameworkException(
+                                                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                                    "Timed out waiting for User Spot authority"));
+                                }
                                 return CompletableFuture.supplyAsync(
                                                 () -> null,
                                                 CompletableFuture.delayedExecutor(
@@ -1417,7 +1430,28 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                 deadline,
                                                                 timeout,
                                                                 getOrCreate,
-                                                                excludedTargets));
+                                                                excludedTargets))
+                                        .exceptionallyCompose(
+                                                failure -> {
+                                                    Throwable cause = unwrapCompletion(failure);
+                                                    if (System.currentTimeMillis() >= deadline
+                                                            && (cause
+                                                                            instanceof
+                                                                            java.util.concurrent
+                                                                                    .CancellationException
+                                                                    || cause
+                                                                            instanceof
+                                                                            java.util.concurrent
+                                                                                    .TimeoutException)) {
+                                                        return CompletableFuture.failedFuture(
+                                                                new ZLinkFrameworkException(
+                                                                        ZLinkFrameworkErrorKind
+                                                                                .DEADLINE_EXCEEDED,
+                                                                        "Timed out waiting for User Spot authority",
+                                                                        cause));
+                                                    }
+                                                    return CompletableFuture.failedFuture(cause);
+                                                });
                             }
                             if (!(result instanceof ZLinkObjectReserved reserved)) {
                                 return CompletableFuture.failedFuture(
@@ -1526,21 +1560,28 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 Duration.ofMillis(Math.max(1L, deadline - System.currentTimeMillis())));
     }
 
-    private CompletionStage<ZLinkSpotCreateResult> existingResult(
+    private Optional<ZLinkSpotCreateResult> existingResult(
             ZLinkAuthoritySnapshot snapshot, String spotId, String stableType) {
         var authority =
                 userSpotAuthorities
                         .decode(snapshot.payload())
                         .orElseThrow(
                                 () -> new IllegalStateException("invalid User Spot authority"));
-        if (!authority.stableType().equals(stableType)
-                || authority.state()
-                        != systems.zlink.framework.runtime.locations
-                                .ZLinkServiceAuthorityPayloadCodec.State.READY) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("User Spot type or state does not match"));
+        if (!authority.stableType().equals(stableType)) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.TYPE_MISMATCH, "User Spot type does not match");
         }
-        return CompletableFuture.completedFuture(
+        if (authority.state()
+                == systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec.State
+                        .CLOSING) {
+            return Optional.empty();
+        }
+        if (authority.state()
+                != systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec.State
+                        .READY) {
+            throw new IllegalStateException("User Spot type or state does not match");
+        }
+        return Optional.of(
                 new ZLinkSpotCreateResult(
                         new SpotRef(
                                 spotId,

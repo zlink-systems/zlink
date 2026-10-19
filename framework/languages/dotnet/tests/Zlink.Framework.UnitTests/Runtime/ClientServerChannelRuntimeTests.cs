@@ -14,7 +14,7 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutputHelper output)
 {
-    private const string AdmissionTestServerHost = "127.0.0.2";
+    private const string AdmissionTestServerHost = "127.0.0.1";
 
     [Fact]
     public Task Unawaited_ClientServer_Update_Failure_Is_Reported_Once_Without_Unobserved_Task() =>

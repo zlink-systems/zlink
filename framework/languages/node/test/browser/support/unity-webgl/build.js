@@ -20,7 +20,7 @@ const pluginRoot = path.join(packageRoot, 'Plugins/WebGL');
 // One line, because a test runner prints a skip reason with the newlines escaped.
 const INSTALL_HINT =
   'emscripten not found, so the Unity WebGL plugins cannot be linked. Install it with: ' +
-  'git clone https://github.com/emscripten-core/emsdk.git ~/.cache/zlink/emsdk && ' +
+  `git clone --branch ${EMSDK_VERSION} --depth 1 https://github.com/emscripten-core/emsdk.git ~/.cache/zlink/emsdk && ` +
   `~/.cache/zlink/emsdk/emsdk install ${EMSDK_VERSION} && ` +
   `~/.cache/zlink/emsdk/emsdk activate ${EMSDK_VERSION} ` +
   '(or point ZLINK_EMSDK_ROOT at an existing emsdk checkout).';
