@@ -338,13 +338,7 @@ internal sealed class ZLinkSpotNodeCatalog(
 
     private async ValueTask DetachRelocatedSourceAsync(ZLinkSpotActivation activation)
     {
-        await _lane
-            .RunAsync(() =>
-            {
-                _spots.Remove(activation.SpotId);
-                _instanceSpotTypes.Remove(activation.SpotId);
-            })
-            .ConfigureAwait(false);
+        await RemoveActivationAsync(activation).ConfigureAwait(false);
     }
 
     internal static async ValueTask ScheduleRelocatedSourceCleanupAsync(
@@ -527,15 +521,8 @@ internal sealed class ZLinkSpotNodeCatalog(
 
         foreach (var activation in activations)
         {
-            var spotId = activation.SpotId;
             await CaptureAsync(activation.DisposeAsync).ConfigureAwait(false);
-            await _lane
-                .RunAsync(() =>
-                {
-                    _spots.Remove(spotId);
-                    _instanceSpotTypes.Remove(spotId);
-                })
-                .ConfigureAwait(false);
+            await RemoveActivationAsync(activation).ConfigureAwait(false);
         }
 
         if (failures is { Count: 1 })
@@ -985,9 +972,9 @@ internal sealed class ZLinkSpotNodeCatalog(
             {
                 EnsureSpotTypeRegisteredLocked(spotType);
                 EnsureCreationAdmissionOpenLocked();
-                ThrowIfClosingLocked(requestedSpotId);
                 if (_spots.TryGetValue(requestedSpotId, out var existing))
                 {
+                    ThrowIfClosingLocked(requestedSpotId);
                     ThrowIfSpotTypeMismatch(existing.Spot.GetType(), spotType, requestedSpotId);
                     return new PreparedReservedSpot(existing, true, null);
                 }
@@ -1819,30 +1806,18 @@ internal sealed class ZLinkSpotNodeCatalog(
             }
 
             await activation.DisposeAsync().ConfigureAwait(false);
+            await RemoveActivationAsync(activation).ConfigureAwait(false);
             if (releaseLocation)
                 await ReleaseSpotLocationAsync(ZLinkSpotId.FromBoundary(spotId, nameof(spotId)))
                     .ConfigureAwait(false);
         }
         catch (Exception exception)
         {
-            await _lane
-                .RunAsync(() =>
-                {
-                    _spots.Remove(spotId);
-                    _instanceSpotTypes.Remove(spotId);
-                })
-                .ConfigureAwait(false);
+            await RemoveActivationAsync(activation).ConfigureAwait(false);
             transaction.TrySetException(exception);
             throw;
         }
 
-        await _lane
-            .RunAsync(() =>
-            {
-                _spots.Remove(spotId);
-                _instanceSpotTypes.Remove(spotId);
-            })
-            .ConfigureAwait(false);
         ZLinkRuntimeMetrics.RecordSpotClosed(registration.SpotNodeName, activation.KindName);
 
         transaction.TrySetResult(true);
@@ -2069,17 +2044,8 @@ internal sealed class ZLinkSpotNodeCatalog(
                     .CaptureAsync(() =>
                         _lane.RunAsync(() =>
                         {
-                            if (
-                                _spots.TryGetValue(spotId, out var current)
-                                && (
-                                    ReferenceEquals(current, activation)
-                                    || ReferenceEquals(current, outcome.Successor)
-                                )
-                            )
-                            {
-                                _spots.Remove(spotId);
-                                _instanceSpotTypes.Remove(spotId);
-                            }
+                            RemoveActivationLocked(activation);
+                            RemoveActivationLocked(outcome.Successor);
                         })
                     )
                     .ConfigureAwait(false);
@@ -2105,19 +2071,6 @@ internal sealed class ZLinkSpotNodeCatalog(
         {
             runtime.ErrorSink.ReportRuntimeTaskException("spot-close-finalization", exception);
         }
-        await _lane
-            .RunAsync(() =>
-            {
-                if (
-                    _spots.TryGetValue(spotId, out var current)
-                    && ReferenceEquals(current, activation)
-                )
-                {
-                    _spots.Remove(spotId);
-                    _instanceSpotTypes.Remove(spotId);
-                }
-            })
-            .ConfigureAwait(false);
         ZLinkRuntimeMetrics.RecordSpotClosed(registration.SpotNodeName, activation.KindName);
         transaction.TrySetResult(true);
         return true;
@@ -2306,6 +2259,7 @@ internal sealed class ZLinkSpotNodeCatalog(
     {
         if (authority.State == CloseAuthorityState.Local)
         {
+            await RemoveActivationAsync(activation).ConfigureAwait(false);
             await ReleaseSpotLocationAsync(activation.RuntimeSpotId).ConfigureAwait(false);
             return (null, null, null);
         }
@@ -2473,6 +2427,7 @@ internal sealed class ZLinkSpotNodeCatalog(
                 }
             }
         }
+        await RemoveActivationAsync(activation).ConfigureAwait(false);
         var deleted = await store
             .CompareExchangeAuthorityAsync(
                 authority.Key,
@@ -2533,16 +2488,10 @@ internal sealed class ZLinkSpotNodeCatalog(
                 )
             )
             .ConfigureAwait(false);
+        await failures.CaptureAsync(activation.DisposeAsync).ConfigureAwait(false);
+        await RemoveActivationAsync(activation).ConfigureAwait(false);
         await failures
             .CaptureAsync(() => ReleaseSpotLocationAsync(activation.RuntimeSpotId))
-            .ConfigureAwait(false);
-        await failures.CaptureAsync(activation.DisposeAsync).ConfigureAwait(false);
-        await _lane
-            .RunAsync(() =>
-            {
-                _spots.Remove(activation.SpotId);
-                _instanceSpotTypes.Remove(activation.SpotId);
-            })
             .ConfigureAwait(false);
         ZLinkRuntimeMetrics.RecordSpotClosed(registration.SpotNodeName, activation.KindName);
         failures.ThrowIfAny();
@@ -2563,7 +2512,11 @@ internal sealed class ZLinkSpotNodeCatalog(
 
     private void RemoveActivationLocked(ZLinkSpotActivation? activation)
     {
-        if (activation is not null)
+        if (
+            activation is not null
+            && _spots.TryGetValue(activation.SpotId, out var current)
+            && ReferenceEquals(current, activation)
+        )
         {
             _spots.Remove(activation.SpotId);
             _instanceSpotTypes.Remove(activation.SpotId);

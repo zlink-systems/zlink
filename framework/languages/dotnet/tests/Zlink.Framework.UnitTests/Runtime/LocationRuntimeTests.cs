@@ -391,8 +391,10 @@ public sealed class LocationRuntimeTests
             await store.ReadOwnerLeaseAsync(runtime.OwnerId)
         );
 
+        var renewed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        runtime.OwnerLeaseRenewed += _ => renewed.TrySetResult();
         flaky.Fail = false;
-        await flaky.Claimed.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        await renewed.Task.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.True(runtime.IsOwnerAdmissionOpen);
         Assert.IsType<ZLinkOwnerLeaseReadResult.Found>(
             await store.ReadOwnerLeaseAsync(runtime.OwnerId)
@@ -883,9 +885,6 @@ public sealed class LocationRuntimeTests
     {
         public bool Fail { get; set; }
 
-        public TaskCompletionSource Claimed { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
         public override async ValueTask<ZLinkOwnerLeaseClaimResult> ClaimOwnerLeaseAsync(
             string ownerId,
             TimeSpan leaseTtl,
@@ -894,10 +893,7 @@ public sealed class LocationRuntimeTests
         {
             if (Fail)
                 throw new InvalidOperationException("store unreachable");
-            var result = await inner.ClaimOwnerLeaseAsync(ownerId, leaseTtl, cancellationToken);
-            if (result is ZLinkOwnerLeaseClaimResult.Claimed)
-                Claimed.TrySetResult();
-            return result;
+            return await inner.ClaimOwnerLeaseAsync(ownerId, leaseTtl, cancellationToken);
         }
 
         public override ValueTask<ZLinkOwnerLeaseReadResult> ReadOwnerLeaseAsync(
