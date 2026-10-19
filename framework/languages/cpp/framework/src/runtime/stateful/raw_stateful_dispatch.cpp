@@ -6,6 +6,7 @@
 #include "runtime/messaging/envelope_codec.hpp"
 
 #include <runtime/locations/location_repository.hpp>
+#include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/sha256.hpp"
 #include "runtime/execution/task_result.hpp"
@@ -175,49 +176,12 @@ bool frozen_matches_registration (const protocol::frozen_record_t &frozen,
 
 }
 
-task_t<std::optional<std::vector<protocol::request_source_fence_t>>>
-read_accepted_record_sources (zlink::framework::location_repository_t &store,
-                              const std::string &mesh_name,
-                              const std::vector<protocol::request_source_fence_t> &sources)
-{
-    std::vector<protocol::request_source_fence_t> resolved;
-    if (sources.empty ())
-        co_return resolved;
-    std::vector<mesh_node_descriptor_t> nodes;
-    location_page_request_t page;
-    do {
-        auto listed = co_await store.list_mesh_nodes (mesh_name, page);
-        nodes.insert (nodes.end (), std::make_move_iterator (listed.items.begin ()),
-                      std::make_move_iterator (listed.items.end ()));
-        page.continuation_token = std::move (listed.continuation_token);
-    } while (page.continuation_token);
-    std::map<std::string, owner_lease_read_result_t> leases;
-    resolved.reserve (sources.size ());
-    for (const auto &source : sources) {
-        const auto rid = zlink::routing_id_t::from (source.node_routing_id);
-        const auto node = std::find_if (nodes.begin (), nodes.end (), [&] (const auto &candidate) {
-            return candidate.rid == rid && candidate.lifecycle_generation == source.node_generation;
-        });
-        if (node == nodes.end () || node->owner_id.empty () || node->lease_generation <= 0)
-            co_return std::nullopt;
-        if (!leases.contains (node->owner_id))
-            leases.emplace (node->owner_id, co_await store.read_owner_lease (node->owner_id));
-        const auto *live = std::get_if<owner_lease_found_t> (&leases.at (node->owner_id));
-        if (!live || live->token.owner_id != node->owner_id
-            || live->token.lease_generation != node->lease_generation
-            || live->lease_expires_at <= live->store_now)
-            co_return std::nullopt;
-        resolved.push_back ({node->owner_id, static_cast<std::uint64_t> (node->lease_generation),
-                             source.node_routing_id, source.node_generation});
-    }
-    co_return resolved;
-}
-
 namespace
 {
 accepted_record_authority_resolver_t make_store_authority_resolver (location_repository_t &store)
 {
-    return [&store] (const accepted_record_authority_query_t &query)
+    auto reader = std::make_shared<live_location_reader_t> (store);
+    return [&store, reader] (const accepted_record_authority_query_t &query)
              -> task_t<std::optional<accepted_record_authority_t>> {
         try {
             std::uint64_t target_lease = 0;
@@ -254,13 +218,19 @@ accepted_record_authority_resolver_t make_store_authority_resolver (location_rep
                 target_lease =
                   static_cast<std::uint64_t> (snapshot->allocation.target.owner.lease_generation);
             }
-            const std::vector<protocol::request_source_fence_t> requested{
-              {{}, 0, query.source_node_routing_id, query.source_node_generation}};
-            const auto sources =
-              co_await read_accepted_record_sources (store, query.target.mesh_name, requested);
-            if (!sources)
+            const auto cached = reader->cached_request_source (
+              query.target.mesh_name, query.source_node_routing_id, query.source_node_generation);
+            const auto source = cached
+                                  ? *cached
+                                  : co_await reader->request_source (query.target.mesh_name,
+                                                                     query.source_node_routing_id,
+                                                                     query.source_node_generation);
+            if (!source)
                 co_return std::nullopt;
-            co_return accepted_record_authority_t{sources->front (), target_lease};
+            co_return accepted_record_authority_t{
+              {source->owner_id, static_cast<std::uint64_t> (source->lease_generation),
+               query.source_node_routing_id, query.source_node_generation},
+              target_lease};
         }
         catch (...) {
             co_return std::nullopt;
@@ -590,11 +560,38 @@ raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
     co_return sent;
 }
 
-claimed_ingress_t claimed_ingress_t::prepare (const mesh::service_mailbox_record_t &original)
+claimed_ingress_t claimed_ingress_t::prepare (mesh::service_mailbox_record_t &original,
+                                              live_location_reader_t *sources,
+                                              const std::string &mesh_name)
 {
     claimed_ingress_t query;
     query.source_routing_id = original.source_routing_id;
     query.source_node_generation = original.source_node_generation;
+    if (!original.source_original && sources) {
+        if (auto cached = sources->cached_request_source (mesh_name, original.source_routing_id,
+                                                          original.source_node_generation)) {
+            original.source_original = mesh::request_source_t{std::move (*cached)};
+        } else {
+            auto lookup = std::make_shared<mesh::request_source_lookup_state_t> ();
+            original.source_original = mesh::request_source_t{lookup};
+            lookup->start = [sources, mesh_name, rid = original.source_routing_id,
+                             generation = original.source_node_generation] (
+                              const mesh::request_source_lookup_t &lookup) {
+                using descriptor_t = std::shared_ptr<const mesh_node_descriptor_t>;
+                try {
+                    auto reading = std::make_shared<task_t<descriptor_t>> (
+                      sources->request_source (mesh_name, rid, generation));
+                    detail::observe_task_completion (
+                      *reading, [reading, lookup] (const result_t<descriptor_t> &result) {
+                          lookup->completion.complete (result);
+                      });
+                }
+                catch (...) {
+                    lookup->completion.complete (detail::current_exception_result<descriptor_t> ());
+                }
+            };
+        }
+    }
     query.source_original = original.source_original;
     query.bound_session = original.bound_session_source.has_value ();
     if (original.parts.size () == 2) {
@@ -621,9 +618,14 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
     // The original stays in the canonical mailbox slot until the handoff wins its take.
     auto *const slot = std::get_if<mesh::service_mailbox_t::claim_handle_t> (&original);
     auto *const owned = std::get_if<mesh::service_mailbox_record_t> (&original);
-    if (!prepared)
-        prepared = slot ? _transport->mailbox ().prepare (*slot, claimed_ingress_t::prepare)
-                        : std::optional{claimed_ingress_t::prepare (*owned)};
+    if (!prepared) {
+        const auto prepare = [this, &owner] (mesh::service_mailbox_record_t &record) {
+            return claimed_ingress_t::prepare (record, _transport->request_sources (),
+                                               owner.mesh_name);
+        };
+        prepared =
+          slot ? _transport->mailbox ().prepare (*slot, prepare) : std::optional{prepare (*owned)};
+    }
     if (!prepared)
         co_return stateful_error_t::not_found;
     const auto take_original = [&] () -> std::optional<mesh::service_mailbox_record_t> {
@@ -760,15 +762,22 @@ raw_stateful_dispatch_t::ingest_claimed (object_ref_t owner,
             // moving replies with the retryable relocation terminal
             // (conflict + spotMoving maps to a retryable unavailable on the
             // requester), so the session owner keeps redelivery ownership.
+            const auto unavailable =
+              validation == stateful_error_t::unavailable
+                ? messaging::request_failure_mapper_t{}.target_failure_reply (
+                    framework_error_kind_t::unavailable)
+                : std::nullopt;
             const auto terminal_result =
-              validation == stateful_error_t::generation_stale
+              unavailable ? unavailable->terminal_result
+              : validation == stateful_error_t::generation_stale
                   || validation == stateful_error_t::moving
                 ? static_cast<std::uint32_t> (protocol::request_terminal_result::conflict)
               : validation == stateful_error_t::conflict
                 ? static_cast<std::uint32_t> (protocol::request_terminal_result::rejected)
                 : static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError);
             const auto failure_code =
-              validation == stateful_error_t::generation_stale
+              unavailable ? unavailable->failure_code
+              : validation == stateful_error_t::generation_stale
                 ? static_cast<std::uint32_t> (protocol::framework_error_code::spotGenerationStale)
               : validation == stateful_error_t::moving
                 ? static_cast<std::uint32_t> (protocol::framework_error_code::spotMoving)
@@ -1005,27 +1014,33 @@ raw_stateful_dispatch_t::resolve_accepted_authority (
 {
     std::optional<accepted_record_authority_t> authority;
     if (retained) {
-        // Location §7.3: the native source seal owns Follow; no fresh Store proof.
+        // Location §7.3: the retained source owns the target Follow fence.
+        // This newly received request still records its sender once (§9.3).
         if (query.requested_object_generation != retained->owner.object_generation
             || query.requested_authority_owner_generation
                  != retained->owner.authority_owner_generation)
             co_return std::pair{stateful_error_t::generation_stale, std::nullopt};
         if (query.target_node_routing_id != retained->fence.node_routing_id
-            || query.target_node_generation != retained->fence.node_generation)
+            || query.target_node_generation != retained->fence.node_generation
+            || (target_owner_lease_generation != 0
+                && target_owner_lease_generation != retained->fence.lease_generation))
             co_return std::pair{stateful_error_t::conflict, std::nullopt};
-        const auto target_lease = retained->fence.lease_generation;
-        auto source = std::move (retained->fence);
-        source.node_routing_id = std::move (query.source_node_routing_id);
-        source.node_generation = query.source_node_generation;
-        authority = accepted_record_authority_t{std::move (source), target_lease};
-    } else {
-        if (!_authority_resolver)
-            co_return std::pair{stateful_error_t::invalid, std::nullopt};
+    }
+    if (!_authority_resolver)
+        co_return std::pair{stateful_error_t::invalid, std::nullopt};
+    try {
         authority = co_await _authority_resolver (query);
     }
-    if (!authority
-        || (target_owner_lease_generation != 0
-            && target_owner_lease_generation != authority->target_owner_lease_generation))
+    catch (const framework_exception_t &error) {
+        if (error.kind () != framework_error_kind_t::unavailable)
+            throw;
+    }
+    if (authority && retained)
+        authority->target_owner_lease_generation = retained->fence.lease_generation;
+    if (!authority)
+        co_return std::pair{stateful_error_t::unavailable, std::nullopt};
+    if ((target_owner_lease_generation != 0
+         && target_owner_lease_generation != authority->target_owner_lease_generation))
         co_return std::pair{stateful_error_t::conflict, std::nullopt};
     co_return std::pair{stateful_error_t::none, std::move (authority)};
 }

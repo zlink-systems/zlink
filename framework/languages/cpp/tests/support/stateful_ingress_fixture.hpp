@@ -30,11 +30,6 @@ publish_stateful_claims (runtime::mesh::raw_mesh_node_owner_t &transport,
     for (auto &record : records) {
         record.owner = key;
         record.domain = runtime::mesh::service_mailbox_domain_t::application;
-        // The raw receive turn reads a peer source before the mailbox accepts the record.
-        if (!record.source_original)
-            record.source_original = runtime::mesh::raw_mesh_node_owner_t::accepted_source (
-              record.source_routing_id, record.source_node_generation, {},
-              transport.topology ().peer (record.source_routing_id).get ());
         if (!mailbox.try_enqueue (std::move (record)))
             throw std::runtime_error ("fixture mailbox publication failed");
     }

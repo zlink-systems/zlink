@@ -8,6 +8,7 @@
 #include "runtime/messaging/submit_result_mapper.hpp"
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/locations/live_location_reader.hpp"
 #include "runtime/mesh/service_channel_membership.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 
@@ -695,12 +696,10 @@ bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint)
 }
 
 bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint,
-                                          service_node_descriptor_t expected_descriptor,
-                                          std::shared_ptr<const mesh_node_descriptor_t> discovered)
+                                          service_node_descriptor_t expected_descriptor)
 {
     return _lane
-      .run ([this, &endpoint, expected_descriptor = std::move (expected_descriptor),
-             discovered = std::move (discovered)] () mutable {
+      .run ([this, &endpoint, expected_descriptor = std::move (expected_descriptor)] () mutable {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           if (!_router || endpoint.empty ()) {
               return false;
@@ -708,7 +707,7 @@ bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint,
           const auto is_stale_same_endpoint = [&endpoint,
                                                &expected_descriptor] (const auto &entry) {
               return entry.first != expected_descriptor.node_routing_id
-                     && entry.second.wire.advertised_endpoint == endpoint;
+                     && entry.second.advertised_endpoint == endpoint;
           };
           const auto endpoint_retargeted =
             std::any_of (_expected_peers.begin (), _expected_peers.end (), is_stale_same_endpoint);
@@ -738,9 +737,8 @@ bool raw_mesh_node_owner_t::connect_peer (const std::string &endpoint,
                       end_peer_operations_if_disconnected_locked (retired_rid);
                   }
               }
-              _expected_peers.insert_or_assign (
-                expected_descriptor.node_routing_id,
-                expected_peer_t{expected_descriptor, std::move (discovered)});
+              _expected_peers.insert_or_assign (expected_descriptor.node_routing_id,
+                                                expected_descriptor);
               return true;
           }
           catch (const zlink::binding_error_t &rejection) {
@@ -847,36 +845,18 @@ bool raw_mesh_node_owner_t::disconnect_peer (const std::vector<std::uint8_t> &ex
     }
 }
 
-void raw_mesh_node_owner_t::expect_peer (service_node_descriptor_t expected_descriptor,
-                                         std::shared_ptr<const mesh_node_descriptor_t> discovered)
+void raw_mesh_node_owner_t::expect_peer (service_node_descriptor_t expected_descriptor)
 {
     if (expected_descriptor.node_routing_id.empty ()
         || expected_descriptor.advertised_endpoint.empty ())
         return;
-    std::uint64_t route_generation = 0;
-    std::map<protocol::command, std::vector<std::uint8_t>> held;
     _lane
-      .run ([this, &expected_descriptor, &discovered, &route_generation, &held] {
+      .run ([this, &expected_descriptor] {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
-          _topology.bind_source_original (expected_descriptor.node_routing_id, discovered);
-          _expected_peers.insert_or_assign (
-            expected_descriptor.node_routing_id,
-            expected_peer_t{expected_descriptor, std::move (discovered)});
-          if (const auto route = _routes.find (expected_descriptor.node_routing_id);
-              route != _routes.end ()) {
-              route_generation = route->second.generation;
-              held = std::exchange (route->second.awaiting_discovery, {});
-          }
+          _expected_peers.insert_or_assign (expected_descriptor.node_routing_id,
+                                            expected_descriptor);
       })
       .get ();
-    // The handshake records held for this discovery input take the same admission now.
-    // HELLO first, so its ADMIT reaches the wire before this node publishes the peer ready.
-    for (const auto kind :
-         {protocol::command::hello, protocol::command::admit, protocol::command::update})
-        if (const auto record = held.find (kind); record != held.end ())
-            (void) admit_descriptor_record (expected_descriptor.node_routing_id, route_generation,
-                                            kind, record->second,
-                                            service_liveness_registry_t::clock_t::now ());
 }
 
 void raw_mesh_node_owner_t::configure_peer_reconcile (peer_reconcile_t request)
@@ -891,11 +871,18 @@ raw_mesh_node_owner_t::peer_reconcile_t raw_mesh_node_owner_t::peer_reconcile ()
     return _peer_reconcile;
 }
 
+void raw_mesh_node_owner_t::configure_request_sources (live_location_reader_t *sources)
+{
+    std::lock_guard lifecycle_lock (_lifecycle_mutex);
+    if (_router || _request_sources)
+        throw std::logic_error ("request source reader must be configured once before start");
+    _request_sources = sources;
+}
+
 std::optional<request_source_t>
-raw_mesh_node_owner_t::accepted_source (const std::vector<std::uint8_t> &rid,
-                                        std::uint64_t generation,
-                                        const local_request_source_t &local,
-                                        const admitted_peer_t *peer)
+raw_mesh_node_owner_t::local_accepted_source (const std::vector<std::uint8_t> &rid,
+                                              std::uint64_t generation,
+                                              const local_request_source_t &local)
 {
     if (local.node && rid == local.node->node_routing_id) {
         if (generation != local.node->lifecycle_generation || !local.lease
@@ -903,10 +890,7 @@ raw_mesh_node_owner_t::accepted_source (const std::vector<std::uint8_t> &rid,
             return std::nullopt;
         return request_source_t{local};
     }
-    if (!peer || !peer->ready || peer->descriptor.lifecycle_generation != generation
-        || !peer->source_original)
-        return std::nullopt;
-    return request_source_t{peer->source_original};
+    return std::nullopt;
 }
 
 void raw_mesh_node_owner_t::forget_peer (const std::vector<std::uint8_t> &node_routing_id,
@@ -916,10 +900,9 @@ void raw_mesh_node_owner_t::forget_peer (const std::vector<std::uint8_t> &node_r
       .run ([this, &node_routing_id, &endpoint] {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           const auto found = _expected_peers.find (node_routing_id);
-          if (found != _expected_peers.end () && found->second.wire.advertised_endpoint != endpoint)
+          if (found != _expected_peers.end () && found->second.advertised_endpoint != endpoint)
               return;
           _expected_peers.erase (node_routing_id);
-          _topology.bind_source_original (node_routing_id, nullptr);
           end_peer_operations_if_disconnected_locked (node_routing_id);
       })
       .get ();
@@ -2795,16 +2778,16 @@ raw_mesh_pump_result_t raw_mesh_node_owner_t::admit_descriptor_record (
             const auto expected = _expected_peers.find (source_routing_id);
             if (expected == _expected_peers.end ())
                 return value;
-            value.intent_endpoint = expected->second.wire.advertised_endpoint;
+            value.intent_endpoint = expected->second.advertised_endpoint;
             value.expected_descriptor_mismatch =
-              expected->second.wire.mesh_name != descriptor.mesh_name
-              || expected->second.wire.node_routing_id != descriptor.node_routing_id
-              || expected->second.wire.advertised_endpoint != descriptor.advertised_endpoint
-              || expected->second.wire.security_identity != descriptor.security_identity
-              || (expected->second.wire.lifecycle_generation != 0
-                  && expected->second.wire.lifecycle_generation != descriptor.lifecycle_generation);
-            if (expected->second.wire.lifecycle_generation != 0)
-                value.expected_descriptor = expected->second.wire;
+              expected->second.mesh_name != descriptor.mesh_name
+              || expected->second.node_routing_id != descriptor.node_routing_id
+              || expected->second.advertised_endpoint != descriptor.advertised_endpoint
+              || expected->second.security_identity != descriptor.security_identity
+              || (expected->second.lifecycle_generation != 0
+                  && expected->second.lifecycle_generation != descriptor.lifecycle_generation);
+            if (expected->second.lifecycle_generation != 0)
+                value.expected_descriptor = expected->second;
             return value;
         })
         .get ();
@@ -2816,43 +2799,16 @@ raw_mesh_pump_result_t raw_mesh_node_owner_t::admit_descriptor_record (
     }
     const auto admission =
       _lane
-        .run ([this, &source_routing_id, &descriptor, &expectation, &connection_id, now, kind,
-               route_generation, bytes] {
+        .run ([this, &source_routing_id, &descriptor, &expectation, &connection_id, now, kind] {
             peer_admission_result_t result;
             {
                 std::lock_guard lifecycle_lock (_lifecycle_mutex);
-                // The original is read in the admission turn, so a concurrent discovery
-                // input either reaches this admission or finds the record held below.
-                const auto expected = _expected_peers.find (source_routing_id);
-                auto original =
-                  expected != _expected_peers.end () ? expected->second.discovered : nullptr;
-                const auto admitted = _topology.peer (source_routing_id);
-                const bool established =
-                  admitted && admitted->connection_id == connection_id
-                  && admitted->descriptor.lifecycle_generation == descriptor.lifecycle_generation;
-                // Under auto-connect both object roles publish a descriptor before
-                // admission (MeshNode 6), so a new object route waits for its original.
-                if (_peer_reconcile && !established && !original
-                    && _options.descriptor.object_role != service_object_role_t::none
-                    && descriptor.object_role != service_object_role_t::none)
-                    result = peer_admission_result_t::awaiting_discovery;
-                else
-                    result =
-                      expectation.expected_descriptor
-                        ? _topology.admit (descriptor, connection_id,
-                                           *expectation.expected_descriptor, now, kind, original)
-                        : _topology.admit (descriptor, connection_id, now, kind, original);
+                result = expectation.expected_descriptor
+                           ? _topology.admit (descriptor, connection_id,
+                                              *expectation.expected_descriptor, now, kind)
+                           : _topology.admit (descriptor, connection_id, now, kind);
                 trace_admission_phase (source_routing_id, descriptor.lifecycle_generation, kind,
                                        result);
-            }
-            if (result == peer_admission_result_t::awaiting_discovery) {
-                // Held on its selected route until discovery supplies the original;
-                // the route's end drops it (MeshNode 7.1 HELLO resend still applies).
-                if (const auto route = _routes.find (source_routing_id);
-                    route != _routes.end () && route->second.generation == route_generation)
-                    route->second.awaiting_discovery.insert_or_assign (
-                      kind, std::vector<std::uint8_t> (bytes.begin (), bytes.end ()));
-                return result;
             }
             refresh_admission_due_on_lane ();
             if (result == peer_admission_result_t::not_required
@@ -2904,12 +2860,6 @@ raw_mesh_pump_result_t raw_mesh_node_owner_t::admit_descriptor_record (
               })
               .get ();
         }
-        return raw_mesh_pump_result_t::infrastructure;
-    }
-    if (admission == peer_admission_result_t::awaiting_discovery) {
-        if (mesh_trace_enabled ())
-            trace_mesh ("admission-hold reason=awaiting-discovery source="
-                        + owner_key (source_routing_id));
         return raw_mesh_pump_result_t::infrastructure;
     }
     if (admission != peer_admission_result_t::admitted
@@ -3487,7 +3437,6 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
         std::optional<std::uint64_t> correlation;
         std::optional<std::pair<std::uint64_t, std::uint64_t>> operation;
         std::optional<service_bound_session_source_t> bound_session_source;
-        std::optional<request_source_t> source_original;
         if (header.kind == protocol::command::nodeSend
             || header.kind == protocol::command::nodeRequest) {
             if (header.kind == protocol::command::nodeSend
@@ -3537,9 +3486,6 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
             }
             correlation = spot.correlation;
             operation = std::pair{spot.operation.high, spot.operation.low};
-            source_original =
-              accepted_source (received->source_routing_id,
-                               admitted->descriptor.lifecycle_generation, {}, admitted.get ());
             mailbox_owner =
               service_mailbox_t::application_owner (host::owner_kind_t::spot, spot.target.spot_id);
         } else {
@@ -3555,9 +3501,6 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
             }
             correlation = actor.correlation;
             operation = std::pair{actor.operation.high, actor.operation.low};
-            source_original =
-              accepted_source (received->source_routing_id,
-                               admitted->descriptor.lifecycle_generation, {}, admitted.get ());
             if (actor.bound_session_source) {
                 bound_session_source = service_bound_session_source_t{
                   std::move (actor.bound_session_source->session_routing_id),
@@ -3576,7 +3519,13 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
                                         admitted->descriptor.lifecycle_generation,
                                         operation,
                                         std::move (bound_session_source)};
-        record.source_original = std::move (source_original);
+        // The receive turn only observes the polling list; a missing source is read by
+        // the authority owner after the canonical claim has recorded its shared lookup.
+        if (operation && _request_sources)
+            if (auto source = _request_sources->cached_request_source (
+                  _options.descriptor.mesh_name, record.source_routing_id,
+                  record.source_node_generation))
+                record.source_original = request_source_t{std::move (*source)};
         auto result = enqueue_received (std::move (record), raw_mesh_pump_result_t::application);
         trace_mesh (
           "application-enqueue result=" + std::to_string (static_cast<int> (result)) + " pending="

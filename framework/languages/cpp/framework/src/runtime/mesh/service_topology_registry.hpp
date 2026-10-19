@@ -24,11 +24,6 @@
 #include <unordered_map>
 #include <vector>
 
-namespace zlink::framework
-{
-struct mesh_node_descriptor_t;
-}
-
 namespace zlink::framework::runtime::mesh
 {
 
@@ -96,9 +91,7 @@ enum class peer_admission_result_t
     not_required,
     mesh_mismatch,
     invalid_descriptor,
-    stale_descriptor,
-    // An object peer whose discovery original this node has not observed yet.
-    awaiting_discovery
+    stale_descriptor
 };
 
 struct admitted_peer_t
@@ -114,7 +107,6 @@ struct admitted_peer_t
     // The remote ADMIT was received on this exact selected route.
     bool ready = false;
     service_liveness_registry_t::connection_t liveness;
-    std::shared_ptr<const mesh_node_descriptor_t> source_original;
 };
 
 bool route_mesh_connection_not_required (const service_node_descriptor_t &local,
@@ -145,28 +137,19 @@ class service_topology_registry_t
     using peer_observer_t = std::function<peer_observation_t ()>;
     peer_observer_t observe_peer (std::vector<std::uint8_t> node_routing_id) const;
 
-    peer_admission_result_t
-    admit (service_node_descriptor_t descriptor,
-           std::vector<std::uint8_t> connection_id,
-           service_liveness_registry_t::clock_t::time_point now =
-             service_liveness_registry_t::clock_t::now (),
-           protocol::command command = protocol::command::admit,
-           std::shared_ptr<const mesh_node_descriptor_t> source_original = {});
-    peer_admission_result_t
-    admit (service_node_descriptor_t descriptor,
-           std::vector<std::uint8_t> connection_id,
-           const service_node_descriptor_t &expected_descriptor,
-           service_liveness_registry_t::clock_t::time_point now =
-             service_liveness_registry_t::clock_t::now (),
-           protocol::command command = protocol::command::admit,
-           std::shared_ptr<const mesh_node_descriptor_t> source_original = {});
+    peer_admission_result_t admit (service_node_descriptor_t descriptor,
+                                   std::vector<std::uint8_t> connection_id,
+                                   service_liveness_registry_t::clock_t::time_point now =
+                                     service_liveness_registry_t::clock_t::now (),
+                                   protocol::command command = protocol::command::admit);
+    peer_admission_result_t admit (service_node_descriptor_t descriptor,
+                                   std::vector<std::uint8_t> connection_id,
+                                   const service_node_descriptor_t &expected_descriptor,
+                                   service_liveness_registry_t::clock_t::time_point now =
+                                     service_liveness_registry_t::clock_t::now (),
+                                   protocol::command command = protocol::command::admit);
     bool disconnect (const std::vector<std::uint8_t> &node_routing_id,
                      const std::vector<std::uint8_t> &connection_id);
-    // Binds the current discovery original to an admitted peer's source identity;
-    // an original that is absent or not valid for its lifecycle ends that identity.
-    void bind_source_original (const std::vector<std::uint8_t> &node_routing_id,
-                               std::shared_ptr<const mesh_node_descriptor_t> source_original);
-
     std::vector<admitted_peer_t> peers () const;
     std::vector<service_node_descriptor_t> not_required_peers () const;
     // The admitted peer inside the current immutable topology snapshot; the
@@ -190,19 +173,13 @@ class service_topology_registry_t
     };
 
     static bool valid_descriptor (const service_node_descriptor_t &descriptor);
-    static std::shared_ptr<const mesh_node_descriptor_t>
-    accepted_source_original (const service_node_descriptor_t &descriptor,
-                              std::shared_ptr<const mesh_node_descriptor_t> original,
-                              const std::shared_ptr<const mesh_node_descriptor_t> &bound);
     static bool selectable (const service_node_descriptor_t &descriptor,
                             const std::string &channel_name);
-    peer_admission_result_t
-    admit_impl (service_node_descriptor_t descriptor,
-                std::vector<std::uint8_t> connection_id,
-                const service_node_descriptor_t *expected_descriptor,
-                service_liveness_registry_t::clock_t::time_point now,
-                protocol::command command,
-                std::shared_ptr<const mesh_node_descriptor_t> source_original);
+    peer_admission_result_t admit_impl (service_node_descriptor_t descriptor,
+                                        std::vector<std::uint8_t> connection_id,
+                                        const service_node_descriptor_t *expected_descriptor,
+                                        service_liveness_registry_t::clock_t::time_point now,
+                                        protocol::command command);
     struct topology_state_t;
     std::function<void ()> publish_topology (std::shared_ptr<topology_state_t> next);
 

@@ -13,6 +13,18 @@
 namespace zlink::framework::runtime::mesh
 {
 
+void service_mailbox_t::start_source_lookup (const request_source_lookup_t &lookup) const
+{
+    request_source_lookup_state_t::start_t start;
+    {
+        std::lock_guard lock (_state->mutex);
+        start = std::exchange (lookup->start, {});
+    }
+    if (start)
+        start (lookup);
+}
+
+
 std::string service_mailbox_t::application_owner (host::owner_kind_t kind, std::string_view id)
 {
     switch (kind) {

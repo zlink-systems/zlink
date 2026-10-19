@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
+#include <zlink/framework/contracts/dispatch/task.hpp>
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
@@ -38,9 +39,18 @@ struct local_request_source_t
 };
 
 // Location runtime §9.3: the source original accepted with a record. A peer's is the
-// discovery original bound to its admission; a local one is this node's lease observation.
-using request_source_t =
-  std::variant<local_request_source_t, std::shared_ptr<const mesh_node_descriptor_t>>;
+// live polling original read at acceptance; a local one is this node's lease observation.
+struct request_source_lookup_state_t
+{
+    using descriptor_t = std::shared_ptr<const mesh_node_descriptor_t>;
+    using start_t = std::function<void (const std::shared_ptr<request_source_lookup_state_t> &)>;
+    task_completion_source_t<descriptor_t> completion;
+    start_t start;
+};
+using request_source_lookup_t = std::shared_ptr<request_source_lookup_state_t>;
+using request_source_t = std::variant<local_request_source_t,
+                                      std::shared_ptr<const mesh_node_descriptor_t>,
+                                      request_source_lookup_t>;
 
 enum class service_mailbox_domain_t
 {
@@ -145,13 +155,16 @@ class service_mailbox_t
                                                               std::size_t message_budget,
                                                               std::size_t byte_budget);
     using claim_handle_t = service_mailbox_slot_t;
+    // A missing source belongs to its original. Claims and cut share one lookup; the
+    // existing producer mutex transfers its starter, and Store work runs outside it.
+    void start_source_lookup (const request_source_lookup_t &lookup) const;
     // Query preparation and original transfer share the existing producer boundary.
     template <class Prepare>
     auto prepare (const claim_handle_t &handle, Prepare prepare) const
-      -> std::optional<std::invoke_result_t<Prepare, const service_mailbox_record_t &>>
+      -> std::optional<std::invoke_result_t<Prepare, service_mailbox_record_t &>>
     {
         std::lock_guard lock (_state->mutex);
-        const auto *slot = slot_locked (handle);
+        auto *slot = slot_locked (handle);
         if (!slot)
             return std::nullopt;
         return prepare (*slot);
@@ -160,16 +173,15 @@ class service_mailbox_t
     // take; otherwise the original transfers now. monostate means it is gone or not next.
     template <class Keep>
     auto take_unless (const claim_handle_t &handle, Keep keep)
-      -> std::variant<
-        std::monostate,
-        service_mailbox_record_t,
-        typename std::invoke_result_t<Keep, const service_mailbox_record_t &>::value_type>
+      -> std::variant<std::monostate,
+                      service_mailbox_record_t,
+                      typename std::invoke_result_t<Keep, service_mailbox_record_t &>::value_type>
     {
         std::lock_guard lock (_state->mutex);
         auto *slot = slot_locked (handle);
         if (!slot)
             return std::monostate{};
-        if (auto kept = keep (std::as_const (*slot)))
+        if (auto kept = keep (*slot))
             return std::move (*kept);
         if (!next_locked (handle))
             return std::monostate{};

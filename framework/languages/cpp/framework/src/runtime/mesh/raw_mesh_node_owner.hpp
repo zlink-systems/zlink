@@ -43,6 +43,11 @@ class poller_t;
 class router_socket_t;
 }
 
+namespace zlink::framework::runtime
+{
+class live_location_reader_t;
+}
+
 namespace zlink::framework::runtime::mesh
 {
 
@@ -144,25 +149,22 @@ class raw_mesh_node_owner_t
     service_mailbox_t &mailbox () noexcept;
 
     bool connect_peer (const std::string &endpoint);
-    bool connect_peer (const std::string &endpoint,
-                       service_node_descriptor_t expected_descriptor,
-                       std::shared_ptr<const mesh_node_descriptor_t> discovered = {});
+    bool connect_peer (const std::string &endpoint, service_node_descriptor_t expected_descriptor);
     void disconnect_peer (const std::string &endpoint) noexcept;
     bool disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
                           const std::string &endpoint) noexcept;
-    void expect_peer (service_node_descriptor_t expected_descriptor,
-                      std::shared_ptr<const mesh_node_descriptor_t> discovered = {});
-    // The auto-connect owner's per-peer reconcile request (MeshNode 7.1). While it is
-    // configured, discovery supplies the source original of every object peer.
+    void expect_peer (service_node_descriptor_t expected_descriptor);
+    // The auto-connect owner's per-peer reconcile request (MeshNode 7.1).
     using peer_reconcile_t = std::function<void (const std::vector<std::uint8_t> &)>;
     void configure_peer_reconcile (peer_reconcile_t request);
     peer_reconcile_t peer_reconcile () const;
-    // The single source-original reader (Location runtime §9.3). Publication owners call
-    // it once before the mailbox accepts a record; the record then keeps the result.
-    static std::optional<request_source_t> accepted_source (const std::vector<std::uint8_t> &rid,
-                                                            std::uint64_t generation,
-                                                            const local_request_source_t &local,
-                                                            const admitted_peer_t *peer);
+    void configure_request_sources (live_location_reader_t *sources);
+    live_location_reader_t *request_sources () const noexcept { return _request_sources; }
+    // A local publication keeps its own node and lease observation (Location §9.3).
+    static std::optional<request_source_t>
+    local_accepted_source (const std::vector<std::uint8_t> &rid,
+                           std::uint64_t generation,
+                           const local_request_source_t &local);
     void forget_peer (const std::vector<std::uint8_t> &node_routing_id,
                       const std::string &endpoint);
     peer_admission_result_t admit_peer (service_node_descriptor_t descriptor,
@@ -546,21 +548,15 @@ class raw_mesh_node_owner_t
     static void publish_drop_metrics (opentelemetry::metrics::ObserverResult result, void *state);
     std::atomic_size_t _last_pump_bytes{0};
     std::shared_ptr<foundation::operation_registry_t> _operations;
-    struct expected_peer_t
-    {
-        service_node_descriptor_t wire;
-        std::shared_ptr<const mesh_node_descriptor_t> discovered;
-    };
-    std::map<std::vector<std::uint8_t>, expected_peer_t, raw_mesh_byte_vector_less_t>
+    std::map<std::vector<std::uint8_t>, service_node_descriptor_t, raw_mesh_byte_vector_less_t>
       _expected_peers;
     peer_reconcile_t _peer_reconcile;
+    live_location_reader_t *_request_sources = nullptr;
     struct selected_route_t
     {
         std::uint64_t generation;
         // The admission exchange retains its first HELLO until ADMIT or route end.
         std::vector<std::uint8_t> hello;
-        // Remote HELLO/ADMIT awaiting this node's discovery original for the peer.
-        std::map<protocol::command, std::vector<std::uint8_t>> awaiting_discovery;
     };
     std::map<std::vector<std::uint8_t>, selected_route_t, raw_mesh_byte_vector_less_t> _routes;
     std::set<std::string> _outbound_endpoints;

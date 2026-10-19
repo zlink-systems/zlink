@@ -7,6 +7,8 @@
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/locations/live_location_reader.hpp"
+#include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/accepted_actor_record.hpp"
@@ -29,6 +31,26 @@
 #include <type_traits>
 #include <variant>
 #include <vector>
+
+namespace zlink::framework::runtime
+{
+struct in_memory_location_repository_test_access_t
+{
+    static std::promise<void> hold_lane (in_memory_location_repository_t &store)
+    {
+        std::promise<void> release, entered;
+        auto held = release.get_future ().share ();
+        auto running = entered.get_future ();
+        if (!store._lane.try_post ([held, &entered] {
+                entered.set_value ();
+                held.wait ();
+            }))
+            throw std::runtime_error ("store lane is closed");
+        running.wait ();
+        return release;
+    }
+};
+}
 
 namespace zlink::framework::runtime::host
 {
@@ -149,9 +171,8 @@ mesh::service_mailbox_record_t spot_send (host::public_host_runtime_t &host,
          protocol::spot_route_fence_t{spot.key, spot.object_generation, {1}, 1, 1, 3},
          {1, operation}, correlation),
        protocol::encode_application_payload ({"Probe", "application/json", {'{', '}'}})});
-    record.source_original = mesh::raw_mesh_node_owner_t::accepted_source (
-      record.source_routing_id, record.source_node_generation, {},
-      host.transport ().topology ().peer (record.source_routing_id).get ());
+    record.source_original = mesh::raw_mesh_node_owner_t::local_accepted_source (
+      record.source_routing_id, record.source_node_generation, {});
     return record;
 }
 
@@ -1327,9 +1348,11 @@ TEST (FrameworkRelocationSealContract, accepted_follow_preserves_actor_and_spot_
 
 TEST (FrameworkRelocationSealContract, retained_follow_rejects_previous_object_generation)
 {
+    auto descriptor = test_descriptor ("follow-generation");
+    descriptor.node_routing_id = {1};
     auto host = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{
-        .descriptor = test_descriptor ("follow-generation"),
+        .descriptor = std::move (descriptor),
         .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
     auto &objects = host->objects ();
     const stateful::object_ref_t object{
@@ -1346,16 +1369,20 @@ TEST (FrameworkRelocationSealContract, retained_follow_rejects_previous_object_g
                  .first,
                stateful::stateful_error_t::none);
     stateful::raw_stateful_dispatch_t dispatch (
-      objects, host->transport (),
-      [] (const auto &) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
-          throw std::runtime_error ("Store is unavailable");
-          co_return std::nullopt;
+      objects, host->transport (), [&] (const auto &query) {
+          return host->accepted_record_authority (
+            query,
+            std::make_shared<const location_owner_token_t> (location_owner_token_t{"target", 3}));
       });
+    auto sender = std::make_shared<mesh_node_descriptor_t> ();
+    sender->owner_id = "actual-sender";
+    sender->lease_generation = 11;
+    const mesh::request_source_t recorded_source{sender};
     protocol::actor_message_header_t header;
     header.target = {object.key, object.object_generation, {1}, 1, 1, 3};
     EXPECT_EQ (dispatch
                  .accepted_actor_authority (
-                   object, header, {1}, 1, std::nullopt, false,
+                   object, header, {1}, 1, recorded_source, false,
                    zlink::framework::test::retained_ingress_snapshot (objects, object))
                  .result ()
                  .value ()
@@ -1364,7 +1391,7 @@ TEST (FrameworkRelocationSealContract, retained_follow_rejects_previous_object_g
     --header.target.object_generation;
     EXPECT_EQ (dispatch
                  .accepted_actor_authority (
-                   object, header, {1}, 1, std::nullopt, false,
+                   object, header, {1}, 1, recorded_source, false,
                    zlink::framework::test::retained_ingress_snapshot (objects, object))
                  .result ()
                  .value ()
@@ -1375,9 +1402,11 @@ TEST (FrameworkRelocationSealContract, retained_follow_rejects_previous_object_g
 
 TEST (FrameworkRelocationSealContract, retained_spot_rejects_previous_object_generation)
 {
+    auto descriptor = test_descriptor ("follow-generation");
+    descriptor.node_routing_id = {1};
     auto host = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{
-        .descriptor = test_descriptor ("follow-generation"),
+        .descriptor = std::move (descriptor),
         .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
     auto &objects = host->objects ();
     const stateful::object_ref_t object{
@@ -1394,16 +1423,20 @@ TEST (FrameworkRelocationSealContract, retained_spot_rejects_previous_object_gen
                  .first,
                stateful::stateful_error_t::none);
     stateful::raw_stateful_dispatch_t dispatch (
-      objects, host->transport (),
-      [] (const auto &) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
-          throw std::runtime_error ("Store is unavailable");
-          co_return std::nullopt;
+      objects, host->transport (), [&] (const auto &query) {
+          return host->accepted_record_authority (
+            query,
+            std::make_shared<const location_owner_token_t> (location_owner_token_t{"target", 3}));
       });
+    auto sender = std::make_shared<mesh_node_descriptor_t> ();
+    sender->owner_id = "actual-sender";
+    sender->lease_generation = 11;
+    const mesh::request_source_t recorded_source{sender};
     protocol::spot_message_header_t header;
     header.target = {object.key, object.object_generation, {1}, 1, 1, 3};
     EXPECT_EQ (dispatch
                  .accepted_spot_authority (
-                   object, header, {1}, 1, std::nullopt,
+                   object, header, {1}, 1, recorded_source,
                    zlink::framework::test::retained_ingress_snapshot (objects, object))
                  .result ()
                  .value ()
@@ -1412,7 +1445,7 @@ TEST (FrameworkRelocationSealContract, retained_spot_rejects_previous_object_gen
     --header.target.object_generation;
     EXPECT_EQ (dispatch
                  .accepted_spot_authority (
-                   object, header, {1}, 1, std::nullopt,
+                   object, header, {1}, 1, recorded_source,
                    zlink::framework::test::retained_ingress_snapshot (objects, object))
                  .result ()
                  .value ()
@@ -1481,6 +1514,131 @@ TEST (FrameworkRelocationSealContract, mailbox_cut_takes_each_untaken_original_o
 // waits — the source FIFO (B), a claim suspended on its source authority (C) or the mailbox
 // (D). The started turn (A) reaches its terminal on the source first, and a record published
 // after the cut (E) takes the ingress hold.
+TEST (FrameworkRelocationSealContract, source_store_reads_return_before_store_lane_completes)
+{
+    runtime::in_memory_location_repository_t store;
+    const auto verify = [&] (auto read) {
+        auto release = runtime::in_memory_location_repository_test_access_t::hold_lane (store);
+        auto returned = std::async (std::launch::async, read);
+        EXPECT_EQ (returned.wait_for (std::chrono::milliseconds (100)), std::future_status::ready);
+        release.set_value ();
+        auto completed = returned.get ();
+        EXPECT_TRUE (completed.result ());
+    };
+    verify ([&] { return store.list_mesh_nodes ("mesh"); });
+    verify ([&] { return store.read_owner_lease ("owner"); });
+}
+
+TEST (FrameworkRelocationSealContract, source_lookup_is_shared_by_claim_and_cut)
+{
+    struct deferred_store_t : runtime::in_memory_location_repository_t
+    {
+        int reads = 0;
+        task_completion_source_t<location_page_t<mesh_node_descriptor_t>> listed;
+        task_t<location_page_t<mesh_node_descriptor_t>>
+        list_mesh_nodes (std::string, location_page_request_t = {}) override
+        {
+            ++reads;
+            return listed.task ();
+        }
+    } store;
+    const auto source_owner =
+      std::get<owner_lease_claimed_t> (
+        store.claim_owner_lease ("source-owner", std::chrono::seconds (15)).result ().value ())
+        .token;
+    runtime::live_location_reader_t reader (store);
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("source-lookup"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    const auto local =
+      std::make_shared<const location_owner_token_t> (location_owner_token_t{"target", 3});
+    host->configure_stateful_dispatch ([local] { return local; }, &reader);
+    const stateful::object_ref_t spot{
+      stateful::object_kind_t::user_spot, "spot", 1, 1, "mesh", "source"};
+    auto &mailbox = host->transport ().mailbox ();
+    auto original = spot_send (*host, spot, 1, 2);
+    const auto key = original.owner;
+    ASSERT_TRUE (mailbox.try_enqueue (std::move (original)));
+    auto claim =
+      mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, key, 1, 4096);
+    ASSERT_TRUE (claim);
+    auto prepared = mailbox.prepare ({claim, 0}, [&] (auto &record) {
+        return stateful::claimed_ingress_t::prepare (record, &reader, "mesh");
+    });
+    ASSERT_TRUE (prepared);
+    EXPECT_EQ (store.reads, 0);
+    stateful::accepted_record_authority_query_t query;
+    query.target = spot;
+    query.source_node_routing_id = {2};
+    query.source_node_generation = 1;
+    query.source_original = prepared->source_original;
+    const auto descriptor = host->transport ().topology ().local_descriptor ();
+    query.target_node_routing_id = descriptor.node_routing_id;
+    query.target_node_generation = descriptor.lifecycle_generation;
+    auto first = host->accepted_record_authority (query, local, &reader);
+    EXPECT_EQ (store.reads, 1);
+    EXPECT_FALSE (first.await_ready ());
+    auto cut = mailbox.cut_owners ({key}, {}, [] {});
+    ASSERT_TRUE (cut);
+    ASSERT_EQ ((*cut)[0].size (), 1u);
+    auto cut_query = stateful::claimed_ingress_t::prepare ((*cut)[0][0], &reader, "mesh");
+    query.source_original = cut_query.source_original;
+    auto second = host->accepted_record_authority (query, local, &reader);
+    EXPECT_EQ (store.reads, 1);
+    EXPECT_FALSE (second.await_ready ());
+    location_page_t<mesh_node_descriptor_t> page;
+    page.items.push_back ({.mesh_name = "mesh",
+                           .rid = zlink::routing_id_t::from (std::vector<std::uint8_t>{2}),
+                           .lifecycle_generation = 1,
+                           .descriptor_revision = 1,
+                           .endpoint = "tcp://127.0.0.1:1",
+                           .state = framework_runtime_state_t::serving,
+                           .security_identity = "test",
+                           .owner_id = source_owner.owner_id,
+                           .lease_generation = source_owner.lease_generation});
+    store.listed.complete (
+      result_t<location_page_t<mesh_node_descriptor_t>>::success (std::move (page)));
+    const auto accepted = first.result ().value ();
+    const auto captured = second.result ().value ();
+    ASSERT_TRUE (accepted);
+    ASSERT_TRUE (captured);
+    EXPECT_EQ (accepted->source, captured->source);
+    EXPECT_EQ (captured->source.owner_id, source_owner.owner_id);
+    EXPECT_EQ (captured->source.lease_generation,
+               static_cast<std::uint64_t> (source_owner.lease_generation));
+    EXPECT_EQ (store.reads, 1);
+    if (const auto credit = (*cut)[0][0].transferred)
+        EXPECT_TRUE (credit ());
+    host->close ();
+}
+
+TEST (FrameworkRelocationSealContract, unavailable_source_read_keeps_unavailable_result)
+{
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("source-read-error"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    stateful::raw_stateful_dispatch_t dispatch (
+      host->objects (), host->transport (), [] (const auto &) {
+          return task_t<std::optional<stateful::accepted_record_authority_t>> (
+            result_t<std::optional<stateful::accepted_record_authority_t>>::failure (
+              framework_error_kind_t::unavailable, "source repository is unavailable"));
+      });
+    const stateful::object_ref_t actor{
+      stateful::object_kind_t::actor, "actor", 1, 1, "mesh", "source"};
+    protocol::actor_message_header_t header;
+    header.target = {actor.key, 1, {1}, 1, 1, 3};
+    header.operation = {1, 1};
+    const auto [error, authority] =
+      dispatch.accepted_actor_authority (actor, header, {2}, 1, std::nullopt, false, std::nullopt)
+        .result ()
+        .value ();
+    EXPECT_EQ (error, stateful::stateful_error_t::unavailable);
+    EXPECT_FALSE (authority);
+    host->close ();
+}
+
 TEST (FrameworkRelocationSealContract, seal_cut_saves_each_unstarted_original_once)
 {
     using namespace std::chrono_literals;
@@ -1773,11 +1931,13 @@ TEST (FrameworkRelocationSealContract, aggregate_participant_failure_aborts_ever
                    stateful::stateful_error_t::none);
 }
 
-TEST (FrameworkRelocationSealContract, local_follow_uses_retained_source_without_store)
+TEST (FrameworkRelocationSealContract, retained_target_keeps_recorded_sender_without_store)
 {
+    auto descriptor = test_descriptor ("authority-order");
+    descriptor.node_routing_id = {1};
     auto host = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{
-        .descriptor = test_descriptor ("authority-order"),
+        .descriptor = std::move (descriptor),
         .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
     auto &objects = host->objects ();
     const stateful::object_ref_t object{
@@ -1785,14 +1945,20 @@ TEST (FrameworkRelocationSealContract, local_follow_uses_retained_source_without
     const auto created = objects.begin_reserved_object (object, "actor", {});
     ASSERT_EQ (created.error, stateful::stateful_error_t::none);
     ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
-    int reads = 0;
+    int resolves = 0;
+    auto sender = std::make_shared<mesh_node_descriptor_t> ();
+    sender->owner_id = "actual-sender";
+    sender->lease_generation = 11;
+    const mesh::request_source_t recorded_source{sender};
     const protocol::request_source_fence_t fence{"source-owner", 3, {1}, 1};
     stateful::raw_stateful_dispatch_t dispatch (
       objects, host->transport (),
       [&] (const auto &query) -> task_t<std::optional<stateful::accepted_record_authority_t>> {
-          ++reads;
+          ++resolves;
           EXPECT_EQ (query.target.object_generation, object.object_generation);
-          co_return stateful::accepted_record_authority_t{fence, 3};
+          co_return co_await host->accepted_record_authority (
+            query,
+            std::make_shared<const location_owner_token_t> (location_owner_token_t{"target", 3}));
       });
     protocol::actor_message_header_t header;
     header.target = {object.key, 6, {1}, 1, 1, 3};
@@ -1800,12 +1966,12 @@ TEST (FrameworkRelocationSealContract, local_follow_uses_retained_source_without
     std::optional<stateful::retained_relocation_source_t> retained;
     ASSERT_TRUE (objects.find (object.kind, object.key, std::nullopt, &retained));
     EXPECT_EQ (
-      dispatch.accepted_actor_authority (object, header, {2}, 1, std::nullopt, false, retained)
+      dispatch.accepted_actor_authority (object, header, {2}, 1, recorded_source, false, retained)
         .result ()
         .value ()
         .first,
       stateful::stateful_error_t::none);
-    EXPECT_EQ (reads, 1);
+    EXPECT_EQ (resolves, 1);
     const auto sealed = objects.try_seal_relocation_aggregate ({object}).result ().value ();
     ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
     ASSERT_EQ (objects
@@ -1816,18 +1982,21 @@ TEST (FrameworkRelocationSealContract, local_follow_uses_retained_source_without
     ASSERT_TRUE (objects.find (object.kind, object.key, std::nullopt, &retained));
     ASSERT_TRUE (retained);
     header.target.object_generation = 7;
-    reads = 0;
+    resolves = 0;
     const auto accept = [&] {
         return dispatch
-          .accepted_actor_authority (object, header, {2}, 1, std::nullopt, false, retained)
+          .accepted_actor_authority (object, header, {2}, 1, recorded_source, false, retained)
           .result ()
           .value ();
     };
     const auto accepted = accept ();
     ASSERT_EQ (accepted.first, stateful::stateful_error_t::none);
     ASSERT_TRUE (accepted.second);
+    EXPECT_EQ (accepted.second->source.owner_id, "actual-sender");
+    EXPECT_EQ (accepted.second->source.lease_generation, 11u);
+    EXPECT_EQ (accepted.second->target_owner_lease_generation, 3u);
     EXPECT_EQ (accepted.second->source.node_routing_id, (std::vector<std::uint8_t>{2}));
-    EXPECT_EQ (reads, 0);
+    EXPECT_EQ (resolves, 1);
     ++header.target.authority_owner_generation;
     EXPECT_NE (accept ().first, stateful::stateful_error_t::none);
     --header.target.authority_owner_generation;
@@ -1836,7 +2005,7 @@ TEST (FrameworkRelocationSealContract, local_follow_uses_retained_source_without
     --header.target.target_node_generation;
     ++header.target.owner_lease_generation;
     EXPECT_NE (accept ().first, stateful::stateful_error_t::none);
-    EXPECT_EQ (reads, 0);
+    EXPECT_EQ (resolves, 1);
     host->close ();
 }
 

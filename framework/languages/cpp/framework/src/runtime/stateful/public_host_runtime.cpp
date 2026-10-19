@@ -958,7 +958,7 @@ public_host_runtime_t::~public_host_runtime_t ()
 }
 
 void public_host_runtime_t::configure_stateful_dispatch (
-  stateful::accepted_record_authority_resolver_t resolver)
+  stateful::accepted_record_authority_resolver_t resolver, live_location_reader_t *sources)
 {
     if (!resolver)
         throw std::invalid_argument ("stateful dispatch authority resolver must not be empty");
@@ -967,6 +967,8 @@ void public_host_runtime_t::configure_stateful_dispatch (
           if (_started || _stateful_dispatch)
               throw std::logic_error (
                 "stateful dispatch must be configured once before host start");
+          if (sources)
+              _transport->configure_request_sources (sources);
           _stateful_dispatch = std::make_unique<stateful::raw_stateful_dispatch_t> (
             _objects, *_transport,
             [this, resolver = std::move (resolver)] (
@@ -1022,7 +1024,8 @@ void public_host_runtime_t::configure_stateful_dispatch (
 }
 
 void public_host_runtime_t::configure_stateful_dispatch (
-  std::function<std::shared_ptr<const location_owner_token_t> ()> owner)
+  std::function<std::shared_ptr<const location_owner_token_t> ()> owner,
+  live_location_reader_t *sources)
 {
     if (!owner)
         throw std::invalid_argument ("stateful dispatch owner observation must not be empty");
@@ -1034,27 +1037,47 @@ void public_host_runtime_t::configure_stateful_dispatch (
           _local_lease_observation = std::move (owner);
       })
       .get ();
-    configure_stateful_dispatch ([this] (stateful::accepted_record_authority_query_t query) {
-        // A local record was accepted under the lease observation it was published with;
-        // a peer record is accepted under the current one.
-        const auto *local = query.source_original
-                              ? std::get_if<mesh::local_request_source_t> (&*query.source_original)
-                              : nullptr;
-        auto owner = local ? local->lease : _local_lease_observation ();
-        return accepted_record_authority (std::move (query), std::move (owner));
-    });
+    configure_stateful_dispatch (
+      [this, sources] (stateful::accepted_record_authority_query_t query) {
+          // A local record was accepted under the lease observation it was published with;
+          // a peer record is accepted under the current one.
+          const auto *local =
+            query.source_original
+              ? std::get_if<mesh::local_request_source_t> (&*query.source_original)
+              : nullptr;
+          auto owner = local ? local->lease : _local_lease_observation ();
+          return accepted_record_authority (std::move (query), std::move (owner), sources);
+      },
+      sources);
 }
 
 task_t<std::optional<stateful::accepted_record_authority_t>>
 public_host_runtime_t::accepted_record_authority (
   stateful::accepted_record_authority_query_t query,
-  std::shared_ptr<const location_owner_token_t> owner) const
+  std::shared_ptr<const location_owner_token_t> owner,
+  live_location_reader_t *sources) const
 {
+    if (query.source_original)
+        if (const auto *lookup =
+              std::get_if<mesh::request_source_lookup_t> (&*query.source_original)) {
+            _transport->mailbox ().start_source_lookup (*lookup);
+            auto descriptor = co_await (*lookup)->completion.task ();
+            query.source_original = mesh::request_source_t{std::move (descriptor)};
+        }
     using authority_t = std::optional<stateful::accepted_record_authority_t>;
     authority_t accepted;
     const auto &local = _options.mesh.descriptor;
-    // The source is the original read when the record was published (Location §9.3);
-    // a later discovery change does not reach a record that is already accepted.
+    // Location §9.3: the first accepting owner resolves once; forwarded records keep it.
+    if (!query.source_original && sources) {
+        auto cached = sources->cached_request_source (local.mesh_name, query.source_node_routing_id,
+                                                      query.source_node_generation);
+        auto descriptor =
+          cached ? std::move (*cached)
+                 : co_await sources->request_source (local.mesh_name, query.source_node_routing_id,
+                                                     query.source_node_generation);
+        if (descriptor)
+            query.source_original = mesh::request_source_t{std::move (descriptor)};
+    }
     if (owner && !owner->owner_id.empty () && owner->lease_generation > 0
         && query.source_original
         // A Spot mailbox facade can outlive an incarnation. Its execution
@@ -1065,19 +1088,21 @@ public_host_runtime_t::accepted_record_authority (
                  == query.target.authority_owner_generation)
         && query.target_node_routing_id == local.node_routing_id
         && query.target_node_generation == local.lifecycle_generation) {
-        auto source = std::visit (
-          [&query] (const auto &reference) -> protocol::request_source_fence_t {
-              using reference_t = std::decay_t<decltype (reference)>;
-              if constexpr (std::is_same_v<reference_t, mesh::local_request_source_t>)
-                  return {reference.lease->owner_id,
-                          static_cast<std::uint64_t> (reference.lease->lease_generation),
-                          query.source_node_routing_id, query.source_node_generation};
-              else
-                  return {reference->owner_id,
-                          static_cast<std::uint64_t> (reference->lease_generation),
-                          query.source_node_routing_id, query.source_node_generation};
-          },
-          *query.source_original);
+        protocol::request_source_fence_t source;
+        if (const auto *reference =
+              std::get_if<mesh::local_request_source_t> (&*query.source_original)) {
+            source = {reference->lease->owner_id,
+                      static_cast<std::uint64_t> (reference->lease->lease_generation),
+                      query.source_node_routing_id, query.source_node_generation};
+        } else {
+            const auto &descriptor =
+              std::get<std::shared_ptr<const mesh_node_descriptor_t>> (*query.source_original);
+            if (!descriptor)
+                co_return accepted;
+            source = {descriptor->owner_id,
+                      static_cast<std::uint64_t> (descriptor->lease_generation),
+                      query.source_node_routing_id, query.source_node_generation};
+        }
         accepted = stateful::accepted_record_authority_t{
           std::move (source), static_cast<std::uint64_t> (owner->lease_generation)};
     }
@@ -1226,8 +1251,7 @@ bool public_host_runtime_t::connect_peer (const std::string &endpoint,
                                           std::optional<zlink::routing_id_t> expected,
                                           std::uint64_t expected_lifecycle_generation,
                                           std::string security_identity,
-                                          bool automatic,
-                                          std::shared_ptr<const mesh_node_descriptor_t> discovered)
+                                          bool automatic)
 {
     return _peer_endpoint_lane
       .run ([&] {
@@ -1246,8 +1270,7 @@ bool public_host_runtime_t::connect_peer (const std::string &endpoint,
               descriptor.advertised_endpoint = endpoint;
               descriptor.lifecycle_generation = expected_lifecycle_generation;
               descriptor.security_identity = std::move (security_identity);
-              connected =
-                _transport->connect_peer (endpoint, std::move (descriptor), std::move (discovered));
+              connected = _transport->connect_peer (endpoint, std::move (descriptor));
           } else {
               connected = _transport->connect_peer (endpoint);
           }
@@ -1261,15 +1284,14 @@ bool public_host_runtime_t::connect_peer (const std::string &endpoint,
 void public_host_runtime_t::expect_peer (const std::string &endpoint,
                                          const zlink::routing_id_t &expected,
                                          std::uint64_t expected_lifecycle_generation,
-                                         std::string security_identity,
-                                         std::shared_ptr<const mesh_node_descriptor_t> discovered)
+                                         std::string security_identity)
 {
     auto descriptor = _options.mesh.descriptor;
     descriptor.node_routing_id = expected.to_bytes ();
     descriptor.advertised_endpoint = endpoint;
     descriptor.lifecycle_generation = expected_lifecycle_generation;
     descriptor.security_identity = std::move (security_identity);
-    _transport->expect_peer (std::move (descriptor), std::move (discovered));
+    _transport->expect_peer (std::move (descriptor));
 }
 
 void public_host_runtime_t::forget_peer (const std::string &endpoint,
@@ -3953,35 +3975,7 @@ task_t<bool> public_host_runtime_t::restore_relocation_assembly (
     stateful::stateful_error_t restored = stateful::stateful_error_t::conflict;
     std::optional<framework_exception_t> failure;
     try {
-        // Relocation is the durable boundary. Validate each original source
-        // before either Actor intake or Spot restore can expose accepted work.
-        std::map<std::string, std::vector<protocol::request_source_fence_t>> sources_by_mesh;
-        for (const auto &participant : staging->frozen) {
-            auto &sources = sources_by_mesh[participant.owner.mesh_name];
-            for (const auto &turn : participant.pending_application) {
-                const auto record =
-                  turn.application_record
-                    ? protocol::summarize_frozen_application_record (*turn.application_record)
-                  : turn.frozen_record ? *turn.frozen_record
-                                       : protocol::decode_frozen_record (turn.payload);
-                if (record.application
-                    && std::find (sources.begin (), sources.end (), record.source)
-                         == sources.end ())
-                    sources.push_back (record.source);
-            }
-        }
-        for (const auto &[mesh, sources] : sources_by_mesh) {
-            if (sources.empty ())
-                continue;
-            if (!_user_spot_store)
-                throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "Relocation source repository is unavailable");
-            const auto current =
-              co_await stateful::read_accepted_record_sources (*_user_spot_store, mesh, sources);
-            if (!current || *current != sources)
-                throw framework_exception_t (framework_error_kind_t::unavailable,
-                                             "Relocation accepted source fence is unavailable");
-        }
+        // Location §9.3: relocation preserves the source recorded at first acceptance.
         const auto previous_actor_identities = co_await _spot_actor_index_lane.run_task ([&] {
             std::vector<stateful::object_ref_t> previous;
             for (const auto &target : staging->targets) {
@@ -7031,8 +7025,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
         try {
             auto step = _transport->mailbox ().take_unless (
               slot,
-              [stateful = static_cast<bool> (_stateful_dispatch)] (
-                const mesh::service_mailbox_record_t &original) -> std::optional<kept_t> {
+              [stateful = static_cast<bool> (_stateful_dispatch),
+               sources = _transport->request_sources (),
+               mesh_name = &_options.mesh.descriptor.mesh_name] (
+                mesh::service_mailbox_record_t &original) -> std::optional<kept_t> {
                   if (!stateful)
                       return std::nullopt;
                   if (original.application) {
@@ -7047,7 +7043,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                       .kind);
                   if (!kind || !is_stateful_application (*kind))
                       return std::nullopt;
-                  return kept_t{stateful::claimed_ingress_t::prepare (original)};
+                  return kept_t{
+                    stateful::claimed_ingress_t::prepare (original, sources, *mesh_name)};
               });
             if (std::holds_alternative<std::monostate> (step))
                 continue;
@@ -7074,11 +7071,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                            detail::activation_admission_t::spot_key_prefix)) {
                     const auto key =
                       claim->owner.substr (detail::activation_admission_t::spot_key_prefix.size ());
-                    native_owner = _objects.find (stateful::object_kind_t::user_spot, key,
-                                                  std::nullopt, &retained);
-                    if (!native_owner)
-                        native_owner = _objects.find (stateful::object_kind_t::instance_spot, key,
-                                                      std::nullopt, &retained);
+                    native_owner = _objects.resolve_spot (key, &retained);
                 }
                 if (native_owner) {
                     const auto accepted = co_await _stateful_dispatch->ingest_claimed (
@@ -7778,12 +7771,11 @@ void public_host_runtime_t::publish_local_application (local_application_dispatc
       std::pair{dispatch.record.operation_id.high, dispatch.record.operation_id.low};
     if (is_request (dispatch.record.kind))
         record.correlation = dispatch.record.reply_route_id;
-    record.source_original = mesh::raw_mesh_node_owner_t::accepted_source (
+    record.source_original = mesh::raw_mesh_node_owner_t::local_accepted_source (
       record.source_routing_id, _options.mesh.descriptor.lifecycle_generation,
       {_local_lease_observation ? _local_lease_observation () : nullptr,
        std::shared_ptr<const mesh::service_node_descriptor_t> (shared_from_this (),
-                                                               &_options.mesh.descriptor)},
-      nullptr);
+                                                               &_options.mesh.descriptor)});
     record.application = std::make_shared<local_application_dispatch_t> (std::move (dispatch));
     if (!_transport->mailbox ().try_enqueue (std::move (record)))
         throw protocol::service_wire_error_t ("local application mailbox is closed");

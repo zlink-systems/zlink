@@ -229,7 +229,8 @@ class mesh_node_runtime_t
     using stateful_dispatch_configuration_t =
       std::variant<runtime::stateful::accepted_record_authority_resolver_t,
                    std::function<std::shared_ptr<const location_owner_token_t> ()>>;
-    void configure_stateful_dispatch (stateful_dispatch_configuration_t configuration);
+    void configure_stateful_dispatch (stateful_dispatch_configuration_t configuration,
+                                      runtime::live_location_reader_t *sources = nullptr);
     void configure_bound_session_operations (host::bound_session_operations_t operations);
     void configure_late_session_route_update (
       std::function<void (const runtime::protocol::session_relocation_route_t &)> reporter);
@@ -254,14 +255,12 @@ class mesh_node_runtime_t
                        const std::string &endpoint,
                        std::uint64_t expected_lifecycle_generation = 0,
                        std::string security_identity = "default",
-                       bool automatic = false,
-                       std::shared_ptr<const mesh_node_descriptor_t> discovered = {});
+                       bool automatic = false);
     void connect_peer (const std::string &endpoint, std::string security_identity = "default");
     void expect_peer (const zlink::routing_id_t &expected_routing_id,
                       const std::string &endpoint,
                       std::uint64_t expected_lifecycle_generation,
-                      std::string security_identity,
-                      std::shared_ptr<const mesh_node_descriptor_t> discovered = {});
+                      std::string security_identity);
     void forget_peer (const zlink::routing_id_t &expected_routing_id, const std::string &endpoint);
     void disconnect_peer (const std::string &endpoint) noexcept;
     void disconnect_peer (const zlink::routing_id_t &expected_routing_id,
@@ -666,6 +665,7 @@ class mesh_node_runtime_t
       const runtime::stateful::object_ref_t &)>
       _bound_session_relocation_resolver;
     stateful_dispatch_configuration_t _stateful_dispatch_configuration;
+    runtime::live_location_reader_t *_request_sources = nullptr;
     std::optional<host::bound_session_operations_t> _bound_session_operations;
     std::function<void (const runtime::protocol::session_relocation_route_t &)>
       _late_session_route_update_reporter;

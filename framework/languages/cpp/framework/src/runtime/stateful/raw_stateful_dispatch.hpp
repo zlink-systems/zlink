@@ -59,11 +59,6 @@ using accepted_record_authority_resolver_t =
   std::function<task_t<std::optional<accepted_record_authority_t>> (
     const accepted_record_authority_query_t &)>;
 
-task_t<std::optional<std::vector<protocol::request_source_fence_t>>>
-read_accepted_record_sources (zlink::framework::location_repository_t &store,
-                              const std::string &mesh_name,
-                              const std::vector<protocol::request_source_fence_t> &sources);
-
 accepted_record_authority_resolver_t
 make_location_store_authority_resolver (zlink::framework::location_repository_t &store);
 
@@ -83,7 +78,9 @@ struct claimed_ingress_t
     std::size_t body_bytes = 0;
     std::exception_ptr error;
 
-    static claimed_ingress_t prepare (const mesh::service_mailbox_record_t &original);
+    static claimed_ingress_t prepare (mesh::service_mailbox_record_t &original,
+                                      live_location_reader_t *sources = nullptr,
+                                      const std::string &mesh_name = {});
 };
 
 struct stateful_delivery_t

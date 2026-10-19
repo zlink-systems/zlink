@@ -7,6 +7,8 @@
 #include <zlink/framework/contracts/locations/stores.hpp>
 
 #include <algorithm>
+#include <atomic>
+#include <memory>
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -57,7 +59,9 @@ class live_location_reader_t final
     std::optional<std::chrono::steady_clock::duration>
     admission_lifetime (const location_owner_token_t &owner, const owner_lease_found_t *found) const
     {
-        if (!owner_is_available (owner.lease_generation, found)) {
+        if (owner.owner_id.empty () || owner.lease_generation <= 0
+            || !owner_is_available (owner.lease_generation, found)
+            || found->token.owner_id != owner.owner_id) {
             return std::nullopt;
         }
         const auto remaining =
@@ -84,6 +88,121 @@ class live_location_reader_t final
         }
     }
 
+    struct mesh_source_t
+    {
+        mesh_node_descriptor_t descriptor;
+        std::chrono::steady_clock::time_point admission_deadline;
+        bool available () const noexcept
+        {
+            return std::chrono::steady_clock::now () < admission_deadline;
+        }
+    };
+    using mesh_sources_t = std::vector<mesh_source_t>;
+
+    // Auto-connect and request acceptance share these descriptor originals and lease deadlines.
+    task_t<std::shared_ptr<const mesh_sources_t>> poll_mesh_sources (std::string mesh_name)
+    {
+        auto sources = std::make_shared<mesh_sources_t> ();
+        std::map<std::string,
+                 std::pair<owner_lease_read_result_t, std::chrono::steady_clock::time_point>>
+          leases;
+        location_page_request_t page;
+        do {
+            auto listed = co_await _store->list_mesh_nodes (mesh_name, page);
+            for (auto &descriptor : listed.items) {
+                if (!leases.contains (descriptor.owner_id)) {
+                    const auto started = std::chrono::steady_clock::now ();
+                    auto lease = co_await _store->read_owner_lease (descriptor.owner_id);
+                    leases.emplace (descriptor.owner_id,
+                                    std::make_pair (std::move (lease), started));
+                }
+                const auto &observation = leases.at (descriptor.owner_id);
+                const auto *lease = std::get_if<owner_lease_found_t> (&observation.first);
+                const auto lifetime =
+                  admission_lifetime ({descriptor.owner_id, descriptor.lease_generation}, lease);
+                const auto deadline = lifetime ? observation.second + *lifetime
+                                               : std::chrono::steady_clock::time_point{};
+                sources->push_back ({std::move (descriptor), deadline});
+            }
+            page.continuation_token = std::move (listed.continuation_token);
+        } while (page.continuation_token);
+        std::sort (sources->begin (), sources->end (), [] (const auto &left, const auto &right) {
+            return rid_less (left.descriptor.rid, right.descriptor.rid);
+        });
+        auto previous = _mesh_sources.load (std::memory_order_acquire);
+        do {
+            auto next = std::make_shared<mesh_source_catalog_t> (*previous);
+            next->insert_or_assign (mesh_name, sources);
+            std::shared_ptr<const mesh_source_catalog_t> published = std::move (next);
+            if (_mesh_sources.compare_exchange_weak (previous, published, std::memory_order_release,
+                                                     std::memory_order_acquire))
+                break;
+        } while (true);
+        co_return sources;
+    }
+
+    std::optional<std::shared_ptr<const mesh_node_descriptor_t>>
+    cached_request_source (const std::string &mesh_name,
+                           const std::vector<std::uint8_t> &rid,
+                           std::uint64_t generation) const
+    {
+        const auto catalog = _mesh_sources.load (std::memory_order_acquire);
+        const auto mesh = catalog->find (mesh_name);
+        if (mesh != catalog->end ())
+            if (const auto *source = find_mesh_source (*mesh->second, rid, generation))
+                return source_original (mesh->second, source);
+        return std::nullopt;
+    }
+
+    task_t<std::shared_ptr<const mesh_node_descriptor_t>> request_source (
+      std::string mesh_name, const std::vector<std::uint8_t> &rid, std::uint64_t generation)
+    {
+        if (auto cached = cached_request_source (mesh_name, rid, generation))
+            return task_t<std::shared_ptr<const mesh_node_descriptor_t>> (
+              result_t<std::shared_ptr<const mesh_node_descriptor_t>>::success (
+                std::move (*cached)));
+        return read_request_source (std::move (mesh_name), rid, generation);
+    }
+
+  private:
+    static const mesh_source_t *find_mesh_source (const mesh_sources_t &sources,
+                                                  const std::vector<std::uint8_t> &rid,
+                                                  std::uint64_t generation)
+    {
+        const auto identity = zlink::routing_id_t::from (rid);
+        auto source = std::lower_bound (sources.begin (), sources.end (), identity,
+                                        [] (const auto &candidate, const auto &rid) {
+                                            return rid_less (candidate.descriptor.rid, rid);
+                                        });
+        for (; source != sources.end () && source->descriptor.rid == identity; ++source)
+            if (source->descriptor.lifecycle_generation == generation)
+                return &*source;
+        return nullptr;
+    }
+
+    static bool rid_less (const zlink::routing_id_t &left, const zlink::routing_id_t &right)
+    {
+        return std::lexicographical_compare (left.data (), left.data () + left.size (),
+                                             right.data (), right.data () + right.size ());
+    }
+
+    static std::shared_ptr<const mesh_node_descriptor_t>
+    source_original (const std::shared_ptr<const mesh_sources_t> &sources,
+                     const mesh_source_t *source)
+    {
+        if (!source || !source->available ())
+            return {};
+        return {sources, &source->descriptor};
+    }
+
+    task_t<std::shared_ptr<const mesh_node_descriptor_t>> read_request_source (
+      std::string mesh_name, std::vector<std::uint8_t> rid, std::uint64_t generation)
+    {
+        const auto sources = co_await poll_mesh_sources (std::move (mesh_name));
+        co_return source_original (sources, find_mesh_source (*sources, rid, generation));
+    }
+
+  public:
     /* Every stored descriptor, including those whose owner lease is gone.
      * Location runtime §7.4 service summaries classify these by the lease. */
     task_t<location_page_t<mesh_node_descriptor_t>>
@@ -127,6 +246,9 @@ class live_location_reader_t final
         });
     }
 
+    using mesh_source_catalog_t = std::map<std::string, std::shared_ptr<const mesh_sources_t>>;
+    std::atomic<std::shared_ptr<const mesh_source_catalog_t>> _mesh_sources{
+      std::make_shared<const mesh_source_catalog_t> ()};
     location_repository_t *_store;
     location_options_t _options;
 };

@@ -53,7 +53,8 @@ enum class stateful_error_t
     moving,
     conflict,
     backpressured,
-    instance_manager_create_forbidden
+    instance_manager_create_forbidden,
+    unavailable
 };
 
 struct placement_candidate_t

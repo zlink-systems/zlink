@@ -189,11 +189,11 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                            * remains owned by the route registration. */
                           mesh_node->expect_peer (target.node_rid, target.endpoint,
                                                   target.lifecycle_generation,
-                                                  target.security_identity, target.original);
+                                                  target.security_identity);
                           if (target.initiates_connection)
-                              mesh_node->connect_peer (
-                                target.node_rid, target.endpoint, target.lifecycle_generation,
-                                target.security_identity, true, target.original);
+                              mesh_node->connect_peer (target.node_rid, target.endpoint,
+                                                       target.lifecycle_generation,
+                                                       target.security_identity, true);
                       }
                   }
                   if (target.initiates_connection && !manual_endpoint)
@@ -224,12 +224,11 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
               mesh_node->object_role (), !mesh_node->channel_weights ().empty (),
               [mesh_node] (const target_t &target) {
                   mesh_node->expect_peer (target.node_rid, target.endpoint,
-                                          target.lifecycle_generation, target.security_identity,
-                                          target.original);
+                                          target.lifecycle_generation, target.security_identity);
                   if (target.initiates_connection)
                       mesh_node->connect_peer (target.node_rid, target.endpoint,
                                                target.lifecycle_generation,
-                                               target.security_identity, true, target.original);
+                                               target.security_identity, true);
               },
               [mesh_node] (const target_t &target) {
                   mesh_node->forget_peer (target.node_rid, target.endpoint);
@@ -347,7 +346,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     void run_loop (std::optional<std::chrono::steady_clock::time_point> observed)
     {
         auto stopped = _stop_requested.task ();
-        std::vector<std::pair<loop_t *, std::vector<mesh_node_descriptor_t>>> snapshots;
+        std::vector<
+          std::pair<loop_t *, std::shared_ptr<const live_location_reader_t::mesh_sources_t>>>
+          snapshots;
         snapshots.reserve (_loops.size ());
         while (!stopped.await_ready ()) {
             for (auto &loop : _loops) {
@@ -406,18 +407,10 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     }
 
 
-    std::vector<mesh_node_descriptor_t> read_descriptors (const loop_t &loop)
+    std::shared_ptr<const live_location_reader_t::mesh_sources_t>
+    read_descriptors (const loop_t &loop)
     {
-        std::vector<mesh_node_descriptor_t> descriptors;
-        location_page_request_t page;
-        do {
-            auto result = _live_store->list_mesh_nodes (loop.mesh_name, page).result ().value ();
-            descriptors.insert (descriptors.end (), std::make_move_iterator (result.items.begin ()),
-                                std::make_move_iterator (result.items.end ()));
-            page.continuation_token = result.continuation_token;
-        } while (page.continuation_token);
-
-        return descriptors;
+        return _live_store->poll_mesh_sources (loop.mesh_name).result ().value ();
     }
 
     bool republish_after_store_recovery (location_write_intent_t intent) noexcept
@@ -443,7 +436,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     }
 
 
-    void reconcile (loop_t &loop, std::vector<mesh_node_descriptor_t> descriptors, bool published)
+    void reconcile (loop_t &loop,
+                    std::shared_ptr<const live_location_reader_t::mesh_sources_t> descriptors,
+                    bool published)
     {
         const bool was_recovering = loop.recovering_from_store_failure;
         if (!published) {
@@ -524,22 +519,24 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
 
 
     static std::map<std::string, target_t>
-    compute_desired (const loop_t &loop, std::vector<mesh_node_descriptor_t> input)
+    compute_desired (const loop_t &loop,
+                     std::shared_ptr<const live_location_reader_t::mesh_sources_t> originals)
     {
-        const auto originals =
-          std::make_shared<const std::vector<mesh_node_descriptor_t>> (std::move (input));
         const auto &descriptors = *originals;
         std::map<std::string, target_t> desired;
         const auto local =
           loop.local_rid
             ? std::find_if (descriptors.begin (), descriptors.end (),
-                            [&loop] (const mesh_node_descriptor_t &descriptor) {
-                                return descriptor.mesh_name == loop.mesh_name
+                            [&loop] (const auto &source) {
+                                const auto &descriptor = source.descriptor;
+                                return source.available () && descriptor.mesh_name == loop.mesh_name
                                        && descriptor.rid.to_hex () == loop.local_rid->to_hex ();
                             })
             : descriptors.end ();
-        for (const auto &descriptor : descriptors) {
-            if (descriptor.mesh_name != loop.mesh_name || descriptor.endpoint.empty ()
+        for (const auto &source : descriptors) {
+            const auto &descriptor = source.descriptor;
+            if (!source.available () || descriptor.mesh_name != loop.mesh_name
+                || descriptor.endpoint.empty ()
                 || (loop.local_rid && descriptor.rid.to_hex () == loop.local_rid->to_hex ())
                 || (!loop.local_endpoint.empty () && descriptor.endpoint == loop.local_endpoint)
                 || descriptor.state == framework_runtime_state_t::stopped
@@ -552,7 +549,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                   remote_has_server_channel))
                 continue;
             if (!loop.local_object_role && local != descriptors.end ()
-                && mesh::route_mesh_connection_not_required (*local, descriptor))
+                && mesh::route_mesh_connection_not_required (local->descriptor, descriptor))
                 continue;
             /* Both sides retain the discovery expectation so inbound
              * admission can validate endpoint and security. Only the lower
