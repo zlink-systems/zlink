@@ -8009,12 +8009,15 @@ int verify_deferred_join_waits_for_handler_terminal_across_yield ()
             if (!resume)
                 throw std::runtime_error ("turn was not released");
             record ("yield");
-            resume ([&, turn, fail_after_yield] {
+            // Deliver the actual handler result after its final continuation,
+            // as the dispatcher does for a coroutine that awaited Yield.
+            resume ([&, complete, fail_after_yield] {
                 record ("continuation");
-                if (fail_after_yield)
-                    turn->cancel_deferred ();
+                complete ([fail_after_yield] {
+                    if (fail_after_yield)
+                        throw std::runtime_error ("handler failed after Yield");
+                });
             });
-            complete ([] {});
         });
         queue.drain ();
     };
@@ -9875,11 +9878,13 @@ bool verify_accepted_continuation_survives_shutdown (bool close_before_resume)
       rt::serial_execution_queue_t::error_handler_t{}, rt::serial_lane_policy_t::spot_wide ());
     std::shared_ptr<fw::detail::serial_turn_t> accepted;
     bool released = false, owned = false;
+    rt::serial_execution_queue_t::async_completion_t finish;
     int callbacks = 0, fresh_callbacks = 0;
     queue->post_async (
       "accepted-before-shutdown",
-      [&] (auto) {
+      [&] (auto complete) {
           accepted = fw::detail::capture_current_serial_turn ();
+          finish = std::move (complete);
           released = accepted && accepted->release ();
       },
       rt::serial_work_options_t{rt::serial_work_lane_t::lifecycle});
@@ -9891,6 +9896,9 @@ bool verify_accepted_continuation_survives_shutdown (bool close_before_resume)
             ++callbacks;
             const auto turn = fw::detail::capture_current_serial_turn ();
             owned = turn && !turn->released () && turn->belongs_to (queue.get ());
+            // This is the handler's final segment, so deliver its actual
+            // task result separately from the resume work's completion.
+            finish ([] {});
         });
     }
     queue->cancel_pending ();
@@ -9898,6 +9906,7 @@ bool verify_accepted_continuation_survives_shutdown (bool close_before_resume)
     worker.run_all ();
     const bool passed = released && owned && callbacks == 1 && fresh_rejected
                         && fresh_callbacks == 0 && queue->pending_count () == 0;
+    finish = {};
     accepted.reset ();
     queue->drain ();
     worker.drain ();
@@ -10276,6 +10285,216 @@ bool verify_seal_waits_for_yielded_handler_terminal ()
     return passed;
 }
 
+// A resume record can finish its execution segment while its handler still
+// awaits another result. Relocation must observe the handler's final result.
+bool verify_intermediate_resume_keeps_handler_terminal ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::runtime;
+    test::manual_internal_scheduler_t worker;
+    auto queue = std::make_shared<serial_execution_queue_t> (
+      worker, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},
+      serial_lane_policy_t::spot_wide ());
+    std::shared_ptr<detail::serial_turn_t> handler;
+    serial_execution_queue_t::async_completion_t finish;
+    bool continued = false, finished = false;
+    queue->post_async ("intermediate-handler", [&] (auto complete) {
+        handler = detail::capture_current_serial_turn ();
+        finish = std::move (complete);
+    });
+    worker.run_all ();
+    handler->release ();
+    worker.run_all ();
+    handler->resume_scheduler () ([&] { continued = true; });
+    worker.run_all ();
+    auto observed = queue->observe_handler_terminal ();
+    worker.run_all ();
+    auto terminal = observed.value ()->run ();
+    const bool premature = terminal.await_ready ();
+    finish ([&] { finished = true; });
+    worker.run_all ();
+    if (finished)
+        worker.run_until (terminal);
+    const bool passed = continued && !premature && finished && terminal.await_ready ();
+    observed.value ()->cancel ();
+    worker.run_all ();
+    handler.reset ();
+    finish = {};
+    queue->close ();
+    worker.run_all ();
+    queue->drain ();
+    worker.drain ();
+    std::cout << "intermediate-terminal continued=" << continued << " premature=" << premature
+              << " finished=" << finished << " passed=" << passed << '\n';
+    return passed;
+}
+
+enum class origin_terminal_case_t
+{
+    success,
+    failure,
+    cancel,
+    reply_encoding
+};
+
+struct origin_reply_t
+{
+};
+
+zlink::framework::task_t<void> origin_handler_task (
+  std::vector<zlink::framework::task_completion_source_t<void>> &sources, int &stage, bool fail)
+{
+    namespace fw = zlink::framework;
+    stage = 1;
+    co_await fw::detail::yield_call<void> ([&] { return sources[0].task (); });
+    stage = 2;
+    co_await sources[1].task ();
+    stage = 3;
+    co_await fw::detail::yield_call<void> ([&] { return sources[2].task (); });
+    stage = 4;
+    co_await sources[3].task ();
+    stage = 5;
+    if (fail)
+        throw std::runtime_error ("origin handler failed");
+}
+
+// Real coroutines cover two Yield/ordinary-await pairs. An ordinary await
+// after reacquiring the gate keeps the next application record queued.
+bool verify_handler_origin_terminals (origin_terminal_case_t outcome, bool borrowed)
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    fw::test::manual_internal_scheduler_t worker;
+    int errors = 0;
+    auto queue = std::make_shared<rt::serial_execution_queue_t> (
+      worker, rt::serial_execution_queue_options_t{},
+      [&] (const auto &, const auto &) { ++errors; }, rt::serial_lane_policy_t::spot_wide ());
+    std::shared_ptr<fw::detail::serial_turn_t> parent;
+    int parent_terminal = 0;
+    if (borrowed) {
+        queue->post_async (
+          "finished-parent",
+          [&] (auto complete) {
+              parent = fw::detail::capture_current_serial_turn ();
+              complete ([&] { ++parent_terminal; });
+          },
+          rt::serial_work_options_t{.lane = rt::serial_work_lane_t::lifecycle});
+        worker.run_all ();
+    }
+    fw::serializer_registry_t serializers;
+    serializers.add<origin_reply_t> (
+      [] (const origin_reply_t &) -> fw::encoded_payload_t {
+          throw std::runtime_error ("origin reply encoding failed");
+      },
+      [] (const fw::encoded_payload_t &) { return origin_reply_t{}; },
+      "application/x-origin-reply");
+    std::vector<fw::task_completion_source_t<void>> first (4), second (4);
+    int first_stage = 0, second_stage = 0, activated = 0, cancelled = 0;
+    int terminals = 0, suffix = 0;
+    std::vector<std::shared_ptr<fw::task_t<void>>> tasks;
+    const auto submit = [&] (std::string name, auto &sources, int &stage) {
+        rt::serial_execution_queue_t::async_work_t work = [&sources, &stage, &tasks, &activated,
+                                                           &cancelled, &terminals, &serializers,
+                                                           outcome] (auto complete) {
+            auto turn = fw::detail::capture_current_serial_turn ();
+            if (!turn->defer (
+                  [&activated] {
+                      ++activated;
+                      return fw::task_t<void> (fw::result_t<void>::success ());
+                  },
+                  [&cancelled] { ++cancelled; }))
+                throw std::runtime_error ("origin Defer was rejected");
+            auto task = std::make_shared<fw::task_t<void>> (
+              origin_handler_task (sources, stage, outcome == origin_terminal_case_t::failure));
+            tasks.push_back (task);
+            fw::detail::observe_task_terminal (*task, [task, complete, &terminals, &serializers,
+                                                       outcome] (const fw::result_t<void> &result) {
+                complete ([result, &terminals, &serializers, outcome] {
+                    ++terminals;
+                    result.value ();
+                    if (outcome == origin_terminal_case_t::reply_encoding)
+                        (void) serializers.get<origin_reply_t> ().serialize ({});
+                });
+            });
+        };
+        if (borrowed)
+            return queue->try_post_continuation (std::move (name), std::move (work), parent, true);
+        return queue->try_post_async (std::move (name), std::move (work));
+    };
+    bool passed = submit ("origin-first", first, first_stage);
+    if (!borrowed)
+        passed = submit ("origin-second", second, second_stage) && passed;
+    worker.run_all ();
+    auto observed = queue->observe_handler_terminal ();
+    worker.run_all ();
+    auto terminal = observed.value ()->run ();
+    const auto handlers = borrowed ? 1 : 2;
+    passed = passed && first_stage == 1 && (borrowed || second_stage == 1)
+             && !terminal.await_ready () && parent_terminal == (borrowed ? 1 : 0);
+    first[0].complete (fw::result_t<void>::success ());
+    worker.run_all ();
+    queue->post ("origin-suffix", [&] { ++suffix; });
+    worker.run_all ();
+    passed = passed && first_stage == 2 && suffix == 0 && !terminal.await_ready ();
+    first[1].complete (fw::result_t<void>::success ());
+    worker.run_all ();
+    passed = passed && first_stage == 3 && suffix == 1 && !terminal.await_ready ();
+    first[2].complete (fw::result_t<void>::success ());
+    worker.run_all ();
+    passed = passed && first_stage == 4 && !terminal.await_ready () && activated == 0;
+    first[3].complete (outcome == origin_terminal_case_t::cancel
+                         ? fw::result_t<void>::failure (fw::framework_error_kind_t::shutting_down,
+                                                        "origin wait cancelled")
+                         : fw::result_t<void>::success ());
+    worker.run_all ();
+    if (!borrowed) {
+        passed = passed && !terminal.await_ready () && terminals == 1;
+        for (auto &source : second) {
+            source.complete (
+              outcome == origin_terminal_case_t::cancel && &source == &second.back ()
+                ? fw::result_t<void>::failure (fw::framework_error_kind_t::shutting_down,
+                                               "origin wait cancelled")
+                : fw::result_t<void>::success ());
+            worker.run_all ();
+        }
+    }
+    worker.run_all ();
+    worker.run_until (terminal);
+    worker.run_all ();
+    passed = passed && terminal.await_ready () && terminals == handlers
+             && activated == (outcome == origin_terminal_case_t::success ? handlers : 0)
+             && cancelled == (outcome == origin_terminal_case_t::success ? 0 : handlers)
+             && errors == (outcome == origin_terminal_case_t::success ? 0 : handlers);
+    auto late = queue->observe_handler_terminal ();
+    worker.run_all ();
+    auto late_terminal = late.value ()->run ();
+    passed = passed && late_terminal.await_ready ();
+    observed.value ()->cancel ();
+    late.value ()->cancel ();
+    tasks.clear ();
+    parent.reset ();
+    queue->close ();
+    worker.run_all ();
+    queue->drain ();
+    worker.drain ();
+    std::cout << "origin-terminals outcome=" << static_cast<int> (outcome)
+              << " borrowed=" << borrowed << " terminals=" << terminals
+              << " activated=" << activated << " cancelled=" << cancelled << " errors=" << errors
+              << " passed=" << passed << '\n';
+    return passed;
+}
+
+bool verify_all_handler_origin_terminals ()
+{
+    bool passed = verify_intermediate_resume_keeps_handler_terminal ();
+    for (const auto outcome :
+         {origin_terminal_case_t::success, origin_terminal_case_t::failure,
+          origin_terminal_case_t::cancel, origin_terminal_case_t::reply_encoding})
+        for (const bool borrowed : {false, true})
+            passed = verify_handler_origin_terminals (outcome, borrowed) && passed;
+    return passed;
+}
+
 bool verify_async_capture_releases_state_owner ()
 {
     using namespace zlink::framework;
@@ -10310,6 +10529,12 @@ bool verify_async_capture_releases_state_owner ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--handler-origin-terminals")
+        return verify_all_handler_origin_terminals () ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (argc == 1 && !verify_all_handler_origin_terminals ())
+        return EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--intermediate-handler-terminal")
+        return verify_intermediate_resume_keeps_handler_terminal () ? EXIT_SUCCESS : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "--async-capture-owner")
         return verify_async_capture_releases_state_owner () ? EXIT_SUCCESS : EXIT_FAILURE;
     if (argc == 1 && !verify_async_capture_releases_state_owner ())

@@ -3020,12 +3020,11 @@ void spot_context_state_t::run_serial_task_async (
               return;
           }
           owner->enter_callback ();
-          auto turn = detail::capture_current_serial_turn ();
           try {
               callback_context_scope_t callback_scope (owner.get ());
               auto observed = std::make_shared<task_t<void>> (work ());
               detail::observe_task_completion (
-                *observed, [owner, accepted_turn, observed, work = std::move (work), settle, turn,
+                *observed, [owner, accepted_turn, observed, work = std::move (work), settle,
                             complete] (const result_t<void> &value) mutable {
                     const auto final_result =
                       value
@@ -3034,22 +3033,16 @@ void spot_context_state_t::run_serial_task_async (
                     auto finish = [owner, settle, final_result] () mutable {
                         owner->leave_callback ();
                         settle (final_result);
+                        final_result.value ();
                     };
-                    if (turn && turn->released ()) {
-                        // After a Yield the continuation turn ends only a queue
-                        // turn; the callback terminal settles deferred work here.
-                        if (!value)
-                            turn->cancel_deferred ();
-                        finish ();
-                    } else {
-                        complete (std::move (finish));
-                    }
+                    complete (std::move (finish));
                 });
           }
           catch (const framework_exception_t &error) {
               complete ([owner, settle, error] () mutable {
                   owner->leave_callback ();
                   settle (detail::result_access_t::failure<void> (error));
+                  throw error;
               });
           }
           catch (const std::exception &error) {
@@ -3058,13 +3051,16 @@ void spot_context_state_t::run_serial_task_async (
                   owner->leave_callback ();
                   settle (
                     result_t<void>::failure (framework_error_kind_t::internal_failure, message));
+                  throw framework_exception_t (framework_error_kind_t::internal_failure, message);
               });
           }
           catch (...) {
-              complete ([owner, settle] () mutable {
+              const auto error = std::current_exception ();
+              complete ([owner, settle, error] () mutable {
                   owner->leave_callback ();
                   settle (result_t<void>::failure (framework_error_kind_t::internal_failure,
                                                    "spot lifecycle callback failed"));
+                  std::rethrow_exception (error);
               });
           }
       };
@@ -4625,10 +4621,6 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
             };
         }
         const bool admission_preclaimed = static_cast<bool> (application_admission_terminal);
-        const bool completes_outer_actor_after_spot_yield =
-          admission_preclaimed && requires_spot_serial
-          && actor_queue_dispatch == actor_queue_dispatch_t::acquire
-          && !actor_execution_key.empty ();
         // The work is admitted here, before its queue: a turn that starts
         // after the seal still runs it (Spot address messaging §7 step 2).
         if (!admission_preclaimed
@@ -4661,8 +4653,8 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
            actor_execution_spot_id = std::move (actor_execution_spot_id),
            before_invoke = std::move (before_invoke),
            before_application_handler = std::move (before_application_handler), trace_message_kind,
-           trace_packet_name, trace_actor_id, trace_spot_id, completes_outer_actor_after_spot_yield,
-           admission_terminal, retained_message, application_record] (auto complete) mutable {
+           trace_packet_name, trace_actor_id, trace_spot_id, admission_terminal, retained_message,
+           application_record, actor_queue_dispatch] (auto complete) mutable {
               runtime::flow_context_t::scope_t callback_flow (std::move (dispatch_flow));
               // incarnation을 넘길 때는 원본 activation record를 그대로 사용한다.
               if (state->closed) {
@@ -4769,7 +4761,25 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                 state->node, message_flow_outcome_t::dispatched, trace_message_kind,
                 trace_packet_name, trace_spot_id, trace_actor_id,
                 "invoke_erased.serial_queue_execute", "started=true");
-              auto turn = detail::capture_current_serial_turn ();
+              // This adapter delivers the task result in both execution modes.
+              // A current-turn replay belongs to its enclosing handler task;
+              // only a newly acquired queued handler reports a gate terminal.
+              auto finish_handler = [completion, admission_terminal, complete,
+                                     turn =
+                                       actor_queue_dispatch == actor_queue_dispatch_t::acquire
+                                         ? detail::capture_current_serial_turn ()
+                                         : nullptr] (result_t<zlink::message_t> result) mutable {
+                  complete (
+                    [completion, admission_terminal, turn, result = std::move (result)] () mutable {
+                        const auto terminal =
+                          result ? result_t<void>::success ()
+                                 : detail::propagate_failure<void> (result, "spot handler failed");
+                        settle_handler_admission_once (admission_terminal);
+                        completion->complete (std::move (result));
+                        if (turn)
+                            terminal.value ();
+                    });
+              };
               try {
                   if (before_invoke) {
                       auto redirected = before_invoke (carrier->first, carrier->second);
@@ -4792,8 +4802,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                   auto handler_task = state->handler_invokers[handler_index](
                     spot, actor, services, serializers, carrier->first, carrier->second);
                   detail::observe_task_completion (
-                    handler_task, [state, completion, turn, complete, carrier, admission_terminal,
-                                   completes_outer_actor_after_spot_yield, trace_message_kind,
+                    handler_task, [state, finish_handler, carrier, trace_message_kind,
                                    trace_packet_name, trace_spot_id, trace_actor_id] (
                                     const result_t<zlink::message_t> &result) mutable {
                         report_actor_dispatch_stage_trace_lazy (
@@ -4809,25 +4818,7 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                                                                         result.error () != nullptr
                                                                           ? result.error ()->what ()
                                                                           : "spot handler failed");
-                        auto finish = [completion, admission_terminal,
-                                       final_result = std::move (final_result)] () mutable {
-                            settle_handler_admission_once (admission_terminal);
-                            completion->complete (std::move (final_result));
-                        };
-                        if (!result && turn)
-                            turn->cancel_deferred ();
-                        if (turn && turn->released ()) {
-                            // Yield already completed the inner SpotWide turn. The
-                            // preclaimed mesh path is still nested in its Actor turn,
-                            // so route terminal settlement through the wrapper that
-                            // completes that outer turn exactly once.
-                            if (completes_outer_actor_after_spot_yield)
-                                complete (std::move (finish));
-                            else
-                                finish ();
-                            return;
-                        }
-                        complete (std::move (finish));
+                        finish_handler (std::move (final_result));
                     });
               }
               catch (const framework_exception_t &error) {
@@ -4835,36 +4826,23 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                     state->node, message_flow_outcome_t::dispatched, trace_message_kind,
                     trace_packet_name, trace_spot_id, trace_actor_id,
                     "invoke_erased.application_handler", "result=finished success=false");
-                  complete ([completion, admission_terminal, error] () mutable {
-                      settle_handler_admission_once (admission_terminal);
-                      completion->complete (
-                        detail::result_access_t::failure<zlink::message_t> (error));
-                  });
+                  finish_handler (detail::result_access_t::failure<zlink::message_t> (error));
               }
               catch (const std::exception &error) {
                   report_actor_dispatch_stage_trace (
                     state->node, message_flow_outcome_t::dispatched, trace_message_kind,
                     trace_packet_name, trace_spot_id, trace_actor_id,
                     "invoke_erased.application_handler", "result=finished success=false");
-                  const auto message = std::string (error.what ());
-                  complete (
-                    [completion, admission_terminal, message = std::move (message)] () mutable {
-                        settle_handler_admission_once (admission_terminal);
-                        completion->complete (result_t<zlink::message_t>::failure (
-                          framework_error_kind_t::internal_failure, std::move (message)));
-                    });
+                  finish_handler (result_t<zlink::message_t>::failure (
+                    framework_error_kind_t::internal_failure, error.what ()));
               }
               catch (...) {
                   report_actor_dispatch_stage_trace (
                     state->node, message_flow_outcome_t::dispatched, trace_message_kind,
                     trace_packet_name, trace_spot_id, trace_actor_id,
                     "invoke_erased.application_handler", "result=finished success=false");
-                  complete ([completion, admission_terminal] () mutable {
-                      settle_handler_admission_once (admission_terminal);
-                      completion->complete (result_t<zlink::message_t>::failure (
-                        framework_error_kind_t::internal_failure,
-                        "spot handler threw an exception"));
-                  });
+                  finish_handler (result_t<zlink::message_t>::failure (
+                    framework_error_kind_t::internal_failure, "spot handler threw an exception"));
               }
           };
         const auto submit = [&] {
@@ -15571,6 +15549,10 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                * the committed Message Follow source between the relocation
                * commit and the source cleanup lost its reply forever (the
                * requester's wire operation simply timed out). */
+              const auto finish_application = [application_completed, result] {
+                  if (application_completed)
+                      application_completed ([result] { result.value (); });
+              };
               const bool handoff_reserved =
                 deferred_handoff_request
                 || (admission_token && admission_token->handoff_reserved ());
@@ -15587,8 +15569,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                   }
               }
               if (terminal_claimed->exchange (true, std::memory_order_acq_rel)) {
-                  if (application_completed)
-                      application_completed ([] {});
+                  finish_application ();
                   return;
               }
               if (!parked) {
@@ -15615,8 +15596,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
               }
               if (*terminal_owner)
                   (*terminal_owner) ();
-              if (application_completed)
-                  application_completed ([] {});
+              finish_application ();
           });
         if (terminal_deferred)
             *terminal_deferred = true;

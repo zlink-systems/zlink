@@ -236,6 +236,34 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
   private:
     friend class serial_turn_handle_impl_t;
 
+    struct new_handler_t
+    {
+        std::shared_ptr<serial_turn_chain_t> handler;
+    };
+    struct handler_resume_t
+    {
+        std::shared_ptr<serial_turn_handle_impl_t> handler;
+    };
+    struct borrowed_callback_t
+    {
+        std::shared_ptr<serial_turn_chain_t> fifo;
+        std::shared_ptr<serial_turn_chain_t> handler;
+    };
+    struct barrier_origin_t
+    {
+        std::shared_ptr<serial_deferred_barrier_t> barrier;
+        std::shared_ptr<serial_turn_chain_t> handler;
+    };
+    struct readiness_barrier_origin_t
+    {
+        std::shared_ptr<serial_turn_chain_t> handler;
+    };
+    using item_origin_t = std::variant<new_handler_t,
+                                       handler_resume_t,
+                                       borrowed_callback_t,
+                                       barrier_origin_t,
+                                       readiness_barrier_origin_t>;
+
     struct work_item_t
     {
         std::string name;
@@ -247,10 +275,6 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
         std::shared_ptr<serial_turn_handle_impl_t> turn;
         bool cancel_requested = false;
         std::optional<std::function<void ()>> suspended_completion;
-        // The handler this item continues after a Yield; empty otherwise.
-        std::shared_ptr<serial_turn_chain_t> chain;
-        // The deferred-work position this item holds; empty otherwise.
-        std::shared_ptr<serial_deferred_barrier_t> barrier;
         std::shared_ptr<const void> retained_message;
         std::shared_ptr<serial_application_record_t> application_record;
         std::shared_ptr<serial_execution_queue_t> actor_mailbox;
@@ -261,12 +285,6 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
         std::atomic<publication_node_t *> next{nullptr};
         std::optional<work_item_t> item;
         std::function<void ()> control;
-    };
-
-    struct item_origin_t
-    {
-        std::shared_ptr<serial_turn_chain_t> chain;
-        std::shared_ptr<serial_deferred_barrier_t> barrier;
     };
 
     struct lane_state_t
@@ -363,6 +381,11 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                          serial_submission_id_t submission_id = 0,
                          std::function<void ()> cancel = {},
                          item_origin_t origin = {});
+    result_t<serial_submission_id_t> try_post_cancellable_async (std::string name,
+                                                                 async_work_t work,
+                                                                 std::function<void ()> cancel,
+                                                                 serial_work_options_t options,
+                                                                 item_origin_t origin);
     /* A lifecycle operation that released its turn (Yield) keeps the lifecycle
      * lane until its terminal (§7): only its own continuation runs there. */
     void hold_lifecycle (std::shared_ptr<serial_turn_chain_t> chain);
@@ -373,12 +396,20 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                  serial_work_lane_t lane,
                  item_origin_t origin,
                  bool holds_application_while_waiting = false);
+    bool try_post_resume (std::string name,
+                          async_work_t work,
+                          const std::shared_ptr<serial_turn_handle_impl_t> &handler,
+                          bool holds_application_while_waiting);
     void activate_turn_locked (work_item_t &item) noexcept;
     std::deque<work_item_t>::iterator next_lifecycle_locked () noexcept;
     bool has_queued_locked () const noexcept;
     bool has_ready_locked () noexcept;
-    std::deque<work_item_t>::iterator next_application_locked () noexcept;
-    bool application_ready_locked () noexcept;
+    struct application_selection_t
+    {
+        std::deque<work_item_t>::iterator next;
+        bool ready;
+    };
+    application_selection_t next_application_locked () noexcept;
     work_item_t take_next_locked (std::optional<serial_work_lane_t> forced_lane = {});
     serial_work_lane_t select_next_lane_locked () noexcept;
     void report_deferred_error (const std::string &name,
