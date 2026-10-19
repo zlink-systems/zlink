@@ -208,7 +208,7 @@ void application_dispatch_terminal_owner_t::invoke (const std::function<void ()>
 
 namespace
 {
-constexpr auto creation_authority_poll_interval = std::chrono::milliseconds (1);
+constexpr auto creation_authority_poll_interval = std::chrono::milliseconds (10);
 
 namespace terminal_codec = zlink::framework::runtime::protocol::generated::detail;
 
@@ -1128,7 +1128,7 @@ mesh_node_host_service_t::create_actor (bool exclusive,
               [this] (zlink::message_t raw) {
                   return message_t::from_raw (std::move (raw), _serializers);
               }));
-        zlink::framework::runtime::wait_poll_interval (creation_authority_poll_interval);
+        zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
     }
     co_return result_t<actor_create_result_t>::failure (framework_error_kind_t::deadline_exceeded,
                                                         "Actor creation deadline elapsed");
