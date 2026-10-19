@@ -8,7 +8,6 @@
 #include "runtime/messaging/submit_result_mapper.hpp"
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
-#include "runtime/locations/live_location_reader.hpp"
 #include "runtime/mesh/service_channel_membership.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 
@@ -3645,13 +3644,6 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
                                         admitted->descriptor.lifecycle_generation,
                                         operation,
                                         std::move (bound_session_source)};
-        // The receive turn only observes the polling list; a missing source is read by
-        // the authority owner after the canonical claim has recorded its shared lookup.
-        if (operation && _request_sources)
-            if (auto source = _request_sources->cached_request_source (
-                  _options.descriptor.mesh_name, record.source_routing_id,
-                  record.source_node_generation))
-                record.source_original = request_source_t{std::move (*source)};
         auto result = enqueue_received (std::move (record), raw_mesh_pump_result_t::application);
         trace_mesh (
           "application-enqueue result=" + std::to_string (static_cast<int> (result)) + " pending="

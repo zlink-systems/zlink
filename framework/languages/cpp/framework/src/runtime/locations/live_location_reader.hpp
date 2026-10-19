@@ -4,10 +4,10 @@
 #include <zlink/framework/contracts/locations/options.hpp>
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/execution/task_result.hpp"
+#include "runtime/locations/location_runtime.hpp"
 #include <zlink/framework/contracts/locations/stores.hpp>
 
 #include <algorithm>
-#include <atomic>
 #include <memory>
 #include <chrono>
 #include <cstdint>
@@ -26,8 +26,10 @@ namespace zlink::framework::runtime
 class live_location_reader_t final
 {
   public:
-    live_location_reader_t (location_repository_t &store, location_options_t options = {}) :
-        _store (&store), _options (std::move (options))
+    live_location_reader_t (location_repository_t &store,
+                            location_options_t options = {},
+                            location_runtime_t *runtime = nullptr) :
+        _store (&store), _options (std::move (options)), _runtime (runtime)
     {
     }
 
@@ -88,16 +90,7 @@ class live_location_reader_t final
         }
     }
 
-    struct mesh_source_t
-    {
-        mesh_node_descriptor_t descriptor;
-        std::chrono::steady_clock::time_point admission_deadline;
-        bool available () const noexcept
-        {
-            return std::chrono::steady_clock::now () < admission_deadline;
-        }
-    };
-    using mesh_sources_t = std::vector<mesh_source_t>;
+    using mesh_sources_t = location_runtime_t::mesh_sources_t;
 
     // Auto-connect and request acceptance share these descriptor originals and lease deadlines.
     task_t<std::shared_ptr<const mesh_sources_t>> poll_mesh_sources (std::string mesh_name)
@@ -129,83 +122,33 @@ class live_location_reader_t final
         std::sort (sources->begin (), sources->end (), [] (const auto &left, const auto &right) {
             return rid_less (left.descriptor.rid, right.descriptor.rid);
         });
-        auto previous = _mesh_sources.load (std::memory_order_acquire);
-        do {
-            auto next = std::make_shared<mesh_source_catalog_t> (*previous);
-            next->insert_or_assign (mesh_name, sources);
-            std::shared_ptr<const mesh_source_catalog_t> published = std::move (next);
-            if (_mesh_sources.compare_exchange_weak (previous, published, std::memory_order_release,
-                                                     std::memory_order_acquire))
-                break;
-        } while (true);
+        if (_runtime)
+            co_await _runtime->publish_mesh_sources (mesh_name, sources);
         co_return sources;
     }
 
-    std::optional<std::shared_ptr<const mesh_node_descriptor_t>>
-    cached_request_source (const std::string &mesh_name,
-                           const std::vector<std::uint8_t> &rid,
-                           std::uint64_t generation) const
+    task_t<std::shared_ptr<const mesh_node_descriptor_t>>
+    request_source (std::string mesh_name, std::vector<std::uint8_t> rid, std::uint64_t generation)
     {
-        const auto catalog = _mesh_sources.load (std::memory_order_acquire);
-        const auto mesh = catalog->find (mesh_name);
-        if (mesh != catalog->end ())
-            if (const auto *source = find_mesh_source (*mesh->second, rid, generation))
-                return source_original (mesh->second, source);
-        return std::nullopt;
-    }
-
-    task_t<std::shared_ptr<const mesh_node_descriptor_t>> request_source (
-      std::string mesh_name, const std::vector<std::uint8_t> &rid, std::uint64_t generation)
-    {
-        if (auto cached = cached_request_source (mesh_name, rid, generation))
-            return task_t<std::shared_ptr<const mesh_node_descriptor_t>> (
-              result_t<std::shared_ptr<const mesh_node_descriptor_t>>::success (
-                std::move (*cached)));
-        return read_request_source (std::move (mesh_name), rid, generation);
+        if (_runtime)
+            if (auto cached = co_await _runtime->cached_request_source (mesh_name, rid, generation))
+                co_return *cached;
+        co_return co_await read_request_source (std::move (mesh_name), rid, generation);
     }
 
   private:
-    static const mesh_source_t *find_mesh_source (const mesh_sources_t &sources,
-                                                  const std::vector<std::uint8_t> &rid,
-                                                  std::uint64_t generation)
-    {
-        auto source = std::lower_bound (
-          sources.begin (), sources.end (), rid, [] (const auto &candidate, const auto &identity) {
-              const auto &value = candidate.descriptor.rid;
-              return std::lexicographical_compare (value.data (), value.data () + value.size (),
-                                                   identity.begin (), identity.end ());
-          });
-        for (; source != sources.end (); ++source) {
-            const auto &identity = source->descriptor.rid;
-            if (identity.size () != rid.size ()
-                || !std::equal (rid.begin (), rid.end (), identity.data ()))
-                break;
-            if (source->descriptor.lifecycle_generation == generation)
-                return &*source;
-        }
-        return nullptr;
-    }
-
     static bool rid_less (const zlink::routing_id_t &left, const zlink::routing_id_t &right)
     {
         return std::lexicographical_compare (left.data (), left.data () + left.size (),
                                              right.data (), right.data () + right.size ());
     }
 
-    static std::shared_ptr<const mesh_node_descriptor_t>
-    source_original (const std::shared_ptr<const mesh_sources_t> &sources,
-                     const mesh_source_t *source)
-    {
-        if (!source || !source->available ())
-            return {};
-        return {sources, &source->descriptor};
-    }
-
     task_t<std::shared_ptr<const mesh_node_descriptor_t>> read_request_source (
       std::string mesh_name, std::vector<std::uint8_t> rid, std::uint64_t generation)
     {
         const auto sources = co_await poll_mesh_sources (std::move (mesh_name));
-        co_return source_original (sources, find_mesh_source (*sources, rid, generation));
+        co_return location_runtime_t::source_original (
+          sources, location_runtime_t::find_mesh_source (*sources, rid, generation));
     }
 
   public:
@@ -252,11 +195,9 @@ class live_location_reader_t final
         });
     }
 
-    using mesh_source_catalog_t = std::map<std::string, std::shared_ptr<const mesh_sources_t>>;
-    std::atomic<std::shared_ptr<const mesh_source_catalog_t>> _mesh_sources{
-      std::make_shared<const mesh_source_catalog_t> ()};
     location_repository_t *_store;
     location_options_t _options;
+    location_runtime_t *_runtime;
 };
 
 } // namespace zlink::framework::runtime

@@ -218,15 +218,8 @@ accepted_record_authority_resolver_t make_store_authority_resolver (location_rep
                 target_lease =
                   static_cast<std::uint64_t> (snapshot->allocation.target.owner.lease_generation);
             }
-            const auto cached = reader->cached_request_source (
+            const auto source = co_await reader->request_source (
               query.target.mesh_name, query.source_node_routing_id, query.source_node_generation);
-            std::shared_ptr<const mesh_node_descriptor_t> source;
-            if (cached)
-                source = *cached;
-            else
-                source = co_await reader->request_source (query.target.mesh_name,
-                                                          query.source_node_routing_id,
-                                                          query.source_node_generation);
             if (!source)
                 co_return std::nullopt;
             co_return accepted_record_authority_t{
@@ -570,29 +563,24 @@ claimed_ingress_t claimed_ingress_t::prepare (mesh::service_mailbox_record_t &or
     query.source_routing_id = original.source_routing_id;
     query.source_node_generation = original.source_node_generation;
     if (!original.source_original && sources) {
-        if (auto cached = sources->cached_request_source (mesh_name, original.source_routing_id,
-                                                          original.source_node_generation)) {
-            original.source_original = mesh::request_source_t{std::move (*cached)};
-        } else {
-            auto lookup = std::make_shared<mesh::request_source_lookup_state_t> ();
-            original.source_original = mesh::request_source_t{lookup};
-            lookup->start = [sources, mesh_name, rid = original.source_routing_id,
-                             generation = original.source_node_generation] (
-                              const mesh::request_source_lookup_t &lookup) {
-                using descriptor_t = std::shared_ptr<const mesh_node_descriptor_t>;
-                try {
-                    auto reading = std::make_shared<task_t<descriptor_t>> (
-                      sources->request_source (mesh_name, rid, generation));
-                    detail::observe_task_completion (
-                      *reading, [reading, lookup] (const result_t<descriptor_t> &result) {
-                          lookup->completion.complete (result);
-                      });
-                }
-                catch (...) {
-                    lookup->completion.complete (detail::current_exception_result<descriptor_t> ());
-                }
-            };
-        }
+        auto lookup = std::make_shared<mesh::request_source_lookup_state_t> ();
+        original.source_original = mesh::request_source_t{lookup};
+        lookup->start = [sources, mesh_name, rid = original.source_routing_id,
+                         generation = original.source_node_generation] (
+                          const mesh::request_source_lookup_t &lookup) {
+            using descriptor_t = std::shared_ptr<const mesh_node_descriptor_t>;
+            try {
+                auto reading = std::make_shared<task_t<descriptor_t>> (
+                  sources->request_source (mesh_name, rid, generation));
+                detail::observe_task_completion (
+                  *reading, [reading, lookup] (const result_t<descriptor_t> &result) {
+                      lookup->completion.complete (result);
+                  });
+            }
+            catch (...) {
+                lookup->completion.complete (detail::current_exception_result<descriptor_t> ());
+            }
+        };
     }
     query.source_original = original.source_original;
     query.bound_session = original.bound_session_source.has_value ();
@@ -1062,6 +1050,11 @@ raw_stateful_dispatch_t::resolve_accepted_authority (
     if (!_authority_resolver)
         co_return std::pair{stateful_error_t::invalid, std::nullopt};
     try {
+        // Freeze the first accepting owner's source before the authority port can suspend.
+        if (query.source_original)
+            if (const auto *lookup =
+                  std::get_if<mesh::request_source_lookup_t> (&*query.source_original))
+                _transport->mailbox ().start_source_lookup (*lookup);
         authority = co_await _authority_resolver (query);
     }
     catch (const framework_exception_t &error) {

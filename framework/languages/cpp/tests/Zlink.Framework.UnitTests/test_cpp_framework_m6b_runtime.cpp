@@ -4745,7 +4745,8 @@ void verify_discovery_owner_metadata_preserved ()
     const auto fixture = nlohmann::json::parse (input);
     for (const auto &example : fixture.at ("cases")) {
         counting_location_repository_t store;
-        runtime::live_location_reader_t reader (store);
+        runtime::location_runtime_t source_catalog_runtime (store);
+        runtime::live_location_reader_t reader (store, {}, &source_catalog_runtime);
         const auto mesh_name = fixture.at ("meshName").get<std::string> ();
         const auto rid =
           zlink::routing_id_t::from (fixture.at ("peer").at ("nodeRid").get<std::string> ());
@@ -4816,7 +4817,8 @@ void verify_memory_accepted_record_authority ()
                 && original_lease->lease_generation == generation);
     }
     auto store = std::make_shared<counting_location_repository_t> ();
-    runtime::live_location_reader_t reader (*store);
+    runtime::location_runtime_t source_catalog_runtime (*store);
+    runtime::live_location_reader_t reader (*store, {}, &source_catalog_runtime);
     const auto target = descriptor ("memory-target");
     auto source = descriptor ("memory-source");
     const auto original = std::make_shared<const mesh_node_descriptor_t> (
@@ -5000,7 +5002,8 @@ void verify_batched_accepted_record_sources ()
         sources.push_back ({owner.owner_id, static_cast<std::uint64_t> (owner.lease_generation),
                             node.rid.to_bytes (), 1});
     }
-    runtime::live_location_reader_t reader (store);
+    runtime::location_runtime_t source_catalog_runtime (store);
+    runtime::live_location_reader_t reader (store, {}, &source_catalog_runtime);
     const auto read = [&] () -> std::optional<std::vector<protocol::request_source_fence_t>> {
         (void) reader.poll_mesh_sources ("m6b-mesh").result ().value ();
         std::vector<protocol::request_source_fence_t> resolved;
@@ -5021,9 +5024,29 @@ void verify_batched_accepted_record_sources ()
     const auto live = read ();
     assert (live && *live == sources);
     assert (store.mesh_node_reads == 1 && store.owner_lease_reads == 1);
+    // A second execution owner consumes the same published originals without a Store read.
+    runtime::live_location_reader_t authority_reader (store, {}, &source_catalog_runtime);
+    const auto original = reader
+                            .request_source ("m6b-mesh", sources.front ().node_routing_id,
+                                             sources.front ().node_generation)
+                            .result ()
+                            .value ();
+    auto other_owner = std::async (std::launch::async, [&] {
+        return authority_reader
+          .request_source ("m6b-mesh", sources.front ().node_routing_id,
+                           sources.front ().node_generation)
+          .result ()
+          .value ();
+    });
+    assert (other_owner.get () == original);
+    assert (store.mesh_node_reads == 1 && store.owner_lease_reads == 1);
     const auto now = std::chrono::system_clock::now ();
     store.owner_lease_override = owner_lease_found_t{owner, now, now};
+    const auto mesh_reads_before_expiry = store.mesh_node_reads.load ();
+    const auto lease_reads_before_expiry = store.owner_lease_reads.load ();
     assert (!read ());
+    assert (store.mesh_node_reads == mesh_reads_before_expiry + 1);
+    assert (store.owner_lease_reads == lease_reads_before_expiry + 1);
     auto impostor = owner;
     impostor.owner_id = "another-owner";
     store.owner_lease_override = owner_lease_found_t{impostor, now + 15s, now};
