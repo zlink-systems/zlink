@@ -1328,7 +1328,7 @@ export class RawServiceMeshRuntime {
    * ADMIT, which keeps the existing announce cadence.
    */
   nextMaintenanceDeadlineMs(nowMs: number): number {
-    if (!this.closed) {
+    if (!this.closed && this.controlSends.size !== 0) {
       for (const exchange of this.controlSends.values()) {
         if (exchange.hello !== undefined && exchange.current?.() === true) return nowMs;
       }
@@ -1339,6 +1339,14 @@ export class RawServiceMeshRuntime {
   tickLiveness(nowMs = performance.now()): ServiceLivenessTick {
     const result = this.liveness.tick(nowMs);
     this.requireStarted();
+    // The registry already skips work before its existing deadline. Only an
+    // outstanding control exchange requires maintenance between those ticks.
+    if (
+      this.controlSends.size === 0 &&
+      result.probes.length === 0 &&
+      result.timedOutNodes.length === 0
+    )
+      return result;
     for (const nodeRoutingId of this.selectedRoutes.keys()) void this.announcePeer(nodeRoutingId);
     for (const probe of result.probes) {
       const parts = [

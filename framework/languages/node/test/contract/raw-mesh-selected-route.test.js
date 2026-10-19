@@ -15,6 +15,14 @@ const {
 const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const zlink = require('@zlink-systems/zlink');
 const {
+  createServiceWireCodec
+} = require('../../packages/framework/dist/runtime/foundation/service-wire-codec');
+const livenessCodec = createServiceWireCodec({
+  magic: wire.M6A_SERVICE_WIRE_MAGIC,
+  major: wire.M6A_SERVICE_WIRE_MAJOR,
+  commands: wire.M6aServiceWireCommand
+});
+const {
   ZLinkNodeRawBindingPort
 } = require('../../packages/framework/dist/runtime/backend/node/node-raw-binding-port');
 const { setImmediate: turn } = require('node:timers/promises');
@@ -93,6 +101,7 @@ function selectedRouteRuntime(routes, submit) {
   runtime.start();
   return {
     runtime,
+    router,
     sent,
     requested,
     disconnected,
@@ -672,3 +681,140 @@ for (const terminal of ['deadline', 'cancel', 'close']) {
     } finally { h.runtime.close(); }
   });
 }
+
+// Hot-path §4.2: the registry owns the deadline; an admitted route has no
+// HELLO exchange to maintain between probe/timeout deadlines.
+test('idle liveness maintenance does not enumerate routes or control sends', async (t) => {
+  t.mock.method(performance, 'now', () => 0);
+  const h = selectedRouteRuntime(new Map([['peer', 11n]]));
+  try {
+    await h.runtime.observeSelectedRoutes();
+    await h.processReceived({
+      sourceRid: 'peer',
+      routeGeneration: 11n,
+      parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.admit, descriptor('peer'))]
+    });
+    assert.equal(h.runtime.tickLiveness(0).probes.length, 1);
+    assert.equal(h.runtime.liveness.nextDeadlineMs(), 5000);
+    assert.equal(h.runtime.controlSends.size, 0);
+    const routes = t.mock.method(h.runtime.selectedRoutes, 'keys');
+    const controls = t.mock.method(h.runtime.controlSends, 'values');
+    const peers = t.mock.method(h.runtime.liveness.peers, Symbol.iterator);
+    for (const now of [1, 1000, 4999]) {
+      assert.deepEqual(h.runtime.tickLiveness(now), { probes: [], timedOutNodes: [] });
+      assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), 5000);
+    }
+    assert.equal(routes.mock.callCount(), 0);
+    assert.equal(controls.mock.callCount(), 0);
+    assert.equal(peers.mock.callCount(), 0);
+  } finally {
+    h.runtime.close();
+  }
+});
+
+for (const requestCount of [1, 64]) {
+  test(`a receive rotation maintains liveness once for ${requestCount} requests and once when idle`, async (t) => {
+    t.mock.method(performance, 'now', () => 0);
+    const h = selectedRouteRuntime(new Map([['peer', 11n]]));
+    let received = 0;
+    let closedRecords = 0;
+    try {
+      await h.runtime.observeSelectedRoutes();
+      await h.processReceived({
+        sourceRid: 'peer',
+        routeGeneration: 11n,
+        parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.admit, descriptor('peer'))]
+      });
+      h.runtime.tickLiveness(0);
+      t.mock.method(performance, 'now', () => 1000);
+      h.runtime.serviceIngress = () => {
+        received++;
+        return 'infrastructure';
+      };
+      t.mock.method(h.router, 'receive', () =>
+        received < requestCount
+          ? {
+              sourceRid: 'peer',
+              sourceRoute: Buffer.from('peer'),
+              routeGeneration: 11n,
+              requestSeq: BigInt(received + 1),
+              parts: [wire.encodeNodeRequestHeader(BigInt(received + 1)), Buffer.from([0])],
+              close() {
+                closedRecords++;
+              }
+            }
+          : undefined
+      );
+      const ticks = t.mock.method(h.runtime, 'tickLiveness');
+      const routes = t.mock.method(h.runtime.selectedRoutes, 'keys');
+      assert.equal(await h.runtime.pumpBatch(true), requestCount === 64);
+      assert.equal(received, requestCount);
+      assert.equal(closedRecords, requestCount);
+      assert.equal(ticks.mock.callCount(), 1);
+      assert.equal(await h.runtime.pumpBatch(true), false);
+      assert.equal(ticks.mock.callCount(), 2);
+      assert.equal(await h.runtime.pumpBatch(false), false);
+      assert.equal(ticks.mock.callCount(), 3);
+      assert.equal(routes.mock.callCount(), 0);
+      h.runtime.close();
+      await h.runtime.pumpBatch(false);
+      assert.equal(ticks.mock.callCount(), 3);
+    } finally {
+      h.runtime.close();
+    }
+  });
+}
+
+test('maintenance preserves probe boundaries, ACK expiry and replacement admission', async (t) => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const routes = new Map([['peer', 11n]]);
+  const h = selectedRouteRuntime(routes);
+  const admit = (generation) =>
+    h.processReceived({
+      sourceRid: 'peer',
+      routeGeneration: generation,
+      parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.admit, descriptor('peer'))]
+    });
+  try {
+    await h.runtime.observeSelectedRoutes();
+    await admit(11n);
+    const probesSent = () =>
+      h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.livenessProbe).length;
+    const first = h.runtime.tickLiveness(0).probes[0];
+    assert.equal(probesSent(), 1);
+    assert.equal(h.runtime.tickLiveness(4999).probes.length, 0);
+    assert.equal(probesSent(), 1);
+    assert.equal(h.runtime.tickLiveness(5000).probes[0].probeId, first.probeId);
+    assert.equal(probesSent(), 2);
+    now = 6000;
+    await h.processReceived({
+      sourceRid: 'peer',
+      routeGeneration: 11n,
+      parts: [
+        livenessCodec.encodeLivenessRecord({
+          command: wire.M6aServiceWireCommand.livenessAck,
+          probeId: first.probeId
+        })
+      ]
+    });
+    assert.equal(h.runtime.tickLiveness(9999).probes.length, 0);
+    assert.notEqual(h.runtime.tickLiveness(10000).probes[0].probeId, first.probeId);
+    assert.equal(probesSent(), 3);
+    assert.deepEqual(h.runtime.tickLiveness(20999).timedOutNodes, []);
+    assert.deepEqual(h.runtime.tickLiveness(21000).timedOutNodes, ['peer']);
+    h.runtime.tickLiveness(21001);
+    assert.deepEqual(h.disconnected, ['peer']);
+    assert.deepEqual(h.admissionsEnded, ['peer']);
+    now = 22000;
+    routes.set('peer', 12n);
+    await h.runtime.observeSelectedRoutes();
+    await admit(12n);
+    assert.equal(h.runtime.tickLiveness(now).probes[0].connectionId, 12n);
+    assert.deepEqual(h.runtime.tickLiveness(36999).timedOutNodes, []);
+    assert.deepEqual(h.runtime.tickLiveness(37000).timedOutNodes, ['peer']);
+    assert.deepEqual(h.disconnected, ['peer', 'peer']);
+  } finally {
+    h.runtime.close();
+  }
+});
