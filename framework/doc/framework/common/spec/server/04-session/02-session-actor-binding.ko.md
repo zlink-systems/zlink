@@ -141,7 +141,8 @@ lease generation은 Session owner host의 `(OwnerId, LeaseGeneration)`([Location
 그 node의 MeshNode descriptor에 게시된 값이다. Actor owner는 bind를 수락할 때 이 값을 descriptor에서 얻어 current binding에
 저장한다. Session owner가 다른 node이면 그 peer의 [Peer admission](../00-foundation/02-glossary.ko.md#peer-admission)과
 RID·lifecycle generation이 일치하고 [Location runtime §4.1](../05-location-relocation/01-location-runtime.ko.md#41-대상-descriptor의-owner-lease-검증)의
-owner lease 검증을 통과한 descriptor를, 같은 node이면 자기 descriptor를 사용한다. 이 identity를 담는 command 42·51·54는
+owner lease 검증을 통과한 descriptor를, 같은 node이면 자기 descriptor를 사용한다. 그런 descriptor가 없으면 그 operation을
+`Unavailable`로 거부한다. 이 identity를 담는 command 42·51·54는
 저장한 값을 그대로 보내고, 받는 Session owner는 자기 현재 값과 정확히 비교한다. 아래 binding identity는 이 중 Node RID와
 lifecycle generation만 사용하며, owner ID와 owner lease generation은 command 42·51·54의 fence 값이다.
 
