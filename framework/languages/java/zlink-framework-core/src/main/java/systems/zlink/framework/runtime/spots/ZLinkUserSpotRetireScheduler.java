@@ -5,7 +5,6 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation
 
 import java.time.Duration;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -21,11 +20,12 @@ final class ZLinkUserSpotRetireScheduler {
         return ZLinkRelocationHandOff.run(
                         request.client(),
                         stage,
-                        () ->
+                        ignoredSettlement ->
                                 request.source()
                                         .relayCapturedIngress(request.client(), request.timeout()),
                         request.timeout(),
-                        request.restoreDeadline())
+                        request.restoreDeadline(),
+                        request.source().metrics)
                 .handle(
                         (settlement, failure) ->
                                 failure == null
@@ -113,12 +113,7 @@ final class ZLinkUserSpotRetireScheduler {
                 stage.participants().stream()
                         .filter(participant -> participant.objectKind() == 1)
                         .count();
-        for (long index = 0; index < count; index++) {
-            systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.increment(
-                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics
-                            .DRAIN_ACTORS_HANDED_OFF_NAME,
-                    Map.of());
-        }
+        for (long index = 0; index < count; index++) {}
     }
 
     record RemoteRequest(

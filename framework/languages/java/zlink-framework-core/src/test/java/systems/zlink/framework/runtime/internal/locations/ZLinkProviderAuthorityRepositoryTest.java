@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -67,6 +68,123 @@ final class ZLinkProviderAuthorityRepositoryTest {
         public CompletionStage<systems.zlink.framework.actors.ZLinkActor> create(
                 systems.zlink.framework.actors.ZLinkActorContext context) {
             return CompletableFuture.completedFuture(new ReclaimActor(context));
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void metricRefreshFailurePreservesTheDescriptorPage(boolean synchronous) throws Exception {
+        var underlying = new ZLinkInMemoryProviderLocationStore();
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                new ZLinkProviderLocationRepository(underlying)
+                                        .claimOwnerLease(
+                                                "metric-failure-owner", Duration.ofHours(1))
+                                        .toCompletableFuture()
+                                        .join())
+                        .token();
+        var provider =
+                (ZLinkLocationStore)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                ZLinkLocationStore.class.getClassLoader(),
+                                new Class<?>[] {ZLinkLocationStore.class},
+                                (proxy, method, arguments) -> {
+                                    if (method.getName().equals("read")) {
+                                        var failure =
+                                                new IllegalStateException(
+                                                        "metric-only capacity read failed");
+                                        if (synchronous) throw failure;
+                                        return CompletableFuture.failedFuture(failure);
+                                    }
+                                    return method.invoke(underlying, arguments);
+                                });
+        var repository = new ZLinkProviderAuthorityRepository(provider);
+        var descriptor = capacityDescriptor(owner);
+        var page =
+                new systems.zlink.framework.locations.ZLinkLocationPage<>(
+                        List.of(descriptor), "next");
+        try (var observation = repository.registerCapacityObservation()) {
+            repository.registerCapacityMetrics(descriptor);
+            assertSame(page, repository.refreshCapacityMetrics(page).toCompletableFuture().join());
+        }
+    }
+
+    @Test
+    void metricsReadOnlyConfirmedCapacityAndNeverQueryTheStoreDuringCollection() throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                repository
+                                        .claimOwnerLease("metrics-owner", Duration.ofHours(1))
+                                        .toCompletableFuture()
+                                        .join())
+                        .token();
+        var descriptor = capacityDescriptor(owner);
+        try (var observation = repository.registerCapacityObservation()) {
+            repository
+                    .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                    .toCompletableFuture()
+                    .join();
+            String key = ZLinkAuthorityKeyCodec.spot("metrics-spot");
+            var reservation =
+                    assertInstanceOf(
+                                    ZLinkObjectReserved.class,
+                                    repository
+                                            .reserve(
+                                                    capacityRequest(key, descriptor, owner),
+                                                    () -> false)
+                                            .toCompletableFuture()
+                                            .join())
+                            .reservation();
+            try (var metrics =
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                            .install()) {
+                var tags = Map.of("mesh_name", "game", "capacity_scope", "spot");
+                assertEquals(0, metrics.observable("zlink.object.capacity.active", tags));
+                assertEquals(1, metrics.observable("zlink.object.capacity.reserved", tags));
+                assertEquals(1, metrics.observable("zlink.object.capacity.limit", tags));
+                // Store confirmation moves one reserved slot to the active population.
+                assertEquals(
+                        ZLinkObjectCommitResult.COMMITTED,
+                        repository
+                                .commit(
+                                        reservation,
+                                        new systems.zlink.framework.runtime.locations
+                                                        .ZLinkServiceAuthorityPayloadCodec()
+                                                .encodeUser(
+                                                        systems.zlink.framework.runtime.locations
+                                                                .ZLinkServiceAuthorityPayloadCodec
+                                                                .State.READY,
+                                                        "room",
+                                                        "metrics-spot",
+                                                        owner.ownerId(),
+                                                        owner.leaseGeneration(),
+                                                        descriptor.meshName(),
+                                                        descriptor.rid(),
+                                                        descriptor.lifecycleGeneration()),
+                                        null,
+                                        () -> false)
+                                .toCompletableFuture()
+                                .join());
+                assertEquals(1, metrics.observable("zlink.object.capacity.active", tags));
+                assertEquals(0, metrics.observable("zlink.object.capacity.reserved", tags));
+                assertInstanceOf(
+                        ZLinkPlacementCapacityExhausted.class,
+                        repository
+                                .reserve(
+                                        capacityRequest(
+                                                ZLinkAuthorityKeyCodec.spot("overflow"),
+                                                descriptor,
+                                                owner),
+                                        () -> false)
+                                .toCompletableFuture()
+                                .join());
+                assertEquals(1, metrics.observable("zlink.object.capacity.active", tags));
+                assertEquals(0, metrics.observable("zlink.object.capacity.reserved", tags));
+            }
         }
     }
 

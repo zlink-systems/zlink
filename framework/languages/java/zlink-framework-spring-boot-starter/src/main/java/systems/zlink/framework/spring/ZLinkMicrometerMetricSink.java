@@ -6,7 +6,6 @@ import io.micrometer.core.instrument.FunctionCounter;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Tags;
-import io.micrometer.core.instrument.Timer;
 
 import systems.zlink.framework.monitoring.ZLinkApplicationJobQueuePressureState;
 import systems.zlink.framework.monitoring.ZLinkHostCapacityStatus;
@@ -27,13 +26,14 @@ import java.util.function.Supplier;
 import java.util.function.ToDoubleFunction;
 
 final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
-    private static final String CORE_HWM_ACCOUNTED_NAME = "zlink.host.core_hwm.accounted";
+    private static final String CORE_HWM_ACCOUNTED_NAME =
+            ZLinkRuntimeMetrics.Metric.HOST_CORE_HWM_ACCOUNTED.metricName();
     private static final String COMPLETION_ACCOUNTED_NAME =
-            "zlink.host.core_hwm.completion_accounted";
-    private static final String APPLICATION_JOBS_NAME = "zlink.host.application_job_queue.jobs";
+            ZLinkRuntimeMetrics.Metric.HOST_CORE_HWM_COMPLETION_ACCOUNTED.metricName();
+    private static final String APPLICATION_JOBS_NAME =
+            ZLinkRuntimeMetrics.Metric.HOST_APPLICATION_JOB_QUEUE_JOBS.metricName();
     private static final String PAUSE_DURATION_NAME =
-            "zlink.host.application_job_queue.pause_duration";
-    private static final String PRESSURE_TRANSITIONS_SUFFIX = "pressure_transitions";
+            ZLinkRuntimeMetrics.Metric.HOST_APPLICATION_JOB_QUEUE_PAUSE_DURATION.metricName();
 
     private enum GaugeState {
         CURRENT("current"),
@@ -57,11 +57,52 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
     private static final Set<String> FORBIDDEN_TAGS =
             Set.of("correlation_id", "flow_id", "actor_id", "spot_id");
     private final MeterRegistry registry;
+
+    private record HostStateSeries(AtomicLong value, io.micrometer.core.instrument.Meter.Id id) {}
+
+    private final ConcurrentHashMap<String, HostStateSeries> hostStates = new ConcurrentHashMap<>();
+
+    @Override
+    public void observeHostState(String state) {
+        observeHostStates(() -> Map.of(state, 1L));
+    }
+
+    @Override
+    public void observeHostStates(Supplier<Map<String, Long>> source) {
+        for (var state : systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeState.values()) {
+            String label = ZLinkRuntimeMetrics.wire(state);
+            hostStates.compute(
+                    label,
+                    (key, current) -> {
+                        Map<String, Long> snapshot = source.get();
+                        if (snapshot.isEmpty()) return current;
+                        long count = snapshot.getOrDefault(key, 0L);
+                        if (count == 0) {
+                            if (current != null) registry.remove(current.id());
+                            return null;
+                        }
+                        if (current != null) {
+                            current.value().set(count);
+                            return current;
+                        }
+                        AtomicLong value = new AtomicLong(count);
+                        var meter =
+                                Gauge.builder(
+                                                ZLinkRuntimeMetrics.Metric.HOST_STATE.metricName(),
+                                                value,
+                                                AtomicLong::doubleValue)
+                                        .baseUnit(Unit.RUNTIME.wire())
+                                        .tag(ZLinkRuntimeMetrics.Tag.STATE.wire(), key)
+                                        .register(registry);
+                        return new HostStateSeries(value, meter.getId());
+                    });
+        }
+    }
+
     private final Map<String, Map<Map<String, String>, AtomicLong>> gauges =
             new ConcurrentHashMap<>();
     private final Map<String, Map<Map<String, String>, Counter>> counters =
             new ConcurrentHashMap<>();
-    private final Map<String, Map<Map<String, String>, Timer>> timers = new ConcurrentHashMap<>();
     private final Map<String, Map<Map<String, String>, DistributionSummary>> summaries =
             new ConcurrentHashMap<>();
     private final Map<String, Map<Map<String, String>, LongSupplier>> requestInflight =
@@ -95,20 +136,13 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
 
     @Override
     public void record(String name, Duration duration, Map<String, String> tags) {
-        timer(name, tags).record(duration.toNanos(), TimeUnit.NANOSECONDS);
+        record(name, duration.toNanos() / (double) TimeUnit.SECONDS.toNanos(1), tags);
     }
 
     @Override
     public void record(String name, double value, Map<String, String> tags) {
         ZLinkRuntimeMetrics.Metric metric = ZLinkRuntimeMetrics.Metric.decode(name);
-        if (metric != null && metric.kind() == ZLinkRuntimeMetrics.Metric.Kind.HISTOGRAM) {
-            timer(name, tags)
-                    .record(
-                            Math.max(0L, Math.round(value * (double) TimeUnit.SECONDS.toNanos(1))),
-                            TimeUnit.NANOSECONDS);
-            return;
-        }
-        summary(name, tags, null).record(value);
+        summary(name, tags, metric == null ? null : metric.unit().wire()).record(value);
     }
 
     @Override
@@ -123,17 +157,17 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
                             ZLinkRuntimeMetrics.Tag.SOURCE.wire(),
                             snapshot.source());
             registerMeshTopologyGauge(
-                    "zlink.mesh_node.peers.configured",
+                    ZLinkRuntimeMetrics.Metric.MESH_NODE_PEERS_CONFIGURED.metricName(),
                     Unit.PEER.wire(),
                     peerTags,
                     value -> value.configuredPeers());
             registerMeshTopologyGauge(
-                    "zlink.mesh_node.peers.connected",
+                    ZLinkRuntimeMetrics.Metric.MESH_NODE_PEERS_CONNECTED.metricName(),
                     Unit.PEER.wire(),
                     peerTags,
                     value -> value.connectedPeers());
             registerMeshTopologyGauge(
-                    "zlink.mesh_node.peers.ready",
+                    ZLinkRuntimeMetrics.Metric.MESH_NODE_PEERS_READY.metricName(),
                     Unit.PEER.wire(),
                     peerTags,
                     value -> value.readyPeers());
@@ -143,7 +177,7 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
                                 ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(), snapshot.meshName(),
                                 ZLinkRuntimeMetrics.Tag.CHANNEL_NAME.wire(), channel.channelName());
                 registerMeshTopologyGauge(
-                        "zlink.mesh_node.channels.ready_members",
+                        ZLinkRuntimeMetrics.Metric.MESH_NODE_CHANNELS_READY_MEMBERS.metricName(),
                         Unit.MEMBER.wire(),
                         channelTags,
                         value ->
@@ -159,6 +193,16 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
                                         .sum());
             }
         }
+    }
+
+    @Override
+    public void registerObservable(
+            ZLinkRuntimeMetrics.Metric metric, Map<String, String> tags, LongSupplier value) {
+        Gauge.builder(metric.metricName(), value, LongSupplier::getAsLong)
+                .strongReference(true)
+                .baseUnit(metric.unit().wire())
+                .tags(toTags(tags))
+                .register(registry);
     }
 
     @Override
@@ -178,13 +222,13 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
     public void registerHostCapacity(Supplier<ZLinkHostCapacityStatus> source) {
         hostCapacitySource.set(source);
         registerGauge(
-                "zlink.host.core_hwm.effective_budget",
+                ZLinkRuntimeMetrics.Metric.HOST_CORE_HWM_EFFECTIVE_BUDGET.metricName(),
                 Unit.BYTES.wire(),
                 Map.of(),
                 hostCapacitySource,
                 status -> status.coreHwm().effectiveBudgetBytes());
         registerGauge(
-                "zlink.host.core_hwm.applied",
+                ZLinkRuntimeMetrics.Metric.HOST_CORE_HWM_APPLIED.metricName(),
                 Unit.BYTES.wire(),
                 Map.of(),
                 hostCapacitySource,
@@ -214,13 +258,13 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
                 hostCapacitySource,
                 status -> status.coreHwm().completionPeakAccountedBytes());
         registerGauge(
-                "zlink.host.core_hwm.blocked_ratio",
+                ZLinkRuntimeMetrics.Metric.HOST_CORE_HWM_BLOCKED_RATIO.metricName(),
                 Unit.PPM.wire(),
                 Map.of(),
                 hostCapacitySource,
                 status -> status.coreHwm().blockedRatioPpm());
         registerGauge(
-                "zlink.host.application_job_queue.limit",
+                ZLinkRuntimeMetrics.Metric.HOST_APPLICATION_JOB_QUEUE_LIMIT.metricName(),
                 Unit.JOB.wire(),
                 Map.of(),
                 hostCapacitySource,
@@ -250,13 +294,14 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
                 hostCapacitySource,
                 status -> status.applicationJobQueue().peakPermitsInUse());
         registerGauge(
-                "zlink.host.application_job_queue.capacity_waiters",
+                ZLinkRuntimeMetrics.Metric.HOST_APPLICATION_JOB_QUEUE_CAPACITY_WAITERS.metricName(),
                 Unit.WAITER.wire(),
                 Map.of(),
                 hostCapacitySource,
                 status -> status.applicationJobQueue().capacityWaiters());
         FunctionCounter.builder(
-                        "zlink.host.application_job_queue.capacity_waits",
+                        ZLinkRuntimeMetrics.Metric.HOST_APPLICATION_JOB_QUEUE_CAPACITY_WAITS
+                                .metricName(),
                         hostCapacitySource,
                         value ->
                                 valueOrZero(
@@ -265,7 +310,8 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
                 .baseUnit(Unit.WAIT.wire())
                 .register(registry);
         FunctionCounter.builder(
-                        "zlink.host.application_job_queue.capacity_wait_duration",
+                        ZLinkRuntimeMetrics.Metric.HOST_APPLICATION_JOB_QUEUE_CAPACITY_WAIT_DURATION
+                                .metricName(),
                         hostCapacitySource,
                         value ->
                                 valueOrZero(
@@ -302,15 +348,17 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
                             pressure.cumulativePauseDuration().toNanos()
                                     / (double) TimeUnit.SECONDS.toNanos(1));
             registerPressureCounter(
-                    PRESSURE_TRANSITIONS_SUFFIX,
+                    ZLinkRuntimeMetrics.Metric.HOST_APPLICATION_JOB_QUEUE_PRESSURE_TRANSITIONS,
                     ZLinkApplicationJobQueuePressureState.RUNNING.wire(),
                     pressure -> pressure.runningTransitionCount());
             registerPressureCounter(
-                    PRESSURE_TRANSITIONS_SUFFIX,
+                    ZLinkRuntimeMetrics.Metric.HOST_APPLICATION_JOB_QUEUE_PRESSURE_TRANSITIONS,
                     ZLinkApplicationJobQueuePressureState.PAUSED.wire(),
                     pressure -> pressure.pausedTransitionCount());
             FunctionCounter.builder(
-                            "zlink.host.application_job_queue.flow_state_config_failures",
+                            ZLinkRuntimeMetrics.Metric
+                                    .HOST_APPLICATION_JOB_QUEUE_FLOW_STATE_CONFIG_FAILURES
+                                    .metricName(),
                             applicationJobQueuePressureSource,
                             current ->
                                     valueOrZero(
@@ -335,7 +383,8 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
         String state = snapshot.pressureState().wire();
         Gauge gauge =
                 Gauge.builder(
-                                "zlink.host.application_job_queue.pressure_state",
+                                ZLinkRuntimeMetrics.Metric.HOST_APPLICATION_JOB_QUEUE_PRESSURE_STATE
+                                        .metricName(),
                                 applicationJobQueuePressureStateValue,
                                 AtomicLong::doubleValue)
                         .baseUnit(Unit.STATE.wire())
@@ -345,14 +394,14 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
     }
 
     private void registerPressureCounter(
-            String name,
+            ZLinkRuntimeMetrics.Metric metric,
             String state,
             ToDoubleFunction<ZLinkApplicationJobQueuePressureMetrics> value) {
         FunctionCounter.builder(
-                        "zlink.host.application_job_queue." + name,
+                        metric.metricName(),
                         applicationJobQueuePressureSource,
                         current -> valueOrZero(current.get(), value))
-                .baseUnit(Unit.TRANSITION.wire())
+                .baseUnit(metric.unit().wire())
                 .tags(ZLinkRuntimeMetrics.Tag.STATE.wire(), state)
                 .register(registry);
     }
@@ -409,19 +458,6 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
         }
         Counter created = builder.register(registry);
         Counter raced = byTags.putIfAbsent(immutableTags, created);
-        return raced == null ? created : raced;
-    }
-
-    private Timer timer(String name, Map<String, String> tags) {
-        Map<Map<String, String>, Timer> byTags = timers.get(name);
-        Timer existing = byTags == null ? null : byTags.get(tags);
-        if (existing != null) {
-            return existing;
-        }
-        byTags = timers.computeIfAbsent(name, ignored -> new ConcurrentHashMap<>());
-        Map<String, String> immutableTags = Map.copyOf(tags);
-        Timer created = Timer.builder(name).tags(toTags(immutableTags)).register(registry);
-        Timer raced = byTags.putIfAbsent(immutableTags, created);
         return raced == null ? created : raced;
     }
 
@@ -494,6 +530,11 @@ final class ZLinkMicrometerMetricSink implements ZLinkRuntimeMetrics.Sink {
                 registeredTags -> {
                     AtomicLong created = new AtomicLong();
                     Gauge.builder(name, created, AtomicLong::doubleValue)
+                            .baseUnit(
+                                    java.util.Objects.requireNonNull(
+                                                    ZLinkRuntimeMetrics.Metric.decode(name))
+                                            .unit()
+                                            .wire())
                             .tags(toTags(registeredTags))
                             .register(registry);
                     return created;
