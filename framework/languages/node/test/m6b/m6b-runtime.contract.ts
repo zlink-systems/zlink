@@ -7983,6 +7983,34 @@ for (const remote of [false, true]) {
     resolveClose();
     assert.equal((await terminal).terminalResult, RequestResult.Ok);
     assert.notEqual(runtime.registry.binding(actor), undefined, 'close does not separately unbind');
+    const malformed = await ingress!(
+      withIngressOwner({
+        command: M6bServiceWireCommand.boundSessionClose,
+        flags: 0,
+        sourceRoutingId: remote ? 'actor-owner' : 'session-owner',
+        sourceNodeGeneration: 7n,
+        requestSequence: request.correlation,
+        parts: [
+          Buffer.from(encodeBoundSessionCloseCommand(request, {})[0]!),
+          Buffer.from('forbidden')
+        ],
+        reply: () => assert.fail('malformed close must not reach the Session aggregate')
+      })
+    );
+    assert.equal(malformed, 'protocolError');
+    assert.equal(physicalCloses, 1);
+
     runtime.close();
   });
 }
+
+test('bound Session close rejects a payload on its terminal reply', () => {
+  assert.throws(() =>
+    decodeStatefulReply(
+      encodeStatefulReply(17n, RequestResult.Ok, 0),
+      17n,
+      'boundSessionClose',
+      true
+    )
+  );
+});

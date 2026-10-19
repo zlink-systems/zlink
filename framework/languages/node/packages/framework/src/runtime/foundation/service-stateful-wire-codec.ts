@@ -2060,6 +2060,8 @@ export function decodeStatefulReply(
   const terminalResult = reader.u32('terminalResult');
   const failureCode = reader.u32('failureCode');
   validateReplyTerminal(terminalResult, failureCode, hasPayload);
+  if (operationKind === 'boundSessionClose' && hasPayload)
+    fail('A bound Session close reply cannot carry application payload.');
   let tail: ServiceStatefulReplyTail | undefined;
   if (terminalResult === 0) {
     if (operationKind === 'actorLookup') {
