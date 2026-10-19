@@ -149,8 +149,9 @@ final class ZLinkJavaRawMeshNodePumpTest {
         if (!exhaustPermit)
             assertEquals(0, targetPump.posts.get(), "target pump reposted a receive rotation");
         else
+            // The probe above is one post; the grant and the resumed rotation must add more.
             assertTrue(
-                    targetPump.posts.get() > 0, "pending grant must run on the receive executor");
+                    targetPump.posts.get() >= 2, "pending grant must run on the receive executor");
     }
 
     private static CountingExecutor countPump(ZLinkJavaRawMeshNode node) throws Exception {
