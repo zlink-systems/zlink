@@ -14,7 +14,7 @@ namespace Zlink.Framework.Runtime.Locations;
 internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStore provider)
     : IZLinkLocationRepository
 {
-    private readonly IZLinkLocationStore _provider = new ProviderBoundary(provider);
+    private readonly ProviderBoundary _provider = new(provider);
     private const string Prefix = "zlink:v11:";
     private const long MaximumGeneration = long.MaxValue;
     private const int MaximumDescriptorWriteRetries = 3;
@@ -259,8 +259,10 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
         ZLinkMeshNodeDescriptor descriptor,
         ZLinkLocationWriteIntent intent,
         CancellationToken cancellationToken = default
-    ) =>
-        await UpdateDescriptorAsync(
+    )
+    {
+        _provider.TrackCapacity(CapacityKey(new(descriptor.MeshName, descriptor.Rid)));
+        return await UpdateDescriptorAsync(
                 MeshKey(descriptor.MeshName, descriptor.Rid),
                 descriptor.OwnerId,
                 descriptor.LeaseGeneration,
@@ -273,6 +275,7 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
                 cancellationToken
             )
             .ConfigureAwait(false);
+    }
 
     public async ValueTask<ZLinkLocationWriteStatus> RemoveMeshNodeAsync(
         ZLinkMeshNodeDescriptorKey key,
@@ -301,6 +304,8 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
                 cancellationToken
             )
             .ConfigureAwait(false);
+        if (result is ZLinkStoreWriteResult.Applied)
+            _provider.ForgetCapacity(CapacityKey(key));
         return result is ZLinkStoreWriteResult.Applied
             ? ZLinkLocationWriteStatus.Stored
             : ZLinkLocationWriteStatus.IgnoredStale;
@@ -945,6 +950,40 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
         public int RecordVersion { get; init; } = 1;
     }
 
+    internal async ValueTask RefreshCapacityAsync(
+        ZLinkMeshNodeDescriptorKey descriptor,
+        CancellationToken cancellationToken = default
+    )
+    {
+        var key = CapacityKey(descriptor);
+        _provider.TrackCapacity(key);
+        await _provider.ReadAsync(key, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal ZLinkPlacementCapacity? ConfirmedCapacity(
+        ZLinkMeshNodeDescriptorKey descriptor,
+        ZLinkPlacementCapacity limits
+    )
+    {
+        var record = _provider.ConfirmedCapacity(CapacityKey(descriptor));
+        if (record is null)
+            return null;
+        return new(
+            new(record.ActorsActive, record.ActorsPending, limits.Actors.Limit),
+            new(record.SpotsActive, record.SpotsPending, limits.Spots.Limit),
+            limits
+                .SpotTypes.Select(type =>
+                {
+                    record.SpotTypes.TryGetValue(
+                        CapacityTypeKey(type.ObjectKind, type.StableType),
+                        out var count
+                    );
+                    return type with { Active = count.Active, Reserved = count.Pending };
+                })
+                .ToArray()
+        );
+    }
+
     // Canonical opaque-record envelope shared by the mesh-node/
     // client-server/fanout-publisher descriptors (21-location-runtime.md
     // #2.4's general table): {recordVersion, ownerId, leaseGeneration,
@@ -957,20 +996,53 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
     // Decode records after the SPI boundary, so decode failures retain their own meaning.
     private sealed class ProviderBoundary(IZLinkLocationStore provider) : IZLinkLocationStore
     {
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<
+            ZLinkStoreKey,
+            CapacityObservation
+        > _capacities = new();
+
+        internal void TrackCapacity(ZLinkStoreKey key) =>
+            _capacities.GetOrAdd(key, static _ => new());
+
+        internal void ForgetCapacity(ZLinkStoreKey key) => _capacities.TryRemove(key, out _);
+
+        internal CapacityRecord? ConfirmedCapacity(ZLinkStoreKey key) =>
+            _capacities.TryGetValue(key, out var value) ? Volatile.Read(ref value.Record) : null;
+
+        private void ConfirmCapacity(ZLinkStoreKey key, CapacityRecord record)
+        {
+            if (_capacities.TryGetValue(key, out var value))
+                Volatile.Write(ref value.Record, record);
+        }
+
+        private sealed class CapacityObservation
+        {
+            internal CapacityRecord? Record;
+        }
+
         public async ValueTask<ZLinkStoreReadResult> ReadAsync(
             ZLinkStoreKey key,
             CancellationToken cancellationToken = default
         )
         {
+            ZLinkStoreReadResult result;
             try
             {
-                return await provider.ReadAsync(key, cancellationToken).ConfigureAwait(false);
+                result = await provider.ReadAsync(key, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception error)
             {
                 Rethrow(error, cancellationToken);
                 throw;
             }
+            if (_capacities.ContainsKey(key))
+                ConfirmCapacity(
+                    key,
+                    result is ZLinkStoreReadResult.Found found
+                        ? DecodeCapacity(found.Value.Bytes)
+                        : new()
+                );
+            return result;
         }
 
         public async ValueTask<ZLinkStoreWriteResult> WriteAsync(
@@ -978,15 +1050,23 @@ internal sealed partial class ZLinkProviderLocationRepository(IZLinkLocationStor
             CancellationToken cancellationToken = default
         )
         {
+            ZLinkStoreWriteResult result;
             try
             {
-                return await provider.WriteAsync(request, cancellationToken).ConfigureAwait(false);
+                result = await provider
+                    .WriteAsync(request, cancellationToken)
+                    .ConfigureAwait(false);
             }
             catch (Exception error)
             {
                 Rethrow(error, cancellationToken);
                 throw;
             }
+            if (result is ZLinkStoreWriteResult.Applied)
+                foreach (var mutation in request.Mutations)
+                    if (mutation is ZLinkStoreMutation.Put put && _capacities.ContainsKey(put.Key))
+                        ConfirmCapacity(put.Key, DecodeCapacity(put.Bytes));
+            return result;
         }
 
         public async ValueTask<ZLinkStoreScanResult> ScanAsync(

@@ -528,7 +528,7 @@ internal sealed class ZLinkActorInboundPipeline(
             frame.RequestId != 0
                 ? Diagnostics.ZLinkRuntimeMetrics.StartRequest(actor.Context.MeshName, "actor")
                 : null;
-        var requestOutcome = "completed";
+        var requestOutcome = Diagnostics.ZLinkRuntimeMetrics.RequestCompleted;
         try
         {
             await DispatchCurrentActorAsync(
@@ -542,16 +542,6 @@ internal sealed class ZLinkActorInboundPipeline(
                     callerOwnsDispatchTurn
                 )
                 .ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            requestOutcome = "timed_out";
-            throw;
-        }
-        catch (OperationCanceledException)
-        {
-            requestOutcome = "cancelled";
-            throw;
         }
         catch (ZLinkFrameworkException exception)
             when (allowCapture && IsUnitSealRefusal(exception, state))
@@ -583,9 +573,13 @@ internal sealed class ZLinkActorInboundPipeline(
             await CompleteMovingBoundaryAsync(frame, acknowledgeHandledFrame, cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch
+        catch (Exception error)
         {
-            requestOutcome = "failed";
+            requestOutcome = Diagnostics.ZLinkRuntimeMetrics.RequestFailureOutcome(
+                error,
+                cancellationToken,
+                runtime.ShutdownToken
+            );
             throw;
         }
         finally

@@ -1209,6 +1209,15 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     public bool IsStarted =>
         Volatile.Read(ref _lifecyclePhase) == (int)ZLinkRuntimeLifecyclePhase.Running;
 
+    internal ZLinkPlacementCapacity? ConfirmedCapacity(
+        ZLinkMeshNodeDescriptorKey key,
+        ZLinkPlacementCapacity limits
+    ) =>
+        (_locationRuntime?.Store as ZLinkProviderLocationRepository)?.ConfirmedCapacity(
+            key,
+            limits
+        );
+
     internal CancellationToken ShutdownToken =>
         _state?.StopTokenSource.Token ?? new CancellationToken(canceled: true);
 
