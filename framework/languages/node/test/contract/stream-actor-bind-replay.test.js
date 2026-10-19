@@ -2,6 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const framework = require('../../packages/framework/dist/internal');
+const { withTestSessionOwners } = require('./fixtures/session-owner-descriptors');
 const {
   RequestResult, SubmitResult, ZLinkBackendResultError
 } = require('../../packages/framework/dist/runtime/backend/runtime-values');
@@ -30,7 +31,7 @@ function bindFixture(request) {
   const attempts = [];
   let ready = true;
   const routeObservers = new Set();
-  const runtime = new ServiceStatefulRuntime({
+  const runtime = withTestSessionOwners(new ServiceStatefulRuntime({
     observePeerRoute: () => ({ generation: 1n, ready }),
     observePeerRouteChanged: listener => { routeObservers.add(listener); return () => routeObservers.delete(listener); },
     observePeerConnectionIntentRemoved() { return () => {}; },
@@ -47,7 +48,7 @@ function bindFixture(request) {
         throw error;
       }
     }
-  }, 'session-node', 3n);
+  }, 'session-node', 3n));
   runtime.rememberActorRoute({
     actor, targetNodeGeneration: 3n, authorityOwnerGeneration: 9n, ownerLeaseGeneration: 10n
   });

@@ -1837,9 +1837,8 @@ final class ZLinkJavaRawMeshNode
     }
 
     @Override
-    public String localAuthorityOwnerId() {
-        ZLinkInternalMeshNode.PeerAuthorityFence local = localAuthorityFence;
-        return local == null ? routingId().toString() : local.ownerId();
+    public Optional<ZLinkInternalMeshNode.PeerAuthorityFence> localSessionOwner() {
+        return Optional.ofNullable(localAuthorityFence);
     }
 
     long bindingGenerationSeed() {
@@ -7020,24 +7019,21 @@ final class ZLinkJavaRawMeshNode
         resolveSourceAuthority(inbound)
                 .handle(
                         (authority, failure) -> {
-                            String ownerId =
-                                    authority != null && authority.isPresent()
-                                            ? authority.orElseThrow().ownerId()
-                                            : inbound.source().toString();
-                            long ownerLease =
-                                    authority != null && authority.isPresent()
-                                            ? authority.orElseThrow().ownerLeaseGeneration()
-                                            : 1L;
-                            if (failure != null) {
+                            // Session-Actor binding §4: the identity comes from the admitted
+                            // peer descriptor that passed the owner lease check, or the bind
+                            // is rejected.
+                            if (failure != null || authority == null || authority.isEmpty()) {
                                 replyBoundSessionBind(inbound, binding, false);
                                 return null;
                             }
+                            ZLinkInternalMeshNode.PeerAuthorityFence sessionOwner =
+                                    authority.orElseThrow();
                             ((ZLinkJavaRawSpotNode) spotNode())
                                     .applyRemoteStreamBinding(
                                             inbound.source(),
                                             sourceGeneration,
-                                            ownerId,
-                                            ownerLease,
+                                            sessionOwner.ownerId(),
+                                            sessionOwner.ownerLeaseGeneration(),
                                             binding,
                                             accepted ->
                                                     replyBoundSessionBind(

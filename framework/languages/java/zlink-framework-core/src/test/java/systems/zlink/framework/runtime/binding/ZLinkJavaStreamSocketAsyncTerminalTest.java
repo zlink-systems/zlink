@@ -383,6 +383,9 @@ final class ZLinkJavaStreamSocketAsyncTerminalTest {
                 var node = new ZLinkJavaRawMeshNode(context, "mesh");
                 var stream = new ZLinkJavaStreamSocket(context.createStreamSocket(), node)) {
             node.setRoutingId(nodeRid);
+            node.setBind("inproc://" + nodeRid + "-" + System.nanoTime());
+            node.start();
+            ZLinkTestSessionOwners.install(node);
             ZLinkBackendSpot entry = node.spotNode().entrySpot();
             entry.onDispatchEvent(
                     info -> {
@@ -438,6 +441,9 @@ final class ZLinkJavaStreamSocketAsyncTerminalTest {
                 var node = new ZLinkJavaRawMeshNode(context, "mesh");
                 var stream = new ZLinkJavaStreamSocket(context.createStreamSocket(), node)) {
             node.setRoutingId(nodeRid);
+            node.setBind("inproc://" + nodeRid + "-" + System.nanoTime());
+            node.start();
+            ZLinkTestSessionOwners.install(node);
             ZLinkBackendSpot entry = node.spotNode().entrySpot();
             entry.onDispatchEvent(
                     info -> {

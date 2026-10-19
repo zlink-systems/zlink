@@ -1538,6 +1538,7 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
     session_owner->configure_bound_session_operations (host::bound_session_operations_t{
       .bind =
         [] (const protocol::bound_session_bind_t &, const zlink::routing_id_t &, std::uint64_t,
+            const zlink::framework::location_owner_token_t &,
             std::function<bool ()> submit_terminal_reply) {
             (void) submit_terminal_reply ();
             return host::bound_session_bind_operation_result_t{};
@@ -1621,6 +1622,7 @@ void verify_bound_session_push_admission_uses_only_session_owned_fields ()
     session_owner->configure_bound_session_operations (host::bound_session_operations_t{
       .bind =
         [] (const protocol::bound_session_bind_t &, const zlink::routing_id_t &, std::uint64_t,
+            const zlink::framework::location_owner_token_t &,
             std::function<bool ()> submit_terminal_reply) {
             (void) submit_terminal_reply ();
             return host::bound_session_bind_operation_result_t{};

@@ -31,10 +31,13 @@ internal sealed partial class ZLinkFrameworkRuntime
                 )
             );
         if (
-            nodeRuntime is null
-            || nodeRuntime.Node.MeshStatus().LifecycleGeneration
-                != retired.SessionOwnerNodeGeneration
-            || !MatchesLocalSessionOwnerFence(nodeRuntime, retired)
+            nodeRuntime?.LocalSessionOwner is not { } sessionOwner
+            || !sessionOwner.IdentifiesSessionOwner(
+                retired.SessionOwnerNodeRid,
+                retired.SessionOwnerNodeGeneration,
+                retired.SessionOwnerId,
+                retired.SessionOwnerLeaseGeneration
+            )
         )
             return false;
 
@@ -85,28 +88,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             sessionOwnerLeaseGeneration,
             bindingGeneration
         );
-
-    private static bool MatchesLocalSessionOwnerFence(
-        ZLinkSpotNodeRuntime nodeRuntime,
-        ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession retired
-    )
-    {
-        try
-        {
-            var local = nodeRuntime.LocalRequestSource;
-            return string.Equals(local.OwnerId, retired.SessionOwnerId, StringComparison.Ordinal)
-                && local.LeaseGeneration == retired.SessionOwnerLeaseGeneration;
-        }
-        catch (InvalidOperationException)
-        {
-            return string.Equals(
-                    retired.SessionOwnerId,
-                    retired.SessionOwnerNodeRid.ToHex(),
-                    StringComparison.Ordinal
-                )
-                && retired.SessionOwnerLeaseGeneration == retired.SessionOwnerNodeGeneration;
-        }
-    }
 
     private void ScheduleBoundSessionReplacedNotification(
         IZLinkBackendSpotNode sourceNode,

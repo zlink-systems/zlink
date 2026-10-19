@@ -207,6 +207,58 @@ export interface ServiceCanonicalActorJoinCandidate {
   readonly local: { readonly phase: 'admission'; readonly transferId: string };
 }
 
+/**
+ * Session–Actor binding §4: the owner ID and owner lease generation of a
+ * Session owner identity are the host's `(OwnerId, LeaseGeneration)` published
+ * in its MeshNode descriptor.
+ */
+export interface ServiceSessionOwnerToken {
+  readonly ownerId: string;
+  readonly leaseGeneration: bigint;
+}
+
+/** The descriptor source of the Session owner identity (§4). */
+export interface ServiceSessionOwnerDescriptors {
+  /** This host's published token, or undefined while it has no live descriptor. */
+  local(): ServiceSessionOwnerToken | undefined;
+  /**
+   * The token of the admitted peer descriptor with this exact RID and
+   * lifecycle generation that passed the Location runtime §4.1 owner lease
+   * check, or undefined when no such descriptor exists.
+   */
+  peer(nodeRid: string, nodeGeneration: bigint): Promise<ServiceSessionOwnerToken | undefined>;
+}
+
+/** The four values of one Session owner identity (§4). */
+export interface ServiceSessionOwnerIdentity {
+  readonly nodeRid: string;
+  readonly nodeGeneration: bigint;
+  readonly ownerId: string;
+  readonly leaseGeneration: bigint;
+}
+
+/**
+ * The receiving Session owner compares the identity carried by command 42,
+ * 51 or 54 with its current values exactly (§4).
+ */
+export function sessionOwnerFenceMatches(
+  local: ServiceSessionOwnerIdentity,
+  fence: Pick<
+    ServiceRetiredBoundSessionRouteFence,
+    | 'sessionOwnerNodeRid'
+    | 'sessionOwnerNodeGeneration'
+    | 'sessionOwnerId'
+    | 'sessionOwnerLeaseGeneration'
+  >
+): boolean {
+  return (
+    routingIdsEqual(fence.sessionOwnerNodeRid, local.nodeRid) &&
+    fence.sessionOwnerNodeGeneration === local.nodeGeneration &&
+    fence.sessionOwnerId === local.ownerId &&
+    fence.sessionOwnerLeaseGeneration === local.leaseGeneration
+  );
+}
+
 export interface ServiceSessionDelivery {
   readonly binding: ServiceSessionBinding;
   /**
@@ -426,6 +478,7 @@ export class ServiceStatefulRuntime {
     readonly owner: string;
   }) => void;
   private dispatchErrors?: ZLinkDispatchErrorReporter;
+  private sessionOwnerDescriptors?: ServiceSessionOwnerDescriptors;
   private dispatchErrorMeshName?: string;
   private readonly admittedUserSpotOperations = new Map<
     string,
@@ -467,6 +520,52 @@ export class ServiceStatefulRuntime {
     }) => void
   ): void {
     this.mailboxDropHandler = handler;
+  }
+
+  setSessionOwnerDescriptors(source: ServiceSessionOwnerDescriptors): void {
+    this.sessionOwnerDescriptors = source;
+  }
+
+  /** §4: this host's Session owner identity, taken from its own descriptor. */
+  private localSessionOwner(): ServiceSessionOwnerIdentity | undefined {
+    const token = this.sessionOwnerDescriptors?.local();
+    return token === undefined
+      ? undefined
+      : {
+          nodeRid: this.nodeRid,
+          nodeGeneration: this.nodeGeneration,
+          ownerId: token.ownerId,
+          leaseGeneration: token.leaseGeneration
+        };
+  }
+
+  /**
+   * §4: the identity of the Session owner that requested a bind. It is this
+   * host's own descriptor, or the admitted peer descriptor of that exact
+   * lifecycle that passed the owner lease check. Without one the bind is
+   * rejected instead of storing a guessed identity.
+   */
+  private async sessionOwnerOf(
+    nodeRid: string,
+    nodeGeneration: bigint
+  ): Promise<ServiceSessionOwnerIdentity> {
+    const token = routingIdsEqual(nodeRid, this.nodeRid)
+      ? nodeGeneration === this.nodeGeneration
+        ? this.sessionOwnerDescriptors?.local()
+        : undefined
+      : await this.sessionOwnerDescriptors?.peer(nodeRid, nodeGeneration);
+    if (token === undefined) {
+      throw createInternalFrameworkException(
+        ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+        `Session owner '${nodeRid}' has no live MeshNode descriptor for its lifecycle.`
+      );
+    }
+    return {
+      nodeRid,
+      nodeGeneration,
+      ownerId: token.ownerId,
+      leaseGeneration: token.leaseGeneration
+    };
   }
 
   setDispatchErrorReporter(reporter: ZLinkDispatchErrorReporter, meshName: string): void {
@@ -1769,14 +1868,27 @@ export class ServiceStatefulRuntime {
   ): ServiceStatefulPendingOperation {
     const deadlineMs = performance.now() + timeoutMs;
     const pending = this.operations.register(timeoutMs, 'sender');
+    const sessionOwner = this.localSessionOwner();
+    if (sessionOwner === undefined) {
+      this.operations.reply(
+        pending.id,
+        failure(
+          createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RouteNotConnected,
+            `Session owner '${this.nodeRid}' has no live MeshNode descriptor.`
+          )
+        )
+      );
+      return pending;
+    }
     const generation = this.nextSessionSequence++;
     const localBinding: ServiceSessionBinding = {
       actor,
       sessionRid,
-      sessionOwnerNodeRid: this.nodeRid,
-      sessionOwnerNodeGeneration: this.nodeGeneration,
-      sessionOwnerId: this.nodeRid,
-      sessionOwnerLeaseGeneration: this.nodeGeneration,
+      sessionOwnerNodeRid: sessionOwner.nodeRid,
+      sessionOwnerNodeGeneration: sessionOwner.nodeGeneration,
+      sessionOwnerId: sessionOwner.ownerId,
+      sessionOwnerLeaseGeneration: sessionOwner.leaseGeneration,
       bindingGeneration: generation,
       membershipEpoch: this.registry.actor(actor.actorId)?.membershipEpoch ?? 1n
     };
@@ -1814,10 +1926,10 @@ export class ServiceStatefulRuntime {
         const binding = this.registry.bindSession(
           actor,
           sessionRid,
-          this.nodeRid,
-          this.nodeGeneration,
-          this.nodeRid,
-          this.nodeGeneration
+          sessionOwner.nodeRid,
+          sessionOwner.nodeGeneration,
+          sessionOwner.ownerId,
+          sessionOwner.leaseGeneration
         );
         if (previousDelivery !== undefined && previous !== undefined) {
           this.retiredSessionDeliveries.set(sessionDeliveryKey(previous), previousDelivery);
@@ -2391,7 +2503,7 @@ export class ServiceStatefulRuntime {
           canonicalActorJoinPayload
         );
       case 'boundSessionBind':
-        return this.replySessionBind(ingress, record);
+        return await this.replySessionBind(ingress, record);
       case 'boundSessionClose':
         return await this.handleBoundSessionClose(ingress, record);
       case 'boundSessionReplaced':
@@ -3474,25 +3586,27 @@ export class ServiceStatefulRuntime {
     return 'infrastructure';
   }
 
-  private replySessionBind(
+  private async replySessionBind(
     ingress: RawServiceIngressRecord,
     record: Extract<ServiceStatefulWireRecord, { readonly kind: 'boundSessionBind' }>
-  ): RawServicePumpResult {
+  ): Promise<RawServicePumpResult> {
     try {
       if (record.binding.state === 'active') {
+        const sessionOwner = await this.sessionOwnerOf(
+          ingress.sourceRoutingId,
+          ingress.sourceNodeGeneration ?? this.peerGeneration(ingress.sourceRoutingId)
+        );
         const actor = this.validateActorFence(record.actor);
         const previous = this.registry.binding(actor.ref);
-        const sourceGeneration =
-          ingress.sourceNodeGeneration ?? this.peerGeneration(ingress.sourceRoutingId);
         const binding = sessionBindingFromWire(
           actor.ref,
           record.sessionRid,
-          ingress.sourceRoutingId,
+          sessionOwner.nodeRid,
           record.binding.generation,
           actor.membershipEpoch,
-          sourceGeneration,
-          ingress.sourceRoutingId,
-          sourceGeneration
+          sessionOwner.nodeGeneration,
+          sessionOwner.ownerId,
+          sessionOwner.leaseGeneration
         );
         if (previous !== undefined && sameSessionIdentity(previous, binding)) {
           // Registry publication is the last step of the first binding owner
@@ -3581,7 +3695,10 @@ export class ServiceStatefulRuntime {
     if (ingress.requestSequence === undefined) return 'protocolError';
     try {
       const delivery = this.sessionDeliveries.get(actorKey(record.actor));
+      const sessionOwner = this.localSessionOwner();
       if (
+        sessionOwner === undefined ||
+        !sessionOwnerFenceMatches(sessionOwner, record.session) ||
         delivery === undefined ||
         delivery.binding.actor.generation !== record.actor.generation ||
         !exactRetiredDelivery(delivery.binding, record.session) ||
@@ -3623,11 +3740,10 @@ export class ServiceStatefulRuntime {
       // session that belongs to the new lifecycle.
       return 'infrastructure';
     }
+    const sessionOwner = this.localSessionOwner();
     if (
-      record.retiredSession.sessionOwnerNodeRid !== this.nodeRid ||
-      record.retiredSession.sessionOwnerNodeGeneration !== this.nodeGeneration ||
-      record.retiredSession.sessionOwnerId !== this.nodeRid ||
-      record.retiredSession.sessionOwnerLeaseGeneration !== this.nodeGeneration
+      sessionOwner === undefined ||
+      !sessionOwnerFenceMatches(sessionOwner, record.retiredSession)
     ) {
       return 'infrastructure';
     }
@@ -3669,14 +3785,20 @@ export class ServiceStatefulRuntime {
     previous: ServiceSessionBinding,
     actorAuthority: ServiceBoundSessionActorAuthority
   ): void {
-    const ownerGeneration =
-      previous.sessionOwnerNodeGeneration ?? this.tryPeerGeneration(previous.sessionOwnerNodeRid);
-    if (ownerGeneration === undefined) return;
+    // Command 51 carries the retired binding's stored identity unchanged; a
+    // binding without one has nothing to notify.
+    if (
+      previous.sessionOwnerNodeGeneration === undefined ||
+      previous.sessionOwnerId === undefined ||
+      previous.sessionOwnerLeaseGeneration === undefined
+    ) {
+      return;
+    }
     const header = encodeBoundSessionReplacedHeader(actorAuthority, {
       sessionOwnerNodeRid: previous.sessionOwnerNodeRid,
-      sessionOwnerNodeGeneration: ownerGeneration,
-      sessionOwnerId: previous.sessionOwnerId ?? previous.sessionOwnerNodeRid,
-      sessionOwnerLeaseGeneration: previous.sessionOwnerLeaseGeneration ?? ownerGeneration,
+      sessionOwnerNodeGeneration: previous.sessionOwnerNodeGeneration,
+      sessionOwnerId: previous.sessionOwnerId,
+      sessionOwnerLeaseGeneration: previous.sessionOwnerLeaseGeneration,
       sessionRid: previous.sessionRid,
       retiredBindingGeneration: previous.bindingGeneration
     });
@@ -3701,9 +3823,7 @@ export class ServiceStatefulRuntime {
       current.bindingGeneration !== record.binding.retiredGeneration ||
       !routingIdsEqual(current.sessionRid, record.sessionRid) ||
       current.sessionOwnerNodeRid !== ingress.sourceRoutingId ||
-      current.sessionOwnerNodeGeneration !== sourceGeneration ||
-      current.sessionOwnerId !== ingress.sourceRoutingId ||
-      current.sessionOwnerLeaseGeneration !== sourceGeneration
+      current.sessionOwnerNodeGeneration !== sourceGeneration
     ) {
       this.replyWire(ingress, record.correlation, RequestResult.Ok, 0);
       return;
@@ -4755,13 +4875,17 @@ export class ServiceStatefulRuntime {
       try {
         const current = this.validateActorFence(decoded.actor);
         if (decoded.binding.state === 'active') {
+          const sessionOwner = await this.sessionOwnerOf(this.nodeRid, this.nodeGeneration);
           this.registry.installSessionBinding(
             sessionBindingFromWire(
               current.ref,
               decoded.sessionRid,
-              this.nodeRid,
+              sessionOwner.nodeRid,
               decoded.binding.generation,
-              current.membershipEpoch
+              current.membershipEpoch,
+              sessionOwner.nodeGeneration,
+              sessionOwner.ownerId,
+              sessionOwner.leaseGeneration
             )
           );
         } else {

@@ -12,6 +12,7 @@ const wire = require('../../packages/framework/dist/runtime/foundation/service-s
 const meshWire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const { decodeActorJoin28 } = require('../../packages/framework/dist/runtime/protocol/service_wire_pilot_codec.generated');
 const { randomOperationId } = require('../../packages/framework/dist/runtime/locations/creation-operation-id');
+const { withTestSessionOwners } = require('./fixtures/session-owner-descriptors');
 
 const operationKinds = ['userSpotCreate', 'userSpotClose', 'actorCreate', 'streamBind', 'actorJoin'];
 const turn = () => new Promise(resolve => setImmediate(resolve));
@@ -59,7 +60,7 @@ function fixture(request, disconnectOnFailure = true) {
   });
   raw.start();
   raw.connectPeerByRoutingId(target.advertisedEndpoint, target.nodeRoutingId, 'default', 7n);
-  const runtime = new ServiceStatefulRuntime(raw, 'source-node', 7n);
+  const runtime = withTestSessionOwners(new ServiceStatefulRuntime(raw, 'source-node', 7n));
   const actor = { nodeRid: 'target-node', actorId: 'actor', generation: 3n };
   const spot = { spotId: 'spot', generation: 3n };
   runtime.rememberActorRoute({ actor, targetNodeGeneration: 7n, authorityOwnerGeneration: 5n, ownerLeaseGeneration: 7n });

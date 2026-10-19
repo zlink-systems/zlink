@@ -244,6 +244,9 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
     targetNodeRid: 'session-owner',
     sessionNodeRid: 'session-owner',
     sessionRid: 'session-1',
+    sessionOwnerNodeGeneration: 4n,
+    sessionOwnerId: 'session-owner-id',
+    sessionOwnerLeaseGeneration: 8n,
     spotId: 'session-entry',
     bindingGeneration: 6n
   };
@@ -319,14 +322,6 @@ test('pre-cutover rollback restores the source queue and state before one-way Se
     },
     authorityStore: () => ({ readAuthority: async () => authority }),
     relocationStore: () => undefined,
-    liveDescriptors: async () => [
-      {
-        rid: 'session-owner',
-        lifecycleGeneration: 4n,
-        ownerId: 'session-owner-id',
-        leaseGeneration: 8n
-      }
-    ],
     sessionRelocationWire: () => ({
       async requestSessionRelocationSeal(
         _meshName: string,

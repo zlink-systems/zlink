@@ -1125,10 +1125,8 @@ internal sealed class ZLinkActorRuntimeState(
             pending.TargetOwnerLeaseGeneration,
             route.SessionOwnerNodeGeneration,
             route.AcceptedHighWater,
-            route.SessionOwnerId ?? route.NodeRid!.Value.ToHex(),
-            route.SessionOwnerLeaseGeneration == 0
-                ? route.SessionOwnerNodeGeneration
-                : route.SessionOwnerLeaseGeneration
+            route.SessionOwnerId ?? "",
+            route.SessionOwnerLeaseGeneration
         );
     }
 
@@ -1881,18 +1879,11 @@ internal readonly record struct ZLinkActorBoundSession(
     {
         if (SessionNodeRid is not { } previousNodeRid)
             return false;
-        var previousOwnerId = string.IsNullOrWhiteSpace(SessionOwnerId)
-            ? previousNodeRid.ToHex()
-            : SessionOwnerId;
-        var previousOwnerLease =
-            SessionOwnerLeaseGeneration == 0
-                ? SessionOwnerNodeGeneration
-                : SessionOwnerLeaseGeneration;
         return previousNodeRid == sessionNodeRid
             && SessionOwnerNodeGeneration == sessionOwnerNodeGeneration
             && SessionRid == sessionRid
-            && string.Equals(previousOwnerId, sessionOwnerId, StringComparison.Ordinal)
-            && previousOwnerLease == sessionOwnerLeaseGeneration;
+            && string.Equals(SessionOwnerId, sessionOwnerId, StringComparison.Ordinal)
+            && SessionOwnerLeaseGeneration == sessionOwnerLeaseGeneration;
     }
 }
 

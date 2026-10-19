@@ -7,12 +7,14 @@ using Systems.Zlink.Framework.Runtime.Protocol;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Contracts.Messaging;
+using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Configuration;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Identifiers;
+using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
 using Zlink.Framework.Runtime.Streams;
@@ -333,6 +335,68 @@ public sealed class BoundSessionReplacementLifecycleTests
         retired.Time.Advance(TimeSpan.FromMilliseconds(1));
         Assert.Equal(1, retired.Socket.DisconnectCount);
         Assert.Equal(0, replacement.Socket.DisconnectCount);
+    }
+
+    [Fact]
+    public async Task Session_Owner_Without_A_Live_Descriptor_Has_No_Guessed_Identity()
+    {
+        // Session-Actor binding §4: the owner ID and lease generation are the host's
+        // MeshNode descriptor values. A node without a live descriptor has no Session owner
+        // identity, so a command 51 naming its RID and lifecycle generation is not its own.
+        var nodeRid = RoutingId.From($"replacement-owner-{Guid.NewGuid():N}");
+        await using var retired = await HostedReplacementFixture.CreateAsync(
+            nodeRid,
+            "tcp://127.0.0.1:0",
+            ReplacementCallbackBehavior.Success,
+            withLocationStore: false
+        );
+        var nodeGeneration = retired.Node.MeshStatus().LifecycleGeneration;
+        var actor = new ActorRef("actor-a", 1, "actors", RoutingId.From("actor-owner"));
+        _ = retired.Runtime.BindSessionActor(
+            "actor-a",
+            retired.Lifetime.Context,
+            "binding-actor-a",
+            new ZLinkSessionActor(
+                retired.Lifetime.Context,
+                "actor-a",
+                retired.SessionRid,
+                "binding-actor-a"
+            ),
+            retired.BindingGeneration,
+            ZLinkSessionBindingRoute.Create(
+                actor,
+                "actors",
+                targetNodeGeneration: 2,
+                authorityOwnerGeneration: 3,
+                ownerLeaseGeneration: 5
+            ),
+            nodeGeneration,
+            nodeRid,
+            nodeRid.ToHex(),
+            nodeGeneration
+        );
+        var record = new ZLinkServiceWireCodec.BoundSessionReplacedRecord(
+            new ZLinkServiceWireCodec.BoundSessionReplacedActorAuthority(
+                "actor-a",
+                1,
+                nodeRid,
+                nodeGeneration,
+                3,
+                5
+            ),
+            new ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession(
+                nodeRid,
+                nodeGeneration,
+                nodeRid.ToHex(),
+                nodeGeneration,
+                retired.SessionRid,
+                retired.BindingGeneration
+            )
+        );
+
+        Assert.False(
+            retired.Runtime.TryHandleBoundSessionReplacedNotification(nodeRid, nodeRid, record)
+        );
     }
 
     [Theory]
@@ -1391,8 +1455,10 @@ public sealed class BoundSessionReplacementLifecycleTests
             BindingGeneration = bindingGeneration;
             SessionOwnerNodeRid = node.RoutingId;
             SessionOwnerNodeGeneration = node.MeshStatus().LifecycleGeneration;
-            SessionOwnerId = node.RoutingId.ToHex();
-            SessionOwnerLeaseGeneration = SessionOwnerNodeGeneration;
+            // Session-Actor binding §4: the identity is this host's descriptor value.
+            var sessionOwner = runtime.GetSpotNodeRuntime(node.RoutingId).LocalSessionOwner;
+            SessionOwnerId = sessionOwner?.OwnerId ?? "";
+            SessionOwnerLeaseGeneration = sessionOwner?.LeaseGeneration ?? 0;
         }
 
         internal ZLinkFrameworkRuntime Runtime { get; }
@@ -1412,7 +1478,8 @@ public sealed class BoundSessionReplacementLifecycleTests
         internal static async Task<HostedReplacementFixture> CreateAsync(
             RoutingId nodeRid,
             string endpoint,
-            ReplacementCallbackBehavior behavior
+            ReplacementCallbackBehavior behavior,
+            bool withLocationStore = true
         )
         {
             var registration = new ZLinkFrameworkRegistration
@@ -1429,11 +1496,42 @@ public sealed class BoundSessionReplacementLifecycleTests
 
             var lifetime = new ReplacementLifetime(behavior);
             ZLinkFrameworkRuntime runtime = null!;
-            var services = new ServiceCollection()
+            var serviceCollection = new ServiceCollection()
                 .AddSingleton(registration)
                 .AddSingleton(lifetime)
-                .AddSingleton(_ => runtime)
-                .BuildServiceProvider();
+                .AddSingleton(_ => runtime);
+            if (withLocationStore)
+            {
+                // A live host publishes its owner token through the Location Store.
+                var locationTime = new ManualTimeProvider();
+                var locationProvider = new ZLinkInMemoryProviderLocationStore(locationTime);
+                var locationStore = new ZLinkProviderLocationRepository(locationProvider);
+                var locationOptions = new ZLinkLocationOptions { PollingInterval = TimeSpan.Zero };
+                var leaseTracker = new ZLinkOwnerLeaseTracker(
+                    locationStore,
+                    locationOptions,
+                    locationTime
+                );
+                var locationResolvers = new ZLinkStoreLocationResolvers(
+                    locationStore,
+                    leaseTracker,
+                    options: locationOptions
+                );
+                var locationRuntime = new ZLinkLocationRuntime(
+                    locationOptions,
+                    locationStore,
+                    locationTime
+                );
+                Assert.True(await locationRuntime.RenewOwnerLeaseOnceAsync());
+                serviceCollection
+                    .AddSingleton(locationRuntime)
+                    .AddSingleton(new ZLinkLocationLifecycle(locationRuntime, locationResolvers))
+                    .AddSingleton(leaseTracker)
+                    .AddSingleton(locationResolvers)
+                    .AddSingleton<IZLinkMeshNodeLocationResolver>(locationResolvers);
+                registration.Locations.StoreInstance = locationProvider;
+            }
+            var services = serviceCollection.BuildServiceProvider();
             runtime = new ZLinkFrameworkRuntime(
                 services,
                 new ZLinkDotNetBackendAdapterFactory(),
