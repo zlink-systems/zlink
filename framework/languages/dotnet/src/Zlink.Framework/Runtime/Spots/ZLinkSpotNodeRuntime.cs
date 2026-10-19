@@ -119,9 +119,16 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                 throw new InvalidOperationException(
                     "The MeshNode backend does not support authority fencing."
                 );
-            if (node is not IZLinkBackendRequestSourceFenceObserver)
+            if (node is not IZLinkBackendRequestSourceFenceObserver sources)
                 throw new InvalidOperationException(
                     "The MeshNode backend does not preserve request-source fences."
+                );
+            if (
+                (leaseTracker ?? services.GetService<ZLinkOwnerLeaseTracker>()) is { } leases
+                && services.GetService<IZLinkMeshNodeLocationResolver>() is { } peers
+            )
+                sources.SetRequestSourceAcceptance(
+                    new ZLinkRequestSourceFenceResolver(peers, leases, spotChannelName)
                 );
         }
         _leaseTracker = leaseTracker;

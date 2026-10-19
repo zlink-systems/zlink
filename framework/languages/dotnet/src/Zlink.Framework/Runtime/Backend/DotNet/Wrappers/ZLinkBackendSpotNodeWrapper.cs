@@ -99,6 +99,15 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         ulong sourceNodeGeneration
     ) => _pump.ResolveRequestSourceFence(sourceNodeRid, sourceNodeGeneration);
 
+    public void SetRequestSourceAcceptance(IZLinkBackendRequestSourceAcceptance acceptance) =>
+        _pump.SetRequestSourceAcceptance(acceptance);
+
+    public ValueTask<ZLinkServiceWireCodec.RequestSourceFence?> AcceptRequestSourceAsync(
+        RoutingId sourceNodeRid,
+        ulong sourceNodeGeneration,
+        CancellationToken cancellationToken
+    ) => _pump.AcceptRequestSourceAsync(sourceNodeRid, sourceNodeGeneration, cancellationToken);
+
     public void SetActorMessageFollowIngressHandler(
         Func<IReadOnlyList<ZLinkBackendActorPart>, bool> handler
     ) => _messageFollowIngress.SetHandler(handler);

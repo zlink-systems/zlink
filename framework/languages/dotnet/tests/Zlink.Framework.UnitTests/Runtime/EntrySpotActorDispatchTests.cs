@@ -101,6 +101,7 @@ public sealed partial class EntrySpotActorDispatchTests
                             7
                         )
                 ),
+                requestSource: AcceptedRequestSource(RoutingId.From("message-follow-hop")),
                 directReply: parts =>
                 {
                     replies.Add(parts.Single().AsReadOnlySpan().ToArray());
@@ -12008,7 +12009,8 @@ public sealed partial class EntrySpotActorDispatchTests
                 flags,
                 Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
                 true,
-                RouteContext: replyRoute
+                RouteContext: replyRoute,
+                RequestSource: AcceptedRequestSource(sourceNode)
             ),
             new ZLinkBackendActorPart(
                 actorRef,
@@ -12020,10 +12022,17 @@ public sealed partial class EntrySpotActorDispatchTests
                     ? Message.From("{")
                     : Message.From(ZLinkEnvelopeCodec.EncodeJsonBytes(value, typeof(string))),
                 false,
-                RouteContext: replyRoute
+                RouteContext: replyRoute,
+                RequestSource: AcceptedRequestSource(sourceNode)
             ),
         ];
     }
+
+    // The dispatch pump records the sender's source owner values when this owner accepts the
+    // frame (Location runtime §9.3); parts injected in its place carry the recorded values.
+    private static ZLinkServiceWireCodec.RequestSourceFence AcceptedRequestSource(
+        RoutingId sourceNode
+    ) => new("accepted-source-owner", 1, sourceNode, 1);
 
     private static bool IsDisposed(Message message)
     {
@@ -13947,6 +13956,14 @@ public sealed partial class EntrySpotActorDispatchTests
             _requestSources.TryGetValue((sourceNodeRid, sourceNodeGeneration), out var source)
                 ? source
                 : null;
+
+        public void SetRequestSourceAcceptance(IZLinkBackendRequestSourceAcceptance acceptance) { }
+
+        public ValueTask<ZLinkServiceWireCodec.RequestSourceFence?> AcceptRequestSourceAsync(
+            RoutingId sourceNodeRid,
+            ulong sourceNodeGeneration,
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(ResolveRequestSourceFence(sourceNodeRid, sourceNodeGeneration));
 
         public void ObserveActorAuthority(
             ZLinkBackendActorRef actor,

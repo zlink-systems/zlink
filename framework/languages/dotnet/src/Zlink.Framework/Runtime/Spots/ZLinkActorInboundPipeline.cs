@@ -365,6 +365,30 @@ internal sealed class ZLinkActorInboundPipeline(
             runtime.Flow.CaptureEnabled,
             ZLinkFlowOrigin.Inbound
         );
+        // Location runtime §9.3: the dispatch pump recorded the source owner values when this
+        // owner accepted the frame. A frame without them ends Unavailable (binding §4).
+        if (
+            allowCapture
+            && ZLinkRequestSourceFenceResolver.LacksRecordedSource(runtime, frame.RequestSource)
+        )
+        {
+            await ZLinkActorBoundSessionRelay
+                .ReplyStaleActorAsync(
+                    runtime,
+                    frame.Actor,
+                    frame.SourceNodeRid,
+                    frame.SourceSessionRid,
+                    frame.RequestId,
+                    frame.Flags,
+                    frame.RouteContext.ReplyCapability,
+                    frame.Header,
+                    ZLinkRequestSourceFenceResolver.Unavailable(frame.SourceNodeRid),
+                    cancellationToken,
+                    frame.DirectReply
+                )
+                .ConfigureAwait(false);
+            return;
+        }
         var state = frame.AcceptedState ?? runtime.GetOrCreateActorState(frame.Actor.ActorId);
         ZLinkActorHandoffIngressStateSnapshot ingress;
         ZLinkActorHandoffCaptureResult capture;
