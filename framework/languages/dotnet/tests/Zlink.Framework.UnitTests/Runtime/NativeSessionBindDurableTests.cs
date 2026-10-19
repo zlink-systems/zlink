@@ -1,3 +1,4 @@
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Messaging;
@@ -21,16 +22,11 @@ public sealed partial class StatefulServiceRuntimeTests
         var endpoint = $"inproc://bind-intent-{Guid.NewGuid():N}";
         source.SetPeerExpectation(target, endpoint, ZLinkServiceSecurityIdentity.Plaintext, 7);
         source.Start();
-        using var payload = Message.From("bind-operation"u8);
         var request = source
-            .RequestToNodeDirectAsync(
-                target,
-                [payload],
-                SendFlags.None,
-                default,
+            .BindBoundSessionAsync(
+                CanonicalBindRequest(target, 7),
                 TimeSpan.FromSeconds(2),
-                CancellationToken.None,
-                durable: true
+                CancellationToken.None
             )
             .AsTask();
         Assert.False(request.IsCompleted);
@@ -113,67 +109,70 @@ public sealed partial class StatefulServiceRuntimeTests
         target.SetBind(endpoint);
         source.Start();
         target.Start();
-        using var payload = Message.From("bind-operation"u8);
+        var attempts = 0;
+        target.SetBoundSessionBindHandler(
+            (sourceRid, generation, binding, reply, cancellationToken) =>
+            {
+                attempts++;
+                Assert.Equal(source.RoutingId, sourceRid);
+                Assert.NotEqual(0UL, generation);
+                Assert.Equal("bind-actor", binding.Actor.Actor.ActorId.Value);
+                if (rejected)
+                    return ValueTask.FromException(
+                        new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.Unavailable,
+                            "terminal rejection"
+                        )
+                    );
+                reply();
+                return ValueTask.CompletedTask;
+            }
+        );
         var request = source
-            .RequestToNodeDirectAsync(
-                target.RoutingId,
-                [payload],
-                SendFlags.None,
-                default,
+            .BindBoundSessionAsync(
+                CanonicalBindRequest(target.RoutingId, target.Status().LifecycleGeneration),
                 TimeSpan.FromSeconds(2),
-                CancellationToken.None,
-                durable: true
+                CancellationToken.None
             )
             .AsTask();
-        // Request execution reaches the initial missing-peer admission before
-        // returning its first incomplete await. The one-shot path is terminal here.
         Assert.False(request.IsCompleted);
         source.ConnectPeer(endpoint, target.RoutingId);
-        using var ready = new MeshReadyBatch();
-        await WaitUntilAsync(() =>
-        {
-            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
-            return ready.Count > 0;
-        });
-        using var claim = ready.TakeClaim(0);
-        using var received = new MeshReceiveBatch();
-        Assert.True(claim.Receive(received, RecvFlags.DontWait));
-        Assert.Equal(MeshRecordKind.NodeRequest, received[0].Kind);
         if (rejected)
         {
-            var header = ZLinkClientCallCodec.CreateEnvelope(
-                ZLinkMessageKind.Request,
-                "mesh",
-                "bind"
-            ) with
-            {
-                Kind = ZLinkMessageKind.Error,
-                ErrorCode = "unavailable",
-                ErrorMessage = "terminal rejection",
-            };
-            using var terminal = ZLinkEnvelopeCodec.EncodeHeader(header);
-            Assert.Equal(SubmitResult.Ok, received[0].Reply([terminal]));
-            var reply = await request;
-            var error = Assert.Throws<ZLinkFrameworkException>(() =>
-                ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<object>(
-                    reply,
-                    "empty",
-                    "bind rejected",
-                    new ZLinkFrameworkRegistration().Codecs
-                )
-            );
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => request);
             Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
         }
         else
         {
-            using var terminal = Message.From("bound"u8);
-            Assert.Equal(SubmitResult.Ok, received[0].Reply([terminal]));
-            using var reply = await request;
-            Assert.Equal(
-                terminal.AsReadOnlyMemory().ToArray(),
-                reply.ApplicationPayloadView!.Value.GetSpan(0).ToArray()
-            );
+            var accepted = await request;
+            Assert.NotNull(accepted);
+            Assert.Equal(1UL, accepted.BindingGeneration.Value);
+            Assert.Equal(3UL, accepted.AuthorityOwnerGeneration.Value);
         }
-        Assert.False(claim.Receive(received, RecvFlags.DontWait));
+        Assert.Equal(1, attempts);
+        using var ready = new MeshReadyBatch();
+        target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
+        Assert.Equal(0, ready.Count);
     }
+
+    private static ServiceWireCodec.BoundSessionBind38 CanonicalBindRequest(
+        RoutingId target,
+        ulong generation
+    ) =>
+        new(
+            0,
+            new(1),
+            new(
+                new(new("bind-actor"), new(1)),
+                new(target.ToBytes().ToArray()),
+                new(generation),
+                new(3),
+                new(5)
+            ),
+            new(RoutingId.From("bind-session").ToBytes().ToArray()),
+            new ServiceWireCodec.BoundSessionBindingTransitionCase0(
+                ServiceWireCodec.BoundSessionBindingState.Active,
+                new(1)
+            )
+        );
 }

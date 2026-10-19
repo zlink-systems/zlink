@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Runtime.ExceptionServices;
 using Microsoft.Extensions.DependencyInjection;
+using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Identifiers;
@@ -3096,22 +3097,163 @@ internal sealed partial class ZLinkFrameworkRuntime
         ZLinkEntrySpotActivation? EntrySpot
     );
 
-    internal async ValueTask<ZLinkRemoteSessionBindResponse> BindRemoteBoundSessionRouteAsync(
-        ZLinkRemoteSessionBindRequest request,
+    internal async ValueTask ApplyBoundSessionBindAsync(
+        RoutingId targetNodeRid,
         RoutingId sourceNodeRid,
+        ulong sourceNodeGeneration,
+        ServiceWireCodec.BoundSessionBind38 request,
+        Action reply,
         CancellationToken cancellationToken
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
+        var nodeRuntime = GetSpotNodeRuntime(targetNodeRid);
+        var meshName = ResolveSpotNodeMeshName(nodeRuntime);
         var sessionOwner = await ResolveSessionOwnerAsync(
-                GetSpotNodeRuntime(RoutingId.From(request.TargetNodeRid)),
-                request.MeshName,
-                RoutingId.From(request.SessionNodeRid),
-                request.SessionOwnerNodeGeneration,
+                nodeRuntime,
+                meshName,
+                sourceNodeRid,
+                sourceNodeGeneration,
                 cancellationToken
             )
             .ConfigureAwait(false);
-        return BindRemoteBoundSessionRoute(request, sourceNodeRid, sessionOwner);
+        var actorId = request.Actor.Actor.ActorId.Value;
+        var actorRef = new ZLinkBackendActorRef(
+            targetNodeRid,
+            actorId,
+            request.Actor.Actor.ObjectGeneration.Value
+        );
+        var sessionRid = RoutingId.From(request.SessionRid.Value);
+        var bindingGeneration = request.Binding switch
+        {
+            ServiceWireCodec.BoundSessionBindingTransitionCase0 active => active
+                .BindingGeneration
+                .Value,
+            ServiceWireCodec.BoundSessionBindingTransitionCase1 retired => retired
+                .RetiredBindingGeneration
+                .Value,
+            _ => throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ProtocolError,
+                "Invalid binding transition."
+            ),
+        };
+        var token = ZLinkActorBoundSessionBindingToken.Canonical(
+            sourceNodeRid,
+            sourceNodeGeneration,
+            sessionOwner.OwnerId,
+            sessionOwner.LeaseGeneration,
+            sessionRid,
+            bindingGeneration
+        );
+        var node = nodeRuntime.Node;
+        if (!TryGetCreatedActorState(actorId, out var state))
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{actorId}' is unavailable for session binding."
+            );
+        if (request.Binding is ServiceWireCodec.BoundSessionBindingTransitionCase1)
+        {
+            var expected = new ZLinkActorBoundSession(
+                sourceNodeRid,
+                sessionRid,
+                token,
+                bindingGeneration,
+                actorRef.Generation,
+                request.Actor.ExpectedAuthorityOwnerGeneration.Value,
+                ZLinkMeshName.FromBoundary(meshName, nameof(meshName)),
+                request.Actor.TargetNodeGeneration.Value,
+                request.Actor.ExpectedOwnerLeaseGeneration.Value,
+                sourceNodeGeneration,
+                0,
+                sessionOwner.OwnerId,
+                sessionOwner.LeaseGeneration
+            );
+            _actorBoundSessionCoordinator.TombstoneActorSession(
+                actorId,
+                expected,
+                ValidateAuthority,
+                reply
+            );
+            return;
+        }
+        if (
+            node is not IZLinkBackendLocalActorAuthorityReader authorityReader
+            || !authorityReader.TryGetLocalActorAuthority(actorRef, out _, out var ownerLease)
+        )
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.Unavailable,
+                $"Actor '{actorId}' authority is unavailable."
+            );
+        var replacement = _actorBoundSessionCoordinator.ReplaceActorSessionBinding(
+            actorId,
+            sourceNodeRid,
+            sessionRid,
+            token,
+            bindingGeneration,
+            actorRef.Generation,
+            request.Actor.ExpectedAuthorityOwnerGeneration.Value,
+            meshName,
+            request.Actor.TargetNodeGeneration.Value,
+            ownerLease,
+            sourceNodeGeneration,
+            0,
+            sessionOwner.OwnerId,
+            sessionOwner.LeaseGeneration,
+            ValidateAuthority,
+            reply
+        );
+        if (
+            replacement.Changed
+            && replacement.Previous is { } previous
+            && previous.SessionNodeRid is { } previousSessionNodeRid
+            && !previous.IsSamePhysicalSessionOwner(
+                sourceNodeRid,
+                sourceNodeGeneration,
+                sessionRid,
+                sessionOwner.OwnerId,
+                sessionOwner.LeaseGeneration
+            )
+        )
+        {
+            var notification = new ZLinkServiceWireCodec.BoundSessionReplacedRecord(
+                new(
+                    actorId,
+                    actorRef.Generation,
+                    targetNodeRid,
+                    request.Actor.TargetNodeGeneration.Value,
+                    request.Actor.ExpectedAuthorityOwnerGeneration.Value,
+                    ownerLease
+                ),
+                new(
+                    previousSessionNodeRid,
+                    previous.SessionOwnerNodeGeneration,
+                    previous.SessionOwnerId,
+                    previous.SessionOwnerLeaseGeneration,
+                    previous.SessionRid,
+                    previous.BindingGeneration
+                )
+            );
+            ScheduleBoundSessionReplacedNotification(node, previousSessionNodeRid, notification);
+        }
+
+        void ValidateAuthority(ZLinkActorRuntimeState current)
+        {
+            if (
+                RoutingId.From(request.Actor.TargetNodeRid.Value) != targetNodeRid
+                || node.MeshStatus().LifecycleGeneration != request.Actor.TargetNodeGeneration.Value
+                || current.IsDispatchBlocked
+                || current.Actor is null
+                || current.NativeActorRef != actorRef
+                || node is not IZLinkBackendLocalActorAuthorityReader reader
+                || !reader.TryGetLocalActorAuthority(actorRef, out var authority, out _)
+                || authority != request.Actor.ExpectedAuthorityOwnerGeneration.Value
+                || !HasExactAdmittedNodeLifecycle(node, sourceNodeRid, sourceNodeGeneration)
+            )
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    $"Actor '{actorId}' session binding authority is unavailable."
+                );
+        }
     }
 
     /// <summary>
@@ -3163,216 +3305,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             ZLinkRetryAdvice.RetryAfterBackoff
         );
 
-    private ZLinkRemoteSessionBindResponse BindRemoteBoundSessionRoute(
-        ZLinkRemoteSessionBindRequest request,
-        RoutingId sourceNodeRid,
-        ZLinkServiceWireCodec.RequestSourceFence sessionOwner
-    )
-    {
-        var targetNodeRid = RoutingId.From(request.TargetNodeRid);
-        var sessionNodeRid = RoutingId.From(request.SessionNodeRid);
-        var sessionRid = RoutingId.From(request.SessionRid);
-        if (sourceNodeRid != sessionNodeRid)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InvalidOperation,
-                "Remote actor session binding source did not match the declared session node."
-            );
-
-        var actorRef = new ZLinkBackendActorRef(
-            targetNodeRid,
-            request.ActorId,
-            request.ObjectGeneration
-        );
-        var nodeRuntime = GetSpotNodeRuntime(targetNodeRid);
-        var node = nodeRuntime.Node;
-        var currentNodeGeneration = node.MeshStatus().LifecycleGeneration;
-        var localMeshName = ResolveSpotNodeMeshName(nodeRuntime);
-        if (
-            !string.Equals(localMeshName, request.MeshName, StringComparison.Ordinal)
-            || currentNodeGeneration == 0
-            || !HasExactAdmittedNodeLifecycle(
-                node,
-                sessionNodeRid,
-                request.SessionOwnerNodeGeneration
-            )
-            || node.RoutingId != targetNodeRid
-            || node is not IZLinkBackendLocalActorAuthorityReader authorityReader
-            || !authorityReader.TryGetLocalActorAuthority(
-                actorRef,
-                out var authorityOwnerGeneration,
-                out var ownerLeaseGeneration
-            )
-            || authorityOwnerGeneration == 0
-            || ownerLeaseGeneration == 0
-        )
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                $"Actor '{request.ActorId}' remote session binding target lifecycle is stale."
-            );
-
-        //  Recorded at bind time; the relocation seal reads it back later, so
-        //  printing both ends shows whether they name the same node.
-        ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"bind_session actor={request.ActorId} session_node={sessionNodeRid}"
-        );
-        ZLinkActorBoundSession? priorBindingForNotification = TryGetActorBoundSessionForOutbound(
-            request.ActorId,
-            out var priorBinding
-        )
-            ? priorBinding
-            : null;
-        if (
-            priorBindingForNotification is null
-            && TryGetActorStagedSessionRoute(request.ActorId, out var stagedRoute)
-        )
-        {
-            priorBindingForNotification = new ZLinkActorBoundSession(
-                stagedRoute.NodeRid,
-                stagedRoute.SessionRid!.Value,
-                stagedRoute.BindingToken!,
-                stagedRoute.BindingGeneration,
-                stagedRoute.ObjectGeneration,
-                stagedRoute.AuthorityOwnerGeneration,
-                ZLinkMeshName.FromBoundary(stagedRoute.MeshName!, nameof(stagedRoute.MeshName)),
-                stagedRoute.TargetNodeGeneration,
-                stagedRoute.OwnerLeaseGeneration,
-                stagedRoute.SessionOwnerNodeGeneration,
-                stagedRoute.AcceptedHighWater,
-                stagedRoute.SessionOwnerId ?? "",
-                stagedRoute.SessionOwnerLeaseGeneration
-            );
-        }
-        ZLinkFrameworkDebugLog.SpotDiscovery(
-            $"bound_session_replaced_candidate actor={request.ActorId} current={Diagnostics.ZLinkFrameworkDebugLog.OrAbsent(priorBindingForNotification?.SessionRid.ToHex())}"
-        );
-        var replacement = _actorBoundSessionCoordinator.ReplaceActorSessionBinding(
-            request.ActorId,
-            sessionNodeRid,
-            sessionRid,
-            request.BindingToken,
-            request.BindingGeneration,
-            request.ObjectGeneration,
-            authorityOwnerGeneration,
-            localMeshName,
-            currentNodeGeneration,
-            ownerLeaseGeneration,
-            request.SessionOwnerNodeGeneration,
-            request.AcceptedHighWater,
-            sessionOwner.OwnerId,
-            sessionOwner.LeaseGeneration,
-            state =>
-                EnsureSessionReplacementAuthorityCurrent(
-                    state,
-                    request,
-                    targetNodeRid,
-                    currentNodeGeneration,
-                    authorityOwnerGeneration
-                )
-        );
-        if (replacement.Changed)
-        {
-            var previousForNotification = replacement.Previous ?? priorBindingForNotification;
-            if (
-                previousForNotification is { } previous
-                && previous.SessionNodeRid is { } previousSessionNodeRid
-                && !previous.IsSamePhysicalSessionOwner(
-                    sessionNodeRid,
-                    request.SessionOwnerNodeGeneration,
-                    sessionRid,
-                    sessionOwner.OwnerId,
-                    sessionOwner.LeaseGeneration
-                )
-                // Command 51 carries the retired binding's stored identity unchanged; a
-                // binding without one has nothing to notify.
-                && !string.IsNullOrEmpty(previous.SessionOwnerId)
-                && previous.SessionOwnerLeaseGeneration != 0
-            )
-            {
-                var notification = new ZLinkServiceWireCodec.BoundSessionReplacedRecord(
-                    new ZLinkServiceWireCodec.BoundSessionReplacedActorAuthority(
-                        request.ActorId,
-                        request.ObjectGeneration,
-                        targetNodeRid,
-                        currentNodeGeneration,
-                        authorityOwnerGeneration,
-                        ownerLeaseGeneration
-                    ),
-                    new ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession(
-                        previousSessionNodeRid,
-                        previous.SessionOwnerNodeGeneration,
-                        previous.SessionOwnerId,
-                        previous.SessionOwnerLeaseGeneration,
-                        previous.SessionRid,
-                        previous.BindingGeneration
-                    )
-                );
-                ZLinkFrameworkDebugLog.SpotDiscovery(
-                    $"bound_session_replaced_schedule actor={request.ActorId} source={targetNodeRid} target={previousSessionNodeRid} session={previous.SessionRid} binding={previous.BindingGeneration}"
-                );
-                ScheduleBoundSessionReplacedNotification(
-                    node,
-                    previousSessionNodeRid,
-                    notification
-                );
-            }
-        }
-        return new ZLinkRemoteSessionBindResponse(
-            true,
-            request.ObjectGeneration,
-            localMeshName,
-            targetNodeRid.ToBytes().ToArray(),
-            currentNodeGeneration,
-            authorityOwnerGeneration,
-            ownerLeaseGeneration
-        );
-    }
-
-    private void EnsureSessionReplacementAuthorityCurrent(
-        ZLinkActorRuntimeState state,
-        ZLinkRemoteSessionBindRequest request,
-        RoutingId targetNodeRid,
-        ulong targetNodeGeneration,
-        ulong authorityOwnerGeneration
-    )
-    {
-        var nodeRuntime = GetSpotNodeRuntime(targetNodeRid);
-        var node = nodeRuntime.Node;
-        var actorRef = new ZLinkBackendActorRef(
-            targetNodeRid,
-            request.ActorId,
-            request.ObjectGeneration
-        );
-        if (
-            node.MeshStatus().LifecycleGeneration != targetNodeGeneration
-            || !HasExactAdmittedNodeLifecycle(
-                node,
-                RoutingId.From(request.SessionNodeRid),
-                request.SessionOwnerNodeGeneration
-            )
-            || !string.Equals(
-                ResolveSpotNodeMeshName(nodeRuntime),
-                request.MeshName,
-                StringComparison.Ordinal
-            )
-            || state.IsDispatchBlocked
-            || state.Actor is null
-            || state.NativeActorRef is not { } currentActor
-            || currentActor != actorRef
-            || node is not IZLinkBackendLocalActorAuthorityReader authorityReader
-            || !authorityReader.TryGetLocalActorAuthority(
-                actorRef,
-                out var currentAuthorityOwnerGeneration,
-                out _
-            )
-            || currentAuthorityOwnerGeneration != authorityOwnerGeneration
-        )
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                $"Actor '{request.ActorId}' changed authority before session binding publication.",
-                ZLinkRetryAdvice.RetryAfterBackoff
-            );
-    }
-
     private static bool HasExactAdmittedNodeLifecycle(
         IZLinkBackendSpotNode node,
         RoutingId nodeRid,
@@ -3395,155 +3327,6 @@ internal sealed partial class ZLinkFrameworkRuntime
             && peer.RoutingId == nodeRid
             && peer.LifecycleGeneration == nodeGeneration
         );
-    }
-
-    internal async ValueTask<ZLinkRemoteSessionOwnerTombstoneResponse> TombstoneRemoteSessionOwnerBindingAsync(
-        ZLinkRemoteSessionOwnerTombstoneRequest request,
-        RoutingId sourceNodeRid,
-        CancellationToken cancellationToken
-    )
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var actorNodeRid = RoutingId.From(request.ActorNodeRid);
-        var sessionNode = GetMeshNodeRuntime(request.MeshName).Node;
-        var rows =
-            Services.GetService(typeof(ZLinkStoreLocationResolvers)) as ZLinkStoreLocationResolvers;
-        if (rows is null)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                "Session owner tombstone requires current Location Store authority.",
-                ZLinkRetryAdvice.RetryAfterBackoff
-            );
-        var key = new ZLinkActorLocationKey(request.ActorId);
-        rows.InvalidateActorRoute(key);
-        var currentLocation = await rows.ResolveActorRowAsync(key, cancellationToken)
-            .ConfigureAwait(false);
-        if (
-            actorNodeRid != sourceNodeRid
-            || currentLocation is null
-            || currentLocation.ActorRef.NodeRid != actorNodeRid
-            || currentLocation.ActorRef.ObjectGeneration != request.ObjectGeneration
-            || currentLocation.OwnerNodeGeneration != request.ActorNodeGeneration
-            || currentLocation.AuthorityOwnerGeneration != request.AuthorityOwnerGeneration
-            || currentLocation.LeaseGeneration < 0
-            || (ulong)currentLocation.LeaseGeneration != request.OwnerLeaseGeneration
-            || !HasExactAdmittedNodeLifecycle(
-                sessionNode,
-                actorNodeRid,
-                request.ActorNodeGeneration
-            )
-            || sessionNode.MeshStatus().LifecycleGeneration != request.SessionOwnerNodeGeneration
-            || request.ObjectGeneration == 0
-            || string.IsNullOrWhiteSpace(request.MeshName)
-            || request.ActorNodeGeneration == 0
-            || request.AuthorityOwnerGeneration == 0
-            || request.OwnerLeaseGeneration == 0
-            || request.BindingGeneration == 0
-            || request.SessionOwnerNodeGeneration == 0
-        )
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InvalidOperation,
-                "Session binding tombstone source or identity is invalid."
-            );
-        var actorRoute = ZLinkSessionBindingRoute.Create(
-            new ActorRef(request.ActorId, request.ObjectGeneration, request.MeshName, actorNodeRid),
-            request.MeshName,
-            request.ActorNodeGeneration,
-            request.AuthorityOwnerGeneration,
-            request.OwnerLeaseGeneration
-        );
-        TombstoneSessionActorBinding(
-            request.ActorId,
-            RoutingId.From(request.SessionRid),
-            request.BindingToken,
-            request.BindingGeneration,
-            request.SessionOwnerNodeGeneration,
-            actorRoute
-        );
-        return new ZLinkRemoteSessionOwnerTombstoneResponse(true);
-    }
-
-    internal async ValueTask<ZLinkRemoteSessionUnbindResponse> TombstoneRemoteActorBindingAsync(
-        ZLinkRemoteSessionUnbindRequest request,
-        RoutingId sourceNodeRid,
-        CancellationToken cancellationToken
-    )
-    {
-        cancellationToken.ThrowIfCancellationRequested();
-        var targetNodeRid = RoutingId.From(request.TargetNodeRid);
-        var nodeRuntime = GetSpotNodeRuntime(targetNodeRid);
-        var node = nodeRuntime.Node;
-        var rows =
-            Services.GetService(typeof(ZLinkStoreLocationResolvers)) as ZLinkStoreLocationResolvers;
-        if (rows is null)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                "Actor session replacement requires current Location Store authority.",
-                ZLinkRetryAdvice.RetryAfterBackoff
-            );
-
-        var key = new ZLinkActorLocationKey(request.ActorId);
-        rows.InvalidateActorRoute(key);
-        var currentLocation = await rows.ResolveActorRowAsync(key, cancellationToken)
-            .ConfigureAwait(false);
-        var actorRef = new ZLinkBackendActorRef(
-            targetNodeRid,
-            request.ActorId,
-            request.ObjectGeneration
-        );
-        var sessionNodeRid = RoutingId.From(request.SessionNodeRid);
-        var sessionRid = RoutingId.From(request.SessionRid);
-        var expected = new ZLinkActorBoundSession(
-            sessionNodeRid,
-            sessionRid,
-            request.BindingToken,
-            request.BindingGeneration,
-            request.ObjectGeneration,
-            request.AuthorityOwnerGeneration,
-            ZLinkMeshName.FromBoundary(request.MeshName, nameof(request.MeshName)),
-            request.TargetNodeGeneration,
-            request.OwnerLeaseGeneration,
-            request.SessionOwnerNodeGeneration,
-            request.AcceptedHighWater
-        );
-        if (
-            sourceNodeRid.IsEmpty
-            || sessionNodeRid.IsEmpty
-            || sessionRid.IsEmpty
-            || currentLocation is null
-            || currentLocation.ActorRef.NodeRid != sourceNodeRid
-            || !string.Equals(currentLocation.MeshName, request.MeshName, StringComparison.Ordinal)
-            || !HasExactAdmittedNodeLifecycle(
-                node,
-                sourceNodeRid,
-                currentLocation.OwnerNodeGeneration
-            )
-            || node.MeshStatus().LifecycleGeneration != request.TargetNodeGeneration
-            || !string.Equals(
-                ResolveSpotNodeMeshName(nodeRuntime),
-                request.MeshName,
-                StringComparison.Ordinal
-            )
-            || !TryGetCreatedActorState(request.ActorId, out var actorState)
-            || actorState.NativeActorRef is not { } currentActor
-            || currentActor != actorRef
-            || node is not IZLinkBackendLocalActorAuthorityReader authorityReader
-            || !authorityReader.TryGetLocalActorAuthority(
-                actorRef,
-                out var currentAuthorityOwnerGeneration,
-                out var currentOwnerLeaseGeneration
-            )
-            || currentAuthorityOwnerGeneration != request.AuthorityOwnerGeneration
-            || currentOwnerLeaseGeneration != request.OwnerLeaseGeneration
-        )
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                $"Actor '{request.ActorId}' previous binding tombstone is stale.",
-                ZLinkRetryAdvice.RetryAfterBackoff
-            );
-
-        _actorBoundSessionCoordinator.TombstoneActorSession(request.ActorId, expected);
-        return new ZLinkRemoteSessionUnbindResponse(true);
     }
 
     private static string ResolveSpotNodeMeshName(ZLinkSpotNodeRuntime node) =>
@@ -5319,7 +5102,7 @@ internal sealed partial class ZLinkFrameworkRuntime
 
     internal ValueTask CloseSessionBindingAsync(
         ZLinkServiceWireCodec.RequestSourceFence? sessionOwner,
-        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionClose54 request,
+        ServiceWireCodec.BoundSessionClose54 request,
         CancellationToken cancellationToken
     ) =>
         _actorBoundSessionCoordinator.CloseSessionBindingAsync(
