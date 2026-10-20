@@ -151,7 +151,7 @@ export class ZLinkSpotActorDispatcher {
     actor: ZLinkActor,
     packetName: string,
     message: TMessage,
-    context: Partial<ZLinkMessageContext> = {}
+    context?: Partial<ZLinkMessageContext>
   ): Promise<void> {
     return this.dispatchSendDecoded(actor, packetName, () => message, context);
   }
@@ -160,7 +160,7 @@ export class ZLinkSpotActorDispatcher {
     actor: ZLinkActor,
     packetName: string,
     decode: () => TMessage,
-    context: Partial<ZLinkMessageContext> = {}
+    context?: Partial<ZLinkMessageContext>
   ): Promise<void> {
     return this.execute(async () => {
       const descriptor = this.requirePacket(ZLinkActorPacketKind.Send, actor, packetName);
@@ -187,7 +187,7 @@ export class ZLinkSpotActorDispatcher {
     actor: ZLinkActor,
     packetName: string,
     request: TRequest,
-    context: Partial<ZLinkMessageContext> = {}
+    context?: Partial<ZLinkMessageContext>
   ): Promise<TReply> {
     return this.dispatchRequestThenDecoded<TRequest, TReply, TReply>(
       actor,
@@ -202,7 +202,7 @@ export class ZLinkSpotActorDispatcher {
     actor: ZLinkActor,
     packetName: string,
     decode: () => TRequest,
-    context: Partial<ZLinkMessageContext> = {}
+    context?: Partial<ZLinkMessageContext>
   ): Promise<TReply> {
     return this.dispatchRequestThenDecoded<TRequest, TReply, TReply>(
       actor,
@@ -217,7 +217,7 @@ export class ZLinkSpotActorDispatcher {
     actor: ZLinkActor,
     packetName: string,
     request: TRequest,
-    context: Partial<ZLinkMessageContext> = {},
+    context: Partial<ZLinkMessageContext> | undefined,
     afterReply: (
       reply: TReply,
       options: ZLinkSpotActorReplyOptionsSnapshot
@@ -241,7 +241,7 @@ export class ZLinkSpotActorDispatcher {
     actor: ZLinkActor,
     packetName: string,
     decode: () => TRequest,
-    context: Partial<ZLinkMessageContext> = {},
+    context: Partial<ZLinkMessageContext> | undefined,
     afterReply: (
       reply: TReply,
       options: ZLinkSpotActorReplyOptionsSnapshot
@@ -400,15 +400,15 @@ export class ZLinkSpotActorDispatcher {
 
   private createContext(
     packetName: string,
-    context: Partial<ZLinkMessageContext>
+    context: Partial<ZLinkMessageContext> | undefined
   ): ZLinkMessageContext {
     return {
-      meshName: context.meshName,
-      channelName: context.channelName,
+      meshName: context?.meshName,
+      channelName: context?.channelName,
       packetName,
-      contentType: context.contentType,
-      metadata: context.metadata ?? ZLinkMessageMetadataEmpty,
-      correlationId: context.correlationId
+      contentType: context?.contentType,
+      metadata: context?.metadata ?? ZLinkMessageMetadataEmpty,
+      correlationId: context?.correlationId
     };
   }
 }
