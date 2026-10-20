@@ -746,14 +746,22 @@ internal static class ZLinkEnvelopeCodec
         if (bodyType == typeof(ReadOnlyMemory<byte>))
             return bodyMessage.AsReadOnlyMemory();
 
-        var body = bodyMessage.AsReadOnlySpan();
-        if (body.IsEmpty)
-            return bodyType.IsValueType ? Activator.CreateInstance(bodyType) : null;
+        // The span reads native storage; keep its owner reachable until decoding ends.
+        try
+        {
+            var body = bodyMessage.AsReadOnlySpan();
+            if (body.IsEmpty)
+                return bodyType.IsValueType ? Activator.CreateInstance(bodyType) : null;
 
-        if (serializer is IZLinkMessageSpanDeserializer spanDeserializer)
-            return spanDeserializer.Deserialize(body, bodyType);
+            if (serializer is IZLinkMessageSpanDeserializer spanDeserializer)
+                return spanDeserializer.Deserialize(body, bodyType);
 
-        return serializer.Deserialize(ZLinkEncodedPayload.FromOwned(body.ToArray()), bodyType);
+            return serializer.Deserialize(ZLinkEncodedPayload.FromOwned(body.ToArray()), bodyType);
+        }
+        finally
+        {
+            GC.KeepAlive(bodyMessage);
+        }
     }
 
     internal static object? DecodeBody(
