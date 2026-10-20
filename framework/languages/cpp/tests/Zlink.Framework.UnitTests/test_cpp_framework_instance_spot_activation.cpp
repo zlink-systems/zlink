@@ -1125,9 +1125,13 @@ void verify_reserve_loser (bool expire_deadline, bool one_way)
                   diagnostic_promise.set_value (error.kind ());
               }
           });
-    auto target = std::make_shared<host::public_host_runtime_t> (std::move (options));
+    // Declared before `target` so it outlives the terminal that close() delivers.
+    int terminals = 0;
     int prepares = 0;
     int handlers = 0;
+    std::promise<rt::protocol::reply_header_t> reply_promise;
+    auto reply_future = reply_promise.get_future ();
+    auto target = std::make_shared<host::public_host_runtime_t> (std::move (options));
     target->configure_instance_spot_operations (
       store, relocations, [] { return fw::location_owner_token_t{"target-owner", 1}; },
       host::instance_spot_activation_materializer_t{
@@ -1157,10 +1161,7 @@ void verify_reserve_loser (bool expire_deadline, bool one_way)
     rt::protocol::instance_activation_recovery_t command{
       request, std::nullopt,
       rt::protocol::application_payload_t{"probe", "application/json", {1, 2, 3}}};
-    int terminals = 0;
     std::uint64_t reply_correlation = 0;
-    std::promise<rt::protocol::reply_header_t> reply_promise;
-    auto reply_future = reply_promise.get_future ();
     const auto submitted =
       one_way
         ? target
@@ -1789,18 +1790,26 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
 {
     zlink::framework::serializer_registry_t serializers;
 
-    std::mutex events_mutex;
-    std::condition_variable events_changed;
-    std::vector<zlink::framework::message_flow_event_t> events;
+    // Worker threads may emit after this scope ends, so the observer owns the state.
+    struct events_state_t
+    {
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::vector<zlink::framework::message_flow_event_t> events;
+    };
+    const auto events_state = std::make_shared<events_state_t> ();
+    auto &events_mutex = events_state->mutex;
+    auto &events_changed = events_state->changed;
+    auto &events = events_state->events;
     zlink::framework::dispatch_options_t dispatch;
     dispatch.message_flow (zlink::framework::message_flow_log_mode_t::normal);
     zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
-      dispatch, [&] (const zlink::framework::message_flow_event_t &event) {
+      dispatch, [events_state] (const zlink::framework::message_flow_event_t &event) {
           {
-              const std::lock_guard lock (events_mutex);
-              events.push_back (event);
+              const std::lock_guard lock (events_state->mutex);
+              events_state->events.push_back (event);
           }
-          events_changed.notify_all ();
+          events_state->changed.notify_all ();
       });
 
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
