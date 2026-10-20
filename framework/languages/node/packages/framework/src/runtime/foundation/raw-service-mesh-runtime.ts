@@ -1371,7 +1371,7 @@ export class RawServiceMeshRuntime {
    * ADMIT, which keeps the existing announce cadence.
    */
   nextMaintenanceDeadlineMs(nowMs: number): number {
-    if (!this.closed && this.controlSends.size !== 0) {
+    if (!this.closed) {
       for (const exchange of this.controlSends.values()) {
         if (exchange.hello !== undefined && exchange.current?.() === true) return nowMs;
       }
