@@ -101,6 +101,18 @@ test('channel request and reply encode allocate only the final parts representat
   assert.equal(counts.get('encodePayload:object:contentType,message') ?? 0, 0);
 });
 
+test('correlation validation accepts the full ASCII contract without per-call RegExp objects', () => {
+  const { codec, counts } = countedCodec('channels/channel-envelope');
+  for (let index = 0; index < 1000; index++) {
+    assert.equal(codec.isValidChannelCorrelationId('a'.repeat(64)), true);
+    assert.equal(codec.isValidChannelCorrelationId('\0\x7f'), true);
+    for (const value of ['', 'a'.repeat(65), 'é', '\ud800']) {
+      assert.equal(codec.isValidChannelCorrelationId(value), false);
+    }
+  }
+  assert.equal(counts.get('isValidChannelCorrelationId:regexp') ?? 0, 0);
+});
+
 async function trackedCodecAllocations(filename, action) {
   const inspector = require('node:inspector');
   const session = new inspector.Session();

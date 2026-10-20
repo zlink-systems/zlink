@@ -98,7 +98,7 @@ const CHANNEL_CORRELATION_TEXT = /^[0-9a-f]{32}$/;
 const CHANNEL_FLOW_FIELD = ',"flowId":';
 // A flow id is a lowercase UUIDv7 (spec 27 §3): fixed 36 JSON-safe ASCII bytes.
 const PREPARED_CHANNEL_FLOW = '00000000-0000-7000-8000-000000000000';
-const CHANNEL_FLOW_TEXT = /^[0-9a-f-]{36}$/;
+const CHANNEL_FLOW_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 // A per-process random 64-bit prefix followed by a per-process counter, both
 // as lowercase hex: unique among the runtime's pending requests (spec 06-obs/04
@@ -1174,10 +1174,11 @@ function validateCorrelationForKind(
 const MAXIMUM_CORRELATION_ID_BYTES = 64;
 
 export function isValidChannelCorrelationId(value: string): boolean {
-  const byteLength = Buffer.byteLength(value, 'utf8');
-  return (
-    byteLength >= 1 && byteLength <= MAXIMUM_CORRELATION_ID_BYTES && /^[\x00-\x7f]*$/.test(value)
-  );
+  if (value.length < 1 || value.length > MAXIMUM_CORRELATION_ID_BYTES) return false;
+  for (let index = 0; index < value.length; index++) {
+    if (value.charCodeAt(index) > 0x7f) return false;
+  }
+  return true;
 }
 
 function validateCorrelationValue(correlationId: string): void {
@@ -1265,7 +1266,7 @@ function optionalFlowOrigin(value: unknown): ZLinkFlowOrigin | undefined {
 
 function requireFlowId(value: unknown): string {
   const flowId = requireString(value, 'flowId');
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(flowId)) {
+  if (!CHANNEL_FLOW_TEXT.test(flowId)) {
     throw new ZLinkConfigurationException('Channel envelope flowId must be a lowercase UUIDv7.');
   }
   return flowId;
