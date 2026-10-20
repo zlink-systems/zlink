@@ -128,9 +128,9 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   돌리고 결과는 `zlink-work/gates/<tag>/results.txt`에서 본다. 새 worktree가 gate까지 돌 수 있게
   되는 절차(머신 설치 한 번, 로컬 패키지 링크, `rebuild-dev → gate`)는
   [`doc/principal/dev/worktree-setup.ko.md`](doc/principal/dev/worktree-setup.ko.md)가 소유한다.
-  gate는 한 번에 하나만, load average
-  10 미만에서 시작한다(타이밍 assert가 부하에 민감하다). 부하로 깨진 테스트는 단독 재실행으로
-  판정하고 허용치를 넓히지 않는다.
+  gate는 한 번에 하나만 돌리되 머신 부하와 관계없이 진행한다. 시스템은 부하 아래에서도 동작해야
+  하므로, 부하에서 깨지는 테스트는 시험이나 제품의 결함으로 보고 원인을 고친다. 단독 재실행 통과를
+  판정 근거로 쓰지 않으며, timeout·허용치를 늘리거나 단언을 약하게 하지 않는다.
 - framework의 기본 빌드·솔루션·CI는 `cross-language` e2e만 포함한다. 7개 샘플(`samples/*`)은
   샘플별 `run_sample.sh`·Node `npm run test:samples`로만 돌리며 CI 솔루션 필터
   (`Zlink.Framework.ci.slnf`)·CMake 기본 타깃·Gradle 루트 빌드·CI·배포에 넣지 않는다. 언어별 구성,
