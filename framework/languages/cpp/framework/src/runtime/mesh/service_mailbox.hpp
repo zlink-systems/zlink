@@ -147,13 +147,19 @@ class service_mailbox_t
     // claim can see it.
     bool try_enqueue (service_mailbox_record_t &&record,
                       const std::function<void ()> &admitted = {});
+    // The consumer may move ordinary originals into its batch before the claim lock
+    // is released. It must not reenter the mailbox. Relocation originals
+    // stay in their slots until their individual producer take.
+    using claimed_t = std::function<void (const std::shared_ptr<service_mailbox_claim_t> &)>;
     std::shared_ptr<service_mailbox_claim_t> try_claim (service_mailbox_domain_t domain,
                                                         std::size_t message_budget,
-                                                        std::size_t byte_budget);
+                                                        std::size_t byte_budget,
+                                                        const claimed_t &claimed = {});
     std::shared_ptr<service_mailbox_claim_t> try_claim_owner (service_mailbox_domain_t domain,
                                                               const std::string &owner,
                                                               std::size_t message_budget,
-                                                              std::size_t byte_budget);
+                                                              std::size_t byte_budget,
+                                                              const claimed_t &claimed = {});
     using claim_handle_t = service_mailbox_slot_t;
     // A missing source belongs to its original. Claims and cut share one lookup; the
     // existing producer mutex transfers its starter, and Store work runs outside it.
@@ -258,7 +264,9 @@ class service_mailbox_t
                         service_mailbox_domain_t domain_value,
                         const std::string &owner,
                         std::size_t message_budget,
-                        std::size_t byte_budget);
+                        std::size_t byte_budget,
+                        const claimed_t &claimed,
+                        std::unique_lock<std::mutex> &lock);
     static std::size_t retained_bytes (const service_mailbox_record_t &record);
     static service_mailbox_record_t *slot_locked (const claim_handle_t &handle);
     static bool next_locked (const claim_handle_t &handle);

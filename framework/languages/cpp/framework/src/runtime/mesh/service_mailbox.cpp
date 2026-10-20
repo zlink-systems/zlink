@@ -12,6 +12,13 @@
 
 namespace zlink::framework::runtime::mesh
 {
+namespace
+{
+bool has_original (const service_mailbox_record_t &record) noexcept
+{
+    return !record.parts.empty () || record.application;
+}
+} // namespace
 
 void service_mailbox_t::start_source_lookup (const request_source_lookup_t &lookup) const
 {
@@ -56,7 +63,7 @@ const service_mailbox_t::domain_t &service_mailbox_t::domain (service_mailbox_do
 bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
                                      const std::function<void ()> &admitted)
 {
-    if (record.owner.empty () || (record.parts.empty () && !record.application)) {
+    if (record.owner.empty () || !has_original (record)) {
         throw std::invalid_argument (
           "service mailbox record requires an owner and retained payload");
     }
@@ -90,13 +97,16 @@ bool service_mailbox_t::try_enqueue (service_mailbox_record_t &&record,
     return true;
 }
 
-std::shared_ptr<service_mailbox_claim_t> service_mailbox_t::try_claim (
-  service_mailbox_domain_t domain_value, std::size_t message_budget, std::size_t byte_budget)
+std::shared_ptr<service_mailbox_claim_t>
+service_mailbox_t::try_claim (service_mailbox_domain_t domain_value,
+                              std::size_t message_budget,
+                              std::size_t byte_budget,
+                              const claimed_t &claimed)
 {
     if (message_budget == 0 || byte_budget == 0) {
         throw std::invalid_argument ("service mailbox claim budgets must be positive");
     }
-    std::lock_guard lock (_state->mutex);
+    std::unique_lock lock (_state->mutex);
     auto &source = domain (domain_value);
     while (!source.ready.empty ()) {
         const auto &owner = source.ready.front ();
@@ -106,7 +116,8 @@ std::shared_ptr<service_mailbox_claim_t> service_mailbox_t::try_claim (
             source.ready.pop_front ();
             continue;
         }
-        auto claim = claim_owner_locked (source, domain_value, owner, message_budget, byte_budget);
+        auto claim = claim_owner_locked (source, domain_value, owner, message_budget, byte_budget,
+                                         claimed, lock);
         source.ready.pop_front ();
         return claim;
     }
@@ -117,19 +128,21 @@ std::shared_ptr<service_mailbox_claim_t>
 service_mailbox_t::try_claim_owner (service_mailbox_domain_t domain_value,
                                     const std::string &owner,
                                     std::size_t message_budget,
-                                    std::size_t byte_budget)
+                                    std::size_t byte_budget,
+                                    const claimed_t &claimed)
 {
     if (owner.empty () || message_budget == 0 || byte_budget == 0) {
         throw std::invalid_argument ("service mailbox owner claim arguments are invalid");
     }
-    std::lock_guard lock (_state->mutex);
+    std::unique_lock lock (_state->mutex);
     auto &source = domain (domain_value);
     const auto found = source.owners.find (owner);
     if (found == source.owners.end () || found->second.active_messages != 0
         || found->second.records.empty ()) {
         return nullptr;
     }
-    auto claim = claim_owner_locked (source, domain_value, owner, message_budget, byte_budget);
+    auto claim =
+      claim_owner_locked (source, domain_value, owner, message_budget, byte_budget, claimed, lock);
     if (found->second.phase != owner_phase_t::draining) {
         source.ready.erase (std::remove (source.ready.begin (), source.ready.end (), owner),
                             source.ready.end ());
@@ -142,7 +155,9 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
                                        service_mailbox_domain_t domain_value,
                                        const std::string &owner,
                                        std::size_t message_budget,
-                                       std::size_t byte_budget)
+                                       std::size_t byte_budget,
+                                       const claimed_t &claimed,
+                                       std::unique_lock<std::mutex> &lock)
 {
     const auto found = source.owners.find (owner);
     if (found == source.owners.end () || found->second.active_messages != 0
@@ -190,6 +205,22 @@ service_mailbox_t::claim_owner_locked (domain_t &source,
     source.active_messages += claim->claimed_messages;
     if (queue.phase != owner_phase_t::draining)
         queue.phase = owner_phase_t::retained;
+    // A consumer allocation may fail before or during transfer. Return every
+    // outstanding credit through the same release owner. Own the remaining originals
+    // before unlocking so a relocation cut cannot acquire credits being returned.
+    const auto rollback = [this, &lock, &claim] (service_mailbox_claim_t *failed) {
+        std::vector<service_mailbox_record_t> discarded;
+        discarded.reserve (failed->claimed_messages);
+        for (std::size_t index = 0; index != failed->claimed_messages; ++index)
+            if (auto *slot = slot_locked ({claim, index}))
+                discarded.push_back (transfer_locked (*slot));
+        lock.unlock ();
+        release (*failed);
+    };
+    std::unique_ptr<service_mailbox_claim_t, decltype (rollback)> pending (claim.get (), rollback);
+    if (claimed)
+        claimed (claim);
+    pending.release ();
     return claim;
 }
 
@@ -200,7 +231,7 @@ service_mailbox_record_t *service_mailbox_t::slot_locked (const claim_handle_t &
         || handle.index >= handle.claim->records.size ())
         return nullptr;
     auto *slot = handle.claim->records[handle.index];
-    return slot->parts.empty () && !slot->application ? nullptr : slot;
+    return has_original (*slot) ? slot : nullptr;
 }
 
 bool service_mailbox_t::next_locked (const claim_handle_t &handle)
@@ -209,7 +240,7 @@ bool service_mailbox_t::next_locked (const claim_handle_t &handle)
     if (handle.index == 0)
         return true;
     const auto *previous = handle.claim->records[handle.index - 1];
-    return previous->parts.empty () && !previous->application;
+    return !has_original (*previous);
 }
 
 service_mailbox_record_t service_mailbox_t::transfer_locked (service_mailbox_record_t &slot)
@@ -227,15 +258,12 @@ service_mailbox_t::cut_owners (const std::vector<std::string> &owners,
     std::vector<std::vector<service_mailbox_record_t>> taken (owners.size ());
     std::unique_lock lock (_state->mutex);
     auto &source = _state->application;
-    const auto untaken = [] (const service_mailbox_record_t &slot) {
-        return !slot.parts.empty () || slot.application;
-    };
     for (const auto &owner : owners) {
         const auto found = source.owners.find (owner);
         if (found == source.owners.end ())
             continue;
         for (const auto &slot : found->second.records)
-            if (untaken (slot) && admits && !admits (slot))
+            if (has_original (slot) && admits && !admits (slot))
                 return std::nullopt;
     }
     for (std::size_t index = 0; index != owners.size (); ++index) {
@@ -249,8 +277,8 @@ service_mailbox_t::cut_owners (const std::vector<std::string> &owners,
         // unclaimed records leave the FIFO now.
         const auto claimed = std::min (queue.active_messages, queue.records.size ());
         for (std::size_t slot = 0; slot != claimed; ++slot)
-            if (untaken (queue.records[slot]))
-                records.push_back (std::move (queue.records[slot]));
+            if (has_original (queue.records[slot]))
+                records.push_back (transfer_locked (queue.records[slot]));
         for (auto slot = queue.records.begin () + static_cast<std::ptrdiff_t> (claimed);
              slot != queue.records.end (); ++slot) {
             const auto bytes = retained_bytes (*slot);
@@ -258,7 +286,7 @@ service_mailbox_t::cut_owners (const std::vector<std::string> &owners,
             source.bytes -= bytes;
             --queue.messages;
             --source.messages;
-            records.push_back (std::move (*slot));
+            records.push_back (transfer_locked (*slot));
         }
         queue.records.erase (queue.records.begin () + static_cast<std::ptrdiff_t> (claimed),
                              queue.records.end ());
@@ -306,8 +334,8 @@ bool service_mailbox_t::release (service_mailbox_claim_t &claim)
             continue;
         ++settled;
         auto &slot = *claim.records[index];
-        if (!slot.parts.empty () || slot.application)
-            discarded.push_back (std::move (slot));
+        if (has_original (slot))
+            discarded.push_back (transfer_locked (slot));
     }
     if (settled == 0)
         return false;

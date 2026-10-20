@@ -176,7 +176,9 @@ class mesh_node_runtime_t
     mesh_node_runtime_t (const mesh_node_runtime_t &) = delete;
     mesh_node_runtime_t &operator= (const mesh_node_runtime_t &) = delete;
 
-    void start ();
+    void start (host::public_host_runtime_t::relocation_gate_t relocation_gate = {},
+                host::public_host_runtime_t::native_spot_target_t native_spot_target = {},
+                runtime::mesh::service_mailbox_t::application_dispatch_t relocation_resume = {});
     void request_stop () noexcept;
     void stop ();
     void cancel_pending_dispatch_waits () noexcept;

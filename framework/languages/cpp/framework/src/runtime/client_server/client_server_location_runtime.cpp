@@ -1363,13 +1363,15 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
     std::shared_ptr<mesh::service_mailbox_claim_t> active_claim;
     try {
         for (;;) {
-            active_claim =
-              mailbox.try_claim_owner (mesh::service_mailbox_domain_t::application, owner_name, 1,
-                                       dispatch_limits::receive_batch_bytes);
+            std::optional<mesh::service_mailbox_record_t> original;
+            active_claim = mailbox.try_claim_owner (
+              mesh::service_mailbox_domain_t::application, owner_name, 1,
+              dispatch_limits::receive_batch_bytes, [&] (const auto &claim) noexcept {
+                  original.emplace (std::move (*claim->records.front ()));
+              });
             if (!active_claim)
                 break;
             for (std::size_t index = 0; index < active_claim->claimed_messages; ++index) {
-                auto original = mailbox.take ({active_claim, index});
                 if (!original)
                     continue;
                 auto &record = *original;

@@ -580,6 +580,17 @@ local_application_dispatch_t local_application_query (const local_application_di
     return query;
 }
 
+std::optional<owner_kind_t> stateful_application_owner (std::string_view owner)
+{
+    if (owner.starts_with (detail::activation_admission_t::actor_key_prefix))
+        return owner_kind_t::actor;
+    if (owner.starts_with (detail::activation_admission_t::spot_key_prefix))
+        return owner_kind_t::spot;
+    return std::nullopt;
+}
+
+} // namespace
+
 // Dispatcher storage of one claim: taken originals keep request reply tokens alive
 // without another allocation; retained marks a downstream owner of the credit.
 struct application_claim_batch_t
@@ -592,10 +603,18 @@ struct application_claim_batch_t
 
     explicit application_claim_batch_t (std::size_t size) : entries (size) {}
 
+    void take_ordinary (const std::shared_ptr<mesh::service_mailbox_claim_t> &claim,
+                        bool stateful) noexcept
+    {
+        // These owners can enter a relocation cut even after this claim is made.
+        if (stateful && stateful_application_owner (claim->owner))
+            return;
+        for (std::size_t index = 0; index < claim->claimed_messages; ++index)
+            entries[index].original.emplace (std::move (*claim->records[index]));
+    }
+
     std::vector<entry_t> entries;
 };
-
-} // namespace
 
 zlink::routing_id_t node_status_t::routing_id () const
 {
@@ -6917,12 +6936,17 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
         }
 
         while (accept_application_receive && !application_dispatch_started && standalone) {
+            std::shared_ptr<application_claim_batch_t> batch;
             auto claim = _transport->mailbox ().try_claim (
-              mesh::service_mailbox_domain_t::application, 1, dispatch_limits::receive_batch_bytes);
+              mesh::service_mailbox_domain_t::application, 1, dispatch_limits::receive_batch_bytes,
+              [&] (const auto &claimed) {
+                  batch = std::make_shared<application_claim_batch_t> (claimed->claimed_messages);
+                  batch->take_ordinary (claimed, static_cast<bool> (_stateful_dispatch));
+              });
             if (!claim)
                 break;
             const auto dispatched =
-              co_await dispatch_application_claim (std::move (claim), dispatch);
+              co_await dispatch_application_claim (std::move (claim), dispatch, std::move (batch));
             count += dispatched;
             application_dispatch_started = dispatched != 0;
         }
@@ -7231,20 +7255,18 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
     if (error != stateful::stateful_error_t::none)
         co_return false; // Existing ingress owns the exact rejection and reply mapping.
     header.target.owner_lease_generation = authority->target_owner_lease_generation;
-    const auto [locate, prepare] = co_await _lifecycle_configuration_lane.run_task (
-      [this] { return std::pair{_relocation_gate, _native_spot_target}; });
+    // Configured before transport start; the lifecycle lane rejects later writes
+    // while the host is running or closing.
+    const auto &locate = _relocation_gate;
+    const auto &prepare = _native_spot_target;
     std::shared_ptr<runtime::serial_execution_queue_t> gate;
     std::shared_ptr<runtime::serial_application_target_t> target;
     std::vector<zlink::message_t> parts;
     try {
-        if (application) {
-            parts.reserve (application->parts.size ());
-            for (const auto &part : application->parts)
-                parts.push_back (part.copy ());
-        } else {
+        if (!application) {
             parts = protocol::decode_application_parts (std::move (*query.body), capture_flow ());
         }
-        if (parts.empty ())
+        if (application ? application->parts.empty () : parts.empty ())
             throw protocol::service_wire_error_t ("Spot application envelope is empty");
     }
     catch (const protocol::service_wire_error_t &) {
@@ -7284,6 +7306,7 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
         ready_record_t owner;
         receive_record_t record;
         if (application) {
+            parts = std::move (original->application->parts);
             owner = application->owner;
             record = application->record;
         } else {
@@ -7363,7 +7386,8 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
 task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
   std::shared_ptr<mesh::service_mailbox_claim_t> claim,
   const std::function<void (
-    const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch)
+    const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
+  std::shared_ptr<application_claim_batch_t> batch)
 {
     // Stateful originals stay in their slot across the authority suspension; every
     // other original transfers in the same boundary step that classifies it.
@@ -7376,7 +7400,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
     std::size_t count = 0;
     trace_mesh_host ("mailbox-claim",
                      std::string ("records=") + std::to_string (claim->claimed_messages));
-    const auto batch = std::make_shared<application_claim_batch_t> (claim->claimed_messages);
+    if (!batch)
+        batch = std::make_shared<application_claim_batch_t> (claim->claimed_messages);
     for (std::size_t index = 0; index < claim->claimed_messages; ++index) {
         const mesh::service_mailbox_t::claim_handle_t slot{claim, index};
         auto &entry = batch->entries[index];
@@ -7384,28 +7409,34 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
         std::variant<std::monostate, messaging::request_wire_failure_t, std::exception_ptr>
           rejection;
         try {
-            auto step = _transport->mailbox ().take_unless (
-              slot,
-              [stateful = static_cast<bool> (_stateful_dispatch),
-               sources = _transport->request_sources (),
-               mesh_name = &_options.mesh.descriptor.mesh_name] (
-                mesh::service_mailbox_record_t &original) -> std::optional<kept_t> {
-                  if (!stateful)
-                      return std::nullopt;
-                  if (original.application) {
-                      const auto &record = original.application->record;
-                      if (record.application_record || !is_stateful_application (record.kind))
-                          return std::nullopt;
-                      return kept_t{kept_local_t{original.application, original.source_original}};
-                  }
-                  const auto kind = record_kind (
-                    protocol::decode_header (protocol::message_bytes (original.parts.front ()))
-                      .kind);
-                  if (!kind || !is_stateful_application (*kind))
-                      return std::nullopt;
-                  return kept_t{
-                    stateful::claimed_ingress_t::prepare (original, sources, *mesh_name)};
-              });
+            using step_t = std::variant<std::monostate, mesh::service_mailbox_record_t, kept_t>;
+            auto step =
+              entry.original
+                ? step_t (std::move (*entry.original))
+                : _transport->mailbox ().take_unless (
+                    slot,
+                    [stateful = static_cast<bool> (_stateful_dispatch),
+                     sources = _transport->request_sources (),
+                     mesh_name = &_options.mesh.descriptor.mesh_name] (
+                      mesh::service_mailbox_record_t &original) -> std::optional<kept_t> {
+                        if (!stateful)
+                            return std::nullopt;
+                        if (original.application) {
+                            const auto &record = original.application->record;
+                            if (record.application_record || !is_stateful_application (record.kind))
+                                return std::nullopt;
+                            return kept_t{
+                              kept_local_t{original.application, original.source_original}};
+                        }
+                        const auto kind =
+                          record_kind (protocol::decode_header (
+                                         protocol::message_bytes (original.parts.front ()))
+                                         .kind);
+                        if (!kind || !is_stateful_application (*kind))
+                            return std::nullopt;
+                        return kept_t{
+                          stateful::claimed_ingress_t::prepare (original, sources, *mesh_name)};
+                    });
             if (std::holds_alternative<std::monostate> (step))
                 continue;
             if (auto *kept = std::get_if<kept_t> (&step)) {
@@ -7442,14 +7473,14 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                 }
                 std::optional<stateful::object_ref_t> native_owner;
                 std::optional<stateful::retained_relocation_source_t> retained;
-                if (claim->owner.starts_with (detail::activation_admission_t::actor_key_prefix))
+                const auto owner_kind = stateful_application_owner (claim->owner);
+                if (owner_kind == owner_kind_t::actor)
                     native_owner = co_await _objects.find_async (
                       stateful::object_kind_t::actor,
                       claim->owner.substr (
                         detail::activation_admission_t::actor_key_prefix.size ()),
                       std::nullopt, &retained);
-                else if (claim->owner.starts_with (
-                           detail::activation_admission_t::spot_key_prefix)) {
+                else if (owner_kind == owner_kind_t::spot) {
                     const auto key =
                       claim->owner.substr (detail::activation_admission_t::spot_key_prefix.size ());
                     native_owner = co_await _objects.resolve_spot_async (key, &retained);
@@ -7654,9 +7685,13 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
             if (release_mailbox_reservation)
                 release_mailbox_reservation ();
             // Earlier credits stay with their owners; only the untaken suffix settles here.
-            for (std::size_t remaining = index; remaining < claim->claimed_messages; ++remaining)
-                if (auto abandoned = _transport->mailbox ().take ({claim, remaining}))
+            for (std::size_t remaining = index; remaining < claim->claimed_messages; ++remaining) {
+                auto &original = batch->entries[remaining].original;
+                auto abandoned = original ? std::exchange (original, std::nullopt)
+                                          : _transport->mailbox ().take ({claim, remaining});
+                if (abandoned)
                     abandoned->transferred ();
+            }
             std::rethrow_exception (*unhandled);
         }
         if (!entry.original)
@@ -7683,22 +7718,32 @@ task_t<bool> public_host_runtime_t::dispatch_application_owner (
   std::function<void ()> started,
   std::function<void ()> rejected)
 {
-    auto claim = _transport->mailbox ().try_claim_owner (
-      mesh::service_mailbox_domain_t::application, owner, dispatch_limits::receive_batch_messages,
-      dispatch_limits::receive_batch_bytes);
-    if (!claim)
-        co_return false;
-    const auto claimed = claim->claimed_messages;
-    for (std::size_t index = 0; index < claimed; ++index)
-        started ();
+    std::shared_ptr<application_claim_batch_t> batch;
+    std::size_t claimed = 0;
     std::size_t handed_off = 0;
+    const auto transfer = [&] (const auto &claim) {
+        claimed = claim->claimed_messages;
+        for (std::size_t index = 0; index < claimed; ++index)
+            started ();
+        batch = std::make_shared<application_claim_batch_t> (claimed);
+        batch->take_ordinary (claim, static_cast<bool> (_stateful_dispatch));
+    };
     try {
+        // Account the accepted claim even if its consumer storage cannot be allocated.
+        auto claim = _transport->mailbox ().try_claim_owner (
+          mesh::service_mailbox_domain_t::application, owner,
+          dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes,
+          std::ref (transfer));
+        if (!claim)
+            co_return false;
         co_await dispatch_application_claim (
-          std::move (claim), [&] (const ready_record_t &ready, const receive_record_t &record,
-                                  std::vector<zlink::message_t> parts) {
+          std::move (claim),
+          [&] (const ready_record_t &ready, const receive_record_t &record,
+               std::vector<zlink::message_t> parts) {
               dispatch (ready, record, std::move (parts));
               ++handed_off;
-          });
+          },
+          std::move (batch));
     }
     catch (...) {
         while (handed_off < claimed) {
@@ -8196,6 +8241,8 @@ void public_host_runtime_t::configure_relocation_gate (
 {
     _lifecycle_configuration_lane
       .run ([&] {
+          if (_started || _closing)
+              throw std::logic_error ("relocation gate must be configured before start");
           _relocation_gate = std::move (gate);
           _native_spot_target = std::move (target);
           _relocation_resume = std::move (resume);

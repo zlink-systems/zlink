@@ -1557,6 +1557,112 @@ TEST (FrameworkRelocationSealContract, mailbox_cut_takes_each_untaken_original_o
     EXPECT_EQ (id_of (*next->records.front ()), 4);
 }
 
+TEST (FrameworkRelocationSealContract, ordinary_claim_transfers_batch_before_cut)
+{
+    const auto domain = mesh::service_mailbox_domain_t::application;
+    mesh::service_mailbox_t mailbox;
+    std::vector<mesh::service_mailbox_record_t> batch;
+    batch.reserve (64);
+    for (std::uint8_t index = 0; index < 64; ++index) {
+        mesh::service_mailbox_record_t original;
+        original.owner = "ordinary";
+        original.domain = domain;
+        original.parts = detail::backend::materialize_binding_parts ({{index}});
+        ASSERT_TRUE (mailbox.try_enqueue (std::move (original)));
+    }
+    const auto claim = mailbox.try_claim (domain, 64, 65536, [&] (const auto &claimed) noexcept {
+        for (auto *original : claimed->records)
+            batch.push_back (std::move (*original));
+    });
+    ASSERT_TRUE (claim);
+    ASSERT_EQ (batch.size (), 64u);
+    const auto cut = mailbox.cut_owners ({"ordinary"}, {}, {});
+    ASSERT_TRUE (cut);
+    EXPECT_TRUE (cut->front ().empty ());
+    for (std::size_t index = 0; index < batch.size (); ++index) {
+        EXPECT_EQ (batch[index].parts.front ().to_bytes ().front (), index);
+        EXPECT_FALSE (mailbox.take ({claim, index}));
+        EXPECT_TRUE (batch[index].transferred ());
+        EXPECT_FALSE (batch[index].transferred ());
+    }
+    EXPECT_EQ (claim->outstanding (), 0u);
+    EXPECT_FALSE (mailbox.release (*claim));
+}
+
+TEST (FrameworkRelocationSealContract, throwing_claim_consumer_returns_all_credits)
+{
+    const auto domain = mesh::service_mailbox_domain_t::application;
+    for (const bool by_owner : {false, true}) {
+        mesh::service_mailbox_t mailbox;
+        const auto enqueue = [&] {
+            mesh::service_mailbox_record_t original;
+            original.owner = "ordinary";
+            original.domain = domain;
+            original.parts = detail::backend::materialize_binding_parts ({{1}});
+            ASSERT_TRUE (mailbox.try_enqueue (std::move (original)));
+        };
+        enqueue ();
+        enqueue ();
+        std::optional<mesh::service_mailbox_record_t> transferred;
+        const mesh::service_mailbox_t::claimed_t fail = [&] (const auto &claim) {
+            transferred.emplace (std::move (*claim->records.front ()));
+            throw std::bad_alloc ();
+        };
+        if (by_owner)
+            EXPECT_THROW (mailbox.try_claim_owner (domain, "ordinary", 2, 4096, fail),
+                          std::bad_alloc);
+        else
+            EXPECT_THROW (mailbox.try_claim (domain, 2, 4096, fail), std::bad_alloc);
+        ASSERT_TRUE (transferred);
+        EXPECT_FALSE (transferred->transferred ());
+        EXPECT_EQ (mailbox.pending_messages (domain), 0u);
+        enqueue ();
+        const auto next = mailbox.try_claim (domain, 1, 4096);
+        ASSERT_TRUE (next);
+        EXPECT_TRUE (mailbox.release (*next));
+    }
+}
+
+TEST (FrameworkRelocationSealContract, ordinary_dispatch_failure_returns_transferred_suffix)
+{
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("ordinary-batch"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    auto &mailbox = host->transport ().mailbox ();
+    const auto enqueue = [&] {
+        mesh::service_mailbox_record_t original;
+        original.owner = "node";
+        original.domain = mesh::service_mailbox_domain_t::application;
+        original.application = std::make_shared<host::local_application_dispatch_t> ();
+        original.application->owner.owner_kind = host::owner_kind_t::node;
+        original.application->record.kind = host::record_kind_t::channel_send;
+        original.application->parts = detail::backend::materialize_binding_parts ({{1}});
+        ASSERT_TRUE (mailbox.try_enqueue (std::move (original)));
+    };
+    for (int index = 0; index < 64; ++index)
+        enqueue ();
+    unsigned started = 0, rejected = 0;
+    auto failed = host->dispatch_application_owner (
+      "node",
+      [] (const auto &, const auto &, auto) { throw std::runtime_error ("dispatch failed"); },
+      [&] { ++started; }, [&] { ++rejected; });
+    const auto &failure = failed.result ();
+    EXPECT_FALSE (failure);
+    EXPECT_THROW (failure.value (), std::runtime_error);
+    EXPECT_EQ (failure.error (), nullptr);
+    EXPECT_EQ (started, 64u);
+    EXPECT_EQ (rejected, 64u);
+    EXPECT_EQ (mailbox.pending_messages (mesh::service_mailbox_domain_t::application), 0u);
+    enqueue ();
+    unsigned dispatched = 0;
+    auto next = host->dispatch_application_owner (
+      "node", [&] (const auto &, const auto &, auto) { ++dispatched; }, [] {}, [] {});
+    EXPECT_TRUE (next.result ().value ());
+    EXPECT_EQ (dispatched, 1u);
+    host->close ();
+}
+
 TEST (FrameworkRelocationSealContract, source_store_reads_return_before_store_lane_completes)
 {
     runtime::in_memory_location_repository_t store;
@@ -1679,6 +1785,20 @@ TEST (FrameworkRelocationSealContract, unavailable_source_read_keeps_unavailable
         .value ();
     EXPECT_EQ (error, stateful::stateful_error_t::unavailable);
     EXPECT_FALSE (authority);
+    host->close ();
+}
+
+TEST (FrameworkRelocationSealContract, relocation_callbacks_are_immutable_after_transport_start)
+{
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("startup-relocation-callbacks"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    EXPECT_NO_THROW (host->configure_relocation_gate ({}));
+    host->start ();
+    // Force the former write/read overlap boundary: transport is already running.
+    // Even clearing callbacks must be rejected before mutating the published set.
+    EXPECT_THROW (host->configure_relocation_gate ({}), std::logic_error);
     host->close ();
 }
 
@@ -2871,6 +2991,7 @@ TEST (FrameworkRelocationSealContract, native_public_requester_terminal_uses_reg
           co_return gate;
       });
     host->start ();
+    EXPECT_THROW (host->configure_relocation_gate ({}), std::logic_error);
     messaging::envelope_header_t header;
     header.kind = messaging::message_kind_t::request;
     header.channel_name = "mesh";
@@ -2889,10 +3010,13 @@ TEST (FrameworkRelocationSealContract, native_public_requester_terminal_uses_reg
       mesh::service_mailbox_domain_t::application,
       mesh::service_mailbox_t::application_owner (host::owner_kind_t::spot, spot.key), 1, 65536);
     ASSERT_TRUE (claim);
+    ASSERT_TRUE (claim->records.front ()->application);
+    const auto *original_parts = claim->records.front ()->application->parts.data ();
     ASSERT_EQ (host::public_host_runtime_test_access_t::dispatch_claim (
                  *host, claim,
-                 [gate] (const auto &, const host::receive_record_t &record,
-                         std::vector<zlink::message_t> application) {
+                 [gate, original_parts] (const auto &, const host::receive_record_t &record,
+                                         std::vector<zlink::message_t> application) {
+                     EXPECT_EQ (application.data (), original_parts);
                      record.application_record->set_invocation (application.back ().copy (), {});
                      serial_work_options_t options;
                      options.application_record = record.application_record;
