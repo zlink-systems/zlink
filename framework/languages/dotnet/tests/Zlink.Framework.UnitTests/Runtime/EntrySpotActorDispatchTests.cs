@@ -10031,16 +10031,18 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         var time = new ControllableTimeProvider();
         var timeout = TimeSpan.FromMilliseconds(20);
-        var operation = ZLinkActorRemoteJoiner.ExecuteWithDeadlineAsync(
-            async cancellationToken =>
-            {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-                return 0;
-            },
-            timeout,
-            CancellationToken.None,
-            time
-        ).AsTask();
+        var operation = ZLinkActorRemoteJoiner
+            .ExecuteWithDeadlineAsync(
+                async cancellationToken =>
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    return 0;
+                },
+                timeout,
+                CancellationToken.None,
+                time
+            )
+            .AsTask();
         Assert.Equal(1, time.ActiveTimerCount);
         Assert.False(operation.IsCompleted);
         time.AdvanceMonotonic(timeout);
@@ -10056,16 +10058,18 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         var time = new ControllableTimeProvider();
         using var caller = new CancellationTokenSource();
-        var operation = ZLinkActorRemoteJoiner.ExecuteWithDeadlineAsync(
-            async cancellationToken =>
-            {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-                return 0;
-            },
-            TimeSpan.FromMilliseconds(20),
-            caller.Token,
-            time
-        ).AsTask();
+        var operation = ZLinkActorRemoteJoiner
+            .ExecuteWithDeadlineAsync(
+                async cancellationToken =>
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    return 0;
+                },
+                TimeSpan.FromMilliseconds(20),
+                caller.Token,
+                time
+            )
+            .AsTask();
         Assert.Equal(1, time.ActiveTimerCount);
         caller.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
