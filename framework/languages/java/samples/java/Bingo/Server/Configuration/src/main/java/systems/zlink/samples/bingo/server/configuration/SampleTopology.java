@@ -2,6 +2,8 @@ package systems.zlink.samples.bingo.server.configuration;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
+
 @ConfigurationProperties("sample")
 public record SampleTopology(
         String apiAChannelEndpoint,
@@ -21,7 +23,8 @@ public record SampleTopology(
         String apiNode,
         String playNode,
         String sessionNode,
-        String logDirectory) {
+        String logDirectory,
+        ZLinkMessageFlowLogMode diagnosticsLevel) {
 
     public SampleTopology {
         apiAChannelEndpoint = value(apiAChannelEndpoint, "tcp://127.0.0.1:47103");
@@ -42,6 +45,8 @@ public record SampleTopology(
         playNode = value(playNode, "a");
         sessionNode = value(sessionNode, "a");
         logDirectory = required(logDirectory, "logDirectory");
+        diagnosticsLevel =
+                diagnosticsLevel == null ? ZLinkMessageFlowLogMode.NORMAL : diagnosticsLevel;
     }
 
     public String selectedApiChannelEndpoint() {

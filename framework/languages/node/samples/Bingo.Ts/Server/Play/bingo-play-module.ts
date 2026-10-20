@@ -43,7 +43,7 @@ function createBingoPlayModule() {
             metrics: { meterProvider: bingoMeterProvider }
           });
           builder.setApplicationVersion(1n);
-          builder.configureDispatch().messageFlow('normal');
+          builder.configureDispatch().messageFlow(config.diagnosticsLevel);
           builder.addLocationStore(createBingoLocationStore(config));
           builder.addRelocationStore(createBingoRelocationStore(config));
           bingoLocationOptions(builder.configureLocations());
