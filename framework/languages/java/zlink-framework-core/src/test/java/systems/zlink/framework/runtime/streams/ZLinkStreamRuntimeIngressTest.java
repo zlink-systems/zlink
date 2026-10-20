@@ -1509,22 +1509,19 @@ final class ZLinkStreamRuntimeIngressTest {
 
     @Test
     void concurrentAbsentSealsRejectChangedFieldsBeforePublishingTheFirstReply() throws Exception {
-        ReplacementFixture fixture = startReplacement(new FakeStream());
+        var pending = new java.util.concurrent.ConcurrentLinkedQueue<Runnable>();
+        var executor =
+                new java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Executor>(
+                        pending::add);
+        var stateLane =
+                new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(
+                        work -> executor.get().execute(work));
+        ReplacementFixture fixture = startReplacement(new FakeStream(), stateLane);
         runtimes.add(fixture.runtime());
         var actor = new ZLinkBackendActorRef(RoutingId.from("actor-node"), "absent-actor", 7);
         var relocation = new ZLinkServiceM6BWireCodec.RelocationIdentity(19, 1);
         var first = sessionSeal(relocation, actor, PEER_A, 1);
         var changed = sessionSeal(relocation, actor, PEER_A, 2);
-        var pending = new java.util.concurrent.ConcurrentLinkedQueue<Runnable>();
-        var executor =
-                new java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Executor>(
-                        pending::add);
-        var laneField = ZLinkStreamRuntime.class.getDeclaredField("stateLane");
-        laneField.setAccessible(true);
-        laneField.set(
-                fixture.runtime(),
-                new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(
-                        work -> executor.get().execute(work)));
         var codec = new ZLinkServiceM6BWireCodec();
         var accepted =
                 fixture.runtime()
@@ -1918,6 +1915,13 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     private static ReplacementFixture startReplacement(FakeStream stream) {
+        return startReplacement(
+                stream, new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane());
+    }
+
+    private static ReplacementFixture startReplacement(
+            FakeStream stream,
+            systems.zlink.framework.runtime.internal.execution.ZLinkStateLane stateLane) {
         stream.enqueue(PEER_A, frame("initial", "{}"));
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setSessionReplacementCallbackTimeout(Duration.ofMillis(100));
@@ -2003,7 +2007,25 @@ final class ZLinkStreamRuntimeIngressTest {
                                 null,
                                 null,
                                 new FakeContext(),
-                                false)
+                                false,
+                                (ignoredBackend, ignoredKey) ->
+                                        (ignoredSubmission, ignoredCleanup) ->
+                                                CompletableFuture.failedFuture(
+                                                        new IllegalStateException(
+                                                                "one-way admission factory is required")),
+                                System::nanoTime,
+                                () ->
+                                        java.util.concurrent.Executors
+                                                .newSingleThreadScheduledExecutor(
+                                                        task -> {
+                                                            Thread thread =
+                                                                    new Thread(
+                                                                            task,
+                                                                            "zlink-stream-liveness");
+                                                            thread.setDaemon(true);
+                                                            return thread;
+                                                        }),
+                                stateLane)
                         .start();
         return new ReplacementFixture(runtime, actors, requestedPeer, requestedGeneration);
     }

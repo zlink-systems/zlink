@@ -115,7 +115,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final Map<String, ZLinkInternalSpotNode> streamSessionRelaySpotNodes = new HashMap<>();
     private final Map<String, SessionState> sessions = new HashMap<>();
     private final Map<SealRecordKey, AbsentSealRecord> absentSealRecords = new HashMap<>();
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    private final ZLinkStateLane stateLane;
     private final ScheduledExecutorService livenessExecutor;
     private final LongSupplier nanoTime;
     private final ScheduledExecutorService replyRetryExecutor;
@@ -271,9 +271,50 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     admission,
             LongSupplier nanoTime,
             Supplier<ScheduledExecutorService> livenessExecutorFactory) {
+        this(
+                backendFactory,
+                adapterOptions,
+                registration,
+                spotNodes,
+                meshNodes,
+                serializer,
+                actors,
+                handlerFactory,
+                spots,
+                eventDispatcher,
+                context,
+                ownsContext,
+                admission,
+                nanoTime,
+                livenessExecutorFactory,
+                new ZLinkStateLane());
+    }
+
+    ZLinkStreamRuntime(
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            Map<String, ZLinkInternalSpotNode> spotNodes,
+            Map<String, ZLinkInternalMeshNode> meshNodes,
+            ZLinkMessageSerializer serializer,
+            ZLinkActorRuntime actors,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkSpotRuntime spots,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            ZLinkBackendContext context,
+            boolean ownsContext,
+            BiFunction<
+                            ZLinkBackendObject,
+                            ZLinkBackendAdmissionKey,
+                            BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>>
+                    admission,
+            LongSupplier nanoTime,
+            Supplier<ScheduledExecutorService> livenessExecutorFactory,
+            ZLinkStateLane stateLane) {
         if (registration.streamNodes().isEmpty()) {
             throw new ZLinkConfigurationException("at least one stream node is required");
         }
+        this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
         this.registration = Objects.requireNonNull(registration, "registration");
         this.sessionRelocationSealTimeout =
                 registration.locations().options().sessionRelocationSealTimeout();

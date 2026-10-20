@@ -136,17 +136,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                             ZLinkSpotRetireControl.client(peer),
                             null,
                             null);
-            var factory =
-                    java.util.Arrays.stream(
-                                    ZLinkUserSpotRetireTargetEndpoint.class.getDeclaredMethods())
-                            .filter(method -> method.getName().equals("productionReplayer"))
-                            .findFirst()
-                            .orElseThrow();
-            factory.setAccessible(true);
-            var replayer = factory.invoke(endpoint, null, request);
-            var relayField = ZLinkAcceptedJournalReplayer.class.getDeclaredField("replyRelay");
-            relayField.setAccessible(true);
-            var relay = (ZLinkAcceptedJournalReplayer.ReplyRelay) relayField.get(replayer);
+            var relay = endpoint.productionReplyRelay(request);
             byte[] packetName = new byte[8192];
             java.util.Arrays.fill(packetName, (byte) 'a');
             var record =
