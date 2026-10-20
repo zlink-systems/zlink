@@ -453,10 +453,19 @@ internal abstract partial class ZLinkSpotActivation
 
     public ValueTask NotifyActorDisconnectedAsync(
         IZLinkActor actor,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool callerOwnsDispatchTurn = false
     )
     {
         ArgumentNullException.ThrowIfNull(actor);
+        if (callerOwnsDispatchTurn)
+            return _serial.ExecuteActorOperationAsync(
+                actor.Context.ActorId,
+                static (activation, actor, ct) =>
+                    activation.NotifyActorDisconnectedCoreAsync(actor, ct),
+                actor,
+                cancellationToken
+            );
         return ReferenceEquals(ZLinkSpotAmbientContext.CurrentOrDefault, this)
             ? NotifyActorDisconnectedCoreAsync(actor, cancellationToken)
             : ExecuteSerializedAsync(
