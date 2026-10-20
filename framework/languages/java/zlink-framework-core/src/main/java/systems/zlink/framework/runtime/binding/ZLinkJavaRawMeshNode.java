@@ -4948,8 +4948,8 @@ final class ZLinkJavaRawMeshNode
 
     private static long retainedBytes(List<Message> frames) {
         long bytes = 0;
-        for (Message frame : frames) {
-            bytes = Math.addExact(bytes, frame.size());
+        for (int index = 0; index < frames.size(); index++) {
+            bytes = Math.addExact(bytes, frames.get(index).size());
         }
         return bytes;
     }

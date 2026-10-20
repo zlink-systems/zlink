@@ -119,6 +119,7 @@ public final class ZLinkJavaIngressAllocationTest {
             // Object sizes, alignment, binding allocations and JDK container layouts are excluded.
             assertEquals(attempts + records, portObjects, "no separate header-list owner per record");
             assertEquals(0, resumeCallbacks, "immediate permits need no resumption closure");
+            assertEquals(0, byteIterators, "byte accounting indexes the existing message list");
         } finally {
             Files.deleteIfExists(recordingPath);
         }
