@@ -294,7 +294,7 @@ using its ID is called an
 | `stable_type` | Only the stable type of a User/Instance Spot registered at startup with a limited count is used. |
 | `object_kind` | `actor|user_spot|instance_spot` |
 | `policy` | `recreate|snapshot` |
-| Relocation `outcome` | `completed|aborted|failed|shutdown`. It's the result the source observed. `completed` means the source confirmed the target's commit; `aborted` means the source restored the original object with `Preserve`; `failed` means the source cleaned up without confirming the commit (including reading the authority as `Missing`); `shutdown` means the source ended it by shutting down. |
+| Relocation `outcome` | `completed|aborted|failed|shutdown`. It's the result the source observed from the existing authority settlement ([Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received)), and the four values don't overlap. `completed` means the source confirmed the target commit; `aborted` means the source confirmed `Preserve` and resumed the original object's retained work. A cleanup error or source shutdown after either confirmation doesn't change these two values. `shutdown` means the relocation ended by source shutdown before either result was confirmed; `failed` is any other terminal cleanup, including reading the authority as `Missing`. |
 | `transport` | One of the allowed values fixed at startup registration. |
 | `close_reason` | `client_close|idle_timeout|heartbeat_timeout|server_shutdown|protocol_error|transport_error` |
 

@@ -259,7 +259,7 @@ ID로 처음 호출할 때 Framework가 만들 수 있는 Spot을
 | `stable_type` | Startup에 등록하여 개수가 제한된 User·Instance Spot의 stable type만 사용한다. |
 | `object_kind` | `actor|user_spot|instance_spot` |
 | `policy` | `recreate|snapshot` |
-| Relocation `outcome` | `completed|aborted|failed|shutdown`. Source가 관찰한 결과다. `completed`는 source가 target의 commit을 확인한 경우, `aborted`는 source가 원래 object를 `Preserve`로 되살린 경우, `failed`는 source가 commit을 확인하지 못하고 정리한 경우(authority를 `Missing`으로 읽은 경우 포함), `shutdown`은 source 종료로 끝난 경우다. |
+| Relocation `outcome` | `completed|aborted|failed|shutdown`. Source가 기존 authority 정리 결과([Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때))로 관찰한 결과이며, 네 값은 겹치지 않는다. `completed`는 source가 target commit을 확인한 경우, `aborted`는 source가 `Preserve` 성공을 확인하고 원래 object의 보관 작업을 재개한 경우다. 이 두 값은 확인한 뒤의 정리 오류나 source 종료로 바뀌지 않는다. `shutdown`은 두 결과를 확인하기 전에 source 종료로 relocation이 끝난 경우, `failed`는 그 밖의 terminal 정리이며 authority를 `Missing`으로 읽은 경우를 포함한다. |
 | `transport` | Startup 등록 시점에 정한 허용 값 중 하나다. |
 | `close_reason` | `client_close|idle_timeout|heartbeat_timeout|server_shutdown|protocol_error|transport_error` |
 
