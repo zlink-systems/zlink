@@ -32,6 +32,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <limits>
 #include <map>
@@ -427,6 +428,8 @@ struct instance_spot_activation_result_t
     // Releases the accepted application turn only after its reply is handed
     // to the transport. Instance Spot close waits on this terminal.
     std::function<void ()> accepted_turn_terminal;
+    // Preserve the original failure for diagnostics alongside its wire classification.
+    std::exception_ptr exception;
 };
 
 struct instance_spot_activation_materializer_t
@@ -865,7 +868,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       std::shared_ptr<const mesh::service_mailbox_record_t> reply_record,
       std::function<void (instance_spot_activation_result_t)> done = {});
     task_t<void> dispatch_instance_spot_activation_core (
-      protocol::instance_activation_recovery_t command,
+      std::shared_ptr<protocol::instance_activation_recovery_t> command,
       std::shared_ptr<const mesh::service_mailbox_record_t> reply_record,
       std::function<void (instance_spot_activation_result_t)> done,
       std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> admission,

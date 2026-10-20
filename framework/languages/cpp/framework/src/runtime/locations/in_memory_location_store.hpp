@@ -826,6 +826,10 @@ class in_memory_location_repository_t : public location_repository_t
             return _lane
               .run ([&] {
                   const auto now = clock_t::now ();
+                  if (request.operation_deadline != std::chrono::system_clock::time_point{}
+                      && std::chrono::system_clock::now () >= request.operation_deadline)
+                      throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                                   "Object creation deadline expired");
                   const auto key = object_key (request.key);
                   if (request.key.kind != placement_object_kind_t::actor) {
                       const auto claim = _entry_spot_id_claims.find (request.key.global_id);
@@ -905,9 +909,10 @@ class in_memory_location_repository_t : public location_repository_t
         }
     }
 
-    task_t<object_commit_result_t> commit (object_commit_request_t request,
-                                           std::stop_token cancellation = {},
-                                           std::chrono::system_clock::time_point = {}) override
+    task_t<object_commit_result_t>
+    commit (object_commit_request_t request,
+            std::stop_token cancellation = {},
+            std::chrono::system_clock::time_point operation_deadline = {}) override
     {
         if (cancellation.stop_requested ())
             return cancelled<object_commit_result_t> ();
@@ -952,6 +957,10 @@ class in_memory_location_repository_t : public location_repository_t
                     now))
                   return completed (
                     object_commit_result_t{object_commit_conflict_t{authority->second}});
+              if (operation_deadline != std::chrono::system_clock::time_point{}
+                  && std::chrono::system_clock::now () >= operation_deadline)
+                  return task_t<object_commit_result_t> (result_t<object_commit_result_t>::failure (
+                    framework_error_kind_t::deadline_exceeded, "Object creation deadline expired"));
               authority->second.store_version = next_store_version ();
               authority->second.payload = std::move (request.ready_payload);
               authority->second.store_now = now;
