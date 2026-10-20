@@ -226,6 +226,7 @@
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.cs"/>
         <Compile Include="Runtime/StreamFlowEndToEndTests.cs"/>
         <Compile Include="Runtime/StreamRequestRoundTripLatencyTests.cs"/>
+        <Compile Include="Runtime/StreamFrameWriteTests.cs"/>
         <Compile Include="Runtime/SessionJobQueueLoadTests.cs"/>
         <Compile Include="Runtime/TimerLifecycleTests.cs"/>
         <Compile Include="Runtime/ActivationReadyTests.cs"/>

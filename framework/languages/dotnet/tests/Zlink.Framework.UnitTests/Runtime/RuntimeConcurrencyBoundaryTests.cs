@@ -2,6 +2,85 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class RuntimeConcurrencyBoundaryTests
 {
+    [Fact]
+    public async Task RunnerProducerStoresOnlyOwnedCarrierReferences()
+    {
+        const int count = 1000;
+        const int warmup = 100;
+        var scope = new ZLinkRuntimeExecutionScope();
+        var runner = new ZLinkRuntimeTaskRunner(
+            new ZLinkRuntimeErrorSink(),
+            CancellationToken.None,
+            scope
+        );
+        var executed = 0;
+        Func<CancellationToken, ValueTask> work = _ =>
+        {
+            Interlocked.Increment(ref executed);
+            return ValueTask.CompletedTask;
+        };
+        Action<
+            Tuple<
+                ZLinkRuntimeTaskRunner,
+                string,
+                Func<CancellationToken, ValueTask>,
+                TaskCompletionSource
+            >
+        > complete = static state =>
+        {
+            state.Item3(CancellationToken.None).GetAwaiter().GetResult();
+            state.Item4.SetResult();
+        };
+        var tasks = new Task[count];
+        for (var i = 0; i < count; i++)
+        {
+            tasks[i] = new TaskCompletionSource().Task;
+            Assert.True(scope.Supervisor.TryStart(runner, tasks[i], false, false));
+        }
+        foreach (var task in tasks)
+            scope.Supervisor.Remove(runner, task);
+        for (var i = 0; i < warmup; i++)
+        {
+            var completion = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            ThreadPool.QueueUserWorkItem(
+                complete,
+                Tuple.Create(runner, "carrier", work, completion),
+                false
+            );
+            await completion.Task;
+            await runner.Run("carrier", work);
+        }
+        var baseline = long.MaxValue;
+        for (var i = 0; i < count; i++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var completion = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            ThreadPool.QueueUserWorkItem(
+                complete,
+                Tuple.Create(runner, "carrier", work, completion),
+                false
+            );
+            tasks[i] = completion.Task;
+            baseline = Math.Min(baseline, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
+        await Task.WhenAll(tasks);
+        var actual = long.MaxValue;
+        for (var i = 0; i < count; i++)
+        {
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            tasks[i] = runner.Run("carrier", work);
+            actual = Math.Min(actual, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
+        await Task.WhenAll(tasks);
+        await runner.StopAsync();
+        Assert.Equal(2 * (warmup + count), executed);
+        Assert.Equal(baseline, actual);
+    }
+
 #if DEBUG
     [Fact]
     public async Task InfrastructureWaitGuard_RejectsIncompleteWaitOnStateLane()
