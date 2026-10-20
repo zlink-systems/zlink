@@ -1393,9 +1393,12 @@ export class RawServiceMeshRuntime {
   }
 
   tickLiveness(nowMs = performance.now()): ServiceLivenessTick {
+    this.refreshAdmissionPending(nowMs);
     const admissionDue = this.liveness.tickAdmission(nowMs);
     const result = this.liveness.tick(nowMs);
     this.requireStarted();
+    if (!admissionDue && result.probes.length === 0 && result.timedOutNodes.length === 0)
+      return result;
     if (admissionDue)
       for (const nodeRoutingId of this.selectedRoutes.keys()) void this.announcePeer(nodeRoutingId);
     for (const probe of result.probes) {

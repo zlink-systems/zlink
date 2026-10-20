@@ -118,7 +118,8 @@ function selectedRouteRuntime(routes, submit, options = {}) {
 }
 
 for (const deferred of [false, true]) {
-  test(`HELLO retains its first bytes until ADMIT and then publishes UPDATE (deferred=${deferred})`, async () => {
+  test(`HELLO retains its first bytes until ADMIT and then publishes UPDATE (deferred=${deferred})`, async (t) => {
+    t.mock.method(performance, 'now', () => 0);
     let complete;
     const h = selectedRouteRuntime(
       new Map([['peer', 11n]]),
@@ -156,7 +157,7 @@ for (const deferred of [false, true]) {
         complete();
         await turn();
       }
-      h.runtime.tickLiveness(0);
+      h.runtime.tickLiveness(5000);
       await turn();
       const hellos = h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello);
       assert.equal(hellos.length, 2);
@@ -563,7 +564,7 @@ test('inbound selected route sends HELLO without an outbound intent', async () =
 // MeshNode §7.1 and hot-path §4.2: an inbound-only route must retain its
 // management wake until ADMIT, even after a crossed HELLO admits its descriptor.
 for (const crossedHello of [false, true]) {
-  test(`maintenance stays due until inbound selected route receives ADMIT (crossedHello=${crossedHello})`, async (t) => {
+  test(`maintenance follows the probe cadence until inbound selected route receives ADMIT (crossedHello=${crossedHello})`, async (t) => {
     const now = 1000;
     t.mock.method(performance, 'now', () => now);
     const h = selectedRouteRuntime(new Map([['peer', 11n]]));
@@ -576,10 +577,10 @@ for (const crossedHello of [false, true]) {
       await h.runtime.observeSelectedRoutes();
       if (crossedHello) await receive(wire.M6aServiceWireCommand.hello);
       h.runtime.liveness.tick(now);
-      assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), now);
+      assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), now + 5000);
       const hellos = () => h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length;
       const initial = hellos();
-      h.runtime.tickLiveness(now);
+      h.runtime.tickLiveness(now + 5000);
       assert.equal(hellos(), initial + 1);
       await receive(wire.M6aServiceWireCommand.admit);
       h.runtime.liveness.tick(now);
@@ -592,20 +593,23 @@ for (const crossedHello of [false, true]) {
   });
 }
 
-test('liveness maintenance resends HELLO until the selected route receives ADMIT', async () => {
+test('liveness maintenance resends HELLO until the selected route receives ADMIT', async (t) => {
+  t.mock.method(performance, 'now', () => 0);
   const h = selectedRouteRuntime(new Map([['peer', 11n]]));
   try {
     h.runtime.connectPeerByRoutingId(descriptor('peer').advertisedEndpoint, 'peer');
     await h.runtime.observeSelectedRoutes();
     const initial = h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length;
-    h.runtime.tickLiveness(0);
+    h.runtime.tickLiveness(5000);
     await turn();
     assert.equal(h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length, initial + 1);
   } finally { h.runtime.close(); }
 });
 
 for (const beforeSnapshot of [false, true]) {
-  test(`remote ADMIT stops HELLO and resets only on route replacement (beforeSnapshot=${beforeSnapshot})`, async () => {
+  test(`remote ADMIT stops HELLO and resets only on route replacement (beforeSnapshot=${beforeSnapshot})`, async (t) => {
+    let now = 0;
+    t.mock.method(performance, 'now', () => now);
     const routes = new Map([['peer', 11n]]);
     const h = selectedRouteRuntime(routes);
     const receive = (command, routeGeneration) => h.processReceived({
@@ -630,6 +634,7 @@ for (const beforeSnapshot of [false, true]) {
       assert.equal(hellos(), accepted + (beforeSnapshot ? 0 : 1));
       if (!beforeSnapshot) {
         await receive(wire.M6aServiceWireCommand.hello, 12n);
+        now += 5000;
         h.runtime.tickLiveness();
         await turn();
         assert.equal(hellos(), accepted + 2, 'receiving HELLO alone must not stop HELLO submission');
@@ -838,8 +843,10 @@ for (const initiallySealed of [false, true]) {
       assert.equal(hellos().length, before);
       assert.equal(h.runtime.nextMaintenanceDeadlineMs(0), Infinity);
       sealed = false;
-      assert.equal(h.runtime.nextMaintenanceDeadlineMs(1000), 1000);
-      h.runtime.tickLiveness(1000);
+      assert.equal(h.runtime.nextMaintenanceDeadlineMs(1000), 6000);
+      h.runtime.tickLiveness(5999);
+      assert.equal(hellos().length, before);
+      h.runtime.tickLiveness(6000);
       assert.equal(hellos().length, before + 1);
       if (before !== 0) assert.deepEqual(hellos()[1][2], hellos()[0][2]);
     } finally {
@@ -873,11 +880,38 @@ test('a HELLO submission completed while admission is sealed remains resumable',
     await Promise.resolve();
     await Promise.resolve();
     sealed = false;
-    h.runtime.tickLiveness(1000);
+    assert.equal(h.runtime.nextMaintenanceDeadlineMs(1000), 6000);
+    h.runtime.tickLiveness(6000);
     assert.equal(h.sent.length, 2);
   } finally {
     h.runtime.close();
     complete?.();
     await Promise.resolve();
+  }
+});
+
+test('a pending non-HELLO control with a current route waits for completion readiness', async (t) => {
+  const now = 1000;
+  t.mock.method(performance, 'now', () => now);
+  const h = selectedRouteRuntime(new Map());
+  let complete;
+  let attempts = 0;
+  try {
+    h.runtime.startControlSend('peer', wire.M6aServiceWireCommand.livenessProbe, () => {
+      attempts++;
+      return new Promise(resolve => { complete = resolve; });
+    }, () => true);
+    const pending = [...h.runtime.controlSends.values()][0].task;
+    assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), Infinity,
+      'a current route is not readiness for an outstanding Core submission');
+    h.runtime.tickLiveness(now);
+    assert.equal(attempts, 1);
+    complete(true);
+    await pending;
+    assert.equal(h.runtime.controlSends.size, 0);
+    assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), Infinity);
+  } finally {
+    complete?.(true);
+    h.runtime.close();
   }
 });
