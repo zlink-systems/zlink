@@ -22,6 +22,7 @@
 #include <future>
 #include <sstream>
 #include <thread>
+#include <tuple>
 
 namespace
 {
@@ -728,8 +729,13 @@ TEST (RoutePayloadOwnership, MissingActorHandlerRepliesWithStreamError)
                std::string (error.error ()->what ()).find ("spot handler is not registered"));
 }
 
-TEST (RoutePayloadOwnership, ActorSendCompletesAtLocalAdmissionWithoutRemoteReply)
+class ActorSendRelayAdmission : public ::testing::TestWithParam<std::tuple<bool, bool>>
 {
+};
+
+TEST_P (ActorSendRelayAdmission, CompletesWithoutRemoteReply)
+{
+    const auto [await_remote_admission, ordered_relay] = GetParam ();
     auto source_state = make_wire_test_node ("wire-source", object_role_t::server);
     auto target_state = make_wire_test_node ("wire-target", object_role_t::server);
     detail::mesh_node_runtime_t source (source_state), target (target_state);
@@ -747,17 +753,25 @@ TEST (RoutePayloadOwnership, ActorSendCompletesAtLocalAdmissionWithoutRemoteRepl
     ASSERT_EQ (1u, target.admitted_peer_count ());
     const auto actor = detail::actor_ref_access_t::make (node_rid_t::from_string ("wire-target"),
                                                          "player", "actor", 1);
-    detail::stream_header_t header (detail::stream_message_kind_t::send, stream_codec_t::json,
-                                    detail::stream_header_flags_t::none, std::nullopt, "WireSend");
     runtime::protocol::actor_route_fence_t fence{
       "actor", 1, target_state->routing_id->to_bytes (), target.status ().lifecycle_generation (),
       1,       1};
-    auto pending =
-      source.relay_application_actor (actor, header, zlink::message_t::from ("{}"),
-                                      std::chrono::milliseconds (100), true, std::nullopt, fence);
+    auto metadata = detail::stream_metadata_t{}.values ();
+    if (ordered_relay)
+        metadata.emplace (std::string (detail::bound_session_relay_sequence_key), "1");
+    detail::stream_header_t header (detail::stream_message_kind_t::send, stream_codec_t::json,
+                                    detail::stream_header_flags_t::none, std::nullopt, "WireSend",
+                                    detail::stream_metadata_t (std::move (metadata)));
+    auto pending = source.relay_application_actor (actor, header, zlink::message_t::from ("{}"),
+                                                   std::chrono::milliseconds (100),
+                                                   await_remote_admission, std::nullopt, fence);
     // The remote application queue is deliberately not drained and emits no reply.
     const auto sent = detail::request_task_access_t::physical_reply (pending).result ();
     EXPECT_TRUE (sent) << (sent.error () ? sent.error ()->what () : "");
     source.stop ();
     target.stop ();
 }
+
+INSTANTIATE_TEST_SUITE_P (All,
+                          ActorSendRelayAdmission,
+                          ::testing::Combine (::testing::Bool (), ::testing::Bool ()));
