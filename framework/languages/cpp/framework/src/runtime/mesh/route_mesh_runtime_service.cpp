@@ -6,11 +6,11 @@
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
 #include "runtime/diagnostics/runtime_observation.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
-#include "runtime/utils/poll_interval_wait.hpp"
 
 #include <zlink/framework/contracts/errors/error.hpp>
 
 #include <algorithm>
+#include <condition_variable>
 #include <set>
 #include <thread>
 #include <utility>
@@ -28,9 +28,6 @@ build_snapshot_async (std::shared_ptr<route_mesh_runtime_service_t::state_t> sta
 
 namespace
 {
-
-constexpr auto monitor_refresh_interval = std::chrono::milliseconds (100);
-constexpr auto monitor_pump_interval = std::chrono::milliseconds (10);
 
 topology_state_t map_state (mesh::service_node_state_t state)
 {
@@ -107,11 +104,10 @@ struct route_mesh_runtime_service_t::state_t
 
         std::shared_ptr<detail::mesh_node_runtime_t> node;
         std::mutex mutex;
+        std::condition_variable management_changed;
         std::vector<std::weak_ptr<observer_t>> observers;
         std::optional<mesh_node_snapshot_t> last_snapshot;
         bool location_store_healthy = false;
-        std::chrono::steady_clock::time_point next_location_poll{};
-        std::chrono::steady_clock::time_point next_descriptor_poll{};
         std::vector<mesh_node_descriptor_t> location_descriptors;
         std::atomic_bool stopped{false};
         std::thread pump;
@@ -204,13 +200,6 @@ struct route_mesh_runtime_service_t::state_t
     {
         if (location_runtime == nullptr)
             return;
-        const auto now = std::chrono::steady_clock::now ();
-        {
-            std::lock_guard lock (hub.mutex);
-            if (now < hub.next_location_poll)
-                return;
-            hub.next_location_poll = now + monitor_refresh_interval;
-        }
         std::optional<location_runtime_status_t> status_for_log;
         try {
             auto query = location_runtime->get_status ();
@@ -242,14 +231,6 @@ struct route_mesh_runtime_service_t::state_t
 
     void poll_location_descriptors (hub_t &hub)
     {
-        const auto now = std::chrono::steady_clock::now ();
-        {
-            std::lock_guard lock (hub.mutex);
-            if (now < hub.next_descriptor_poll)
-                return;
-            hub.next_descriptor_poll = now + monitor_refresh_interval;
-        }
-
         refresh_location_descriptors (hub);
         publish_current_snapshot (hub);
     }
@@ -352,13 +333,22 @@ void route_mesh_runtime_service_t::start ()
         const auto state = _state;
         // Prime Store capacity and remote descriptor observations before
         // exposing the runtime, without a Store read on every query.
+        state->poll_location (*hub);
         state->poll_location_descriptors (*hub);
         hub->pump = std::thread ([state, hub] {
-            while (!hub->stopped.load (std::memory_order_acquire)) {
-                state->poll_location (*hub);
-                state->poll_location_descriptors (*hub);
-                zlink::framework::runtime::wait_poll_interval (monitor_pump_interval);
-            }
+            pump_management ([] { return std::chrono::steady_clock::now (); },
+                             [&] {
+                                 state->poll_location (*hub);
+                                 state->poll_location_descriptors (*hub);
+                             },
+                             [&] (std::chrono::steady_clock::time_point due) {
+                                 std::unique_lock lock (hub->mutex);
+                                 const auto stopped = [&] {
+                                     return hub->stopped.load (std::memory_order_acquire);
+                                 };
+                                 hub->management_changed.wait_until (lock, due, stopped);
+                                 return !hub->stopped.load (std::memory_order_acquire);
+                             });
         });
     }
 }
@@ -367,8 +357,13 @@ void route_mesh_runtime_service_t::stop () noexcept
 {
     if (_state->stopped.exchange (true, std::memory_order_acq_rel))
         return;
-    for (const auto &[_, hub] : _state->hubs)
-        hub->stopped.store (true, std::memory_order_release);
+    for (const auto &[_, hub] : _state->hubs) {
+        {
+            std::lock_guard lock (hub->mutex);
+            hub->stopped.store (true, std::memory_order_release);
+        }
+        hub->management_changed.notify_all ();
+    }
     for (const auto &[_, hub] : _state->hubs) {
         if (hub->pump.joinable ())
             hub->node->native_node ().transport ().topology ().set_change_handler ({});
