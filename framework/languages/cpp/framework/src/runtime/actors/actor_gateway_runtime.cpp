@@ -991,6 +991,11 @@ actor_context_t::join_spot_erased (spot_id_t spot_id,
                                       std::nullopt};
       });
 
+    if (joined.result_code == detail::actor_join_reply_t::relayed) {
+        auto cleanup = std::exchange (joined.source_cleanup, {});
+        co_await cleanup ();
+        joined.result_code = detail::actor_join_reply_t::accepted;
+    }
     if (joined.result_code == 0) {
         state->sync ([&] {
             *actor_ref = joined.actor;

@@ -3457,4 +3457,141 @@ TEST (ActorMaintenanceJoin, ActiveInventoryExcludesCreatingRecoveringAndFinalize
     EXPECT_EQ (target_runtime.monitoring_counts_async ().result ().value ().first, 1u);
     EXPECT_TRUE (source_runtime.local_actor_refs ().empty ());
 }
+
+class join_settlement_store_t final : public fw::location_store_t
+{
+  public:
+    explicit join_settlement_store_t (std::shared_ptr<fw::location_store_t> inner) :
+        inner (std::move (inner))
+    {
+    }
+    fw::task_t<fw::store_read_result_t> read (fw::store_key_t key) override
+    {
+        const auto actor_authority = armed.load () && key.value == authority_key.value;
+        if (actor_authority)
+            co_await release.task ();
+        auto result = co_await inner->read (std::move (key));
+        if (actor_authority && std::holds_alternative<fw::store_missing_t> (result))
+            missing.complete (fw::result_t<void>::success ());
+        co_return result;
+    }
+    fw::task_t<fw::store_write_result_t> write (fw::store_write_request_t request) override
+    {
+        return inner->write (std::move (request));
+    }
+    fw::task_t<fw::store_scan_result_t> scan (fw::store_scan_request_t request) override
+    {
+        return inner->scan (std::move (request));
+    }
+    std::shared_ptr<fw::location_store_t> inner;
+    fw::store_key_t authority_key;
+    std::atomic<bool> armed{false};
+    fw::task_completion_source_t<void> release;
+    fw::task_completion_source_t<void> missing;
+};
+
+TEST (ActorMaintenanceJoin, MissingAfterTargetCommitAndDestroyDoesNotCompleteOnSource)
+{
+    observations_t evidence;
+    observations = &evidence;
+    auto store = std::make_shared<observed_location_store_t> ();
+    auto source_store = std::make_shared<join_settlement_store_t> (store);
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t source, target;
+    struct release_store_t
+    {
+        std::shared_ptr<join_settlement_store_t> store;
+        ~release_store_t () { store->release.complete (fw::result_t<void>::success ()); }
+    } release_store{source_store};
+    release_callbacks_t release{evidence};
+    configure (source, first_rid, source_store, relocations, default_follow_duration, 0, true);
+    source.start ();
+    ASSERT_TRUE (ready (source));
+    auto services = source.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
+                   .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                   .async ()
+                   .result ());
+    const auto key = fw::runtime::actor_authority_key (actor_id);
+    const auto authority = std::get<fw::authority_snapshot_t> (
+      services.get_required<fw::location_repository_t> ().read_authority (key).result ().value ());
+    const auto page =
+      std::get<fw::store_scan_page_t> (store->scan ({"", std::nullopt, 100}).result ().value ());
+    for (const auto &item : page.items)
+        if (item.value.version.value == authority.store_version)
+            source_store->authority_key = item.key;
+    ASSERT_FALSE (source_store->authority_key.value.empty ());
+    services.get_required<fw::route_mesh_runtime_options_t> ().mesh (mesh_name).placement_weight (
+      0);
+    configure (target, second_rid, store, relocations, default_follow_duration, 0, true);
+    target.start ();
+    ASSERT_TRUE (ready (target));
+    auto target_services = target.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (target_services.get_required<fw::spot_manager_t> ()
+                   .get_or_create (fw::spot_id_t (local_spot), room_type)
+                   .async ()
+                   .result ());
+    ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
+    const auto native =
+      fw::detail::spot_node_runtime_t (
+        fw::detail::mesh_node_runtime_t::registrations (target.app.advanced ().zlink ())
+          .front ()
+          ->spot_state)
+        .native_node ();
+    const auto candidate = fw::runtime::host::public_host_runtime_t::remote_actor_ref (
+      zlink::routing_id_t::from (second_rid), actor_id, authority.object_generation);
+    store->before_next_write_when (
+      [native, candidate, target_services,
+       source_store] (const fw::store_write_request_t &request) mutable -> fw::task_t<bool> {
+          if (!native->resolve_actor (candidate))
+              co_return false;
+          const auto location =
+            co_await target_services.get_required<fw::location_runtime_query_t> ()
+              .find_actor_location (fw::actor_id_t (actor_id));
+          if (!location || location->node_rid.to_string () != first_rid)
+              co_return false;
+          co_return std::ranges::any_of (request.conditions, [&] (const auto &condition) {
+              const auto *version = std::get_if<fw::store_version_condition_t> (&condition);
+              return version && version->key.value == source_store->authority_key.value;
+          });
+      },
+      [source_store] () -> fw::task_t<void> {
+          source_store->armed.store (true);
+          co_return;
+      });
+    ASSERT_TRUE (move_to (services.get_required<fw::actor_client_t> (), evidence, local_spot, 1));
+    ASSERT_TRUE (source_store->armed.load ());
+    store->before_next_write_when ({}, {});
+    ASSERT_TRUE (
+      move_to (target_services.get_required<fw::actor_client_t> (), evidence, entry_target, 2));
+    const auto entry_ready = target_services.get_required<fw::actor_client_t> ()
+                               .request (fw::actor_id_t (actor_id), probe_t{instance_probe})
+                               .async<probe_t> ()
+                               .result ();
+    ASSERT_TRUE (entry_ready);
+    EXPECT_GT (entry_ready.value ().value, 0);
+    std::optional<fw::actor_ref_t> current;
+    {
+        std::lock_guard lock (evidence.mutex);
+        current = std::get<fw::actor_join_accepted_t> (evidence.completions.back ()).actor;
+    }
+    ASSERT_TRUE (
+      target_services.get_required<fw::actor_manager_t> ().destroy (*current).result ().value ());
+    ASSERT_TRUE (std::holds_alternative<fw::authority_missing_t> (
+      target_services.get_required<fw::location_repository_t> ()
+        .read_authority (key)
+        .result ()
+        .value ()));
+    source_store->release.complete (fw::result_t<void>::success ());
+    ASSERT_TRUE (source_store->missing.task ().result_for (wait_budget));
+    evidence.release_leave.complete (fw::result_t<void>::success ());
+    const auto stopped = source.app.shutdown (wait_budget).result ();
+    ASSERT_TRUE (stopped);
+    ASSERT_EQ (stopped.value ().outcome, fw::termination_outcome_t::stopped);
+    std::lock_guard lock (evidence.mutex);
+    ASSERT_EQ (evidence.completions.size (), 2u);
+    EXPECT_TRUE (std::ranges::all_of (evidence.completion_owners,
+                                      [] (const auto &owner) { return owner == second_rid; }));
+}
+
 } // namespace
