@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Systems.Zlink.Stream.Connector.Contracts;
@@ -8,13 +7,14 @@ using Zlink.Framework.Runtime.Host;
 
 namespace Zlink.Framework.UnitTests;
 
-// #1382: one STREAM request round trip must not wait for a TCP delayed ACK (40 ms or more).
-public sealed class StreamRequestRoundTripLatencyTests(Xunit.Abstractions.ITestOutputHelper output)
+// #1382: StreamFrameWriteTests verifies the single write that avoids TCP delayed ACK
+// waits. This test verifies the sequential request/reply path over a real TCP connection.
+public sealed class StreamRequestRoundTripLatencyTests
 {
     private const int Requests = 21;
 
     [Fact]
-    public async Task Sequential_Tcp_Requests_Do_Not_Wait_For_Delayed_Ack()
+    public async Task Sequential_Tcp_Requests_Return_Expected_Replies()
     {
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddZLinkFramework(options =>
@@ -49,21 +49,10 @@ public sealed class StreamRequestRoundTripLatencyTests(Xunit.Abstractions.ITestO
             await connector.Connect.Async();
 
             await RoundTripAsync(connector);
-            var elapsed = new double[Requests];
             for (var i = 0; i < Requests; i++)
             {
-                var started = Stopwatch.GetTimestamp();
                 await RoundTripAsync(connector);
-                elapsed[i] = Stopwatch.GetElapsedTime(started).TotalMilliseconds;
             }
-
-            Array.Sort(elapsed);
-            var median = elapsed[Requests / 2];
-            output.WriteLine($"median round trip {median:F3} ms, max {elapsed[^1]:F3} ms");
-            Assert.True(
-                median < 20,
-                $"median round trip {median:F2} ms; all: {string.Join(", ", elapsed.Select(value => value.ToString("F2")))}"
-            );
 
             await connector.Close.Async();
         }
@@ -85,6 +74,7 @@ public sealed class StreamRequestRoundTripLatencyTests(Xunit.Abstractions.ITestO
             .Submit<EchoReply>(result => completed.TrySetResult(result));
         var result = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(result.IsSuccess);
+        Assert.Equal("reply", Assert.IsType<EchoReply>(result.Value).Value);
     }
 
     private sealed record EchoRequest(string Value);
