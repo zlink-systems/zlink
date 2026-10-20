@@ -113,6 +113,58 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
+    public async Task ApplicationDrainWaitersAreIsolatedAcrossPendingGenerations()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
+        Task? previous = null;
+        for (var cycle = 0; cycle < 2; cycle++)
+        {
+            var entered = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var execution = queue
+                .RunAsync(
+                    async _ =>
+                    {
+                        entered.TrySetResult();
+                        await release.Task;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            try
+            {
+                await entered.Task;
+                var drained = queue.ApplicationDrained;
+                Assert.False(drained.IsCompleted);
+                Assert.Same(drained, queue.ApplicationDrained);
+                if (previous is not null)
+                {
+                    Assert.NotSame(previous, drained);
+                    Assert.True(previous.IsCompletedSuccessfully);
+                }
+                release.TrySetResult();
+                await execution;
+                await drained;
+                previous = drained;
+            }
+            finally
+            {
+                release.TrySetResult();
+                await execution;
+            }
+        }
+    }
+
+    [Fact]
     public async Task TerminalCompositionAllocatesOnlyItsTwoCallbackReferences()
     {
         using var errors = new ZLinkRuntimeErrorSink();
@@ -242,6 +294,54 @@ public sealed class SerialExecutorTests
         for (var i = 0; i < 1000; i++)
             GC.KeepAlive(Create());
         Assert.Equal(storage, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
+    public async Task ApplicationDrainSignalIsAllocatedOnlyWhenObserved()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
+        Assert.True(queue.ApplicationDrained.IsCompletedSuccessfully);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var execution = queue
+            .RunAsync(
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await release.Task;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        try
+        {
+            await entered.Task;
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            GC.KeepAlive(
+                new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+            );
+            var signalStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+            before = GC.GetAllocatedBytesForCurrentThread();
+            var drained = queue.ApplicationDrained;
+            var observedStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Equal(signalStorage, observedStorage);
+            Assert.Same(drained, queue.ApplicationDrained);
+            Assert.False(drained.IsCompleted);
+            release.TrySetResult();
+            await execution;
+            await drained;
+            Assert.True(queue.ApplicationDrained.IsCompletedSuccessfully);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await execution;
+        }
     }
 
     [Fact]
