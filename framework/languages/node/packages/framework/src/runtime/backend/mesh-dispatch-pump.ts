@@ -123,11 +123,15 @@ export class ZLinkMeshDispatchPump {
     if (startInfrastructure) this.scheduleInfrastructure();
     if (startApplication) {
       if ((domains & ReadyDomain.Infrastructure) !== 0) {
-        setImmediate(() => this.wakeApplicationWorker());
+        this.scheduleApplicationWorker();
       } else {
         this.wakeApplicationWorker();
       }
     }
+  }
+
+  private scheduleApplicationWorker(): void {
+    setImmediate(() => this.wakeApplicationWorker());
   }
 
   private wakeApplicationWorker(): void {
@@ -213,6 +217,14 @@ export class ZLinkMeshDispatchPump {
       releaseApplicationJobPermitTurn(permit);
       return;
     }
+    return this.finishPendingRecord(result, record, permit);
+  }
+
+  private finishPendingRecord(
+    result: Promise<void>,
+    record: ReceiveRecord,
+    permit: ApplicationJobPermitPort | undefined
+  ): Promise<void> {
     return Promise.resolve(result).then(
       () => releaseApplicationJobPermitTurn(permit),
       (error) => {
@@ -269,7 +281,7 @@ export class ZLinkMeshDispatchPump {
         }
         this.pendingDomains &= ~ReadyDomain.Infrastructure;
         if ((this.pendingDomains & ReadyDomain.Application) !== 0) {
-          setImmediate(() => this.wakeApplicationWorker());
+          this.scheduleApplicationWorker();
         }
         const lifecycleBudgetExhausted = await this.drainDomain(readyBatch);
         if (lifecycleBudgetExhausted) {
