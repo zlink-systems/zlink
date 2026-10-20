@@ -4,13 +4,12 @@
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/actors/actor_manager_access.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/execution/task_result.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/handlers/handler_registry_runtime.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
-#include "runtime/messaging/failure_origin_wire.hpp"
-#include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
@@ -781,7 +780,9 @@ class actor_client_impl_t final : public actor_client_t
               "explicit Actor route requires a running MeshNode");
         }
         runtime::messaging::client_call_codec_t codec;
-        auto header = codec.create_envelope (kind, "actor", std::move (packet_name), timeout);
+        auto header = codec.create_envelope (kind, detail::actor_message_channel_name,
+                                             std::move (packet_name), timeout);
+        header.content_type = _serializers->content_type (message._type);
         header.correlation_id = _request_id_prefix + std::to_string (_request_id_seq.fetch_add (1));
         co_return co_await route->relay_application_actor (
           actor.native_ref, header, detail::message_to_raw (message, *_serializers), timeout,
@@ -828,7 +829,9 @@ class actor_client_impl_t final : public actor_client_t
                         const actor_send_call_t::metadata_map_t &metadata = {})
     {
         runtime::messaging::client_call_codec_t codec;
-        auto header = codec.create_envelope (kind, "actor", packet_name, timeout);
+        auto header =
+          codec.create_envelope (kind, detail::actor_message_channel_name, packet_name, timeout);
+        header.content_type = _serializers->content_type (message._type);
         if (!request_id.empty ()) {
             // A request keeps one correlation id across route re-resolution and
             // transfer replay. The native operation id is local to one runtime;
@@ -836,8 +839,8 @@ class actor_client_impl_t final : public actor_client_t
             header.correlation_id = request_id;
         }
         header.metadata = metadata;
-        auto parts = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
-          header, detail::message_to_raw (message, *_serializers));
+        auto parts =
+          detail::encode_actor_packet (header, detail::message_to_raw (message, *_serializers));
         try {
             auto copied = parts.items ();
             if (kind == runtime::messaging::message_kind_t::command) {
@@ -882,31 +885,7 @@ class actor_client_impl_t final : public actor_client_t
                            + std::string (actor.native_ref.node_rid ().value ()) + "/"
                            + std::to_string (actor.native_ref.object_generation ()) + "'");
             }
-            runtime::messaging::envelope_codec_t reply_codec;
-            auto reply_header = reply_codec.decode_header (reply.value (), false);
-            if (!reply_header) {
-                co_return result_t<std::optional<zlink::message_t>>::failure (
-                  reply_header.error_kind (), reply_header.error ()
-                                                ? reply_header.error ()->what ()
-                                                : "actor mesh reply header decode failed");
-            }
-            if (reply_header.value ().kind == runtime::messaging::message_kind_t::error) {
-                const auto message =
-                  reply_header.value ().error_message.value_or ("actor mesh request failed");
-                runtime::messaging::request_failure_mapper_t failure_mapper;
-                auto mapped = failure_mapper.error_header_exception (
-                  reply_header.value ().error_code.value_or ("request_failed"), message,
-                  "actor mesh request");
-                mapped = runtime::messaging::restore_failure_origin (reply_header.value (),
-                                                                     std::move (mapped));
-                co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (
-                  mapped);
-            }
-            auto body = reply_codec.decode_body (reply.value ());
-            if (!body)
-                co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
-            co_return result_t<std::optional<zlink::message_t>>::success (
-              std::make_optional (std::move (body.value ())));
+            co_return detail::decode_actor_reply (reply.value ());
         }
         catch (const framework_exception_t &) {
             co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (

@@ -19,6 +19,7 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <sstream>
 #include <thread>
 
@@ -166,11 +167,10 @@ TEST (RoutePayloadOwnership, ActorSendFallbackProvidesHeader)
     runtime::host::receive_record_t record;
     record.kind = runtime::host::record_kind_t::actor_send;
     runtime::messaging::envelope_header_t header;
-    header.channel_name = "mesh";
+    header.kind = runtime::messaging::message_kind_t::command;
+    header.channel_name = "actor";
     header.message_name = "payload";
-    auto parts = runtime::messaging::envelope_codec_t{}
-                   .encode_raw_body_parts (header, zlink::message_t::from ("42"))
-                   .take_items ();
+    auto parts = detail::encode_actor_packet (header, zlink::message_t::from ("42")).take_items ();
     auto decoded = runtime::decode_mesh_record_header (record, parts, false);
     EXPECT_FALSE (
       spots.dispatch_mesh_record (owner, record, parts, decoded.value (), provider, serializers));
@@ -197,11 +197,9 @@ TEST (RoutePayloadOwnership, ActorSendWithoutTerminalPreservesIngressHeaderAndFr
     record.kind = runtime::host::record_kind_t::actor_send;
     runtime::messaging::envelope_header_t header;
     header.kind = runtime::messaging::message_kind_t::command;
-    header.channel_name = "mesh";
+    header.channel_name = "actor";
     header.message_name = "payload";
-    auto parts = runtime::messaging::envelope_codec_t{}
-                   .encode_raw_body_parts (header, zlink::message_t::from ("42"))
-                   .take_items ();
+    auto parts = detail::encode_actor_packet (header, zlink::message_t::from ("42")).take_items ();
     auto decoded = runtime::decode_mesh_record_header (record, parts, false);
     parts[0] = zlink::message_t::from (std::string ("invalid header"));
     EXPECT_FALSE (
@@ -264,8 +262,8 @@ TEST (RoutePayloadOwnership, MeshIngressRepliesToInvalidRequestHeadersForEveryOw
     std::vector<message_dispatch_error_event_t> errors;
     detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
       options, [&] (const message_dispatch_error_event_t &event) { errors.push_back (event); });
-    for (auto kind : {host::record_kind_t::actor_request, host::record_kind_t::spot_request,
-                      host::record_kind_t::node_request, host::record_kind_t::channel_request}) {
+    for (auto kind : {host::record_kind_t::spot_request, host::record_kind_t::node_request,
+                      host::record_kind_t::channel_request}) {
         SCOPED_TRACE (static_cast<int> (kind));
         host::receive_record_t record;
         record.kind = kind;
@@ -431,13 +429,12 @@ TEST (RoutePayloadOwnership, MalformedReplyRouteMatchesSharedFourLanguageContrac
         std::getline (input, json, '\t');
         std::getline (input, action, '\t');
         SCOPED_TRACE (id);
-        for (auto kind :
-             request == "true"
-               ? std::vector{host::record_kind_t::node_request,
-                             host::record_kind_t::channel_request,
-                             host::record_kind_t::spot_request, host::record_kind_t::actor_request}
-               : std::vector{host::record_kind_t::node_send, host::record_kind_t::channel_send,
-                             host::record_kind_t::spot_send, host::record_kind_t::actor_send}) {
+        for (auto kind : request == "true" ? std::vector{host::record_kind_t::node_request,
+                                                         host::record_kind_t::channel_request,
+                                                         host::record_kind_t::spot_request}
+                                           : std::vector{host::record_kind_t::node_send,
+                                                         host::record_kind_t::channel_send,
+                                                         host::record_kind_t::spot_send}) {
             SCOPED_TRACE (static_cast<int> (kind));
             host::receive_record_t record;
             record.kind = kind;
@@ -483,20 +480,26 @@ TEST (RoutePayloadOwnership, MalformedReplyRouteMatchesSharedFourLanguageContrac
     EXPECT_EQ (count, 22);
 }
 
+namespace
+{
+std::shared_ptr<detail::mesh_node_builder_state_t> make_wire_test_node (const char *rid,
+                                                                        object_role_t role)
+{
+    auto state = test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("mesh");
+    state->core_context = std::make_shared<zlink::context_t> ();
+    state->routing_id = zlink::routing_id_t::from (rid);
+    state->listen_endpoint = "tcp://127.0.0.1:0";
+    state->listen_port.reset ();
+    state->object_role = role;
+    state->channels.emplace ("work", detail::mesh_channel_registration_t{100, {}, true, true});
+    return state;
+}
+}
+
 TEST (RoutePayloadOwnership, BoundSessionInternalSendSkipsUserTargetClassification)
 {
-    auto make_node = [] (const char *rid, object_role_t role) {
-        auto state = test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("mesh");
-        state->core_context = std::make_shared<zlink::context_t> ();
-        state->routing_id = zlink::routing_id_t::from (rid);
-        state->listen_endpoint = "tcp://127.0.0.1:0";
-        state->listen_port.reset ();
-        state->object_role = role;
-        state->channels.emplace ("work", detail::mesh_channel_registration_t{100, {}, true, true});
-        return state;
-    };
-    auto source_state = make_node ("actor-node", object_role_t::server);
-    auto target_state = make_node ("session-node", object_role_t::client);
+    auto source_state = make_wire_test_node ("actor-node", object_role_t::server);
+    auto target_state = make_wire_test_node ("session-node", object_role_t::client);
     detail::mesh_node_runtime_t source (source_state), target (target_state);
     auto store = std::make_shared<client_node_store_t> ();
     source.configure_user_spot_operations (store, {});
@@ -630,4 +633,131 @@ TEST (RoutePayloadOwnership, ServiceWireRejectsTruncatedTransferredFrame)
     EXPECT_THROW (protocol::decode_application_parts (std::move (native[0]), false),
                   protocol::service_wire_error_t);
 }
+}
+
+TEST (RoutePayloadOwnership, ActorInvalidHeaderRepliesWithStreamErrorUsingOuterCorrelation)
+{
+    namespace host = runtime::host;
+    auto reply_host = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      .mesh = {.descriptor = {.mesh_name = "actor-header-rejection",
+                              .node_routing_id = zlink::routing_id_t::from ("reply").to_bytes (),
+                              .lifecycle_generation = 1,
+                              .descriptor_revision = 1,
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    host::receive_record_t record{.kind = host::record_kind_t::actor_request};
+    record.reply_token.host = reply_host;
+    std::vector<zlink::message_t> reply_parts;
+    record.reply_token.local_reply = [&] (const std::vector<zlink::message_t> &parts) {
+        reply_parts = parts;
+        return true;
+    };
+    for (const auto &bad : {std::string ("BeginUserSpotJoinReq"), std::string ("{}")}) {
+        auto parts = std::vector<zlink::message_t>{zlink::message_t::from (bad),
+                                                   zlink::message_t::from ("{}")};
+        auto decoded = runtime::decode_mesh_record_header (record, parts, false);
+        ASSERT_FALSE (decoded);
+        EXPECT_EQ (framework_error_kind_t::protocol_error, decoded.error_kind ());
+        ASSERT_EQ (1u, reply_parts.size ());
+        auto error = detail::decode_actor_reply (runtime::messaging::message_parts_t (reply_parts));
+        ASSERT_FALSE (error);
+        EXPECT_EQ (framework_error_kind_t::protocol_error, error.error_kind ());
+    }
+}
+
+TEST (RoutePayloadOwnership, MissingActorHandlerRepliesWithStreamError)
+{
+    namespace host = runtime::host;
+    auto state = test::runtime_failure_fixture<detail::spot_node_builder_state_t> ("node");
+    state->actor_types_by_id["actor"] = "player";
+    state->actor_instances["player:actor"] = std::make_shared<int> (7);
+    state->actor_generations["player:actor"] = 1;
+    state->actor_spot_ids["player:actor"] = spot_id_t ("spot");
+    detail::spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.create_instance = [] (std::string) { return std::make_shared<int> (7); };
+    factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+    state->actor_factories.emplace ("player", std::move (factory));
+    auto context = std::make_shared<detail::spot_context_state_t> ();
+    context->node = state;
+    context->spot_id = spot_id_t ("spot");
+    context->spot_name = "spot";
+    context->spot_instance = std::make_shared<int> (1);
+    context->serial_executor = state->worker_executor;
+    context->channel_runtime = test::runtime_failure_fixture<detail::channel_runtime_state_t> ();
+    state->spot_contexts_by_id.emplace (context->spot_id,
+                                        detail::spot_context_access_t::create (context));
+    serializer_registry_t serializers;
+    context->channel_runtime->serializers = &serializers;
+    service_collection_t services;
+    services.add_singleton<detail::actor_gateway_runtime_t> ();
+    auto provider = services.build_provider ();
+    auto reply_host = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      .mesh = {.descriptor = {.mesh_name = "actor-handler-rejection",
+                              .node_routing_id = zlink::routing_id_t::from ("reply").to_bytes (),
+                              .lifecycle_generation = 1,
+                              .descriptor_revision = 1,
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    std::promise<std::vector<zlink::message_t>> reply;
+    auto received = reply.get_future ();
+    host::receive_record_t record{.kind = host::record_kind_t::actor_request};
+    record.reply_token.host = reply_host;
+    record.reply_token.local_reply = [&] (const std::vector<zlink::message_t> &parts) {
+        reply.set_value (parts);
+        return true;
+    };
+    host::ready_record_t owner{.owner_kind = host::owner_kind_t::actor};
+    owner.actor =
+      detail::actor_ref_access_t::make (node_rid_t::from_string ("node"), "player", "actor", 1);
+    runtime::messaging::envelope_header_t request;
+    request.message_name = "MissingHandler";
+    auto parts = detail::encode_actor_packet (request, zlink::message_t::from ("{}")).take_items ();
+    auto decoded = runtime::decode_mesh_record_header (record, parts, false);
+    ASSERT_TRUE (decoded);
+    EXPECT_TRUE (detail::spot_node_runtime_t (state).dispatch_mesh_record (
+      owner, record, parts, decoded.value (), provider, serializers));
+    ASSERT_EQ (std::future_status::ready, received.wait_for (std::chrono::seconds (2)));
+    auto frames = received.get ();
+    ASSERT_EQ (1u, frames.size ());
+    auto error =
+      detail::decode_actor_reply (runtime::messaging::message_parts_t (std::move (frames)));
+    ASSERT_FALSE (error);
+    EXPECT_EQ (framework_error_kind_t::not_found, error.error_kind ());
+    EXPECT_NE (std::string::npos,
+               std::string (error.error ()->what ()).find ("spot handler is not registered"));
+}
+
+TEST (RoutePayloadOwnership, ActorSendCompletesAtLocalAdmissionWithoutRemoteReply)
+{
+    auto source_state = make_wire_test_node ("wire-source", object_role_t::server);
+    auto target_state = make_wire_test_node ("wire-target", object_role_t::server);
+    detail::mesh_node_runtime_t source (source_state), target (target_state);
+    source.start ();
+    target.start ();
+    source.connect_peer (*target_state->routing_id, target.status ().local_endpoint ());
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    while ((source.admitted_peer_count () == 0 || target.admitted_peer_count () == 0)
+           && std::chrono::steady_clock::now () < deadline) {
+        source.dispatch_ready ([] (const auto &, const auto &, auto) {}).result ().value ();
+        target.dispatch_ready ([] (const auto &, const auto &, auto) {}).result ().value ();
+        std::this_thread::yield ();
+    }
+    ASSERT_EQ (1u, source.admitted_peer_count ());
+    ASSERT_EQ (1u, target.admitted_peer_count ());
+    const auto actor = detail::actor_ref_access_t::make (node_rid_t::from_string ("wire-target"),
+                                                         "player", "actor", 1);
+    detail::stream_header_t header (detail::stream_message_kind_t::send, stream_codec_t::json,
+                                    detail::stream_header_flags_t::none, std::nullopt, "WireSend");
+    runtime::protocol::actor_route_fence_t fence{
+      "actor", 1, target_state->routing_id->to_bytes (), target.status ().lifecycle_generation (),
+      1,       1};
+    auto pending =
+      source.relay_application_actor (actor, header, zlink::message_t::from ("{}"),
+                                      std::chrono::milliseconds (100), true, std::nullopt, fence);
+    // The remote application queue is deliberately not drained and emits no reply.
+    const auto sent = detail::request_task_access_t::physical_reply (pending).result ();
+    EXPECT_TRUE (sent) << (sent.error () ? sent.error ()->what () : "");
+    source.stop ();
+    target.stop ();
 }
