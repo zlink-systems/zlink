@@ -593,6 +593,9 @@ public final class ZLinkSerialExecutionQueue {
             CompletionStage<Void> execution =
                     manageCurrentInTurn(
                             preparationTerminal.thenCompose(ignored -> operation.get()));
+            // The queue monitor owns applicationPending, and the queue dispatches no
+            // application work before the returned stage completes. The rewrite therefore
+            // precedes dispatch on the completing thread without another gate turn.
             return execution.whenComplete((ignored, failure) -> rewritePending(failure));
         }
 
