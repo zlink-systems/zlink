@@ -283,32 +283,42 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
             return ValueTask.FromCanceled<ZLinkApplicationJobQueueReservation>(cancellationToken);
 
         var acquired = AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                var reserved = ReserveAvailableOnLane(maximum);
-                if (reserved.Count != 0)
-                    return new AcquireResult(
-                        null,
-                        CreateReservation(reserved.Count, origin, onGranted),
-                        reserved.PressureChanged
+            _lane.RunAsync(
+                static state =>
+                {
+                    var queue = state.Queue;
+                    var reserved = queue.ReserveAvailableOnLane(state.Maximum);
+                    if (reserved.Count != 0)
+                        return new AcquireResult(
+                            null,
+                            queue.CreateReservation(reserved.Count, state.Origin, state.OnGranted),
+                            reserved.PressureChanged
+                        );
+                    var waiter = new Waiter(
+                        state.CancellationToken,
+                        queue._timeProvider.GetTimestamp(),
+                        queue._measurementEpoch,
+                        state.OnGranted,
+                        state.Origin,
+                        state.Maximum
                     );
-                var waiter = new Waiter(
-                    cancellationToken,
-                    _timeProvider.GetTimestamp(),
-                    _measurementEpoch,
-                    onGranted,
-                    origin,
-                    maximum
-                );
-                waiter.Node = _waiters.AddLast(waiter);
-                _capacityWaiters = checked(_capacityWaiters + 1);
-                return new AcquireResult(
-                    waiter,
-                    default,
-                    false,
-                    UpdateLocalWaitersOnLane(origin, 1)
-                );
-            })
+                    waiter.Node = queue._waiters.AddLast(waiter);
+                    queue._capacityWaiters = checked(queue._capacityWaiters + 1);
+                    return new AcquireResult(
+                        waiter,
+                        default,
+                        false,
+                        queue.UpdateLocalWaitersOnLane(state.Origin, 1)
+                    );
+                },
+                (
+                    Queue: this,
+                    Maximum: maximum,
+                    CancellationToken: cancellationToken,
+                    OnGranted: onGranted,
+                    Origin: origin
+                )
+            )
         );
 
         if (acquired.LocalBacklogWarning is { } localWaiters)
@@ -331,12 +341,16 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
                 new CancellationRegistrationState(this, waiter!)
             );
             AwaitStateLane(
-                _lane.RunAsync(() =>
-                {
-                    waiter.CancellationRegistration = registration;
-                    if (waiter.State != WaiterState.Waiting)
-                        registration.Dispose();
-                })
+                _lane.RunAsync(
+                    static state =>
+                    {
+                        state.Waiter.CancellationRegistration = state.Registration;
+                        if (state.Waiter.State != WaiterState.Waiting)
+                            state.Registration.Dispose();
+                        return true;
+                    },
+                    (Waiter: waiter, Registration: registration)
+                )
             );
         }
 
@@ -356,7 +370,9 @@ internal sealed class ZLinkApplicationJobQueue : IDisposable
         ZLinkApplicationJobOrigin origin
     )
     {
-        var acquired = await _lane.RunAsync(() => ReserveAvailableOnLane(1)).ConfigureAwait(false);
+        var acquired = await _lane
+            .RunAsync(static queue => queue.ReserveAvailableOnLane(1), this)
+            .ConfigureAwait(false);
         if (acquired.PressureChanged)
             _receiveFlowController.ApplyPending();
         return acquired.Count == 0 ? null : new ZLinkApplicationJobQueueLease(this, origin);
