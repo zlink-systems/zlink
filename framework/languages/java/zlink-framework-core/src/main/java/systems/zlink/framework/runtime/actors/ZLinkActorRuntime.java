@@ -2202,6 +2202,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
         return dispatches.beginTeardown(
                 actorId,
+                context,
                 () -> {
                     return ZLinkHandlerStages.completeAll(
                             List.of(
@@ -4326,6 +4327,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return dispatches
                 .beginTeardown(
                         actorId,
+                        context,
                         () ->
                                 spotNode.destroyActor(actorRef, defaultRequestTimeout)
                                         .thenCompose(
@@ -4434,6 +4436,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return dispatches
                 .registerTeardown(
                         actorId,
+                        source.context(),
                         () -> CompletableFuture.completedFuture(null),
                         () ->
                                 ZLinkHandlerStages.completeAll(
@@ -4453,6 +4456,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return dispatches
                 .registerTeardown(
                         actorId,
+                        source.context(),
                         () -> retireRelocationSource(actorId, source, departed),
                         () -> disposeRelocationSource(source.context()))
                 .thenCompose(
@@ -4548,6 +4552,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         String actorId = actor.context().actorId();
         return dispatches.beginTeardown(
                 actorId,
+                context,
                 () ->
                         ZLinkHandlerStages.completeAll(
                                 List.of(
