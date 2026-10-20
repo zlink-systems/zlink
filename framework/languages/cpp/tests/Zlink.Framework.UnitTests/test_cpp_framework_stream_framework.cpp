@@ -1489,6 +1489,13 @@ int transport_bound_close (bool tls, bool remote = false)
         return 344;
     if (!closed || !sessions.is_current (other_binding))
         return 345;
+    /* The bound close is the subject of this case. The Session's binding to
+     * "actor-owner", a node that never answers, is incidental. Remove it
+     * before cleanup releases the disconnected dispatch, so the reader's
+     * retirement does not wait out the remote tombstone deadline in stop. */
+    if (const auto [unbind_error, unbound] = sessions.unbind (binding);
+        unbind_error != stateful::stateful_error_t::none || !unbound)
+        return 348;
     // The native socket must already be closed when the close task completes.
     auto &socket = tls ? tls_client.next_layer () : ws_client.next_layer ();
     socket.non_blocking (true);
