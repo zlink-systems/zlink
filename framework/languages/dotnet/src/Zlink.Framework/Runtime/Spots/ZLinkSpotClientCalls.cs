@@ -110,6 +110,10 @@ internal sealed class ZLinkInstanceSpotSendCall<TMessage>(
         var cancellationToken = runtime.ShutdownToken;
         _submission.Claim();
         var submittedAt = DateTimeOffset.UtcNow;
+        using var flowScope = ZLinkFlowContext.EnterCurrentOrCreate(
+            ZLinkFlowOrigin.Application,
+            runtime.Flow.CaptureEnabled
+        );
         if (_meshSelected && !_instanceIntent)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
