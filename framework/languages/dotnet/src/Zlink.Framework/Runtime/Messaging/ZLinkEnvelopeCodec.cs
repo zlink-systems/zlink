@@ -258,7 +258,7 @@ internal static class ZLinkEnvelopeCodec
                     $"Envelope body type is ZLinkMessage, but body instance is '{body?.GetType()}'."
                 );
 
-            return message.ToRawMessage(codecs ?? new ZLinkCodecRegistryBuilder(), out contentType);
+            return message.ToRawMessage(codecs, out contentType);
         }
 
         var hasSerializer = TryResolveBodySerializer(
@@ -740,11 +740,7 @@ internal static class ZLinkEnvelopeCodec
             return bodyMessage;
 
         if (bodyType == typeof(ZLinkMessage))
-            return ZLinkMessage.FromEnvelopePayload(
-                contentType,
-                bodyMessage,
-                codecs ?? new ZLinkCodecRegistryBuilder()
-            );
+            return ZLinkMessage.FromEnvelopePayload(contentType, bodyMessage, codecs);
 
         if (bodyType == typeof(ReadOnlyMemory<byte>))
             return bodyMessage.AsReadOnlyMemory();
@@ -773,11 +769,7 @@ internal static class ZLinkEnvelopeCodec
         if (bodyType == typeof(Message))
             return Message.From(body);
         if (bodyType == typeof(ZLinkMessage))
-            return ZLinkMessage.FromEncoded(
-                contentType,
-                body.ToArray(),
-                codecs ?? new ZLinkCodecRegistryBuilder()
-            );
+            return ZLinkMessage.FromEncoded(contentType, body.ToArray(), codecs);
         if (bodyType == typeof(ReadOnlyMemory<byte>))
             return (ReadOnlyMemory<byte>)body.ToArray();
         if (body.IsEmpty)

@@ -67,10 +67,15 @@ public sealed partial class ZLinkMessage
     internal static ZLinkMessage FromEncoded(
         string contentType,
         ReadOnlyMemory<byte> payload,
-        IZLinkMessageCodecRegistry codecs
+        IZLinkMessageCodecRegistry? codecs
     )
     {
-        return new ZLinkMessage(payload, contentType, null, codecs.Snapshot());
+        return new ZLinkMessage(
+            payload,
+            contentType,
+            null,
+            codecs?.Snapshot() ?? ZLinkCodecRegistrySnapshot.Empty
+        );
     }
 
     internal static ZLinkMessage FromCanonicalActorJoinReply(
@@ -88,13 +93,17 @@ public sealed partial class ZLinkMessage
         );
     }
 
-    internal Message ToRawMessage(IZLinkMessageCodecRegistry codecs) => ToRawMessage(codecs, out _);
+    internal Message ToRawMessage(IZLinkMessageCodecRegistry? codecs) =>
+        ToRawMessage(codecs, out _);
 
-    internal Message ToRawMessage(IZLinkMessageCodecRegistry codecs, out string contentType)
+    internal Message ToRawMessage(IZLinkMessageCodecRegistry? codecs, out string contentType)
     {
         if (_declaredType is not null)
         {
-            var resolution = ResolvePayloadSerializer(_declaredType, codecs);
+            var resolution = ResolvePayloadSerializer(
+                _declaredType,
+                (IZLinkMessageCodecResolver?)codecs ?? ZLinkCodecRegistrySnapshot.Empty
+            );
             contentType = resolution.ContentType;
             return ZLinkEnvelopeCodec.EncodeSerializedPart(
                 _value,
@@ -123,18 +132,11 @@ public sealed partial class ZLinkMessage
     internal static ZLinkMessage FromEnvelopePayload(
         string contentType,
         Message payload,
-        IZLinkMessageCodecRegistry codecs
-    )
-    {
-        return new ZLinkMessage(
-            // AsReadOnlyMemory is the binding boundary snapshot for native
-            // storage. Do not copy that managed snapshot a second time.
-            payload.AsReadOnlyMemory(),
-            contentType,
-            null,
-            codecs.Snapshot()
-        );
-    }
+        IZLinkMessageCodecRegistry? codecs
+    ) =>
+        // AsReadOnlyMemory transfers the binding boundary snapshot; the same
+        // factory owns codec snapshots for borrowed and native envelope bodies.
+        FromEncoded(contentType, payload.AsReadOnlyMemory(), codecs);
 
     private object? Decode(Type targetType)
     {
@@ -278,7 +280,7 @@ public sealed partial class ZLinkMessage
     private static (
         string ContentType,
         IZLinkMessageSerializer? Serializer
-    ) ResolvePayloadSerializer(Type declaredType, IZLinkMessageCodecRegistry codecs)
+    ) ResolvePayloadSerializer(Type declaredType, IZLinkMessageCodecResolver codecs)
     {
         if (codecs.TryResolveSerializer(declaredType, out var contentType, out var serializer))
             return (contentType, serializer);
