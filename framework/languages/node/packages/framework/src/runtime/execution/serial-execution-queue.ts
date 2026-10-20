@@ -226,7 +226,6 @@ export class ZLinkSerialExecutionQueue {
     if (this.closed) throw new Error('The serial execution queue is closed.');
     const lane = options.lane ?? 'application';
     const target = lane === 'application' ? this.application : this.lifecycle;
-    let settled = false;
     let released = false;
     let resolveResult!: (value: T | PromiseLike<T>) => void;
     let rejectResult!: (reason?: unknown) => void;
@@ -246,16 +245,6 @@ export class ZLinkSerialExecutionQueue {
         }
       }
     };
-    const resolve = (value: T): void => {
-      if (settled) return;
-      settled = true;
-      resolveResult(value);
-    };
-    const reject = (reason: unknown): void => {
-      if (settled) return;
-      settled = true;
-      rejectResult(reason);
-    };
     const record: SerialWorkRecord<T> = {
       acceptedSequence: 0n,
       lane,
@@ -264,11 +253,11 @@ export class ZLinkSerialExecutionQueue {
       context,
       preparation,
       preparationState: preparation === undefined ? 'ready' : 'idle',
-      resolve,
-      reject,
+      resolve: resolveResult,
+      reject: rejectResult,
       release,
       fail: (reason) => {
-        reject(reason);
+        rejectResult(reason);
         release();
       }
     };
@@ -292,7 +281,7 @@ export class ZLinkSerialExecutionQueue {
         new Error('Durable record transferred to another handoff.')
       );
       record.preparation?.cancel();
-      resolve(undefined as T);
+      resolveResult(undefined as T);
       release();
       return true;
     });
@@ -484,7 +473,7 @@ export class ZLinkSerialExecutionQueue {
     if (record !== selected) {
       throw new Error('The selected serial work record changed before owner claim.');
     }
-    if (record.mailbox !== undefined) record.mailbox.ownerMembership = undefined;
+    if (selected.mailbox !== undefined) selected.mailbox.ownerMembership = undefined;
     return record;
   }
 

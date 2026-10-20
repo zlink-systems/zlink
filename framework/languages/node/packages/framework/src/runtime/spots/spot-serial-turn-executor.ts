@@ -338,8 +338,8 @@ export class ZLinkSpotSerialTurnExecutor {
       return Promise.resolve(this.executionBarrier?.enter()).then((claim) =>
         this.runTurn(
           record.operation,
-          (value) => record.resolve(value),
-          (error) => record.reject(error),
+          record.resolve,
+          record.reject,
           claim,
           record.release
         )
@@ -347,8 +347,8 @@ export class ZLinkSpotSerialTurnExecutor {
     }
     return this.runTurn(
       record.operation,
-      (value) => record.resolve(value),
-      (error) => record.reject(error),
+      record.resolve,
+      record.reject,
       record.context as ZLinkExecutionBarrierClaim | undefined,
       record.release
     );
