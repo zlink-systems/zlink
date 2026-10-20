@@ -425,7 +425,7 @@ public final class ZLinkServiceM6AWireCodec {
         for (int index = 0; index < parts.size(); index++) {
             Message part = parts.get(index);
             target.putInt(part.size());
-            target.put(part.dataBuffer());
+            part.copyTo(target);
         }
     }
 
