@@ -1,5 +1,30 @@
 package systems.zlink.framework.runtime.actors;
 
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
+import java.util.function.Consumer;
+import java.util.function.Function;
+import java.util.function.Supplier;
+import java.util.logging.Logger;
+import java.util.stream.Collectors;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.errors.ConfigResult;
 import systems.zlink.contracts.errors.ZlinkConfigException;
@@ -68,32 +93,6 @@ import systems.zlink.framework.spots.ZLinkActorCreateResponse;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
-
-import java.time.Duration;
-import java.util.HashMap;
-import java.util.IdentityHashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.Set;
-import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.Executor;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.BiFunction;
-import java.util.function.Consumer;
-import java.util.function.Function;
-import java.util.function.Supplier;
-import java.util.logging.Logger;
-import java.util.stream.Collectors;
 
 public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDirectory {
     private static final Logger LOGGER = Logger.getLogger(ZLinkActorRuntime.class.getName());
@@ -2202,6 +2201,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         }
         return dispatches.beginTeardown(
                 actorId,
+                context,
                 () -> {
                     return ZLinkHandlerStages.completeAll(
                             List.of(
@@ -3292,14 +3292,17 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                         .thenCompose(
                                                 ignored -> {
                                                     var target = followSource.rawTargetRoute();
-                                                    if (messageFollowRoute(target)
-                                                            .equals(sourceRoute)) {
+                                                    if (target == null
+                                                            || messageFollowRoute(target)
+                                                                    .equals(sourceRoute)) {
                                                         parts.forEach(Message::close);
                                                         return CompletableFuture.failedFuture(
                                                                 new ZLinkFrameworkException(
                                                                         ZLinkFrameworkErrorKind
                                                                                 .UNAVAILABLE,
-                                                                        "Message Follow loop detected"));
+                                                                        target == null
+                                                                                ? "Message Follow has no current first-target route"
+                                                                                : "Message Follow loop detected"));
                                                     }
                                                     return spotNode.forwardMessageFollowActor(
                                                             header, target, parts);
@@ -4326,6 +4329,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return dispatches
                 .beginTeardown(
                         actorId,
+                        context,
                         () ->
                                 spotNode.destroyActor(actorRef, defaultRequestTimeout)
                                         .thenCompose(
@@ -4434,6 +4438,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return dispatches
                 .registerTeardown(
                         actorId,
+                        source.context(),
                         () -> CompletableFuture.completedFuture(null),
                         () ->
                                 ZLinkHandlerStages.completeAll(
@@ -4453,6 +4458,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return dispatches
                 .registerTeardown(
                         actorId,
+                        source.context(),
                         () -> retireRelocationSource(actorId, source, departed),
                         () -> disposeRelocationSource(source.context()))
                 .thenCompose(
@@ -4548,6 +4554,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         String actorId = actor.context().actorId();
         return dispatches.beginTeardown(
                 actorId,
+                context,
                 () ->
                         ZLinkHandlerStages.completeAll(
                                 List.of(

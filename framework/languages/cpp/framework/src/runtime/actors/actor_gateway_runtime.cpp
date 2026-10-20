@@ -14,6 +14,9 @@
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
+#include "runtime/messaging/failure_origin_wire.hpp"
+#include "runtime/messaging/request_failure_mapper.hpp"
+#include <nlohmann/json.hpp>
 #include <algorithm>
 #include <atomic>
 #include <limits>
@@ -556,6 +559,9 @@ namespace detail
 
 namespace
 {
+// Service command correlation owns Actor replies; STREAM requires a nonzero sequence.
+constexpr std::uint64_t actor_wire_request_sequence = 1;
+
 thread_local std::vector<stream_header_t> stream_relay_headers;
 
 stream_header_t actor_relay_header (stream_message_kind_t kind, std::string packet_name)
@@ -564,6 +570,112 @@ stream_header_t actor_relay_header (stream_message_kind_t kind, std::string pack
                             std::move (packet_name));
 }
 
+}
+
+runtime::messaging::message_parts_t
+encode_actor_packet (const runtime::messaging::envelope_header_t &header, zlink::message_t body)
+{
+    using runtime::messaging::message_kind_t;
+    stream_header_t wire (
+      header.kind == message_kind_t::command ? stream_message_kind_t::send
+                                             : stream_message_kind_t::request,
+      stream_codec_from_content_type (header.content_type), stream_header_flags_t::none,
+      header.kind == message_kind_t::command ? std::nullopt
+                                             : std::make_optional (actor_wire_request_sequence),
+      header.message_name, stream_metadata_t (header.metadata));
+    if (!header.correlation_id.empty ())
+        wire.with_correlation_id (header.correlation_id);
+    if (header.flow_id && header.flow_origin)
+        wire.with_flow (*header.flow_id, *header.flow_origin);
+    stream_runtime_t::propagate_flow (wire);
+    auto encoded = stream_runtime_t (nullptr).encode_header (wire);
+    return {zlink::message_t::from (std::move (encoded.value ())), std::move (body)};
+}
+
+result_t<runtime::messaging::envelope_header_t>
+decode_actor_packet_header (const runtime::messaging::message_parts_t &parts,
+                            stream_message_kind_t expected_kind,
+                            bool capture_flow)
+{
+    using runtime::messaging::envelope_header_t;
+    using runtime::messaging::message_kind_t;
+    if (parts.size () != 2)
+        return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
+                                                     "Actor typed message requires two parts");
+    auto decoded = stream_runtime_t::decode_header (parts[0].to_bytes (), capture_flow);
+    if (!decoded)
+        return result_t<envelope_header_t>::failure (decoded.error_kind (),
+                                                     decoded.error ()->what ());
+    const auto &wire = decoded.value ();
+    if (wire.kind () != expected_kind)
+        return result_t<envelope_header_t>::failure (
+          framework_error_kind_t::protocol_error,
+          "Actor STREAM kind does not match its service command");
+    envelope_header_t header;
+    header.kind = wire.kind () == stream_message_kind_t::send ? message_kind_t::command
+                                                              : message_kind_t::request;
+    header.channel_name = actor_message_channel_name;
+    header.message_name = wire.packet_name ();
+    header.content_type = stream_content_type (wire.codec ());
+    header.metadata = wire.metadata ().values ();
+    if (const auto correlation = wire.correlation_id ())
+        header.correlation_id = *correlation;
+    if (const auto flow = wire.flow_id ())
+        header.flow_id = std::string (*flow);
+    header.flow_origin = wire.flow_origin ();
+    return result_t<envelope_header_t>::success (std::move (header));
+}
+
+runtime::messaging::message_parts_t
+encode_actor_reply (const runtime::messaging::envelope_header_t &header, zlink::message_t body)
+{
+    const bool error = header.kind == runtime::messaging::message_kind_t::error;
+    stream_header_t wire (error ? stream_message_kind_t::error : stream_message_kind_t::response,
+                          error ? stream_codec_t::json
+                                : stream_codec_from_content_type (header.content_type),
+                          stream_header_flags_t::none, actor_wire_request_sequence, "",
+                          stream_metadata_t (header.metadata));
+    if (error) {
+        body = stream_error_payload (
+          header.error_code.value_or (stream_error_code (framework_error_kind_t::internal_failure)),
+          header.error_message.value_or ("Actor handler failed"));
+    }
+    stream_runtime_t::propagate_flow (wire);
+    auto encoded = stream_runtime_t (nullptr).encode_frame (wire, body);
+    return runtime::messaging::message_parts_t (
+      std::vector<zlink::message_t>{zlink::message_t::from (std::move (encoded.value ()))});
+}
+
+result_t<std::optional<zlink::message_t>>
+decode_actor_reply (const runtime::messaging::message_parts_t &parts)
+{
+    try {
+        auto [header, body] = stream_runtime_t::decode_frame (parts.items (), false);
+        if (!header.packet_name ().empty ()
+            || (header.kind () != stream_message_kind_t::response
+                && header.kind () != stream_message_kind_t::error))
+            return result_t<std::optional<zlink::message_t>>::failure (
+              framework_error_kind_t::protocol_error,
+              "Actor reply requires an unnamed Response or Error");
+        if (header.kind () == stream_message_kind_t::error) {
+            const auto payload = nlohmann::json::parse (body.to_string ());
+            auto error = runtime::messaging::request_failure_mapper_t{}.error_header_exception (
+              payload.at ("code").get<std::string> (), payload.at ("message").get<std::string> (),
+              "Actor request");
+            runtime::messaging::envelope_header_t context;
+            context.metadata = header.metadata ().values ();
+            return detail::result_access_t::failure<std::optional<zlink::message_t>> (
+              runtime::messaging::restore_failure_origin (context, std::move (error)));
+        }
+        return result_t<std::optional<zlink::message_t>>::success (std::move (body));
+    }
+    catch (const framework_exception_t &error) {
+        return detail::result_access_t::failure<std::optional<zlink::message_t>> (error);
+    }
+    catch (const nlohmann::json::exception &error) {
+        return result_t<std::optional<zlink::message_t>>::failure (
+          framework_error_kind_t::protocol_error, error.what ());
+    }
 }
 
 stream_relay_dispatch_scope_t::stream_relay_dispatch_scope_t (stream_header_t header)
@@ -2156,8 +2268,7 @@ bool same_physical_bound_session (const actor_bound_session_route_t &left,
     // Actor authority changes on relocation while the physical Session and
     // its binding generation remain current. Only a physical identity change
     // retires the existing stream binding.
-    return left.node_rid.to_bytes () == right.node_rid.to_bytes ()
-           && left.session_rid == right.session_rid
+    return left.node_rid == right.node_rid && left.session_rid == right.session_rid
            && left.object_generation == right.object_generation
            && left.node_generation == right.node_generation
            && left.binding_generation == right.binding_generation
@@ -2344,21 +2455,41 @@ admit_session_relay_unlocked (actor_gateway_state_t &state,
     return result_t<void>::success ();
 }
 
-result_t<void> bind_session_components (const std::shared_ptr<actor_gateway_state_t> &state,
-                                        actor_ref_t actor_ref,
-                                        bound_session_sink_t sink,
-                                        stream_codec_t codec,
-                                        bool replace_existing,
-                                        std::optional<actor_bound_session_route_t> route,
-                                        actor_bound_session_transition_t *transition = nullptr,
-                                        const std::function<bool ()> &before_publish = {})
+result_t<void> admit_bound_session_registration (const actor_bound_session_route_t &current,
+                                                 actor_bound_session_route_t &candidate)
+{
+    if (current.node_rid != candidate.node_rid
+        || current.node_generation != candidate.node_generation)
+        return result_t<void>::success ();
+    if (current.session_rid == candidate.session_rid
+        && current.binding_generation == candidate.binding_generation) {
+        candidate.binding_token = current.binding_token;
+        candidate.session_owner_id = current.session_owner_id;
+        candidate.session_owner_lease_generation = current.session_owner_lease_generation;
+        return result_t<void>::success ();
+    }
+    if (candidate.binding_generation <= current.binding_generation)
+        return result_t<void>::failure (framework_error_kind_t::unavailable,
+                                        "bound Session registration is stale");
+    return result_t<void>::success ();
+}
+
+result_t<void> bind_session_components (
+  const std::shared_ptr<actor_gateway_state_t> &state,
+  actor_ref_t actor_ref,
+  bound_session_sink_t sink,
+  stream_codec_t codec,
+  bool replace_existing,
+  std::optional<actor_bound_session_route_t> route,
+  actor_bound_session_transition_t *transition = nullptr,
+  const std::function<bool (const actor_bound_session_route_t &)> &before_publish = {})
 {
     const auto actor_id = std::string (actor_ref.actor_id ().value ());
     return state->sync ([&] {
         auto found = state->actors_by_id.find (actor_id);
         bool keep_existing_sink = false;
         if (found == state->actors_by_id.end ()) {
-            if (before_publish && !before_publish ()) {
+            if (before_publish && !before_publish (*route)) {
                 return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                                 "bound Session terminal reply was not submitted");
             }
@@ -2391,16 +2522,13 @@ result_t<void> bind_session_components (const std::shared_ptr<actor_gateway_stat
             }
             if (route && route->binding_generation == 0)
                 route->binding_generation = found->second.source_binding_generation;
-            if (route && found->second.bound_session_route && route->binding_generation != 0
-                && found->second.bound_session_route->binding_generation
-                     > route->binding_generation) {
-                if (transition != nullptr) {
-                    transition->current = *found->second.bound_session_route;
-                    transition->changed = false;
-                }
-                return result_t<void>::success ();
+            if (route && found->second.bound_session_route) {
+                const auto admitted =
+                  admit_bound_session_registration (*found->second.bound_session_route, *route);
+                if (!admitted)
+                    return admitted;
             }
-            if (before_publish && !before_publish ()) {
+            if (before_publish && !before_publish (*route)) {
                 return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                                 "bound Session terminal reply was not submitted");
             }
@@ -2429,9 +2557,8 @@ result_t<void> bind_session_components (const std::shared_ptr<actor_gateway_stat
                 if (found->second.bound_session_route
                     && same_physical_bound_session (*found->second.bound_session_route, *route)) {
                     /* Relocation can refresh authority for the same physical
-                 * Session.  Its already-attached direct writer remains the
-                 * right capability; only a physical identity replacement
-                 * must swap it. */
+                     * Session. Its already-attached direct writer remains the
+                     * delivery capability; remote sinks follow the new authority. */
                     keep_existing_sink = found->second.bound_session_stream_sink
                                          && existing_sink != state->bound_session_sinks.end ();
                     *route = merge_bound_session_route_fence (*found->second.bound_session_route,
@@ -2807,12 +2934,12 @@ result_t<void> actor_gateway_runtime_t::bind_session_route (
                                     replace_existing, std::move (route));
 }
 
-result_t<actor_bound_session_transition_t>
-actor_gateway_runtime_t::replace_session_route (actor_ref_t actor_ref,
-                                                bound_session_sink_t sink,
-                                                actor_bound_session_route_t route,
-                                                stream_codec_t codec,
-                                                std::function<bool ()> before_publish)
+result_t<actor_bound_session_transition_t> actor_gateway_runtime_t::replace_session_route (
+  actor_ref_t actor_ref,
+  bound_session_sink_t sink,
+  actor_bound_session_route_t route,
+  stream_codec_t codec,
+  std::function<bool (const actor_bound_session_route_t &)> before_publish)
 {
     actor_bound_session_transition_t transition;
     const auto bound =
@@ -2875,10 +3002,12 @@ record_bound_session_route_on_lane (const std::shared_ptr<actor_gateway_state_t>
               framework_error_kind_t::invalid_operation, "actor generation is stale");
         if (route.binding_generation == 0)
             route.binding_generation = found->second.source_binding_generation;
-        if (!publish && found->second.bound_session_route && route.binding_generation != 0
-            && found->second.bound_session_route->binding_generation > route.binding_generation) {
-            return result_t<actor_bound_session_transition_t>::failure (
-              framework_error_kind_t::unavailable, "bound Session registration is stale");
+        if (found->second.bound_session_route) {
+            const auto admitted =
+              admit_bound_session_registration (*found->second.bound_session_route, route);
+            if (!admitted)
+                return result_t<actor_bound_session_transition_t>::failure (
+                  admitted.error_kind (), admitted.error ()->what ());
         }
     }
     if (publish && (!route.session_rid || route.binding_generation == 0))

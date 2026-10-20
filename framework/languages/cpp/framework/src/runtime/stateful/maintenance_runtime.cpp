@@ -7,6 +7,7 @@
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/locations/sha256.hpp"
 #include "runtime/timers/async_delay.hpp"
+#include "runtime/diagnostics/runtime_metrics.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -202,6 +203,80 @@ decode_session_journal (const std::vector<std::uint8_t> &payload)
 
 } // namespace
 
+class maintenance_runtime_t::relocation_metric_operation_t
+{
+  public:
+    relocation_metric_operation_t (
+      const eligible_relocation_unit_t::canonical_wire_context_t &context, object_kind_t kind) :
+        _metrics (context.monitoring)
+    {
+        using policy_t = framework::detail::factory_relocation_kind_t;
+        if (!_metrics.enabled ()
+            || (context.policy != policy_t::recreate && context.policy != policy_t::preserve_state))
+            return;
+        const auto object_kind = kind == object_kind_t::actor       ? "actor"
+                                 : kind == object_kind_t::user_spot ? "user_spot"
+                                                                    : "instance_spot";
+        _tags = {{"mesh_name", context.mesh_name},
+                 {"object_kind", object_kind},
+                 {"policy", context.policy == policy_t::preserve_state ? "snapshot" : "recreate"}};
+        _started = std::chrono::steady_clock::now ();
+        _metrics.counter ("zlink.relocation.started", "{relocation}", 1, _tags);
+    }
+
+    relocation_metric_operation_t (relocation_metric_operation_t &&other) noexcept :
+        _metrics (std::move (other._metrics)),
+        _tags (std::move (other._tags)),
+        _started (std::exchange (other._started, {}))
+    {
+    }
+    relocation_metric_operation_t (const relocation_metric_operation_t &) = delete;
+    ~relocation_metric_operation_t () { complete (std::nullopt); }
+
+    void record_bytes (std::size_t bytes) const
+    {
+        if (_started != std::chrono::steady_clock::time_point{})
+            _metrics.histogram ("zlink.relocation.bytes", "By", static_cast<double> (bytes), _tags);
+    }
+
+    void complete (std::optional<relocation_authority_t> settlement)
+    {
+        const auto started = std::exchange (_started, {});
+        if (started == std::chrono::steady_clock::time_point{})
+            return;
+        const char *outcome = "failed";
+        if (settlement) {
+            switch (*settlement) {
+                case relocation_authority_t::target_committed:
+                    outcome = "completed";
+                    break;
+                case relocation_authority_t::source_preserved:
+                    outcome = "aborted";
+                    break;
+                // Only the host-stop deadline return at maintenance_runtime.cpp:687 reaches
+                // this case; ordinary unsettled observations stay in settle_relocation.
+                // Host stop installs that deadline at host/app.cpp:3959,4261.
+                case relocation_authority_t::unsettled:
+                    outcome = "shutdown";
+                    break;
+                default:
+                    break;
+            }
+        }
+        _tags.emplace ("outcome", outcome);
+        _metrics.counter ("zlink.relocation.completed", "{relocation}", 1, _tags);
+        _metrics.histogram (
+          "zlink.relocation.duration", "s",
+          std::chrono::duration<double> (std::chrono::steady_clock::now () - started).count (),
+          _tags);
+    }
+
+  private:
+    runtime_metrics_t _metrics;
+    std::map<std::string, std::string> _tags;
+    std::chrono::steady_clock::time_point _started{};
+};
+
 struct maintenance_runtime_t::relocation_terminal_state_t
 {
     object_ref_t source;
@@ -237,6 +312,7 @@ struct maintenance_runtime_t::relocation_terminal_state_t
      * of the route_convergence window (25 §"zlink.relocation"), which ends
      * at S4 (Message Follow route removable). */
     std::chrono::steady_clock::time_point cutover_terminal_at{};
+    std::optional<relocation_metric_operation_t> metric;
 };
 
 durable_session_journal_store_t::durable_session_journal_store_t (
@@ -443,11 +519,16 @@ bool maintenance_runtime_t::register_terminal_source (
 }
 
 task_t<stateful_error_t> maintenance_runtime_t::abort_relocation_before_cutover (
-  std::uint64_t token, const eligible_relocation_unit_t::canonical_wire_context_t &context)
+  std::uint64_t token, const eligible_relocation_unit_t::canonical_wire_context_t &context,
+  relocation_metric_operation_t *preserved_metric)
 {
     const auto aborted = _objects.abort_relocation_before_cutover (token);
-    if (aborted == stateful_error_t::none && _relocation_wire)
-        co_await _relocation_wire->unregister_terminal_sources (context.relocation);
+    if (aborted == stateful_error_t::none) {
+        if (preserved_metric)
+            preserved_metric->complete (relocation_authority_t::source_preserved);
+        if (_relocation_wire)
+            co_await _relocation_wire->unregister_terminal_sources (context.relocation);
+    }
     co_return aborted;
 }
 
@@ -735,6 +816,7 @@ maintenance_runtime_t::apply_relocation_settlement (
     };
     switch (settled.outcome) {
         case relocation_authority_t::target_committed:
+            state->metric->complete (settled.outcome);
             (void) _objects.finalize_relocation_cutover (token, deliver);
             if (_committed_terminal)
                 for (const auto &participant : participants)
@@ -744,10 +826,12 @@ maintenance_runtime_t::apply_relocation_settlement (
             /* The captured queue and timers, then the retained boundary and
              * post-boundary records, return to the source queue in original
              * acceptance order and dispatch reopens. */
-            (void) co_await abort_relocation_before_cutover (token, state->context);
+            (void) co_await abort_relocation_before_cutover (token, state->context,
+                                                            &*state->metric);
             co_return std::pair{relocation_terminal_t::blocked,
                                 relocation_reason_t::restore_failed};
         default:
+            state->metric->complete (settled.outcome);
             /* Expired-owner terminal: dispatch and Store changes stop for
              * good; each pending request gets Unavailable once. */
             (void) _objects.finalize_relocation_cutover (token, deliver);
@@ -811,6 +895,7 @@ task_t<relocation_preparation_t> maintenance_runtime_t::relocate_to_ready (
             finish ({relocation_terminal_t::blocked, relocation_reason_t::permit_unavailable,
                      std::nullopt})}));
     }
+    state->metric.emplace (*canonical_wire, source.kind);
     return relocate_prepare_ready (std::move (state));
 }
 
@@ -961,6 +1046,7 @@ bool maintenance_runtime_t::relocate_encode (
                    std::nullopt}));
         return false;
     }
+    state->metric->record_bytes (state->payload.size ());
     return true;
 }
 
@@ -1172,6 +1258,8 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
         co_return aggregate_relocation_result_t{
           relocation_terminal_t::blocked, relocation_reason_t::permit_unavailable, {}};
     }
+    auto state = std::make_shared<relocation_terminal_state_t> ();
+    state->metric.emplace (persisted_context, relocation_primary (sources).kind);
     const auto seal_attempt = co_await _objects.try_seal_relocation_aggregate (
       sources, cancellation, [this, &persisted_context] {
           return capture_relocation_session_bindings (persisted_context);
@@ -1182,7 +1270,6 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
         co_return aggregate_relocation_result_t{
           relocation_terminal_t::blocked, relocation_reason_t::restore_failed, {}};
     }
-    auto state = std::make_shared<relocation_terminal_state_t> ();
     state->context = persisted_context;
     state->advertised_receive_chunk_limit_bytes = advertised_receive_chunk_limit_bytes;
     state->effective_chunk_limit =
@@ -1205,6 +1292,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
           state->seal_attempt.seal.participants, persisted_context.relocation,
           persisted_context.application_version, persisted_context.session_bindings);
         state->manifest = plan_relocation_payload (state->payload, state->effective_chunk_limit);
+        state->metric->record_bytes (state->payload.size ());
     }
     catch (...) {
     }

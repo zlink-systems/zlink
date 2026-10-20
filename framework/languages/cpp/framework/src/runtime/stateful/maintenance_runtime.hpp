@@ -33,6 +33,7 @@
 namespace zlink::framework::detail
 {
 class delay_owner_t;
+class monitoring_runtime_state_t;
 }
 
 namespace zlink::framework::runtime::stateful
@@ -367,6 +368,10 @@ struct eligible_relocation_unit_t
         // This is valid only after an exact target failure and before a
         // Cutover enqueue.  It fences source admission restoration.
         std::function<bool ()> abort_target_before_cutover;
+        std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring;
+        std::string mesh_name;
+        framework::detail::factory_relocation_kind_t policy =
+          framework::detail::factory_relocation_kind_t::unspecified;
     };
     std::optional<canonical_wire_context_t> canonical_wire;
 };
@@ -599,6 +604,7 @@ class maintenance_runtime_t
 
   private:
     struct relocation_terminal_state_t;
+    class relocation_metric_operation_t;
 
     class permit_t
     {
@@ -666,7 +672,8 @@ class maintenance_runtime_t
                               std::uint64_t participant_id,
                               const turn_record_t &turn) const;
     task_t<stateful_error_t> abort_relocation_before_cutover (
-      std::uint64_t token, const eligible_relocation_unit_t::canonical_wire_context_t &context);
+      std::uint64_t token, const eligible_relocation_unit_t::canonical_wire_context_t &context,
+      relocation_metric_operation_t *preserved_metric = nullptr);
     task_t<relocation_reason_t>
     prepare_target (const eligible_relocation_unit_t::canonical_wire_context_t &context,
                     const std::vector<frozen_object_state_t> &participants,

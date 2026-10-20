@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Diagnostics.Metrics;
+using Zlink.Framework.Runtime.Host;
 
 namespace Zlink.Framework.Runtime.Diagnostics;
 
@@ -1393,7 +1394,6 @@ internal static class ZLinkRuntimeMetrics
         {
             ZLinkRelocationMetricOutcome.Completed => "completed",
             ZLinkRelocationMetricOutcome.Aborted => "aborted",
-            ZLinkRelocationMetricOutcome.Recovered => "recovered",
             ZLinkRelocationMetricOutcome.Failed => "failed",
             ZLinkRelocationMetricOutcome.Shutdown => "shutdown",
             _ => throw new ArgumentOutOfRangeException(nameof(outcome)),
@@ -1447,6 +1447,21 @@ internal static class ZLinkRuntimeMetrics
                 { OutcomeTag, outcome },
             };
 
+        internal void CompleteSource(ZLinkSourceSettlement? settlement, bool sourceStopped = false)
+        {
+            Complete(
+                settlement switch
+                {
+                    ZLinkSourceSettlement.TargetCommitted => ZLinkRelocationMetricOutcome.Completed,
+                    ZLinkSourceSettlement.SourcePreserved => ZLinkRelocationMetricOutcome.Aborted,
+                    ZLinkSourceSettlement.SourceLeaseExpired => ZLinkRelocationMetricOutcome.Failed,
+                    _ => sourceStopped
+                        ? ZLinkRelocationMetricOutcome.Shutdown
+                        : ZLinkRelocationMetricOutcome.Failed,
+                }
+            );
+        }
+
         internal void Complete(ZLinkRelocationMetricOutcome outcome)
         {
             if (ReferenceEquals(this, Disabled))
@@ -1499,7 +1514,6 @@ internal enum ZLinkRelocationMetricOutcome
 {
     Completed,
     Aborted,
-    Recovered,
     Failed,
     Shutdown,
 }

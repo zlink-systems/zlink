@@ -22,6 +22,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamReceiv
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendStreamSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkSocketMonitorDrainLoop;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
@@ -434,15 +435,10 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
             requireSessionRuntime();
             BindingKey key = new BindingKey(sessionRid, actor.actorId());
             long generation = rawSpotNode().allocateStreamBindingGeneration();
-            SessionBinding candidate = new SessionBinding(actor, generation, actorSlot);
-            CompletionStage<Void> bound =
-                    boundSessionLifecycle == null
-                            ? rawSpotNode()
-                                    .bindStreamSession(
-                                            sessionRid, actor, generation, actorSlot, this, timeout)
-                            : boundSessionLifecycle.bind(sessionRid, actor, generation, timeout);
-            return bound.thenRun(
-                    () ->
+            CompletionStage<SessionBinding> bound =
+                    bindExactSessionRoute(sessionRid, actor, generation, actorSlot, timeout);
+            return bound.thenAccept(
+                    candidate ->
                             bindings.compute(
                                     key,
                                     (ignored, current) ->
@@ -718,7 +714,8 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                         binding.actor(),
                         binding.generation(),
                         binding.actorSlot(),
-                        this);
+                        this,
+                        binding.authorityOwnerGeneration());
     }
 
     @Override
@@ -747,15 +744,13 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                     new IllegalStateException(
                             "bound Session relocation binding generation is stale"));
         }
-        SessionBinding target =
-                new SessionBinding(targetActor, bindingGeneration, source.actorSlot());
         // Relocation preserves the binding identity (spec 20 section 8.2). The source
         // may already have retired; only the target route needs preparation.
         return bindExactSessionRoute(
                         sessionRid, targetActor, bindingGeneration, source.actorSlot(), timeout)
-                .thenRun(
-                        () -> {
-                            if (!bindings.replace(key, source, target)) {
+                .thenAccept(
+                        accepted -> {
+                            if (!bindings.replace(key, source, accepted)) {
                                 throw new IllegalStateException(
                                         "bound Session route changed during relocation");
                             }
@@ -763,17 +758,30 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                         });
     }
 
-    private CompletionStage<Void> bindExactSessionRoute(
+    private CompletionStage<SessionBinding> bindExactSessionRoute(
             RoutingId sessionRid,
             ZLinkBackendActorRef actor,
             long bindingGeneration,
             int actorSlot,
             Duration timeout) {
-        return boundSessionLifecycle == null
-                ? rawSpotNode()
-                        .bindStreamSession(
-                                sessionRid, actor, bindingGeneration, actorSlot, this, timeout)
-                : boundSessionLifecycle.bind(sessionRid, actor, bindingGeneration, timeout);
+        CompletionStage<ZLinkServiceM6BWireCodec.BoundSessionBindReply> accepted =
+                boundSessionLifecycle == null
+                        ? rawSpotNode()
+                                .bindStreamSession(
+                                        sessionRid,
+                                        actor,
+                                        bindingGeneration,
+                                        actorSlot,
+                                        this,
+                                        timeout)
+                        : boundSessionLifecycle.bind(sessionRid, actor, bindingGeneration, timeout);
+        return accepted.thenApply(
+                reply ->
+                        new SessionBinding(
+                                actor,
+                                reply.bindingGeneration(),
+                                actorSlot,
+                                reply.authorityOwnerGeneration()));
     }
 
     private long allocateBoundSessionSequence() {
@@ -810,7 +818,11 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
 
     private record BindingKey(RoutingId sessionRid, String actorId) {}
 
-    private record SessionBinding(ZLinkBackendActorRef actor, long generation, int actorSlot) {}
+    private record SessionBinding(
+            ZLinkBackendActorRef actor,
+            long generation,
+            int actorSlot,
+            long authorityOwnerGeneration) {}
 
     @FunctionalInterface
     interface BoundSessionSink {
@@ -829,7 +841,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     }
 
     interface BoundSessionLifecycle {
-        CompletionStage<Void> bind(
+        CompletionStage<ZLinkServiceM6BWireCodec.BoundSessionBindReply> bind(
                 RoutingId sessionRid,
                 ZLinkBackendActorRef actor,
                 long bindingGeneration,

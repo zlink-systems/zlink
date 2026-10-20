@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "metric_test_reader.hpp"
 
 #include <zlink/framework.hpp>
 
@@ -36,6 +37,19 @@
 #include <typeinfo>
 #include <vector>
 
+namespace zlink::framework::runtime::host
+{
+struct public_host_runtime_test_access_t
+{
+    static task_t<void> activate (public_host_runtime_t &host,
+                                  protocol::instance_activation_recovery_t command,
+                                  std::function<void (instance_spot_activation_result_t)> done)
+    {
+        return host.dispatch_instance_spot_activation (std::move (command), {}, std::move (done));
+    }
+};
+} // namespace zlink::framework::runtime::host
+
 namespace
 {
 
@@ -57,8 +71,12 @@ class reserve_loser_repository_t final
         observed = std::move (request);
         captured = zlink::framework::runtime::protocol::decode_instance_activation_recovery (
           relocations->get (observed->intent.request_content_reference).value (), false);
-        if (expire_deadline)
+        if (expire_deadline) {
             std::this_thread::sleep_until (observed->operation_deadline);
+            throw zlink::framework::framework_exception_t (
+              zlink::framework::framework_error_kind_t::deadline_exceeded,
+              "Object creation deadline expired");
+        }
         co_return zlink::framework::object_reserve_conflict_t{
           zlink::framework::authority_missing_t{std::chrono::system_clock::now ()}};
     }
@@ -309,6 +327,8 @@ static void verify_same_target_activation_order (
     pump ();
     EXPECT_EQ (1, store->reserves);
     EXPECT_TRUE (queued.empty ());
+    if (ready_request)
+        EXPECT_EQ (std::future_status::timeout, result.wait_for (100ms));
     store->release.complete (fw::result_t<void>::success ());
     if (read_after_delete) {
         while (!blob_store->read_entered.load ()
@@ -929,6 +949,19 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     namespace fw = zlink::framework;
     auto app = fw::app_t::create ();
     auto &options = app.add_zlink_framework ();
+    std::promise<fw::message_flow_event_t> dropped;
+    auto drop = dropped.get_future ();
+    std::atomic_int drops{0};
+    auto &dispatch = options.configure_dispatch ();
+    dispatch.message_flow (fw::message_flow_log_mode_t::normal);
+    fw::detail::dispatch_options_access_t::set_observer_for_tests (
+      dispatch, [&] (const fw::message_flow_event_t &event) {
+          if (event.surface == fw::dispatch_error_surface_t::instance_spot
+              && event.outcome == fw::message_flow_outcome_t::dropped) {
+              if (drops.fetch_add (1) == 0)
+                  dropped.set_value (event);
+          }
+      });
     class lookup_gate_store_t final : public fw::location_store_t
     {
       public:
@@ -999,18 +1032,22 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     const auto admitted = send.result_for (1s);
     ASSERT_TRUE (admitted.has_value ());
     ASSERT_TRUE (*admitted);
-    const auto reply = client.request_to_spot ("budget-player-1", traced_request_t{7})
-                         .instance_spot ("traced-player")
-                         .in_mesh ("activation-budget")
-                         .timeout (3s)
-                         .async<traced_reply_t> ()
-                         .result_for (4s);
-    ASSERT_TRUE (reply.has_value ());
-    ASSERT_TRUE (*reply);
-    ASSERT_TRUE (instance);
-    EXPECT_EQ (0, instance->last_event);
+    // Spot address messaging §4.2/§5: admission does not finish activation.
+    // Observe that activation's terminal instead of assuming a later request starts a new one.
+    ASSERT_EQ (std::future_status::ready, drop.wait_for (3s));
+    const auto terminal = drop.get ();
+    EXPECT_EQ (fw::message_flow_reason_t::activation_timeout, terminal.reason);
+    ASSERT_TRUE (terminal.exception);
+    try {
+        std::rethrow_exception (terminal.exception);
+    }
+    catch (const fw::framework_exception_t &error) {
+        EXPECT_EQ (fw::framework_error_kind_t::deadline_exceeded, error.kind ());
+    }
+    EXPECT_FALSE (instance);
     EXPECT_TRUE (send.result ());
     cleanup.reset ();
+    EXPECT_EQ (1, drops.load ());
     EXPECT_EQ (0, exit_code);
 }
 
@@ -2594,4 +2631,414 @@ TEST (CppFrameworkInstanceSpotActivation, ReadyLocalAdmissionSurvivesRecoveryRoo
 TEST (CppFrameworkInstanceSpotActivation, RecoveryWithoutLocalAdmissionRejectsMissingRoot)
 {
     verify_ready_recovery_root_deletion (false);
+}
+
+enum class activation_failure_t
+{
+    deadline,
+    factory,
+    shutdown,
+    accepted_handler,
+    initialization,
+    conflict,
+    store_failure,
+    fenced,
+    cancelled,
+    non_std_factory
+};
+
+static void verify_activation_failure_terminal (bool local,
+                                                bool provider,
+                                                activation_failure_t failure,
+                                                bool registered_type = true,
+                                                bool hold_delivery = false)
+{
+    using namespace std::chrono_literals;
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    namespace host = rt::host;
+    metric_test::provider_t metrics;
+    const bool shutdown_failure =
+      failure == activation_failure_t::shutdown || failure == activation_failure_t::cancelled;
+    const auto expected_kind =
+      failure == activation_failure_t::deadline || failure == activation_failure_t::initialization
+        ? fw::framework_error_kind_t::deadline_exceeded
+      : shutdown_failure                          ? fw::framework_error_kind_t::shutting_down
+      : failure == activation_failure_t::conflict ? fw::framework_error_kind_t::already_exists
+      : failure == activation_failure_t::fenced   ? fw::framework_error_kind_t::invalid_operation
+                                                  : fw::framework_error_kind_t::internal_failure;
+    auto opaque = std::make_shared<rt::in_memory_location_store_t> ();
+    std::shared_ptr<fw::location_repository_t> store =
+      provider ? std::static_pointer_cast<fw::location_repository_t> (
+                   std::make_shared<rt::provider_location_repository_t> (*opaque))
+               : std::static_pointer_cast<fw::location_repository_t> (
+                   std::make_shared<rt::in_memory_location_repository_t> ());
+    const auto owner = std::get<fw::owner_lease_claimed_t> (
+                         store->claim_owner_lease ("terminal-owner", 60s).result ().value ())
+                         .token;
+    fw::mesh_node_descriptor_t descriptor;
+    descriptor.mesh_name = "terminal";
+    descriptor.rid = zlink::routing_id_t::from ("terminal-target");
+    descriptor.lifecycle_generation = 1;
+    descriptor.descriptor_revision = 1;
+    descriptor.endpoint = "tcp://127.0.0.1:7101";
+    descriptor.security_identity = "terminal-owner";
+    descriptor.owner_id = owner.owner_id;
+    descriptor.lease_generation = owner.lease_generation;
+    descriptor.object_role = fw::object_role_t::server;
+    descriptor.state = fw::framework_runtime_state_t::serving;
+    descriptor.object_capabilities.push_back ({fw::placement_object_kind_t::instance_spot,
+                                               "room-type", fw::maintenance_policy_kind_t::disabled,
+                                               false, 1});
+    descriptor.capacity.spots.limit = 1;
+    descriptor.capacity.spot_types.push_back (
+      {fw::placement_object_kind_t::instance_spot, "room-type", {0, 0, 1}});
+    ASSERT_EQ (fw::location_write_status_t::stored,
+               store->update_mesh_node (descriptor, fw::location_write_intent_t::new_claim)
+                 .result ()
+                 .value ()
+                 .status);
+    auto blob_store = std::make_shared<rt::in_memory_relocation_store_t> ();
+    auto blobs = std::make_shared<rt::provider_relocation_repository_t> (*blob_store);
+    auto relocations = std::make_shared<rt::stateful::public_relocation_store_adapter_t> (blobs);
+    auto options = host::host_options_t{
+      .mesh = {.descriptor = {.mesh_name = "terminal",
+                              .node_routing_id = descriptor.rid.to_bytes (),
+                              .lifecycle_generation = 1,
+                              .descriptor_revision = 1,
+                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+               .runtime_failures = std::make_shared<rt::runtime_failure_collector_t> ()}};
+    options.mesh.dispatch.message_flow (fw::message_flow_log_mode_t::normal);
+    std::vector<fw::message_flow_event_t> events;
+    std::vector<fw::message_dispatch_error_event_t> errors;
+    std::atomic_bool terminal_observed{false};
+    fw::detail::dispatch_options_access_t::set_observer_for_tests (
+      options.mesh.dispatch, [&] (const auto &event) {
+          if (event.surface == fw::dispatch_error_surface_t::instance_spot
+              && event.outcome == fw::message_flow_outcome_t::dropped)
+              events.push_back (event);
+      });
+    fw::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      options.mesh.dispatch, [&] (const auto &event) {
+          errors.push_back (event);
+          terminal_observed.store (true, std::memory_order_release);
+      });
+    auto target = std::make_shared<host::public_host_runtime_t> (std::move (options));
+    int dispatches = 0;
+    int cleanups = 0;
+    std::promise<void> preparation_cleaned;
+    std::promise<void> delivery_release;
+    auto release_delivery = delivery_release.get_future ().share ();
+    std::promise<void> delivery_completed;
+    std::promise<void> initialization_entered;
+    std::promise<void> initialization_release;
+    auto release_initialization = initialization_release.get_future ().share ();
+    const bool deadline_failure =
+      failure == activation_failure_t::deadline || failure == activation_failure_t::initialization;
+    target->configure_instance_spot_operations (
+      store, relocations, [owner] { return owner; },
+      host::instance_spot_activation_materializer_t{
+        [&] (const auto &request, const auto &, auto &cleanup) {
+            cleanup = [&] (bool) -> fw::task_t<void> {
+                ++cleanups;
+                preparation_cleaned.set_value ();
+                co_return;
+            };
+            if (failure == activation_failure_t::factory)
+                throw std::runtime_error ("factory terminal failure");
+            if (failure == activation_failure_t::non_std_factory)
+                throw 7;
+            if (failure == activation_failure_t::cancelled)
+                throw std::system_error (std::make_error_code (std::errc::operation_canceled));
+            if (failure == activation_failure_t::conflict
+                || failure == activation_failure_t::store_failure
+                || failure == activation_failure_t::fenced)
+                throw fw::framework_exception_t (expected_kind, "typed activation failure");
+            if (failure == activation_failure_t::initialization) {
+                initialization_entered.set_value ();
+                release_initialization.get ();
+            }
+            if (failure == activation_failure_t::deadline)
+                std::this_thread::sleep_until (std::chrono::system_clock::time_point (
+                  std::chrono::milliseconds (request.target.deadline_unix_ms)));
+            return true;
+        },
+        [&] (auto, auto) -> fw::task_t<host::instance_spot_activation_result_t> {
+            ++dispatches;
+            co_return host::instance_spot_activation_result_t{
+              static_cast<std::uint32_t> (rt::protocol::request_terminal_result::internalError),
+              static_cast<std::uint32_t> (rt::protocol::framework_error_code::requestFailed),
+              std::nullopt, [] {}};
+        },
+        {},
+        [registered_type] (
+          const std::string &type) -> std::optional<fw::detail::factory_relocation_kind_t> {
+            return registered_type && type == "room-type"
+                     ? std::make_optional (fw::detail::factory_relocation_kind_t::disabled)
+                     : std::nullopt;
+        }});
+    target->start ();
+    auto cleanup = std::unique_ptr<host::public_host_runtime_t,
+                                   std::function<void (host::public_host_runtime_t *)>> (
+      target.get (), [&] (auto *) { target->close (); });
+    if (failure == activation_failure_t::shutdown)
+        target->close ();
+    const auto deadline = std::chrono::system_clock::now () + (deadline_failure ? 100ms : 3s);
+    rt::protocol::instance_spot_activation_header_t header{
+      {descriptor.rid.to_bytes (), 1, "terminal-room", "terminal", "room-type", "1",
+       static_cast<std::uint64_t> (
+         std::chrono::duration_cast<std::chrono::milliseconds> (deadline.time_since_epoch ())
+           .count ())},
+      1,
+      descriptor.rid.to_bytes (),
+      std::nullopt,
+      false,
+      {2242, 1},
+      0,
+      false};
+    const std::string flow_id = "019fc5b9-9df3-786b-bb69-d55358f6d48b";
+    rt::protocol::application_payload_t payload{"probe", "application/json", {1}};
+    payload.flow_id = flow_id;
+    payload.flow_origin = fw::flow_origin_t::application;
+    if (local) {
+        int terminals = 0;
+        std::promise<void> terminal_ready;
+        auto run = [&] {
+            auto activation = host::public_host_runtime_test_access_t::activate (
+              *target, {header, std::nullopt, payload}, [&] (const auto &result) {
+                  ++terminals;
+                  terminal_ready.set_value ();
+                  const auto error =
+                    rt::messaging::request_failure_mapper_t{}.reply_header_exception (
+                      result.terminal_result, result.failure_code, "Activation regression");
+                  EXPECT_EQ (expected_kind, error.kind ());
+                  if (result.accepted_turn_terminal)
+                      result.accepted_turn_terminal ();
+                  if (hold_delivery) {
+                      release_delivery.get ();
+                      delivery_completed.set_value ();
+                  }
+              });
+            EXPECT_TRUE (activation.result ());
+        };
+        if (failure == activation_failure_t::initialization) {
+            auto running = std::async (std::launch::async, run);
+            EXPECT_EQ (std::future_status::ready,
+                       initialization_entered.get_future ().wait_for (1s));
+            EXPECT_EQ (std::future_status::ready, terminal_ready.get_future ().wait_for (1s));
+            initialization_release.set_value ();
+            if (hold_delivery) {
+                EXPECT_EQ (std::future_status::ready,
+                           preparation_cleaned.get_future ().wait_for (1s));
+                EXPECT_EQ (std::future_status::timeout, running.wait_for (100ms));
+                delivery_release.set_value ();
+                EXPECT_EQ (std::future_status::ready,
+                           delivery_completed.get_future ().wait_for (1s));
+            }
+            running.get ();
+        } else
+            run ();
+        EXPECT_EQ (1, terminals);
+    } else {
+        ASSERT_TRUE (
+          target->send_instance_spot_activation_remote (descriptor.rid, header, {}, payload)
+            .result ()
+            .value ());
+        const auto until = std::chrono::steady_clock::now () + 3s;
+        while (!terminal_observed.load (std::memory_order_acquire)
+               && std::chrono::steady_clock::now () < until) {
+            ASSERT_TRUE (
+              target->dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ());
+            std::this_thread::yield ();
+        }
+    }
+    target->close ();
+    int activation_count = 0;
+    int duration_count = 0;
+    const std::string expected_outcome = failure == activation_failure_t::accepted_handler ? "ready"
+                                         : deadline_failure                          ? "timed_out"
+                                         : shutdown_failure                          ? "shutdown"
+                                         : failure == activation_failure_t::conflict ? "conflict"
+                                         : failure == activation_failure_t::fenced   ? "fenced"
+                                         : failure == activation_failure_t::store_failure
+                                           ? "store_failure"
+                                           : "rejected";
+    for (const auto &metric : metrics.collect ()) {
+        if (metric.instrument_descriptor.name_ != "zlink.instance_spot.activations"
+            && metric.instrument_descriptor.name_ != "zlink.instance_spot.activation.duration")
+            continue;
+        for (const auto &point : metric.point_data_attr_) {
+            EXPECT_EQ (3u, point.attributes.size ());
+            EXPECT_EQ ("terminal",
+                       opentelemetry::nostd::get<std::string> (point.attributes.at ("mesh_name")));
+            EXPECT_EQ ("room-type", opentelemetry::nostd::get<std::string> (
+                                      point.attributes.at ("instance_spot_type")));
+            EXPECT_EQ (expected_outcome,
+                       opentelemetry::nostd::get<std::string> (point.attributes.at ("outcome")));
+            if (auto sum = opentelemetry::nostd::get_if<metric_test::sdk::SumPointData> (
+                  &point.point_data)) {
+                EXPECT_TRUE (sum->is_monotonic_);
+                EXPECT_DOUBLE_EQ (1, opentelemetry::nostd::get<double> (sum->value_));
+                EXPECT_EQ ("{activation}", metric.instrument_descriptor.unit_);
+                ++activation_count;
+            } else if (auto histogram =
+                         opentelemetry::nostd::get_if<metric_test::sdk::HistogramPointData> (
+                           &point.point_data)) {
+                EXPECT_EQ (1u, histogram->count_);
+                EXPECT_GE (opentelemetry::nostd::get<double> (histogram->sum_), 0);
+                EXPECT_EQ ("s", metric.instrument_descriptor.unit_);
+                ++duration_count;
+            }
+        }
+    }
+    EXPECT_EQ (registered_type ? 1 : 0, activation_count);
+    EXPECT_EQ (registered_type ? 1 : 0, duration_count);
+    const auto &dropped = events;
+    if (failure == activation_failure_t::accepted_handler) {
+        EXPECT_TRUE (dropped.empty ());
+        EXPECT_EQ (1, dispatches);
+        EXPECT_EQ (1, cleanups);
+        EXPECT_EQ (1u, errors.size ());
+        return;
+    }
+    ASSERT_EQ (1u, dropped.size ());
+    const auto &event = dropped.front ();
+    EXPECT_EQ (fw::dispatch_error_action_t::drop, event.error_action);
+    EXPECT_EQ (flow_id, event.flow_id);
+    EXPECT_EQ (fw::flow_origin_t::application, event.flow_origin);
+    EXPECT_EQ (deadline_failure   ? fw::message_flow_reason_t::activation_timeout
+               : shutdown_failure ? fw::message_flow_reason_t::shutdown
+                                  : fw::message_flow_reason_t::activation_rejected,
+               event.reason);
+    EXPECT_EQ (fw::message_flow_result_t::dropped, event.result);
+    ASSERT_TRUE (event.exception);
+    try {
+        std::rethrow_exception (event.exception);
+    }
+    catch (const std::exception &error) {
+        if (failure == activation_failure_t::factory)
+            EXPECT_STREQ ("factory terminal failure", error.what ());
+        else if (failure == activation_failure_t::cancelled) {
+            const auto *cancelled = dynamic_cast<const std::system_error *> (&error);
+            ASSERT_NE (nullptr, cancelled);
+            EXPECT_EQ (std::make_error_code (std::errc::operation_canceled), cancelled->code ());
+        } else {
+            const auto *typed = dynamic_cast<const fw::framework_exception_t *> (&error);
+            ASSERT_NE (nullptr, typed);
+            EXPECT_EQ (expected_kind, typed->kind ());
+        }
+    }
+    catch (int error) {
+        EXPECT_EQ (activation_failure_t::non_std_factory, failure);
+        EXPECT_EQ (7, error);
+    }
+    EXPECT_EQ (0, dispatches);
+    EXPECT_EQ (failure == activation_failure_t::shutdown ? 0 : 1, cleanups);
+    ASSERT_EQ (1u, errors.size ());
+    EXPECT_TRUE (errors.front ().error_type);
+    EXPECT_TRUE (errors.front ().error_message);
+    if (failure != activation_failure_t::shutdown) {
+        const auto authority =
+          store->read_authority (rt::spot_authority_key ("terminal-room")).result ().value ();
+        EXPECT_FALSE (std::holds_alternative<fw::authority_snapshot_t> (authority));
+    }
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, ActivationTaskWaitsForTerminalDelivery)
+{
+    verify_activation_failure_terminal (true, true, activation_failure_t::initialization, true,
+                                        true);
+}
+TEST (ZLinkFrameworkInstanceSpotActivation, NonStandardFactoryFailureRemainsRejectedAndObservable)
+{
+    verify_activation_failure_terminal (true, true, activation_failure_t::non_std_factory);
+}
+TEST (ZLinkFrameworkInstanceSpotActivation, UnregisteredTypeDoesNotCreateActivationMetricSeries)
+{
+    verify_activation_failure_terminal (true, true, activation_failure_t::factory, false);
+}
+TEST (ZLinkFrameworkInstanceSpotActivation, CancelledPreparationKeepsShutdownMetricAndDrop)
+{
+    verify_activation_failure_terminal (true, true, activation_failure_t::cancelled);
+}
+TEST (ZLinkFrameworkInstanceSpotActivation, ConflictActivationMetrics)
+{
+    verify_activation_failure_terminal (true, true, activation_failure_t::conflict);
+}
+TEST (ZLinkFrameworkInstanceSpotActivation, StoreFailureActivationMetrics)
+{
+    verify_activation_failure_terminal (true, true, activation_failure_t::store_failure);
+}
+TEST (ZLinkFrameworkInstanceSpotActivation, FencedActivationMetrics)
+{
+    verify_activation_failure_terminal (true, true, activation_failure_t::fenced);
+}
+TEST (ZLinkFrameworkInstanceSpotActivation, InitializationDeadlineEndsBeforePreparationCompletes)
+{
+    verify_activation_failure_terminal (true, true, activation_failure_t::initialization);
+}
+TEST (ZLinkFrameworkInstanceSpotActivation, LocalProviderDeadlineDropsOriginalFlowOnce)
+{
+    verify_activation_failure_terminal (true, true, activation_failure_t::deadline);
+}
+TEST (ZLinkFrameworkInstanceSpotActivation, RemoteProviderDeadlineDropsOriginalFlowOnce)
+{
+    verify_activation_failure_terminal (false, true, activation_failure_t::deadline);
+}
+TEST (ZLinkFrameworkInstanceSpotActivation, InMemoryDeadlineDropsOriginalFlowOnce)
+{
+    verify_activation_failure_terminal (true, false, activation_failure_t::deadline);
+}
+TEST (ZLinkFrameworkInstanceSpotActivation, LocalFactoryFailureDropsOriginalErrorOnce)
+{
+    verify_activation_failure_terminal (true, true, activation_failure_t::factory);
+}
+TEST (ZLinkFrameworkInstanceSpotActivation, RemoteFactoryFailureDropsOriginalErrorOnce)
+{
+    verify_activation_failure_terminal (false, true, activation_failure_t::factory);
+}
+TEST (ZLinkFrameworkInstanceSpotActivation, StoppedTargetKeepsShutdownTerminal)
+{
+    verify_activation_failure_terminal (true, true, activation_failure_t::shutdown);
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, ExpiredAuthorityReservePreservesDeadlineAndCancellation)
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    auto opaque = std::make_shared<rt::in_memory_location_store_t> ();
+    std::vector<std::shared_ptr<fw::location_repository_t>> repositories{
+      std::make_shared<rt::provider_location_repository_t> (*opaque),
+      std::make_shared<rt::in_memory_location_repository_t> ()};
+    for (const auto &repository : repositories) {
+        fw::object_reserve_request_t request;
+        request.key = {fw::placement_object_kind_t::instance_spot, "expired-room"};
+        request.intent.stable_type = "room-type";
+        request.capacity_bundle = {0, 1,
+                                   fw::spot_type_capacity_delta_t{
+                                     fw::placement_object_kind_t::instance_spot, "room-type", 1}};
+        request.operation_deadline =
+          std::chrono::system_clock::now () - std::chrono::milliseconds (1);
+        const auto expired = repository->reserve (request).result ();
+        ASSERT_FALSE (expired);
+        EXPECT_EQ (fw::framework_error_kind_t::deadline_exceeded, expired.error_kind ());
+        std::stop_source shutdown;
+        shutdown.request_stop ();
+        const auto cancelled =
+          repository->commit ({}, shutdown.get_token (), request.operation_deadline).result ();
+        ASSERT_FALSE (cancelled);
+        ASSERT_TRUE (cancelled.exception ());
+        try {
+            std::rethrow_exception (cancelled.exception ());
+        }
+        catch (const std::exception &error) {
+            EXPECT_TRUE (fw::detail::is_cancellation_exception (error));
+        }
+    }
+}
+
+TEST (ZLinkFrameworkInstanceSpotActivation, AcceptedHandlerFailureDoesNotBecomeActivationDrop)
+{
+    verify_activation_failure_terminal (true, true, activation_failure_t::accepted_handler);
+    verify_activation_failure_terminal (false, true, activation_failure_t::accepted_handler);
 }

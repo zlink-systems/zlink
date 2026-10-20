@@ -3456,6 +3456,40 @@ reply_header_t decode_reply_header (std::span<const std::uint8_t> bytes)
     return {correlation, terminal, failure};
 }
 
+std::vector<std::uint8_t> encode_stream_bind_reply (std::uint64_t correlation,
+                                                    std::uint32_t terminal_result,
+                                                    std::uint32_t failure_code,
+                                                    std::optional<stream_bind_reply_tail_t> binding)
+{
+    auto bytes = encode_reply_header (correlation, terminal_result, failure_code);
+    if (terminal_result == 0) {
+        if (!binding || binding->binding_generation == 0
+            || binding->authority_owner_generation == 0)
+            throw service_wire_error_t ("stream bind success requires accepted binding fence");
+        append_u64 (bytes, binding->binding_generation);
+        append_u64 (bytes, binding->authority_owner_generation);
+    } else if (binding) {
+        throw service_wire_error_t ("stream bind failure cannot contain a success tail");
+    }
+    return bytes;
+}
+
+stream_bind_reply_t decode_stream_bind_reply (std::span<const std::uint8_t> bytes)
+{
+    stream_bind_reply_t reply{decode_reply_header (bytes), std::nullopt};
+    std::size_t offset = reply_header_t::encoded_size;
+    if (reply.header.terminal_result == 0) {
+        const auto generation = read_u64 (bytes, offset);
+        const auto authority = read_u64 (bytes, offset);
+        if (generation == 0 || authority == 0)
+            throw service_wire_error_t ("stream bind success fence must be nonzero");
+        reply.binding = stream_bind_reply_tail_t{generation, authority};
+    }
+    if (offset != bytes.size ())
+        throw service_wire_error_t ("stream bind reply has unexpected tail bytes");
+    return reply;
+}
+
 std::vector<std::uint8_t> encode_user_spot_create_reply (std::uint64_t correlation,
                                                          std::uint32_t terminal_result,
                                                          std::uint32_t failure_code,

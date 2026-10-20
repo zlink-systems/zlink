@@ -2601,7 +2601,7 @@ bool verify_spot_wide_yield_blocks_idle_eviction_until_handler_terminal ()
     record.actor_route = exact_route;
     --record.actor_route->object_generation;
     messaging::envelope_codec_t codec;
-    auto encoded = codec.encode_raw_body_parts (
+    auto encoded = zlink::framework::detail::encode_actor_packet (
       messaging::envelope_header_t{.kind = messaging::message_kind_t::command,
                                    .channel_name = "actor",
                                    .message_name = "YieldIdleEvictionProbe"},

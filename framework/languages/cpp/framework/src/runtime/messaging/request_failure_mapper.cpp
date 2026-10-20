@@ -106,6 +106,28 @@ request_failure_mapper_t::target_failure_reply (framework_error_kind_t kind,
                                   static_cast<std::uint32_t> (row->failure)};
 }
 
+std::optional<request_wire_failure_t>
+request_failure_mapper_t::target_failure_reply (const std::exception_ptr &error) const
+{
+    if (error) {
+        try {
+            std::rethrow_exception (error);
+        }
+        catch (const framework_exception_t &typed) {
+            return target_failure_reply (typed);
+        }
+        catch (const std::exception &failure) {
+            return target_failure_reply (detail::is_cancellation_exception (failure)
+                                           ? framework_error_kind_t::shutting_down
+                                           : framework_error_kind_t::internal_failure);
+        }
+        catch (...) {
+            // The caller retains the original exception; this selects only its wire terminal.
+        }
+    }
+    return target_failure_reply (framework_error_kind_t::internal_failure);
+}
+
 std::uint32_t
 request_failure_mapper_t::target_failure_code (framework_error_kind_t kind,
                                                std::uint32_t cause_code) const noexcept

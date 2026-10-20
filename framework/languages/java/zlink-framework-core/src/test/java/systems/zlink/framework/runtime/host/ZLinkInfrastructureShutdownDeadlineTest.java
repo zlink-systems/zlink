@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.host;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -21,7 +22,6 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -41,6 +41,64 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
     @Test
     void lateSpotPublisherSettlementReportsForceStopped() throws Exception {
         assertDeadlineOutcome(false, true);
+    }
+
+    @Test
+    void closePreservesShutdownTerminalAfterTeardownFailure() throws Exception {
+        var runtime = ZLinkFrameworkRuntimeTestAccess.start(new DefaultZLinkFrameworkOptions());
+        runtime.startupCompletion().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS);
+        var executor = failChannelCleanup(runtime);
+        var terminal =
+                runtime.shutdown(Duration.ofSeconds(WAIT_SECONDS))
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
+        assertEquals(ZLinkFrameworkTerminationOutcome.FORCE_STOPPED, terminal.outcome());
+        assertEquals(ZLinkFrameworkTerminationReason.TEARDOWN_FAILED, terminal.reason());
+        assertDoesNotThrow(runtime::close);
+        assertDoesNotThrow(runtime::close);
+        assertEquals(terminal, runtime.status().terminationResult().orElseThrow());
+        assertEquals(
+                terminal,
+                runtime.shutdown(Duration.ofSeconds(WAIT_SECONDS))
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS));
+        assertTrue(executor.isTerminated());
+    }
+
+    @Test
+    void directCloseStillPropagatesCleanupFailure() throws Exception {
+        var runtime = ZLinkFrameworkRuntimeTestAccess.start(new DefaultZLinkFrameworkOptions());
+        runtime.startupCompletion().toCompletableFuture().get(WAIT_SECONDS, TimeUnit.SECONDS);
+        var executor = failChannelCleanup(runtime);
+        var failure = assertThrows(ZLinkFrameworkShutdown.Failure.class, runtime::close);
+        assertEquals("injected executor cleanup failure", failure.getCause().getMessage());
+        assertTrue(executor.isTerminated());
+    }
+
+    private ExecutorService failChannelCleanup(ZLinkFrameworkRuntime runtime) throws Exception {
+        var channelsField = ZLinkFrameworkRuntime.class.getDeclaredField("channels");
+        channelsField.setAccessible(true);
+        var channels = (ZLinkChannelRuntime) channelsField.get(runtime);
+        var executorField = ZLinkChannelRuntime.class.getDeclaredField("infrastructureExecutor");
+        executorField.setAccessible(true);
+        var executor = (ExecutorService) executorField.get(channels);
+        var failure = new IllegalStateException("injected executor cleanup failure");
+        executorField.set(
+                channels,
+                Proxy.newProxyInstance(
+                        ExecutorService.class.getClassLoader(),
+                        new Class<?>[] {ExecutorService.class},
+                        (proxy, method, arguments) -> {
+                            if (method.getName().equals("isTerminated")) return false;
+                            try {
+                                var result = method.invoke(executor, arguments);
+                                if (method.getName().equals("awaitTermination")) throw failure;
+                                return result;
+                            } catch (InvocationTargetException error) {
+                                throw error.getCause();
+                            }
+                        }));
+        return executor;
     }
 
     private void assertDeadlineOutcome(boolean executorDeadline, boolean spotPublisher)
@@ -133,12 +191,10 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
             release.countDown();
             assertTrue(executor.awaitTermination(WAIT_SECONDS, TimeUnit.SECONDS));
             if (shutdown != null) shutdown.get(WAIT_SECONDS, TimeUnit.SECONDS);
-            if (executorDeadline) {
-                var failure = assertThrows(ZLinkFrameworkShutdown.Failure.class, runtime::close);
-                assertTrue(failure.getCause() instanceof TimeoutException);
-            } else {
-                runtime.close();
-            }
+            var terminal = shutdown.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertDoesNotThrow(runtime::close);
+            assertDoesNotThrow(runtime::close);
+            assertEquals(terminal, runtime.status().terminationResult().orElseThrow());
         }
         var result = shutdown.get(WAIT_SECONDS, TimeUnit.SECONDS);
         assertEquals(ZLinkFrameworkTerminationOutcome.FORCE_STOPPED, result.outcome());

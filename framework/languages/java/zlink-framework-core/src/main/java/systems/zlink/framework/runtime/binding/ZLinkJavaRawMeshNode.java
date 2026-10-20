@@ -44,6 +44,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorRe
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
@@ -72,6 +73,7 @@ import systems.zlink.framework.runtime.mesh.MeshNodeRegistration.RouterSocketCon
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
+import systems.zlink.framework.runtime.spots.ZLinkSpotFlowFrame;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 import java.io.ByteArrayOutputStream;
@@ -134,7 +136,6 @@ final class ZLinkJavaRawMeshNode
     private static final int MAX_INGRESS_BATCH = 64;
     private static final long MAX_INGRESS_BATCH_BYTES = 4L * 1024 * 1024;
     private static final long MAX_INGRESS_BATCH_NANOS = 2_000_000L;
-    private static final Duration MAX_INGRESS_WAIT_TIMEOUT = Duration.ofMillis(100);
     private static final long MAX_INFRASTRUCTURE_CONTROL_BYTES = 256L * 1024;
     private static final long MAX_INFRASTRUCTURE_PAYLOAD_BYTES = 4_294_966_774L;
     private static final byte[] RELOCATION_CONTROL_PACKET =
@@ -180,7 +181,6 @@ final class ZLinkJavaRawMeshNode
     private final ZLinkServiceM6AWireCodec wire = new ZLinkServiceM6AWireCodec();
     private final ZLinkServiceM6BWireCodec statefulWire = new ZLinkServiceM6BWireCodec();
     private final ZLinkServiceLivenessRegistry liveness;
-    private final Duration ingressWaitTimeout;
     private final ScheduledExecutorService deadlines = ZLinkProcessExecutionLanes.deadlines();
     private final Executor applicationDispatch = ZLinkProcessExecutionLanes.applicationLane();
     private final ZLinkServiceOperationRegistry operations =
@@ -322,10 +322,6 @@ final class ZLinkJavaRawMeshNode
         this.port = new ZLinkJavaRawServicePort(context, transportStateLane, operations);
         this.currentTimeMillis = Objects.requireNonNull(currentTimeMillis, "currentTimeMillis");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
-        this.ingressWaitTimeout =
-                livenessProbeInterval.compareTo(MAX_INGRESS_WAIT_TIMEOUT) < 0
-                        ? livenessProbeInterval
-                        : MAX_INGRESS_WAIT_TIMEOUT;
         this.liveness =
                 new ZLinkServiceLivenessRegistry(
                         livenessProbeInterval, livenessPeerTimeout, transportStateLane);
@@ -1066,6 +1062,7 @@ final class ZLinkJavaRawMeshNode
             return;
         }
         pendingPeerCloseRequests.add(new PeerCloseRequest(connectionIntentId, intent.endpoint()));
+        port.signalReceiveOwner(router);
         signalStateChanged(intent.expectedRoutingId());
     }
 
@@ -3089,9 +3086,11 @@ final class ZLinkJavaRawMeshNode
         long correlation = allocateCorrelation();
         List<Message> messages = new ArrayList<>(parts.size());
         String contentType;
+        ZLinkFlowContext.State activationFlow;
         try {
             for (Message part : parts) messages.add(Message.from(part.toByteArray()));
             contentType = applicationContentType(messages);
+            activationFlow = request ? null : captureInstanceActivationFlow(messages);
         } catch (RuntimeException | Error failure) {
             messages.forEach(Message::close);
             throw failure;
@@ -3155,7 +3154,8 @@ final class ZLinkJavaRawMeshNode
                                                 header.replyRouteId(),
                                                 request
                                                         ? ZLinkDispatchErrorAction.FAIL_CALLER
-                                                        : ZLinkDispatchErrorAction.DROP);
+                                                        : ZLinkDispatchErrorAction.DROP,
+                                                activationFlow);
                                         if (operation != null)
                                             operations.completeExceptionally(
                                                     operation.id(), unwrap(failure));
@@ -3177,7 +3177,8 @@ final class ZLinkJavaRawMeshNode
                     failure,
                     request,
                     header.replyRouteId(),
-                    request ? ZLinkDispatchErrorAction.FAIL_CALLER : ZLinkDispatchErrorAction.DROP);
+                    request ? ZLinkDispatchErrorAction.FAIL_CALLER : ZLinkDispatchErrorAction.DROP,
+                    activationFlow);
             if (operation != null) operations.completeExceptionally(operation.id(), failure);
             return CompletableFuture.failedFuture(failure);
         }
@@ -3289,7 +3290,7 @@ final class ZLinkJavaRawMeshNode
                         });
     }
 
-    CompletionStage<Void> bindRemoteStreamSession(
+    CompletionStage<ZLinkServiceM6BWireCodec.BoundSessionBindReply> bindRemoteStreamSession(
             RoutingId sessionRid,
             ZLinkBackendActorRef actor,
             long authorityOwnerGeneration,
@@ -3330,14 +3331,15 @@ final class ZLinkJavaRawMeshNode
                                                     bindingGeneration)));
                         },
                         timeout)
-                .thenAccept(
+                .thenApply(
                         replies -> {
                             if (replies.size() != 1) {
                                 throw new IllegalArgumentException(
                                         "bound session binding reply frame count");
                             }
-                            ZLinkServiceM6AWireCodec.Reply reply =
-                                    wire.decodeReplyHeader(replies.getFirst());
+                            ZLinkServiceM6BWireCodec.BoundSessionBindReply reply =
+                                    statefulWire.decodeBoundSessionBindReply(
+                                            replies.getFirst(), active);
                             if (reply.correlation() != correlation) {
                                 throw new IllegalArgumentException(
                                         "bound session binding reply correlation");
@@ -3351,6 +3353,7 @@ final class ZLinkJavaRawMeshNode
                                         reply.failureCode(),
                                         java.util.Map.of());
                             }
+                            return reply;
                         });
     }
 
@@ -4264,6 +4267,19 @@ final class ZLinkJavaRawMeshNode
                             .RecoveryEnvelope
                     envelope,
             ZLinkServiceM6BWireCodec.InstanceRouteFence route) {
+        ZLinkFlowContext.State activationFlow = null;
+        ZLinkDispatchErrorReporter flowReporter = dispatchErrorReporter;
+        if (!envelope.request() && flowReporter != null && flowReporter.flow().captureEnabled()) {
+            var parts =
+                    ZLinkServiceM6AWireCodec.decodeFrameworkMultipartFrame(
+                            ByteBuffer.wrap(envelope.applicationPayloadFrame()));
+            try {
+                activationFlow = captureInstanceActivationFlow(parts);
+            } finally {
+                parts.forEach(Message::close);
+            }
+        }
+        var capturedFlow = activationFlow;
         CompletionStage<Void> recovery =
                 ((ZLinkJavaRawSpotNode) spotNode()).recoverInstanceSpot(envelope, route);
         ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
@@ -4280,7 +4296,8 @@ final class ZLinkJavaRawMeshNode
                                 envelope.replyRouteId(),
                                 envelope.request()
                                         ? ZLinkDispatchErrorAction.FAIL_CALLER
-                                        : ZLinkDispatchErrorAction.DROP);
+                                        : ZLinkDispatchErrorAction.DROP,
+                                capturedFlow);
                     }
                 });
     }
@@ -4749,6 +4766,7 @@ final class ZLinkJavaRawMeshNode
         }
         state = MeshNodeState.STOPPED;
         ZLinkApplicationJobQueue.cancelPendingAcquire(pendingReceiveAcquire);
+        port.signalReceiveOwner(router);
         ExecutorService currentPump = pump;
         if (currentPump != null) {
             currentPump.shutdownNow();
@@ -4802,6 +4820,11 @@ final class ZLinkJavaRawMeshNode
         pump.execute(pumpRotation);
     }
 
+    private void resumeReceiveOwner(Runnable resume) {
+        pump.execute(resume);
+        port.signalReceiveOwner(router);
+    }
+
     private void pumpTurn(RouterSocket pumpSocket) {
         // Spec 08 §4.1 I0–I4 and §4.2: readiness blocks between receive rotations;
         // the same receive owner needs no executor round trip for the next rotation.
@@ -4810,12 +4833,14 @@ final class ZLinkJavaRawMeshNode
         // progress on the existing receive turns even when ordinary capacity is exhausted.
         do {
             if (closed.get()) return;
+            long waitStartedAt = nanoTime.getAsLong();
             int ready =
-                    port.waitForReady(
-                            pumpSocket,
-                            pendingRawMulticast != null && pendingReceiveAcquire.get() == null
-                                    ? Duration.ZERO
-                                    : managementWaitTimeout(nanoTime.getAsLong()));
+                    pendingRawMulticast != null && pendingReceiveAcquire.get() == null
+                            ? port.waitForReady(pumpSocket, Duration.ZERO)
+                            : port.waitForManagementReady(
+                                    pumpSocket,
+                                    managementDeadlineNanos(waitStartedAt),
+                                    waitStartedAt);
             long now = nanoTime.getAsLong();
             // The existing pump remains this ROUTER's one route observer.
             if ((ready & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0) {
@@ -4867,7 +4892,7 @@ final class ZLinkJavaRawMeshNode
                 if (grant == null && !budgeted && queue != null) {
                     grant =
                             queue.acquireOrResume(
-                                    pump,
+                                    this::resumeReceiveOwner,
                                     permit -> drainIngressBatch(pumpSocket, permit),
                                     pendingReceiveAcquire,
                                     ZLinkApplicationJobQueue.Origin.REMOTE);
@@ -5391,13 +5416,21 @@ final class ZLinkJavaRawMeshNode
         }
     }
 
+    private ZLinkFlowContext.State captureInstanceActivationFlow(List<Message> parts) {
+        var reporter = dispatchErrorReporter;
+        return reporter != null && reporter.flow().captureEnabled()
+                ? ZLinkSpotFlowFrame.decode(parts)
+                : null;
+    }
+
     private int[] recordInstanceActivationFailure(
             String spotId,
             RoutingId sourceRid,
             Throwable failure,
             boolean request,
             Long correlation,
-            ZLinkDispatchErrorAction action) {
+            ZLinkDispatchErrorAction action,
+            ZLinkFlowContext.State activationFlow) {
         Throwable cause = unwrap(failure);
         ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
         boolean captureEnabled = reporter != null && reporter.errorsEnabled();
@@ -5414,6 +5447,30 @@ final class ZLinkJavaRawMeshNode
                     OneWayFailureContext.INSTANCE_ACTIVATION);
         }
         if (captureEnabled) {
+            if (!request) {
+                reporter.flow()
+                        .traceInstanceActivationDrop(
+                                spotId,
+                                sourceRid,
+                                cause,
+                                (cause instanceof ZLinkFrameworkException typed
+                                                        && typed.kind()
+                                                                == ZLinkFrameworkErrorKind
+                                                                        .DEADLINE_EXCEEDED)
+                                                || cause instanceof TimeoutException
+                                        ? ZLinkDispatchErrorReason.ACTIVATION_TIMEOUT
+                                        : (cause instanceof ZLinkFrameworkException typed
+                                                                && typed.kind()
+                                                                        == ZLinkFrameworkErrorKind
+                                                                                .SHUTTING_DOWN)
+                                                        || cause
+                                                                instanceof
+                                                                java.util.concurrent
+                                                                        .CancellationException
+                                                ? ZLinkDispatchErrorReason.SHUTDOWN
+                                                : ZLinkDispatchErrorReason.ACTIVATION_REJECTED,
+                                activationFlow);
+            }
             reporter.report(
                     ZLinkDispatchErrorSurface.INSTANCE_SPOT,
                     request ? ZLinkDispatchMessageKind.REQUEST : ZLinkDispatchMessageKind.SEND,
@@ -6139,8 +6196,10 @@ final class ZLinkJavaRawMeshNode
             return;
         }
         String contentType;
+        ZLinkFlowContext.State activationFlow;
         try {
             contentType = applicationContentType(messages);
+            activationFlow = header.request() ? null : captureInstanceActivationFlow(messages);
         } catch (RuntimeException budgetFailure) {
             messages.forEach(Message::close);
             replyInstanceFailure(inbound, header, 104, 12);
@@ -6190,7 +6249,8 @@ final class ZLinkJavaRawMeshNode
                                                         header.request()
                                                                 ? ZLinkDispatchErrorAction
                                                                         .REPLY_ERROR
-                                                                : ZLinkDispatchErrorAction.DROP);
+                                                                : ZLinkDispatchErrorAction.DROP,
+                                                        activationFlow);
                                         if (header.request()) {
                                             replyInstanceFailure(inbound, header, pair[0], pair[1]);
                                         }
@@ -6214,7 +6274,8 @@ final class ZLinkJavaRawMeshNode
                                 header.replyRouteId(),
                                 header.request()
                                         ? ZLinkDispatchErrorAction.REPLY_ERROR
-                                        : ZLinkDispatchErrorAction.DROP);
+                                        : ZLinkDispatchErrorAction.DROP,
+                                activationFlow);
                 if (header.request()) replyInstanceFailure(inbound, header, pair[0], pair[1]);
             }
         }
@@ -7076,21 +7137,12 @@ final class ZLinkJavaRawMeshNode
     private void replyBoundSessionBind(
             ZLinkJavaRawServicePort.Inbound inbound,
             ZLinkServiceM6BWireCodec.BoundSessionBind binding,
-            boolean accepted) {
-        if (accepted) {
-            port.reply(
-                    requireStarted(),
-                    inbound.source(),
-                    inbound.requestSequence(),
-                    List.of(wire.encodeReplyHeader(binding.correlation(), 0, 0)));
-            return;
-        }
-        replyBoundSessionBindFailure(
-                inbound,
-                binding,
-                ZLinkRequestFailureMapping.outgoing(
-                        ZLinkFrameworkErrorKind.NOT_FOUND,
-                        (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_ROUTE_NOT_FOUND));
+            ZLinkServiceM6BWireCodec.BoundSessionBindReply reply) {
+        port.reply(
+                requireStarted(),
+                inbound.source(),
+                inbound.requestSequence(),
+                List.of(statefulWire.encodeBoundSessionBindReply(reply, binding.active())));
     }
 
     private void replyBoundSessionBindFailure(
@@ -7650,12 +7702,12 @@ final class ZLinkJavaRawMeshNode
         liveness.setAdmissionPending(pending, nowNanos);
     }
 
-    private Duration managementWaitTimeout(long nowNanos) {
-        long remaining = liveness.nextDeadlineNanos(nowNanos) - nowNanos;
-        if (remaining <= 0) return Duration.ZERO;
-        return remaining >= ingressWaitTimeout.toNanos()
-                ? ingressWaitTimeout
-                : Duration.ofNanos(remaining);
+    ZLinkServiceLivenessRegistry livenessForTest() {
+        return liveness;
+    }
+
+    long managementDeadlineNanos(long nowNanos) {
+        return liveness.nextDeadlineNanos(nowNanos);
     }
 
     private void tickLiveness(long nowNanos) {

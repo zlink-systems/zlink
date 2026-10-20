@@ -7,6 +7,114 @@ using Zlink.Framework.Runtime.Backend.Contracts;
 public sealed class ActorBoundSessionRelayTests
 {
     [Fact]
+    public void Shared_Registration_Contract_Vectors()
+    {
+        var root = Common.FrameworkTestEnvironment.GetRepoRoot();
+        using var fixture = System.Text.Json.JsonDocument.Parse(
+            File.ReadAllText(
+                Path.Combine(root, "framework/runtime/protocol/fixtures/bind-registration-v1.json")
+            )
+        );
+        foreach (var vector in fixture.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            var state = new ZLinkActorRuntimeState("shared-registration");
+            var initial = Register(fixture.RootElement.GetProperty("current"));
+            if (vector.GetProperty("success").GetBoolean())
+            {
+                var accepted = Register(vector).Replacement;
+                Assert.Equal(
+                    ulong.Parse(vector.GetProperty("generation").GetString()!),
+                    accepted.BindingGeneration
+                );
+                Assert.Equal(41UL, accepted.AuthorityOwnerGeneration);
+                Assert.True(state.TryGetBoundSession(out var current));
+                Assert.Equal(accepted, current);
+            }
+            else
+            {
+                var error = Assert.Throws<ZLinkFrameworkException>(() => Register(vector));
+                Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+                Assert.True(state.TryGetBoundSession(out var current));
+                Assert.Equal(initial.Replacement, current);
+            }
+
+            ZLinkActorSessionBindingTransition Register(System.Text.Json.JsonElement value)
+            {
+                string Text(string key) => value.GetProperty(key).GetString()!;
+                ulong Number(string key) => ulong.Parse(Text(key));
+                return state.ReplaceSessionBinding(
+                    RoutingId.From(Text("node")),
+                    RoutingId.From(Text("session")),
+                    $"{Text("node")}:{Text("lifecycle")}:{Text("session")}:{Text("generation")}:{Text("ownerId")}:{Text("lease")}",
+                    Number("generation"),
+                    1,
+                    41,
+                    ZLinkMeshName.FromBoundary("actors", "meshName"),
+                    1,
+                    1,
+                    Number("lifecycle"),
+                    0,
+                    Text("ownerId"),
+                    Number("lease")
+                );
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("session-node", 1UL, "session-a", 9UL, true)]
+    [InlineData("session-node", 1UL, "session-a", 8UL, false)]
+    [InlineData("session-node", 1UL, "session-b", 9UL, false)]
+    [InlineData("session-node", 1UL, "session-b", 10UL, true)]
+    [InlineData("other-node", 1UL, "session-b", 1UL, true)]
+    [InlineData("session-node", 2UL, "session-b", 1UL, true)]
+    public void Registration_Table_Preserves_Current_Or_Registers_Request(
+        string node,
+        ulong lifecycle,
+        string session,
+        ulong generation,
+        bool succeeds
+    )
+    {
+        var state = new ZLinkActorRuntimeState("registration-table");
+        var initial = Register("session-node", 1, "session-a", 9);
+        if (!succeeds)
+        {
+            var error = Assert.Throws<ZLinkFrameworkException>(() =>
+                Register(node, lifecycle, session, generation)
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
+            Assert.True(state.TryGetBoundSession(out var retained));
+            Assert.Equal(initial.Replacement, retained);
+            return;
+        }
+        var result = Register(node, lifecycle, session, generation);
+        Assert.Equal(generation, result.Replacement.BindingGeneration);
+        Assert.Equal(7UL, result.Replacement.AuthorityOwnerGeneration);
+        Assert.Equal(generation != 9 || session != "session-a", result.Changed);
+
+        ZLinkActorSessionBindingTransition Register(
+            string owner,
+            ulong epoch,
+            string rid,
+            ulong counter
+        ) =>
+            state.ReplaceSessionBinding(
+                RoutingId.From(owner),
+                RoutingId.From(rid),
+                $"{owner}:{epoch}:{rid}:{counter}",
+                counter,
+                1,
+                7,
+                ZLinkMeshName.FromBoundary("actors", "meshName"),
+                1,
+                1,
+                epoch,
+                0
+            );
+    }
+
+    [Fact]
     public void Disconnect_body_matches_shared_golden_identity()
     {
         var root = Common.FrameworkTestEnvironment.GetRepoRoot();
@@ -197,7 +305,7 @@ public sealed class ActorBoundSessionRelayTests
         var stale = Assert.Throws<ZLinkFrameworkException>(() =>
             Replace(state, "binding-a", "session-a", 1)
         );
-        Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, stale.Kind);
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, stale.Kind);
         Assert.Equal(ZLinkRetryAdvice.DoNotRetry, stale.RetryAdvice);
         Assert.True(state.TryGetBoundSession(out var current));
         Assert.Equal("binding-b", current.BindingToken);
@@ -356,27 +464,26 @@ public sealed class ActorBoundSessionRelayTests
     }
 
     [Fact]
-    public void Duplicate_Token_Requires_The_Full_Immutable_Binding_Identity()
+    public void Duplicate_Identity_Preserves_Current_When_Lease_Copy_Changes()
     {
         var state = new ZLinkActorRuntimeState("actor-conflict");
         var installed = Replace(state, "binding-a", "session-a", authorityGeneration: 1);
 
-        var conflict = Assert.Throws<ZLinkFrameworkException>(() =>
-            state.ReplaceSessionBinding(
-                RoutingId.From("session-node"),
-                RoutingId.From("session-a"),
-                "binding-a",
-                bindingGeneration: 1,
-                objectGeneration: 7,
-                authorityOwnerGeneration: 1,
-                meshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
-                targetNodeGeneration: 1,
-                ownerLeaseGeneration: 99,
-                sessionOwnerNodeGeneration: 1,
-                acceptedHighWater: 0
-            )
+        var duplicate = state.ReplaceSessionBinding(
+            RoutingId.From("session-node"),
+            RoutingId.From("session-a"),
+            "binding-a",
+            bindingGeneration: 1,
+            objectGeneration: 7,
+            authorityOwnerGeneration: 1,
+            meshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
+            targetNodeGeneration: 1,
+            ownerLeaseGeneration: 99,
+            sessionOwnerNodeGeneration: 1,
+            acceptedHighWater: 0
         );
-        Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, conflict.Kind);
+        Assert.False(duplicate.Changed);
+        Assert.Equal(installed.Replacement, duplicate.Replacement);
         Assert.True(installed.Changed);
     }
 
@@ -477,7 +584,7 @@ public sealed class ActorBoundSessionRelayTests
             RoutingId.From("session-node"),
             RoutingId.From(session),
             token,
-            bindingGeneration: 1,
+            bindingGeneration: authorityGeneration,
             objectGeneration: 7,
             authorityOwnerGeneration: authorityGeneration,
             meshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
@@ -500,7 +607,7 @@ public sealed class ActorBoundSessionRelayTests
             RoutingId.From("session-node"),
             RoutingId.From(session),
             token,
-            bindingGeneration: 1,
+            bindingGeneration: authorityGeneration,
             objectGeneration: 7,
             authorityOwnerGeneration: authorityGeneration,
             meshName: ZLinkMeshName.FromBoundary("actors", "meshName"),

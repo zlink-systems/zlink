@@ -7,8 +7,21 @@ import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.ArrayList;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
-
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ActorRef;
@@ -25,22 +38,32 @@ import systems.zlink.framework.spots.ZLinkSpotKind;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
-import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.util.ArrayList;
-import java.util.EnumSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
-import java.util.concurrent.TimeUnit;
-import java.util.stream.Stream;
-
 final class ZLinkActorTransferHandoffTest {
+    @Test
+    void confirmedLaterOwnerCompletesWithoutAFirstTargetFollowRoute() {
+        var handoff = new ZLinkActorTransferHandoff();
+        try {
+            var source = route("node-a", 11, 3);
+            var target =
+                    new java.util.concurrent.CompletableFuture<
+                            ZLinkServiceM6BWireCodec.ActorRouteFence>();
+            handoff.stageRelocationRouteAsync(source, ref("node-b", 7), target)
+                    .toCompletableFuture()
+                    .join();
+            var staged = handoff.messageFollowSource(source).orElseThrow();
+            target.complete(null);
+            assertTrue(
+                    staged.targetReady().toCompletableFuture().isDone(),
+                    "a confirmed later owner settles the pending route without waiting for a timer");
+            handoff.commitRelocationRouteAsync(source, Duration.ofSeconds(30))
+                    .toCompletableFuture()
+                    .join();
+            assertEquals(0, handoff.messageFollowSourceCount());
+        } finally {
+            handoff.close();
+        }
+    }
+
     @Test
     void closePreservesSourceRemovalFailuresAndRetiresEveryOwnedSource() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
