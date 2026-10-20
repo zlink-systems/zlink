@@ -137,8 +137,8 @@ final class ZLinkJavaRawMeshNode
     private static final Duration MAX_INGRESS_WAIT_TIMEOUT = Duration.ofMillis(100);
     private static final long MAX_INFRASTRUCTURE_CONTROL_BYTES = 256L * 1024;
     private static final long MAX_INFRASTRUCTURE_PAYLOAD_BYTES = 4_294_966_774L;
-    private static final String RELOCATION_CONTROL_PACKET =
-            "zlink.internal.spot.relocation.control.v1";
+    private static final byte[] RELOCATION_CONTROL_PACKET =
+            "zlink.internal.spot.relocation.control.v1".getBytes(StandardCharsets.UTF_8);
     // Session·Actor binding §4: a request whose sender has no live descriptor ends Unavailable.
     private static final int[] SOURCE_OWNER_UNAVAILABLE =
             ZLinkRequestFailureMapping.outgoing(ZLinkFrameworkErrorKind.UNAVAILABLE);
@@ -3397,9 +3397,7 @@ final class ZLinkJavaRawMeshNode
             return handler.handle(routingId, payload).thenApply(byte[]::clone);
         }
         List<Message> parts =
-                List.of(
-                        Message.from(RELOCATION_CONTROL_PACKET.getBytes(StandardCharsets.UTF_8)),
-                        Message.from(payload));
+                List.of(Message.from(RELOCATION_CONTROL_PACKET), Message.from(payload));
         CompletionStage<ZLinkBackendReceived> request;
         try {
             request = requestNode(targetNodeRid, new byte[0], parts, timeout, null, null, null);
@@ -5218,15 +5216,11 @@ final class ZLinkJavaRawMeshNode
                 replyApplicationProtocolFailure(inbound, correlation, kind);
                 return;
             }
-            boolean relocationControl = false;
-            if (channelName == null && correlation != null && messages.size() == 2) {
-                try {
-                    relocationControl =
-                            RELOCATION_CONTROL_PACKET.equals(messages.getFirst().toUtf8String());
-                } catch (RuntimeException invalidPacketName) {
-                    relocationControl = false;
-                }
-            }
+            boolean relocationControl =
+                    channelName == null
+                            && correlation != null
+                            && messages.size() == 2
+                            && messages.getFirst().contentEquals(RELOCATION_CONTROL_PACKET);
             if (relocationControl) {
                 try {
                     byte[] relocationCommand = messages.get(1).toByteArray();
