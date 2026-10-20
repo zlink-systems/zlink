@@ -240,6 +240,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         if (!_loops.empty ())
             detail::channel_runtime_t::from (_bus).mark_auto_connect_active ();
         for (auto &loop : _loops) {
+            co_await _runtime->register_metric_scope ("mesh", loop.mesh_name);
             for (const auto &mesh_node : _mesh_nodes)
                 if (mesh_node && mesh_node->mesh_name () == loop.mesh_name)
                     mesh_node->configure_peer_reconcile (_runtime->peer_reconcile_requester ());
@@ -247,7 +248,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         }
         const auto observed = _runtime->owner_lease_observation ();
         _thread = std::thread ([this, observed] { run_loop (observed); });
-        return task_t<void> (result_t<void>::success ());
+        co_return;
     }
 
     void stop () noexcept override
@@ -332,7 +333,6 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                    std::function<void (const target_t &)> connect_target,
                    std::function<void (const target_t &)> disconnect_target)
     {
-        _runtime->register_metric_scope ("mesh", mesh_name);
         loop_t loop;
         loop.mesh_name = std::move (mesh_name);
         loop.local_rid = std::move (local_rid);

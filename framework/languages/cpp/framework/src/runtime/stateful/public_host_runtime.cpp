@@ -949,7 +949,6 @@ public_host_runtime_t::public_host_runtime_t (host_options_t options) :
      * relocation replay wire; the host outlives the coordinator it owns. */
     _relocation_wire->set_flow_capture_provider ([this] { return capture_flow (); });
     const auto &descriptor = _options.mesh.descriptor;
-    _objects.configure_population_metrics (descriptor.mesh_name);
     _relocation_metrics = std::make_shared<runtime::relocation_metrics_t> (descriptor.mesh_name);
     // This host's own object record is not a new target selection: the node placement weight
     // belongs to Framework placement (MeshNode §5.1), so the local candidate keeps the default

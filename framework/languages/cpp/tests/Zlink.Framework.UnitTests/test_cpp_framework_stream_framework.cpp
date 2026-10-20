@@ -344,6 +344,7 @@ class shutdown_session_control_t final
     void record_destroyed () { record (_destroyed, "destroyed"); }
 
     bool wait_connected () { return wait_for (_connected, 1); }
+    bool wait_disconnected () { return wait_for (_disconnected, 1); }
     bool wait_packet_entered () { return wait_for (_packet_entered, 1); }
 
     std::size_t connected () const noexcept { return _connected.load (std::memory_order_acquire); }
@@ -948,9 +949,43 @@ bool contains_error_frame (const zlink::framework::detail::stream_runtime_t &run
     return false;
 }
 
-int core_connected_rejection_cleanup ()
+double stream_metric_sum (metric_test::provider_t &provider, std::string_view name)
+{
+    const auto data = provider.collect ();
+    metric_test::validate_metric_contract (data);
+    double total = 0;
+    bool found = false;
+    for (const auto &metric : data) {
+        if (metric.instrument_descriptor.name_ != name)
+            continue;
+        found = true;
+        for (const auto &point : metric.point_data_attr_) {
+            const auto &sum =
+              opentelemetry::nostd::get<metric_test::sdk::SumPointData> (point.point_data);
+            total += opentelemetry::nostd::get<double> (sum.value_);
+        }
+    }
+    if (!found && name == "zlink.stream.connections.active")
+        throw std::runtime_error ("connection metric instrument was not registered");
+    return total;
+}
+
+enum class connection_close_case_t
+{
+    connected_rejected,
+    client_close,
+    disconnect_rejected,
+    server_stop,
+    heartbeat_timeout
+};
+
+int core_connected_rejection_cleanup (
+  metric_test::provider_t &metrics,
+  connection_close_case_t close_case = connection_close_case_t::connected_rejected)
 {
     using namespace zlink::framework;
+    const auto opened = stream_metric_sum (metrics, "zlink.stream.connections.opened");
+    const auto closed = stream_metric_sum (metrics, "zlink.stream.connections.closed");
     service_collection_t services;
     handler_registry_t handlers;
     serializer_registry_t serializers;
@@ -976,6 +1011,7 @@ int core_connected_rejection_cleanup ()
       .listen (loopback_tcp_any_port);
     options.add_stream_node ("connected-rejection-stream")
       .bind (loopback_tcp_any_port)
+      .set_heartbeat (std::chrono::milliseconds{50}, std::chrono::milliseconds{500})
       .register_session ("connected-rejection-session");
     options.apply ();
     for (const auto &registration : detail::mesh_node_runtime_t::registrations (builder)) {
@@ -1030,21 +1066,39 @@ int core_connected_rejection_cleanup ()
             detail::configure_stream_dispatch_executor ();
         }
     } cleanup{host, *mesh, provider};
+    host.bind_monitoring (test::runtime_failure_monitoring ());
     mesh->start ();
     host.start (provider);
 
     // Reject admission before any connected callback can execute.
-    detail::shutdown_stream_dispatch_executor ();
+    if (close_case == connection_close_case_t::connected_rejected)
+        detail::shutdown_stream_dispatch_executor ();
     auto client = connect_loopback (endpoint_port (
       listener_endpoint (*listeners, listener_kind_t::stream, "connected-rejection-stream")));
     if (!client)
         return 337;
-    const bool rejection_observed =
-      rejected.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
+    if (close_case == connection_close_case_t::connected_rejected) {
+        if (rejected.wait_for (std::chrono::seconds (2)) != std::future_status::ready)
+            return 338;
+    } else {
+        if (!control->wait_connected ())
+            return 343;
+        if (stream_metric_sum (metrics, "zlink.stream.connections.opened") - opened != 1
+            || stream_metric_sum (metrics, "zlink.stream.connections.active") != 1)
+            return 345;
+        if (close_case == connection_close_case_t::disconnect_rejected)
+            detail::shutdown_stream_dispatch_executor ();
+        if (close_case == connection_close_case_t::client_close
+            || close_case == connection_close_case_t::disconnect_rejected)
+            close_native_client (client, true);
+        if ((close_case == connection_close_case_t::client_close
+             || close_case == connection_close_case_t::heartbeat_timeout)
+            && !control->wait_disconnected ())
+            return 344;
+    }
+    host.stop ();
     host.stop ();
     close_native_client (client);
-    if (!rejection_observed)
-        return 338;
 
     // A fresh Core STREAM socket assigns its first connection RID 1. The
     // registry uses that RID's hex key and its own first connection generation.
@@ -1052,14 +1106,26 @@ int core_connected_rejection_cleanup ()
       zlink::routing_id_t::from (std::uint32_t{1}).to_hex (), 1, mesh->routing_id (),
       mesh->native_node ().status ().lifecycle_generation ()};
     const auto residual = mesh->native_node ().sessions ().close (connection);
-    std::cerr << "core-connected-rejection-cleanup rejection_observed=" << rejection_observed
-              << " residual.closed=" << residual.closed << " connected=" << control->connected ()
-              << " disconnected=" << control->disconnected ()
-              << " destroyed=" << control->destroyed () << '\n';
-    if (residual.closed)
+    if (residual.closed || control->destroyed () != 1)
         return 339;
-    if (control->connected () != 0 || control->disconnected () != 0 || control->destroyed () != 1)
+    const bool connected_rejected = close_case == connection_close_case_t::connected_rejected;
+    const bool disconnect_rejected = close_case == connection_close_case_t::disconnect_rejected;
+    if (control->connected () != (connected_rejected ? 0u : 1u)
+        || control->disconnected () != (connected_rejected || disconnect_rejected ? 0u : 1u))
         return 340;
+    if (stream_metric_sum (metrics, "zlink.stream.connections.opened") - opened != 1
+        || stream_metric_sum (metrics, "zlink.stream.connections.closed") - closed != 1
+        || stream_metric_sum (metrics, "zlink.stream.connections.active") != 0) {
+        std::cerr << "FAIL connection metrics case=" << static_cast<int> (close_case) << " opened="
+                  << stream_metric_sum (metrics, "zlink.stream.connections.opened") - opened
+                  << " closed="
+                  << stream_metric_sum (metrics, "zlink.stream.connections.closed") - closed
+                  << " active=" << stream_metric_sum (metrics, "zlink.stream.connections.active")
+                  << '\n';
+        return 342;
+    }
+    std::cout << "PASS connection metrics case=" << static_cast<int> (close_case)
+              << " opened=closed=1 active=0\n";
     return 0;
 }
 
@@ -1074,11 +1140,21 @@ int main (int argc, char **argv)
     using zlink::framework::detail::stream_message_kind_t;
 
     if (argc == 2 && std::string_view (argv[1]) == "--core-connected-rejection-cleanup")
-        return core_connected_rejection_cleanup ();
-    if (argc != 1)
+        return core_connected_rejection_cleanup (metric_provider);
+    const bool metrics_only = argc == 2 && std::string_view (argv[1]) == "--connection-metrics";
+    if (argc != 1 && !metrics_only)
         return 341;
-    if (const auto result = core_connected_rejection_cleanup (); result != 0)
-        return result;
+    for (const auto close_case :
+         {connection_close_case_t::connected_rejected, connection_close_case_t::client_close,
+          connection_close_case_t::disconnect_rejected, connection_close_case_t::server_stop,
+          connection_close_case_t::heartbeat_timeout}) {
+        if (const auto result = core_connected_rejection_cleanup (metric_provider, close_case);
+            result != 0)
+            return result;
+    }
+
+    if (metrics_only)
+        return 0;
 
     zlink::monitor_event_t ready_snapshot;
     ready_snapshot.event = zlink::monitor_event::connection_ready;
@@ -2211,6 +2287,7 @@ int main (int argc, char **argv)
       std::chrono::milliseconds{30'000}, nullptr, {}, transport_listeners);
     auto transport_drain = std::make_shared<std::atomic_bool> (false);
     transport_host.bind_drain_flag (transport_drain);
+    transport_host.bind_monitoring (zlink::framework::test::runtime_failure_monitoring ());
     transport_host.start (transport_provider);
     const auto transport_endpoint = listener_endpoint (
       *transport_listeners, zlink::framework::listener_kind_t::stream, "transport-stream");

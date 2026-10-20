@@ -6,6 +6,7 @@
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/spots/activation_admission.hpp"
 #include <zlink/framework.hpp>
 #include <cmath>
 #include <iostream>
@@ -67,6 +68,21 @@ void require_one_current_host_state (metric_test::provider_t &provider)
     }
     require (total == 1, "host has more than one current state");
 }
+void activation_metrics_configured_once ()
+{
+    metric_test::provider_t provider;
+    auto admission = std::make_shared<detail::activation_admission_t> ();
+    admission->configure_metrics ("first-mesh");
+    admission->configure_metrics ("second-mesh");
+    require (admission->try_enter ("actor:test"), "activation was rejected");
+    require (point (provider, "zlink.object.activation.active", {{"mesh_name", "first-mesh"}}) == 1,
+             "reconfiguration replaced the activation callback owner");
+    require (!point (provider, "zlink.object.activation.active", {{"mesh_name", "second-mesh"}}),
+             "reconfiguration registered another callback");
+    admission.reset ();
+    metric_test::validate_metric_contract (provider.collect ());
+}
+
 void host_lifecycle ()
 {
     metric_test::provider_t provider;
@@ -389,6 +405,7 @@ void contract_rejects_wrong_metadata ()
 int main ()
 {
     try {
+        activation_metrics_configured_once ();
         host_lifecycle ();
         serving_relocated_stopped ();
         capacity_transitions ();

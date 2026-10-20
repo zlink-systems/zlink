@@ -800,20 +800,6 @@ void record_relocation_terminal (const std::shared_ptr<runtime::relocation_metri
                && result.error ()->kind () == framework_error_kind_t::shutting_down) {
         outcome = "shutdown";
     }
-    if (!result && !result.error () && result.exception ()) {
-        // Inspect cancellation without replacing the original result returned
-        // by the caller. Non-standard failures keep their original exception.
-        try {
-            std::rethrow_exception (result.exception ());
-        }
-        catch (const std::system_error &error) {
-            if (detail::is_cancellation_exception (error))
-                outcome = "aborted";
-        }
-        catch (...) {
-            // The caller propagates the unchanged result below.
-        }
-    }
     metrics->complete (
       tags, outcome,
       std::chrono::duration<double> (std::chrono::steady_clock::now () - started).count ());

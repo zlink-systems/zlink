@@ -440,7 +440,7 @@ TEST (ZLinkFrameworkLocationRuntime, RenewLatenessIsMeasuredFromTheHeartbeatSche
                          .owner_lease_renew_timeout = std::chrono::seconds (1)},
       "owner-lateness");
     runtime.bind_monitoring (zlink::framework::test::runtime_failure_monitoring ());
-    runtime.register_metric_scope ("mesh", "lateness-mesh");
+    runtime.register_metric_scope ("mesh", "lateness-mesh").result ().value ();
     auto first_renew_called = store.first_renew_called ();
     runtime.start (zlink::routing_id_t::from ("node-lateness"));
     ASSERT_EQ (std::future_status::ready, first_renew_called.wait_for (std::chrono::seconds (5)));

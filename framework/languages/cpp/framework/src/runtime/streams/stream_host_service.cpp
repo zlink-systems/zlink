@@ -1493,7 +1493,7 @@ class stream_host_service_t::listener_t
                    * The Core loop drains it with no session lock held;
                    * begin_core_session_close is idempotent, so a duplicate
                    * request is a no-op. */
-                  request_core_peer_disconnect (rid, "error_reply_failed");
+                  request_core_peer_disconnect (rid, "transport_error");
               }
               if (completed) {
                   completed ();
@@ -2212,7 +2212,7 @@ class stream_host_service_t::listener_t
                           error.exception = std::current_exception ();
                           return error;
                       });
-                    disconnect_core_peer (*monitor_event->routing_id, "connected_dispatch_error");
+                    disconnect_core_peer (*monitor_event->routing_id, "transport_error");
                 }
             }
             if (monitor_event->event == zlink::monitor_event::disconnected
@@ -2242,8 +2242,7 @@ class stream_host_service_t::listener_t
         auto stream = _runtime.open_session (_stream.name);
         _runtime.set_session_identity (stream, rid);
         auto transport_connection = _mesh_node->native_node ().sessions ().open (
-          key,
-          [this, rid] { request_core_peer_disconnect (rid, "session_relocation_seal_timeout"); },
+          key, [this, rid] { request_core_peer_disconnect (rid, "transport_error"); },
           _mesh_node->routing_id (), _mesh_node->native_node ().status ().lifecycle_generation (),
           [this, rid] { _core_socket->disconnect_rid (rid); });
         detail::session_actor_manager_access_t::attach (actors, stream);
@@ -2253,9 +2252,10 @@ class stream_host_service_t::listener_t
         // Register before dispatch/configuration can fail so the caller's close
         // path retires the canonical connection and its bindings.
         _core_sessions.emplace (key, created);
+        record_connection_opened ();
         auto replacement = register_replacement_session (
           rid, created->stream,
-          [this, rid] { request_core_peer_disconnect (rid, "actor_binding_replaced"); },
+          [this, rid] { request_core_peer_disconnect (rid, "transport_error"); },
           [weak = std::weak_ptr<core_session_t> (created)] (stream_t &dispatch_stream,
                                                             std::string actor_id) {
               const auto owner = weak.lock ();
@@ -2290,7 +2290,7 @@ class stream_host_service_t::listener_t
               if (!result) {
                   // Completion can run while the creator holds the registry
                   // mutex. The Core loop owns the actual disconnect.
-                  request_core_peer_disconnect (rid, "connected_dispatch_error");
+                  request_core_peer_disconnect (rid, "transport_error");
               }
           });
         if (!connected) {
@@ -2299,7 +2299,6 @@ class stream_host_service_t::listener_t
                                                             : "STREAM connected dispatch failed");
         }
         created->connected = true;
-        record_connection_opened ();
         register_active_stream (
           created->stream, [this] { _core_wake_timer.signal (); },
           [this, rid] (stream_close_reason_t reason, std::string diagnostic) {
@@ -2373,6 +2372,7 @@ class stream_host_service_t::listener_t
                 return;
             }
             current->closing = true;
+            record_connection_closed (close_reason);
             if (current->replacement) {
                 current->replacement->deactivate ();
             }
@@ -2383,7 +2383,7 @@ class stream_host_service_t::listener_t
             ++_core_sessions_revision;
         }
         _core_sessions_changed.notify_all ();
-        auto complete_close = [this, retirement_id, current, close_reason] {
+        auto complete_close = [this, retirement_id, current] {
             bool dispatch_disconnected = false;
             {
                 const std::lock_guard session_lock (current->gate);
@@ -2409,7 +2409,6 @@ class stream_host_service_t::listener_t
                 if (!submitted) {
                     finalize (submitted);
                 }
-                record_connection_closed (close_reason);
             } else {
                 finalize (result_t<void>::success ());
             }
@@ -2699,7 +2698,7 @@ class stream_host_service_t::listener_t
         return dispatched;
     }
 
-    void close_core_sessions (const char *close_reason = "server_stop",
+    void close_core_sessions (const char *close_reason = "server_shutdown",
                               std::optional<stream_close_reason_t> notify_reason = std::nullopt,
                               std::string_view diagnostic = {}) noexcept
     {
@@ -3582,20 +3581,19 @@ class stream_host_service_t::listener_t
                     completed (submitted);
                 }
             };
-            if (_stop->load (std::memory_order_acquire)) {
-                record_connection_closed ("server_shutdown");
-                dispatch_disconnect ();
-            } else {
+            const auto forced = liveness->forced ();
+            const bool stopping = _stop->load (std::memory_order_acquire);
+            record_connection_closed (stopping                  ? "server_shutdown"
+                                      : forced                  ? liveness_close_label (*forced)
+                                      : session_transport_error ? "transport_error"
+                                                                : "client_close");
+            if (!stopping) {
                 trace_stream_host ("dispatch-disconnected-begin", _stream);
-                const auto forced = liveness->forced ();
-                record_connection_closed (forced                    ? liveness_close_label (*forced)
-                                          : session_transport_error ? "transport_error"
-                                                                    : "client_close");
                 if (session_transport_error && !forced) {
                     (void) _runtime.dispatch_error (session, stream, *session_transport_error);
                 }
-                dispatch_disconnect ();
             }
+            dispatch_disconnect ();
             _runtime.drain_async_dispatch (stream);
             // Connected/packet/disconnected callbacks have settled, and the
             // active entry is gone. Release their final IO posts on this owner.

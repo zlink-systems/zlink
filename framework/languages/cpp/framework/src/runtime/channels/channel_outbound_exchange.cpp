@@ -833,11 +833,6 @@ struct channel_request_reservation_guard_t
     ~channel_request_reservation_guard_t () { (void) runtime.cancel_outbound_request (sequence); }
 };
 
-/* channel.request.* catalog instruments (runtime-metrics §4.4). The guard is
- * armed only when a metric subscriber exists, so the disabled path skips the
- * clock read entirely (§7.2). */
-
-
 message_flow_result_t request_terminal_result (const std::exception &error) noexcept
 {
     if (detail::is_cancellation_exception (error))

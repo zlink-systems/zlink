@@ -215,38 +215,16 @@ class location_runtime_t
         _monitoring = std::move (monitoring);
     }
 
-    void register_metric_scope (std::string kind, std::string name)
+    task_t<void> register_metric_scope (std::string kind, std::string name)
     {
-        _lane
-          .run ([&] {
-              const auto scope = std::pair{std::move (kind), std::move (name)};
-              if (std::find (_metric_scopes.begin (), _metric_scopes.end (), scope)
-                  == _metric_scopes.end ())
-                  _metric_scopes.push_back (scope);
-          })
-          .get ();
+        return _lane.run_task ([this, kind = std::move (kind), name = std::move (name)] () mutable {
+            const auto scope = std::pair{std::move (kind), std::move (name)};
+            if (std::find (_metric_scopes.begin (), _metric_scopes.end (), scope)
+                == _metric_scopes.end ())
+                _metric_scopes.push_back (scope);
+        });
     }
 
-    void record_lease_metric (bool failure, double seconds = 0) const
-    {
-        runtime_metrics_t metrics (_monitoring);
-        if (!metrics.enabled ())
-            return;
-        _lane
-          .run ([&] {
-              for (const auto &[kind, name] : _metric_scopes) {
-                  const std::map<std::string, std::string> tags{{"scope_kind", kind},
-                                                                {"scope_name", name}};
-                  if (failure)
-                      metrics.counter ("zlink.location.owner_lease.renew.failures", "{failure}", 1,
-                                       tags);
-                  else
-                      metrics.histogram ("zlink.location.owner_lease.renew.lateness", "s", seconds,
-                                         tags);
-              }
-          })
-          .get ();
-    }
 
     void set_draining (bool value) noexcept
     {
@@ -495,6 +473,21 @@ class location_runtime_t
 
 
   private:
+    void record_lease_metric_on_lane (bool failure, double seconds = 0) const
+    {
+        runtime_metrics_t metrics (_monitoring);
+        if (!metrics.enabled ())
+            return;
+        for (const auto &[kind, name] : _metric_scopes) {
+            const std::map<std::string, std::string> tags{{"scope_kind", kind},
+                                                          {"scope_name", name}};
+            if (failure)
+                metrics.counter ("zlink.location.owner_lease.renew.failures", "{failure}", 1, tags);
+            else
+                metrics.histogram ("zlink.location.owner_lease.renew.lateness", "s", seconds, tags);
+        }
+    }
+
     static bool owner_lease_usable (const owner_lease_snapshot_t &lease,
                                     std::chrono::steady_clock::time_point now) noexcept
     {
@@ -683,7 +676,8 @@ class location_runtime_t
     }
 
     static task_t<lease_renew_outcome_t>
-    heartbeat_renew_once_async (std::weak_ptr<heartbeat_attempt_t> weak_attempt)
+    heartbeat_renew_once_async (std::weak_ptr<heartbeat_attempt_t> weak_attempt,
+                                double lateness_seconds = 0)
     {
         auto attempt = weak_attempt.lock ();
         if (!attempt)
@@ -695,8 +689,12 @@ class location_runtime_t
         const auto started_at = attempt->started_at;
         std::optional<std::string> unexpected_failure;
         try {
-            const auto owner_token = co_await lease_lane (
-              attempt, [runtime] { return runtime->current_owner_token_unchecked (); });
+            const auto owner_token =
+              co_await lease_lane (attempt, [runtime, metrics_enabled, lateness_seconds] {
+                  if (metrics_enabled && lateness_seconds > 0)
+                      runtime->record_lease_metric_on_lane (false, lateness_seconds);
+                  return runtime->current_owner_token_unchecked ();
+              });
             if (auto heartbeat = attempt->heartbeat.lock ();
                 heartbeat && heartbeat->stop.load (std::memory_order_acquire))
                 co_return outcome;
@@ -758,7 +756,10 @@ class location_runtime_t
                         co_return outcome;
                     }
                     if (metrics_enabled)
-                        runtime->record_lease_metric (true);
+                        co_await lease_lane (attempt, [runtime] {
+                            runtime->record_lease_metric_on_lane (true);
+                            return true;
+                        });
                     co_await heartbeat_failure (attempt, std::move (failure));
                     co_return outcome;
                 }
@@ -797,7 +798,10 @@ class location_runtime_t
                     }
                 }
                 if (metrics_enabled)
-                    runtime->record_lease_metric (true);
+                    co_await lease_lane (attempt, [runtime] {
+                        runtime->record_lease_metric_on_lane (true);
+                        return true;
+                    });
                 co_await heartbeat_failure (attempt, std::move (failure));
                 co_return outcome;
             }
@@ -993,10 +997,8 @@ class location_runtime_t
               this, started_at, started_at + _options.owner_lease_renew_timeout, heartbeat);
             heartbeat->current = attempt;
             lock.unlock ();
-            if (const runtime_metrics_t metrics (_monitoring);
-                metrics.enabled () && lateness > lateness.zero ())
-                record_lease_metric (false, std::chrono::duration<double> (lateness).count ());
-            attempt->task.emplace (heartbeat_renew_once_async (attempt));
+            attempt->task.emplace (heartbeat_renew_once_async (
+              attempt, std::chrono::duration<double> (lateness).count ()));
             detail::observe_task_terminal (*attempt->task,
                                            [weak_heartbeat = std::weak_ptr{heartbeat}] (
                                              const result_t<lease_renew_outcome_t> &) {

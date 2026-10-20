@@ -27,6 +27,8 @@ class activation_admission_t : public std::enable_shared_from_this<activation_ad
   public:
     void configure_metrics (std::string mesh_name)
     {
+        if (_active_metric || _limit_metric)
+            return;
         _metric_mesh = std::move (mesh_name);
         auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
         if (dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ()))
