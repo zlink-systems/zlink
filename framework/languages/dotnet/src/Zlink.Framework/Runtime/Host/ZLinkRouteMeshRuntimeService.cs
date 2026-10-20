@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
@@ -19,7 +18,7 @@ namespace Zlink.Framework.Runtime.Host;
 /// </summary>
 internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAsyncDisposable
 {
-    private static readonly TimeSpan MonitorIdleDelay = TimeSpan.FromMilliseconds(10);
+    private static readonly TimeSpan DescriptorPollInterval = TimeSpan.FromMilliseconds(100);
 
     // The public RouteMesh stream projects topology changes, not per-message
     // operations. RawMeshMonitor is FIFO, so subscribing to data-plane events
@@ -640,8 +639,8 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
         };
 
     /// <summary>
-    /// Owns Core's single monitor for one MeshNode and fans events out without
-    /// putting observer backpressure on the native receive loop.
+    /// Owns the managed topology monitor for one MeshNode and fans events out
+    /// without putting observer backpressure on the receive loop.
     /// </summary>
     private sealed class MonitorHub
     {
@@ -654,7 +653,6 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
         private Task? _pump;
         private readonly List<ZLinkObservationQueue<ZLinkRouteMeshStatus>> _observers = [];
         private readonly Dictionary<RoutingId, ZLinkMeshNodeDescriptor> _descriptors = [];
-        private TimeSpan _nextDescriptorPoll;
         private ZLinkRouteMeshStatus? _lastStatus;
 
         public MonitorHub(
@@ -781,6 +779,8 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
         private async Task PumpAsync()
         {
             var projectionPending = false;
+            Task<bool>? monitorReady = null;
+            Task? descriptorDue = null;
             try
             {
                 while (!_stop.IsCancellationRequested)
@@ -793,17 +793,14 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                             projectionPending = false;
                         }
 
-                        await PublishDescriptorChangesAsync(_stop.Token).ConfigureAwait(false);
-
-                        var nativeEvent = _monitor.Recv(RecvFlags.DontWait);
-                        if (nativeEvent is null)
+                        if (_owner._locationQuery is not null && descriptorDue is null)
                         {
-                            await Task.Delay(MonitorIdleDelay, _stop.Token).ConfigureAwait(false);
-                            continue;
+                            descriptorDue = Task.Delay(DescriptorPollInterval, _stop.Token);
+                            await PublishDescriptorChangesAsync(_stop.Token).ConfigureAwait(false);
                         }
-
-                        if (UpdatesStatus(nativeEvent.Kind))
-                            PublishCurrentStatus();
+                        while (_monitor.Recv(RecvFlags.DontWait) is { } monitorEvent)
+                            if (UpdatesStatus(monitorEvent.Kind))
+                                PublishCurrentStatus();
                     }
                     catch (OperationCanceledException) when (_stop.IsCancellationRequested)
                     {
@@ -816,7 +813,22 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                         // retry preserves its convergence signal.
                         projectionPending = true;
                         ZLinkFrameworkDebugLog.TaskFailure("route-mesh-monitor-pump", error);
-                        await Task.Delay(MonitorIdleDelay, _stop.Token).ConfigureAwait(false);
+                    }
+                    monitorReady ??= _monitor.WaitAsync(_stop.Token).AsTask();
+                    if (descriptorDue is null)
+                        await monitorReady.ConfigureAwait(false);
+                    else
+                        await Task.WhenAny(monitorReady, descriptorDue).ConfigureAwait(false);
+                    if (monitorReady.IsCompleted)
+                    {
+                        if (!await monitorReady.ConfigureAwait(false))
+                            return;
+                        monitorReady = null;
+                    }
+                    if (descriptorDue?.IsCompleted == true)
+                    {
+                        await descriptorDue.ConfigureAwait(false);
+                        descriptorDue = null;
                     }
                 }
             }
@@ -829,26 +841,11 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
 
         private async ValueTask PublishDescriptorChangesAsync(CancellationToken cancellationToken)
         {
-            if (
-                _owner._locationQuery is null
-                || !await _lane
-                    .RunAsync(() =>
-                    {
-                        if (Stopwatch.GetElapsedTime(0) < _nextDescriptorPoll)
-                            return false;
-                        _nextDescriptorPoll =
-                            Stopwatch.GetElapsedTime(0) + TimeSpan.FromMilliseconds(100);
-                        return true;
-                    })
-                    .ConfigureAwait(false)
-            )
-                return;
-
             ZLinkLocationPage<ZLinkMeshNodeDescriptor> current;
             try
             {
                 current = await _owner
-                    ._locationQuery.ListMeshNodeDescriptorsAsync(
+                    ._locationQuery!.ListMeshNodeDescriptorsAsync(
                         _meshName.Value,
                         default,
                         cancellationToken
