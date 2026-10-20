@@ -297,6 +297,7 @@ export class ZLinkSerialExecutionQueue {
       // Ready membership in the existing owner queue is the only notification state.
       if (this.ownerMembership !== undefined) return;
       {
+        // Block-scoped captures keep early returns free of a V8 function context.
         const mailbox = this;
         mailbox.enqueueMailboxTurn(() => mailbox.consumeMailbox());
       }
@@ -305,6 +306,7 @@ export class ZLinkSerialExecutionQueue {
     const consumer = this.consumer!;
     if (consumer.scheduled || consumer.running) return;
     {
+      // Same block-scoped capture as the mailbox branch above.
       const queue = this;
       const scheduledConsumer = consumer;
       scheduledConsumer.scheduled = true;
@@ -465,6 +467,7 @@ export class ZLinkSerialExecutionQueue {
     if (lifecycleOwner === undefined) {
       applicationRecord = this.application.records[0];
     } else {
+      // Capture only inside the lifecycle branch; the common path allocates no context.
       const owner = lifecycleOwner;
       applicationRecord = this.application.records.find((record) =>
         owner.canExecuteApplication(record)
@@ -510,9 +513,9 @@ export class ZLinkSerialExecutionQueue {
     this.lifecycleDebt = false;
     if (this.application.records[0] === selected) return this.application.records.shift()!;
     const index = this.application.records.indexOf(selected);
-    const record = this.application.records.at(index)!;
+    const record = this.application.records[index]!;
     this.application.records.copyWithin(index, index + 1);
-    this.application.records.length = Math.max(0, this.application.records.length - 1);
+    this.application.records.length -= 1;
     return record;
   }
 

@@ -319,6 +319,7 @@ export class ZLinkSpotSerialTurnExecutor {
 
   private runQueuedRecord(record: ZLinkSerialWorkRecord<unknown>): Promise<void> {
     if (record.context instanceof Promise) {
+      // Branch-local captures keep the synchronous path free of a V8 function context.
       const executor = this;
       const work = record;
       const pending = record.context;
