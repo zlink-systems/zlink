@@ -20,33 +20,34 @@ final class ZLinkProtobufPayloads {
 
     private ZLinkProtobufPayloads() {}
 
-    static byte[] encodeStream(Object value) {
+    static Message encodeStream(Object value) {
         if (value instanceof byte[] bytes) {
-            return bytes;
+            return Message.from(bytes);
         }
         if (value instanceof Message message) {
-            return message.toByteArray();
+            return Message.from(message);
         }
         if (value instanceof String text) {
-            return text.getBytes(StandardCharsets.UTF_8);
+            return Message.from(text);
         }
         try {
-            return MAPPER.writeValueAsBytes(value);
+            return Message.from(MAPPER.writeValueAsBytes(value));
         } catch (JsonProcessingException ex) {
             throw new IllegalArgumentException(
                     "failed to encode Protobuf stream payload: " + valueTypeName(value), ex);
         }
     }
 
-    static <T> T decodeStreamFallback(byte[] bytes, Class<T> type) {
+    static <T> T decodeStreamFallback(Message payload, Class<T> type) {
+        if (type == Message.class) {
+            return type.cast(Message.from(payload));
+        }
+        byte[] bytes = payload.toByteArray();
         if (type == String.class) {
             return type.cast(new String(bytes, StandardCharsets.UTF_8));
         }
         if (type == byte[].class) {
             return type.cast(bytes);
-        }
-        if (type == Message.class) {
-            return type.cast(Message.from(bytes));
         }
         try {
             return MAPPER.readValue(bytes, type);

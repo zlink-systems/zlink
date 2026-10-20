@@ -1,7 +1,9 @@
 package systems.zlink.framework.codecs.protobuf;
 
 import static org.junit.jupiter.api.Assertions.assertAll;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.google.protobuf.AbstractParser;
 import com.google.protobuf.ByteString;
@@ -16,11 +18,59 @@ import com.google.protobuf.StringValue;
 
 import org.junit.jupiter.api.Test;
 
+import systems.zlink.contracts.messaging.Message;
+import systems.zlink.stream.connector.ZLinkStreamEncodedPayload;
+
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 
 final class ZLinkProtobufPreparationTest {
+    @Test
+    void rawStreamMessagesOwnStorageAcrossEncodingAndDecoding() {
+        var codec = ZLinkProtobufCodec.defaultCodec();
+        byte[] expected = {0, -1, 67};
+        ZLinkStreamEncodedPayload encoded;
+        try (Message input = Message.from(expected)) {
+            encoded = codec.encode("raw", input);
+            input.fill((byte) 0);
+            assertTrue(encoded.payload().contentEquals(expected));
+        }
+        Message decoded;
+        try (Message frame = encoded.payload()) {
+            decoded = codec.decode(encoded, Message.class);
+            frame.fill((byte) 127);
+            assertTrue(decoded.contentEquals(expected));
+        }
+        try (decoded) {
+            assertTrue(decoded.contentEquals(expected));
+        }
+    }
+
+    @Test
+    void streamFallbackPreservesBytesTextAndJsonValues() {
+        var codec = ZLinkProtobufCodec.defaultCodec();
+        byte[] input = {0, -1, 67};
+        var encodedBytes = codec.encode("bytes", input);
+        try (Message frame = encodedBytes.payload()) {
+            input[0] = 99;
+            byte[] decoded = codec.decode(encodedBytes, byte[].class);
+            frame.fill((byte) 0);
+            assertArrayEquals(new byte[] {0, -1, 67}, decoded);
+        }
+        var encodedText = codec.encode("text", "한글😀");
+        try (Message frame = encodedText.payload()) {
+            assertEquals("한글😀", codec.decode(encodedText, String.class));
+        }
+        var expected = new FallbackValue("json:42");
+        var encodedJson = codec.encode("json", expected);
+        try (Message frame = encodedJson.payload()) {
+            assertEquals(expected, codec.decode(encodedJson, FallbackValue.class));
+        }
+    }
+
+    record FallbackValue(String id) {}
+
     @Test
     void borrowedProtobufBytesDoNotAliasTheNativeInput() {
         var original = BytesValue.of(ByteString.copyFromUtf8("owned-value".repeat(1024)));
