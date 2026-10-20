@@ -110,11 +110,9 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
             ZLinkLocationStoreHealth.ProjectSnapshot(locationHealth)
         )
         {
-            ApplicationVersion =
-                placement?.ApplicationVersion ?? _runtime.Registration.ApplicationVersion,
-            ObjectRole = placement?.ObjectRole ?? nodeRuntime.Registration.ObjectRole,
-            PlacementWeight =
-                placement?.PlacementWeight ?? nodeRuntime.Registration.PlacementWeight,
+            ApplicationVersion = _runtime.Registration.ApplicationVersion,
+            ObjectRole = nodeRuntime.Registration.ObjectRole,
+            PlacementWeight = nodeRuntime.Registration.PlacementWeight,
             PopulationCapacity = capacity,
             ActivationConcurrency = new ZLinkActivationConcurrency(
                 nodeRuntime.ActivationAdmission.Active,

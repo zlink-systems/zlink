@@ -835,6 +835,72 @@ public sealed class RouteMeshRuntimeServiceTests
         Assert.True(recovered.Status.Placement.IsAvailable);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(100)]
+    public async Task LocalPlacementIgnoresStaleStoreResult(int placementWeight)
+    {
+        await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Server);
+        var stalePage = await fixture.Store.ListMeshNodesAsync(RuntimeFixture.MeshName, default);
+        Assert.Equal(100, Assert.Single(stalePage.Items).PlacementWeight);
+        var query = new ControlledDescriptorQuery();
+        await using var monitoring = fixture.CreateMonitoring(query);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await using var existing = monitoring
+            .ObserveAsync(RuntimeFixture.MeshName, timeout.Token)
+            .GetAsyncEnumerator(timeout.Token);
+        Assert.True(await existing.MoveNextAsync());
+        AssertPlacement(existing.Current.Status, 100);
+        await query.FirstQueryStarted.Task.WaitAsync(timeout.Token);
+
+        fixture.RuntimeOptions.Mesh(RuntimeFixture.MeshName).PlacementWeight = placementWeight;
+        var changed = monitoring.GetStatus(RuntimeFixture.MeshName);
+        AssertPlacement(changed, placementWeight);
+        if (placementWeight == 0)
+        {
+            Assert.True(await existing.MoveNextAsync());
+            AssertPlacement(existing.Current.Status, placementWeight);
+        }
+
+        // The first read captured weight 100 before the local mutation. The
+        // next read starts only after monitoring has consumed that stale page.
+        query.InitialPage.SetResult(stalePage);
+        await query.NextQueryStarted.Task.WaitAsync(timeout.Token);
+        var afterRead = monitoring.GetStatus(RuntimeFixture.MeshName);
+        AssertPlacement(afterRead, placementWeight);
+        Assert.Equal(changed.Sequence, afterRead.Sequence);
+
+        await using var added = monitoring
+            .ObserveAsync(RuntimeFixture.MeshName, timeout.Token)
+            .GetAsyncEnumerator(timeout.Token);
+        Assert.True(await added.MoveNextAsync());
+        AssertPlacement(added.Current.Status, placementWeight);
+        Assert.Equal(new ZLinkObservationLoss(0, 0), added.Current.Loss);
+
+        fixture.ReportLocationFailure();
+        await MoveUntilAsync(
+            existing,
+            status =>
+                status.Status.Placement.UnavailableReason == ZLinkTopologyReason.LocationUnavailable
+        );
+        fixture.ReportLocationSuccess();
+        var recovered = await MoveUntilAsync(
+            existing,
+            status => status.Status.State == ZLinkTopologyState.Ready
+        );
+        AssertPlacement(recovered.Status, placementWeight);
+        AssertPlacement(monitoring.GetStatus(RuntimeFixture.MeshName), placementWeight);
+
+        static void AssertPlacement(ZLinkRouteMeshStatus status, int weight)
+        {
+            Assert.Equal(weight > 0, status.Placement.IsAvailable);
+            Assert.Equal(
+                weight > 0 ? (ZLinkTopologyReason?)null : ZLinkTopologyReason.CapacityExceeded,
+                status.Placement.UnavailableReason
+            );
+        }
+    }
+
     [Fact]
     public async Task ObserverStartsWithPlacementWeightChangedBeforeSubscription()
     {
