@@ -85,7 +85,7 @@ export interface ZLinkRuntimeMessageFlowEvent {
   readonly commandId?: number;
   readonly messageSize?: number;
   readonly durationSeconds?: number;
-  readonly errorReason?: ZLinkDispatchErrorReason;
+  readonly errorReason?: ZLinkDispatchErrorReason | 'activation_timeout' | 'activation_rejected';
   readonly errorAction?: ZLinkDispatchErrorAction;
   readonly errorType?: string;
   readonly errorMessage?: string;

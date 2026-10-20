@@ -1972,7 +1972,7 @@ test('immediately resolved capacity Conflict terminates at the original operatio
   assert.equal(reserved.kind, 'reserved');
   const deadlineMs = 50;
   const deadlineUnixMs = BigInt(Date.now() + deadlineMs);
-  const signal = AbortSignal.timeout(deadlineMs);
+  const signal = undefined;
   armed = true;
   await assert.rejects(
     repository.commit(
@@ -1986,7 +1986,7 @@ test('immediately resolved capacity Conflict terminates at the original operatio
       signal,
       deadlineUnixMs
     ),
-    { name: 'TimeoutError' }
+    { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded }
   );
   assert.ok(attempts > 0);
 });
@@ -2038,7 +2038,7 @@ test('immediately resolved reservation Abort Conflict terminates at the original
   assert.equal(reserved.kind, 'reserved');
   const deadlineMs = 50;
   const deadlineUnixMs = BigInt(Date.now() + deadlineMs);
-  const signal = AbortSignal.timeout(deadlineMs);
+  const signal = undefined;
   armed = true;
   await assert.rejects(
     repository.abort(
@@ -2051,7 +2051,7 @@ test('immediately resolved reservation Abort Conflict terminates at the original
       signal,
       deadlineUnixMs
     ),
-    { name: 'TimeoutError' }
+    { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded }
   );
   assert.ok(attempts > 0);
 });
