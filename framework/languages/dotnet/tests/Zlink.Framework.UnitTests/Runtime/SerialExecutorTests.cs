@@ -6,6 +6,91 @@ namespace Zlink.Framework.UnitTests;
 public sealed class SerialExecutorTests
 {
     [Fact]
+    public void ApplicationScopeAllocatesOnlyItsClaimAndAmbientCarrier()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var ambient = new AsyncLocal<ZLinkApplicationExecutionScope?>();
+                var input = new ZLinkApplicationExecutionScope(
+                    "scope-cost",
+                    ZLinkUserSpotExecutionMode.SpotWide,
+                    null,
+                    true
+                );
+                void Baseline()
+                {
+                    var claim = new ZLinkApplicationExecutionClaim();
+                    ambient.Value = input with { Claim = claim };
+                    claim.Deactivate();
+                    ambient.Value = null;
+                }
+                void Actual()
+                {
+                    using var scope = ZLinkApplicationExecutionContext.Push(input);
+                }
+                for (var i = 0; i < 1000; i++)
+                {
+                    Baseline();
+                    Actual();
+                }
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                for (var i = 0; i < 1000; i++)
+                    Baseline();
+                var ambientStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+                before = GC.GetAllocatedBytesForCurrentThread();
+                for (var i = 0; i < 1000; i++)
+                    Actual();
+                Assert.Equal(ambientStorage, GC.GetAllocatedBytesForCurrentThread() - before);
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        using (ExecutionContext.SuppressFlow())
+            thread.Start();
+        thread.Join();
+        if (failure is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
+    [Fact]
+    public async Task ApplicationScopeRestoresOuterScopeAndDeactivatesCapturedClaims()
+    {
+        var input = new ZLinkApplicationExecutionScope(
+            "outer",
+            ZLinkUserSpotExecutionMode.SpotWide,
+            null,
+            true
+        );
+        var outer = ZLinkApplicationExecutionContext.Push(input);
+        var outerClaim = ZLinkApplicationExecutionContext.Current!.Value.Claim!;
+        ZLinkApplicationExecutionClaim innerClaim;
+        try
+        {
+            using (ZLinkApplicationExecutionContext.Push(input with { SpotId = "inner" }))
+            {
+                innerClaim = ZLinkApplicationExecutionContext.Current!.Value.Claim!;
+                await Task.Yield();
+                Assert.Equal("inner", ZLinkApplicationExecutionContext.Current!.Value.SpotId);
+                Assert.True(innerClaim.IsActive);
+            }
+            Assert.False(innerClaim.IsActive);
+            Assert.Equal("outer", ZLinkApplicationExecutionContext.Current!.Value.SpotId);
+            Assert.Same(outerClaim, ZLinkApplicationExecutionContext.Current!.Value.Claim);
+        }
+        finally
+        {
+            outer.Dispose();
+        }
+        Assert.False(outerClaim.IsActive);
+        Assert.Null(ZLinkApplicationExecutionContext.Current);
+    }
+
+    [Fact]
     public async Task SpotStateReadAllocatesOnlyItsCallbackAndStateLaneContext()
     {
         using var errors = new ZLinkRuntimeErrorSink();

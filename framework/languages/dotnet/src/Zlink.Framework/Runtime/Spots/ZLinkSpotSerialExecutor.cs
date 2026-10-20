@@ -1549,7 +1549,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     private void RecordApplicationWorkCompleted() =>
         Volatile.Write(ref _lastApplicationWorkCompletedAt, Stopwatch.GetTimestamp());
 
-    private IDisposable PushExecutionScope(string? actorId, bool yieldAllowed)
+    private ZLinkApplicationExecutionContext.Scope PushExecutionScope(
+        string? actorId,
+        bool yieldAllowed
+    )
     {
         return ZLinkApplicationExecutionContext.Push(
             new ZLinkApplicationExecutionScope(
