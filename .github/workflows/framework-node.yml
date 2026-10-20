@@ -46,6 +46,12 @@ on:
 #       - "framework/languages/node/cross-language/**"
 #       - "framework/languages/dotnet/cross-language/**"
   workflow_dispatch:
+  # Mergify merge-queue batches and backports run CI on their own branches only;
+  # ordinary PRs and main pushes still start CI by hand.
+  push:
+    branches:
+      - "mergify/merge-queue/**"
+      - "mergify/bp/**"
 
 env:
   PLAYWRIGHT_BROWSERS_PATH: ${{ github.workspace }}/framework/languages/node/.cache/ms-playwright
@@ -376,7 +382,7 @@ jobs:
         run: npm run verify:cross-language
 
   framework-node-gate:
-    name: release-gate
+    name: node-release-gate
     runs-on: ubuntu-24.04
     needs:
       - framework-node
