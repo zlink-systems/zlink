@@ -34,6 +34,7 @@
 #include "runtime/timers/core_timer_drain_loop.hpp"
 #include "runtime/timers/async_delay.hpp"
 #include "runtime/timers/timer_runtime.hpp"
+#include "../support/scope_exit.hpp"
 
 #include <zlink/framework/contracts/spots/spot.hpp>
 #include <zlink/framework/contracts/actors/actor.hpp>
@@ -68,6 +69,8 @@ namespace
 {
 
 constexpr std::uint32_t handler_coroutine_worker_count = 4;
+
+using zlink::framework::test::scope_exit_t;
 
 #ifndef ZLINK_SERIAL_EXECUTION_CONFORMANCE_PATH
 #error "serial execution conformance fixture path is required"
@@ -646,6 +649,15 @@ bool verify_suspended_lifecycle_keeps_fifo_and_allows_application ()
           changed.notify_all ();
       },
       serial_work_options_t{serial_work_lane_t::lifecycle});
+    // Completes the suspended turn and drains before the locals above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        {
+            std::unique_lock lock (gate);
+            changed.wait (lock, [&] { return started; });
+        }
+        finish ([] {});
+        queue.drain ();
+    });
     {
         std::unique_lock lock (gate);
         if (!changed.wait_for (lock, std::chrono::seconds (1), [&] { return started; }))
@@ -694,6 +706,15 @@ bool verify_suspended_lifecycle_resumes_at_original_fifo_head ()
           changed.notify_all ();
       },
       serial_work_options_t{serial_work_lane_t::lifecycle});
+    // Completes the suspended turn and drains before the locals above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        {
+            std::unique_lock lock (gate);
+            changed.wait (lock, [&] { return started; });
+        }
+        finish ([] {});
+        queue.drain ();
+    });
     {
         std::unique_lock lock (gate);
         if (!changed.wait_for (lock, std::chrono::seconds (1), [&] { return started; }))
@@ -732,6 +753,15 @@ bool verify_ready_lifecycle_continuation_pays_burst_debt ()
         blocker_started = true;
         changed.notify_all ();
         changed.wait (lock, [&] { return release_blocker; });
+    });
+    // Releases the blocker and drains before the locals above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        {
+            std::lock_guard lock (gate);
+            release_blocker = true;
+        }
+        changed.notify_all ();
+        queue.drain ();
     });
     {
         std::unique_lock lock (gate);
@@ -789,6 +819,16 @@ bool verify_suspended_lifecycle_cancellation_releases_fifo ()
       serial_work_options_t{serial_work_lane_t::lifecycle});
     if (!submission)
         return false;
+    // Completes the suspended turn and drains before the locals above are destroyed.
+    const auto drain_suspended = [&] {
+        {
+            std::unique_lock lock (gate);
+            changed.wait (lock, [&] { return started; });
+        }
+        finish ([] {});
+        queue.drain ();
+    };
+    std::optional<scope_exit_t> drain_on_exit (std::in_place, drain_suspended);
     {
         std::unique_lock lock (gate);
         if (!changed.wait_for (lock, std::chrono::seconds (1), [&] { return started; }))
@@ -815,6 +855,7 @@ bool verify_suspended_lifecycle_cancellation_releases_fifo ()
         || cancelled.load () != 1 || later_runs.load () != 1 || queue.pending_count () != 0)
         return false;
 
+    drain_on_exit.reset ();
     started = false;
     application_ran = false;
     const auto normal = queue.try_post_cancellable_async (
@@ -828,6 +869,7 @@ bool verify_suspended_lifecycle_cancellation_releases_fifo ()
       [&] { ++cancelled; }, serial_work_options_t{serial_work_lane_t::lifecycle});
     if (!normal)
         return false;
+    drain_on_exit.emplace (drain_suspended);
     {
         std::unique_lock lock (gate);
         if (!changed.wait_for (lock, std::chrono::seconds (1), [&] { return started; }))
@@ -855,14 +897,16 @@ bool verify_delayed_barrier_activation_uses_retained_turn ()
     using namespace zlink::framework;
     using namespace zlink::framework::runtime;
 
+    // Declared before the queue so queued work never outlives them.
+    std::mutex gate;
+    std::condition_variable changed;
+    bool application_ran = false;
+    bool ran_on_retained_turn = false;
     offload_executor_t executor (2);
     serial_execution_queue_t queue (executor, serial_execution_queue_options_t{});
     auto reserved = queue.reserve_barrier_next ("delayed-lifecycle-activation");
     if (!reserved)
         return false;
-    std::mutex gate;
-    std::condition_variable changed;
-    bool application_ran = false;
     queue.post ("application-while-barrier-reached", [&] {
         std::lock_guard lock (gate);
         application_ran = true;
@@ -875,7 +919,6 @@ bool verify_delayed_barrier_activation_uses_retained_turn ()
             return false;
         }
     }
-    bool ran_on_retained_turn = false;
     const auto activated = reserved.value ()->activate_async ([&] (auto release) {
         const auto turn = detail::capture_current_serial_turn ();
         ran_on_retained_turn = turn && turn->belongs_to (&queue);
@@ -895,6 +938,10 @@ bool verify_timer_terminal_precedes_lifecycle_close_turn ()
     using namespace zlink::framework::detail;
 
     serializer_registry_t serializers;
+    // Declared before the state so the queued close turn never outlives them.
+    std::atomic_bool close_requested{false};
+    std::atomic_bool closing_called{false};
+    std::atomic_bool cancel_completed_in_closing{false};
     auto state = std::make_shared<spot_context_state_t> ();
     state->node = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::spot_node_builder_state_t> ("timer-terminal-before-close");
@@ -918,9 +965,6 @@ bool verify_timer_terminal_precedes_lifecycle_close_turn ()
     state->timers.push_back (timer_state);
     auto timer = timer_test_access_t::create (timer_state);
 
-    std::atomic_bool close_requested{false};
-    std::atomic_bool closing_called{false};
-    std::atomic_bool cancel_completed_in_closing{false};
     state->lifecycle.on_closing = [timer_state, &closing_called, &cancel_completed_in_closing] (
                                     void *, const spot_closing_context_t &, std::stop_token) {
         closing_called.store (true, std::memory_order_release);
@@ -1038,10 +1082,9 @@ class serial_test_signal_t
   public:
     void set ()
     {
-        {
-            std::lock_guard lock (_mutex);
-            _set = true;
-        }
+        // Notify under the lock so a waiter cannot destroy this object mid-notify.
+        std::lock_guard lock (_mutex);
+        _set = true;
         _changed.notify_all ();
     }
 
@@ -1084,6 +1127,15 @@ bool verify_cpu_worker_completes_in_ordinary_turn ()
                     && detail::capture_current_serial_turn () == turn && !turn->released ();
         co_return;
     };
+    // Runs the worker jobs the suspended handler waits for, then drains, before the locals
+    // above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        auto drained = std::async (std::launch::async, [&] { queue.drain (); });
+        while (drained.wait_for (std::chrono::milliseconds (2)) != std::future_status::ready) {
+            while (scheduler->worker_job_count () != 0)
+                scheduler->run_worker_job ();
+        }
+    });
     if (!queue.try_post_async ("ordinary-worker-handler",
                                [&] (auto complete) {
                                    auto task = handler ();
@@ -1192,6 +1244,20 @@ class serial_executor_test_fixture_t
         spot_queue->drain ();
     }
 
+    // Drains the Spot queue, then every Actor and Timer queue that exists now.
+    void drain ()
+    {
+        spot_queue->drain ();
+        if (const auto actors = serial.actor_executor_snapshot ()) {
+            for (const auto &[_, executor] : *actors)
+                executor->queue ()->drain ();
+        }
+        for (const auto &queue : serial.timer_queues ()) {
+            if (queue)
+                queue->drain ();
+        }
+    }
+
     std::shared_ptr<zlink::framework::runtime::offload_executor_t> worker;
     zlink::framework::runtime::state_lane_t lane;
     std::shared_ptr<queue_t> spot_queue;
@@ -1274,6 +1340,11 @@ bool verify_request_turn_mode (bool release_turn, const std::vector<int> &expect
     auto reply = std::make_shared<zlink::framework::task_completion_source_t<int>> ();
     auto order = std::make_shared<std::vector<int>> ();
     auto order_gate = std::make_shared<std::mutex> ();
+    // Completes the reply the request waits for and drains, also when a check fails early.
+    scope_exit_t drain_on_exit ([&] {
+        (void) reply->complete (zlink::framework::result_t<int>::success (7));
+        queue.drain ();
+    });
 
     queue.post_async ("request", [reply, order, order_gate, release_turn] (auto complete) {
         auto task = std::make_shared<zlink::framework::task_t<void>> (
@@ -1364,6 +1435,15 @@ bool verify_serial_resume_waits_behind_queued_work ()
     bool filler_entered = false;
     bool release_filler = false;
     bool filler_posted = false;
+    // Releases the filler and drains before the locals above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        {
+            std::lock_guard lock (filler_gate);
+            release_filler = true;
+        }
+        filler_changed.notify_all ();
+        queue.drain ();
+    });
     for (int attempt = 0; attempt < 100 && !filler_posted; ++attempt) {
         filler_posted = queue.try_post (
           "resume-filler",
@@ -1421,6 +1501,15 @@ bool verify_serial_queue_lanes_are_unbounded ()
     bool first_entered = false;
     bool release_first = false;
     std::vector<std::string> order;
+    // Releases the first item and drains before the locals above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        {
+            std::lock_guard lock (gate);
+            release_first = true;
+        }
+        changed.notify_all ();
+        queue.drain ();
+    });
 
     if (!queue.try_post (
           "application-first",
@@ -1505,6 +1594,15 @@ bool verify_transferred_owner_reservation_is_continuous_until_terminal ()
         })) {
         return false;
     }
+    // Completes the active turn and drains before the locals above are destroyed.
+    scope_exit_t drain_active ([&] {
+        {
+            std::unique_lock lock (gate);
+            changed.wait (lock, [&] { return active_entered; });
+        }
+        (*complete_active) ([] {});
+        queue.drain ();
+    });
     {
         std::unique_lock lock (gate);
         if (!changed.wait_for (lock, std::chrono::seconds (1), [&] { return active_entered; })) {
@@ -1553,6 +1651,16 @@ bool verify_transferred_owner_reservation_is_continuous_until_terminal ()
         queue.drain ();
         return false;
     }
+    // Completes both turns and drains before the mailbox and counters above are destroyed.
+    scope_exit_t drain_transferred ([&] {
+        (*complete_active) ([] {});
+        {
+            std::unique_lock lock (gate);
+            changed.wait (lock, [&] { return transferred_entered; });
+        }
+        (*complete_transferred) ([] {});
+        queue.drain ();
+    });
     if (transfer_count.load (std::memory_order_relaxed) != 1
         || !transfer_released.load (std::memory_order_acquire) || mailbox.release (*claim)
         || queue.pending_count (serial_work_lane_t::application) != 2
@@ -1614,6 +1722,16 @@ bool verify_transferred_owner_reservation_shares_unbounded_lifecycle_lane ()
           lifecycle)) {
         return false;
     }
+    // Completes the active turn and drains before the locals above are destroyed.
+    scope_exit_t drain_active ([&] {
+        {
+            std::unique_lock lock (gate);
+            changed.wait (lock, [&] { return active_entered; });
+        }
+        if (complete_active)
+            (*complete_active) ([] {});
+        queue.drain ();
+    });
     {
         std::unique_lock lock (gate);
         if (!changed.wait_for (lock, std::chrono::seconds (1), [&] { return active_entered; }))
@@ -1666,12 +1784,18 @@ bool verify_serial_queue_owner_time_budget ()
 {
     using namespace zlink::framework::runtime;
 
+    // Declared before the executor and queues so queued work never outlives them.
+    std::vector<int> batched_order;
+    std::mutex gate;
+    std::condition_variable changed;
+    bool first_entered = false;
+    bool release_first = false;
+    std::vector<std::string> order;
     offload_executor_t executor (1);
     serial_execution_queue_options_t options;
     options.owner_time_budget = std::chrono::milliseconds (100);
     serial_execution_queue_t batched_queue (executor, options);
 
-    std::vector<int> batched_order;
     for (int value = 1; value <= 4; ++value) {
         if (!batched_queue.try_post (
               "budget-batch", [&batched_order, value] { batched_order.push_back (value); })) {
@@ -1686,11 +1810,6 @@ bool verify_serial_queue_owner_time_budget ()
     options.owner_time_budget = std::chrono::milliseconds (1);
     serial_execution_queue_t overloaded_owner (executor, options);
     serial_execution_queue_t other_owner (executor, options);
-    std::mutex gate;
-    std::condition_variable changed;
-    bool first_entered = false;
-    bool release_first = false;
-    std::vector<std::string> order;
 
     if (!overloaded_owner.try_post ("overloaded-0", [&] {
             std::unique_lock lock (gate);
@@ -1807,6 +1926,11 @@ bool verify_spot_wide_two_actors_are_serial ()
     serial_executor_test_fixture_t fixture (serial_lane_policy_t::spot_wide ());
     serial_test_blocker_t actor_a;
     serial_test_signal_t actor_b_started;
+    // Releases the blocker and drains before the locals above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        actor_a.release ();
+        fixture.drain ();
+    });
     const auto accepted_a = fixture.serial.execute_actor ("actor-a", "wide-a", actor_a.work ());
     if (!accepted_a || !actor_a.wait_for_entry ())
         return false;
@@ -1828,8 +1952,15 @@ bool verify_spot_wide_consumer_waits_for_shared_gate ()
 {
     using namespace zlink::framework::runtime;
 
+    // Declared before the fixture so the marker job never outlives it.
+    serial_test_signal_t marker;
     serial_executor_test_fixture_t fixture (serial_lane_policy_t::spot_wide (), {}, 1);
     serial_test_blocker_t owner;
+    // Releases the blocker and drains before the locals above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        owner.release ();
+        fixture.drain ();
+    });
     if (!fixture.serial.execute_spot ("gate-owner", owner.work ()) || !owner.wait_for_entry ())
         return false;
 
@@ -1849,7 +1980,6 @@ bool verify_spot_wide_consumer_waits_for_shared_gate ()
     }
     // One worker makes this marker follow the existing independent Actor drains.
     // Admission must finish while the ordinary asynchronous Spot turn is held.
-    serial_test_signal_t marker;
     const auto marked = fixture.worker->try_submit_internal ([&] { marker.set (); });
     const auto observed = marked && marker.wait_for ();
     std::size_t waiting_messages = 0;
@@ -1883,13 +2013,18 @@ bool verify_spot_wide_cancel_removes_unclaimed_actor_head ()
     using namespace zlink::framework::runtime;
 
     serial_executor_test_fixture_t fixture (serial_lane_policy_t::spot_wide ());
+    std::atomic_int started{0};
+    std::atomic_int cancelled{0};
     serial_test_blocker_t owner;
+    // Releases the blocker and drains before the locals above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        owner.release ();
+        fixture.drain ();
+    });
     if (!fixture.serial.execute_spot ("cancel-gate-owner", owner.work ())
         || !owner.wait_for_entry ())
         return false;
 
-    std::atomic_int started{0};
-    std::atomic_int cancelled{0};
     auto submitted = fixture.serial.execute_actor_cancellable (
       "actor-a", "cancel-before-claim",
       [&] (auto complete) {
@@ -1918,6 +2053,15 @@ bool verify_spot_wide_control_returns_without_waiting_for_gate ()
     std::condition_variable changed;
     bool entered = false;
     bool release = false;
+    // Releases the held gate and drains before the locals above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        {
+            std::lock_guard lock (mutex);
+            release = true;
+        }
+        changed.notify_all ();
+        fixture.drain ();
+    });
     if (!fixture.spot_queue->try_post ("held-physical-gate", [&] {
             std::unique_lock lock (mutex);
             entered = true;
@@ -1969,12 +2113,17 @@ bool verify_spot_wide_stop_settles_queued_actor_rejection ()
     using namespace zlink::framework::runtime;
 
     serial_executor_test_fixture_t fixture (serial_lane_policy_t::spot_wide ());
+    std::atomic_int started{0};
+    std::atomic_int rejected{0};
     serial_test_blocker_t owner;
+    // Releases the blocker and drains before the locals above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        owner.release ();
+        fixture.drain ();
+    });
     if (!fixture.serial.execute_spot ("stop-gate-owner", owner.work ()) || !owner.wait_for_entry ())
         return false;
 
-    std::atomic_int started{0};
-    std::atomic_int rejected{0};
     if (!fixture.serial.execute_actor (
           "actor-a", "stop-before-claim",
           [&] (auto complete) {
@@ -2025,15 +2174,20 @@ bool verify_spot_wide_actor_ready_lane_tracks_lifecycle ()
     using namespace zlink::framework::runtime;
 
     serial_executor_test_fixture_t fixture (serial_lane_policy_t::spot_wide ());
-    serial_test_blocker_t owner;
-    if (!fixture.serial.execute_spot ("lane-gate-owner", owner.work ()) || !owner.wait_for_entry ())
-        return false;
     std::mutex order_mutex;
     std::vector<std::string> order;
     const auto record = [&] (std::string name) {
         std::lock_guard lock (order_mutex);
         order.push_back (std::move (name));
     };
+    serial_test_blocker_t owner;
+    // Releases the blocker and drains before the locals above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        owner.release ();
+        fixture.drain ();
+    });
+    if (!fixture.serial.execute_spot ("lane-gate-owner", owner.work ()) || !owner.wait_for_entry ())
+        return false;
     auto actor = fixture.serial.actor_executor ("actor-a");
     const bool accepted_application =
       fixture.serial.execute_actor ("actor-a", "queued-application", [&] (auto complete) {
@@ -2076,6 +2230,20 @@ bool verify_spot_wide_handoff_allows_spot_control ()
         };
         reached.store (true);
     });
+    // Settles the held barrier and drains before the locals above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        if (activated) {
+            while (!reached.load ())
+                std::this_thread::yield ();
+            std::lock_guard lock (mutex);
+            if (settle) {
+                settle ([] {});
+                settle = nullptr;
+            }
+        }
+        actor->queue ()->drain ();
+        fixture.drain ();
+    });
     if (!activated || !wait_until ([&] { return reached.load (); }))
         return false;
     const bool posted = fixture.serial.execute_spot ("handoff-peer-control", [&] (auto complete) {
@@ -2086,6 +2254,7 @@ bool verify_spot_wide_handoff_allows_spot_control ()
     {
         std::lock_guard lock (mutex);
         settle ([] {});
+        settle = nullptr;
     }
     actor->queue ()->drain ();
     fixture.spot_queue->drain ();
@@ -2095,18 +2264,25 @@ bool verify_spot_wide_handoff_allows_spot_control ()
 bool verify_spot_wide_terminal_retains_gate_lifetime ()
 {
     using namespace zlink::framework::runtime;
+    // Declared before the executor so the settle job never outlives it.
+    std::atomic_bool settled{false};
     offload_executor_t executor (1);
     auto queue = std::make_shared<serial_execution_queue_t> (
       executor, serial_execution_queue_options_t{}, serial_execution_queue_t::error_handler_t{},
       serial_lane_policy_t::spot_wide ());
     serial_test_blocker_t owner;
+    // Releases the blocker and drains before the locals above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        owner.release ();
+        if (queue)
+            queue->drain ();
+    });
     if (!queue->try_post_async ("lifetime-owner", owner.work ()) || !owner.wait_for_entry ())
         return false;
     if (!queue->try_post ("last-context-reference", [retained = queue] {}))
         return false;
     queue.reset ();
     owner.release ();
-    std::atomic_bool settled{false};
     if (!executor.try_submit_internal ([&] { settled.store (true); }))
         return false;
     return wait_until ([&] { return settled.load (); });
@@ -2122,7 +2298,6 @@ bool verify_same_actor_fifo_in_both_modes ()
                               ? serial_lane_policy_t::per_actor_spot ()
                               : serial_lane_policy_t::spot_wide ();
         serial_executor_test_fixture_t fixture (policy);
-        serial_test_blocker_t first;
         serial_test_signal_t second_started;
         std::mutex order_gate;
         std::vector<std::string> order;
@@ -2130,6 +2305,12 @@ bool verify_same_actor_fifo_in_both_modes ()
             std::lock_guard lock (order_gate);
             order.push_back (std::move (event));
         };
+        serial_test_blocker_t first;
+        // Releases the blocker and drains before the locals above are destroyed.
+        scope_exit_t drain_on_exit ([&] {
+            first.release ();
+            fixture.drain ();
+        });
 
         const auto accepted_first = fixture.serial.execute_actor (
           "actor-a", "fifo-first", first.work ([&] { record ("first:start"); }));
@@ -2160,7 +2341,6 @@ bool verify_per_actor_timer_names_overlap_and_keep_fifo ()
     using namespace zlink::framework::runtime;
 
     serial_executor_test_fixture_t fixture (serial_lane_policy_t::per_actor_spot ());
-    serial_test_blocker_t first_tick;
     serial_test_signal_t second_tick_started;
     serial_test_signal_t beat_started;
     std::mutex order_gate;
@@ -2169,6 +2349,12 @@ bool verify_per_actor_timer_names_overlap_and_keep_fifo ()
         std::lock_guard lock (order_gate);
         order.push_back (std::move (event));
     };
+    serial_test_blocker_t first_tick;
+    // Releases the blocker and drains before the locals above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        first_tick.release ();
+        fixture.drain ();
+    });
 
     const auto accepted_first = fixture.serial.execute_timer (
       "tick", "tick-first", first_tick.work ([&] { record ("tick:first:start"); }));
@@ -2215,9 +2401,14 @@ bool verify_actor_mailbox_backlog_is_accepted_in_both_modes ()
           serial_lane_policy_t::actor_delivery ());
         fixture.serial.replace_actor_queue ("actor-full", full_actor_queue);
 
-        serial_test_blocker_t first;
         serial_test_signal_t same_ran;
         serial_test_signal_t other_ran;
+        serial_test_blocker_t first;
+        // Releases the blocker and drains before the locals above are destroyed.
+        scope_exit_t drain_on_exit ([&] {
+            first.release ();
+            fixture.drain ();
+        });
         const auto accepted_first =
           fixture.serial.execute_actor ("actor-full", "capacity-first", first.work ());
         if (!accepted_first || !first.wait_for_entry ())
@@ -2255,9 +2446,14 @@ bool verify_spot_wide_large_and_small_payloads_are_queued ()
       serial_lane_policy_t::actor_delivery ());
     fixture.serial.replace_actor_queue ("actor-a", actor_queue);
 
-    serial_test_blocker_t first;
     serial_test_signal_t second_large_ran;
     serial_test_signal_t small_ran;
+    serial_test_blocker_t first;
+    // Releases the blocker and drains before the locals above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        first.release ();
+        fixture.drain ();
+    });
     const serial_work_options_t large{serial_work_lane_t::application, 60};
     const serial_work_options_t small{serial_work_lane_t::application, 10};
     const auto accepted_first =
@@ -2303,9 +2499,14 @@ bool verify_spot_wide_upper_queue_accepts_former_boundaries ()
                                                   serial_lane_policy_t::actor_delivery ()));
         }
 
-        serial_test_blocker_t first;
         serial_test_signal_t second_ran;
         std::atomic_bool rejected{false};
+        serial_test_blocker_t first;
+        // Releases the blocker and drains before the locals above are destroyed.
+        scope_exit_t drain_on_exit ([&] {
+            first.release ();
+            fixture.drain ();
+        });
         const auto accepted_first =
           fixture.serial.execute_actor ("actor-a", "upper-first", first.work (),
                                         serial_work_options_t{serial_work_lane_t::application, 1});
@@ -2375,6 +2576,8 @@ bool verify_spot_wide_yield_retains_actor_claim ()
       std::make_unique<serial_executor_test_fixture_t> (serial_lane_policy_t::spot_wide ());
     auto reply = std::make_shared<task_completion_source_t<int>> ();
     auto state = std::make_shared<spot_wide_yield_probe_state_t> ();
+    // Completes the reply the yielded handler waits for, so the fixture can drain on early returns.
+    scope_exit_t release_reply ([&] { (void) reply->complete (result_t<int>::success (7)); });
 
     const auto first_accepted = fixture->serial.execute_actor (
       "actor-a", "yield-first", [reply, state] (auto complete) mutable {
@@ -2745,11 +2948,12 @@ bool verify_cancellable_serial_submission_lifecycle ()
     // A queued cancellation removes its accounting before the stop callback
     // runs, and its replacement is accepted immediately.
     {
-        offload_executor_t executor (1);
+        // Declared before the executor so the blocking job never outlives them.
         std::mutex worker_gate;
         std::condition_variable worker_changed;
         bool worker_entered = false;
         bool release_worker = false;
+        offload_executor_t executor (1);
         if (!executor.try_submit_internal ([&] {
                 std::unique_lock lock (worker_gate);
                 worker_entered = true;
@@ -2812,6 +3016,21 @@ bool verify_cancellable_serial_submission_lifecycle ()
         bool entered = false;
         bool follower_ran = false;
         std::atomic_int stop_requests = 0;
+        // Acknowledges an active turn left by a failed check, then drains before the locals above
+        // are destroyed.
+        scope_exit_t drain_on_exit ([&] {
+            if (queue.pending_count () != 0) {
+                serial_execution_queue_t::async_completion_t finish;
+                {
+                    std::unique_lock lock (gate);
+                    changed.wait (lock, [&] { return entered; });
+                    finish = std::move (*acknowledge);
+                }
+                if (finish)
+                    finish ([] {});
+            }
+            queue.drain ();
+        });
         const auto submission = queue.try_post_cancellable_async (
           "active-cancellable",
           [&] (auto complete) {
@@ -2894,6 +3113,19 @@ bool verify_cancellable_serial_submission_lifecycle ()
             })) {
             return false;
         }
+        // Acknowledges the active turn and drains before the locals above are destroyed.
+        scope_exit_t drain_on_exit ([&] {
+            serial_execution_queue_t::async_completion_t finish;
+            {
+                std::unique_lock lock (gate);
+                changed.wait (lock, [&] { return entered; });
+                if (acknowledge)
+                    finish = std::move (*acknowledge);
+            }
+            if (finish)
+                finish ([] {});
+            queue.drain ();
+        });
         {
             std::unique_lock lock (gate);
             if (!changed.wait_for (lock, std::chrono::seconds (1), [&] { return entered; })) {
@@ -2929,11 +3161,12 @@ bool verify_cancellable_serial_submission_lifecycle ()
     // Queue shutdown cancels queued cancellable submissions and makes their
     // identifiers terminal without running their work.
     {
-        offload_executor_t executor (1);
+        // Declared before the executor so the blocking job never outlives them.
         std::mutex worker_gate;
         std::condition_variable worker_changed;
         bool worker_entered = false;
         bool release_worker = false;
+        offload_executor_t executor (1);
         if (!executor.try_submit_internal ([&] {
                 std::unique_lock lock (worker_gate);
                 worker_entered = true;
@@ -2989,11 +3222,12 @@ bool verify_cancellable_serial_submission_lifecycle ()
     // Queued deferred barriers receive cancellation before shutdown removes
     // their work, so activation becomes terminal and drain still converges.
     {
-        offload_executor_t executor (1);
+        // Declared before the executor so the blocking job never outlives them.
         std::mutex worker_gate;
         std::condition_variable worker_changed;
         bool worker_entered = false;
         bool release_worker = false;
+        offload_executor_t executor (1);
         if (!executor.try_submit_internal ([&] {
                 std::unique_lock lock (worker_gate);
                 worker_entered = true;
@@ -3225,6 +3459,8 @@ bool verify_relocation_ready_keeps_registering_turn_across_state_lane ()
         keep_lane_claimed.store (false, std::memory_order_release);
         producer.join ();
         other_queue.drain ();
+        // Drain queued copies of keep_draining before its captures go out of scope.
+        node->lane.run ([] {}).get ();
         return false;
     }
 
@@ -3251,6 +3487,8 @@ bool verify_relocation_ready_keeps_registering_turn_across_state_lane ()
     keep_lane_claimed.store (false, std::memory_order_release);
     producer.join ();
     other_queue.drain ();
+    // Drain queued copies of keep_draining before its captures go out of scope.
+    node->lane.run ([] {}).get ();
     owner->complete_relocation_ready (spot_relocation_ready_outcome_t::continued);
     owner->serial_queue->drain ();
 
@@ -3292,6 +3530,8 @@ bool verify_released_spot_turn_does_not_inline_lifecycle_task ()
     std::atomic_bool lifecycle_allowed_yield{false};
     std::atomic_bool lifecycle_succeeded{false};
     std::atomic_bool completed{false};
+    // Drains before the locals above are destroyed; the queued handler references them.
+    scope_exit_t drain_on_exit ([&] { queue->drain (); });
     if (!queue->try_post_async ("release-spot-handler-turn", [&] (auto complete) {
             const auto released_turn = capture_current_serial_turn ();
             const auto released = released_turn && released_turn->release ();
@@ -3355,6 +3595,9 @@ bool verify_spot_serial_task_async_retains_work_until_terminal ()
     using namespace zlink::framework::detail;
     namespace runtime = zlink::framework::runtime;
 
+    // Declared before the executor and owner so queued work never outlives them.
+    std::promise<void> entered;
+    std::promise<result_t<void>> settled;
     auto executor = std::make_shared<runtime::offload_executor_t> (1, "spot-serial-retain");
     auto owner = std::make_shared<spot_context_state_t> ();
     owner->serial_executor = executor;
@@ -3363,10 +3606,11 @@ bool verify_spot_serial_task_async_retains_work_until_terminal ()
       runtime::serial_execution_queue_t::error_handler_t{},
       runtime::serial_lane_policy_t::spot_wide ());
     auto terminal = std::make_shared<task_completion_source_t<void>> ();
+    // Completes the callback terminal so the queue can drain on early returns.
+    scope_exit_t complete_terminal (
+      [&] { (void) terminal->complete (result_t<void>::success ()); });
     auto actor_instance = std::make_shared<int> (7);
     const std::weak_ptr<int> weak_actor = actor_instance;
-    std::promise<void> entered;
-    std::promise<result_t<void>> settled;
     owner->run_serial_task_async (
       "retained-spot-lifecycle-leave",
       [actor_instance = std::move (actor_instance), terminal, &entered] {
@@ -3399,12 +3643,31 @@ bool verify_spot_serial_task_async_shutdown_settlement ()
     // A queued lifecycle callback is removed by shutdown and settles its
     // observer exactly once without invoking application work.
     {
-        auto executor =
-          std::make_shared<runtime::offload_executor_t> (1, "spot-serial-queued-cancel");
+        // Declared before the executor so the blocking job and the callbacks never outlive them.
         std::mutex worker_mutex;
         std::condition_variable worker_changed;
         bool worker_entered = false;
         bool release_worker = false;
+        std::mutex result_mutex;
+        std::condition_variable result_changed;
+        std::optional<result_t<void>> result;
+        std::atomic_int work_calls = 0;
+        std::atomic_int completion_calls = 0;
+        auto executor =
+          std::make_shared<runtime::offload_executor_t> (1, "spot-serial-queued-cancel");
+        auto owner = std::make_shared<spot_context_state_t> ();
+        owner->serial_executor = executor;
+        owner->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+          *executor, runtime::serial_execution_queue_options_t{});
+        auto queue = owner->serial_queue;
+        // Releases the blocking worker job so the queue can drain on early returns.
+        scope_exit_t release_worker_on_exit ([&] {
+            {
+                std::lock_guard lock (worker_mutex);
+                release_worker = true;
+            }
+            worker_changed.notify_all ();
+        });
         if (!executor->try_submit_internal ([&] {
                 std::unique_lock lock (worker_mutex);
                 worker_entered = true;
@@ -3420,16 +3683,6 @@ bool verify_spot_serial_task_async_shutdown_settlement ()
                 return false;
             }
         }
-        auto owner = std::make_shared<spot_context_state_t> ();
-        owner->serial_executor = executor;
-        owner->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
-          *executor, runtime::serial_execution_queue_options_t{});
-        auto queue = owner->serial_queue;
-        std::mutex result_mutex;
-        std::condition_variable result_changed;
-        std::optional<result_t<void>> result;
-        std::atomic_int work_calls = 0;
-        std::atomic_int completion_calls = 0;
         owner->run_serial_task_async (
           "queued-spot-lifecycle-cancel",
           [&] () -> task_t<void> {
@@ -3467,6 +3720,12 @@ bool verify_spot_serial_task_async_shutdown_settlement ()
     // Shutdown settles the owned waiter while preserving its pending source.
     // The terminal callback releases the owner before late source completion.
     {
+        // Declared before the executor so queued work and callbacks never outlive them.
+        std::mutex gate;
+        std::condition_variable changed;
+        bool entered = false;
+        std::optional<result_t<void>> result;
+        std::atomic_int completion_calls = 0;
         auto executor =
           std::make_shared<runtime::offload_executor_t> (1, "spot-serial-active-cancel");
         auto owner = std::make_shared<spot_context_state_t> ();
@@ -3476,11 +3735,9 @@ bool verify_spot_serial_task_async_shutdown_settlement ()
         auto queue = owner->serial_queue;
         auto callback_terminal = std::make_shared<task_completion_source_t<void>> ();
         auto source_task = callback_terminal->task ();
-        std::mutex gate;
-        std::condition_variable changed;
-        bool entered = false;
-        std::optional<result_t<void>> result;
-        std::atomic_int completion_calls = 0;
+        // Completes the callback terminal so the queue can drain on early returns.
+        scope_exit_t complete_terminal (
+          [&] { (void) callback_terminal->complete (result_t<void>::success ()); });
         owner->run_serial_task_async (
           "active-spot-lifecycle-cancel",
           [callback_terminal, &gate, &changed, &entered] () -> task_t<void> {
@@ -3593,6 +3850,19 @@ bool verify_fixture_accounting_boundaries ()
                   options)) {
                 return false;
             }
+            // Completes the active turn and drains before the locals above are destroyed.
+            scope_exit_t drain_on_exit ([&] {
+                serial_execution_queue_t::async_completion_t release;
+                {
+                    std::unique_lock lock (gate);
+                    changed.wait (lock, [&] { return active; });
+                    if (finish_active)
+                        release = std::move (*finish_active);
+                }
+                if (release)
+                    release ([] {});
+                queue.drain ();
+            });
             {
                 std::unique_lock lock (gate);
                 if (!changed.wait_for (lock, std::chrono::seconds (1), [&] { return active; })) {
@@ -3688,6 +3958,15 @@ bool verify_fixture_arbitration_and_owner_isolation ()
         // inside the turn instead.
         bool first_started = false;
         bool release_first = false;
+        // Releases L1 and drains before the locals above are destroyed.
+        scope_exit_t drain_arbitration ([&] {
+            {
+                std::lock_guard lock (order_gate);
+                release_first = true;
+            }
+            order_changed.notify_all ();
+            arbitration_queue.drain ();
+        });
         if (!arbitration_queue.try_post (
               lifecycle.front (),
               [&] {
@@ -3758,6 +4037,19 @@ bool verify_fixture_arbitration_and_owner_isolation ()
             })) {
             return false;
         }
+        // Completes the active owner A turn and drains before the locals above are destroyed.
+        scope_exit_t drain_owners ([&] {
+            serial_execution_queue_t::async_completion_t release;
+            {
+                std::unique_lock lock (progress_gate);
+                progress_changed.wait (lock, [&] { return release_owner_a.has_value (); });
+                release = std::move (*release_owner_a);
+            }
+            if (release)
+                release ([] {});
+            owner_a.drain ();
+            owner_b.drain ();
+        });
         {
             std::unique_lock lock (progress_gate);
             if (!progress_changed.wait_for (lock, std::chrono::seconds (1),
@@ -4299,6 +4591,8 @@ bool verify_idle_instance_spot_eviction_closes_local_context ()
           close_local ();
           return true;
       };
+    // Drains before the locals above are destroyed; the close turn references them.
+    scope_exit_t drain_on_exit ([&] { executor->drain (); });
 
     spot_node_runtime_t runtime (node);
     set_last_application_work (std::chrono::milliseconds (100));
@@ -4486,6 +4780,11 @@ bool verify_close_terminal_for_operational_boundary ()
             }))
             return false;
         auto finish_active = active.get ();
+        // Finishes the active turn and drains before the locals above are destroyed.
+        scope_exit_t drain_on_exit ([&] {
+            finish_active ([] {});
+            state->drain_serial ();
+        });
         auto close = spot_context_access_t::create (state).close ();
         auto record = std::make_shared<instance_spot_retained_message_t> ();
         record->completion = std::make_shared<task_completion_source_t<zlink::message_t>> ();
@@ -4562,6 +4861,13 @@ bool verify_spot_close_returns_turn_while_store_step_is_pending ()
     auto close_result = closed.get_future ();
     context->request_close ({}, [&] (result_t<bool> result) { closed.set_value (result); });
     started.get ();
+    // Settles the store step and drains before the locals above are destroyed.
+    scope_exit_t drain_on_exit ([&] {
+        (void) step->complete (result_t<commit_t>::success (
+          commit_t{result_t<bool>::success (true),
+                   [] { return task_t<bool> (result_t<bool>::success (true)); }}));
+        context->drain_serial ();
+    });
 
     // 이 raw application 항목은 이미 실행 중인 handler의 resume capability가 아니다.
     if (!context->serial_queue->try_post ("application-while-close-waits", [&] {
@@ -5595,6 +5901,13 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
     constexpr const char *transfer_id = "join-commit-transfer";
     std::atomic_int source_leave_failures{0};
     std::atomic_bool source_leave_identity{false};
+    // Declared before the node so work queued on its Spot never outlives them.
+    std::atomic_int reservation_failures{0};
+    std::atomic_bool reservation_identity{false};
+    std::atomic_int completions{0};
+    std::atomic_bool completion_identity{false};
+    std::promise<void> joined_started;
+    auto started = joined_started.get_future ();
     serializer_registry_t serializers;
     auto node = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::spot_node_builder_state_t> ("join-commit-target");
@@ -5636,8 +5949,6 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
     constexpr std::uint64_t operation_low = 37;
     constexpr std::string_view lifecycle_error = "materialized lifecycle failure";
     constexpr std::string_view completion_error = "materialized completion failure";
-    std::atomic_int reservation_failures{0};
-    std::atomic_bool reservation_identity{false};
     spot->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
       *spot->serial_executor, runtime::serial_execution_queue_options_t{},
       [&reservation_failures, &reservation_identity, completion_failure, lifecycle_error,
@@ -5659,8 +5970,6 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
     node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
     spot_node_builder_state_t::actor_factory_registration_t factory;
     factory.actor_type = std::type_index (typeid (int));
-    std::atomic_int completions{0};
-    std::atomic_bool completion_identity{false};
     factory.on_join_completed =
       [&completions, &completion_identity, lifecycle_failure, completion_failure,
        completion_error] (void *, actor_join_completion_outcome_t outcome, std::uint64_t high,
@@ -5678,8 +5987,6 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
         co_return;
     };
     node->actor_factories.emplace ("player", std::move (factory));
-    std::promise<void> joined_started;
-    auto started = joined_started.get_future ();
     auto release_joined = std::make_shared<task_completion_source_t<void>> ();
     spot_actor_admission_callbacks_t callbacks;
     callbacks.join = [] (void *, std::string_view, const zlink::message_t &,
@@ -5978,10 +6285,10 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     serializer_registry_t serializers;
     auto node = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::spot_node_builder_state_t> ("actor-finalize-node");
-    std::atomic_int leave_submit_unavailable_events{0};
+    auto leave_submit_unavailable_events = std::make_shared<std::atomic_int> (0);
     node->dispatch.message_flow (message_flow_log_mode_t::errors);
     dispatch_options_access_t::set_observer_for_tests (
-      node->dispatch, [&leave_submit_unavailable_events] (const message_flow_event_t &event) {
+      node->dispatch, [leave_submit_unavailable_events] (const message_flow_event_t &event) {
           if (event.packet_name != "spot_actor_leave_submit"
               || event.result != message_flow_result_t::failed || !event.exception)
               return;
@@ -5990,7 +6297,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
           }
           catch (const framework_exception_t &error) {
               if (error.kind () == framework_error_kind_t::unavailable)
-                  leave_submit_unavailable_events.fetch_add (1, std::memory_order_release);
+                  leave_submit_unavailable_events->fetch_add (1, std::memory_order_release);
           }
       });
     node->worker_executor = std::make_shared<runtime::offload_executor_t> (1, "actor-finalize");
@@ -6175,6 +6482,15 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
 
     const std::string transfer_id = "transfer-c2";
     const std::string key = "player:actor-c2";
+    // Completes the blockers the queued Join work waits for and drains before the locals above
+    // are destroyed, also when a check fails early.
+    scope_exit_t drain_on_exit ([&] {
+        (void) join_completion->complete (result_t<void>::success ());
+        (void) joined_bound_delivery->complete (result_t<void>::success ());
+        (void) first_replay->complete (result_t<void>::success ());
+        target->serial_queue->drain ();
+        node->worker_executor->drain ();
+    });
     const auto admitted = owner
                             .admit_remote_actor_to_spot (
                               transfer_id, actor, spot_id_t ("source-spot"), target->spot_id,
@@ -6319,10 +6635,10 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     }
     const auto leave_submit_observation_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (1);
-    while (leave_submit_unavailable_events.load (std::memory_order_acquire) == 0
+    while (leave_submit_unavailable_events->load (std::memory_order_acquire) == 0
            && std::chrono::steady_clock::now () < leave_submit_observation_deadline)
         std::this_thread::yield ();
-    if (leave_submit_unavailable_events.load (std::memory_order_acquire) != 1)
+    if (leave_submit_unavailable_events->load (std::memory_order_acquire) != 1)
         return false;
     {
         std::lock_guard lock (authority->mutex);
@@ -6439,6 +6755,10 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     std::mutex queued_gate;
     std::condition_variable queued_changed;
     std::optional<runtime::serial_execution_queue_t::async_completion_t> release_predecessor;
+    std::mutex cancelled_mutex;
+    std::condition_variable cancelled_changed;
+    std::optional<result_t<actor_join_reply_t>> cancelled;
+    bool finalize_started = false;
     if (!queued_actor_queue->try_post_async ("deadline-predecessor", [&] (auto complete) {
             {
                 std::lock_guard lock (queued_gate);
@@ -6448,6 +6768,24 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         })) {
         return false;
     }
+    // Releases the predecessor, waits for the finalize callback and drains before the locals
+    // above are destroyed.
+    scope_exit_t drain_queued ([&] {
+        runtime::serial_execution_queue_t::async_completion_t release;
+        {
+            std::unique_lock lock (queued_gate);
+            queued_changed.wait (lock, [&] { return release_predecessor.has_value (); });
+            release = std::move (*release_predecessor);
+        }
+        if (release)
+            release ([] {});
+        if (finalize_started) {
+            std::unique_lock lock (cancelled_mutex);
+            cancelled_changed.wait (lock, [&] { return cancelled.has_value (); });
+        }
+        if (queued_actor_queue)
+            queued_actor_queue->drain ();
+    });
     {
         std::unique_lock lock (queued_gate);
         if (!queued_changed.wait_for (lock, std::chrono::seconds (1),
@@ -6457,9 +6795,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         }
     }
     const auto completion_calls_before_cancel = join_completion_calls.load ();
-    std::mutex cancelled_mutex;
-    std::condition_variable cancelled_changed;
-    std::optional<result_t<actor_join_reply_t>> cancelled;
+    finalize_started = true;
     owner.finalize_remote_actor_to_spot_async (
       queued_transfer_id, queued_actor, target->spot_id, provider, nullptr,
       std::chrono::steady_clock::now () + std::chrono::milliseconds (10),
@@ -6540,6 +6876,10 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     std::condition_variable lifecycle_gate_changed;
     std::optional<runtime::serial_execution_queue_t::async_completion_t>
       release_lifecycle_predecessor;
+    std::mutex lifecycle_cancel_mutex;
+    std::condition_variable lifecycle_cancel_changed;
+    std::optional<result_t<actor_join_reply_t>> lifecycle_cancelled;
+    bool lifecycle_finalize_started = false;
     if (!target->serial_queue->try_post_async (
           "deadline-lifecycle-predecessor",
           [&] (auto complete) {
@@ -6554,6 +6894,24 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
             runtime::serial_execution_queue_t::fixed_work_byte_cost})) {
         return false;
     }
+    // Releases the predecessor, waits for the finalize callback and drains before the locals
+    // above are destroyed.
+    scope_exit_t drain_lifecycle ([&] {
+        runtime::serial_execution_queue_t::async_completion_t release;
+        {
+            std::unique_lock lock (lifecycle_gate);
+            lifecycle_gate_changed.wait (
+              lock, [&] { return release_lifecycle_predecessor.has_value (); });
+            release = std::move (*release_lifecycle_predecessor);
+        }
+        if (release)
+            release ([] {});
+        if (lifecycle_finalize_started) {
+            std::unique_lock lock (lifecycle_cancel_mutex);
+            lifecycle_cancel_changed.wait (lock, [&] { return lifecycle_cancelled.has_value (); });
+        }
+        target->serial_queue->drain ();
+    });
     {
         std::unique_lock lock (lifecycle_gate);
         if (!lifecycle_gate_changed.wait_for (lock, std::chrono::seconds (1), [&] {
@@ -6564,9 +6922,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     }
     const auto joined_calls_before_lifecycle_cancel =
       actor_joined_calls.load (std::memory_order_acquire);
-    std::mutex lifecycle_cancel_mutex;
-    std::condition_variable lifecycle_cancel_changed;
-    std::optional<result_t<actor_join_reply_t>> lifecycle_cancelled;
+    lifecycle_finalize_started = true;
     owner.finalize_remote_actor_to_spot_async (
       lifecycle_transfer_id, lifecycle_actor, target->spot_id, provider, &gateway,
       std::chrono::steady_clock::now () + std::chrono::milliseconds (10),
@@ -6609,6 +6965,21 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     auto active_lifecycle = std::make_shared<task_completion_source_t<void>> ();
     std::atomic_bool active_lifecycle_entered{false};
     std::atomic_int active_lifecycle_failure_calls{0};
+    std::mutex active_lifecycle_mutex;
+    std::condition_variable active_lifecycle_changed;
+    std::optional<result_t<actor_join_reply_t>> active_lifecycle_result;
+    bool active_lifecycle_finalize_started = false;
+    // Completes the lifecycle callback, waits for the finalize callback and drains before the
+    // locals above are destroyed.
+    scope_exit_t drain_active_lifecycle ([&] {
+        (void) active_lifecycle->complete (result_t<void>::success ());
+        if (active_lifecycle_finalize_started) {
+            std::unique_lock lock (active_lifecycle_mutex);
+            active_lifecycle_changed.wait (lock,
+                                           [&] { return active_lifecycle_result.has_value (); });
+        }
+        target->serial_queue->drain ();
+    });
     node->actor_factories.at ("player").on_join_completed =
       [&active_lifecycle_failure_calls] (void *, actor_join_completion_outcome_t outcome,
                                          std::uint64_t operation_high, std::uint64_t operation_low,
@@ -6644,9 +7015,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         || !active_lifecycle_prepared) {
         return false;
     }
-    std::mutex active_lifecycle_mutex;
-    std::condition_variable active_lifecycle_changed;
-    std::optional<result_t<actor_join_reply_t>> active_lifecycle_result;
+    active_lifecycle_finalize_started = true;
     owner.finalize_remote_actor_to_spot_async (
       active_lifecycle_transfer_id, active_lifecycle_actor, target->spot_id, provider, &gateway,
       std::chrono::steady_clock::now () + std::chrono::milliseconds (20),
@@ -6699,6 +7068,22 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     auto shutdown_lifecycle = std::make_shared<task_completion_source_t<void>> ();
     std::atomic_bool shutdown_lifecycle_entered{false};
     std::atomic_int shutdown_lifecycle_failure_calls{0};
+    std::mutex shutdown_lifecycle_mutex;
+    std::condition_variable shutdown_lifecycle_changed;
+    std::optional<result_t<actor_join_reply_t>> shutdown_lifecycle_result;
+    std::atomic_int shutdown_lifecycle_terminals{0};
+    bool shutdown_lifecycle_finalize_started = false;
+    // Completes the lifecycle callback, waits for the finalize callback and drains before the
+    // locals above are destroyed.
+    scope_exit_t drain_shutdown_lifecycle ([&] {
+        (void) shutdown_lifecycle->complete (result_t<void>::success ());
+        if (shutdown_lifecycle_finalize_started) {
+            std::unique_lock lock (shutdown_lifecycle_mutex);
+            shutdown_lifecycle_changed.wait (
+              lock, [&] { return shutdown_lifecycle_result.has_value (); });
+        }
+        target->serial_queue->drain ();
+    });
     node->actor_factories.at ("player").on_join_completed =
       [&shutdown_lifecycle_failure_calls] (
         void *, actor_join_completion_outcome_t outcome, std::uint64_t operation_high,
@@ -6735,11 +7120,8 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
         || !shutdown_lifecycle_prepared) {
         return false;
     }
-    std::mutex shutdown_lifecycle_mutex;
-    std::condition_variable shutdown_lifecycle_changed;
-    std::optional<result_t<actor_join_reply_t>> shutdown_lifecycle_result;
-    std::atomic_int shutdown_lifecycle_terminals{0};
     auto shutdown_source_task = shutdown_lifecycle->task ();
+    shutdown_lifecycle_finalize_started = true;
     owner.finalize_remote_actor_to_spot_async (
       shutdown_lifecycle_transfer_id, shutdown_lifecycle_actor, target->spot_id, provider, &gateway,
       std::chrono::steady_clock::now () + std::chrono::seconds (1),
@@ -6844,6 +7226,14 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
           }
           failed_changed.notify_all ();
       });
+    // Waits for the finalize callback and drains before the locals above are destroyed.
+    scope_exit_t drain_failed ([&] {
+        {
+            std::unique_lock lock (failed_mutex);
+            failed_changed.wait (lock, [&] { return failed_result.has_value (); });
+        }
+        target->serial_queue->drain ();
+    });
     {
         std::unique_lock lock (failed_mutex);
         if (!failed_changed.wait_for (lock, std::chrono::seconds (1),
@@ -6917,6 +7307,17 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
           source_leave_submit_order.store (++cutover_order, std::memory_order_release);
           return leave_submit_terminal.task ();
       });
+    // Settles the source leave submission, waits for the finalize callback and drains before the
+    // locals above are destroyed.
+    scope_exit_t drain_leave_order ([&] {
+        (void) leave_submit_terminal.complete (result_t<void>::failure (
+          framework_error_kind_t::internal_failure, "deterministic source leave submit failure"));
+        {
+            std::unique_lock lock (leave_order_mutex);
+            leave_order_changed.wait (lock, [&] { return leave_order_result.has_value (); });
+        }
+        target->serial_queue->drain ();
+    });
     {
         std::unique_lock lock (leave_order_mutex);
         if (!leave_order_changed.wait_for (lock, std::chrono::seconds (1),
@@ -8677,6 +9078,15 @@ int main (int argc, char **argv)
         bool entered = false;
         bool release = false;
         std::atomic_int queued_runs = 0;
+        // Releases the blocking job and drains before the locals above are destroyed.
+        scope_exit_t drain_on_exit ([&] {
+            {
+                std::lock_guard lock (state_mutex);
+                release = true;
+            }
+            state_changed.notify_all ();
+            saturated_executor.drain ();
+        });
         if (!saturated_executor.try_submit ([&] {
                 std::unique_lock lock (state_mutex);
                 entered = true;
@@ -9248,13 +9658,25 @@ int main (int argc, char **argv)
 
         auto completion_state = zlink::framework::test::runtime_failure_fixture<
           zlink::framework::detail::spot_node_builder_state_t> ("completion-node");
-        std::vector<zlink::framework::message_flow_event_t> completion_failure_events;
+        // Shared with the observer, which may outlive this scope on a worker thread.
+        struct completion_failure_log_t
+        {
+            std::mutex mutex;
+            std::vector<zlink::framework::message_flow_event_t> events;
+        };
+        auto completion_failure_log = std::make_shared<completion_failure_log_t> ();
+        // Reads copy the events under the mutex.
+        const auto completion_failure_events = [&completion_failure_log] {
+            std::lock_guard lock (completion_failure_log->mutex);
+            return completion_failure_log->events;
+        };
         completion_state->dispatch.message_flow (zlink::framework::message_flow_log_mode_t::errors);
         zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
           completion_state->dispatch,
-          [&completion_failure_events] (const zlink::framework::message_flow_event_t &event) {
+          [completion_failure_log] (const zlink::framework::message_flow_event_t &event) {
               if (event.packet_name == "JoinSpot" && event.error_reason.has_value ()) {
-                  completion_failure_events.push_back (event);
+                  std::lock_guard lock (completion_failure_log->mutex);
+                  completion_failure_log->events.push_back (event);
               }
           });
         zlink::framework::detail::spot_node_runtime_t completion_runtime (completion_state);
@@ -9374,15 +9796,15 @@ int main (int argc, char **argv)
             || completion_outcomes.back ()
                  != zlink::framework::detail::actor_join_completion_outcome_t::failed
             || completion_error_kind != zlink::framework::framework_error_kind_t::internal_failure
-            || completion_retryable || completion_failure_events.size () != 2
-            || completion_failure_events.back ().actor_id != "completion-actor"
-            || completion_failure_events.back ().error_reason
+            || completion_retryable || completion_failure_events ().size () != 2
+            || completion_failure_events ().back ().actor_id != "completion-actor"
+            || completion_failure_events ().back ().error_reason
                  != zlink::framework::dispatch_error_reason_t::handler_exception
-            || !completion_failure_events.back ().exception) {
+            || !completion_failure_events ().back ().exception) {
             return 72;
         }
         try {
-            std::rethrow_exception (completion_failure_events.back ().exception);
+            std::rethrow_exception (completion_failure_events ().back ().exception);
             return 73;
         }
         catch (const zlink::framework::framework_exception_t &error) {
@@ -9656,10 +10078,11 @@ int main (int argc, char **argv)
     }
 
     {
-        zlink::framework::runtime::offload_executor_t bounded_executor (1);
+        // Declared before the executor so the cancellable job never outlives them.
         std::mutex state_mutex;
         std::condition_variable state_changed;
         bool entered = false;
+        zlink::framework::runtime::offload_executor_t bounded_executor (1);
         if (!bounded_executor.try_submit_cancellable ([&] (std::stop_token token) {
                 std::unique_lock lock (state_mutex);
                 entered = true;
@@ -9690,6 +10113,15 @@ int main (int argc, char **argv)
         std::condition_variable state_changed;
         bool entered = false;
         bool release = false;
+        // Releases the blocking job and drains before the locals above are destroyed.
+        scope_exit_t drain_on_exit ([&] {
+            {
+                std::lock_guard lock (state_mutex);
+                release = true;
+            }
+            state_changed.notify_all ();
+            bounded_executor.drain ();
+        });
         if (!bounded_executor.try_submit_cancellable ([&] (std::stop_token) {
                 std::unique_lock lock (state_mutex);
                 entered = true;
@@ -9730,6 +10162,16 @@ int main (int argc, char **argv)
         int primed = 0;
         bool release_priming = false;
         std::atomic_int priming_completed{0};
+        std::atomic_int post_timeout_completed{0};
+        // Releases the priming jobs and drains before the locals above are destroyed.
+        scope_exit_t drain_on_exit ([&] {
+            {
+                std::lock_guard lock (state_mutex);
+                release_priming = true;
+            }
+            state_changed.notify_all ();
+            fixed_min_executor.drain ();
+        });
         for (int index = 0; index < 2; ++index) {
             if (!fixed_min_executor.try_submit ([&] {
                     {
@@ -9767,7 +10209,6 @@ int main (int argc, char **argv)
             return 65;
         }
 
-        std::atomic_int post_timeout_completed{0};
         for (int index = 0; index < 4; ++index) {
             if (!fixed_min_executor.try_submit (
                   [&] { post_timeout_completed.fetch_add (1, std::memory_order_release); })) {
@@ -9788,12 +10229,13 @@ int main (int argc, char **argv)
         }
     }
 
+    // Declared before the executor so its job never outlives it.
+    std::atomic_bool elastic_work_ran = false;
     zlink::framework::runtime::offload_executor_t elastic_executor (0, 2,
                                                                     std::chrono::milliseconds (5));
     if (elastic_executor.live_worker_count () != 0) {
         return 21;
     }
-    std::atomic_bool elastic_work_ran = false;
     if (!elastic_executor.try_submit ([&] { elastic_work_ran.store (true); })) {
         return 22;
     }
@@ -9814,10 +10256,12 @@ int main (int argc, char **argv)
         // A worker that returns on idle timeout is joined by its owner before
         // the next worker starts, so returned threads do not accumulate.
         constexpr int restart_rounds = 8;
+        // Declared before the executor so its job never outlives it.
+        std::atomic_bool ran = false;
         zlink::framework::runtime::offload_executor_t restarting_executor (
           0, 1, std::chrono::milliseconds (1));
         for (int round = 0; round < restart_rounds; ++round) {
-            std::atomic_bool ran = false;
+            ran = false;
             if (!restarting_executor.try_submit ([&] { ran.store (true); })) {
                 return 76;
             }
