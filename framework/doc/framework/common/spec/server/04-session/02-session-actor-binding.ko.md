@@ -198,6 +198,19 @@ caller 측 lookup·projection이 실어 온 lease 사본과 Actor owner의 curre
 검증([routing](../03-spot-actor/08-routing.ko.md))의 관심사이고, bind 승인에까지 사용하면
 파생 사본 불일치가 stale 판정 근거가 되어 §8.1의 판정 권위 원칙과 충돌한다.
 
+**Actor owner는 승인한 요청을 current binding과 한 번 비교해 결과를 정한다.** binding generation의
+대소는 [§4](#4-binding이-잇는-값과-보관하는-정보)대로 같은 Session owner lifecycle 안에서만 비교한다.
+
+| 요청과 current binding의 관계 | 결과 |
+|---|---|
+| Binding identity(§4)가 같다. | current를 유지하고 성공한다. |
+| Session owner Node RID·lifecycle generation이 같고, 요청 binding generation이 current보다 작다. | current를 유지하고 [§12](#12-실패와-오류)의 binding fence stale(`Unavailable`)로 끝난다. |
+| 그 밖의 경우(current 없음, 같은 Session owner lifecycle의 더 큰 generation, 다른 Session owner lifecycle) | 요청 identity를 current로 등록한다([§6](#6-rebind와-이전-연결-교체)). |
+
+`boundSessionBind(38)` 성공 reply의 tail은 이 비교로 current가 된 binding의 binding generation과
+`AuthorityOwnerGeneration`이다. 성공은 같은 identity이거나 요청 identity를 등록한 경우뿐이므로 두 값은
+요청 값과 같다. Session owner는 이 두 값으로 binding을 commit한다.
+
 Session에서 Actor로 들어가는 payload는 등록된 binding generation과
 session sequence를 포함한 `actorSend(24)`
 record로 Actor owner에 전달한다. Relocation seal이 없으면 payload를 local·remote 여부와 관계없이 target Actor의
