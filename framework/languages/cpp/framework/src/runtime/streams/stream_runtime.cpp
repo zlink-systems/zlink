@@ -13,6 +13,7 @@
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/streams/session_serial_executor.hpp"
 
+#include <nlohmann/json.hpp>
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -36,6 +37,52 @@ using detail::stream_metadata_t;
 
 namespace detail
 {
+
+/* The stream error payload uses the canonical framework wire error name. */
+const char *stream_error_code (framework_error_kind_t kind)
+{
+    switch (kind) {
+        case framework_error_kind_t::not_found:
+            return "not_found";
+        case framework_error_kind_t::already_exists:
+            return "already_exists";
+        case framework_error_kind_t::type_mismatch:
+            return "type_mismatch";
+        case framework_error_kind_t::not_configured:
+            return "not_configured";
+        case framework_error_kind_t::rejected:
+            return "rejected";
+        case framework_error_kind_t::unavailable:
+            return "unavailable";
+        case framework_error_kind_t::deadline_exceeded:
+            return "deadline_exceeded";
+        case framework_error_kind_t::shutting_down:
+            return "shutting_down";
+        case framework_error_kind_t::protocol_error:
+            return "protocol_error";
+        case framework_error_kind_t::invalid_operation:
+            return "invalid_operation";
+        case framework_error_kind_t::data_lost:
+            return "data_lost";
+        case framework_error_kind_t::internal_failure:
+            return "internal_failure";
+    }
+    return "internal_failure";
+}
+
+zlink::message_t stream_error_payload (std::string code, std::string message)
+{
+    return zlink::message_t::from (
+      nlohmann::json{{"code", std::move (code)}, {"message", std::move (message)}}.dump ());
+}
+
+zlink::message_t stream_error_payload (const result_t<void> &error)
+{
+    const auto *failure = error.error ();
+    return stream_error_payload (
+      stream_error_code (failure ? failure->kind () : framework_error_kind_t::internal_failure),
+      failure ? failure->what () : "STREAM request failed");
+}
 
 std::string_view stream_content_type (stream_codec_t codec) noexcept
 {
@@ -853,17 +900,7 @@ stream_send_call_t stream_t::write_packet (const zlink::message_t &payload)
 stream_write_call_t stream_t::write_packet_with_header (detail::stream_header_t header,
                                                         zlink::message_t payload)
 {
-    /* Stream writes propagate the ambient flow (flow-correlation §3.2);
-     * control packets never carry the pair. The diagnostics_mode re-check
-     * keeps a flow scope that was entered before a runtime flip to Off from
-     * materializing 36 bytes on the wire (flow-correlation §4). */
-    if (!header.flow_id () && header.kind () != stream_message_kind_t::control) {
-        if (const auto &flow = runtime::flow_context_t::current ();
-            flow && !flow->flow_id.empty ()
-            && runtime::flow_context_t::tracing (flow->diagnostics_mode)) {
-            header.with_flow (flow->flow_id, flow->origin);
-        }
-    }
+    detail::stream_runtime_t::propagate_flow (header);
     return stream_write_call_t (std::move (header), std::move (payload), _state->compression_codec,
                                 stream_submitter (_state));
 }
@@ -1128,7 +1165,22 @@ std::uint64_t read_u64 (const std::vector<std::uint8_t> &bytes, std::size_t &off
 
 } // namespace
 
-result_t<void> stream_runtime_t::validate_header (const stream_header_t &header) const
+void stream_runtime_t::propagate_flow (stream_header_t &header)
+{
+    /* Stream writes propagate the ambient flow (flow-correlation §3.2);
+     * control packets never carry the pair. The diagnostics_mode re-check
+     * keeps a flow scope that was entered before a runtime flip to Off from
+     * materializing 36 bytes on the wire (flow-correlation §4). */
+    if (!header.flow_id () && header.kind () != stream_message_kind_t::control) {
+        if (const auto &flow = runtime::flow_context_t::current ();
+            flow && !flow->flow_id.empty ()
+            && runtime::flow_context_t::tracing (flow->diagnostics_mode)) {
+            header.with_flow (flow->flow_id, flow->origin);
+        }
+    }
+}
+
+result_t<void> stream_runtime_t::validate_header (const stream_header_t &header)
 {
     if (!known_kind (header.kind ()) || !known_codec (header.codec ())) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
@@ -1357,6 +1409,40 @@ stream_runtime_t::encode_frame (const stream_header_t &header,
     return result_t<std::vector<std::uint8_t>>::success (std::move (frame));
 }
 
+std::pair<stream_header_t, zlink::message_t>
+stream_runtime_t::decode_frame (const std::vector<zlink::message_t> &parts) const
+{
+    return decode_frame (parts, message_flow_tracer_t (_state->dispatch).flow_tracing ());
+}
+
+std::pair<stream_header_t, zlink::message_t>
+stream_runtime_t::decode_frame (const std::vector<zlink::message_t> &parts, bool capture_flow)
+{
+    if (parts.size () != 1)
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "STREAM frame must contain one part");
+    const auto bytes = parts.front ().to_bytes ();
+    if (bytes.size () < 6)
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "STREAM frame prefix is incomplete");
+    const auto header_size =
+      (static_cast<std::size_t> (bytes[0]) << 8) | static_cast<std::size_t> (bytes[1]);
+    const auto payload_size =
+      (static_cast<std::size_t> (bytes[2]) << 24) | (static_cast<std::size_t> (bytes[3]) << 16)
+      | (static_cast<std::size_t> (bytes[4]) << 8) | static_cast<std::size_t> (bytes[5]);
+    if (header_size > bytes.size () - 6 || payload_size != bytes.size () - 6 - header_size)
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "STREAM frame size does not match its prefix");
+    std::vector<std::uint8_t> header_bytes (bytes.begin () + 6, bytes.begin () + 6 + header_size);
+    const auto header = decode_header (header_bytes, capture_flow);
+    if (!header)
+        throw framework_exception_t (header.error_kind (), header.error ()
+                                                             ? header.error ()->what ()
+                                                             : "STREAM header decode failed");
+    return {header.value (), zlink::message_t::from (std::vector<std::uint8_t> (
+                               bytes.begin () + 6 + header_size, bytes.end ()))};
+}
+
 stream_header_t stream_runtime_t::make_terminal_header (const stream_t &stream,
                                                         stream_message_kind_t kind,
                                                         const stream_header_t &request_header)
@@ -1379,6 +1465,12 @@ stream_header_t stream_runtime_t::make_terminal_header (const stream_t &stream,
 
 result_t<stream_header_t>
 stream_runtime_t::decode_header (const std::vector<std::uint8_t> &bytes) const
+{
+    return decode_header (bytes, message_flow_tracer_t (_state->dispatch).flow_tracing ());
+}
+
+result_t<stream_header_t> stream_runtime_t::decode_header (const std::vector<std::uint8_t> &bytes,
+                                                           bool capture_flow)
 {
     if (bytes.size () < 5) {
         return result_t<stream_header_t>::failure (framework_error_kind_t::protocol_error,
@@ -1486,7 +1578,7 @@ stream_runtime_t::decode_header (const std::vector<std::uint8_t> &bytes) const
             return result_t<stream_header_t>::failure (framework_error_kind_t::protocol_error,
                                                        "STREAM header flow fields are incomplete");
         }
-        if (detail::message_flow_tracer_t (_state->dispatch).flow_tracing ()) {
+        if (capture_flow) {
             flow_id = std::string (
               bytes.begin () + static_cast<std::ptrdiff_t> (offset),
               bytes.begin ()

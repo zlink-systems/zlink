@@ -69,6 +69,7 @@ using websocket_stream_t = websocket::stream<tcp::socket>;
 #ifdef ZLINK_FRAMEWORK_STREAM_WITH_OPENSSL
 namespace ssl = asio::ssl;
 #endif
+using detail::stream_error_payload;
 using detail::stream_header_flags_t;
 using detail::stream_header_t;
 using detail::stream_message_kind_t;
@@ -529,48 +530,6 @@ const char *stream_kind_name (stream_message_kind_t kind)
             return "control";
     }
     return "unknown";
-}
-
-/* The stream error payload uses the canonical framework wire error name. */
-const char *stream_error_code (framework_error_kind_t kind)
-{
-    switch (kind) {
-        case framework_error_kind_t::not_found:
-            return "not_found";
-        case framework_error_kind_t::already_exists:
-            return "already_exists";
-        case framework_error_kind_t::type_mismatch:
-            return "type_mismatch";
-        case framework_error_kind_t::not_configured:
-            return "not_configured";
-        case framework_error_kind_t::rejected:
-            return "rejected";
-        case framework_error_kind_t::unavailable:
-            return "unavailable";
-        case framework_error_kind_t::deadline_exceeded:
-            return "deadline_exceeded";
-        case framework_error_kind_t::shutting_down:
-            return "shutting_down";
-        case framework_error_kind_t::protocol_error:
-            return "protocol_error";
-        case framework_error_kind_t::invalid_operation:
-            return "invalid_operation";
-        case framework_error_kind_t::data_lost:
-            return "data_lost";
-        case framework_error_kind_t::internal_failure:
-            return "internal_failure";
-    }
-    return "internal_failure";
-}
-
-zlink::message_t stream_error_payload (const result_t<void> &error)
-{
-    const auto *failure = error.error ();
-    nlohmann::json payload;
-    payload["code"] =
-      stream_error_code (failure ? failure->kind () : framework_error_kind_t::internal_failure);
-    payload["message"] = failure ? failure->what () : "STREAM request failed";
-    return zlink::message_t::from (payload.dump ());
 }
 
 void trace_stream_host_enabled (std::string_view stage,

@@ -1060,10 +1060,13 @@ int main ()
       failure_origin_wire.find ("actor_transfer_in_progress") != std::string::npos
         && channel_reply_writer.find ("runtime::messaging::write_failure_origin (header, error)")
              != std::string::npos
-        && actor_client_runtime.find ("runtime::messaging::restore_failure_origin")
+        && actor_client_runtime.find ("detail::decode_actor_reply") != std::string::npos
+        && actor_gateway_runtime.find ("runtime::messaging::restore_failure_origin")
              != std::string::npos
         && actor_client_runtime.find (".find (\"transfer is in progress\")") == std::string::npos
-        && actor_client_runtime.find ("message.find (") == std::string::npos,
+        && actor_client_runtime.find ("message.find (") == std::string::npos
+        && actor_gateway_runtime.find (".find (\"transfer is in progress\")") == std::string::npos
+        && actor_gateway_runtime.find ("message.find (") == std::string::npos,
       "CPP-COMP-001",
       "Actor retry or native failure classification still depends on exception text");
 

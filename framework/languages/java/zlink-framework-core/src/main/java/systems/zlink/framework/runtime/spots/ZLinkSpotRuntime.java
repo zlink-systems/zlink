@@ -4348,46 +4348,24 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         CompletableFuture<T> result = new CompletableFuture<>();
         ZLinkSerialExecutionQueue.deferCurrentReleaseUntil(result);
         var flow = ZLinkFlowContext.current();
-        Object entryDispatchContext =
-                systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                        .currentEntrySpotDispatch();
         try {
-            ZLinkSerialExecutionQueue.propagateCurrent(handlerExecutor)
-                    .execute(
-                            () -> {
-                                outboundScope.run(
-                                        outbound,
-                                        () -> {
-                                            try (systems.zlink.framework.runtime.internal.handlers
-                                                            .ZLinkSuspendInvocationContext.Scope
-                                                    ignored =
-                                                            systems.zlink.framework.runtime.internal
-                                                                    .handlers
-                                                                    .ZLinkSuspendInvocationContext
-                                                                    .enterEntrySpotDispatch(
-                                                                            entryDispatchContext)) {
-                                                action.get()
-                                                        .whenComplete(
-                                                                (value, error) -> {
-                                                                    ZLinkFlowContext.run(
-                                                                            flow,
-                                                                            () -> {
-                                                                                if (error != null) {
-                                                                                    result
-                                                                                            .completeExceptionally(
-                                                                                                    error);
-                                                                                } else {
-                                                                                    result.complete(
-                                                                                            value);
-                                                                                }
-                                                                            });
-                                                                });
-                                            } catch (RuntimeException ex) {
-                                                result.completeExceptionally(ex);
-                                            }
-                                            return null;
-                                        });
-                            });
+            outboundScope.run(
+                    outbound,
+                    () -> {
+                        action.get()
+                                .whenComplete(
+                                        (value, error) ->
+                                                ZLinkFlowContext.run(
+                                                        flow,
+                                                        () -> {
+                                                            if (error != null) {
+                                                                result.completeExceptionally(error);
+                                                            } else {
+                                                                result.complete(value);
+                                                            }
+                                                        }));
+                        return null;
+                    });
         } catch (RuntimeException ex) {
             result.completeExceptionally(ex);
         }
@@ -4469,17 +4447,21 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                 spotSurface,
                                                                 actor,
                                                                 payload,
-                                                                actorPacketContentType(
-                                                                        packetHeader, headerPart),
+                                                                contentTypeFor(
+                                                                        ZLinkStreamCodec.fromValue(
+                                                                                packetHeader
+                                                                                        .codec())),
                                                                 packetHeader.metadata())
                                                         : invokeActorSendHandler(
                                                                         handler,
                                                                         spotSurface,
                                                                         actor,
                                                                         payload,
-                                                                        actorPacketContentType(
-                                                                                packetHeader,
-                                                                                headerPart),
+                                                                        contentTypeFor(
+                                                                                ZLinkStreamCodec
+                                                                                        .fromValue(
+                                                                                                packetHeader
+                                                                                                        .codec())),
                                                                         packetHeader.metadata())
                                                                 .thenApply(
                                                                         ignored ->
@@ -4572,13 +4554,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         }
                                     });
                         });
-    }
-
-    private String actorPacketContentType(
-            ActorPacketFrames.Header packetHeader, ZLinkBackendActorReceived headerPart) {
-        return packetHeader.streamHeader()
-                ? contentTypeFor(ZLinkStreamCodec.fromValue(packetHeader.codec()))
-                : headerPart.contentType();
     }
 
     private CompletionStage<Void> deliverRelocatedActorReply(

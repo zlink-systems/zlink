@@ -1,10 +1,11 @@
-using System.Collections.Concurrent;
+using System.Threading.Channels;
 
 namespace Zlink.Framework.Runtime.Service;
 
 internal sealed class RawMeshMonitor : IMeshNodeMonitor
 {
-    private readonly ConcurrentQueue<MeshMonitorEvent> _events = new();
+    private readonly Channel<MeshMonitorEvent> _events =
+        Channel.CreateUnbounded<MeshMonitorEvent>();
     private readonly MeshMonitorEventMask _mask;
     private long _sequence;
     private int _disposed;
@@ -37,8 +38,11 @@ internal sealed class RawMeshMonitor : IMeshNodeMonitor
     {
         if (Volatile.Read(ref _disposed) != 0)
             return null;
-        return _events.TryDequeue(out var value) ? value : null;
+        return _events.Reader.TryRead(out var value) ? value : null;
     }
+
+    public ValueTask<bool> WaitAsync(CancellationToken cancellationToken) =>
+        _events.Reader.WaitToReadAsync(cancellationToken);
 
     internal void Publish(
         MeshMonitorEventKind kind,
@@ -75,8 +79,8 @@ internal sealed class RawMeshMonitor : IMeshNodeMonitor
 
         if (Volatile.Read(ref _disposed) != 0 || !Includes(kind))
             return;
-        var sequence = checked((ulong)Interlocked.Increment(ref _sequence));
-        _events.Enqueue(
+        _ = checked((ulong)Interlocked.Increment(ref _sequence));
+        _events.Writer.TryWrite(
             new MeshMonitorEvent(
                 kind,
                 checked((ulong)Environment.TickCount64),
@@ -95,14 +99,14 @@ internal sealed class RawMeshMonitor : IMeshNodeMonitor
                 failureErrno
             )
         );
-        _ = sequence;
     }
 
     public void Dispose()
     {
         if (Interlocked.Exchange(ref _disposed, 1) != 0)
             return;
-        while (_events.TryDequeue(out _)) { }
+        _events.Writer.TryComplete();
+        while (_events.Reader.TryRead(out _)) { }
     }
 
     public ValueTask DisposeAsync()

@@ -134,7 +134,6 @@ final class ZLinkJavaRawMeshNode
     private static final int MAX_INGRESS_BATCH = 64;
     private static final long MAX_INGRESS_BATCH_BYTES = 4L * 1024 * 1024;
     private static final long MAX_INGRESS_BATCH_NANOS = 2_000_000L;
-    private static final Duration MAX_INGRESS_WAIT_TIMEOUT = Duration.ofMillis(100);
     private static final long MAX_INFRASTRUCTURE_CONTROL_BYTES = 256L * 1024;
     private static final long MAX_INFRASTRUCTURE_PAYLOAD_BYTES = 4_294_966_774L;
     private static final byte[] RELOCATION_CONTROL_PACKET =
@@ -180,7 +179,6 @@ final class ZLinkJavaRawMeshNode
     private final ZLinkServiceM6AWireCodec wire = new ZLinkServiceM6AWireCodec();
     private final ZLinkServiceM6BWireCodec statefulWire = new ZLinkServiceM6BWireCodec();
     private final ZLinkServiceLivenessRegistry liveness;
-    private final Duration ingressWaitTimeout;
     private final ScheduledExecutorService deadlines = ZLinkProcessExecutionLanes.deadlines();
     private final Executor applicationDispatch = ZLinkProcessExecutionLanes.applicationLane();
     private final ZLinkServiceOperationRegistry operations =
@@ -322,10 +320,6 @@ final class ZLinkJavaRawMeshNode
         this.port = new ZLinkJavaRawServicePort(context, transportStateLane, operations);
         this.currentTimeMillis = Objects.requireNonNull(currentTimeMillis, "currentTimeMillis");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
-        this.ingressWaitTimeout =
-                livenessProbeInterval.compareTo(MAX_INGRESS_WAIT_TIMEOUT) < 0
-                        ? livenessProbeInterval
-                        : MAX_INGRESS_WAIT_TIMEOUT;
         this.liveness =
                 new ZLinkServiceLivenessRegistry(
                         livenessProbeInterval, livenessPeerTimeout, transportStateLane);
@@ -1066,12 +1060,14 @@ final class ZLinkJavaRawMeshNode
             return;
         }
         pendingPeerCloseRequests.add(new PeerCloseRequest(connectionIntentId, intent.endpoint()));
+        port.signalReceiveOwner(router);
         signalStateChanged(intent.expectedRoutingId());
     }
 
     private void drainPeerCloseRequests() {
-        PeerCloseRequest request;
-        while ((request = pendingPeerCloseRequests.poll()) != null) {
+        PeerCloseRequest request = pendingPeerCloseRequests.poll();
+        if (request == null) return;
+        do {
             PeerIntent intent = peerIntents.get(request.connectionIntentId());
             RouterSocket current = router;
             if (intent == null
@@ -1090,7 +1086,9 @@ final class ZLinkJavaRawMeshNode
                 // route for the intent's peer. A non-inproc transport retries
                 // from a later descriptor observation.
             }
-        }
+        } while ((request = pendingPeerCloseRequests.poll()) != null);
+        // Selected-route changes already settle outstanding closes in observeSelectedRoutes.
+        // Without a new close request or route snapshot, that decision has no new input.
         finishRequestedIntentCloses();
     }
 
@@ -4748,6 +4746,7 @@ final class ZLinkJavaRawMeshNode
         }
         state = MeshNodeState.STOPPED;
         ZLinkApplicationJobQueue.cancelPendingAcquire(pendingReceiveAcquire);
+        port.signalReceiveOwner(router);
         ExecutorService currentPump = pump;
         if (currentPump != null) {
             currentPump.shutdownNow();
@@ -4801,6 +4800,11 @@ final class ZLinkJavaRawMeshNode
         pump.execute(pumpRotation);
     }
 
+    private void resumeReceiveOwner(Runnable resume) {
+        pump.execute(resume);
+        port.signalReceiveOwner(router);
+    }
+
     private void pumpTurn(RouterSocket pumpSocket) {
         // Spec 08 §4.1 I0–I4 and §4.2: readiness blocks between receive rotations;
         // the same receive owner needs no executor round trip for the next rotation.
@@ -4809,12 +4813,14 @@ final class ZLinkJavaRawMeshNode
         // progress on the existing receive turns even when ordinary capacity is exhausted.
         do {
             if (closed.get()) return;
+            long waitStartedAt = nanoTime.getAsLong();
             int ready =
-                    port.waitForReady(
-                            pumpSocket,
-                            pendingRawMulticast != null && pendingReceiveAcquire.get() == null
-                                    ? Duration.ZERO
-                                    : managementWaitTimeout(nanoTime.getAsLong()));
+                    pendingRawMulticast != null && pendingReceiveAcquire.get() == null
+                            ? port.waitForReady(pumpSocket, Duration.ZERO)
+                            : port.waitForManagementReady(
+                                    pumpSocket,
+                                    managementDeadlineNanos(waitStartedAt),
+                                    waitStartedAt);
             long now = nanoTime.getAsLong();
             // The existing pump remains this ROUTER's one route observer.
             if ((ready & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0) {
@@ -4845,10 +4851,9 @@ final class ZLinkJavaRawMeshNode
         long startedAt = System.nanoTime();
         long receivedBytes = 0;
         int count = 0;
-        // Spec 08 §4.1 I1/I2: the rotation's first permit observes the FIFO. After the first
-        // record, the rest of the rotation's budget is what is free now, reserved in one lock,
-        // and the rotation claims records until the socket has none (one readiness wait per
-        // rotation, no poll per record) or a budget, count, byte or time limit is reached.
+        // Spec 08 §4.1 I1/I2: reserve the rotation's currently free budget in one FIFO-aware
+        // lock before its first claim. Only a source with no free budget needs a resumption
+        // callback. Convert budget units to permit objects only for records that exist.
         var budgetQueue = applicationJobQueue;
         int budget = 0;
         boolean budgetReserved = false;
@@ -4857,7 +4862,7 @@ final class ZLinkJavaRawMeshNode
             while (count < MAX_INGRESS_BATCH && !closed.get()) {
                 var queue = applicationJobQueue;
                 boolean budgeted = false;
-                if (grant == null && queue != null && queue == budgetQueue && count > 0) {
+                if (grant == null && queue != null && queue == budgetQueue) {
                     if (!budgetReserved) {
                         budgetReserved = true;
                         budget = queue.reserveRotationBudget(MAX_INGRESS_BATCH - count);
@@ -4867,7 +4872,7 @@ final class ZLinkJavaRawMeshNode
                 if (grant == null && !budgeted && queue != null) {
                     grant =
                             queue.acquireOrResume(
-                                    pump,
+                                    this::resumeReceiveOwner,
                                     permit -> drainIngressBatch(pumpSocket, permit),
                                     pendingReceiveAcquire,
                                     ZLinkApplicationJobQueue.Origin.REMOTE);
@@ -4948,8 +4953,8 @@ final class ZLinkJavaRawMeshNode
 
     private static long retainedBytes(List<Message> frames) {
         long bytes = 0;
-        for (Message frame : frames) {
-            bytes = Math.addExact(bytes, frame.size());
+        for (int index = 0; index < frames.size(); index++) {
+            bytes = Math.addExact(bytes, frames.get(index).size());
         }
         return bytes;
     }
@@ -7641,11 +7646,12 @@ final class ZLinkJavaRawMeshNode
         liveness.setAdmissionPending(pending, nowNanos);
     }
 
-    private Duration managementWaitTimeout(long nowNanos) {
-        long remaining = liveness.nextDeadlineNanos(nowNanos) - nowNanos;
-        return remaining <= 0
-                ? Duration.ZERO
-                : Duration.ofNanos(Math.min(remaining, ingressWaitTimeout.toNanos()));
+    ZLinkServiceLivenessRegistry livenessForTest() {
+        return liveness;
+    }
+
+    long managementDeadlineNanos(long nowNanos) {
+        return liveness.nextDeadlineNanos(nowNanos);
     }
 
     private void tickLiveness(long nowNanos) {
@@ -7653,7 +7659,8 @@ final class ZLinkJavaRawMeshNode
         boolean admissionDue = liveness.tickAdmission(nowNanos);
         announceExpectedPeers(admissionDue);
         ZLinkServiceLivenessRegistry.Tick tick = liveness.tick(nowNanos);
-        for (ZLinkServiceLivenessRegistry.Probe probe : tick.probes()) {
+        for (int index = 0; index < tick.probes().size(); index++) {
+            ZLinkServiceLivenessRegistry.Probe probe = tick.probes().get(index);
             try {
                 sendLiveness(
                         probe.nodeRoutingId(),
@@ -7664,14 +7671,13 @@ final class ZLinkJavaRawMeshNode
                 // failure must not stop the service receive pump.
             }
         }
-        tick.timedOutNodes()
-                .forEach(
-                        peer -> {
-                            if (disconnectAdmitted(peer, admittedConnectionId(peer))) {
-                                requireStarted().disconnectRid(peer);
-                                signalStateChanged(peer);
-                            }
-                        });
+        for (int index = 0; index < tick.timedOutNodes().size(); index++) {
+            RoutingId peer = tick.timedOutNodes().get(index);
+            if (disconnectAdmitted(peer, admittedConnectionId(peer))) {
+                requireStarted().disconnectRid(peer);
+                signalStateChanged(peer);
+            }
+        }
     }
 
     private CompletionStage<Void> sendLiveness(RoutingId target, List<byte[]> frames) {

@@ -601,6 +601,10 @@ class mesh_node_runtime_t
     classify_node_target_from_topology (const zlink::routing_id_t &target, bool &unknown) const;
     task_t<std::optional<zlink::submit_result_t>>
     classify_unknown_node_target (const zlink::routing_id_t &target) const;
+    void configure_relocation_metric_context (
+      runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t &wire,
+      runtime::stateful::object_kind_t kind,
+      const std::string &stable_type) const;
     std::shared_ptr<mesh_node_builder_state_t> _state;
     serializer_registry_t *_serializers = nullptr;
     std::shared_ptr<location_repository_t> _user_spot_store;

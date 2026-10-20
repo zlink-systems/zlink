@@ -1,13 +1,8 @@
 package systems.zlink.framework.runtime.spots;
 
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
+import java.util.Map;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
-
-import java.util.Map;
-import java.util.concurrent.CancellationException;
-import java.util.concurrent.CompletionException;
 
 /** Measurement of the existing handoff operation; it never decides its outcome. */
 final class ZLinkRelocationMetricOperation {
@@ -89,22 +84,15 @@ final class ZLinkRelocationMetricOperation {
                     unitTags);
     }
 
-    void complete(ZLinkRelocationTransitionClient.Settlement settlement, Throwable failure) {
-        while (failure instanceof CompletionException && failure.getCause() != null)
-            failure = failure.getCause();
+    void complete(ZLinkRelocationTransitionClient.Settlement settlement, boolean sourceStopped) {
         Outcome outcome =
-                failure == null
+                settlement != null
                         ? switch (settlement) {
                             case TARGET_COMMITTED -> Outcome.COMPLETED;
                             case SOURCE_PRESERVED -> Outcome.ABORTED;
                             case SOURCE_LEASE_EXPIRED -> Outcome.FAILED;
                         }
-                        : failure instanceof ZLinkFrameworkException typed
-                                        && typed.kind() == ZLinkFrameworkErrorKind.SHUTTING_DOWN
-                                ? Outcome.SHUTDOWN
-                                : failure instanceof CancellationException
-                                        ? Outcome.ABORTED
-                                        : Outcome.FAILED;
+                        : sourceStopped ? Outcome.SHUTDOWN : Outcome.FAILED;
         var tags =
                 Map.of(
                         ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
