@@ -321,16 +321,16 @@ internal sealed class ZLinkActorRemoteJoiner(
                                     handoffId
                                 )
                                 .ConfigureAwait(false);
-                        relocationMetric.Complete(
-                            settlement == ZLinkSourceSettlement.TargetCommitted
-                                ? ZLinkRelocationMetricOutcome.Completed
-                                : ZLinkRelocationMetricOutcome.Aborted
-                        );
+                        relocationMetric.CompleteSource(settlement);
                         return settlement;
                     }
-                    catch (Exception)
+                    catch (Exception error)
                     {
-                        relocationMetric.Complete(ZLinkRelocationMetricOutcome.Failed);
+                        relocationMetric.CompleteSource(
+                            null,
+                            error is OperationCanceledException
+                                && runtime.ShutdownToken.IsCancellationRequested
+                        );
                         throw;
                     }
                     finally
@@ -352,12 +352,17 @@ internal sealed class ZLinkActorRemoteJoiner(
                     handoffId
                 )
                 .ConfigureAwait(false);
-            relocationMetric.Complete(ZLinkRelocationMetricOutcome.Aborted);
+            relocationMetric.CompleteSource(null);
 
             return result;
         }
         catch (Exception transactionFailure)
         {
+            relocationMetric.CompleteSource(
+                null,
+                transactionFailure is OperationCanceledException
+                    && runtime.ShutdownToken.IsCancellationRequested
+            );
             try
             {
                 await RollbackSourceHandoffAsync(
@@ -373,14 +378,8 @@ internal sealed class ZLinkActorRemoteJoiner(
             }
             catch (Exception rollbackFailure)
             {
-                relocationMetric.Complete(ZLinkRelocationMetricOutcome.Failed);
                 throw new AggregateException(transactionFailure, rollbackFailure);
             }
-            relocationMetric.Complete(
-                IsRuntimeShutdown(transactionFailure)
-                    ? ZLinkRelocationMetricOutcome.Shutdown
-                    : ZLinkRelocationMetricOutcome.Failed
-            );
             throw;
         }
         finally
@@ -1062,6 +1061,7 @@ internal sealed class ZLinkActorRemoteJoiner(
                 //  lease ends the unit without reopening its dispatch.
                 if (settlement.Outcome == ZLinkSourceSettlement.SourcePreserved)
                     return settlement.Outcome;
+                relocationMetric.CompleteSource(settlement.Outcome);
                 if (settlement.Outcome == ZLinkSourceSettlement.SourceLeaseExpired)
                 {
                     await runtime
@@ -1322,10 +1322,6 @@ internal sealed class ZLinkActorRemoteJoiner(
         && request.TargetNodeGeneration != 0
         && request.TargetAuthorityOwnerGeneration != 0
         && request.TargetOwnerLeaseGeneration != 0;
-
-    private bool IsRuntimeShutdown(Exception exception) =>
-        runtime.ShutdownToken.IsCancellationRequested
-        || exception is ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.ShuttingDown };
 
     private async ValueTask<ZLinkCapturedActorRelocationState> CaptureRelocationStateAsync(
         ZLinkObjectRelocationRegistration relocation,
