@@ -53,6 +53,7 @@ final class ZLinkCommittedActorLocalIngressTest {
     private static final RoutingId TARGET = RoutingId.from("committed-target");
     private static final long WAIT_SECONDS = 10;
     private static CompletableFuture<ZLinkActorJoinCompletion> joined;
+    private static final AtomicInteger sourceCompletions = new AtomicInteger();
     private static CompletableFuture<Void> handled;
     private static CompletableFuture<Void> firstHandlerRelease;
     private static CompletableFuture<Void> secondHandled;
@@ -289,6 +290,7 @@ final class ZLinkCommittedActorLocalIngressTest {
     }
 
     private static void assertPreparationDiscarded(boolean conflict) throws Exception {
+        sourceCompletions.set(0);
         pairClient = null;
         targetFactory = null;
         PAIR_COMPLETIONS.clear();
@@ -316,6 +318,21 @@ final class ZLinkCommittedActorLocalIngressTest {
                     .toCompletableFuture()
                     .get(WAIT_SECONDS, TimeUnit.SECONDS);
             var targetNode = node(target);
+            var targetCleanup = new CompletableFuture<CompletionStage<Void>>();
+            @SuppressWarnings("unchecked")
+            var targetMachines =
+                    (List<ZLinkCanonicalRelocationStateMachine>)
+                            field(field(target, "spotRetire"), "stateMachines");
+            Runnable observeTargetCleanup =
+                    () ->
+                            targetCleanup.complete(
+                                    CompletableFuture.allOf(
+                                            targetMachines.stream()
+                                                    .map(
+                                                            ZLinkCanonicalRelocationStateMachine
+                                                                    ::awaitAcceptedTargetRelocations)
+                                                    .map(CompletionStage::toCompletableFuture)
+                                                    .toArray(CompletableFuture[]::new)));
             if (conflict) {
                 BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>> abortCommit =
                         (repository, arguments) -> {
@@ -333,10 +350,16 @@ final class ZLinkCommittedActorLocalIngressTest {
                                                             .STALE);
                         };
                 interceptCommit(node(source), abortCommit);
-                interceptCommit(targetNode, abortCommit);
+                interceptCommit(
+                        targetNode,
+                        (repository, arguments) -> {
+                            observeTargetCleanup.run();
+                            return abortCommit.apply(repository, arguments);
+                        });
             } else {
                 targetFactory =
                         context -> {
+                            observeTargetCleanup.run();
                             observedRaw.complete(targetNode.actorLookup(ACTOR));
                             return CompletableFuture.failedFuture(
                                     new IllegalStateException("injected target factory failure"));
@@ -351,20 +374,44 @@ final class ZLinkCommittedActorLocalIngressTest {
                 assertNotNull(
                         observedRaw.get(WAIT_SECONDS, TimeUnit.SECONDS),
                         "preparation must own the raw Actor");
-                assertInstanceOf(
-                        ZLinkActorJoinCompletion.Failed.class,
-                        joined.get(WAIT_SECONDS, TimeUnit.SECONDS));
+                var sourceActors = (ZLinkActorRuntime) source.actorManager();
+                sourceActors
+                        .awaitMoveCompletion(sourceActors.localActor(ACTOR).orElseThrow())
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                sourceActors
+                        .awaitDrainBarrier()
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                // The next source handler verifies the deferred Join terminal. A CAS
+                // conflict after relay-ready must restore work without a source completion
+                // (membership §4); a factory failure before readiness still reports Failed.
+                assertEquals(
+                        "source",
+                        source.actorClient()
+                                .requestToActor(ACTOR, new SourceProbe())
+                                .submit(String.class)
+                                .toCompletableFuture()
+                                .get(WAIT_SECONDS, TimeUnit.SECONDS));
+                if (conflict) {
+                    assertEquals(0, sourceCompletions.get());
+                } else {
+                    assertInstanceOf(
+                            ZLinkActorJoinCompletion.Failed.class,
+                            joined.get(WAIT_SECONDS, TimeUnit.SECONDS));
+                    assertEquals(1, sourceCompletions.get());
+                }
+                // Relocation §4.4 lets source Preserve resume independently of target cleanup.
+                targetCleanup
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS)
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
                 assertNull(
                         targetNode.actorLookup(ACTOR), "failed target must release the raw Actor");
                 var actors = (ZLinkActorRuntime) target.actorManager();
                 assertTrue(actors.localActor(ACTOR).isEmpty());
                 assertNotNull(
                         node(source).actorLookup(ACTOR), "source authority must be preserved");
-                var sourceActors = (ZLinkActorRuntime) source.actorManager();
-                sourceActors
-                        .awaitMoveCompletion(sourceActors.localActor(ACTOR).orElseThrow())
-                        .toCompletableFuture()
-                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
             } finally {
                 targetFactory = null;
             }
@@ -505,9 +552,15 @@ final class ZLinkCommittedActorLocalIngressTest {
 
     public static final class Player implements ZLinkActor {
         private final ZLinkActorContext context;
+        private final boolean target;
 
         public Player(ZLinkActorContext context) {
+            this(context, false);
+        }
+
+        private Player(ZLinkActorContext context, boolean target) {
             this.context = context;
+            this.target = target;
         }
 
         @Override
@@ -517,6 +570,7 @@ final class ZLinkCommittedActorLocalIngressTest {
 
         @Override
         public CompletionStage<Void> onJoinCompleted(ZLinkActorJoinCompletion result) {
+            if (!target) sourceCompletions.incrementAndGet();
             joined.complete(result);
             var pair = PAIR_COMPLETIONS.get(context.actorId());
             if (pair != null) pair.complete(result);
@@ -536,7 +590,7 @@ final class ZLinkCommittedActorLocalIngressTest {
         public CompletionStage<ZLinkActor> create(ZLinkActorContext context) {
             var factory = targetFactory;
             return factory == null
-                    ? CompletableFuture.completedFuture(new Player(context))
+                    ? CompletableFuture.completedFuture(new Player(context, true))
                     : factory.apply(context);
         }
     }
@@ -570,6 +624,7 @@ final class ZLinkCommittedActorLocalIngressTest {
         @Override
         public void configure() {
             context.handlers().addHandler(JoinHandler.class);
+            context.handlers().addHandler(SourceProbeHandler.class);
         }
 
         @Override
@@ -621,6 +676,17 @@ final class ZLinkCommittedActorLocalIngressTest {
         public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
                 String actorId, ZLinkMessage request) {
             return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
+        }
+    }
+
+    public record SourceProbe() {}
+
+    public static final class SourceProbeHandler
+            implements ZLinkEntrySpotActorRequestHandler<Lobby, Player, SourceProbe, String> {
+        @Override
+        public CompletionStage<String> handle(
+                Lobby spot, Player actor, ZLinkMessageContext context, SourceProbe request) {
+            return CompletableFuture.completedFuture("source");
         }
     }
 

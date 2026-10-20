@@ -15,13 +15,19 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.*;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.binding.ZLinkRelocationRawSessionFixture;
+import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterOptions;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendContext;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
@@ -53,6 +59,140 @@ import java.util.function.Supplier;
 
 final class ZLinkUserSpotRetireTargetEndpointTest {
     private static final ZLinkStoreCancellation OPEN = () -> false;
+
+    @Test
+    void replayDiagnosticsOffDoesNotAllocatePacketNamesOrFailureReports() throws Exception {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addRouteMesh("mesh");
+
+        var registration = options.registration();
+        registration.dispatchOptions().messageFlow(ZLinkMessageFlowLogMode.OFF);
+        try (var runtime =
+                new ZLinkSpotRuntime(
+                        (ZLinkBackendAdapterProvider)
+                                Proxy.newProxyInstance(
+                                        getClass().getClassLoader(),
+                                        new Class<?>[] {ZLinkBackendAdapterProvider.class},
+                                        (proxy, method, args) -> null),
+                        new ZLinkBackendAdapterOptions(Duration.ofSeconds(1)),
+                        registration,
+                        null,
+                        (ZLinkBackendContext)
+                                Proxy.newProxyInstance(
+                                        getClass().getClassLoader(),
+                                        new Class<?>[] {ZLinkBackendContext.class},
+                                        (proxy, method, args) -> null),
+                        new ZLinkJsonMessageSerializer(),
+                        ZLinkHandlerActivator.reflection(),
+                        null,
+                        Map.of(
+                                "mesh",
+                                (ZLinkInternalMeshNode)
+                                        Proxy.newProxyInstance(
+                                                getClass().getClassLoader(),
+                                                new Class<?>[] {ZLinkInternalMeshNode.class},
+                                                (proxy, method, args) -> null)))) {
+            var node = RoutingId.from("replay-node");
+            var request =
+                    new ZLinkSpotRetireControl.StageRequest(
+                            new ZLinkSpotRetireControl.Fence(UUID.randomUUID(), 1),
+                            node,
+                            1,
+                            "source",
+                            1,
+                            node,
+                            1,
+                            "target",
+                            1,
+                            "mesh",
+                            "room",
+                            "room",
+                            false,
+                            false,
+                            new byte[] {1},
+                            List.of(
+                                    new ZLinkSpotRetireControl.ParticipantFence(
+                                            "spot:room", 2, "room", "room", false, 1, 1)));
+            var peer =
+                    (ZLinkInternalMeshNode)
+                            Proxy.newProxyInstance(
+                                    ZLinkInternalMeshNode.class.getClassLoader(),
+                                    new Class<?>[] {ZLinkInternalMeshNode.class},
+                                    (proxy, method, args) -> {
+                                        throw new AssertionError(method.getName());
+                                    });
+            var endpoint =
+                    new ZLinkUserSpotRetireTargetEndpoint(
+                            node,
+                            1,
+                            new ZLinkAggregateRelocationCoordinator(new AuthorityState().proxy()),
+                            new ZLinkUserSpotAggregateStagingOwner(new FakeStagingBackend()),
+                            ignored -> TestSpot.class,
+                            null,
+                            null,
+                            Duration.ofSeconds(1),
+                            ignored -> CompletableFuture.completedFuture(null),
+                            runtime,
+                            ZLinkSpotRetireControl.client(peer),
+                            null,
+                            null);
+            var relay = endpoint.productionReplyRelay(request);
+            byte[] packetName = new byte[8192];
+            java.util.Arrays.fill(packetName, (byte) 'a');
+            var record =
+                    new ZLinkSpotAcceptedJournal.Record(
+                            ZLinkBackendRequestResult.OK,
+                            Optional.of(node),
+                            Optional.of("room"),
+                            Optional.empty(),
+                            new byte[0],
+                            List.of(packetName),
+                            1,
+                            2,
+                            "source",
+                            1,
+                            1,
+                            1);
+            var failure = new IllegalStateException("replay failed");
+            Runnable success =
+                    () ->
+                            relay.completeSpot(record, 1, List.of(), null)
+                                    .toCompletableFuture()
+                                    .join();
+            Runnable failed =
+                    () ->
+                            relay.completeSpot(record, 1, List.of(), failure)
+                                    .toCompletableFuture()
+                                    .join();
+            for (int index = 0; index < 200; index++) {
+                success.run();
+                failed.run();
+            }
+            long successBytes = replayAllocatedBytes(success);
+            long failureBytes = replayAllocatedBytes(failed);
+            assertTrue(
+                    successBytes < packetName.length,
+                    "Off must not decode or copy the diagnostic packet name: " + successBytes);
+            assertEquals(
+                    successBytes,
+                    failureBytes,
+                    "Off must add zero diagnostic allocations for a failed replay");
+            registration.dispatchOptions().messageFlow(ZLinkMessageFlowLogMode.ERRORS);
+            assertTrue(
+                    replayAllocatedBytes(failed) > failureBytes + packetName.length,
+                    "enabled diagnostics must construct the packet name and failure report");
+        }
+    }
+
+    private static long replayAllocatedBytes(Runnable operation) {
+        var bean =
+                (com.sun.management.ThreadMXBean)
+                        java.lang.management.ManagementFactory.getThreadMXBean();
+        long threadId = Thread.currentThread().threadId();
+        long before = bean.getThreadAllocatedBytes(threadId);
+        operation.run();
+        return bean.getThreadAllocatedBytes(threadId) - before;
+    }
 
     @Test
     void command46MustCloseTheExactRequestSourceFence() {
@@ -320,9 +460,11 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             normalization.complete(null);
             actorBackend.drain();
             var closed = actorBackend.actorRuntime.closeAsync().toCompletableFuture();
-            actorBackend.drain();
-            closed.join();
-            actorBackend.rawSession.close();
+            try {
+                actorBackend.tasks.drainUntil(closed);
+            } finally {
+                actorBackend.rawSession.close();
+            }
         }
     }
 
@@ -426,9 +568,11 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             if (!backend.operations.contains("open")) backend.openAdmission(backend.prepared);
             backend.drain();
             var closed = backend.actorRuntime.closeAsync().toCompletableFuture();
-            backend.drain();
-            closed.join();
-            backend.rawSession.close();
+            try {
+                backend.tasks.drainUntil(closed);
+            } finally {
+                backend.rawSession.close();
+            }
         }
     }
 
@@ -487,7 +631,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         owner.publishHidden(backlog, 8);
         try {
             var publication = owner.drainDurableBacklog(backlog).toCompletableFuture();
-            publication.join();
+            var replay = publication.join().toCompletableFuture();
             assertFalse(registered.isDone());
             owner.openAdmission(staged);
             var outside =
@@ -495,23 +639,26 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                             systems.zlink.framework.errors.ZLinkFrameworkException.class,
                             () -> backend.prepared.actor().context().joinSpot("outside").defer());
             assertTrue(outside.getMessage().contains("open Framework handler scope"));
-            backend.drain();
+            backend.tasks.drainUntil(CompletableFuture.anyOf(registered, replay));
             assertTrue(
                     registered.isDone(),
                     "adopted record must retain the actual Actor handler scope");
             assertFalse(handler.isDone());
             var failure = new IllegalStateException("handler terminal after deferred registration");
             handler.completeExceptionally(failure);
-            backend.drain();
+            backend.tasks.drainUntil(replay.handle((ignored, error) -> null));
+            assertTrue(replay.isCompletedExceptionally());
             assertSame(failure, observed.get());
         } finally {
             handler.completeExceptionally(new IllegalStateException("test cleanup"));
             if (!backend.operations.contains("open")) backend.openAdmission(backend.prepared);
             backend.drain();
             var closed = backend.actorRuntime.closeAsync().toCompletableFuture();
-            backend.drain();
-            closed.join();
-            backend.rawSession.close();
+            try {
+                backend.tasks.drainUntil(closed);
+            } finally {
+                backend.rawSession.close();
+            }
         }
     }
 
@@ -943,9 +1090,11 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             handlerTerminal.completeExceptionally(new IllegalStateException("test cleanup"));
             recoveredBackend.executor.drain();
             var closed = recoveredBackend.actorRuntime.closeAsync().toCompletableFuture();
-            recoveredBackend.executor.drain();
-            closed.join();
-            recoveredBackend.rawSession.close();
+            try {
+                recoveredBackend.executor.drainUntil(closed);
+            } finally {
+                recoveredBackend.rawSession.close();
+            }
         }
     }
 

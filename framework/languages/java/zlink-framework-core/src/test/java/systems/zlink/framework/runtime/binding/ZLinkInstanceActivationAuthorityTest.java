@@ -78,18 +78,36 @@ final class ZLinkInstanceActivationAuthorityTest {
             var registry = registryField.get(target);
             var factoriesField = ZLinkJavaInstanceSpotRegistry.class.getDeclaredField("factories");
             factoriesField.setAccessible(true);
-            var factories =
-                    (Map<String, BiFunction<String, Long, ZLinkBackendSpot>>)
-                            factoriesField.get(registry);
-            var factory = factories.get("room");
-            factories.put(
-                    "room",
-                    (id, generation) -> {
-                        var spot = factory.apply(id, generation);
-                        if (replacement) owner.registerInstanceIntent("room", successor);
-                        owner.forgetInstanceIntent(route);
-                        return spot;
-                    });
+            var factories = (Map<String, Object>) factoriesField.get(registry);
+            var registration = factories.get("room");
+            var components = registration.getClass().getRecordComponents();
+            var constructor =
+                    registration
+                            .getClass()
+                            .getDeclaredConstructor(
+                                    java.util.Arrays.stream(components)
+                                            .map(java.lang.reflect.RecordComponent::getType)
+                                            .toArray(Class<?>[]::new));
+            constructor.setAccessible(true);
+            Object[] values = new Object[components.length];
+            for (int index = 0; index < components.length; index++) {
+                var accessor = components[index].getAccessor();
+                accessor.setAccessible(true);
+                values[index] = accessor.invoke(registration);
+                if (components[index].getName().equals("factory")) {
+                    var factory = (BiFunction<String, Long, ZLinkBackendSpot>) values[index];
+                    values[index] =
+                            (BiFunction<String, Long, ZLinkBackendSpot>)
+                                    (id, generation) -> {
+                                        var spot = factory.apply(id, generation);
+                                        if (replacement)
+                                            owner.registerInstanceIntent("room", successor);
+                                        owner.forgetInstanceIntent(route);
+                                        return spot;
+                                    };
+                }
+            }
+            factories.put("room", constructor.newInstance(values));
             var failure = new CompletableFuture<Throwable>();
             try (var message = Message.from(new byte[] {1})) {
                 if (recovery) {

@@ -54,30 +54,6 @@ std::optional<runtime::protocol::application_payload_t> canonical_actor_join_app
 std::vector<std::uint8_t> unwrap_canonical_actor_join_application_reply (
   const runtime::protocol::application_payload_t &payload);
 
-enum class application_actor_session_bind_outcome_t : std::uint8_t
-{
-    bound,
-    stale_route,
-    actor_not_ready
-};
-
-enum class application_actor_session_bind_attempt_t : std::uint8_t
-{
-    initial,
-    retry
-};
-
-/* Retries are bounded by the caller's binding deadline (not by attempt
- * count), matching the dotnet/java bind-vs-authority-convergence retry
- * loops: stale_route and actor_not_ready are transient outcomes that a
- * later attempt can resolve once the authority converges. */
-constexpr bool
-can_retry_application_actor_session_bind (application_actor_session_bind_outcome_t outcome) noexcept
-{
-    return outcome == application_actor_session_bind_outcome_t::stale_route
-           || outcome == application_actor_session_bind_outcome_t::actor_not_ready;
-}
-
 inline result_t<runtime::stateful::object_ref_t>
 make_local_application_actor_session_ref (const runtime::stateful::object_ref_t &materialized,
                                           const actor_ref_t &actor,
@@ -418,7 +394,7 @@ class mesh_node_runtime_t
       std::uint64_t reply_route_id,
       bool await_remote_admission = false,
       std::optional<bound_session_relay_source_t> bound_session_source = std::nullopt);
-    request_task_t<application_actor_session_bind_outcome_t>
+    request_task_t<runtime::protocol::stream_bind_reply_tail_t>
     bind_application_actor_session (const actor_ref_t &actor,
                                     const zlink::routing_id_t &session_rid,
                                     std::uint64_t binding_generation,
@@ -431,12 +407,7 @@ class mesh_node_runtime_t
                                                    std::chrono::milliseconds timeout);
     task_t<std::optional<runtime::spot_address_t>>
     resolve_application_actor_route (actor_ref_t actor) const;
-    task_t<std::optional<runtime::spot_address_t>>
-    refresh_application_actor_route (actor_ref_t actor, runtime::spot_address_t stale_route) const;
-    task_t<std::optional<runtime::spot_address_t>>
-    wait_for_application_actor_route_change (const actor_ref_t &actor,
-                                             const runtime::spot_address_t &stale_route,
-                                             std::chrono::milliseconds timeout) const;
+
     task_t<void> notify_application_actor_disconnected (const actor_ref_t &actor,
                                                         runtime::stateful::stream_binding_t binding,
                                                         std::chrono::milliseconds timeout);
@@ -560,8 +531,13 @@ class mesh_node_runtime_t
     seal_remote_application_actor_join_call (std::shared_ptr<remote_actor_join_state_t> state);
     task_t<actor_join_reply_t>
     prepare_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
-    task_t<actor_join_reply_t>
-    finalize_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
+    task_t<void>
+    settle_remote_application_actor_join_source (std::shared_ptr<remote_actor_join_state_t> state,
+                                                 runtime::stateful::relocation_result_t relocated,
+                                                 actor_ref_t target_actor);
+    task_t<void>
+    finalize_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state,
+                                            actor_ref_t target_actor);
     task_t<result_t<void>> deliver_actor_join (actor_ref_t actor,
                                                std::optional<spot_id_t> source_spot,
                                                std::uint64_t operation_high,
@@ -571,8 +547,6 @@ class mesh_node_runtime_t
                                                        const result_t<actor_join_reply_t> &failed,
                                                        std::string message);
     task_t<bool> abort_remote_actor_join_seal (std::shared_ptr<remote_actor_join_state_t> state);
-    task_t<actor_join_reply_t>
-    complete_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
     task_t<runtime::messaging::message_parts_t>
     request_actor_join_spot_route (const runtime::spot_address_t &target,
                                    runtime::messaging::message_parts_t encoded,
@@ -633,6 +607,10 @@ class mesh_node_runtime_t
     classify_node_target_from_topology (const zlink::routing_id_t &target, bool &unknown) const;
     task_t<std::optional<zlink::submit_result_t>>
     classify_unknown_node_target (const zlink::routing_id_t &target) const;
+    void configure_relocation_metric_context (
+      runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t &wire,
+      runtime::stateful::object_kind_t kind,
+      const std::string &stable_type) const;
     std::shared_ptr<mesh_node_builder_state_t> _state;
     serializer_registry_t *_serializers = nullptr;
     std::shared_ptr<location_repository_t> _user_spot_store;

@@ -340,6 +340,10 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                                                 staged.targetReady()
                                                         .toCompletableFuture()
                                                         .completeExceptionally(failure);
+                                            else if (target == null)
+                                                staged.targetReady()
+                                                        .toCompletableFuture()
+                                                        .complete(null);
                                             else
                                                 staged.refreshTarget(
                                                         ZLinkActorRuntime.messageFollowRoute(
@@ -371,16 +375,26 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         return stateLane
                 .runNowOrQueue(() -> exactSource(sourceRoute))
                 .thenCompose(
-                        source ->
-                                source == null
-                                        ? CompletableFuture.<Void>failedFuture(
-                                                new IllegalStateException(
-                                                        "Message Follow source is unavailable"))
-                                        : source.targetReady().thenApply(ignored -> (Void) null))
-                .thenCompose(
-                        ignored ->
-                                stateLane.runNowOrQueue(
-                                        () -> commitRelocationRouteOnLane(sourceRoute, duration)))
+                        source -> {
+                            if (source == null)
+                                return CompletableFuture.<CommitRouteState>failedFuture(
+                                        new IllegalStateException(
+                                                "Message Follow source is unavailable"));
+                            return source.targetReady()
+                                    .thenCompose(
+                                            target ->
+                                                    target == null
+                                                            ? abortRelocationRouteAsync(sourceRoute)
+                                                                    .thenApply(
+                                                                            ignored ->
+                                                                                    (CommitRouteState)
+                                                                                            null)
+                                                            : stateLane.runNowOrQueue(
+                                                                    () ->
+                                                                            commitRelocationRouteOnLane(
+                                                                                    sourceRoute,
+                                                                                    duration)));
+                        })
                 .thenCompose(
                         state -> {
                             if (state == null) {

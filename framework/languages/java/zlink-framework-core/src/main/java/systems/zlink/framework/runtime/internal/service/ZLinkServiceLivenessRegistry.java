@@ -18,6 +18,7 @@ import java.util.function.Supplier;
 public final class ZLinkServiceLivenessRegistry {
     public static final Duration DEFAULT_PROBE_INTERVAL = Duration.ofSeconds(5);
     public static final Duration DEFAULT_PEER_TIMEOUT = Duration.ofSeconds(15);
+    public static final long NO_DEADLINE = Long.MAX_VALUE;
     private final long probeIntervalNanos;
     private final long peerTimeoutNanos;
     private final ZLinkStateLane stateLane;
@@ -25,8 +26,9 @@ public final class ZLinkServiceLivenessRegistry {
     private long nextProbeId = 1;
     // No peer is due before this instant (monotonic nanos). Written on the lane; a later receive
     // only moves a peer's deadline later, so the value stays an early bound.
-    private volatile long nextDueNanos;
-    private volatile boolean nextDueKnown;
+    private volatile long nextDueNanos = NO_DEADLINE;
+    private volatile boolean nextDueKnown = true;
+    private volatile Long admissionActivityNanos;
 
     public ZLinkServiceLivenessRegistry() {
         this(DEFAULT_PROBE_INTERVAL, DEFAULT_PEER_TIMEOUT);
@@ -95,6 +97,12 @@ public final class ZLinkServiceLivenessRegistry {
             return false;
         }
         peers.remove(nodeRoutingId);
+        if (peers.isEmpty()) {
+            nextDueNanos = NO_DEADLINE;
+            nextDueKnown = true;
+        } else {
+            nextDueKnown = false;
+        }
         return true;
     }
 
@@ -129,7 +137,7 @@ public final class ZLinkServiceLivenessRegistry {
      * no liveness work; only a due rotation enters the lane and visits the peers.
      */
     public Tick tick(long nowNanos) {
-        if (nextDueKnown && nowNanos - nextDueNanos < 0) {
+        if (nextDueKnown && (nextDueNanos == NO_DEADLINE || nowNanos - nextDueNanos < 0)) {
             return Tick.NONE;
         }
         return inStateLane(() -> tickCore(nowNanos));
@@ -138,7 +146,7 @@ public final class ZLinkServiceLivenessRegistry {
     private Tick tickCore(long nowNanos) {
         List<Probe> probes = null;
         List<RoutingId> timedOut = null;
-        long nextDue = addExact(nowNanos, probeIntervalNanos);
+        long nextDue = NO_DEADLINE;
         for (Map.Entry<RoutingId, PeerState> entry : peers.entrySet()) {
             PeerState state = entry.getValue();
             if (state.isExpired(nowNanos)) {
@@ -163,7 +171,38 @@ public final class ZLinkServiceLivenessRegistry {
                         timedOut == null ? List.of() : List.copyOf(timedOut));
     }
 
+    /** MeshNode §7.1: admission reuses the liveness management deadline. */
+    public void setAdmissionPending(boolean pending, long nowNanos) {
+        if (pending == (admissionActivityNanos != null)) return;
+        inStateLane(
+                () -> {
+                    if (!pending) admissionActivityNanos = null;
+                    else if (admissionActivityNanos == null) admissionActivityNanos = nowNanos;
+                    return null;
+                });
+    }
+
+    public boolean tickAdmission(long nowNanos) {
+        Long activity = admissionActivityNanos;
+        if (activity == null || nowNanos - activity < probeIntervalNanos) return false;
+        return inStateLane(
+                () -> {
+                    Long current = admissionActivityNanos;
+                    if (current == null || nowNanos - current < probeIntervalNanos) return false;
+                    admissionActivityNanos = nowNanos;
+                    return true;
+                });
+    }
+
+    public long nextDeadlineNanos(long nowNanos) {
+        long due = nextDueKnown ? nextDueNanos : nowNanos;
+        Long activity = admissionActivityNanos;
+        return activity == null ? due : earlier(due, addExact(activity, probeIntervalNanos));
+    }
+
     private static long earlier(long first, long second) {
+        if (first == NO_DEADLINE) return second;
+        if (second == NO_DEADLINE) return first;
         return second - first < 0 ? second : first;
     }
 

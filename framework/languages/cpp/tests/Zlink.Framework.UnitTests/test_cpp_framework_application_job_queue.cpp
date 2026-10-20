@@ -6,6 +6,7 @@
 //  test_cpp_framework_execution.cpp.
 
 #include "runtime/dispatch/application_job_queue.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
@@ -436,8 +437,7 @@ TEST (ZLinkFrameworkStatefulDispatch, RetainedIngressExceptionLeavesTerminalWith
     framework::runtime::messaging::envelope_header_t header;
     header.channel_name = "actor";
     header.message_name = "retained-ingress";
-    auto request = framework::runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
-      header, zlink::message_t::from ("{}"));
+    auto request = framework::detail::encode_actor_packet (header, zlink::message_t::from ("{}"));
     ASSERT_EQ (zlink::submit_result_t::ok,
                actor
                  .request_to (actor.ref (), request.items (), operation, zlink::send_flags_t::none,
@@ -538,8 +538,8 @@ TEST (ZLinkFrameworkStatefulDispatch, DispatchFailureReportsCauseAndFailsOrigina
         header.correlation_id = flow_id;
         header.flow_id = flow_id;
         header.flow_origin = framework::flow_origin_t::application;
-        auto request = framework::runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
-          header, zlink::message_t::from ("{}"));
+        auto request =
+          framework::detail::encode_actor_packet (header, zlink::message_t::from ("{}"));
         ASSERT_EQ (zlink::submit_result_t::ok,
                    actor
                      .request_to (actor.ref (), request.items (), operation,

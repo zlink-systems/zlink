@@ -702,10 +702,18 @@ test('Core-routed Actor request submits its reply before deferred Join completio
   ];
   let replies = 0;
 
-  const result = await dispatch.dispatch('remote', 'alice', parts, true, undefined, undefined, (reply) => {
-    replies += 1;
-    events.push(`reply:${reply.accepted}`);
-  });
+  const result = await dispatch.dispatch(
+    'remote',
+    'alice',
+    parts,
+    true,
+    undefined,
+    undefined,
+    (reply) => {
+      replies += 1;
+      events.push(`reply:${reply.accepted}`);
+    }
+  );
 
   assert.equal(result, undefined);
   assert.equal(replies, 1);
@@ -925,3 +933,56 @@ test('deferred Actor Join reports an application failure with the public Interna
   assert.equal(typeof events[0].operationId.high, 'bigint');
   assert.equal(typeof events[0].operationId.low, 'bigint');
 });
+
+for (const entry of [false, true]) {
+  for (const relayReady of [false, true]) {
+    test(`Join completion owner: entry=${entry}, relayReady=${relayReady}`, async () => {
+      const source = [];
+      const target = [];
+      let discarded = 0;
+      const failure = new Error('source authority Missing');
+      const state = new ZLinkActorRuntimeState('join-completion-owner');
+      const join = async () => {
+        if (!relayReady) throw failure;
+        target.push({ status: 'accepted' });
+        return {
+          accepted: false,
+          sourceCleanup: async () => {
+            discarded++;
+            throw failure;
+          }
+        };
+      };
+      const coordinator = { joinSpot: join, joinEntrySpot: join };
+      const context = new DefaultZLinkActorContext(
+        state,
+        coordinator,
+        undefined,
+        undefined,
+        () => 'mesh',
+        undefined
+      );
+      const actor = {
+        actorId: state.actorId,
+        context,
+        onJoinCompleted: async (value) => {
+          source.push(value);
+        }
+      };
+      state.bindActor(actor, context);
+      await runActorHandlerWithDeferredJoins(() => {
+        (entry ? context.joinEntrySpot() : context.joinSpot('target')).defer();
+      });
+      if (relayReady) {
+        assert.deepEqual(source, []);
+        assert.deepEqual(target, [{ status: 'accepted' }]);
+        assert.equal(discarded, 1);
+      } else {
+        assert.equal(source.length, 1);
+        assert.equal(source[0].status, 'failed');
+        assert.deepEqual(target, []);
+        assert.equal(discarded, 0);
+      }
+    });
+  }
+}

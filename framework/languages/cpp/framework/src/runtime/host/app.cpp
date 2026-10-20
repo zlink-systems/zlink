@@ -98,34 +98,6 @@ std::vector<zlink::message_t> encode_bound_session_frame (const stream_runtime_t
     return {zlink::message_t::from (std::move (encoded_frame.value ()))};
 }
 
-std::pair<stream_header_t, zlink::message_t>
-decode_bound_session_frame (const stream_runtime_t &runtime,
-                            const std::vector<zlink::message_t> &parts)
-{
-    if (parts.size () != 1)
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "bound Session frame must contain one part");
-    const auto bytes = parts.front ().to_bytes ();
-    if (bytes.size () < 6)
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "bound Session frame prefix is incomplete");
-    const auto header_size =
-      (static_cast<std::size_t> (bytes[0]) << 8) | static_cast<std::size_t> (bytes[1]);
-    const auto payload_size =
-      (static_cast<std::size_t> (bytes[2]) << 24) | (static_cast<std::size_t> (bytes[3]) << 16)
-      | (static_cast<std::size_t> (bytes[4]) << 8) | static_cast<std::size_t> (bytes[5]);
-    if (header_size > bytes.size () - 6 || payload_size != bytes.size () - 6 - header_size)
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "bound Session frame size does not match its prefix");
-    std::vector<std::uint8_t> header_bytes (bytes.begin () + 6, bytes.begin () + 6 + header_size);
-    const auto header = runtime.decode_header (header_bytes);
-    if (!header)
-        throw framework_exception_t (header.error_kind (),
-                                     header.error () ? header.error ()->what ()
-                                                     : "bound Session header decode failed");
-    return {header.value (), zlink::message_t::from (std::vector<std::uint8_t> (
-                               bytes.begin () + 6 + header_size, bytes.end ()))};
-}
 
 class session_ingress_completion_t final
 {
@@ -1762,7 +1734,12 @@ void app_t::_apply_zlink_framework ()
         auto location_store = provider.get<location_repository_t> ();
         auto mesh_runtime = std::make_shared<runtime::route_mesh_runtime_service_t> (
           mesh_nodes, location_runtime ? &location_runtime->get () : nullptr,
-          location_store ? &location_store->get () : nullptr, _state->monitoring);
+          location_store ? &location_store->get () : nullptr, _state->monitoring,
+          [access = _state->status_access] {
+              std::shared_lock lock (access->mutex);
+              return access->state ? access->state->runtime_state.load (std::memory_order_acquire)
+                                   : framework_runtime_state_t::stopped;
+          });
         _state->services.add_factory<route_mesh_runtime_t> (
           [mesh_runtime] (service_provider_t &) {
               return std::static_pointer_cast<route_mesh_runtime_t> (mesh_runtime);
@@ -2345,7 +2322,7 @@ void app_t::_apply_zlink_framework ()
                 expected_binding_generation, header, payload.copy ());
           });
         auto deliver_relay =
-          [application_mesh, actor_gateway_runtime] (
+          [application_mesh] (
             actor_ref_t actor, detail::stream_header_t header, zlink::message_t payload,
             std::optional<detail::bound_session_relay_source_t> bound_session_source,
             std::optional<runtime::stateful::stream_dispatch_t> dispatch,
@@ -2355,25 +2332,9 @@ void app_t::_apply_zlink_framework ()
             detail::session_ingress_completion_t ingress;
             auto routed_actor = actor;
             runtime::protocol::actor_route_fence_t stale_route;
-            std::optional<zlink::routing_id_t> session_owner;
             if (bound_session_source) {
                 auto &sessions = session_owner_runtime->sessions ();
                 ingress.arm (sessions, *dispatch);
-                session_owner = application_mesh->routing_id ();
-                const auto completion_admitted =
-                  session_owner
-                    ? actor_gateway_runtime.begin_session_relay_completion (
-                        actor, *session_owner, bound_session_source->session_rid,
-                        bound_session_source->binding_generation, dispatch->inbound_sequence)
-                    : result_t<void>::failure (framework_error_kind_t::not_found,
-                                               "bound Session owner identity is unavailable");
-                if (!completion_admitted) {
-                    co_return result_t<std::optional<zlink::message_t>>::failure (
-                      completion_admitted.error_kind (),
-                      completion_admitted.error () != nullptr
-                        ? completion_admitted.error ()->what ()
-                        : "bound Session relay completion was not admitted");
-                }
                 routed_actor = detail::actor_ref_access_t::make (
                   node_rid_t::from_string (dispatch->binding.actor.node_id),
                   std::string (detail::actor_ref_access_t::actor_type (actor)),
@@ -2387,13 +2348,8 @@ void app_t::_apply_zlink_framework ()
                   dispatch->binding.owner_lease_generation};
                 bound_session_source->session_sequence = dispatch->inbound_sequence;
             }
-            const auto admitted_source = bound_session_source;
-            //  Spec 20-session-actor-dispatch §3/§7 — the admitted ingress
-            //  and relay-sequence fences must complete exactly once even
-            //  when the application handler throws. Skipping the tail
-            //  leaves the owner's recorded sequence behind, so every later
-            //  request on this binding is rejected with "bound Session
-            //  relay completion is not current or next".
+            // The native Session registry owns ingress completion and drain.
+            // Receiver admission alone advances the Actor's relay ordinal.
             std::exception_ptr relay_failure;
             std::optional<zlink::message_t> relayed;
             try {
@@ -2410,31 +2366,12 @@ void app_t::_apply_zlink_framework ()
                 relay_failure = std::current_exception ();
             }
             const auto completed = ingress.complete ();
-            result_t<void> observed = result_t<void>::success ();
-            if (admitted_source) {
-                observed =
-                  session_owner
-                    ? actor_gateway_runtime.complete_session_relay (
-                        actor, *session_owner, admitted_source->session_rid,
-                        admitted_source->binding_generation, admitted_source->session_sequence)
-                    : result_t<void>::failure (framework_error_kind_t::not_found,
-                                               "bound Session owner identity is unavailable");
-            }
-            //  The original application error stays the single terminal;
-            //  fence completion above ran regardless, and its own failure
-            //  is reported only when the relay itself succeeded.
             if (relay_failure)
                 std::rethrow_exception (relay_failure);
             if (completed != runtime::stateful::stateful_error_t::none) {
                 co_return result_t<std::optional<zlink::message_t>>::failure (
                   framework_error_kind_t::internal_failure,
                   "bound Session ingress completion lost its exact fence");
-            }
-            if (!observed) {
-                co_return result_t<std::optional<zlink::message_t>>::failure (
-                  observed.error_kind (), observed.error () != nullptr
-                                            ? observed.error ()->what ()
-                                            : "bound Session ingress high-water was not published");
             }
             co_return relayed;
         };
@@ -2640,7 +2577,8 @@ void app_t::_apply_zlink_framework ()
               const runtime::protocol::bound_session_bind_t &bind,
               const zlink::routing_id_t &session_owner, std::uint64_t session_owner_generation,
               const location_owner_token_t &session_owner_token,
-              std::function<bool ()> submit_terminal_reply) mutable {
+              std::function<bool (const runtime::protocol::stream_bind_reply_tail_t &)>
+                submit_terminal_reply) mutable {
                 const auto actor = detail::actor_ref_access_t::make (
                   node_rid_t::from_string (
                     zlink::routing_id_t::from (bind.actor.target_node_routing_id).to_string ()),
@@ -2726,7 +2664,12 @@ void app_t::_apply_zlink_framework ()
                     bind.actor.owner_lease_generation, bind.binding.generation, 0, 0, false,
                     session_owner_token.owner_id,
                     static_cast<std::uint64_t> (session_owner_token.lease_generation)},
-                  stream_codec_t::message_pack, std::move (submit_terminal_reply));
+                  stream_codec_t::message_pack,
+                  [submit_terminal_reply = std::move (submit_terminal_reply)] (
+                    const detail::actor_bound_session_route_t &accepted) {
+                      return submit_terminal_reply (
+                        {accepted.binding_generation, accepted.authority_owner_generation});
+                  });
                 if (!transition) {
                     return runtime::host::bound_session_bind_operation_result_t{
                       runtime::stateful::stateful_error_t::conflict, std::nullopt};
@@ -2741,18 +2684,6 @@ void app_t::_apply_zlink_framework ()
                              + " replaced=" + (change.changed ? "true" : "false");
                   },
                   &session_rid);
-                if (change.current
-                    && change.current->binding_generation != bind.binding.generation) {
-                    actor_gateway_runtime.trace_bound_session_send_stage (
-                      bind.actor.actor_id, "actor_owner_route_publish_stale_ignored",
-                      [&] {
-                          return "session_rid=" + session_rid.to_hex ()
-                                 + " binding_generation=" + std::to_string (bind.binding.generation)
-                                 + " current_binding_generation="
-                                 + std::to_string (change.current->binding_generation);
-                      },
-                      &session_rid);
-                }
                 if (change.changed && change.previous && change.previous->session_rid
                     && change.previous->node_generation != 0
                     && change.previous->binding_generation != 0
@@ -2785,7 +2716,7 @@ void app_t::_apply_zlink_framework ()
                       node_rid_t::from_string (
                         zlink::routing_id_t::from (send.actor.target_node_routing_id).to_string ()),
                       {}, send.actor.actor_id, send.actor.object_generation);
-                    auto [header, payload] = decode_bound_session_frame (stream_runtime, parts);
+                    auto [header, payload] = stream_runtime.decode_frame (parts);
                     const auto dispatched = actor_gateway_runtime.dispatch_bound_session_send (
                       actor, std::string (header.packet_name ()), header.codec (), payload);
                     return dispatched ? runtime::stateful::stateful_error_t::none
@@ -2831,7 +2762,7 @@ void app_t::_apply_zlink_framework ()
                 return [admitted = std::move (*admitted),
                         stream_runtime] (std::vector<zlink::message_t> parts) mutable {
                     try {
-                        auto [header, payload] = decode_bound_session_frame (stream_runtime, parts);
+                        auto [header, payload] = stream_runtime.decode_frame (parts);
                         const auto dispatched =
                           admitted (std::string (header.packet_name ()), header.codec (), payload);
                         return dispatched ? runtime::stateful::stateful_error_t::none

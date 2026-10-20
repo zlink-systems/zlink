@@ -43,6 +43,45 @@ import java.util.function.Supplier;
 
 final class ZLinkBoundSessionSendCallContractTest {
     @Test
+    void acceptedRetirementClearsTheContextAfterTheOwnerRemovesItsRecord() {
+        var available = new AtomicBoolean(true);
+        var node = spotNode(new AtomicInteger(), available);
+        var actors =
+                new ZLinkActorRuntime(
+                        node,
+                        Map.of("probe", ProbeFactory.class),
+                        Map.of(),
+                        Duration.ofSeconds(1),
+                        Duration.ofSeconds(1),
+                        new ZLinkJsonMessageSerializer(),
+                        ZLinkHandlerActivator.reflection(),
+                        ZLinkStreamCodec.RAW,
+                        unusedAdmission());
+        var actor =
+                actors.getOrCreateLocalActor("retired-binding", ZLinkActor.class)
+                        .toCompletableFuture()
+                        .join()
+                        .orElseThrow();
+        var ref = actors.currentRef(actor);
+        var route = node.boundSessionRoute(ref).orElseThrow();
+        actors.bindNativeSession(actor, node, ref, route.sessionOwnerNodeRid(), route.sessionRid())
+                .toCompletableFuture()
+                .join();
+        assertTrue(actors.hasBoundSession(actor));
+        actors.applyRemoteSessionBinding(
+                        node,
+                        ref,
+                        transition -> {
+                            available.set(false);
+                            transition.retire(route);
+                            return true;
+                        })
+                .toCompletableFuture()
+                .join();
+        assertFalse(actors.hasBoundSession(actor));
+    }
+
+    @Test
     void acceptedHandlerSendSurvivesRelocationSeal() throws Exception {
         acceptedHandlerSendSurvivesSeal(false);
     }
@@ -76,9 +115,7 @@ final class ZLinkBoundSessionSendCallContractTest {
                         backend,
                         new ZLinkBackendActorRef(RoutingId.from("node-a"), "accepted-handler", 7),
                         null,
-                        null,
-                        0,
-                        0)
+                        null)
                 .toCompletableFuture()
                 .join();
         var drain = new ZLinkMeshDrainCoordinator(java.util.List.of("mesh"));
@@ -152,9 +189,7 @@ final class ZLinkBoundSessionSendCallContractTest {
                         spotNode,
                         new ZLinkBackendActorRef(RoutingId.from("node-a"), "actor-1", 7),
                         null,
-                        null,
-                        0,
-                        0)
+                        null)
                 .toCompletableFuture()
                 .join();
 
@@ -211,9 +246,7 @@ final class ZLinkBoundSessionSendCallContractTest {
                         spotNode,
                         new ZLinkBackendActorRef(RoutingId.from("node-a"), "actor-1", 7),
                         null,
-                        null,
-                        0,
-                        0)
+                        null)
                 .toCompletableFuture()
                 .join();
 
@@ -260,9 +293,7 @@ final class ZLinkBoundSessionSendCallContractTest {
                         spotNode,
                         new ZLinkBackendActorRef(RoutingId.from("node-a"), "actor-1", 7),
                         RoutingId.from("session-node"),
-                        RoutingId.from("session-1"),
-                        11,
-                        0)
+                        RoutingId.from("session-1"))
                 .toCompletableFuture()
                 .join();
 
@@ -317,9 +348,7 @@ final class ZLinkBoundSessionSendCallContractTest {
                                                     spotNode,
                                                     actorRef,
                                                     RoutingId.from("session-node"),
-                                                    RoutingId.from("session-1"),
-                                                    11,
-                                                    0)
+                                                    RoutingId.from("session-1"))
                                             .toCompletableFuture());
             assertFalse(bound.isDone());
             assertFalse(actors.hasBoundSession(actor));
@@ -436,6 +465,8 @@ final class ZLinkBoundSessionSendCallContractTest {
                                                             new ZLinkInternalSpotNode
                                                                     .BoundSessionRoute(
                                                                     RoutingId.from("session-node"),
+                                                                    1,
+                                                                    "session-owner",
                                                                     1,
                                                                     RoutingId.from("session-1"),
                                                                     1))

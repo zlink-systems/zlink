@@ -198,6 +198,19 @@ caller 측 lookup·projection이 실어 온 lease 사본과 Actor owner의 curre
 검증([routing](../03-spot-actor/08-routing.ko.md))의 관심사이고, bind 승인에까지 사용하면
 파생 사본 불일치가 stale 판정 근거가 되어 §8.1의 판정 권위 원칙과 충돌한다.
 
+**Actor owner는 승인한 요청을 current binding과 한 번 비교해 결과를 정한다.** binding generation의
+대소는 [§4](#4-binding이-잇는-값과-보관하는-정보)대로 같은 Session owner lifecycle 안에서만 비교한다.
+
+| 요청과 current binding의 관계 | 결과 |
+|---|---|
+| Binding identity(§4)와 SessionRid가 모두 같다. | current를 유지하고 성공한다. |
+| 첫 행에 해당하지 않고, Session owner Node RID·lifecycle generation이 같으며 요청 binding generation이 current 이하다. | current를 유지하고 [§12](#12-실패와-오류)의 binding fence stale(`Unavailable`)로 끝난다. |
+| 그 밖의 경우(current 없음, 같은 Session owner lifecycle의 더 큰 generation, 다른 Session owner lifecycle) | 요청 identity를 current로 등록한다([§6](#6-rebind와-이전-연결-교체)). |
+
+`boundSessionBind(38)` 성공 reply의 tail은 이 비교에서 수락한 binding의 binding generation과
+`AuthorityOwnerGeneration`이다. 성공은 첫 행이거나 요청 identity를 등록한 경우뿐이므로 두 값은
+요청 값과 같다. Session owner는 이 두 값으로 binding을 commit한다.
+
 Session에서 Actor로 들어가는 payload는 등록된 binding generation과
 session sequence를 포함한 `actorSend(24)`
 record로 Actor owner에 전달한다. Relocation seal이 없으면 payload를 local·remote 여부와 관계없이 target Actor의
@@ -572,7 +585,7 @@ message를 source route로 다시 제출하며 reply를 만들지 않는다. Rel
 
 ### 8.2 Control message 42·43·44
 
-Command 42와 43은 Session seal의 설치 request와 reply를 전달한다. Command 43은 seal 설치 결과(`sealResult`)만 전달하며 Session message sequence나 high-water는 포함하지 않는다. `sealResult`는 `sealed`(1) 또는 `bindingAbsent`(2)이고, `bindingAbsent`의 판정과 처리는 §8.3이 소유한다.
+Command 42와 43은 Session seal의 설치 request와 reply를 전달한다. Command 43은 seal 설치 결과(`sealResult`)만 전달하며 Session message sequence나 high-water는 포함하지 않는다. `sealResult`는 `sealed`(1) 또는 `bindingAbsent`(2)이고, `bindingAbsent`의 판정과 처리는 §8.3이 소유한다. **Session owner가 command 42를 거부하면 command 43을 보내지 않는다.** 거부는 §4의 descriptor 부재와 §8.3의 불일치·protocol error다. Session owner는 거부를 [message flow](../06-observability/03-message-flow-tracing.ko.md)에 남기고, coordinator는 아래 "실패"의 seal 대기 deadline으로 그 participant의 실패를 확정한다.
 
 Command 44는 target runtime의 commit 또는 relocation coordinator의 relay-ready accepted
 전 abort를 전달하는 one-way control이다. **Command 44는 response 없이 한 번만 제출하고
@@ -624,7 +637,7 @@ Store CAS가 결정했으므로 Session owner가 Store나 Actor authority mirror
 |---|---|
 | Seal 설치 | §8.1대로 seal을 설치하고 command 43을 `sealResult = sealed`로 반환한다. |
 | Exact binding 부재 | Seal, held message, seal timeout을 만들지 않고 command 43을 `sealResult = bindingAbsent`로 반환한다. |
-| 불일치 | 기존대로 거부한다. 부재로 바꿔 반환하지 않는다. |
+| 불일치 | 거부한다(§8.2, command 43 없음). 부재로 바꿔 반환하지 않는다. |
 
 `bindingAbsent`는 seal을 설치했다는 뜻이 아니라 seal할 current binding이 없다는 뜻이다. 이 결과는
 Session binding과 seal에 관한 결과만 나타내며, disconnect callback의 진행 상태를 알려 주지 않는다.
@@ -677,7 +690,7 @@ identity 단위로 계속 소유한다. 통지는 일반 Actor message와 같이
 수락했으면 saved work로 target에 옮겨지고, capture 뒤에 도착하면 Message Follow로 target에 전달된다.
 Actor owner는 §7의 identity 비교로 통지를 판정한다. Coordinator는 disconnect 통지를 새로 만들거나 다시 제출하지 않는다.
 
-**실패.** Command 42가 불일치로 거부되거나 seal 대기 deadline에 도달하면 relocation은 실패한다.
+**실패.** Seal 대기 deadline까지 command 43을 받지 못하면 relocation은 실패한다. Session owner의 거부(§8.2)도 이 경우다.
 복원 대상은 이미 시작한 모든 participant의 capture와, 이미 `sealed`로 확인한 participant의 seal이다.
 복원 순서는 §8.1의 abort 순서를 따른다. Durable abort와 source queue 복원을 먼저 확정한 뒤 matching
 command 44 abort를 보낸다

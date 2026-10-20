@@ -3811,3 +3811,75 @@ function authorityKey(value: string): ZLinkAuthorityKey {
 function owner(ownerId: string, generation: bigint): ZLinkLocationOwnerToken {
   return { ownerId, leaseGeneration: generation };
 }
+
+test('capacity Store observations follow reserve commit external polling and failed reads', async () => {
+  const provider = new ZLinkInMemoryProviderLocationStore();
+  let fail = false;
+  let reads = 0;
+  const watched = {
+    read: async (...args: Parameters<typeof provider.read>) => {
+      reads++;
+      if (fail) throw new Error('capacity read failed');
+      return provider.read(...args);
+    },
+    write: provider.write.bind(provider),
+    scan: provider.scan.bind(provider)
+  };
+  const store = new ZLinkLocationStoreRepository(watched);
+  const other = new ZLinkLocationStoreRepository(provider);
+  const descriptor = await writeTargetDescriptor(store, 'owner-a', 'node-a', 60_000);
+  const limits = {
+    ...descriptor.populationCapacity,
+    spots: { active: 0, reserved: 0, limit: 8 },
+    spotTypes: descriptor.populationCapacity.spotTypes.map((type) => ({ ...type, limit: 8 }))
+  };
+  await store.updateMeshNode(
+    { ...descriptor, populationCapacity: limits, descriptorRevision: 2n },
+    ZLinkLocationWriteIntent.Renew
+  );
+  const key = { meshName: 'mesh', rid: 'node-a' };
+  assert.equal(store.confirmedCapacity(key, limits), undefined);
+  reads = 0;
+  assert.equal(store.confirmedCapacity(key, limits), undefined);
+  assert.equal(reads, 0);
+  const placement = target('node-a', 'owner-a');
+  const first = await store.reserve(reserveRequest('capacity-one', placement));
+  assert.equal(first.kind, 'reserved');
+  if (first.kind !== 'reserved') throw new Error('missing reservation');
+  assert.equal(store.confirmedCapacity(key, limits)?.spots.reserved, 1);
+  assert.equal(store.confirmedCapacity(key, limits)?.spotTypes[0]?.reserved, 1);
+  assert.equal(store.confirmedCapacity(key, limits)?.spots.limit, 8);
+  assert.equal(
+    (
+      await store.commit({
+        key: { kind: 'user_spot', globalId: 'capacity-one' },
+        reservationId: first.reservationId,
+        expectedStoreVersion: first.creating.storeVersion.value,
+        target: placement,
+        readyPayload: Buffer.from('ready')
+      })
+    ).kind,
+    'committed'
+  );
+  assert.equal(store.confirmedCapacity(key, limits)?.spots.active, 1);
+  assert.equal(store.confirmedCapacity(key, limits)?.spots.reserved, 0);
+  assert.equal((await other.reserve(reserveRequest('capacity-two', placement))).kind, 'reserved');
+  assert.equal(store.confirmedCapacity(key, limits)?.spots.reserved, 0);
+  // RouteMesh polling uses this descriptor query, whose existing capacity read is also the observation.
+  await store.listMeshNodes('mesh');
+  assert.equal(store.confirmedCapacity(key, limits)?.spots.reserved, 1);
+  assert.equal(store.confirmedCapacity(key, limits)?.spotTypes[0]?.active, 1);
+  const saved = store.confirmedCapacity(key, limits);
+  reads = 0;
+  store.confirmedCapacity(key, limits);
+  assert.equal(reads, 0);
+  fail = true;
+  await assert.rejects(
+    store.listMeshNodes('mesh'),
+    /capacity read failed|provider is unavailable/i
+  );
+  assert.deepEqual(store.confirmedCapacity(key, limits), saved);
+  fail = false;
+  assert.equal(await store.removeMeshNode(key, placement.owner), ZLinkLocationWriteStatus.Stored);
+  assert.equal(store.confirmedCapacity(key, limits), undefined);
+});

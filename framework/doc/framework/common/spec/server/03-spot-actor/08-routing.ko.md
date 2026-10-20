@@ -339,14 +339,8 @@ Bind는 caller가 제출한 `ActorRef`의 위치를 최초 route로 사용한다
 bind 전에 Location Store에서 current route를 미리 조회하거나 local Actor instance를
 받는 overload는 제공하지 않는다.
 
-Actor owner는 다음 값이 current 상태와 일치하는지 확인하고 binding generation을
-등록한 뒤 terminal reply를 반환한다.
-
-- `ActorId`와 `ObjectGeneration`
-- Target `NodeGeneration`
-- `AuthorityOwnerGeneration`
-- Current owner lease
-- Session owner와 Session lifecycle identity
+Actor owner의 bind 승인, binding generation 등록과 terminal reply는
+[Session과 Actor binding §5](../04-session/02-session-actor-binding.ko.md#5-bind와-relay)가 정한다.
 
 Bind가 성공하면 Session owner는 Actor마다 다음 정보를 하나의
 [binding route](../00-foundation/02-glossary.ko.md#binding-route)에 저장한다.
@@ -359,13 +353,11 @@ Bind가 성공하면 Session owner는 Actor마다 다음 정보를 하나의
 | Session owner RID·lifecycle generation, binding generation·token | 이전 connection이나 교체된 binding의 늦은 message를 거부한다. |
 | 한 STREAM session에서 수락한 ingress message의 순서를 나타내는 [Session sequence](../00-foundation/02-glossary.ko.md#session-sequence) | 같은 Session에서 수락한 message의 순서를 유지한다. |
 
-다른 owner나 다른 Actor generation으로 rebind할 때 target Actor owner는 새 identity를
-등록한 뒤 이전 owner에 tombstone을 제출한다. 이전 owner의 ACK까지 받은 뒤에만
-bind terminal reply를 반환한다. Session owner는 terminal reply 전에는 기존 route를
-유지하고, reply 뒤에는 새 route로 atomic하게 교체한다. 따라서 Session owner가
-교체 뒤 별도의 durable retry journal을 보관하거나 Location Store·Relocation Store에
-binding route를 기록하지 않는다. 같은 owner의 atomic replacement에서는 이전
-identity tombstone이 새 identity를 제거하지 않아야 한다.
+Rebind의 등록, terminal reply와 이전 Session 통지는
+[Session과 Actor binding §6](../04-session/02-session-actor-binding.ko.md#6-rebind와-이전-연결-교체)이 정한다.
+Session owner는 terminal reply 전에는 기존 route를 유지하고, reply 뒤에는 새 route로
+atomic하게 교체한다. 따라서 Session owner가 교체 뒤 별도의 durable retry journal을
+보관하거나 Location Store·Relocation Store에 binding route를 기록하지 않는다.
 
 ### 3.2 저장한 route로 message를 보낸다
 

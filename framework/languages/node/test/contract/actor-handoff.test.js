@@ -1,3 +1,4 @@
+const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -403,10 +404,10 @@ function harness(messageFollowDurationMs = 30, requestReply) {
       messageFollowPayloads.push(payload);
       followed.push(Buffer.from(payload.payload, 'base64').toString());
     },
-    async requestToSpot() {
+    requestToSpot() { return prepareZLinkRequestReply((async () => {
       if (requestReply !== undefined) return requestReply();
       return { ok: true };
-    }
+    })(), identityRequestReply); }
   };
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: transport,
@@ -712,7 +713,7 @@ test('native ingress for a departed tenure follows that route while a successor 
 test('handoff admission requires committed source and target owner fences', () => {
   let sourceLookupCount = 0;
   const invalidGeneration = new framework.ZLinkActorHandoffCoordinator({
-    routedTransport: { async sendToSpot() {}, async requestToSpot() {} },
+    routedTransport: { async sendToSpot() {}, requestToSpot() { return prepareZLinkRequestReply((async () => {})(), identityRequestReply); } },
     requestSource() {
       sourceLookupCount += 1;
       return {
@@ -732,7 +733,7 @@ test('handoff admission requires committed source and target owner fences', () =
   assert.equal(invalidGeneration.isActive('actor-1'), false);
 
   const replacedSource = new framework.ZLinkActorHandoffCoordinator({
-    routedTransport: { async sendToSpot() {}, async requestToSpot() {} },
+    routedTransport: { async sendToSpot() {}, requestToSpot() { return prepareZLinkRequestReply((async () => {})(), identityRequestReply); } },
     requestSource: () => ({
       meshName: 'mesh',
       objectGeneration: 2n,
@@ -751,7 +752,7 @@ test('handoff admission requires committed source and target owner fences', () =
   assert.equal(replacedSource.isActive('actor-1'), false);
 
   const missingSource = new framework.ZLinkActorHandoffCoordinator({
-    routedTransport: { async sendToSpot() {}, async requestToSpot() {} },
+    routedTransport: { async sendToSpot() {}, requestToSpot() { return prepareZLinkRequestReply((async () => {})(), identityRequestReply); } },
     requestSource() {
       throw new Error('source fence unavailable');
     },
@@ -1572,7 +1573,7 @@ for (const raw of [false, true]) {
     const coordinator = new framework.ZLinkActorHandoffCoordinator({
       routedTransport: {
         async sendToSpot() {},
-        async [raw ? 'requestRawToSpot' : 'requestToSpot'](_target, payload, options) {
+        [raw ? 'requestRawToSpot' : 'requestToSpot'](_target, payload, options) { const pending = (async () => {
           requests.push({
             payload: raw ? JSON.parse(payload.getString('utf8')) : payload,
             options
@@ -1581,7 +1582,7 @@ for (const raw of [false, true]) {
             completeRelay = resolve;
             entered();
           });
-        }
+        })(); return raw ? pending : prepareZLinkRequestReply(pending, identityRequestReply); }
       },
       messageFollowDurationMs: 1_000,
       requestTimeoutMs,
@@ -1680,10 +1681,10 @@ test('Message Follow admits a request whose client deadline has already expired'
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: {
       async sendToSpot() {},
-      async requestToSpot() {
+      requestToSpot() { return prepareZLinkRequestReply((async () => {
         requests += 1;
         return { ok: true, response: 'reply' };
-      }
+      })(), identityRequestReply); }
     },
     messageFollowDurationMs: 1_000,
     requestSource: () => ({
@@ -2029,9 +2030,9 @@ test('Message Follow notification suppression retries rejection and marks only a
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: {
       async sendToSpot() {},
-      async requestToSpot() {
+      requestToSpot() { return prepareZLinkRequestReply((async () => {
         return { ok: true };
-      }
+      })(), identityRequestReply); }
     },
     messageFollowDurationMs: 1_000,
     requestSource: () => ({
@@ -2392,10 +2393,10 @@ test('positive Message Follow request returns one correlated reply and preserves
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: {
       async sendToSpot() {},
-      async requestToSpot(_target, payload) {
+      requestToSpot(_target, payload) { return prepareZLinkRequestReply((async () => {
         relays.push(payload);
         return response;
-      }
+      })(), identityRequestReply); }
     },
     messageFollowDurationMs: 1_000,
     requestSource: () => ({
@@ -2769,9 +2770,9 @@ test('Message Follow keeps opaque node identities that share the same display te
       async sendToSpot(targetRoute, payload) {
         relays.push({ targetNodeRid: String(targetRoute.targetNodeRid), payload });
       },
-      async requestToSpot() {
+      requestToSpot() { return prepareZLinkRequestReply((async () => {
         return { ok: true };
-      }
+      })(), identityRequestReply); }
     },
     requestSource: () => source,
     validateReplySource: () => true

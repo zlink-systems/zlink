@@ -34,6 +34,39 @@ import java.util.concurrent.ConcurrentHashMap;
 
 final class ZLinkProviderRelocationRepositoryTest {
     @Test
+    void metricObservationDoesNotRecheckCancellation() throws Exception {
+        var cancellationChecks = new java.util.concurrent.atomic.AtomicInteger();
+        var original = new IllegalStateException("backend read failed");
+        var provider =
+                (ZLinkRelocationStore)
+                        java.lang.reflect.Proxy.newProxyInstance(
+                                ZLinkRelocationStore.class.getClassLoader(),
+                                new Class<?>[] {ZLinkRelocationStore.class},
+                                (proxy, method, arguments) ->
+                                        CompletableFuture.failedFuture(original));
+        try (var metrics =
+                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                        .install()) {
+            var failure =
+                    assertThrows(
+                            CompletionException.class,
+                            () ->
+                                    new ZLinkProviderRelocationRepository(provider)
+                                            .get(
+                                                    "reference",
+                                                    () -> {
+                                                        cancellationChecks.incrementAndGet();
+                                                        return false;
+                                                    })
+                                            .toCompletableFuture()
+                                            .join());
+            org.junit.jupiter.api.Assertions.assertSame(original, failure.getCause());
+            assertEquals(0, cancellationChecks.get());
+            metrics.assertContractLabels();
+        }
+    }
+
+    @Test
     void uncertainReadbackObservesTheOriginalOperationCancellation() {
         var cancelled = new java.util.concurrent.atomic.AtomicBoolean();
         var provider = new LostResponseProvider(() -> cancelled.set(true));

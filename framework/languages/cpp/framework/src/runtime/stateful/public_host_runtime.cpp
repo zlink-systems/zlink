@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/execution/task_result.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/mesh_trace.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
+#include "runtime/diagnostics/session_binding_diagnostics.hpp"
 
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/mesh/service_channel_membership.hpp"
@@ -131,7 +133,14 @@ void report_stateful_dispatch_error (
                 const auto header_part = identity
                                            ? accepted->application_header ()
                                            : protocol::decode_application_header (application);
-                const auto header = messaging::envelope_codec_t{}.decode_header (header_part, true);
+                const auto header =
+                  actor
+                    ? detail::decode_actor_packet_header (header_part,
+                                                          delivery.request
+                                                            ? detail::stream_message_kind_t::request
+                                                            : detail::stream_message_kind_t::send,
+                                                          true)
+                    : messaging::envelope_codec_t{}.decode_header (header_part, true);
                 if (header) {
                     event.packet_name = header.value ().message_name;
                     event.correlation_id = header.value ().correlation_id;
@@ -270,16 +279,12 @@ bool same_relocation_source_fence (
 
 auto session_relocation_key (const protocol::session_relocation_seal_t &seal)
 {
-    return std::tuple{seal.relocation.high,    seal.relocation.low,
-                      seal.actor.actor_id,     seal.actor.object_generation,
-                      seal.session_routing_id, seal.binding_generation};
+    return std::tuple{seal.relocation.high, seal.relocation.low, seal.actor.actor_id};
 }
 
 auto session_relocation_key (const protocol::session_relocation_route_t &route)
 {
-    return std::tuple{route.relocation.high,    route.relocation.low,
-                      route.actor.actor_id,     route.actor.object_generation,
-                      route.session_routing_id, route.binding_generation};
+    return std::tuple{route.relocation.high, route.relocation.low, route.actor.actor_id};
 }
 
 void append_u32 (std::vector<std::uint8_t> &out, std::uint32_t value)
@@ -754,6 +759,7 @@ spot_handle_t::request_to_spot (const zlink::routing_id_t &target_node_rid,
                   completion (terminal, std::move (decoded));
               }
               catch (...) {
+                  host->_options.mesh.runtime_failures->report (std::current_exception ());
               }
           },
           protocol::wire_operation_id_t{operation.id.high, operation.id.low}, std::nullopt);
@@ -1252,6 +1258,7 @@ void public_host_runtime_t::close () noexcept
             maintenance_closing ();
         }
         catch (...) {
+            _options.mesh.runtime_failures->report (std::current_exception ());
         }
     }
     const auto already_sealed =
@@ -2046,19 +2053,24 @@ public_host_runtime_t::admit_session_relocation_seal (
         return {false, std::nullopt};
     }
 
+    flush_pending_session_relocation_seals ();
     const auto relocation_key = session_relocation_key (seal);
-    bool existing_terminal = false;
     const auto existing_result =
       _relocation_session_terminal_lane
         .run ([&] () -> std::optional<
                        std::pair<bool, std::optional<protocol::session_relocation_sealed_t>>> {
             const auto cached = _session_seal_terminals.find (relocation_key);
             if (cached != _session_seal_terminals.end ()) {
-                existing_terminal = true;
                 if (cached->second.seal != seal)
                     return {{false, std::nullopt}};
-                if (cached->second.consumed && !cached->second.ready)
-                    return {{false, std::nullopt}};
+                if (cached->second.consumed) {
+                    const auto &logger =
+                      detail::dispatch_options_access_t::logger (_options.mesh.dispatch);
+                    if (logger)
+                        detail::diagnostic_event_sink_t::log_if_configured (
+                          logger, log_level_t::warn, "late_session_relocation_seal", {});
+                    return {{true, std::nullopt}};
+                }
                 if (!response_routing_id.empty ())
                     cached->second.response_routing_id = std::move (response_routing_id);
                 if (cached->second.ready)
@@ -2070,15 +2082,16 @@ public_host_runtime_t::admit_session_relocation_seal (
             return std::nullopt;
         })
         .get ();
-    if (existing_terminal)
+    if (existing_result)
         return *existing_result;
 
-    const auto session_id = zlink::routing_id_t::from (seal.session_routing_id).to_hex ();
-    const auto admission = _sessions.seal_remote_route (
-      session_id, seal.binding_generation, seal.actor.actor_id, seal.actor.object_generation);
-    if ((admission.error != stateful::stateful_error_t::none
-         && admission.error != stateful::stateful_error_t::backpressured)
-        || !admission.binding || admission.barrier.token == 0) {
+    const auto session_id = stateful::stream_session_registry_t::connection_key (
+      zlink::routing_id_t::from (seal.session_routing_id));
+    const auto admission =
+      _sessions.seal_remote_route (session_id, seal.binding_generation, seal.actor.actor_id,
+                                   seal.actor.object_generation, seal.actor.owner_lease_generation);
+    if (admission.error != stateful::stateful_error_t::none
+        && admission.error != stateful::stateful_error_t::backpressured) {
         return {false, std::nullopt};
     }
 
@@ -2090,15 +2103,17 @@ public_host_runtime_t::admit_session_relocation_seal (
                                                     seal.session_owner_id,
                                                     seal.session_owner_lease_generation,
                                                     seal.session_routing_id,
-                                                    seal.binding_generation};
-    const auto ready = _sessions.remote_route_seal_ready (admission.barrier);
+                                                    seal.binding_generation,
+                                                    admission.seal_result};
+    const auto ready =
+      admission.seal_result == protocol::session_relocation_seal_result_t::binding_absent
+      || _sessions.remote_route_seal_ready (admission.barrier);
     bool inserted = false;
     std::optional<protocol::session_relocation_sealed_t> immediate;
     _relocation_session_terminal_lane
       .run ([&] {
           session_seal_terminal_record_t record{seal,
                                                 ack,
-                                                admission.last_accepted_sequence,
                                                 admission.barrier,
                                                 std::chrono::steady_clock::now ()
                                                   + _options.session_relocation_seal_timeout,
@@ -2108,6 +2123,13 @@ public_host_runtime_t::admit_session_relocation_seal (
                                                 {}};
           if (local_completion && !ready)
               record.local_completions.push_back (local_completion);
+          // A binding retains only its last closed record. The new seal owns its successor.
+          for (auto it = _session_seal_terminals.begin (); it != _session_seal_terminals.end ();) {
+              if (it->second.consumed && it->second.seal.actor.actor_id == seal.actor.actor_id)
+                  it = _session_seal_terminals.erase (it);
+              else
+                  ++it;
+          }
           const auto [stored, was_inserted] =
             _session_seal_terminals.emplace (relocation_key, std::move (record));
           lower_relocation_next_due_on_lane (relocation_due_now);
@@ -2215,6 +2237,11 @@ task_t<bool> public_host_runtime_t::seal_session_remote (
                     || sealed.session_routing_id != expected.session_routing_id
                     || sealed.binding_generation != expected.binding_generation) {
                     completion (foundation::operation_terminal_t::transport_failed, std::nullopt);
+                    return;
+                }
+                if (sealed.seal_result
+                    == protocol::session_relocation_seal_result_t::binding_absent) {
+                    completion (terminal, session_relocation_seal_result_t{sealed, {}});
                     return;
                 }
                 stateful::durable_session_journal_record_t record{
@@ -3242,6 +3269,7 @@ void public_host_runtime_t::discard_relocation_target_attempts (
                 _aggregate_relocation_authority->abort (*attempt.authority_fence);
             }
             catch (...) {
+                _options.mesh.runtime_failures->report (std::current_exception ());
             }
         }
         for (const auto &object : attempt.wire_objects) {
@@ -3250,6 +3278,7 @@ void public_host_runtime_t::discard_relocation_target_attempts (
                   attempt.prepare.relocation, attempt.prepare.target_attempt_generation, object);
             }
             catch (...) {
+                _options.mesh.runtime_failures->report (std::current_exception ());
             }
         }
         try {
@@ -3261,6 +3290,7 @@ void public_host_runtime_t::discard_relocation_target_attempts (
                                                                     attempt.restore_identity);
         }
         catch (...) {
+            _options.mesh.runtime_failures->report (std::current_exception ());
         }
         if (_stateful_dispatch)
             for (const auto &target : attempt.targets) {
@@ -3268,6 +3298,7 @@ void public_host_runtime_t::discard_relocation_target_attempts (
                     (void) _stateful_dispatch->discard_pending (target);
                 }
                 catch (...) {
+                    _options.mesh.runtime_failures->report (std::current_exception ());
                 }
             }
         const relocation_attempt_key_t key{attempt.prepare.relocation.high,
@@ -3389,13 +3420,53 @@ void public_host_runtime_t::flush_pending_session_relocation_seals ()
     std::vector<session_relocation_key_t> pending;
     std::vector<session_relocation_key_t> expired;
     const auto now = std::chrono::steady_clock::now ();
+    const auto consumed =
+      _relocation_session_terminal_lane
+        .run ([&] {
+            std::map<session_relocation_key_t, protocol::session_relocation_seal_t> records;
+            for (const auto &[key, record] : _session_seal_terminals)
+                if (record.consumed
+                    && record.sealed.seal_result
+                         == protocol::session_relocation_seal_result_t::sealed)
+                    records.emplace (key, record.seal);
+            return records;
+        })
+        .get ();
+    // Read each registry fact outside the terminal turn. Only the captured
+    // records may be pruned with it; a successor record needs its own observation.
+    std::map<std::string, std::optional<stateful::stream_binding_t>> current_bindings;
+    for (const auto &[key, seal] : consumed) {
+        const auto [current, inserted] = current_bindings.try_emplace (seal.actor.actor_id);
+        if (inserted)
+            current->second = _sessions.current_binding (seal.actor.actor_id);
+    }
     _relocation_session_terminal_lane
       .run ([&] {
-          for (const auto &[key, record] : _session_seal_terminals) {
-              if (!record.consumed && record.expires_at <= now)
+          for (auto it = _session_seal_terminals.begin (); it != _session_seal_terminals.end ();) {
+              const auto &[key, record] = *it;
+              if (record.sealed.seal_result
+                  == protocol::session_relocation_seal_result_t::binding_absent) {
+                  if (record.expires_at <= now) {
+                      it = _session_seal_terminals.erase (it);
+                      continue;
+                  }
+              } else if (record.consumed) {
+                  const auto captured = consumed.find (key);
+                  if (captured != consumed.end () && captured->second == record.seal) {
+                      const auto &current = current_bindings.at (record.seal.actor.actor_id);
+                      if (!current || current->binding_generation != record.seal.binding_generation
+                          || current->connection.connection_id
+                               != stateful::stream_session_registry_t::connection_key (
+                                 zlink::routing_id_t::from (record.seal.session_routing_id))) {
+                          it = _session_seal_terminals.erase (it);
+                          continue;
+                      }
+                  }
+              } else if (record.expires_at <= now)
                   expired.push_back (key);
-              else if (!record.consumed && !record.ready)
+              else if (!record.ready)
                   pending.push_back (key);
+              ++it;
           }
       })
       .get ();
@@ -3557,6 +3628,7 @@ task_t<void> public_host_runtime_t::submit_relocation_session_routes (relocation
                 journal_store.cleanup (*completed_journal);
             }
             catch (...) {
+                _options.mesh.runtime_failures->report (std::current_exception ());
             }
         }
     }
@@ -3735,6 +3807,7 @@ bool public_host_runtime_t::submit_relocation_target_authority (
         return true;
     }
     catch (...) {
+        _options.mesh.runtime_failures->report (std::current_exception ());
         return false;
     }
 }
@@ -3984,6 +4057,7 @@ void public_host_runtime_t::rollback_actor_join_recoveries (
             _actor_join_recovery_rollback (stable_type, target);
         }
         catch (...) {
+            _options.mesh.runtime_failures->report (std::current_exception ());
         }
     }
 }
@@ -4007,6 +4081,7 @@ void public_host_runtime_t::unregister_relocation_wire_targets (
                                                         wire_object);
         }
         catch (...) {
+            _options.mesh.runtime_failures->report (std::current_exception ());
         }
     }
 }
@@ -4694,6 +4769,7 @@ void public_host_runtime_t::complete_relocation_assembly (
                       wire_objects[index]);
                 }
                 catch (...) {
+                    _options.mesh.runtime_failures->report (std::current_exception ());
                 }
             }
             // Target relocation-wire registration failed (e.g. an existing
@@ -4778,6 +4854,7 @@ bool public_host_runtime_t::register_relocation_target_queue (
            [] (const protocol::relocation_data_t &) {}});
     }
     catch (...) {
+        _options.mesh.runtime_failures->report (std::current_exception ());
         return false;
     }
 }
@@ -4818,44 +4895,261 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
   std::function<void (instance_spot_activation_result_t)> done)
 {
     auto lifetime = shared_from_this ();
-    const auto spot_id = command.activation.target.spot_id;
+    auto owned_command =
+      std::make_shared<protocol::instance_activation_recovery_t> (std::move (command));
+    const auto started = _instance_activation_metrics.enabled ()
+                           ? std::chrono::steady_clock::now ()
+                           : std::chrono::steady_clock::time_point{};
+    const auto activation =
+      (_instance_activation_metrics.enabled ()
+       || detail::message_flow_tracer_t (_options.mesh.dispatch)
+            .enabled_for (message_flow_outcome_t::dropped)
+       || detail::dispatch_error_reporter_t (_options.mesh.dispatch).enabled ())
+        ? std::make_shared<const protocol::instance_spot_activation_header_t> (
+            owned_command->activation)
+        : nullptr;
+    const auto deliver_terminal = [lifetime, transport = _transport, owned_command, activation,
+                                   mailbox_record,
+                                   done] (instance_spot_activation_result_t result) {
+        if (result.terminal_result != 0) {
+            const detail::dispatch_error_reporter_t reporter (lifetime->_options.mesh.dispatch);
+            if (reporter.enabled ()) {
+                const auto error = messaging::request_failure_mapper_t{}.reply_header_exception (
+                  result.terminal_result, result.failure_code, "Instance Spot activation");
+                const auto exception =
+                  result.exception ? result.exception : std::make_exception_ptr (error);
+                reporter.report_lazy ([&] {
+                    message_dispatch_error_event_t event{
+                      .surface = dispatch_error_surface_t::instance_spot,
+                      .message_kind = activation->request ? dispatch_message_kind_t::request
+                                                          : dispatch_message_kind_t::send,
+                      .reason = detail::dispatch_reason_from_error (&error),
+                      .action = activation->request ? dispatch_error_action_t::reply_error
+                                                    : dispatch_error_action_t::drop,
+                      .packet_name = owned_command->application_payload.packet_name,
+                      .spot_id = activation->target.spot_id,
+                      .source_rid =
+                        zlink::routing_id_t::from (activation->source_node_routing_id).to_string (),
+                      .exception = exception,
+                      .mesh_name = lifetime->_options.mesh.descriptor.mesh_name};
+                    event.flow_id = owned_command->application_payload.flow_id;
+                    event.flow_origin = owned_command->application_payload.flow_origin;
+                    return event;
+                });
+            }
+        }
+        if (done) {
+            done (std::move (result));
+            return;
+        }
+        auto accepted_turn_terminal = std::move (result.accepted_turn_terminal);
+        try {
+            (void) transport->reply_instance_spot_activation (
+              *mailbox_record, result.terminal_result, result.failure_code,
+              std::move (result.application_reply));
+        }
+        catch (...) {
+            if (accepted_turn_terminal)
+                accepted_turn_terminal ();
+            throw;
+        }
+        if (accepted_turn_terminal)
+            accepted_turn_terminal ();
+    };
+    const auto record_activation = [lifetime, owned_command, activation,
+                                    started] (instance_spot_activation_result_t result) {
+        // Reuse the frozen factory catalog; wire type names must not create metric series.
+        const auto &materializer = lifetime->_instance_spot_materializer;
+        const bool collect_metrics =
+          lifetime->_instance_activation_metrics.enabled () && materializer
+          && materializer->relocation_policy
+          && materializer->relocation_policy (activation->target.stable_type).has_value ();
+        if (result.terminal_result != 0) {
+            const auto &dispatch = lifetime->_options.mesh.dispatch;
+            const detail::message_flow_tracer_t tracer (dispatch);
+            if (collect_metrics || tracer.enabled_for (message_flow_outcome_t::dropped)) {
+                const auto error = messaging::request_failure_mapper_t{}.reply_header_exception (
+                  result.terminal_result, result.failure_code, "Instance Spot activation");
+                const auto exception =
+                  result.exception ? result.exception : std::make_exception_ptr (error);
+                auto outcome = instance_spot_activation_outcome_t::rejected;
+                const auto typed = detail::framework_error (exception);
+                if (typed) {
+                    switch (typed->kind ()) {
+                        case framework_error_kind_t::deadline_exceeded:
+                            outcome = instance_spot_activation_outcome_t::timed_out;
+                            break;
+                        case framework_error_kind_t::shutting_down:
+                            outcome = instance_spot_activation_outcome_t::shutdown;
+                            break;
+                        case framework_error_kind_t::already_exists:
+                            outcome = instance_spot_activation_outcome_t::conflict;
+                            break;
+                        case framework_error_kind_t::invalid_operation:
+                            outcome = instance_spot_activation_outcome_t::fenced;
+                            break;
+                        case framework_error_kind_t::unavailable:
+                        case framework_error_kind_t::internal_failure:
+                        case framework_error_kind_t::not_found:
+                            outcome = instance_spot_activation_outcome_t::store_failure;
+                            break;
+                        default:
+                            break;
+                    }
+                } else if (error.kind () == framework_error_kind_t::shutting_down) {
+                    outcome = instance_spot_activation_outcome_t::shutdown;
+                }
+                if (collect_metrics)
+                    lifetime->_instance_activation_metrics.complete (
+                      started, activation->target.stable_type, outcome);
+                if (!activation->request && !result.accepted_turn_terminal) {
+                    tracer.trace (message_flow_outcome_t::dropped, [&] {
+                        message_flow_event_t event{
+                          .outcome = message_flow_outcome_t::dropped,
+                          .surface = dispatch_error_surface_t::instance_spot,
+                          .message_kind = dispatch_message_kind_t::send,
+                          .packet_name = owned_command->application_payload.packet_name,
+                          .source_rid =
+                            zlink::routing_id_t::from (activation->source_node_routing_id)
+                              .to_string (),
+                          .spot_id = activation->target.spot_id,
+                          .error_action = dispatch_error_action_t::drop,
+                          .exception = exception,
+                          .flow_id = owned_command->application_payload.flow_id,
+                          .flow_origin = owned_command->application_payload.flow_origin,
+                          .mesh_name = lifetime->_options.mesh.descriptor.mesh_name,
+                          .instance_spot_type = activation->target.stable_type,
+                          .result = message_flow_result_t::dropped,
+                          .reason = outcome == instance_spot_activation_outcome_t::timed_out
+                                      ? message_flow_reason_t::activation_timeout
+                                    : outcome == instance_spot_activation_outcome_t::shutdown
+                                      ? message_flow_reason_t::shutdown
+                                      : message_flow_reason_t::activation_rejected};
+                        return event;
+                    });
+                }
+            }
+        } else if (collect_metrics) {
+            lifetime->_instance_activation_metrics.complete (
+              started, activation->target.stable_type, instance_spot_activation_outcome_t::ready);
+        }
+    };
+    const auto fail_activation = [record_activation,
+                                  deliver_terminal] (std::exception_ptr exception) {
+        const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (exception);
+        instance_spot_activation_result_t terminal{
+          failure->terminal_result, failure->failure_code, std::nullopt, {}, exception};
+        record_activation (terminal);
+        deliver_terminal (std::move (terminal));
+    };
     std::shared_ptr<instance_activation_operation_t> operation;
+    const auto spot_id = owned_command->activation.target.spot_id;
     std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> previous_admission;
-    const auto previous =
-      _lifecycle_configuration_lane
-        .run ([&] {
-            if (_closing || !_started
-                || _options.mesh.shutdown_admission_seal->load (std::memory_order_acquire))
-                throw framework_exception_t (framework_error_kind_t::shutting_down,
-                                             "Instance Spot activation target stopped");
-            const auto found = _instance_spot_activation_admissions.find (spot_id);
-            const auto pending = found != _instance_spot_activation_admissions.end ()
-                                 && !found->second->admission.task ().await_ready ();
-            if (command.activation.target.authority_owner_generation != 0 && !pending)
-                return std::shared_ptr<instance_activation_operation_t>{};
-            operation = std::make_shared<instance_activation_operation_t> ();
-            auto previous =
-              std::exchange (_instance_spot_activation_admissions[spot_id], operation);
-            if (pending)
-                previous_admission =
-                  std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> (
-                    previous, &previous->admission);
-            return previous;
-        })
-        .get ();
+    std::shared_ptr<instance_activation_operation_t> previous;
+    try {
+        previous =
+          _lifecycle_configuration_lane
+            .run ([&] {
+                if (_closing || !_started
+                    || _options.mesh.shutdown_admission_seal->load (std::memory_order_acquire))
+                    throw framework_exception_t (framework_error_kind_t::shutting_down,
+                                                 "Instance Spot activation target stopped");
+                const auto found = _instance_spot_activation_admissions.find (spot_id);
+                const auto pending = found != _instance_spot_activation_admissions.end ()
+                                     && !found->second->admission.task ().await_ready ();
+                if (owned_command->activation.target.authority_owner_generation != 0 && !pending)
+                    return std::shared_ptr<instance_activation_operation_t>{};
+                operation = std::make_shared<instance_activation_operation_t> ();
+                auto previous =
+                  std::exchange (_instance_spot_activation_admissions[spot_id], operation);
+                if (pending)
+                    previous_admission =
+                      std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> (
+                        previous, &previous->admission);
+                return previous;
+            })
+            .get ();
+    }
+    catch (...) {
+        fail_activation (std::current_exception ());
+        co_return;
+    }
     if (!operation) {
-        co_await dispatch_instance_spot_activation_core (
-          std::move (command), std::move (mailbox_record), std::move (done), nullptr, nullptr);
+        try {
+            co_await dispatch_instance_spot_activation_core (
+              owned_command, mailbox_record,
+              [record_activation, deliver_terminal] (instance_spot_activation_result_t result) {
+                  if (result.terminal_result != 0 && !result.accepted_turn_terminal)
+                      record_activation (result);
+                  deliver_terminal (std::move (result));
+              },
+              nullptr, nullptr);
+        }
+        catch (...) {
+            fail_activation (std::current_exception ());
+        }
         co_return;
     }
     auto admission = std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> (
       operation, &operation->admission);
-    const auto result = co_await runtime::await_result (
-      dispatch_instance_spot_activation_core (std::move (command), std::move (mailbox_record),
-                                              std::move (done), admission, previous_admission));
+    auto deadline = std::make_shared<detail::deadline_state_t> ();
+    auto observed = [] (task_t<instance_activation_admission_t> admitted,
+                        std::shared_ptr<detail::deadline_state_t> deadline, auto record_activation,
+                        auto deliver_terminal) -> task_t<void> {
+        const auto result = co_await runtime::await_result (std::move (admitted));
+        deadline->cancelled.store (true, std::memory_order_release);
+        detail::deadline_scheduler_t::instance ().wake ();
+        if (result && std::holds_alternative<instance_activation_ready_t> (result.value ())) {
+            record_activation ({});
+            co_return;
+        }
+        instance_spot_activation_result_t terminal;
+        if (result)
+            terminal = std::get<instance_spot_activation_result_t> (result.value ());
+        else {
+            const auto failure =
+              messaging::request_failure_mapper_t{}.target_failure_reply (result.exception ());
+            terminal = {failure->terminal_result,
+                        failure->failure_code,
+                        std::nullopt,
+                        {},
+                        result.exception ()};
+        }
+        record_activation (terminal);
+        deliver_terminal (std::move (terminal));
+    }(admission->task (), deadline, record_activation, deliver_terminal);
+    const auto reply_terminal = [admission,
+                                 deliver_terminal] (instance_spot_activation_result_t result) {
+        if (result.terminal_result != 0 && !result.accepted_turn_terminal) {
+            auto completed = admission->task ();
+            if (admission->complete (result_t<instance_activation_admission_t>::success (result)))
+                return;
+            const auto terminal = completed.result ();
+            if (!terminal
+                || !std::holds_alternative<instance_activation_ready_t> (terminal.value ()))
+                return;
+        }
+        deliver_terminal (std::move (result));
+    };
+    // Only the cold route carries a source deadline; Ready joins its pending admission.
+    if (owned_command->activation.target.authority_owner_generation == 0
+        && !admission->task ().await_ready ()) {
+        detail::deadline_scheduler_t::instance ().schedule (
+          messaging::request_deadline_from_unix_ms (
+            owned_command->activation.target.deadline_unix_ms),
+          deadline, [weak = std::weak_ptr (admission)] {
+              if (auto current = weak.lock ())
+                  current->complete (result_t<instance_activation_admission_t>::failure (
+                    framework_error_kind_t::deadline_exceeded,
+                    "Instance Spot activation deadline expired"));
+          });
+    }
+    const auto result = co_await runtime::await_result (dispatch_instance_spot_activation_core (
+      owned_command, mailbox_record, reply_terminal, admission, previous_admission));
     if (!result)
         admission->complete (
           detail::result_access_t::failure<instance_activation_admission_t> (result.exception ()));
+    const auto observed_result = co_await runtime::await_result (std::move (observed));
     if (previous)
         co_await previous->terminal.task ();
     _lifecycle_configuration_lane
@@ -4866,19 +5160,17 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
       })
       .get ();
     operation->terminal.complete (result_t<void>::success ());
-    result.value ();
+    observed_result.value ();
 }
 
 task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
-  protocol::instance_activation_recovery_t command,
+  std::shared_ptr<protocol::instance_activation_recovery_t> owned_command,
   std::shared_ptr<const mesh::service_mailbox_record_t> mailbox_record,
   std::function<void (instance_spot_activation_result_t)> done,
   std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> admission,
   std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> previous_admission)
 {
     auto lifetime = shared_from_this ();
-    auto owned_command =
-      std::make_shared<protocol::instance_activation_recovery_t> (std::move (command));
     std::shared_ptr<const protocol::instance_activation_recovery_t> admission_command =
       owned_command;
     auto &request = owned_command->activation;
@@ -4899,52 +5191,11 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
             admission->complete (
               result_t<instance_activation_admission_t>::success (std::move (result)));
     };
-    const auto reply_terminal = [lifetime, owned_command, transport = _transport, mailbox_record,
-                                 done,
+    const auto reply_terminal = [done,
                                  finish_admission] (instance_spot_activation_result_t result) {
         if (result.terminal_result != 0)
             finish_admission (result);
-        if (!done && result.terminal_result != 0) {
-            detail::dispatch_error_reporter_t (lifetime->_options.mesh.dispatch).report_lazy ([&] {
-                const auto error = messaging::request_failure_mapper_t{}.reply_header_exception (
-                  result.terminal_result, result.failure_code, "Instance Spot activation");
-                message_dispatch_error_event_t event{
-                  .surface = dispatch_error_surface_t::instance_spot,
-                  .message_kind = owned_command->activation.request
-                                    ? dispatch_message_kind_t::request
-                                    : dispatch_message_kind_t::send,
-                  .reason = detail::dispatch_reason_from_error (&error),
-                  .action = owned_command->activation.request ? dispatch_error_action_t::reply_error
-                                                              : dispatch_error_action_t::drop,
-                  .packet_name = owned_command->application_payload.packet_name,
-                  .spot_id = owned_command->activation.target.spot_id,
-                  .source_rid =
-                    zlink::routing_id_t::from (owned_command->activation.source_node_routing_id)
-                      .to_string (),
-                  .exception = std::make_exception_ptr (error),
-                  .mesh_name = lifetime->_options.mesh.descriptor.mesh_name};
-                event.flow_id = owned_command->application_payload.flow_id;
-                event.flow_origin = owned_command->application_payload.flow_origin;
-                return event;
-            });
-        }
-        if (done) {
-            done (std::move (result));
-            return;
-        }
-        auto accepted_turn_terminal = std::move (result.accepted_turn_terminal);
-        try {
-            (void) transport->reply_instance_spot_activation (
-              *mailbox_record, result.terminal_result, result.failure_code,
-              std::move (result.application_reply));
-        }
-        catch (...) {
-            if (accepted_turn_terminal)
-                accepted_turn_terminal ();
-            throw;
-        }
-        if (accepted_turn_terminal)
-            accepted_turn_terminal ();
+        done (std::move (result));
     };
     const auto instance_owner = instance_owner_resolver ? instance_owner_resolver () : std::nullopt;
     if (!store || !instance_relocations || !instance_materializer || !instance_owner) {
@@ -4953,21 +5204,9 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
                          std::nullopt});
         co_return;
     }
-    if (request.target.authority_owner_generation == 0
-        && request.target.deadline_unix_ms <= unix_milliseconds_now ()) {
-        reply_terminal ({101, 0, std::nullopt});
-        co_return;
-    }
     const auto authority_key = spot_authority_key (request.target.spot_id);
     const auto reject_activation = [&] (std::optional<instance_spot_activation_result_t> result =
                                           std::nullopt) {
-        if (request.target.authority_owner_generation == 0
-            && request.target.deadline_unix_ms <= unix_milliseconds_now ()) {
-            reply_terminal (
-              {static_cast<std::uint32_t> (protocol::request_terminal_result::timedOut), 0,
-               std::nullopt});
-            return;
-        }
         if (result) {
             reply_terminal (std::move (*result));
             return;
@@ -5155,16 +5394,19 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
             }
             auto activation_terminal = std::make_shared<activation_terminal_t> ();
             bool prepared = false;
+            std::exception_ptr preparation_error;
             try {
                 prepared = ready_state->state == instance_spot_authority_state_t::closing
                            || instance_materializer->prepare (request, *snapshot,
                                                               activation_terminal->preparation);
             }
             catch (...) {
-                prepared = false;
+                preparation_error = std::current_exception ();
             }
             if (!prepared) {
                 co_await activation_terminal->finish (false);
+                if (preparation_error)
+                    std::rethrow_exception (preparation_error);
                 reply_terminal (
                   {105,
                    static_cast<std::uint32_t> (protocol::framework_error_code::spotCreateFailed),
@@ -5199,11 +5441,6 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
                         });
                   }
               });
-            co_return true;
-        }
-        if (request.target.authority_owner_generation == 0
-            && request.target.deadline_unix_ms <= unix_milliseconds_now ()) {
-            reply_terminal ({101, 0, std::nullopt});
             co_return true;
         }
         // Local Creating work is joined through its target admission owner.
@@ -5356,7 +5593,14 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
     reserve.capacity_bundle = {0, 1,
                                spot_type_capacity_delta_t{placement_object_kind_t::instance_spot,
                                                           request.target.stable_type, 1}};
-    const auto reserved = co_await store->reserve (reserve);
+    object_reserve_result_t reserved;
+    try {
+        reserved = co_await store->reserve (reserve);
+    }
+    catch (...) {
+        instance_relocations->remove (recovery_root.reference);
+        throw;
+    }
     const auto *reservation = std::get_if<object_reserved_t> (&reserved);
     if (!reservation) {
         instance_relocations->remove (recovery_root.reference);
@@ -5378,17 +5622,20 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
     }
     auto activation_terminal = std::make_shared<activation_terminal_t> ();
     bool prepared = false;
+    std::exception_ptr preparation_error;
     try {
         prepared = instance_materializer->prepare (request, reservation->creating,
                                                    activation_terminal->preparation);
     }
     catch (...) {
-        prepared = false;
+        preparation_error = std::current_exception ();
     }
     if (!prepared) {
         co_await activation_terminal->finish (false);
         (void) co_await store->abort ({reserve.key, reservation->fence});
         instance_relocations->remove (recovery_root.reference);
+        if (preparation_error)
+            std::rethrow_exception (preparation_error);
         reply_terminal (
           {105, static_cast<std::uint32_t> (protocol::framework_error_code::spotCreateFailed),
            std::nullopt});
@@ -5415,6 +5662,8 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
       reserve.operation_deadline));
     if (!commit_result) {
         co_await activation_terminal->finish (false);
+        (void) co_await store->abort ({reserve.key, reservation->fence});
+        instance_relocations->remove (recovery_root.reference);
         commit_result.value ();
     }
     const auto &committed = commit_result.value ();
@@ -5610,6 +5859,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                             message_follow_handler (notice);
                         }
                         catch (...) {
+                            _options.mesh.runtime_failures->report (std::current_exception ());
                         }
                     }
                     continue;
@@ -5649,31 +5899,30 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     if (admission == bound_session_bind_admission_t::ready && session_owner) {
                         operation_result = bound_session_operations.bind (
                           bind, session_owner_rid, mailbox_record.source_node_generation,
-                          *session_owner, [this, &mailbox_record, &terminal_replied] {
-                              terminal_replied =
-                                _transport->reply_bound_session_bind (mailbox_record, 0u, 0u);
+                          *session_owner,
+                          [this, &mailbox_record,
+                           &terminal_replied] (const protocol::stream_bind_reply_tail_t &binding) {
+                              terminal_replied = _transport->reply_bound_session_bind (
+                                mailbox_record, 0u, 0u, binding);
                               return terminal_replied;
                           });
                     }
-                    const auto replied =
-                      terminal_replied
-                      || _transport->reply_bound_session_bind (
-                        mailbox_record,
-                        operation_result.error == stateful::stateful_error_t::none ? 0u
-                        : admission == bound_session_bind_admission_t::stale_route
-                          ? static_cast<std::uint32_t> (protocol::request_terminal_result::conflict)
-                        : admission == bound_session_bind_admission_t::actor_not_ready
-                          ? static_cast<std::uint32_t> (protocol::request_terminal_result::busy)
-                          : static_cast<std::uint32_t> (
-                              protocol::request_terminal_result::notFound),
-                        operation_result.error == stateful::stateful_error_t::none ? 0u
-                        : admission == bound_session_bind_admission_t::stale_route
-                          ? static_cast<std::uint32_t> (
-                              protocol::framework_error_code::actorLocationStale)
-                        : admission == bound_session_bind_admission_t::actor_not_ready
-                          ? 0u
-                          : static_cast<std::uint32_t> (
-                              protocol::framework_error_code::actorSessionNotBound));
+                    // One terminal per bind. Session-Actor binding §4: without the Session
+                    // owner descriptor the bind is Unavailable.
+                    using terminal_t = protocol::request_terminal_result;
+                    using code_t = protocol::framework_error_code;
+                    const auto [terminal, code] =
+                      operation_result.error == stateful::stateful_error_t::none
+                        ? std::pair{terminal_t::ok, code_t::none}
+                      : admission == bound_session_bind_admission_t::stale_route
+                        ? std::pair{terminal_t::conflict, code_t::actorLocationStale}
+                      : admission == bound_session_bind_admission_t::actor_not_ready
+                        ? std::pair{terminal_t::busy, code_t::none}
+                        : std::pair{terminal_t::internalError, code_t::routeNotConnected};
+                    const auto replied = terminal_replied
+                                         || _transport->reply_bound_session_bind (
+                                           mailbox_record, static_cast<std::uint32_t> (terminal),
+                                           static_cast<std::uint32_t> (code));
                     if (replied && operation_result.replacement) {
                         (void) co_await _transport->send_bound_session_replaced (
                           operation_result.replacement->retired_session
@@ -6001,18 +6250,51 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       "unsupported infrastructure mailbox command");
 
                 if (wire.kind == protocol::command::sessionRelocationSeal) {
-                    if (mailbox_record.parts.size () != 1 || !session_route_owner_resolver)
+                    if (mailbox_record.parts.size () != 1)
                         continue;
-                    const auto seal = protocol::decode_session_relocation_seal (
-                      protocol::message_bytes (mailbox_record.parts.front ()));
-                    const auto owner = session_route_owner_resolver ();
-                    if (!owner)
+                    const auto seal = [&] {
+                        try {
+                            return protocol::decode_session_relocation_seal (
+                              protocol::message_bytes (mailbox_record.parts.front ()));
+                        }
+                        catch (const protocol::service_wire_error_t &) {
+                            detail::dispatch_error_reporter_t (_options.mesh.dispatch)
+                              .report_lazy ([&] {
+                                  message_dispatch_error_event_t event{};
+                                  event.surface = dispatch_error_surface_t::stream_session;
+                                  event.message_kind = dispatch_message_kind_t::control;
+                                  event.reason = detail::dispatch_reason_from_error (
+                                    framework_error_kind_t::protocol_error);
+                                  event.action = dispatch_error_action_t::drop;
+                                  event.packet_name = "sessionRelocationSeal";
+                                  event.source_rid =
+                                    zlink::routing_id_t::from (mailbox_record.source_routing_id)
+                                      .to_hex ();
+                                  event.exception = std::current_exception ();
+                                  return event;
+                              });
+                            throw;
+                        }
+                    }();
+                    const auto owner =
+                      session_route_owner_resolver ? session_route_owner_resolver () : std::nullopt;
+                    if (!owner) {
+                        detail::trace_session_binding_control_drop (
+                          _options.mesh.dispatch, mailbox_record.source_routing_id,
+                          seal.actor.actor_id, "sessionRelocationSeal",
+                          message_flow_reason_t::location_unavailable);
                         continue;
+                    }
                     const auto reconcile = _transport->peer_reconcile ();
                     const auto [accepted, immediate] = admit_session_relocation_seal (
                       seal, *owner, mailbox_record.source_routing_id, {}, reconcile);
-                    if (!accepted)
+                    if (!accepted) {
+                        detail::trace_session_binding_control_drop (
+                          _options.mesh.dispatch, mailbox_record.source_routing_id,
+                          seal.actor.actor_id, "sessionRelocationSeal",
+                          message_flow_reason_t::stale_target);
                         continue;
+                    }
                     if (immediate)
                         (void) co_await _transport->send_session_relocation_sealed (
                           mailbox_record.source_routing_id, *immediate);
@@ -6057,8 +6339,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       _relocation_session_terminal_lane
                         .run ([&] {
                             const auto sealed = _session_seal_terminals.find (relocation_key);
-                            if (sealed == _session_seal_terminals.end ()
-                                || sealed->second.consumed) {
+                            if (sealed == _session_seal_terminals.end () || sealed->second.consumed
+                                || sealed->second.sealed.seal_result
+                                     == protocol::session_relocation_seal_result_t::
+                                       binding_absent) {
                                 late_session_route_update = true;
                                 return true;
                             }
@@ -6090,13 +6374,14 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                 late_session_route_update_reporter (route);
                             }
                             catch (...) {
+                                _options.mesh.runtime_failures->report (std::current_exception ());
                             }
                         }
                         continue;
                     }
 
-                    const auto session_id =
-                      zlink::routing_id_t::from (route.session_routing_id).to_hex ();
+                    const auto session_id = stateful::stream_session_registry_t::connection_key (
+                      zlink::routing_id_t::from (route.session_routing_id));
                     stateful::stream_route_admission_t admission;
                     if (route.route.action == protocol::session_relocation_route_action_t::commit) {
                         const auto current = _sessions.current_binding (route.actor.actor_id);
@@ -6175,6 +6460,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                   std::move (result.application_reply));
                             }
                             catch (...) {
+                                host->_options.mesh.runtime_failures->report (
+                                  std::current_exception ());
                             }
                         };
                         try {
@@ -6226,6 +6513,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                               std::move (result.application_reply));
                         }
                         catch (...) {
+                            host->_options.mesh.runtime_failures->report (
+                              std::current_exception ());
                         }
                     };
                     try {
@@ -6255,22 +6544,11 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     auto running =
                       std::make_shared<task_t<void>> (dispatch_instance_spot_activation (
                         {request, std::move (metadata), std::move (application)}, reply_record));
-                    detail::observe_task_terminal (
-                      *running, [self = shared_from_this (), running,
-                                 reply_record] (const result_t<void> &result) {
-                          if (!result) {
-                              const auto failure =
-                                (result.error ()
-                                   ? messaging::request_failure_mapper_t{}.target_failure_reply (
-                                       *result.error ())
-                                   : std::optional<messaging::request_wire_failure_t>{})
-                                  .value_or (messaging::request_wire_failure_t{
-                                    105, static_cast<std::uint32_t> (
-                                           protocol::framework_error_code::requestFailed)});
-                              (void) self->_transport->reply_instance_spot_activation (
-                                *reply_record, failure.terminal_result, failure.failure_code);
-                          }
-                      });
+                    detail::observe_task_terminal (*running, [self = shared_from_this (), running] (
+                                                               const result_t<void> &result) {
+                        if (!result)
+                            self->_options.mesh.runtime_failures->report (result.exception ());
+                    });
                     continue;
                 }
                 if (wire.kind == protocol::command::userSpotCreate) {
@@ -7714,6 +7992,7 @@ bool public_host_runtime_t::wait_for_dispatch_activity (
         return _transport->wait_for_activity (timeout, accept_application_receive);
     }
     catch (...) {
+        _options.mesh.runtime_failures->report (std::current_exception ());
         return false;
     }
 }

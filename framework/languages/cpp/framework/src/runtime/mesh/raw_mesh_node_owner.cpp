@@ -2154,12 +2154,22 @@ raw_mesh_node_owner_t::request_bound_session_close (protocol::bound_session_clos
     co_await completion->task ();
 }
 
-bool raw_mesh_node_owner_t::reply_bound_session_bind (const service_mailbox_record_t &request,
-                                                      std::uint32_t terminal_result,
-                                                      std::uint32_t failure_code)
+bool raw_mesh_node_owner_t::reply_bound_session_bind (
+  const service_mailbox_record_t &request,
+  std::uint32_t terminal_result,
+  std::uint32_t failure_code,
+  std::optional<protocol::stream_bind_reply_tail_t> binding)
 {
     if (!request.correlation)
         throw std::invalid_argument ("bound Session bind reply requires a correlation");
+    const auto wire = protocol::decode_header (protocol::message_bytes (request.parts.front ()));
+    if (wire.kind == protocol::command::boundSessionBind
+        && protocol::decode_bound_session_bind (protocol::message_bytes (request.parts.front ()))
+               .binding.state
+             == protocol::bound_session_binding_state_t::active)
+        return reply_infrastructure (
+          request, protocol::encode_stream_bind_reply (*request.correlation, terminal_result,
+                                                       failure_code, binding));
     return reply_infrastructure (
       request, protocol::encode_reply_header (*request.correlation, terminal_result, failure_code));
 }

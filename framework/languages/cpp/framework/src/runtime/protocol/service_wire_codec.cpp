@@ -1043,8 +1043,7 @@ encode_session_relocation_sealed (const session_relocation_sealed_t &record)
     return generated_codec_call ([&] {
         return encode_session_relocation_sealed_43 (
           {to_generated (record.relocation), to_generated (record.coordinator),
-           to_generated (record.actor), to_generated_session (record),
-           service_wire_pilot_session_seal_result::sealed});
+           to_generated (record.actor), to_generated_session (record), record.seal_result});
     });
 }
 
@@ -1052,14 +1051,12 @@ session_relocation_sealed_t decode_session_relocation_sealed (std::span<const st
 {
     const auto generated = generated_codec_call (
       [&] { return decode_session_relocation_sealed_43 (wire_bytes (bytes)); });
-    if (generated.seal_result != service_wire_pilot_session_seal_result::sealed)
-        throw service_wire_error_t (
-          "sessionRelocationSealed bindingAbsent is not supported by this runtime");
     session_relocation_sealed_t record;
     record.relocation = from_generated (generated.relocation);
     record.coordinator = from_generated (generated.coordinator);
     record.actor = from_generated (generated.actor);
     from_generated_session (record, generated.session);
+    record.seal_result = generated.seal_result;
     return record;
 }
 
@@ -3503,6 +3500,40 @@ reply_header_t decode_reply_header (std::span<const std::uint8_t> bytes)
           + ", terminal=" + std::to_string (terminal) + ", failure=" + std::to_string (failure));
     }
     return {correlation, terminal, failure};
+}
+
+std::vector<std::uint8_t> encode_stream_bind_reply (std::uint64_t correlation,
+                                                    std::uint32_t terminal_result,
+                                                    std::uint32_t failure_code,
+                                                    std::optional<stream_bind_reply_tail_t> binding)
+{
+    auto bytes = encode_reply_header (correlation, terminal_result, failure_code);
+    if (terminal_result == 0) {
+        if (!binding || binding->binding_generation == 0
+            || binding->authority_owner_generation == 0)
+            throw service_wire_error_t ("stream bind success requires accepted binding fence");
+        append_u64 (bytes, binding->binding_generation);
+        append_u64 (bytes, binding->authority_owner_generation);
+    } else if (binding) {
+        throw service_wire_error_t ("stream bind failure cannot contain a success tail");
+    }
+    return bytes;
+}
+
+stream_bind_reply_t decode_stream_bind_reply (std::span<const std::uint8_t> bytes)
+{
+    stream_bind_reply_t reply{decode_reply_header (bytes), std::nullopt};
+    std::size_t offset = reply_header_t::encoded_size;
+    if (reply.header.terminal_result == 0) {
+        const auto generation = read_u64 (bytes, offset);
+        const auto authority = read_u64 (bytes, offset);
+        if (generation == 0 || authority == 0)
+            throw service_wire_error_t ("stream bind success fence must be nonzero");
+        reply.binding = stream_bind_reply_tail_t{generation, authority};
+    }
+    if (offset != bytes.size ())
+        throw service_wire_error_t ("stream bind reply has unexpected tail bytes");
+    return reply;
 }
 
 std::vector<std::uint8_t> encode_user_spot_create_reply (std::uint64_t correlation,

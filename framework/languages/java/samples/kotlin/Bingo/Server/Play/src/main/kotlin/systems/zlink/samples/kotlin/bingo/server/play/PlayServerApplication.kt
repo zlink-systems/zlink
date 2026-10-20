@@ -13,7 +13,6 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.core.env.StandardEnvironment
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec
-import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode
 import systems.zlink.framework.kotlin.*
@@ -50,7 +49,7 @@ class PlayServerApplication {
         ZLinkFrameworkConfigurer { options ->
             options.addHandlersFromPackageOf<PlayServerApplication>()
             options.useCoroutineHandlers(Dispatchers.Default)
-            options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
+            options.configureDispatch { messageFlow(topology.diagnosticsLevel) }
             options.codecs().use(ZLinkProtobufCodec.defaultCodec())
             options.configureLocations()
             options.addRelocationStore(

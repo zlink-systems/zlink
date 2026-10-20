@@ -93,6 +93,64 @@ final class ZLinkRelocationHandOffTest {
         assertTrue(cutover.isCancelled());
     }
 
+    @Test
+    void recordsOneRelocationAndSourceLocalInterruptionAtCutoverTerminal() throws Exception {
+        try (var metrics =
+                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                        .install()) {
+            var cutover = new CompletableFuture<Void>();
+            var result =
+                    ZLinkRelocationHandOff.run(
+                            client(
+                                    new AtomicInteger(),
+                                    ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                                    cutover),
+                            request(),
+                            ignored -> CompletableFuture.completedFuture(null),
+                            Duration.ofSeconds(1),
+                            Instant.now(),
+                            System.nanoTime());
+            assertEquals(1, metrics.count("zlink.relocation.started"));
+            assertEquals(0, metrics.count("zlink.relocation.completed"));
+            assertEquals(0, metrics.count("zlink.relocation.interruption"));
+            cutover.complete(null);
+            assertEquals(
+                    ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                    result.toCompletableFuture().join());
+            assertEquals(
+                    "completed", metrics.only("zlink.relocation.completed").tags().get("outcome"));
+            assertEquals(1, metrics.count("zlink.relocation.duration"));
+            assertEquals(1, metrics.count("zlink.relocation.bytes"));
+            assertTrue(metrics.only("zlink.relocation.interruption").value() >= 0);
+            metrics.assertContractLabels();
+        }
+    }
+
+    @Test
+    void cleanupFailureAfterConfirmedCommitCannotReplaceCompleted() throws Exception {
+        try (var metrics =
+                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                        .install()) {
+            var result =
+                    ZLinkRelocationHandOff.run(
+                            client(
+                                    new AtomicInteger(),
+                                    ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                                    CompletableFuture.failedFuture(
+                                            new IllegalStateException("cutover cleanup failed"))),
+                            request(),
+                            () -> CompletableFuture.completedFuture(null),
+                            Duration.ofSeconds(1),
+                            Instant.now());
+            assertEquals(
+                    ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                    result.toCompletableFuture().join());
+            assertEquals(
+                    "completed", metrics.only("zlink.relocation.completed").tags().get("outcome"));
+            assertEquals(1, metrics.count("zlink.relocation.duration"));
+        }
+    }
+
     private static ZLinkSpotRetireControl.StageRequest request() {
         RoutingId source = RoutingId.from("source");
         RoutingId target = RoutingId.from("target");
@@ -118,6 +176,29 @@ final class ZLinkRelocationHandOffTest {
                                 "actor", 1, "actor", "player", true, 1, 1)));
     }
 
+    @Test
+    void settlementThrowAfterRelayReadinessBelongsToSourceCleanup() {
+        var failure = new IllegalStateException("source settlement failed");
+        var ready =
+                ZLinkRelocationHandOff.runToReady(
+                        client(
+                                new AtomicInteger(),
+                                () -> {
+                                    throw failure;
+                                },
+                                CompletableFuture.completedFuture(null)),
+                        request(),
+                        ignored -> CompletableFuture.completedFuture(null),
+                        Duration.ofSeconds(1),
+                        Instant.now());
+        var cleanup = ready.toCompletableFuture().join();
+        var error =
+                assertThrows(
+                        java.util.concurrent.CompletionException.class,
+                        () -> cleanup.toCompletableFuture().join());
+        assertSame(failure, error.getCause());
+    }
+
     private static ZLinkRelocationTransitionClient client(AtomicInteger settleCalls) {
         return client(
                 settleCalls,
@@ -135,6 +216,14 @@ final class ZLinkRelocationHandOffTest {
     private static ZLinkRelocationTransitionClient client(
             AtomicInteger settleCalls,
             CompletionStage<ZLinkRelocationTransitionClient.Settlement> settlement,
+            CompletionStage<Void> cutover) {
+        return client(settleCalls, () -> settlement, cutover);
+    }
+
+    private static ZLinkRelocationTransitionClient client(
+            AtomicInteger settleCalls,
+            java.util.function.Supplier<CompletionStage<ZLinkRelocationTransitionClient.Settlement>>
+                    settlement,
             CompletionStage<Void> cutover) {
         return new ZLinkRelocationTransitionClient() {
             @Override
@@ -165,7 +254,7 @@ final class ZLinkRelocationHandOffTest {
             public CompletionStage<Settlement> settle(
                     RoutingId rid, ZLinkSpotRetireControl.Fence value, Instant preserveAt) {
                 settleCalls.incrementAndGet();
-                return settlement;
+                return settlement.get();
             }
 
             @Override

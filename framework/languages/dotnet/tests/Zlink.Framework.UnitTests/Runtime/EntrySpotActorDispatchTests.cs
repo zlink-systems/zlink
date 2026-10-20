@@ -32,6 +32,222 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed partial class EntrySpotActorDispatchTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Owned_disconnect_finishes_callback_and_the_next_actor_record(bool joined)
+    {
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            new CapturingSpotNode(),
+            entrySpotType: typeof(OwnedDisconnectEntrySpot),
+            userSpotType: typeof(OwnedDisconnectSpot)
+        );
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+            if (joined)
+            {
+                var created = await runtime.GetOrCreateAsync<OwnedDisconnectSpot>(
+                    "owned-disconnect-spot"
+                );
+                Assert.True(
+                    (
+                        await GetSpotActivation(runtime, created.Spot.SpotId)
+                            .JoinActorAsync(actor, ZLinkMessage.Empty, default)
+                    ).Accepted
+                );
+            }
+            state.BindSession(
+                RoutingId.From("session-owner"),
+                RoutingId.From("session"),
+                "binding",
+                objectGeneration: actorRef.Generation,
+                authorityOwnerGeneration: 1,
+                meshName: ZLinkMeshName.FromBoundary("entry", "mesh"),
+                ownerLeaseGeneration: 1,
+                bindingGeneration: 7,
+                sessionOwnerNodeGeneration: 2
+            );
+            var frame = new ZLinkSpotActorFrame(
+                ZLinkApplicationJobOrigin.Remote,
+                actorRef,
+                actorRef,
+                RoutingId.From("message-follow-hop"),
+                RoutingId.From("hop-session"),
+                7,
+                ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                new ZLinkBackendActorRouteContext(default, 1, 0, 0, 0),
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Request,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.HasRequestSeq,
+                    new ZlinkStreamRequestSeq(7),
+                    ZLinkRemoteActorJoinPackets.SessionDisconnectedPacketName,
+                    ZlinkStreamMetadata.Empty
+                ),
+                Message.From(
+                    ZLinkActorBoundSessionRelay.EncodeSessionDisconnected(
+                        RoutingId.From("session-owner"),
+                        2,
+                        7
+                    )
+                ),
+                requestSource: AcceptedRequestSource(RoutingId.From("message-follow-hop"))
+            );
+            var pipeline = new ZLinkActorInboundPipeline(
+                runtime,
+                new ZLinkEntrySpotActorInboundEndpoint(runtime)
+            );
+            var replies = new List<ZLinkActorReply?>();
+            var terminals = state.AdmitDurablePrefix([
+                new ZLinkActorDurableRecord(async ct =>
+                {
+                    using var dispatch = state.EnterDispatch();
+                    await pipeline.DispatchOwnedFrameAsync(
+                        new([frame]),
+                        (_, reply, _) =>
+                        {
+                            replies.Add(reply);
+                            return ValueTask.CompletedTask;
+                        },
+                        deadline.Token
+                    );
+                }),
+                new ZLinkActorDurableRecord(async ct =>
+                {
+                    using var dispatch = state.EnterDispatch();
+                    await pipeline.DispatchOwnedFrameAsync(
+                        ZLinkActorHandoffIngress.CaptureMovingFrames(
+                            ZLinkApplicationJobOrigin.Remote,
+                            runtime,
+                            CreateActorRequestParts(actorRef, "after-disconnect", "next", 0, 0)
+                        ),
+                        (_, reply, _) =>
+                        {
+                            replies.Add(reply);
+                            return ValueTask.CompletedTask;
+                        },
+                        deadline.Token
+                    );
+                }),
+            ]);
+            await Task.WhenAll(terminals).WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(1, actor.OwnedDisconnectCalls);
+            Assert.False(state.TryGetBoundSession(out _));
+            Assert.Equal(2, replies.Count);
+            Assert.All(
+                replies,
+                reply => Assert.Equal(ZlinkStreamMessageKind.Response, reply?.Kind)
+            );
+        }
+        finally
+        {
+            deadline.Cancel();
+            await runtime.StopAsync(default);
+        }
+    }
+
+    private sealed class OwnedDisconnectEntrySpot(IZLinkEntrySpotContext context)
+        : IZLinkEntrySpot<ProbeActor>
+    {
+        public IZLinkEntrySpotContext Context { get; } = context;
+
+        public void Configure() =>
+            Context.Handlers.AddActorPacket<OwnedDisconnectNextHandler, ProbeActor>(
+                "after-disconnect"
+            );
+
+        public ValueTask OnJoinedActorAsync(
+            ProbeActor actor,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+
+        public ValueTask OnLeaveActorAsync(ProbeActor actor, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnDisconnectActorAsync(
+            ProbeActor actor,
+            CancellationToken cancellationToken
+        )
+        {
+            actor.OwnedDisconnectCalls++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class OwnedDisconnectNextHandler
+        : IZLinkEntrySpotActorRequestHandler<
+            OwnedDisconnectEntrySpot,
+            ProbeActor,
+            string,
+            ProbeReply
+        >
+    {
+        public ValueTask<ProbeReply> HandleAsync(
+            OwnedDisconnectEntrySpot spot,
+            ProbeActor actor,
+            IZLinkMessageContext context,
+            string request,
+            CancellationToken cancellationToken
+        )
+        {
+            Assert.Equal(1, actor.OwnedDisconnectCalls);
+            return ValueTask.FromResult(new ProbeReply(request));
+        }
+    }
+
+    private sealed class OwnedDisconnectSpot(IZLinkSpotContext context) : IZLinkSpot<ProbeActor>
+    {
+        public IZLinkSpotContext Context { get; } = context;
+
+        public void Configure() =>
+            Context.Handlers.AddActorPacket<OwnedDisconnectSpotNextHandler, ProbeActor>(
+                "after-disconnect"
+            );
+
+        public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
+            string actorId,
+            ZLinkMessage request,
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
+
+        public ValueTask OnJoinedActorAsync(
+            ProbeActor actor,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+
+        public ValueTask OnLeaveActorAsync(ProbeActor actor, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnDisconnectActorAsync(
+            ProbeActor actor,
+            CancellationToken cancellationToken
+        )
+        {
+            Assert.Equal(Context.SpotId, ZLinkSpotAmbientContext.CurrentOrDefault?.SpotId);
+            actor.OwnedDisconnectCalls++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class OwnedDisconnectSpotNextHandler
+        : IZLinkSpotActorRequestHandler<OwnedDisconnectSpot, ProbeActor, string, ProbeReply>
+    {
+        public ValueTask<ProbeReply> HandleAsync(
+            OwnedDisconnectSpot spot,
+            ProbeActor actor,
+            IZLinkMessageContext context,
+            string request,
+            CancellationToken cancellationToken
+        )
+        {
+            Assert.Equal(1, actor.OwnedDisconnectCalls);
+            return ValueTask.FromResult(new ProbeReply(request));
+        }
+    }
+
+    [Theory]
     [InlineData("same", 1, false)]
     [InlineData("other-rid", 0, false)]
     [InlineData("other-owner-generation", 0, false)]
@@ -2394,6 +2610,35 @@ public sealed partial class EntrySpotActorDispatchTests
             ];
     }
 
+    private static Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBind38 CanonicalBind(
+        ZLinkBackendActorRef actor,
+        string session,
+        ulong generation
+    ) =>
+        new(
+            0,
+            new(generation),
+            new(
+                new(new(actor.ActorId), new(actor.Generation)),
+                new(actor.NodeRid.ToBytes().ToArray()),
+                new(1),
+                new(41),
+                new(51)
+            ),
+            new(RoutingId.From(session).ToBytes().ToArray()),
+            new Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBindingTransitionCase0(
+                Systems
+                    .Zlink
+                    .Framework
+                    .Runtime
+                    .Protocol
+                    .ServiceWireCodec
+                    .BoundSessionBindingState
+                    .Active,
+                new(generation)
+            )
+        );
+
     [Fact]
     public async Task RemoteSessionBindPublication_OldCleanup_Cannot_Interrupt_The_Owner_Turn()
     {
@@ -2427,23 +2672,17 @@ public sealed partial class EntrySpotActorDispatchTests
                 )
             );
             node.SetLocalActorAuthorityFence(actorRef, 41, 51);
-            var request = new ZLinkRemoteSessionBindRequest(
-                actorRef.ActorId,
-                actorRef.NodeRid.ToBytes().ToArray(),
-                sessionNode.ToBytes().ToArray(),
-                RoutingId.From("session-old").ToBytes().ToArray(),
-                "binding-old",
-                1,
-                actorRef.Generation,
-                "entry",
-                61,
-                0
-            );
-            await runtime.BindRemoteBoundSessionRouteAsync(
-                request,
+            var request = CanonicalBind(actorRef, "session-old", 1);
+            await runtime.ApplyBoundSessionBindAsync(
+                actorRef.NodeRid,
                 sessionNode,
+                61,
+                request,
+                static () => { },
                 CancellationToken.None
             );
+            Assert.True(state.TryGetBoundSession(out var oldBinding));
+            var oldToken = oldBinding.BindingToken;
             ZLinkStateLane? publicationLane = null;
             Task cleanup = Task.CompletedTask;
             var readCount = 0;
@@ -2455,22 +2694,36 @@ public sealed partial class EntrySpotActorDispatchTests
                 // The existing authority-reader double places old cleanup at the
                 // acceptance boundary. A single owner turn queues it after install.
                 using (ExecutionContext.SuppressFlow())
-                    cleanup = Task.Run(() => state.UnbindSession("binding-old"));
+                    cleanup = Task.Run(() => state.UnbindSession(oldToken));
             };
-            var response = await runtime.BindRemoteBoundSessionRouteAsync(
+            await runtime.ApplyBoundSessionBindAsync(
+                actorRef.NodeRid,
+                sessionNode,
+                61,
                 request with
                 {
-                    SessionRid = RoutingId.From("session-new").ToBytes().ToArray(),
-                    BindingToken = "binding-new",
+                    SessionRid = new(RoutingId.From("session-new").ToBytes().ToArray()),
+                    Binding =
+                        new Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBindingTransitionCase0(
+                            Systems
+                                .Zlink
+                                .Framework
+                                .Runtime
+                                .Protocol
+                                .ServiceWireCodec
+                                .BoundSessionBindingState
+                                .Active,
+                            new(2)
+                        ),
                 },
-                sessionNode,
+                static () => { },
                 CancellationToken.None
             );
             await cleanup;
             Assert.NotNull(publicationLane);
-            Assert.True(response.Acknowledged);
+
             Assert.True(state.TryGetBoundSession(out var current));
-            Assert.Equal("binding-new", current.BindingToken);
+            Assert.Equal(2UL, current.BindingGeneration);
             Assert.Equal(1, state.SessionBindingTombstoneCount);
         }
         finally
@@ -2517,28 +2770,22 @@ public sealed partial class EntrySpotActorDispatchTests
                     1
                 )
             );
-            var request = new ZLinkRemoteSessionBindRequest(
-                actorRef.ActorId,
-                actorRef.NodeRid.ToBytes().ToArray(),
-                sessionNode.ToBytes().ToArray(),
-                RoutingId.From("session-bind-publication").ToBytes().ToArray(),
-                "binding-token",
-                1,
-                actorRef.Generation,
-                "entry",
-                61,
-                0
-            );
+            var request = CanonicalBind(actorRef, "session-bind-publication", 1);
 
-            var response = await runtime.BindRemoteBoundSessionRouteAsync(
-                request,
+            await runtime.ApplyBoundSessionBindAsync(
+                actorRef.NodeRid,
                 sessionNode,
+                61,
+                request,
+                static () => { },
                 CancellationToken.None
             );
 
-            Assert.True(response.Acknowledged);
-            Assert.Equal(authorityGeneration, response.AuthorityOwnerGeneration);
-            Assert.Equal(51UL, response.OwnerLeaseGeneration);
+            Assert.True(
+                runtime.TryGetActorBoundSessionForOutbound(actorRef.ActorId, out var bound)
+            );
+            Assert.Equal(authorityGeneration, bound.AuthorityOwnerGeneration);
+            Assert.Equal(51UL, bound.OwnerLeaseGeneration);
         }
         finally
         {
@@ -2583,21 +2830,13 @@ public sealed partial class EntrySpotActorDispatchTests
                     1
                 )
             );
-            var request = new ZLinkRemoteSessionBindRequest(
-                actorRef.ActorId,
-                actorRef.NodeRid.ToBytes().ToArray(),
-                sessionNode.ToBytes().ToArray(),
-                RoutingId.From("session-terminal").ToBytes().ToArray(),
-                "binding-before-terminal",
-                1,
-                actorRef.Generation,
-                "entry",
-                61,
-                0
-            );
-            await runtime.BindRemoteBoundSessionRouteAsync(
-                request,
+            var request = CanonicalBind(actorRef, "session-terminal", 1);
+            await runtime.ApplyBoundSessionBindAsync(
+                actorRef.NodeRid,
                 sessionNode,
+                61,
+                request,
+                static () => { },
                 CancellationToken.None
             );
             if (migrated)
@@ -2635,12 +2874,26 @@ public sealed partial class EntrySpotActorDispatchTests
             };
             var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
                 runtime
-                    .BindRemoteBoundSessionRouteAsync(
+                    .ApplyBoundSessionBindAsync(
+                        actorRef.NodeRid,
+                        sessionNode,
+                        61,
                         request with
                         {
-                            BindingToken = "binding-after-terminal",
+                            Binding =
+                                new Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBindingTransitionCase0(
+                                    Systems
+                                        .Zlink
+                                        .Framework
+                                        .Runtime
+                                        .Protocol
+                                        .ServiceWireCodec
+                                        .BoundSessionBindingState
+                                        .Active,
+                                    new(2)
+                                ),
                         },
-                        sessionNode,
+                        static () => { },
                         CancellationToken.None
                     )
                     .AsTask()
@@ -2648,7 +2901,7 @@ public sealed partial class EntrySpotActorDispatchTests
             Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
             Assert.Equal(migrated, state.TryGetBoundSession(out var retained));
             if (migrated)
-                Assert.Equal("binding-before-terminal", retained.BindingToken);
+                Assert.Equal(1UL, retained.BindingGeneration);
             Assert.Equal(0, state.SessionBindingTombstoneCount);
         }
         finally
@@ -2694,22 +2947,18 @@ public sealed partial class EntrySpotActorDispatchTests
                     1
                 )
             );
-            var request = new ZLinkRemoteSessionBindRequest(
-                actorRef.ActorId,
-                actorRef.NodeRid.ToBytes().ToArray(),
-                sessionNode.ToBytes().ToArray(),
-                RoutingId.From("session-bind-authority").ToBytes().ToArray(),
-                "binding-token",
-                1,
-                actorRef.Generation,
-                "entry",
-                61,
-                0
-            );
+            var request = CanonicalBind(actorRef, "session-bind-authority", 1);
 
             var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
                 runtime
-                    .BindRemoteBoundSessionRouteAsync(request, sessionNode, CancellationToken.None)
+                    .ApplyBoundSessionBindAsync(
+                        actorRef.NodeRid,
+                        sessionNode,
+                        61,
+                        request,
+                        static () => { },
+                        CancellationToken.None
+                    )
                     .AsTask()
             );
 
@@ -3429,7 +3678,10 @@ public sealed partial class EntrySpotActorDispatchTests
                     authorityOwnerGeneration: 3,
                     ownerLeaseGeneration: 4
                 ),
-                sessionOwnerNodeGeneration: 5
+                sessionOwnerNodeGeneration: 5,
+                sessionOwnerNodeRid: node.RoutingId,
+                sessionOwnerId: "session-owner",
+                sessionOwnerLeaseGeneration: 1
             );
             var header = CreateHeader("retry-frame");
             var expectedHeader = ZLinkStreamProtocolDefaults.EncodeHeader(header).ToArray();
@@ -4275,7 +4527,10 @@ public sealed partial class EntrySpotActorDispatchTests
                     authorityOwnerGeneration: 3,
                     ownerLeaseGeneration: 4
                 ),
-                sessionOwnerNodeGeneration: 5
+                sessionOwnerNodeGeneration: 5,
+                sessionOwnerNodeRid: node.RoutingId,
+                sessionOwnerId: "session-owner",
+                sessionOwnerLeaseGeneration: 1
             );
             var capability = runtime.TrackRemoteSessionActorRequest(
                 actor.ActorId,
@@ -4454,7 +4709,10 @@ public sealed partial class EntrySpotActorDispatchTests
                     authorityOwnerGeneration: 13,
                     ownerLeaseGeneration: 17
                 ),
-                sessionOwnerNodeGeneration: 19
+                sessionOwnerNodeGeneration: 19,
+                sessionOwnerNodeRid: node.RoutingId,
+                sessionOwnerId: "session-owner",
+                sessionOwnerLeaseGeneration: 1
             );
 
             Assert.True(runtime.TryGetSessionActorBinding(actor.ActorId, context, out var binding));
@@ -4537,8 +4795,18 @@ public sealed partial class EntrySpotActorDispatchTests
             "Bind admission rejected.",
             retryable ? ZLinkRetryAdvice.RetryAfterBackoff : ZLinkRetryAdvice.DoNotRetry
         );
-        var node = new CapturingSpotNode { NodeRequestFailure = failure };
-        var (runtime, _) = await CreateStartedRuntimeAsync(
+        var attempts = 0;
+        var node = new CapturingSpotNode
+        {
+            CanonicalBindHandler = (_, _, _) =>
+            {
+                attempts++;
+                return ValueTask.FromException<Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.RequestSpecificTailCase2?>(
+                    failure
+                );
+            },
+        };
+        var (runtime, actor) = await CreateStartedRuntimeAsync(
             node,
             defaultRequestTimeout: TimeSpan.FromMilliseconds(120)
         );
@@ -4555,12 +4823,12 @@ public sealed partial class EntrySpotActorDispatchTests
             var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
                 await context.ActorCoordinator.BindActorAsync(
                     context,
-                    new ActorRef("remote-bind-actor", 1, "entry", RoutingId.From("remote-node")),
+                    new ActorRef(actor.ActorId, actor.Generation, "entry", actor.NodeRid),
                     CancellationToken.None
                 )
             );
             Assert.Same(failure, error);
-            Assert.Equal(1, node.NodeRequestAttempts);
+            Assert.Equal(1, attempts);
         }
         finally
         {
@@ -9761,20 +10029,51 @@ public sealed partial class EntrySpotActorDispatchTests
     [Fact]
     public async Task ActorRemoteJoiner_InternalDeadline_MapsToTypedDeadlineExceeded()
     {
-        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-            await ZLinkActorRemoteJoiner.ExecuteWithDeadlineAsync(
+        var time = new ControllableTimeProvider();
+        var timeout = TimeSpan.FromMilliseconds(20);
+        var operation = ZLinkActorRemoteJoiner
+            .ExecuteWithDeadlineAsync(
+                async cancellationToken =>
+                {
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    return 0;
+                },
+                timeout,
+                CancellationToken.None,
+                time
+            )
+            .AsTask();
+        Assert.Equal(1, time.ActiveTimerCount);
+        Assert.False(operation.IsCompleted);
+        time.AdvanceMonotonic(timeout);
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => operation);
+
+        Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
+        Assert.IsAssignableFrom<OperationCanceledException>(error.InnerException);
+        Assert.Equal(0, time.ActiveTimerCount);
+    }
+
+    [Fact]
+    public async Task ActorRemoteJoiner_CallerCancellation_RemainsCancellation()
+    {
+        var time = new ControllableTimeProvider();
+        using var caller = new CancellationTokenSource();
+        var operation = ZLinkActorRemoteJoiner
+            .ExecuteWithDeadlineAsync(
                 async cancellationToken =>
                 {
                     await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
                     return 0;
                 },
                 TimeSpan.FromMilliseconds(20),
-                CancellationToken.None
+                caller.Token,
+                time
             )
-        );
-
-        Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
-        Assert.IsAssignableFrom<OperationCanceledException>(error.InnerException);
+            .AsTask();
+        Assert.Equal(1, time.ActiveTimerCount);
+        caller.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
+        Assert.Equal(0, time.ActiveTimerCount);
     }
 
     [Fact]
@@ -10241,6 +10540,7 @@ public sealed partial class EntrySpotActorDispatchTests
         ZLinkFrameworkErrorKind expected
     )
     {
+        var time = new ControllableTimeProvider();
         var admission = new TaskCompletionSource<(ActorJoinCallback Callback, TimeSpan Timeout)>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -10249,7 +10549,11 @@ public sealed partial class EntrySpotActorDispatchTests
             CanonicalActorJoinHandler = (callback, timeout) =>
                 admission.SetResult((callback, timeout)),
         };
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, includeSpotRoute: true);
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            includeSpotRoute: true,
+            joinTimeProvider: time
+        );
         try
         {
             var actor = RegisterProbeActor(runtime, actorRef);
@@ -10266,26 +10570,32 @@ public sealed partial class EntrySpotActorDispatchTests
             join.ReserveBarrier();
             join.Activate();
             var submitted = await admission.Task.WaitAsync(TimeSpan.FromSeconds(2));
-            Assert.InRange(submitted.Timeout, TimeSpan.Zero, timeout);
-            // Native terminal draining can resume after the deadline instant.
-            // Only the sender can classify its admission/exhaustion history.
-            await Task.Delay(submitted.Timeout + TimeSpan.FromMilliseconds(50));
-            Assert.False(actor.JoinCompletion.Task.IsCompleted);
-            submitted.Callback(
-                new ZLinkBackendActorJoinResult(
-                    terminal,
-                    1,
-                    actorRef with
-                    {
-                        NodeRid = node.CanonicalRequest.TargetNodeRid,
-                    },
-                    "spot-ready",
-                    0,
-                    0,
-                    JoinedSpotGeneration: node.CanonicalRequest.TargetSpotGeneration
-                ),
-                Array.Empty<Message>()
-            );
+            try
+            {
+                Assert.Equal(timeout, submitted.Timeout);
+                // Native terminal draining can resume after the deadline instant.
+                // Only the sender can classify its admission/exhaustion history.
+                time.Advance(timeout);
+                Assert.False(actor.JoinCompletion.Task.IsCompleted);
+            }
+            finally
+            {
+                submitted.Callback(
+                    new ZLinkBackendActorJoinResult(
+                        terminal,
+                        1,
+                        actorRef with
+                        {
+                            NodeRid = node.CanonicalRequest.TargetNodeRid,
+                        },
+                        "spot-ready",
+                        0,
+                        0,
+                        JoinedSpotGeneration: node.CanonicalRequest.TargetSpotGeneration
+                    ),
+                    Array.Empty<Message>()
+                );
+            }
             var completion = await actor.JoinCompletion.Task.WaitAsync(TimeSpan.FromSeconds(2));
             if (terminal == RequestResult.Ok)
                 Assert.IsType<ZLinkActorJoinCompletion.Rejected>(completion);
@@ -11474,7 +11784,8 @@ public sealed partial class EntrySpotActorDispatchTests
         Func<IZLinkMeshNodeLocationResolver, IZLinkMeshNodeLocationResolver>? meshResolverWrapper =
             null,
         AcceptedSendProbe? acceptedSendProbe = null,
-        ILoggerFactory? loggerFactory = null
+        ILoggerFactory? loggerFactory = null,
+        TimeProvider? joinTimeProvider = null
     )
     {
         const string locationOwnerId = "entry-spot-dispatch-owner";
@@ -11562,6 +11873,7 @@ public sealed partial class EntrySpotActorDispatchTests
         var services = serviceCollection.BuildServiceProvider();
         var registration = new ZLinkFrameworkRegistration
         {
+            TimeProvider = joinTimeProvider ?? TimeProvider.System,
             DefaultRequestTimeout = defaultRequestTimeout ?? TimeSpan.FromSeconds(1),
             ImplicitHandlerAutoRegistrationEnabled = false,
         };
@@ -12187,6 +12499,8 @@ public sealed partial class EntrySpotActorDispatchTests
     internal sealed class ProbeActor(string actorId, IZLinkActorContext? context = null)
         : IZLinkActor
     {
+        internal int OwnedDisconnectCalls { get; set; }
+
         // Test-only convenience identity for dispatch fixtures that do not create a runtime Context.
         public string ActorId { get; } = actorId;
 
@@ -13894,8 +14208,57 @@ public sealed partial class EntrySpotActorDispatchTests
         : IZLinkBackendSpotNode,
             IZLinkBackendAuthorityObserver,
             IZLinkBackendRequestSourceFenceObserver,
-            IZLinkBackendLocalActorAuthorityReader
+            IZLinkBackendLocalActorAuthorityReader,
+            IZLinkBackendBoundSessionBind
     {
+        public Func<
+            Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBind38,
+            TimeSpan,
+            CancellationToken,
+            ValueTask<Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.RequestSpecificTailCase2?>
+        >? CanonicalBindHandler { get; set; }
+        private Func<
+            RoutingId,
+            ulong,
+            Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBind38,
+            Action,
+            CancellationToken,
+            ValueTask
+        >? _bindHandler;
+
+        public void SetBoundSessionBindHandler(
+            Func<
+                RoutingId,
+                ulong,
+                Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBind38,
+                Action,
+                CancellationToken,
+                ValueTask
+            > handler
+        ) => _bindHandler = handler;
+
+        public async ValueTask<Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.RequestSpecificTailCase2?> BindBoundSessionAsync(
+            Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBind38 request,
+            TimeSpan timeout,
+            CancellationToken cancellationToken
+        )
+        {
+            if (CanonicalBindHandler is { } handler)
+                return await handler(request, timeout, cancellationToken);
+            await _bindHandler!(
+                RoutingId,
+                MeshStatus().LifecycleGeneration,
+                request,
+                static () => { },
+                cancellationToken
+            );
+            return
+                request.Binding
+                    is Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBindingTransitionCase0 active
+                ? new(active.BindingGeneration, request.Actor.ExpectedAuthorityOwnerGeneration)
+                : null;
+        }
+
         private readonly CapturingSpot _entrySpot = new();
         private readonly ConcurrentDictionary<
             (RoutingId, ulong),
@@ -14535,6 +14898,12 @@ public sealed partial class EntrySpotActorDispatchTests
 
         private sealed class UnusedMeshNodeMonitor : IMeshNodeMonitor
         {
+            public async ValueTask<bool> WaitAsync(CancellationToken token)
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return false;
+            }
+
             public MeshMonitorEvent? Recv(RecvFlags flags = RecvFlags.None) =>
                 throw new NotSupportedException();
 

@@ -2601,7 +2601,7 @@ bool verify_spot_wide_yield_blocks_idle_eviction_until_handler_terminal ()
     record.actor_route = exact_route;
     --record.actor_route->object_generation;
     messaging::envelope_codec_t codec;
-    auto encoded = codec.encode_raw_body_parts (
+    auto encoded = zlink::framework::detail::encode_actor_packet (
       messaging::envelope_header_t{.kind = messaging::message_kind_t::command,
                                    .channel_name = "actor",
                                    .message_name = "YieldIdleEvictionProbe"},
@@ -7615,9 +7615,20 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
       target_address.node_generation, target_address.authority_owner_generation,
       static_cast<std::uint64_t> (target_address.owner.lease_generation));
     auto joined = std::async (std::launch::async, [&] {
-        const auto result = std::move (source.join_application_actor_to_spot (
-                                         actor, target_address, zlink::message_t{}, join_timeout))
-                              .result ();
+        auto result = std::move (source.join_application_actor_to_spot (
+                                   actor, target_address, zlink::message_t{}, join_timeout))
+                        .result ();
+        if (result && result.value ().result_code == actor_join_reply_t::relayed) {
+            const auto cleanup = result.value ().source_cleanup ().result ();
+            if (!cleanup)
+                return result_t<actor_join_reply_t>::failure (
+                  cleanup.error_kind (),
+                  cleanup.error () ? cleanup.error ()->what () : "source cleanup failed");
+            auto reply = result.value ();
+            reply.source_cleanup = {};
+            reply.result_code = actor_join_reply_t::accepted;
+            result = result_t<actor_join_reply_t>::success (std::move (reply));
+        }
         if (cancel_source_delay)
             early_leave.complete (result_t<bool>::success (false));
         return result;

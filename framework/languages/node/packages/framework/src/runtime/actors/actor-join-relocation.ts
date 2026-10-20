@@ -33,6 +33,8 @@ export interface ZLinkActorJoinRelocation {
     readonly deadlineAtMs?: number;
     readonly signal?: AbortSignal;
   }): Promise<{
+    /** Source-only terminal after relay readiness transferred public completion. */
+    readonly sourceCleanup?: () => Promise<void>;
     readonly actorRef: ZLinkBackendActorRef;
     readonly membershipEpoch: bigint;
     readonly spotGeneration: bigint;

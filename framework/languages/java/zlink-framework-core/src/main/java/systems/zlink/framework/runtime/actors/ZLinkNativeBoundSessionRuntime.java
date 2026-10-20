@@ -54,6 +54,10 @@ final class ZLinkNativeBoundSessionRuntime implements ZLinkBoundSession {
                 metadataPolicy == null ? ZLinkRelayMetadataPolicy.EMPTY : metadataPolicy;
     }
 
+    ZLinkInternalSpotNode spotNode() {
+        return spotNode;
+    }
+
     void updateActorRef(ZLinkBackendActorRef actorRef) {
         this.actorRef = actorRef;
     }

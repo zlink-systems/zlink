@@ -8,7 +8,6 @@ import org.springframework.context.annotation.Bean;
 
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
-import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.spring.EnableZLinkFramework;
@@ -37,7 +36,7 @@ public final class SessionServerApplication {
     ZLinkFrameworkConfigurer sessionFramework(SampleTopology topology) {
         return options -> {
             options.addHandlersFromPackageOf(SessionServerApplication.class);
-            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            options.configureDispatch().messageFlow(topology.diagnosticsLevel());
             options.codecs().use(ZLinkProtobufCodec.defaultCodec());
             options.configureLocations();
             // --8<-- [start:doc-bingo-session-register]

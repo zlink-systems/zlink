@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 
 namespace Zlink.Framework.Runtime.Host;
@@ -52,29 +51,38 @@ internal sealed class ZLinkFrameworkActorFacade(
     )
     {
         var effectiveDeadline =
-            absoluteDeadline ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
-        var deadline = Stopwatch.GetElapsedTime(0) + (effectiveDeadline - DateTimeOffset.UtcNow);
-        var state = getState();
+            absoluteDeadline
+            ?? registration.TimeProvider.GetUtcNow() + registration.DefaultRequestTimeout;
+        var deadline =
+            registration.TimeProvider.GetElapsedTime(0)
+            + (effectiveDeadline - registration.TimeProvider.GetUtcNow());
         var actorState = actorSessionManager.GetOrCreateState(actor.Context.ActorId);
         var node = getActorSpotNode();
-        var localActivation = spots.GetActivationBySpotId(state, spotId);
-        if (
-            localActivation is null
-            && node is not null
-            && actorState.NativeActorRef is { } actorRef
-        )
-            return await _remoteJoiner
-                .JoinAsync(
-                    spotId,
-                    actor,
-                    actorState,
-                    actorRef,
-                    request,
-                    operationId,
+        if (node is not null && actorState.NativeActorRef is { } actorRef)
+        {
+            var target = await ZLinkActorRemoteJoiner
+                .ExecuteWithDeadlineAsync(
+                    token => ResolveActorJoinTargetAsync(spotId, token),
+                    _remoteJoiner.RemainingTimeout(deadline),
                     cancellationToken,
-                    effectiveDeadline
+                    registration.TimeProvider
                 )
                 .ConfigureAwait(false);
+            if (target.Snapshot.NodeRid != actorRef.NodeRid)
+                return await _remoteJoiner
+                    .JoinAsync(
+                        target,
+                        actor,
+                        actorState,
+                        actorRef,
+                        request,
+                        operationId,
+                        cancellationToken,
+                        (effectiveDeadline, deadline)
+                    )
+                    .ConfigureAwait(false);
+        }
+        var localActivation = spots.GetActivationBySpotId(getState(), spotId);
         return await JoinLocalActorAsync(
                 spotId,
                 actor,
@@ -86,6 +94,49 @@ internal sealed class ZLinkFrameworkActorFacade(
                 absoluteDeadline
             )
             .ConfigureAwait(false);
+    }
+
+    private async ValueTask<ZLinkResolvedSpotHandle> ResolveActorJoinTargetAsync(
+        string spotId,
+        CancellationToken cancellationToken
+    )
+    {
+        var resolver =
+            services.GetService(typeof(ZLinkLocationAddressResolvers))
+            as ZLinkLocationAddressResolvers;
+        if (resolver is null)
+            throw new InvalidOperationException($"SPOT '{spotId}' is not active.");
+
+        var handle = await resolver
+            .ResolveSpotHandleAsync(spotId, cancellationToken)
+            .ConfigureAwait(false);
+        if (handle is null)
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.NotFound,
+                $"SPOT '{spotId}' has no live location row."
+            );
+        var snapshot = handle.Snapshot;
+        if (
+            services.GetService(typeof(IZLinkMeshNodeLocationResolver))
+            is IZLinkMeshNodeLocationResolver peerResolver
+        )
+        {
+            var peers = await peerResolver
+                .ListLiveMeshNodesAsync(snapshot.RouterChannelId, cancellationToken)
+                .ConfigureAwait(false);
+            if (
+                peers.Any(descriptor =>
+                    descriptor.Rid.Equals(snapshot.NodeRid)
+                    && descriptor.State == ZLinkFrameworkRuntimeState.Draining
+                )
+            )
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Rejected,
+                    $"SPOT '{spotId}' is hosted by a draining node.",
+                    ZLinkRetryAdvice.DoNotRetry
+                );
+        }
+        return handle;
     }
 
     private async ValueTask<ZLinkActorJoinResult> JoinLocalActorAsync(
@@ -108,8 +159,9 @@ internal sealed class ZLinkFrameworkActorFacade(
         return await ZLinkActorRemoteJoiner
             .ExecuteWithDeadlineAsync(
                 JoinLocalActorCoreAsync,
-                ZLinkActorRemoteJoiner.RemainingTimeout(deadline.Monotonic),
-                cancellationToken
+                _remoteJoiner.RemainingTimeout(deadline.Monotonic),
+                cancellationToken,
+                registration.TimeProvider
             )
             .ConfigureAwait(false);
 
@@ -165,13 +217,17 @@ internal sealed class ZLinkFrameworkActorFacade(
                 "Actor Entry Spot Join requires the live MeshNode resolver."
             );
         var effectiveDeadline =
-            absoluteDeadline ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
-        var deadline = Stopwatch.GetElapsedTime(0) + (effectiveDeadline - DateTimeOffset.UtcNow);
+            absoluteDeadline
+            ?? registration.TimeProvider.GetUtcNow() + registration.DefaultRequestTimeout;
+        var deadline =
+            registration.TimeProvider.GetElapsedTime(0)
+            + (effectiveDeadline - registration.TimeProvider.GetUtcNow());
         var descriptors = await ZLinkActorRemoteJoiner
             .ExecuteWithDeadlineAsync(
                 token => resolver.ListLiveMeshNodesAsync(meshName, token),
-                ZLinkActorRemoteJoiner.RemainingTimeout(deadline),
-                cancellationToken
+                _remoteJoiner.RemainingTimeout(deadline),
+                cancellationToken,
+                registration.TimeProvider
             )
             .ConfigureAwait(false);
         var eligible = descriptors
@@ -205,8 +261,9 @@ internal sealed class ZLinkFrameworkActorFacade(
             return await ZLinkActorRemoteJoiner
                 .ExecuteWithDeadlineAsync(
                     token => _entrySpotJoin.JoinAsync(target.Rid, actor, request, token),
-                    ZLinkActorRemoteJoiner.RemainingTimeout(deadline),
-                    cancellationToken
+                    _remoteJoiner.RemainingTimeout(deadline),
+                    cancellationToken,
+                    registration.TimeProvider
                 )
                 .ConfigureAwait(false);
         }

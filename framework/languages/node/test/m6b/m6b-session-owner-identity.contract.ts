@@ -8,6 +8,11 @@ import {
   decodeStatefulHeader,
   encodeBoundSessionReplacedHeader
 } from '../../packages/framework/src/runtime/foundation/service-stateful-wire-codec';
+import {
+  internalFrameworkWireReply,
+  wireReplyFailureException
+} from '../../packages/framework/src/runtime/framework-errors-internal';
+import { ZLinkFrameworkErrorKind } from '../../packages/framework/src/contracts';
 
 /**
  * Session-Actor binding §4: every runtime encodes the stored Session owner
@@ -38,6 +43,11 @@ interface SessionOwnerIdentityFixture {
     readonly command51Hex: string;
     readonly command54Hex: string;
   }[];
+  readonly descriptorUnavailable: {
+    readonly errorKind: string;
+    readonly terminalResult: string;
+    readonly failureCode: string;
+  };
 }
 
 test('Session owner identity contract: commands 51 and 54 carry the descriptor identity and the Session owner compares it exactly', () => {
@@ -122,4 +132,21 @@ test('Session owner identity contract: commands 51 and 54 carry the descriptor i
       rejected.name
     );
   }
+});
+
+test('Session owner identity contract: a missing Session owner descriptor travels as Unavailable', () => {
+  const fixture = JSON.parse(
+    readFileSync('../../runtime/protocol/fixtures/session-owner-identity-v1.json', 'utf8')
+  ) as SessionOwnerIdentityFixture;
+  const unavailable = fixture.descriptorUnavailable;
+  assert.equal(unavailable.errorKind, 'Unavailable');
+  const wire = internalFrameworkWireReply(ZLinkFrameworkErrorKind.Unavailable);
+  assert.deepEqual(wire, {
+    terminalResult: Number(unavailable.terminalResult),
+    failureCode: Number(unavailable.failureCode)
+  });
+  assert.equal(
+    wireReplyFailureException(wire.terminalResult, wire.failureCode, 'bind').kind,
+    ZLinkFrameworkErrorKind.Unavailable
+  );
 });

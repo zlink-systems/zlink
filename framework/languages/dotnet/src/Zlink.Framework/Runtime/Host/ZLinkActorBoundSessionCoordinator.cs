@@ -625,7 +625,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         ulong acceptedHighWater,
         string sessionOwnerId = "",
         ulong sessionOwnerLeaseGeneration = 0,
-        Action<ZLinkActorRuntimeState>? acceptAuthority = null
+        Action<ZLinkActorRuntimeState>? acceptAuthority = null,
+        Action? beforePublish = null
     )
     {
         var transition = _getState(actorId)
@@ -643,7 +644,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 acceptedHighWater,
                 sessionOwnerId,
                 sessionOwnerLeaseGeneration,
-                acceptAuthority
+                acceptAuthority,
+                beforePublish
             );
         _boundSessions.Register(
             actorId,
@@ -688,9 +690,14 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         _boundSessions.Unregister(actorId, bindingToken);
     }
 
-    public void TombstoneActorSession(string actorId, ZLinkActorBoundSession expected)
+    public void TombstoneActorSession(
+        string actorId,
+        ZLinkActorBoundSession expected,
+        Action<ZLinkActorRuntimeState>? acceptAuthority = null,
+        Action? reply = null
+    )
     {
-        _getState(actorId).TombstoneSession(expected);
+        _getState(actorId).TombstoneSession(expected, acceptAuthority, reply);
         _boundSessions.Unregister(actorId, expected.BindingToken);
     }
 
@@ -1294,6 +1301,15 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        using var shutdownRegistration = _getShutdownToken()
+            .Register(() =>
+                completion.TrySetException(
+                    new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.ShuttingDown,
+                        "Runtime stopped while awaiting the session disconnect callback."
+                    )
+                )
+            );
         var deadline = checked(
             (ulong)
                 DateTimeOffset

@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Systems.Zlink;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Dispatch;
@@ -610,6 +611,8 @@ internal sealed record MeshMonitorStatus(
 
 internal interface IMeshNodeMonitor : IDisposable, IAsyncDisposable
 {
+    ValueTask<bool> WaitAsync(CancellationToken cancellationToken);
+
     MeshMonitorStatus Status();
     MeshMonitorEvent? Recv(RecvFlags flags = RecvFlags.None);
 }
@@ -621,21 +624,92 @@ internal readonly record struct MeshReadyRecord(
     ActorRef Actor
 );
 
+internal readonly record struct MeshMailboxKey(
+    MeshOwnerKind OwnerKind,
+    string Identity,
+    ulong Generation,
+    MeshReadyDomains Domain,
+    string SpotId,
+    ActorRef Actor
+)
+{
+    internal static MeshMailboxKey ForNode(MeshReadyDomains domain, string? channelName = null) =>
+        new(MeshOwnerKind.Node, channelName ?? string.Empty, 0, domain, string.Empty, default);
+
+    internal static MeshMailboxKey ForSpot(ZLinkManagedSpot spot, MeshReadyDomains domain) =>
+        new(
+            MeshOwnerKind.Spot,
+            spot.SpotId,
+            spot.LifecycleGeneration,
+            domain,
+            spot.SpotId,
+            default
+        );
+
+    internal static MeshMailboxKey ForActor(ActorRef actor, MeshReadyDomains domain) =>
+        new(
+            MeshOwnerKind.Actor,
+            actor.ActorId,
+            actor.ObjectGeneration,
+            domain,
+            string.Empty,
+            actor
+        );
+}
+
 internal sealed class MeshReadyBatch : IDisposable
 {
+    internal readonly record struct Entry(MeshMailboxKey Key, MeshClaim? Claim, int Order)
+        : IComparable<Entry>
+    {
+        public int CompareTo(Entry other)
+        {
+            var domainOrder = (Key.Domain == MeshReadyDomains.Infrastructure ? 0 : 1).CompareTo(
+                other.Key.Domain == MeshReadyDomains.Infrastructure ? 0 : 1
+            );
+            if (domainOrder != 0)
+                return domainOrder;
+            var ownerOrder = ((int)Key.OwnerKind).CompareTo((int)other.Key.OwnerKind);
+            if (ownerOrder != 0)
+                return ownerOrder;
+            var identityOrder = StringComparer.Ordinal.Compare(Key.Identity, other.Key.Identity);
+            return identityOrder != 0 ? identityOrder : Order.CompareTo(other.Order);
+        }
+    }
+
     internal int MaximumRecords { get; set; } = int.MaxValue;
-    private readonly List<(MeshReadyRecord Record, MeshClaim Claim)> _entries = new();
+    private readonly List<Entry> _entries = new();
     public int Count => _entries.Count;
-    public MeshReadyRecord this[int index] => _entries[index].Record;
+    public MeshReadyRecord this[int index]
+    {
+        get
+        {
+            var key = _entries[index].Key;
+            return new(key.OwnerKind, key.Domain, key.SpotId, key.Actor);
+        }
+    }
 
-    public MeshClaim TakeClaim(int index) => _entries[index].Claim;
+    public MeshClaim TakeClaim(int index) => _entries[index].Claim!;
 
-    internal void Add(MeshReadyRecord record, MeshClaim claim) => _entries.Add((record, claim));
+    internal void Add(MeshReadyRecord record, MeshClaim claim) =>
+        _entries.Add(
+            new(
+                new(record.OwnerKind, string.Empty, 0, record.Domain, record.SpotId, record.Actor),
+                claim,
+                _entries.Count
+            )
+        );
+
+    internal void AddCandidate(MeshMailboxKey key) => _entries.Add(new(key, null, _entries.Count));
+
+    internal Span<Entry> Entries => CollectionsMarshal.AsSpan(_entries);
+
+    internal void Truncate(int count) => _entries.RemoveRange(count, _entries.Count - count);
 
     internal void Reset()
     {
-        foreach (var (_, claim) in _entries)
-            claim.Dispose();
+        foreach (var entry in _entries)
+            entry.Claim?.Dispose();
         _entries.Clear();
     }
 

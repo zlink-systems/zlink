@@ -307,25 +307,29 @@ final class ZLinkCanonicalRelocationSettlementTest {
         Fixture fixture = new Fixture();
         fixture.endpoint.relayCompletion = new CompletableFuture<>();
         fixture.stageAndRelay(R1);
-        var runtime = fixture.startTargetHost();
-        var publication =
-                fixture.source
-                        .publish(fixture.targetRid, fixture.request.fence(), Duration.ofSeconds(2))
-                        .toCompletableFuture();
-        assertEquals(1, fixture.endpoint.relayed().size());
-        assertEquals(0, fixture.commits.get(), "verification precedes the CAS");
-        var shutdown = runtime.shutdown(Duration.ofSeconds(1)).toCompletableFuture();
-        assertEquals(0, fixture.endpoint.aborted.get());
-        assertFalse(shutdown.isDone());
-        fixture.endpoint.relayCompletion.complete(null);
-        publication.get(3, TimeUnit.SECONDS);
-        assertEquals(
-                ZLinkFrameworkTerminationOutcome.STOPPED,
-                shutdown.get(3, TimeUnit.SECONDS).outcome());
-        assertEquals(1, fixture.commits.get());
-        assertEquals(1, fixture.endpoint.published.get());
-        assertEquals(0, fixture.endpoint.aborted.get());
-        assertEquals(fixture.targetOwner.ownerId(), fixture.authority().ownerId());
+        try (var runtime = fixture.startTargetHost()) {
+            var publication =
+                    fixture.source
+                            .publish(
+                                    fixture.targetRid,
+                                    fixture.request.fence(),
+                                    Duration.ofSeconds(2))
+                            .toCompletableFuture();
+            assertEquals(1, fixture.endpoint.relayed().size());
+            assertEquals(0, fixture.commits.get(), "verification precedes the CAS");
+            var shutdown = runtime.shutdown(Duration.ofSeconds(1)).toCompletableFuture();
+            assertEquals(0, fixture.endpoint.aborted.get());
+            assertFalse(shutdown.isDone());
+            fixture.endpoint.relayCompletion.complete(null);
+            publication.get(3, TimeUnit.SECONDS);
+            assertEquals(
+                    ZLinkFrameworkTerminationOutcome.STOPPED,
+                    shutdown.get(3, TimeUnit.SECONDS).outcome());
+            assertEquals(1, fixture.commits.get());
+            assertEquals(1, fixture.endpoint.published.get());
+            assertEquals(0, fixture.endpoint.aborted.get());
+            assertEquals(fixture.targetOwner.ownerId(), fixture.authority().ownerId());
+        }
     }
 
     @Test
@@ -333,27 +337,31 @@ final class ZLinkCanonicalRelocationSettlementTest {
         Fixture fixture = new Fixture();
         fixture.ambiguousCommit.set(true);
         fixture.stageAndRelay(R1);
-        var runtime = fixture.startTargetHost();
-        var publication =
-                fixture.source
-                        .publish(fixture.targetRid, fixture.request.fence(), Duration.ofSeconds(2))
-                        .toCompletableFuture();
-        fixture.reconciliationEntered.get(3, TimeUnit.SECONDS);
-        assertEquals(1, fixture.commits.get());
-        assertEquals(
-                fixture.targetOwner.ownerId(),
-                fixture.authority().ownerId(),
-                "the CAS succeeded but its response was lost");
-        var shutdown = runtime.shutdown(Duration.ofSeconds(1)).toCompletableFuture();
-        assertEquals(0, fixture.endpoint.aborted.get());
-        assertFalse(shutdown.isDone());
-        fixture.reconciliationRelease.complete(null);
-        publication.get(3, TimeUnit.SECONDS);
-        assertEquals(
-                ZLinkFrameworkTerminationOutcome.STOPPED,
-                shutdown.get(3, TimeUnit.SECONDS).outcome());
-        assertEquals(1, fixture.endpoint.published.get());
-        assertEquals(0, fixture.endpoint.aborted.get());
+        try (var runtime = fixture.startTargetHost()) {
+            var publication =
+                    fixture.source
+                            .publish(
+                                    fixture.targetRid,
+                                    fixture.request.fence(),
+                                    Duration.ofSeconds(2))
+                            .toCompletableFuture();
+            fixture.reconciliationEntered.get(3, TimeUnit.SECONDS);
+            assertEquals(1, fixture.commits.get());
+            assertEquals(
+                    fixture.targetOwner.ownerId(),
+                    fixture.authority().ownerId(),
+                    "the CAS succeeded but its response was lost");
+            var shutdown = runtime.shutdown(Duration.ofSeconds(1)).toCompletableFuture();
+            assertEquals(0, fixture.endpoint.aborted.get());
+            assertFalse(shutdown.isDone());
+            fixture.reconciliationRelease.complete(null);
+            publication.get(3, TimeUnit.SECONDS);
+            assertEquals(
+                    ZLinkFrameworkTerminationOutcome.STOPPED,
+                    shutdown.get(3, TimeUnit.SECONDS).outcome());
+            assertEquals(1, fixture.endpoint.published.get());
+            assertEquals(0, fixture.endpoint.aborted.get());
+        }
     }
 
     @Test
@@ -363,31 +371,35 @@ final class ZLinkCanonicalRelocationSettlementTest {
         fixture.stageAndRelay(R1);
         assertThrows(CompletionException.class, fixture::publish);
         var terminal = fixture.target.awaitAcceptedTargetRelocations().toCompletableFuture();
-        var runtime = fixture.startTargetHost();
-        try {
-            var result =
-                    runtime.shutdown(Duration.ofSeconds(1))
-                            .toCompletableFuture()
-                            .get(3, TimeUnit.SECONDS);
-            assertTrue(
-                    terminal.isDone(),
-                    "shutdown left the accepted target attempt nonterminal: " + result);
-            assertEquals(ZLinkFrameworkTerminationOutcome.STOPPED, result.outcome());
-            assertEquals(1, fixture.endpoint.aborted.get());
-            fixture.target
-                    .apply(
-                            fixture.sourceRid,
-                            ServiceWireConstants.COMMAND_RELOCATION_CUTOVER,
-                            fixture.cutover.get())
-                    .toCompletableFuture()
-                    .get(3, TimeUnit.SECONDS);
-            assertEquals(0, fixture.commits.get(), "seal prevents a late CUTOVER CAS");
-            assertEquals(0, fixture.endpoint.published.get());
-            assertEquals(fixture.sourceOwner.ownerId(), fixture.authority().ownerId());
-        } finally {
-            fixture.locations.releaseOwnerLease(fixture.targetOwner).toCompletableFuture().join();
-            fixture.cutoverWarning.get().run();
-            terminal.get(3, TimeUnit.SECONDS);
+        try (var runtime = fixture.startTargetHost()) {
+            try {
+                var result =
+                        runtime.shutdown(Duration.ofSeconds(1))
+                                .toCompletableFuture()
+                                .get(3, TimeUnit.SECONDS);
+                assertTrue(
+                        terminal.isDone(),
+                        "shutdown left the accepted target attempt nonterminal: " + result);
+                assertEquals(ZLinkFrameworkTerminationOutcome.STOPPED, result.outcome());
+                assertEquals(1, fixture.endpoint.aborted.get());
+                fixture.target
+                        .apply(
+                                fixture.sourceRid,
+                                ServiceWireConstants.COMMAND_RELOCATION_CUTOVER,
+                                fixture.cutover.get())
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS);
+                assertEquals(0, fixture.commits.get(), "seal prevents a late CUTOVER CAS");
+                assertEquals(0, fixture.endpoint.published.get());
+                assertEquals(fixture.sourceOwner.ownerId(), fixture.authority().ownerId());
+            } finally {
+                fixture.locations
+                        .releaseOwnerLease(fixture.targetOwner)
+                        .toCompletableFuture()
+                        .join();
+                fixture.cutoverWarning.get().run();
+                terminal.get(3, TimeUnit.SECONDS);
+            }
         }
     }
 
@@ -542,7 +554,58 @@ final class ZLinkCanonicalRelocationSettlementTest {
         assertEquals(0, fixture.commits.get());
     }
 
+    @Test
+    void continuedRelocationProvesCommitWithoutTheFirstTargetOwner() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.stage();
+        var source = fixture.authority();
+        fixture.authorityRead.set(
+                new ZLinkAuthoritySnapshot(
+                        "next-owner-version",
+                        source.payload(),
+                        source.objectGeneration(),
+                        source.authorityOwnerGeneration() + 2,
+                        "next-owner",
+                        1,
+                        source.allocation(),
+                        source.storeNow()));
+        var settled =
+                fixture.source
+                        .settleAuthority(fixture.targetRid, fixture.request.fence(), Instant.now())
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS);
+        assertEquals(
+                ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED, settled.outcome());
+        org.junit.jupiter.api.Assertions.assertNull(
+                settled.target(),
+                "a subsequent owner does not reveal the first target's Follow fence");
+    }
+
+    @Test
+    void replacementObjectOnTargetDoesNotProveThisRelocationCommitted() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.stage();
+        var source = fixture.authority();
+        fixture.authorityRead.set(
+                new ZLinkAuthoritySnapshot(
+                        "replacement-version",
+                        source.payload(),
+                        source.objectGeneration() + 1,
+                        source.authorityOwnerGeneration() + 1,
+                        fixture.targetOwner.ownerId(),
+                        fixture.targetOwner.leaseGeneration(),
+                        source.allocation(),
+                        source.storeNow()));
+        assertEquals(
+                ZLinkRelocationTransitionClient.Settlement.SOURCE_LEASE_EXPIRED,
+                fixture.source
+                        .settle(fixture.targetRid, fixture.request.fence(), Instant.now())
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS));
+    }
+
     private static final class Fixture {
+        final AtomicReference<ZLinkAuthoritySnapshot> authorityRead = new AtomicReference<>();
         final RoutingId sourceRid = RoutingId.from("source-node");
         final RoutingId targetRid = RoutingId.from("target-node");
         final ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
@@ -646,6 +709,11 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                     ZLinkLocationRepository.class.getClassLoader(),
                                     new Class<?>[] {ZLinkLocationRepository.class},
                                     (proxy, method, args) -> {
+                                        if (method.getName().equals("read")
+                                                && authorityRead.get() != null
+                                                && authorityKey.equals(args[0]))
+                                            return CompletableFuture.completedFuture(
+                                                    authorityRead.get());
                                         if (method.getName().equals("prepareAggregate")) {
                                             prepareEntered.complete(null);
                                             return prepareCompletion.thenCompose(

@@ -108,6 +108,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                                         : current);
         if (claimed != attempt) {
             return prepared.abort()
+                    .whenComplete((ignored, failure) -> prepared.metrics.complete(null, false))
                     .thenCompose(
                             ignored ->
                                     CompletableFuture.failedFuture(
@@ -115,18 +116,29 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                                                     "canonical Actor Join source is already"
                                                             + " active")));
         }
-        return ZLinkRelocationHandOff.run(
+        return ZLinkRelocationHandOff.runToReady(
                         lane.client(),
                         prepared.stageRequest(),
                         settlement ->
                                 prepared.relayCapturedIngress(lane.client(), timeout, settlement),
                         timeout,
-                        restoreDeadline)
+                        restoreDeadline,
+                        prepared.metrics)
                 .handle(
-                        (settlement, failure) ->
-                                failure == null
-                                        ? settleSource(attempt, settlement)
-                                        : abortSource(attempt, unwrap(failure)))
+                        (settlement, failure) -> {
+                            if (failure != null) return abortSource(attempt, unwrap(failure), null);
+                            CompletionStage<Void> cleanup =
+                                    settlement
+                                            .thenCompose(outcome -> settleSource(attempt, outcome))
+                                            .thenApply(ignored -> null);
+                            return CompletableFuture.completedFuture(
+                                    new Submission(
+                                            new ZLinkBackendActorRef(
+                                                    goal.targetNodeRid(),
+                                                    goal.sourceActor().actorId(),
+                                                    goal.sourceActor().generation()),
+                                            cleanup));
+                        })
                 .thenCompose(outcome -> outcome);
     }
 
@@ -166,7 +178,8 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                             new ZLinkFrameworkException(
                                     ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                                     "Actor Join target commit was not confirmed before its"
-                                            + " deadline; the source Preserve fence won"));
+                                            + " deadline; the source Preserve fence won"),
+                            settlement);
             case SOURCE_LEASE_EXPIRED -> {
                 sources.remove(goal.sourceActor().actorId(), attempt);
                 var expired =
@@ -203,7 +216,10 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
     }
 
     /** Restores the source: a failure before relay readiness or a won Preserve fence. */
-    private CompletionStage<Submission> abortSource(SourceAttempt attempt, Throwable cause) {
+    private CompletionStage<Submission> abortSource(
+            SourceAttempt attempt,
+            Throwable cause,
+            ZLinkRelocationTransitionClient.Settlement settlement) {
         sources.remove(attempt.goal().sourceActor().actorId(), attempt);
         attempt.committed().completeExceptionally(cause);
         return attempt.prepared()
@@ -213,6 +229,10 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                             if (abortFailure != null) {
                                 cause.addSuppressed(unwrap(abortFailure));
                             }
+                            if (settlement != null)
+                                attempt.prepared()
+                                        .metrics
+                                        .complete(abortFailure == null ? settlement : null, false);
                             throw new CompletionException(cause);
                         });
     }

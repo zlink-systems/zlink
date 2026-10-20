@@ -5,6 +5,7 @@
 #include "runtime/operations/call_id.hpp"
 
 #include <service_wire_constants.hpp>
+#include <service_wire_pilot_codec.hpp>
 
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 
@@ -617,6 +618,8 @@ struct session_relocation_seal_t
                             const session_relocation_seal_t &) = default;
 };
 
+using session_relocation_seal_result_t = service_wire_pilot_session_seal_result;
+
 struct session_relocation_sealed_t
 {
     relocation_id_t relocation;
@@ -628,6 +631,8 @@ struct session_relocation_sealed_t
     std::uint64_t session_owner_lease_generation = 0;
     std::vector<std::uint8_t> session_routing_id;
     std::uint64_t binding_generation = 0;
+
+    session_relocation_seal_result_t seal_result = session_relocation_seal_result_t::sealed;
 
     friend bool operator== (const session_relocation_sealed_t &,
                             const session_relocation_sealed_t &) = default;
@@ -658,6 +663,19 @@ struct reply_header_t
     std::uint64_t correlation;
     std::uint32_t terminal_result;
     std::uint32_t failure_code;
+};
+
+struct stream_bind_reply_tail_t
+{
+    std::uint64_t binding_generation;
+    std::uint64_t authority_owner_generation;
+    friend bool operator== (const stream_bind_reply_tail_t &,
+                            const stream_bind_reply_tail_t &) = default;
+};
+struct stream_bind_reply_t
+{
+    reply_header_t header;
+    std::optional<stream_bind_reply_tail_t> binding;
 };
 
 struct user_spot_reservation_fence_t
@@ -1023,6 +1041,12 @@ std::vector<std::uint8_t> encode_reply_header (std::uint64_t correlation,
                                                std::uint32_t terminal_result,
                                                std::uint32_t failure_code);
 reply_header_t decode_reply_header (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t>
+encode_stream_bind_reply (std::uint64_t correlation,
+                          std::uint32_t terminal_result,
+                          std::uint32_t failure_code,
+                          std::optional<stream_bind_reply_tail_t> binding);
+stream_bind_reply_t decode_stream_bind_reply (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_user_spot_create_reply (std::uint64_t correlation,
                                                          std::uint32_t terminal_result,
                                                          std::uint32_t failure_code,

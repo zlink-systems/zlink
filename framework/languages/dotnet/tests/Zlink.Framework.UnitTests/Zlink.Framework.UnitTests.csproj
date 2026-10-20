@@ -37,6 +37,7 @@
     </ItemGroup>
 
     <ItemGroup>
+        <Compile Include="Runtime/CanonicalSessionBindCrossLanguageTests.cs" Condition="'$(ZLinkCrossLanguageBind)' == 'true'"/>
         <Compile Include="Runtime/BoundSessionDisconnectTests.cs"/>
         <Compile Include="Runtime/BoundSessionReplacementCloseTests.cs"/>
         <Compile Include="AssemblyInfo.cs"/>
@@ -98,6 +99,7 @@
         <Compile Include="Runtime/MeshMailboxReadinessTests.cs"/>
         <Compile Include="Runtime/MeshPermitHandoffTests.cs"/>
         <Compile Include="Runtime/MeshReceiveWakeTests.cs"/>
+        <Compile Include="Runtime/ReceiveClaimCostTests.cs"/>
         <Compile Include="Runtime/MeshReplyPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/MeshOutboundPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/MeshMonitorHotPathTests.cs"/>
@@ -137,6 +139,7 @@
         <Compile Include="Runtime/ActorCreationEntryCandidateTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorFifoActivationTests.cs"/>
+        <Compile Include="Runtime/EntrySpotActorDispatchTests.SessionSealTerminal.cs"/>
         <Compile Include="Runtime/AcceptedHandlerSendSealTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.StartupIdentity.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.SourceRetirement.cs"/>
@@ -172,6 +175,7 @@
         <Compile Include="Runtime/InstanceSpotSendDeadlineTests.cs"/>
         <Compile Include="Runtime/SpotStoreFailureKindTests.cs"/>
         <Compile Include="Runtime/LocationRuntimeTests.cs"/>
+        <Compile Include="Runtime/LocationStoreOperationMetricsTests.cs"/>
         <Compile Include="Runtime/MaintenanceRuntimeTests.cs"/>
         <Compile Include="Runtime/LogicalMulticastSubmitTests.cs"/>
         <Compile Include="Runtime/SharedAsyncDisposalTests.cs"/>
@@ -221,6 +225,7 @@
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.cs"/>
         <Compile Include="Runtime/StreamFlowEndToEndTests.cs"/>
         <Compile Include="Runtime/StreamRequestRoundTripLatencyTests.cs"/>
+        <Compile Include="Runtime/StreamFrameWriteTests.cs"/>
         <Compile Include="Runtime/SessionJobQueueLoadTests.cs"/>
         <Compile Include="Runtime/TimerLifecycleTests.cs"/>
         <Compile Include="Runtime/ActivationReadyTests.cs"/>

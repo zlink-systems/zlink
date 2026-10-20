@@ -78,17 +78,18 @@ class ZLinkFrameworkLocationRuntimeTest {
         options.addLocationStore(store);
         options.addRelocationStore(new InMemoryRelocationStore());
 
-        ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(options, new MinimalBackend());
-        runtime.closeAsync().toCompletableFuture().get();
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(options, new MinimalBackend())) {
+            runtime.closeAsync().toCompletableFuture().get();
 
-        assertEquals(
-                List.of(),
-                repository(store)
-                        .listMeshNodes("unused", ZLinkPageRequest.firstPage())
-                        .toCompletableFuture()
-                        .get()
-                        .items());
+            assertEquals(
+                    List.of(),
+                    repository(store)
+                            .listMeshNodes("unused", ZLinkPageRequest.firstPage())
+                            .toCompletableFuture()
+                            .get()
+                            .items());
+        }
     }
 
     @Test

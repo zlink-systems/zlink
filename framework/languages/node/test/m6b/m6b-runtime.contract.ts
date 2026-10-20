@@ -1,3 +1,9 @@
+import {
+  prepareZLinkRequestReply,
+  mapZLinkRequestReply,
+  identityRequestReply,
+  type ZLinkRequestResult
+} from '../../packages/framework/src/runtime/messaging/request-result';
 import { encodeBoundSessionCloseCommand } from '../../packages/framework/src/runtime/protocol/service_wire_codec.generated';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -4601,19 +4607,64 @@ test('Instance Spot activation dispatch rematerializes a missing application bef
   assert.deepEqual(events, ['configure', 'initialize', 'handle:9']);
 });
 
+const registrationFixture = JSON.parse(
+  readFileSync('../../runtime/protocol/fixtures/bind-registration-v1.json', 'utf8')
+) as {
+  current: RegistrationVector;
+  cases: (RegistrationVector & { name: string; success: boolean })[];
+};
+interface RegistrationVector {
+  node: string;
+  lifecycle: string;
+  session: string;
+  generation: string;
+  ownerId: string;
+  lease: string;
+}
+for (const vector of registrationFixture.cases) {
+  test(`bind registration table: ${vector.name}`, () => {
+    const registry = new ServiceStatefulRegistry('actor-owner', 1n);
+    const actor = registry.createActor('registration-actor');
+    const binding = (value: RegistrationVector) => ({
+      actor: actor.ref,
+      sessionRid: value.session,
+      sessionOwnerNodeRid: value.node,
+      sessionOwnerNodeGeneration: BigInt(value.lifecycle),
+      sessionOwnerId: value.ownerId,
+      sessionOwnerLeaseGeneration: BigInt(value.lease),
+      bindingGeneration: BigInt(value.generation),
+      membershipEpoch: actor.membershipEpoch
+    });
+    const initial = binding(registrationFixture.current);
+    registry.installSessionBinding(initial);
+    if (vector.success) {
+      const accepted = registry.installSessionBinding(binding(vector));
+      assert.equal(accepted.bindingGeneration, BigInt(vector.generation));
+      assert.deepEqual(registry.binding(actor.ref), accepted);
+    } else {
+      assert.throws(
+        () => registry.installSessionBinding(binding(vector)),
+        ServiceStaleGenerationError
+      );
+      assert.deepEqual(registry.binding(actor.ref), initial);
+    }
+  });
+}
 test('membership and session binding generations advance and remain scoped to their session owner', async () => {
   const registry = new ServiceStatefulRegistry('node-a', 1n);
   const firstSpot = registry.createSpot('spot-a');
   const secondSpot = registry.createSpot('spot-b');
   const actor = registry.createActor('actor-a', 'Player', firstSpot.ref);
-  const binding = registry.bindSession(
-    actor.ref,
-    'session-a',
-    'node-session',
-    3n,
-    'node-session',
-    3n
-  );
+  const binding = registry.installSessionBinding({
+    actor: actor.ref,
+    sessionRid: 'session-a',
+    sessionOwnerNodeRid: 'node-session',
+    sessionOwnerNodeGeneration: 3n,
+    sessionOwnerId: 'node-session',
+    sessionOwnerLeaseGeneration: 3n,
+    bindingGeneration: 1n,
+    membershipEpoch: actor.membershipEpoch
+  });
   const transition = registry.joinActor(actor.ref, secondSpot.ref);
   assert.equal(transition.previousMembershipEpoch, 1n);
   assert.equal(transition.currentMembershipEpoch, 2n);
@@ -5312,7 +5363,12 @@ test('active session bind replies only after the Actor binding control turn', as
   let ingress: ((record: RawServiceIngressRecord) => string | undefined) | undefined;
   const mailbox: Array<{
     readonly stateful?: {
-      readonly kindData?: { readonly kind?: string; readonly transition?: string };
+      readonly kindData?: {
+        readonly kind?: string;
+        readonly transition?: string;
+        readonly sessionOwnerId?: string;
+        readonly sessionOwnerLeaseGeneration?: bigint;
+      };
       reply(terminalResult: number, failureCode: number): boolean;
     };
   }> = [];
@@ -5361,7 +5417,7 @@ test('active session bind replies only after the Actor binding control turn', as
       ownerLeaseGeneration: 3n
     },
     'session-linearized',
-    { state: 'active', generation: 12n }
+    { state: 'active', generation: 11n }
   );
 
   assert.equal(
@@ -5420,6 +5476,32 @@ test('active session bind replies only after the Actor binding control turn', as
     11n
   );
 
+  runtime.setSessionOwnerDescriptors({
+    local: () => testSessionOwnerToken('actor-node', 3n),
+    peer: async () => ({ ownerId: 'renewed-owner', leaseGeneration: 999n })
+  });
+  await ingress?.({
+    command: M6bServiceWireCommand.boundSessionBind,
+    flags: 0,
+    sourceRoutingId: 'session-node',
+    requestSequence: 10n,
+    parts: [duplicateHeader]
+  });
+  const renewedControl = mailbox.shift()!.stateful!;
+  assert.equal(renewedControl.kindData?.sessionOwnerId, 'renewed-owner');
+  assert.equal(renewedControl.reply(RequestResult.Ok, 0), true);
+  assert.equal(
+    renewedControl.kindData?.sessionOwnerId,
+    testSessionOwnerToken('session-node', 3n).ownerId
+  );
+  assert.equal(
+    renewedControl.kindData?.sessionOwnerLeaseGeneration,
+    testSessionOwnerToken('session-node', 3n).leaseGeneration
+  );
+  assert.equal(
+    runtime.registry.binding(actor.ref)?.sessionOwnerId,
+    testSessionOwnerToken('session-node', 3n).ownerId
+  );
   const tombstoneHeader = encodeBoundSessionBindHeader(
     45n,
     {
@@ -5437,12 +5519,12 @@ test('active session bind replies only after the Actor binding control turn', as
       flags: 0,
       sourceRoutingId: 'session-node',
       sourceNodeGeneration: 3n,
-      requestSequence: 10n,
+      requestSequence: 11n,
       parts: [tombstoneHeader]
     }),
     'infrastructure'
   );
-  assert.equal(replies.length, 2);
+  assert.equal(replies.length, 3);
   assert.equal(runtime.registry.binding(actor.ref)?.bindingGeneration, 11n);
   assert.deepEqual(mailbox[0]!.stateful?.kindData, {
     kind: 'actorBinding',
@@ -5461,7 +5543,7 @@ test('active session bind replies only after the Actor binding control turn', as
   assert.equal(mailbox.shift()!.stateful!.reply(RequestResult.Ok, 0), true);
   assert.equal(runtime.registry.binding(actor.ref), undefined);
   assert.equal(
-    decodeStatefulReply(replies[2]![0]!, 45n, 'streamUnbind').terminalResult,
+    decodeStatefulReply(replies[3]![0]!, 45n, 'streamUnbind').terminalResult,
     RequestResult.Ok
   );
   runtime.close();
@@ -6730,8 +6812,13 @@ test('public SpotId call reaches production host Missing Instance placement with
       async sendToSpot() {
         throw new Error('Ready route must not be used for Missing authority.');
       },
-      async requestToSpot() {
-        throw new Error('request is not used by this test.');
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            throw new Error('request is not used by this test.');
+          })(),
+          identityRequestReply
+        );
       }
     },
     meshNames: () => ['mesh'],
@@ -6832,8 +6919,13 @@ test('Missing Instance distinguishes unsupported types from exhausted placement 
         async sendToSpot() {
           throw new Error('Ready route must not be used.');
         },
-        async requestToSpot() {
-          throw new Error('Ready route must not be used.');
+        requestToSpot() {
+          return prepareZLinkRequestReply(
+            (async () => {
+              throw new Error('Ready route must not be used.');
+            })(),
+            identityRequestReply
+          );
         }
       },
       meshNames: () => ['mesh'],
@@ -6912,8 +7004,13 @@ test('Missing Instance placement capacity fails without polling or retaining a c
       async sendToSpot() {
         throw new Error('Ready route must not be used.');
       },
-      async requestToSpot() {
-        throw new Error('Ready route must not be used.');
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            throw new Error('Ready route must not be used.');
+          })(),
+          identityRequestReply
+        );
       }
     },
     meshNames: () => ['mesh'],
@@ -6996,8 +7093,13 @@ test('Missing Instance request classifies an actorLocationStale terminal as Unav
       async sendToSpot() {
         throw new Error('Ready route must not be used.');
       },
-      async requestToSpot() {
-        throw new Error('Ready route must not be used.');
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            throw new Error('Ready route must not be used.');
+          })(),
+          identityRequestReply
+        );
       }
     },
     meshNames: () => ['mesh'],
@@ -7062,15 +7164,20 @@ test('Ready Instance request ends on a disconnected stale route without resubmis
       async sendToSpot() {
         throw new Error('send is not used by this test.');
       },
-      async requestToSpot<TReply>(route: unknown): Promise<TReply> {
-        attempts += 1;
-        if (attempts === 1) {
-          throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-            `stale route ${String((route as { targetNodeRid: string }).targetNodeRid)}`
-          );
-        }
-        return 'unexpected' as TReply;
+      requestToSpot<TReply>(route: unknown): ZLinkRequestResult<TReply> {
+        return prepareZLinkRequestReply(
+          (async () => {
+            attempts += 1;
+            if (attempts === 1) {
+              throw createInternalFrameworkException(
+                ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+                `stale route ${String((route as { targetNodeRid: string }).targetNodeRid)}`
+              );
+            }
+            return 'unexpected' as TReply;
+          })(),
+          identityRequestReply
+        );
       }
     },
     meshNames: () => ['mesh'],
@@ -7169,9 +7276,14 @@ test('Instance target-not-found completes once and a new call cold-activates Mis
       async sendToSpot() {
         throw new Error('send is not used by this test.');
       },
-      async requestToSpot() {
-        directAttempts += 1;
-        throw targetFailure;
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            directAttempts += 1;
+            throw targetFailure;
+          })(),
+          identityRequestReply
+        );
       }
     },
     meshNames: () => ['mesh'],
@@ -7265,8 +7377,13 @@ test('accepted Instance one-way admission keeps the positive route cache', async
       async sendToSpot() {
         return { status: ZLinkSubmitStatus.Submitted };
       },
-      async requestToSpot() {
-        throw new Error('request is not used by this test.');
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            throw new Error('request is not used by this test.');
+          })(),
+          identityRequestReply
+        );
       }
     },
     meshNames: () => ['mesh'],
@@ -7316,8 +7433,13 @@ test('successful Instance request keeps the positive route cache', async () => {
       async sendToSpot() {
         throw new Error('send is not used by this test.');
       },
-      async requestToSpot<TReply>(): Promise<TReply> {
-        return 'reply' as TReply;
+      requestToSpot<TReply>(): ZLinkRequestResult<TReply> {
+        return prepareZLinkRequestReply(
+          (async () => {
+            return 'reply' as TReply;
+          })(),
+          identityRequestReply
+        );
       }
     },
     meshNames: () => ['mesh'],
@@ -7366,8 +7488,13 @@ test('Instance one-way admission invalidates a route rejected by the target', as
       async sendToSpot() {
         return { status: ZLinkSubmitStatus.RouteNotConnected };
       },
-      async requestToSpot() {
-        throw new Error('request is not used by this test.');
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            throw new Error('request is not used by this test.');
+          })(),
+          identityRequestReply
+        );
       }
     },
     meshNames: () => ['mesh'],
@@ -7531,13 +7658,15 @@ test('Ready Instance routes use command 39 with the complete authority fence', a
   });
   assert.equal(sentMetadata, metadata);
 
-  const reply = await transport.requestToSpot<string>(
-    target,
-    { hello: true },
-    {
-      packetName: 'Ping',
-      metadata
-    }
+  const reply = await mapZLinkRequestReply(
+    transport.requestToSpot<string>(
+      target,
+      { hello: true },
+      {
+        packetName: 'Ping',
+        metadata
+      }
+    )
   );
   assert.equal(reply, 'instance-reply');
   assert.deepEqual(requestedRoute, sentRoute);
@@ -7596,7 +7725,10 @@ test('stateful request failure codes preserve typed Instance route errors', asyn
     );
 
     await assert.rejects(
-      () => transport.requestToSpot(target, { ping: true }, { packetName: 'Ping' }),
+      () =>
+        mapZLinkRequestReply(
+          transport.requestToSpot(target, { ping: true }, { packetName: 'Ping' })
+        ),
       (error: unknown) =>
         error instanceof ZLinkFrameworkException &&
         internalFrameworkErrorKind(error) === expectedKind &&
@@ -8233,6 +8365,48 @@ for (const remote of [false, true]) {
     assert.equal(physicalCloses, 1);
 
     const actorState = runtime.actor(actor.actorId)!;
+    const controlDrops: Array<{ outcome: string; errorReason: string }> = [];
+    runtime.setDispatchErrorReporter(
+      {
+        flow: {
+          accepts: () => true,
+          trace: (event: { outcome: string; errorReason: string }) => controlDrops.push(event)
+        }
+      } as never,
+      'mesh'
+    );
+    runtime.setSessionOwnerDescriptors({ local: () => undefined, peer: async () => undefined });
+    await ingress!(
+      withIngressOwner({
+        command: M6bServiceWireCommand.boundSessionReplaced,
+        flags: 0,
+        sourceRoutingId: actor.nodeRid,
+        sourceNodeGeneration: 7n,
+        parts: [
+          encodeBoundSessionReplacedHeader(
+            {
+              actor,
+              targetNodeGeneration: 7n,
+              authorityOwnerGeneration: actorState.authorityOwnerGeneration,
+              ownerLeaseGeneration: 7n
+            },
+            {
+              sessionOwnerNodeRid: binding.sessionOwnerNodeRid,
+              sessionOwnerNodeGeneration: binding.sessionOwnerNodeGeneration!,
+              sessionOwnerId: binding.sessionOwnerId!,
+              sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration!,
+              sessionRid: binding.sessionRid,
+              retiredBindingGeneration: binding.bindingGeneration
+            }
+          )
+        ]
+      })
+    );
+    assert.equal(controlDrops.length, 1);
+    assert.equal(controlDrops[0]!.outcome, 'dropped');
+    assert.equal(controlDrops[0]!.errorReason, 'location_unavailable');
+    assert.ok(runtime.registry.binding(actor), 'descriptor rejection preserves the binding');
+    withTestSessionOwners(runtime);
     const replaced = await ingress!(
       withIngressOwner({
         command: M6bServiceWireCommand.boundSessionReplaced,

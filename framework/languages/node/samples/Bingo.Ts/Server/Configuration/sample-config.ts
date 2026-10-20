@@ -1,6 +1,9 @@
 import * as fs from 'node:fs';
 import { Module, type DynamicModule } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+const DIAGNOSTICS_LEVELS = ['off', 'errors', 'normal', 'detailed'] as const;
+type DiagnosticsLevel = (typeof DIAGNOSTICS_LEVELS)[number];
+
 type BingoSampleConfig = {
   nodeId: string;
   peerNodeId?: string;
@@ -16,6 +19,7 @@ type BingoSampleConfig = {
   redisEndpoint: string;
   redisKeyPrefix: string;
   logDir: string;
+  diagnosticsLevel: DiagnosticsLevel;
 };
 
 const BINGO_SAMPLE_CONFIG = Symbol.for('BINGO_SAMPLE_CONFIG');
@@ -76,7 +80,21 @@ function validateSampleConfig(
       throw new Error(`Configuration value 'sample.${key}' must be a non-empty string.`);
     }
   }
-  return config as BingoSampleConfig;
+  return {
+    ...config,
+    diagnosticsLevel: readDiagnosticsLevel(config.diagnosticsLevel)
+  } as BingoSampleConfig;
+}
+
+function readDiagnosticsLevel(value: unknown): DiagnosticsLevel {
+  if (value === undefined) return 'normal';
+  const level = typeof value === 'string' ? value.toLowerCase() : undefined;
+  if (!DIAGNOSTICS_LEVELS.includes(level as DiagnosticsLevel)) {
+    throw new Error(
+      "Configuration value 'sample.diagnosticsLevel' must be one of 'off', 'errors', 'normal' or 'detailed'."
+    );
+  }
+  return level as DiagnosticsLevel;
 }
 
 export { BINGO_SAMPLE_CONFIG, createBingoConfigurationModule };

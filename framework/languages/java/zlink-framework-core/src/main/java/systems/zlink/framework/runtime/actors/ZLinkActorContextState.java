@@ -7,6 +7,7 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.spots.ZLinkSpot;
 
 import java.time.Duration;
@@ -21,15 +22,9 @@ final class ZLinkActorContextState {
     private final String meshName;
     private ZLinkBackendActorRef actorRef;
     private ZLinkBoundSession boundSession;
-    // The local token identifies the current binding instance for cleanup;
-    // the generation is owned by the Session and must survive Actor
-    // relocation.  They are intentionally kept separate because a target
-    // can recreate its local binding while retaining the owner's fence.
+    // The local token identifies this context attachment for cleanup. The SpotNode record
+    // owns the Session-issued binding fence, including across relocation.
     private long sessionBindingToken;
-    private long sessionBindingGeneration;
-    private long sessionOwnerNodeGeneration;
-    private RoutingId boundSessionSourceNodeRid;
-    private RoutingId boundSessionSourceSessionRid;
     private RoutingId entrySpotNodeRid;
     private String entrySpotId;
     private String entryRouterChannelId;
@@ -73,12 +68,9 @@ final class ZLinkActorContextState {
         return actorRef;
     }
 
-    RoutingId boundSessionSourceNodeRid() {
-        return boundSessionSourceNodeRid;
-    }
-
     RoutingId boundSessionSourceSessionRid() {
-        return boundSessionSourceSessionRid;
+        var route = boundSessionRoute();
+        return route == null ? null : route.sessionRid();
     }
 
     String spotId() {
@@ -159,6 +151,21 @@ final class ZLinkActorContextState {
         }
     }
 
+    /**
+     * The SpotNode that holds this Actor's current binding record, or {@code null} when the binding
+     * has no SpotNode record. That record owns the binding facts, including the Session owner
+     * identity (Session-Actor binding §4).
+     */
+    ZLinkInternalSpotNode bindingSpotNode() {
+        if (boundSession instanceof ZLinkNativeBoundSessionRuntime runtime) {
+            return runtime.spotNode();
+        }
+        if (boundSession instanceof ZLinkBoundSessionRuntime runtime) {
+            return runtime.spotNode();
+        }
+        return null;
+    }
+
     ZLinkBoundSession requireBoundSession() {
         if (boundSession == null) {
             //  Spec 32-framework-error-model:41 — an operation that requires a
@@ -222,77 +229,21 @@ final class ZLinkActorContextState {
         joined = false;
     }
 
-    long bindSession(
-            ZLinkBoundSession boundSession, RoutingId sourceNodeRid, RoutingId sourceSessionRid) {
-        return bindSession(boundSession, sourceNodeRid, sourceSessionRid, 0);
-    }
-
-    long bindSession(
-            ZLinkBoundSession boundSession,
-            RoutingId sourceNodeRid,
-            RoutingId sourceSessionRid,
-            long bindingGeneration) {
-        return bindSession(boundSession, sourceNodeRid, sourceSessionRid, bindingGeneration, 0);
-    }
-
-    long bindSession(
-            ZLinkBoundSession boundSession,
-            RoutingId sourceNodeRid,
-            RoutingId sourceSessionRid,
-            long bindingGeneration,
-            long sessionOwnerNodeGeneration) {
-        if (bindingGeneration < 0) {
-            throw new IllegalArgumentException("bound Session binding generation is negative");
-        }
-        //  A fence-less re-bind of the session that is already bound must
-        //  keep the session-owner-issued fence and accepted sequence. Every
-        //  bind path funnels through this overload; without the guard the
-        //  remote bound-session BIND relay that follows a relocation
-        //  fabricated a fresh local generation over the owner fence, so the
-        //  next relocation's command 44 failed the owner's binding-fence
-        //  check as stale. A different session rid is a new binding identity
-        //  and still fabricates below.
-        if (bindingGeneration == 0
-                && this.boundSession != null
-                && sourceSessionRid != null
-                && sourceSessionRid.equals(boundSessionSourceSessionRid)
-                && sourceNodeRid != null
-                && sourceNodeRid.equals(boundSessionSourceNodeRid)
-                && sessionBindingGeneration > 0) {
-            this.boundSession = boundSession;
-            return sessionBindingToken;
-        }
-        this.sessionOwnerNodeGeneration = sessionOwnerNodeGeneration;
-        boundSessionSourceNodeRid = sourceNodeRid;
-        boundSessionSourceSessionRid = sourceSessionRid;
-        sessionBindingToken++;
-        sessionBindingGeneration = bindingGeneration == 0 ? sessionBindingToken : bindingGeneration;
+    long bindSession(ZLinkBoundSession boundSession) {
         this.boundSession = boundSession;
-        return sessionBindingToken;
+        return ++sessionBindingToken;
     }
 
-    BoundSessionSource boundSessionSourceSnapshot() {
-        if (boundSession == null
-                || boundSessionSourceNodeRid == null
-                || boundSessionSourceSessionRid == null
-                || sessionBindingToken <= 0
-                || sessionBindingGeneration <= 0) {
-            return null;
-        }
-        return new BoundSessionSource(
-                boundSessionSourceNodeRid,
-                boundSessionSourceSessionRid,
-                sessionBindingGeneration,
-                sessionOwnerNodeGeneration);
+    ZLinkInternalSpotNode.BoundSessionRoute boundSessionRoute() {
+        var node = bindingSpotNode();
+        return node == null || actorRef == null
+                ? null
+                : node.boundSessionRoute(actorRef).orElse(null);
     }
 
     boolean clearBoundSession(long bindingToken) {
         if (boundSession != null && bindingToken == sessionBindingToken) {
             boundSession = null;
-            boundSessionSourceNodeRid = null;
-            boundSessionSourceSessionRid = null;
-            sessionBindingGeneration = 0;
-            sessionOwnerNodeGeneration = 0;
             return true;
         }
         return false;
@@ -301,12 +252,6 @@ final class ZLinkActorContextState {
     long sessionBindingToken() {
         return sessionBindingToken;
     }
-
-    record BoundSessionSource(
-            RoutingId sourceNodeRid,
-            RoutingId sourceSessionRid,
-            long bindingGeneration,
-            long sessionOwnerNodeGeneration) {}
 
     CompletionStage<Void> rebindNativeActor(ZLinkBackendActorRef targetActor, Duration timeout) {
         if (boundSession instanceof ZLinkBoundSessionRuntime runtime) {
@@ -330,9 +275,10 @@ final class ZLinkActorContextState {
     }
 
     boolean hasBoundSession(RoutingId sourceNodeRid, RoutingId sourceSessionRid) {
-        return boundSession != null
-                && Objects.equals(boundSessionSourceNodeRid, sourceNodeRid)
-                && Objects.equals(boundSessionSourceSessionRid, sourceSessionRid);
+        var route = boundSessionRoute();
+        return route != null
+                && Objects.equals(route.sessionOwnerNodeRid(), sourceNodeRid)
+                && Objects.equals(route.sessionRid(), sourceSessionRid);
     }
 
     CompletionStage<Boolean> sendBoundSessionFrame(byte[] frameBytes) {
@@ -353,14 +299,10 @@ final class ZLinkActorContextState {
     void clearAfterDestroy() {
         actorRef = null;
         boundSession = null;
-        boundSessionSourceNodeRid = null;
-        boundSessionSourceSessionRid = null;
         entrySpotNodeRid = null;
         entrySpotId = null;
         entryRouterChannelId = null;
         sessionBindingToken++;
-        sessionBindingGeneration = 0;
-        sessionOwnerNodeGeneration = 0;
         spotId = null;
         spot = null;
         joined = false;

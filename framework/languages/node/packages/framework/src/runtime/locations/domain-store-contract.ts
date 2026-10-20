@@ -49,6 +49,11 @@ import type {
  * implement this interface; the framework maps it to the opaque Store SPI.
  */
 export interface ZLinkDomainLocationStore {
+  confirmedCapacity?(
+    key: ZLinkMeshNodeDescriptorKey,
+    limits: ZLinkMeshNodeDescriptor['populationCapacity']
+  ): ZLinkMeshNodeDescriptor['populationCapacity'] | undefined;
+
   updateMeshNode(
     descriptor: ZLinkMeshNodeDescriptor,
     intent: ZLinkLocationWriteIntent,

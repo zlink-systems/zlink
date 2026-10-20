@@ -12,6 +12,7 @@ using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Configuration;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
@@ -21,8 +22,58 @@ using Zlink.Framework.Runtime.Streams;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class BoundSessionReplacementLifecycleTests
+public sealed partial class BoundSessionReplacementLifecycleTests
 {
+    [Theory]
+    [InlineData("", 1UL)]
+    [InlineData("owner", 0UL)]
+    [InlineData(" ", 1UL)]
+    public async Task Binding_table_rejects_missing_descriptor_identity_without_replacing_current(
+        string ownerId,
+        ulong ownerLease
+    )
+    {
+        await using var fixture = await ReplacementFixture.CreateAsync(
+            ReplacementCallbackBehavior.Success
+        );
+        var token = fixture.BindRetiredSessionActor("actor-a");
+        Assert.True(fixture.Runtime.TryGetSessionActorBinding("actor-a", token, out var original));
+        var table = new ZLinkSessionActorBindingTable(
+            TimeSpan.FromSeconds(30),
+            new ZLinkLocationOptions().SessionRelocationSealTimeout
+        );
+        var actorId = ZLinkActorId.FromBoundary("actor-a", "actorId");
+        await table.BindAsync(
+            actorId,
+            original.Context,
+            token,
+            original.ActorRef,
+            original.BindingGeneration,
+            original.Route,
+            original.SessionOwnerNodeGeneration,
+            original.SessionOwnerNodeRid,
+            original.SessionOwnerId,
+            original.SessionOwnerLeaseGeneration
+        );
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await table.BindAsync(
+                actorId,
+                original.Context,
+                "invalid",
+                original.ActorRef,
+                original.BindingGeneration + 1,
+                original.Route,
+                original.SessionOwnerNodeGeneration,
+                original.SessionOwnerNodeRid,
+                ownerId,
+                ownerLease
+            )
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+        Assert.Equal(token, (await table.GetBindingAsync("actor-a", token))!.BindingToken);
+        Assert.Null(await table.GetBindingAsync("actor-a", "invalid"));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -395,9 +446,29 @@ public sealed class BoundSessionReplacementLifecycleTests
             )
         );
 
+        var activities = new ConcurrentQueue<Activity>();
+        using var listener = new ActivityListener
+        {
+            ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
+            Sample = (ref ActivityCreationOptions<ActivityContext> _) =>
+                ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activities.Enqueue,
+        };
+        ActivitySource.AddActivityListener(listener);
         Assert.False(
             retired.Runtime.TryHandleBoundSessionReplacedNotification(nodeRid, nodeRid, record)
         );
+        var drop = Assert.Single(
+            activities.Where(item =>
+                Equals(item.GetTagItem("packet_name"), "boundSessionReplaced")
+                && Equals(item.GetTagItem("source_rid"), nodeRid.ToHex())
+            )
+        );
+        Assert.Equal("dropped", drop.GetTagItem("phase"));
+        Assert.Equal("dropped", drop.GetTagItem("outcome"));
+        Assert.Equal("stream", drop.GetTagItem("surface"));
+        Assert.Equal("control", drop.GetTagItem("message_kind"));
+        Assert.Equal("location_unavailable", drop.GetTagItem("reason"));
     }
 
     [Theory]

@@ -6,11 +6,11 @@
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
 #include "runtime/diagnostics/runtime_observation.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
-#include "runtime/utils/poll_interval_wait.hpp"
 
 #include <zlink/framework/contracts/errors/error.hpp>
 
 #include <algorithm>
+#include <condition_variable>
 #include <set>
 #include <thread>
 #include <utility>
@@ -28,9 +28,6 @@ build_snapshot_async (std::shared_ptr<route_mesh_runtime_service_t::state_t> sta
 
 namespace
 {
-
-constexpr auto monitor_refresh_interval = std::chrono::milliseconds (100);
-constexpr auto monitor_pump_interval = std::chrono::milliseconds (10);
 
 topology_state_t map_state (mesh::service_node_state_t state)
 {
@@ -107,11 +104,10 @@ struct route_mesh_runtime_service_t::state_t
 
         std::shared_ptr<detail::mesh_node_runtime_t> node;
         std::mutex mutex;
+        std::condition_variable management_changed;
         std::vector<std::weak_ptr<observer_t>> observers;
         std::optional<mesh_node_snapshot_t> last_snapshot;
         bool location_store_healthy = false;
-        std::chrono::steady_clock::time_point next_location_poll{};
-        std::chrono::steady_clock::time_point next_descriptor_poll{};
         std::vector<mesh_node_descriptor_t> location_descriptors;
         std::atomic_bool stopped{false};
         std::thread pump;
@@ -121,6 +117,7 @@ struct route_mesh_runtime_service_t::state_t
     location_runtime_query_t *location_runtime = nullptr;
     location_repository_t *location_store = nullptr;
     std::shared_ptr<detail::monitoring_runtime_state_t> monitoring;
+    std::function<framework_runtime_state_t ()> host_state;
     mutable std::mutex drain_mutex;
     std::optional<std::chrono::system_clock::time_point> drain_deadline;
     bool work_sealed = false;
@@ -146,14 +143,17 @@ struct route_mesh_runtime_service_t::state_t
         return found->first;
     }
 
-    const mesh_node_snapshot_t &publish_snapshot_locked (hub_t &hub, mesh_node_snapshot_t snapshot)
+    // Runtime monitoring §4·§6: a projection is published only from the status it was taken
+    // from. When another publication won the turn first, either projection may describe the
+    // later node state, so this returns nullptr and the caller projects again from the winner.
+    const mesh_node_snapshot_t *publish_snapshot_locked (hub_t &hub, mesh_node_snapshot_t snapshot)
     {
-        if (hub.last_snapshot
-            && (detail::topology_is_terminal (hub.last_snapshot->state)
-                || snapshot.sequence < hub.last_snapshot->sequence))
-            return *hub.last_snapshot;
+        if (hub.last_snapshot && detail::topology_is_terminal (hub.last_snapshot->state))
+            return &*hub.last_snapshot;
+        if (hub.last_snapshot && snapshot.sequence < hub.last_snapshot->sequence)
+            return nullptr;
         if (hub.last_snapshot && snapshot_equivalent (*hub.last_snapshot, snapshot))
-            return *hub.last_snapshot;
+            return &*hub.last_snapshot;
         snapshot.sequence = hub.last_snapshot ? hub.last_snapshot->sequence + 1 : 1;
         snapshot.observed_at = std::chrono::system_clock::now ();
         const bool terminal = detail::topology_is_terminal (snapshot.state);
@@ -167,7 +167,7 @@ struct route_mesh_runtime_service_t::state_t
             }
         }
         hub.observers.erase (write, hub.observers.end ());
-        return published;
+        return &published;
     }
 
     void publish_current_snapshot (hub_t &hub) noexcept
@@ -186,10 +186,13 @@ struct route_mesh_runtime_service_t::state_t
           *task, [state, owner, task] (const result_t<mesh_node_snapshot_t> &result) {
               if (!result)
                   return;
-              std::lock_guard lock (owner->mutex);
-              if (owner->stopped.load (std::memory_order_acquire))
-                  return;
-              state->publish_snapshot_locked (*owner, result.value ());
+              {
+                  std::lock_guard lock (owner->mutex);
+                  if (owner->stopped.load (std::memory_order_acquire)
+                      || state->publish_snapshot_locked (*owner, result.value ()) != nullptr)
+                      return;
+              }
+              state->publish_current_snapshot (*owner);
           });
     }
 
@@ -197,13 +200,6 @@ struct route_mesh_runtime_service_t::state_t
     {
         if (location_runtime == nullptr)
             return;
-        const auto now = std::chrono::steady_clock::now ();
-        {
-            std::lock_guard lock (hub.mutex);
-            if (now < hub.next_location_poll)
-                return;
-            hub.next_location_poll = now + monitor_refresh_interval;
-        }
         std::optional<location_runtime_status_t> status_for_log;
         try {
             auto query = location_runtime->get_status ();
@@ -235,14 +231,6 @@ struct route_mesh_runtime_service_t::state_t
 
     void poll_location_descriptors (hub_t &hub)
     {
-        const auto now = std::chrono::steady_clock::now ();
-        {
-            std::lock_guard lock (hub.mutex);
-            if (now < hub.next_descriptor_poll)
-                return;
-            hub.next_descriptor_poll = now + monitor_refresh_interval;
-        }
-
         refresh_location_descriptors (hub);
         publish_current_snapshot (hub);
     }
@@ -308,12 +296,14 @@ route_mesh_runtime_service_t::route_mesh_runtime_service_t (
   std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> nodes,
   location_runtime_query_t *location_runtime,
   location_repository_t *location_store,
-  std::shared_ptr<detail::monitoring_runtime_state_t> monitoring) :
+  std::shared_ptr<detail::monitoring_runtime_state_t> monitoring,
+  std::function<framework_runtime_state_t ()> host_state) :
     _state (std::make_shared<state_t> ())
 {
     _state->location_runtime = location_runtime;
     _state->location_store = location_store;
     _state->monitoring = std::move (monitoring);
+    _state->host_state = std::move (host_state);
     for (auto &node : nodes)
         _state->hubs.emplace (node->mesh_name (), std::make_shared<state_t::hub_t> (node));
 }
@@ -341,16 +331,24 @@ void route_mesh_runtime_service_t::start ()
           });
         hub->stopped.store (false, std::memory_order_release);
         const auto state = _state;
-        // Prime the descriptor cache before exposing the runtime. Snapshot
-        // callers must see the initial local placement data without forcing a
-        // Store read on every query.
+        // Prime Store capacity and remote descriptor observations before
+        // exposing the runtime, without a Store read on every query.
+        state->poll_location (*hub);
         state->poll_location_descriptors (*hub);
         hub->pump = std::thread ([state, hub] {
-            while (!hub->stopped.load (std::memory_order_acquire)) {
-                state->poll_location (*hub);
-                state->poll_location_descriptors (*hub);
-                zlink::framework::runtime::wait_poll_interval (monitor_pump_interval);
-            }
+            pump_management ([] { return std::chrono::steady_clock::now (); },
+                             [&] {
+                                 state->poll_location (*hub);
+                                 state->poll_location_descriptors (*hub);
+                             },
+                             [&] (std::chrono::steady_clock::time_point due) {
+                                 std::unique_lock lock (hub->mutex);
+                                 const auto stopped = [&] {
+                                     return hub->stopped.load (std::memory_order_acquire);
+                                 };
+                                 hub->management_changed.wait_until (lock, due, stopped);
+                                 return !hub->stopped.load (std::memory_order_acquire);
+                             });
         });
     }
 }
@@ -359,8 +357,13 @@ void route_mesh_runtime_service_t::stop () noexcept
 {
     if (_state->stopped.exchange (true, std::memory_order_acq_rel))
         return;
-    for (const auto &[_, hub] : _state->hubs)
-        hub->stopped.store (true, std::memory_order_release);
+    for (const auto &[_, hub] : _state->hubs) {
+        {
+            std::lock_guard lock (hub->mutex);
+            hub->stopped.store (true, std::memory_order_release);
+        }
+        hub->management_changed.notify_all ();
+    }
     for (const auto &[_, hub] : _state->hubs) {
         if (hub->pump.joinable ())
             hub->node->native_node ().transport ().topology ().set_change_handler ({});
@@ -497,12 +500,10 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
                     });
     const auto mapped_state =
       hub->stopped.load (std::memory_order_acquire) ? topology_state_t::stopped
-      : local_location != location_descriptors.end ()
-        ? detail::topology_state_for_host (local_location->state, transport_state)
-        : transport_state;
+      : state->host_state ? detail::topology_state_for_host (state->host_state (), transport_state)
+                          : transport_state;
     const auto local_role =
-      local_location != location_descriptors.end ()                   ? local_location->object_role
-      : descriptor.object_role == mesh::service_object_role_t::client ? object_role_t::client
+      descriptor.object_role == mesh::service_object_role_t::client   ? object_role_t::client
       : descriptor.object_role == mesh::service_object_role_t::server ? object_role_t::server
                                                                       : object_role_t::none;
     std::map<std::string, int> local_channels;
@@ -548,22 +549,14 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
     }
 
     mesh_node_descriptor_t placement;
-    placement.mesh_name = mesh_name;
-    placement.rid = node_rid;
-    placement.lifecycle_generation = descriptor.lifecycle_generation;
-    placement.descriptor_revision = descriptor.descriptor_revision;
-    placement.endpoint = descriptor.advertised_endpoint;
-    placement.object_role =
-      descriptor.object_role == mesh::service_object_role_t::client   ? object_role_t::client
-      : descriptor.object_role == mesh::service_object_role_t::server ? object_role_t::server
-                                                                      : object_role_t::none;
+    placement.object_role = local_role;
     placement.placement_weight = descriptor.placement_weight;
     placement.capacity.actors.limit = actor_limit;
     placement.capacity.spots.limit = spot_limit;
-    placement.activation_concurrency.limit = hub->node->activation_admission ().limit ();
-    placement.activation_concurrency.active = hub->node->activation_admission ().active ();
+    // Local descriptor values belong to the runtime. Store observations only
+    // contribute the capacity reservation projection (MeshNode §5.1).
     if (local_location != location_descriptors.end ())
-        placement = *local_location;
+        placement.capacity = local_location->capacity;
     // Runtime monitoring §5: report this MeshNode's local activation records.
     placement.capacity.actors.active = active_actor_count;
     placement.capacity.spots.active = active_spot_count;
@@ -662,11 +655,31 @@ mesh_node_snapshot_t route_mesh_runtime_service_t::snapshot (std::string mesh_na
                 || detail::topology_is_terminal (hub->last_snapshot->state)))
             return *hub->last_snapshot;
     }
-    auto snapshot = build_snapshot (_state, std::move (mesh_name));
-    std::lock_guard lock (hub->mutex);
-    if (hub->last_snapshot && hub->stopped.load (std::memory_order_acquire))
-        return *hub->last_snapshot;
-    return _state->publish_snapshot_locked (*hub, std::move (snapshot));
+    return complete_query (mesh_name, query_projection (mesh_name));
+}
+
+mesh_node_snapshot_t
+route_mesh_runtime_service_t::query_projection (const std::string &mesh_name) const
+{
+    return build_snapshot (_state, mesh_name);
+}
+
+mesh_node_snapshot_t
+route_mesh_runtime_service_t::complete_query (const std::string &mesh_name,
+                                              mesh_node_snapshot_t projection) const
+{
+    const auto hub = _state->require_hub (mesh_name);
+    for (;;) {
+        {
+            std::lock_guard lock (hub->mutex);
+            if (hub->last_snapshot && hub->stopped.load (std::memory_order_acquire))
+                return *hub->last_snapshot;
+            if (const auto *published =
+                  _state->publish_snapshot_locked (*hub, std::move (projection)))
+                return *published;
+        }
+        projection = query_projection (mesh_name);
+    }
 }
 
 std::unique_ptr<mesh_runtime_observation_t> route_mesh_runtime_service_t::observe (

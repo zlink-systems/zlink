@@ -14,6 +14,9 @@
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
+#include "runtime/messaging/failure_origin_wire.hpp"
+#include "runtime/messaging/request_failure_mapper.hpp"
+#include <nlohmann/json.hpp>
 #include <algorithm>
 #include <atomic>
 #include <limits>
@@ -34,6 +37,11 @@ namespace detail
 class bound_session_delivery_fence_t
 {
   public:
+    explicit bound_session_delivery_fence_t (std::shared_ptr<actor_gateway_state_t> state) :
+        _state (std::move (state))
+    {
+    }
+
     bool try_add ()
     {
         std::lock_guard lock (_mutex);
@@ -56,11 +64,7 @@ class bound_session_delivery_fence_t
             take_terminal_unlocked (settled, terminal);
         }
         if (settled) {
-            try {
-                settled (std::move (*terminal));
-            }
-            catch (...) {
-            }
+            invoke_settled (settled, std::move (*terminal));
         }
     }
 
@@ -77,15 +81,29 @@ class bound_session_delivery_fence_t
             take_terminal_unlocked (ready, terminal);
         }
         if (ready) {
-            try {
-                ready (std::move (*terminal));
-            }
-            catch (...) {
-            }
+            invoke_settled (ready, std::move (*terminal));
         }
     }
 
   private:
+    void invoke_settled (const std::function<void (result_t<void>)> &settled,
+                         result_t<void> terminal) noexcept
+    {
+        try {
+            settled (std::move (terminal));
+        }
+        catch (...) {
+            dispatch_error_reporter_t (_state->dispatch).report_lazy ([&] {
+                return message_dispatch_error_event_t{
+                  .surface = dispatch_error_surface_t::spot_actor,
+                  .message_kind = dispatch_message_kind_t::control,
+                  .reason = dispatch_error_reason_t::handler_exception,
+                  .action = dispatch_error_action_t::drop,
+                  .exception = std::current_exception ()};
+            });
+        }
+    }
+
     void take_terminal_unlocked (std::function<void (result_t<void>)> &settled,
                                  std::optional<result_t<void>> &terminal)
     {
@@ -95,6 +113,7 @@ class bound_session_delivery_fence_t
         terminal.emplace (_failure ? std::move (*_failure) : result_t<void>::success ());
     }
 
+    std::shared_ptr<actor_gateway_state_t> _state;
     std::mutex _mutex;
     std::size_t _pending = 0;
     bool _sealed = false;
@@ -540,6 +559,9 @@ namespace detail
 
 namespace
 {
+// Service command correlation owns Actor replies; STREAM requires a nonzero sequence.
+constexpr std::uint64_t actor_wire_request_sequence = 1;
+
 thread_local std::vector<stream_header_t> stream_relay_headers;
 
 stream_header_t actor_relay_header (stream_message_kind_t kind, std::string packet_name)
@@ -548,6 +570,118 @@ stream_header_t actor_relay_header (stream_message_kind_t kind, std::string pack
                             std::move (packet_name));
 }
 
+}
+
+runtime::messaging::message_parts_t
+encode_actor_packet (const runtime::messaging::envelope_header_t &header, zlink::message_t body)
+{
+    using runtime::messaging::message_kind_t;
+    stream_header_t wire (
+      header.kind == message_kind_t::command ? stream_message_kind_t::send
+                                             : stream_message_kind_t::request,
+      stream_codec_from_content_type (header.content_type), stream_header_flags_t::none,
+      header.kind == message_kind_t::command ? std::nullopt
+                                             : std::make_optional (actor_wire_request_sequence),
+      header.message_name, stream_metadata_t (header.metadata));
+    if (!header.correlation_id.empty ())
+        wire.with_correlation_id (header.correlation_id);
+    if (header.flow_id && header.flow_origin)
+        wire.with_flow (*header.flow_id, *header.flow_origin);
+    stream_runtime_t::propagate_flow (wire);
+    auto encoded = stream_runtime_t (nullptr).encode_header (wire);
+    return {zlink::message_t::from (std::move (encoded.value ())), std::move (body)};
+}
+
+result_t<runtime::messaging::envelope_header_t>
+decode_actor_packet_header (const runtime::messaging::message_parts_t &parts,
+                            stream_message_kind_t expected_kind,
+                            bool capture_flow)
+{
+    if (parts.size () != 2)
+        return result_t<runtime::messaging::envelope_header_t>::failure (
+          framework_error_kind_t::protocol_error, "Actor typed message requires two parts");
+    return decode_actor_packet_header (parts[0], expected_kind, capture_flow);
+}
+
+result_t<runtime::messaging::envelope_header_t> decode_actor_packet_header (
+  const zlink::message_t &header_part, stream_message_kind_t expected_kind, bool capture_flow)
+{
+    using runtime::messaging::envelope_header_t;
+    using runtime::messaging::message_kind_t;
+    auto decoded = stream_runtime_t::decode_header (header_part.to_bytes (), capture_flow);
+    if (!decoded)
+        return result_t<envelope_header_t>::failure (decoded.error_kind (),
+                                                     decoded.error ()->what ());
+    const auto &wire = decoded.value ();
+    if (wire.kind () != expected_kind)
+        return result_t<envelope_header_t>::failure (
+          framework_error_kind_t::protocol_error,
+          "Actor STREAM kind does not match its service command");
+    envelope_header_t header;
+    header.kind = wire.kind () == stream_message_kind_t::send ? message_kind_t::command
+                                                              : message_kind_t::request;
+    header.channel_name = actor_message_channel_name;
+    header.message_name = wire.packet_name ();
+    header.content_type = stream_content_type (wire.codec ());
+    header.metadata = wire.metadata ().values ();
+    if (const auto correlation = wire.correlation_id ())
+        header.correlation_id = *correlation;
+    if (const auto flow = wire.flow_id ())
+        header.flow_id = std::string (*flow);
+    header.flow_origin = wire.flow_origin ();
+    return result_t<envelope_header_t>::success (std::move (header));
+}
+
+runtime::messaging::message_parts_t
+encode_actor_reply (const runtime::messaging::envelope_header_t &header, zlink::message_t body)
+{
+    const bool error = header.kind == runtime::messaging::message_kind_t::error;
+    stream_header_t wire (error ? stream_message_kind_t::error : stream_message_kind_t::response,
+                          error ? stream_codec_t::json
+                                : stream_codec_from_content_type (header.content_type),
+                          stream_header_flags_t::none, actor_wire_request_sequence, "",
+                          stream_metadata_t (header.metadata));
+    if (error) {
+        body = stream_error_payload (
+          header.error_code.value_or (stream_error_code (framework_error_kind_t::internal_failure)),
+          header.error_message.value_or ("Actor handler failed"));
+    }
+    stream_runtime_t::propagate_flow (wire);
+    auto encoded = stream_runtime_t (nullptr).encode_frame (wire, body);
+    return runtime::messaging::message_parts_t (
+      std::vector<zlink::message_t>{zlink::message_t::from (std::move (encoded.value ()))});
+}
+
+result_t<std::optional<zlink::message_t>>
+decode_actor_reply (const runtime::messaging::message_parts_t &parts)
+{
+    try {
+        auto [header, body] = stream_runtime_t::decode_frame (parts.items (), false);
+        if (!header.packet_name ().empty ()
+            || (header.kind () != stream_message_kind_t::response
+                && header.kind () != stream_message_kind_t::error))
+            return result_t<std::optional<zlink::message_t>>::failure (
+              framework_error_kind_t::protocol_error,
+              "Actor reply requires an unnamed Response or Error");
+        if (header.kind () == stream_message_kind_t::error) {
+            const auto payload = nlohmann::json::parse (body.to_string ());
+            auto error = runtime::messaging::request_failure_mapper_t{}.error_header_exception (
+              payload.at ("code").get<std::string> (), payload.at ("message").get<std::string> (),
+              "Actor request");
+            runtime::messaging::envelope_header_t context;
+            context.metadata = header.metadata ().values ();
+            return detail::result_access_t::failure<std::optional<zlink::message_t>> (
+              runtime::messaging::restore_failure_origin (context, std::move (error)));
+        }
+        return result_t<std::optional<zlink::message_t>>::success (std::move (body));
+    }
+    catch (const framework_exception_t &error) {
+        return detail::result_access_t::failure<std::optional<zlink::message_t>> (error);
+    }
+    catch (const nlohmann::json::exception &error) {
+        return result_t<std::optional<zlink::message_t>>::failure (
+          framework_error_kind_t::protocol_error, error.what ());
+    }
 }
 
 stream_relay_dispatch_scope_t::stream_relay_dispatch_scope_t (stream_header_t header)
@@ -991,7 +1125,14 @@ actor_context_t::join_spot_erased (spot_id_t spot_id,
                                       std::nullopt};
       });
 
-    if (joined.result_code == 0) {
+    if (joined.result_code == detail::actor_join_reply_t::relayed) {
+        auto cleanup = std::exchange (joined.source_cleanup, {});
+        const auto settled = co_await runtime::await_result (cleanup ());
+        if (!settled)
+            co_return joined;
+        joined.result_code = detail::actor_join_reply_t::accepted;
+    }
+    if (joined.result_code == detail::actor_join_reply_t::accepted) {
         state->sync ([&] {
             *actor_ref = joined.actor;
             auto found = state->actors_by_id.find (std::string (actor_ref->actor_id ().value ()));
@@ -2133,8 +2274,7 @@ bool same_physical_bound_session (const actor_bound_session_route_t &left,
     // Actor authority changes on relocation while the physical Session and
     // its binding generation remain current. Only a physical identity change
     // retires the existing stream binding.
-    return left.node_rid.to_bytes () == right.node_rid.to_bytes ()
-           && left.session_rid == right.session_rid
+    return left.node_rid == right.node_rid && left.session_rid == right.session_rid
            && left.object_generation == right.object_generation
            && left.node_generation == right.node_generation
            && left.binding_generation == right.binding_generation
@@ -2321,21 +2461,22 @@ admit_session_relay_unlocked (actor_gateway_state_t &state,
     return result_t<void>::success ();
 }
 
-result_t<void> bind_session_components (const std::shared_ptr<actor_gateway_state_t> &state,
-                                        actor_ref_t actor_ref,
-                                        bound_session_sink_t sink,
-                                        stream_codec_t codec,
-                                        bool replace_existing,
-                                        std::optional<actor_bound_session_route_t> route,
-                                        actor_bound_session_transition_t *transition = nullptr,
-                                        const std::function<bool ()> &before_publish = {})
+result_t<void> bind_session_components (
+  const std::shared_ptr<actor_gateway_state_t> &state,
+  actor_ref_t actor_ref,
+  bound_session_sink_t sink,
+  stream_codec_t codec,
+  bool replace_existing,
+  std::optional<actor_bound_session_route_t> route,
+  actor_bound_session_transition_t *transition = nullptr,
+  const std::function<bool (const actor_bound_session_route_t &)> &before_publish = {})
 {
     const auto actor_id = std::string (actor_ref.actor_id ().value ());
     return state->sync ([&] {
         auto found = state->actors_by_id.find (actor_id);
         bool keep_existing_sink = false;
         if (found == state->actors_by_id.end ()) {
-            if (before_publish && !before_publish ()) {
+            if (before_publish && !before_publish (*route)) {
                 return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                                 "bound Session terminal reply was not submitted");
             }
@@ -2368,16 +2509,23 @@ result_t<void> bind_session_components (const std::shared_ptr<actor_gateway_stat
             }
             if (route && route->binding_generation == 0)
                 route->binding_generation = found->second.source_binding_generation;
-            if (route && found->second.bound_session_route && route->binding_generation != 0
-                && found->second.bound_session_route->binding_generation
-                     > route->binding_generation) {
-                if (transition != nullptr) {
-                    transition->current = *found->second.bound_session_route;
-                    transition->changed = false;
+            if (route && found->second.bound_session_route) {
+                const auto &current = *found->second.bound_session_route;
+                const bool same_owner_lifecycle =
+                  current.node_rid == route->node_rid
+                  && current.node_generation == route->node_generation;
+                if (same_owner_lifecycle && current.session_rid == route->session_rid
+                    && current.binding_generation == route->binding_generation) {
+                    route->binding_token = current.binding_token;
+                    route->session_owner_id = current.session_owner_id;
+                    route->session_owner_lease_generation = current.session_owner_lease_generation;
+                } else if (same_owner_lifecycle
+                           && route->binding_generation <= current.binding_generation) {
+                    return result_t<void>::failure (framework_error_kind_t::unavailable,
+                                                    "bound Session registration is stale");
                 }
-                return result_t<void>::success ();
             }
-            if (before_publish && !before_publish ()) {
+            if (before_publish && !before_publish (*route)) {
                 return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                                 "bound Session terminal reply was not submitted");
             }
@@ -2406,9 +2554,8 @@ result_t<void> bind_session_components (const std::shared_ptr<actor_gateway_stat
                 if (found->second.bound_session_route
                     && same_physical_bound_session (*found->second.bound_session_route, *route)) {
                     /* Relocation can refresh authority for the same physical
-                 * Session.  Its already-attached direct writer remains the
-                 * right capability; only a physical identity replacement
-                 * must swap it. */
+                     * Session. Its already-attached direct writer remains the
+                     * delivery capability; remote sinks follow the new authority. */
                     keep_existing_sink = found->second.bound_session_stream_sink
                                          && existing_sink != state->bound_session_sinks.end ();
                     *route = merge_bound_session_route_fence (*found->second.bound_session_route,
@@ -2792,12 +2939,12 @@ result_t<void> actor_gateway_runtime_t::bind_session_route (
                                     replace_existing, std::move (route));
 }
 
-result_t<actor_bound_session_transition_t>
-actor_gateway_runtime_t::replace_session_route (actor_ref_t actor_ref,
-                                                bound_session_sink_t sink,
-                                                actor_bound_session_route_t route,
-                                                stream_codec_t codec,
-                                                std::function<bool ()> before_publish)
+result_t<actor_bound_session_transition_t> actor_gateway_runtime_t::replace_session_route (
+  actor_ref_t actor_ref,
+  bound_session_sink_t sink,
+  actor_bound_session_route_t route,
+  stream_codec_t codec,
+  std::function<bool (const actor_bound_session_route_t &)> before_publish)
 {
     actor_bound_session_transition_t transition;
     const auto bound =
@@ -3017,103 +3164,6 @@ result_t<actor_context_t> actor_gateway_runtime_t::admit_session_relay_context (
 }
 
 result_t<void>
-actor_gateway_runtime_t::begin_session_relay_completion (const actor_ref_t &actor_ref,
-                                                         const zlink::routing_id_t &source_node_rid,
-                                                         const zlink::routing_id_t &session_rid,
-                                                         std::uint64_t binding_generation,
-                                                         std::uint64_t session_sequence)
-{
-    if (binding_generation == 0 || session_sequence == 0) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "bound Session relay completion fence is invalid");
-    }
-    return _state->sync (
-      [this, &actor_ref, &source_node_rid, &session_rid, binding_generation, session_sequence] {
-          const auto exact = exact_session_relay_route (*_state, actor_ref, source_node_rid,
-                                                        session_rid, binding_generation);
-          if (!exact) {
-              return detail::propagate_failure<void> (
-                exact, "bound Session relay completion admission failed");
-          }
-          const auto &route = *exact.value ();
-          if (!route.session_sequence_baseline_unknown && session_sequence != route.session_sequence
-              && (route.session_sequence == std::numeric_limits<std::uint64_t>::max ()
-                  || session_sequence != route.session_sequence + 1)) {
-              return result_t<void>::failure (
-                framework_error_kind_t::invalid_operation,
-                "bound Session relay completion is not current or next");
-          }
-          const session_relay_completion_fence_t fence{std::string (actor_ref.actor_id ().value ()),
-                                                       actor_ref.object_generation (),
-                                                       source_node_rid.to_hex (),
-                                                       session_rid.to_hex (),
-                                                       binding_generation,
-                                                       session_sequence};
-          if (!_state->active_session_relay_completions.insert (fence).second) {
-              return result_t<void>::failure (framework_error_kind_t::invalid_operation,
-                                              "bound Session relay completion is already active");
-          }
-          return result_t<void>::success ();
-      });
-}
-
-result_t<void>
-actor_gateway_runtime_t::complete_session_relay (const actor_ref_t &actor_ref,
-                                                 const zlink::routing_id_t &source_node_rid,
-                                                 const zlink::routing_id_t &session_rid,
-                                                 std::uint64_t binding_generation,
-                                                 std::uint64_t session_sequence)
-{
-    if (binding_generation == 0 || session_sequence == 0) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "bound Session relay completion fence is invalid");
-    }
-    return _state->sync ([&] {
-        const session_relay_completion_fence_t fence{std::string (actor_ref.actor_id ().value ()),
-                                                     actor_ref.object_generation (),
-                                                     source_node_rid.to_hex (),
-                                                     session_rid.to_hex (),
-                                                     binding_generation,
-                                                     session_sequence};
-        const auto active = _state->active_session_relay_completions.find (fence);
-        if (active == _state->active_session_relay_completions.end ()) {
-            return result_t<void>::failure (framework_error_kind_t::invalid_operation,
-                                            "bound Session relay completion was not admitted");
-        }
-        const auto exact = exact_session_relay_route (*_state, actor_ref, source_node_rid,
-                                                      session_rid, binding_generation);
-        if (!exact) {
-            /* The application handler may retire the Actor before the admitted
-         * send callback publishes its terminal high-water. The completion
-         * fence remains the owner of that terminal and is consumed here
-         * without recreating the retired Actor route. */
-            _state->active_session_relay_completions.erase (active);
-            return result_t<void>::success ();
-        }
-        auto &route = *exact.value ();
-        if (route.session_sequence_baseline_unknown) {
-            route.session_sequence = session_sequence;
-            route.session_sequence_baseline_unknown = false;
-            _state->active_session_relay_completions.erase (active);
-            return result_t<void>::success ();
-        }
-        if (session_sequence == route.session_sequence) {
-            _state->active_session_relay_completions.erase (active);
-            return result_t<void>::success ();
-        }
-        if (route.session_sequence == std::numeric_limits<std::uint64_t>::max ()
-            || session_sequence != route.session_sequence + 1) {
-            _state->active_session_relay_completions.erase (active);
-            return result_t<void>::failure (framework_error_kind_t::invalid_operation,
-                                            "bound Session relay completion is not next");
-        }
-        route.session_sequence = session_sequence;
-        _state->active_session_relay_completions.erase (active);
-        return result_t<void>::success ();
-    });
-}
-
-result_t<void>
 actor_gateway_runtime_t::retire_bound_session_route (const actor_ref_t &actor_ref,
                                                      const zlink::routing_id_t &session_owner_node,
                                                      const zlink::routing_id_t &session_rid,
@@ -3194,8 +3244,11 @@ bool actor_gateway_runtime_t::prepare_session_relocation_target_route (
 {
     if (route.route.action != runtime::protocol::session_relocation_route_action_t::commit
         || route.sender_role != runtime::protocol::relocation_role_t::target
-        || route.actor.actor_id.empty () || route.actor.object_generation == 0
+        || !is_valid_actor_id (route.actor.actor_id) || route.actor.object_generation == 0
         || route.session_owner_node_routing_id.empty () || route.session_routing_id.empty ()
+        || route.session_owner_node_routing_id.size () > runtime::protocol::ridBytes
+        || route.session_routing_id.size () > runtime::protocol::ridBytes
+        || route.route.target_node_routing_id.size () > runtime::protocol::ridBytes
         || route.session_owner_node_generation == 0 || route.binding_generation == 0
         || route.route.previous_authority_owner_generation == 0
         || route.route.target_authority_owner_generation
@@ -3205,49 +3258,44 @@ bool actor_gateway_runtime_t::prepare_session_relocation_target_route (
         return false;
     }
 
-    try {
-        const auto target_node = zlink::routing_id_t::from (route.route.target_node_routing_id);
-        const auto session_owner = zlink::routing_id_t::from (route.session_owner_node_routing_id);
-        const auto session_rid = zlink::routing_id_t::from (route.session_routing_id);
-        return _state->sync ([&] {
-            const auto found = _state->actors_by_id.find (route.actor.actor_id);
-            if (found != _state->actors_by_id.end ()) {
-                if (found->second.ref.object_generation () != route.actor.object_generation)
+    const auto target_node = zlink::routing_id_t::from (route.route.target_node_routing_id);
+    const auto session_owner = zlink::routing_id_t::from (route.session_owner_node_routing_id);
+    const auto session_rid = zlink::routing_id_t::from (route.session_routing_id);
+    return _state->sync ([&] {
+        const auto found = _state->actors_by_id.find (route.actor.actor_id);
+        if (found != _state->actors_by_id.end ()) {
+            if (found->second.ref.object_generation () != route.actor.object_generation)
+                return false;
+            if (found->second.bound_session_route) {
+                const auto &current = *found->second.bound_session_route;
+                const bool already_prepared =
+                  found->second.ref.node_rid ().value () == target_node.to_string ()
+                  && current.authority_owner_generation
+                       == route.route.target_authority_owner_generation
+                  && current.owner_lease_generation == target_owner_lease_generation;
+                // The Store-confirmed Actor tenure fences this cache update.
+                // Binding replacement belongs to the common installation path.
+                if (!already_prepared
+                    && current.authority_owner_generation
+                         > route.route.previous_authority_owner_generation)
                     return false;
-                if (found->second.bound_session_route) {
-                    const auto &current = *found->second.bound_session_route;
-                    const bool already_prepared =
-                      found->second.ref.node_rid ().value () == target_node.to_string ()
-                      && current.authority_owner_generation
-                           == route.route.target_authority_owner_generation
-                      && current.owner_lease_generation == target_owner_lease_generation;
-                    // The Store-confirmed Actor tenure fences this cache update.
-                    // Binding replacement belongs to the common installation path.
-                    if (!already_prepared
-                        && current.authority_owner_generation
-                             > route.route.previous_authority_owner_generation)
-                        return false;
-                }
             }
-            const auto target_actor = actor_ref_access_t::make (
-              node_rid_t::from_string (target_node.to_string ()),
-              found != _state->actors_by_id.end ()
-                ? std::string (actor_ref_access_t::actor_type (found->second.ref))
-                : std::string{},
-              route.actor.actor_id, route.actor.object_generation);
-            return static_cast<bool> (record_bound_session_route_on_lane (
-              _state, target_actor,
-              actor_bound_session_route_t{
-                session_owner, session_rid, route.actor.object_generation,
-                route.session_owner_node_generation, route.route.target_authority_owner_generation,
-                target_owner_lease_generation, route.binding_generation, 0, 0, true,
-                route.session_owner_id, route.session_owner_lease_generation},
-              {}));
-        });
-    }
-    catch (...) {
-        return false;
-    }
+        }
+        const auto target_actor = actor_ref_access_t::make (
+          node_rid_t::from_string (target_node.to_string ()),
+          found != _state->actors_by_id.end ()
+            ? std::string (actor_ref_access_t::actor_type (found->second.ref))
+            : std::string{},
+          route.actor.actor_id, route.actor.object_generation);
+        return static_cast<bool> (record_bound_session_route_on_lane (
+          _state, target_actor,
+          actor_bound_session_route_t{
+            session_owner, session_rid, route.actor.object_generation,
+            route.session_owner_node_generation, route.route.target_authority_owner_generation,
+            target_owner_lease_generation, route.binding_generation, 0, 0, true,
+            route.session_owner_id, route.session_owner_lease_generation},
+          {}));
+    });
 }
 
 void actor_gateway_runtime_t::unbind_session_stream (std::string actor_id,
@@ -3585,7 +3633,7 @@ void actor_gateway_runtime_t::on_bound_session_send (
 std::shared_ptr<detail::bound_session_delivery_fence_t>
 actor_gateway_runtime_t::begin_join_completion_delivery_fence (const actor_ref_t &actor_ref)
 {
-    auto fence = std::make_shared<detail::bound_session_delivery_fence_t> ();
+    auto fence = std::make_shared<detail::bound_session_delivery_fence_t> (_state);
     _state->sync ([&] {
         _state->join_completion_delivery_fences.insert_or_assign (
           join_completion_delivery_key (actor_ref), fence);

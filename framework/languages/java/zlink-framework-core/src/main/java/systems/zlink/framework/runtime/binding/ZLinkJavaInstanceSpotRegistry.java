@@ -25,13 +25,24 @@ import java.util.function.Supplier;
 final class ZLinkJavaInstanceSpotRegistry {
     private final ZLinkStateLane ingressLane;
     private final Executor applicationExecutor;
-    private final Map<String, BiFunction<String, Long, ZLinkBackendSpot>> factories =
-            new ConcurrentHashMap<>();
-    private final Map<String, InstanceSpotActivationHandler> hooks = new ConcurrentHashMap<>();
+    private final String meshName;
+
+    private record Registration(
+            BiFunction<String, Long, ZLinkBackendSpot> factory,
+            InstanceSpotActivationHandler hook,
+            systems.zlink.framework.runtime.internal.metrics.ZLinkInstanceSpotMetrics metrics) {}
+
+    private final Map<String, Registration> factories = new ConcurrentHashMap<>();
     private final Map<String, String> stableTypes = new ConcurrentHashMap<>();
     private final Map<String, ActivationOperation> activations = new ConcurrentHashMap<>();
 
     ZLinkJavaInstanceSpotRegistry(ZLinkStateLane ingressLane, Executor applicationExecutor) {
+        this(ingressLane, applicationExecutor, null);
+    }
+
+    ZLinkJavaInstanceSpotRegistry(
+            ZLinkStateLane ingressLane, Executor applicationExecutor, String meshName) {
+        this.meshName = meshName;
         this.ingressLane = Objects.requireNonNull(ingressLane, "ingressLane");
         this.applicationExecutor =
                 Objects.requireNonNull(applicationExecutor, "applicationExecutor");
@@ -49,11 +60,20 @@ final class ZLinkJavaInstanceSpotRegistry {
             BiFunction<String, Long, ZLinkBackendSpot> factory,
             InstanceSpotActivationHandler hook) {
         requireType(stableType);
-        if (factories.putIfAbsent(stableType, Objects.requireNonNull(factory, "factory")) != null) {
-            throw new IllegalStateException(
-                    "Instance Spot type is already registered: " + stableType);
-        }
-        hooks.put(stableType, Objects.requireNonNull(hook, "hook"));
+        factories.compute(
+                stableType,
+                (type, previous) -> {
+                    if (previous != null)
+                        throw new IllegalStateException(
+                                "Instance Spot type is already registered: " + stableType);
+                    return new Registration(
+                            Objects.requireNonNull(factory, "factory"),
+                            Objects.requireNonNull(hook, "hook"),
+                            meshName == null
+                                    ? null
+                                    : new systems.zlink.framework.runtime.internal.metrics
+                                            .ZLinkInstanceSpotMetrics(meshName, stableType));
+                });
     }
 
     CompletionStage<Activation> activate(
@@ -91,14 +111,44 @@ final class ZLinkJavaInstanceSpotRegistry {
     CompletionStage<Activation> activate(
             String spotId,
             String requestedType,
+            ZLinkServiceM6BWireCodec.InstanceRouteFence route,
+            long deadlineUnixMs,
+            BiFunction<ZLinkBackendSpot, CompletableFuture<Void>, CompletionStage<Void>>
+                    restoreFirst,
+            long payloadBytes) {
+        return activate(
+                spotId,
+                requestedType,
+                deadlineUnixMs,
+                () -> CompletableFuture.completedFuture(route),
+                restoreFirst,
+                payloadBytes);
+    }
+
+    CompletionStage<Activation> activate(
+            String spotId,
+            String requestedType,
             long deadlineUnixMs,
             Supplier<CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence>> authority,
             BiFunction<ZLinkBackendSpot, CompletableFuture<Void>, CompletionStage<Void>>
                     restoreFirst) {
+        return activate(spotId, requestedType, deadlineUnixMs, authority, restoreFirst, 0L);
+    }
+
+    CompletionStage<Activation> activate(
+            String spotId,
+            String requestedType,
+            long deadlineUnixMs,
+            Supplier<CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence>> authority,
+            BiFunction<ZLinkBackendSpot, CompletableFuture<Void>, CompletionStage<Void>>
+                    restoreFirst,
+            long payloadBytes) {
         Objects.requireNonNull(spotId, "spotId");
         String selected = selectType(spotId, requestedType);
         String recorded = stableTypes.putIfAbsent(spotId, selected);
         if (recorded != null && !recorded.equals(selected)) {
+            var metrics = factories.get(selected).metrics();
+            if (metrics != null) metrics.conflict("spot_type");
             return CompletableFuture.failedFuture(
                     new IllegalStateException(
                             "Instance Spot stable type does not match authority"));
@@ -116,7 +166,8 @@ final class ZLinkJavaInstanceSpotRegistry {
                                             authority,
                                             restoreFirst,
                                             candidate,
-                                            current);
+                                            current,
+                                            payloadBytes);
                             CompletableFuture.allOf(
                                             current == null
                                                     ? CompletableFuture.completedFuture(null)
@@ -142,7 +193,21 @@ final class ZLinkJavaInstanceSpotRegistry {
             BiFunction<ZLinkBackendSpot, CompletableFuture<Void>, CompletionStage<Void>>
                     restoreFirst,
             ActivationOperation candidate,
-            ActivationOperation current) {
+            ActivationOperation current,
+            long payloadBytes) {
+        var metrics = factories.get(selected).metrics();
+        boolean cold = current == null || !current.isDone();
+        long startedNanos = current == null && metrics != null ? System.nanoTime() : 0L;
+        CompletionStage<Activation> observed = candidate;
+        if (metrics != null && cold) {
+            metrics.retain(payloadBytes);
+            observed =
+                    candidate.whenComplete(
+                            (activation, failure) -> {
+                                metrics.release(payloadBytes);
+                                if (current == null) metrics.terminal(startedNanos, failure);
+                            });
+        }
         if (current != null) {
             var result = new CompletableFuture<Activation>();
             current.whenCompleteAsync(
@@ -189,6 +254,7 @@ final class ZLinkJavaInstanceSpotRegistry {
                                                 ZLinkBackendSpot spot =
                                                         factories
                                                                 .get(selected)
+                                                                .factory()
                                                                 .apply(
                                                                         spotId,
                                                                         route.objectGeneration());
@@ -202,7 +268,9 @@ final class ZLinkJavaInstanceSpotRegistry {
                                                             "Instance Spot factory returned a stale"
                                                                     + " generation");
                                                 }
-                                                return hooks.get(selected)
+                                                return factories
+                                                        .get(selected)
+                                                        .hook()
                                                         .activate(
                                                                 selected,
                                                                 route,
@@ -237,7 +305,9 @@ final class ZLinkJavaInstanceSpotRegistry {
                                                                                 selected, spot));
                                             },
                                             applicationExecutor);
-            hooks.get(selected)
+            factories
+                    .get(selected)
+                    .hook()
                     .admit(start)
                     .whenComplete(
                             (value, failure) -> {
@@ -250,7 +320,7 @@ final class ZLinkJavaInstanceSpotRegistry {
         } catch (RuntimeException | Error failure) {
             candidate.completeExceptionally(failure);
         }
-        return candidate.thenCompose(value -> firstTerminal.thenApply(ignored -> value));
+        return observed.thenCompose(value -> firstTerminal.thenApply(ignored -> value));
     }
 
     CompletionStage<Void> admitExisting(
@@ -258,14 +328,16 @@ final class ZLinkJavaInstanceSpotRegistry {
             ZLinkServiceM6BWireCodec.InstanceRouteFence currentRoute,
             ZLinkServiceM6BWireCodec.InstanceSpotMessage message,
             ZLinkBackendReceived received) {
-        InstanceSpotActivationHandler hook = hooks.get(stableType);
+        Registration registered = factories.get(stableType);
+        InstanceSpotActivationHandler hook = registered == null ? null : registered.hook();
         return hook == null ? null : hook.admitExisting(currentRoute, message, received);
     }
 
     CompletionStage<ZLinkServiceM6BWireCodec.InstanceRouteFence> reserve(
             ZLinkInstanceActivationRecoveryCodec.RecoveryEnvelope envelope,
             ZLinkAuthorityReadResult authority) {
-        InstanceSpotActivationHandler hook = hooks.get(envelope.stableType());
+        Registration registered = factories.get(envelope.stableType());
+        InstanceSpotActivationHandler hook = registered == null ? null : registered.hook();
         if (hook == null)
             return CompletableFuture.failedFuture(
                     new IllegalStateException("Instance type is not registered"));
@@ -276,12 +348,12 @@ final class ZLinkJavaInstanceSpotRegistry {
             String stableType,
             ZLinkServiceM6BWireCodec.InstanceRouteFence route,
             Throwable failure) {
-        return hooks.get(stableType).recovered(route, failure);
+        return factories.get(stableType).hook().recovered(route, failure);
     }
 
     CompletionStage<Void> completed(
             String stableType, ZLinkServiceM6BWireCodec.InstanceSpotMessage message) {
-        return hooks.get(stableType).completed(message);
+        return factories.get(stableType).hook().completed(message);
     }
 
     boolean close(String spotId, long generation) {
@@ -321,15 +393,23 @@ final class ZLinkJavaInstanceSpotRegistry {
                             current.join().spot().close();
                         });
         activations.clear();
+        factories
+                .values()
+                .forEach(
+                        registration -> {
+                            if (registration.metrics() != null) registration.metrics().close();
+                        });
         stableTypes.clear();
         factories.clear();
-        hooks.clear();
     }
 
     private String selectType(String spotId, String requestedType) {
         String stored = stableTypes.get(spotId);
         if (stored != null) {
             if (requestedType != null && !stored.equals(requestedType)) {
+                Registration registration = factories.get(requestedType);
+                if (registration != null && registration.metrics() != null)
+                    registration.metrics().conflict("spot_type");
                 throw new IllegalStateException(
                         "Instance Spot stable type does not match authority");
             }
