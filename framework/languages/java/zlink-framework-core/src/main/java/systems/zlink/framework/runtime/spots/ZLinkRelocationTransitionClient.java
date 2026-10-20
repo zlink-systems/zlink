@@ -1,9 +1,10 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.contracts.core.RoutingId;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.CompletionStage;
-import systems.zlink.contracts.core.RoutingId;
 
 /** Framework-private relocation transition boundary used by source schedulers. */
 interface ZLinkRelocationTransitionClient {
