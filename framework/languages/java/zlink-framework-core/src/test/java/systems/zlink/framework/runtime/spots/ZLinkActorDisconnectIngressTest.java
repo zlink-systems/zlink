@@ -20,12 +20,15 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceive
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -78,8 +81,12 @@ final class ZLinkActorDisconnectIngressTest {
                                     0,
                                     0,
                                     Message.from(
-                                            ZLinkActorSpotRoutePackets
-                                                    .SESSION_DISCONNECTED_PACKET_NAME),
+                                            ZLinkStreamHeaderCodec.encode(
+                                                    new ZLinkStreamHeader(
+                                                            ZLinkActorSpotRoutePackets
+                                                                    .SESSION_DISCONNECTED_PACKET_NAME,
+                                                            Map.of(),
+                                                            Optional.empty()))),
                                     true,
                                     null,
                                     null);
@@ -158,7 +165,13 @@ final class ZLinkActorDisconnectIngressTest {
                                     Optional.empty(),
                                     0,
                                     0,
-                                    Message.from("zlink.framework.actor.session_disconnected"),
+                                    Message.from(
+                                            ZLinkStreamHeaderCodec.encode(
+                                                    new ZLinkStreamHeader(
+                                                            ZLinkActorSpotRoutePackets
+                                                                    .SESSION_DISCONNECTED_PACKET_NAME,
+                                                            Map.of(),
+                                                            Optional.empty()))),
                                     true,
                                     null,
                                     null);
@@ -350,8 +363,12 @@ final class ZLinkActorDisconnectIngressTest {
                                 0,
                                 0,
                                 Message.from(
-                                        ZLinkActorSpotRoutePackets
-                                                .SESSION_DISCONNECTED_PACKET_NAME),
+                                        ZLinkStreamHeaderCodec.encode(
+                                                new ZLinkStreamHeader(
+                                                        ZLinkActorSpotRoutePackets
+                                                                .SESSION_DISCONNECTED_PACKET_NAME,
+                                                        Map.of(),
+                                                        Optional.empty()))),
                                 true,
                                 null,
                                 null);
