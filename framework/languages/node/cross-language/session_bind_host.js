@@ -137,16 +137,25 @@ async function command(value) {
     );
     return { kind: 'terminal', result: await pending.promise };
   }
-  if (value.kind === 'tombstone') {
+  if (value.kind === 'tombstone' || value.kind === 'register') {
     const correlation = 900n;
     const header = encodeBoundSessionBindHeader(
       correlation,
       { actor: target, ...authority },
       value.session,
-      { state: 'tombstone', retiredGeneration: BigInt(value.bindingGeneration) }
+      value.kind === 'register'
+        ? { state: 'active', generation: BigInt(value.bindingGeneration) }
+        : { state: 'tombstone', retiredGeneration: BigInt(value.bindingGeneration) }
     );
     const reply = await backend.runtime.requestService(value.rid, [header], 2000);
-    return { kind: 'terminal', result: decodeStatefulReply(reply[0], correlation, 'streamUnbind') };
+    return {
+      kind: 'terminal',
+      result: decodeStatefulReply(
+        reply[0],
+        correlation,
+        value.kind === 'register' ? 'streamBind' : 'streamUnbind'
+      )
+    };
   }
   throw new Error(`Unsupported fixture command: ${value.kind}`);
 }

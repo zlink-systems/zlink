@@ -152,6 +152,48 @@ public sealed partial class BoundSessionReplacementLifecycleTests
                 host.Runtime.TryGetActorBoundSessionForOutbound(actor.ActorId, out var replacement)
             );
             Assert.Equal(RoutingId.From("node-session-second"), replacement.SessionRid);
+            foreach (
+                var (session, generation, success) in new[]
+                {
+                    ("node-session-second", replacement.BindingGeneration, true),
+                    ("node-session-first", original.BindingGeneration, false),
+                    ("node-session-conflict", replacement.BindingGeneration, false),
+                }
+            )
+            {
+                var reply = await node.CommandAsync(
+                    new
+                    {
+                        kind = "register",
+                        rid,
+                        actorId = actor.ActorId,
+                        objectGeneration = actor.ObjectGeneration.ToString(),
+                        nodeGeneration = owner.NodeGeneration.ToString(),
+                        authority = actorAuthority.ToString(),
+                        lease = actorLease.ToString(),
+                        session,
+                        bindingGeneration = generation.ToString(),
+                    }
+                );
+                var terminal = reply.GetProperty("result");
+                Assert.Equal(success ? 0 : 105, terminal.GetProperty("terminalResult").GetInt32());
+                if (success)
+                {
+                    var tail = terminal.GetProperty("tail");
+                    Assert.Equal(
+                        generation.ToString(),
+                        tail.GetProperty("bindingGeneration").GetString()
+                    );
+                    Assert.Equal(
+                        actorAuthority.ToString(),
+                        tail.GetProperty("authorityOwnerGeneration").GetString()
+                    );
+                }
+                Assert.True(
+                    host.Runtime.TryGetActorBoundSessionForOutbound(actor.ActorId, out var retained)
+                );
+                Assert.Equal(replacement, retained);
+            }
             var retired = await node.CommandAsync(
                 new
                 {
