@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 
 namespace Zlink.Framework.Runtime.Host;
@@ -52,8 +51,11 @@ internal sealed class ZLinkFrameworkActorFacade(
     )
     {
         var effectiveDeadline =
-            absoluteDeadline ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
-        var deadline = Stopwatch.GetElapsedTime(0) + (effectiveDeadline - DateTimeOffset.UtcNow);
+            absoluteDeadline
+            ?? registration.TimeProvider.GetUtcNow() + registration.DefaultRequestTimeout;
+        var deadline =
+            registration.TimeProvider.GetElapsedTime(0)
+            + (effectiveDeadline - registration.TimeProvider.GetUtcNow());
         var state = getState();
         var actorState = actorSessionManager.GetOrCreateState(actor.Context.ActorId);
         var node = getActorSpotNode();
@@ -108,8 +110,9 @@ internal sealed class ZLinkFrameworkActorFacade(
         return await ZLinkActorRemoteJoiner
             .ExecuteWithDeadlineAsync(
                 JoinLocalActorCoreAsync,
-                ZLinkActorRemoteJoiner.RemainingTimeout(deadline.Monotonic),
-                cancellationToken
+                _remoteJoiner.RemainingTimeout(deadline.Monotonic),
+                cancellationToken,
+                registration.TimeProvider
             )
             .ConfigureAwait(false);
 
@@ -165,13 +168,17 @@ internal sealed class ZLinkFrameworkActorFacade(
                 "Actor Entry Spot Join requires the live MeshNode resolver."
             );
         var effectiveDeadline =
-            absoluteDeadline ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
-        var deadline = Stopwatch.GetElapsedTime(0) + (effectiveDeadline - DateTimeOffset.UtcNow);
+            absoluteDeadline
+            ?? registration.TimeProvider.GetUtcNow() + registration.DefaultRequestTimeout;
+        var deadline =
+            registration.TimeProvider.GetElapsedTime(0)
+            + (effectiveDeadline - registration.TimeProvider.GetUtcNow());
         var descriptors = await ZLinkActorRemoteJoiner
             .ExecuteWithDeadlineAsync(
                 token => resolver.ListLiveMeshNodesAsync(meshName, token),
-                ZLinkActorRemoteJoiner.RemainingTimeout(deadline),
-                cancellationToken
+                _remoteJoiner.RemainingTimeout(deadline),
+                cancellationToken,
+                registration.TimeProvider
             )
             .ConfigureAwait(false);
         var eligible = descriptors
@@ -205,8 +212,9 @@ internal sealed class ZLinkFrameworkActorFacade(
             return await ZLinkActorRemoteJoiner
                 .ExecuteWithDeadlineAsync(
                     token => _entrySpotJoin.JoinAsync(target.Rid, actor, request, token),
-                    ZLinkActorRemoteJoiner.RemainingTimeout(deadline),
-                    cancellationToken
+                    _remoteJoiner.RemainingTimeout(deadline),
+                    cancellationToken,
+                    registration.TimeProvider
                 )
                 .ConfigureAwait(false);
         }
