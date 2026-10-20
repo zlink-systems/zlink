@@ -14,6 +14,7 @@ using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Messaging;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
+using MailboxKey = Zlink.Framework.Runtime.Service.MeshMailboxKey;
 using OwnedMailbox = Zlink.Framework.Runtime.Service.ZLinkMeshNodeOwnedMailbox;
 using Peer = Zlink.Framework.Runtime.Service.ZLinkMeshPeer;
 using QueuedRecord = Zlink.Framework.Runtime.Service.ZLinkMeshQueuedRecord;
@@ -2690,62 +2691,52 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if ((domains & MeshReadyDomains.All) == 0)
             return ValueTask.FromResult(false);
 
-        var comparer = Comparer<(
-            MeshReadyDomains Domain,
-            MeshOwnerKind OwnerKind,
-            string Identity
-        )>.Create(
-            static (left, right) =>
-            {
-                var domainOrder = (
-                    left.Domain == MeshReadyDomains.Infrastructure ? 0 : 1
-                ).CompareTo(right.Domain == MeshReadyDomains.Infrastructure ? 0 : 1);
-                if (domainOrder != 0)
-                    return domainOrder;
-                var ownerOrder = Comparer<MeshOwnerKind>.Default.Compare(
-                    left.OwnerKind,
-                    right.OwnerKind
-                );
-                return ownerOrder != 0
-                    ? ownerOrder
-                    : StringComparer.Ordinal.Compare(left.Identity, right.Identity);
-            }
-        );
         Volatile.Write(ref _readyPosted, 0);
-        foreach (
-            var entry in _readyMailboxes
-                .Where(entry => entry.Value && (entry.Key.Domain & domains) != 0)
-                .OrderBy(
-                    static entry => (entry.Key.Domain, entry.Key.OwnerKind, entry.Key.Identity),
-                    comparer
-                )
-        )
+        var first = batch.Count;
+        var count = first;
+        try
         {
-            if (batch.Count >= batch.MaximumRecords)
-                return ValueTask.FromResult(true);
-            if (!_readyMailboxes.TryUpdate(entry.Key, false, true))
-                continue;
-            if (!_ownedMailboxes.TryGetValue(entry.Key, out var mailbox))
-                continue;
-            batch.Add(
-                new MeshReadyRecord(
-                    entry.Key.OwnerKind,
-                    entry.Key.Domain,
-                    entry.Key.SpotId,
-                    entry.Key.Actor
-                ),
-                new MeshClaim
+            foreach (var entry in _readyMailboxes)
+                if (entry.Value && (entry.Key.Domain & domains) != 0)
+                    batch.AddCandidate(entry.Key);
+
+            // Reuse the caller's batch for candidates. Keep the original ordinal
+            // as the final key so the in-place sort preserves equal-key order.
+            var entries = batch.Entries;
+            entries[first..].Sort();
+            for (var index = first; index < entries.Length; index++)
+            {
+                if (count >= batch.MaximumRecords)
+                    return ValueTask.FromResult(true);
+                var key = entries[index].Key;
+                if (!_readyMailboxes.TryUpdate(key, false, true))
+                    continue;
+                // Keep the captured mailbox inside this scope: a full output
+                // batch must return before the compiler allocates its closure.
                 {
-                    Receiver = (receiveBatch, receiveFlags) =>
-                        mailbox.ClaimAndDrainAsync(
-                            receiveBatch,
-                            Math.Min(ReceiveBatchSize, receiveBatch.MaximumRecords)
-                        ),
-                    Releaser = () => mailbox.Release(),
+                    if (!_ownedMailboxes.TryGetValue(key, out var mailbox))
+                        continue;
+                    entries[count++] = new(
+                        key,
+                        new MeshClaim
+                        {
+                            Receiver = (receiveBatch, receiveFlags) =>
+                                mailbox.ClaimAndDrainAsync(
+                                    receiveBatch,
+                                    Math.Min(ReceiveBatchSize, receiveBatch.MaximumRecords)
+                                ),
+                            Releaser = () => mailbox.Release(),
+                        },
+                        index
+                    );
                 }
-            );
+            }
+            return ValueTask.FromResult(false);
         }
-        return ValueTask.FromResult(false);
+        finally
+        {
+            batch.Truncate(count);
+        }
     }
 
     public ISpot CreateSpot()
@@ -5205,7 +5196,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     : 0
             );
             EnqueueOwned(
-                MailboxKey.ForActor(actor, MeshReadyDomains.Application),
+                MailboxKey.ForActor(actor.Ref, MeshReadyDomains.Application),
                 record,
                 retained,
                 requestAdmission: operation?.RequestAdmission
@@ -8477,7 +8468,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 return false;
             }
             admittedActor = actor;
-            owner = MailboxKey.ForActor(actor, MeshReadyDomains.Application);
+            owner = MailboxKey.ForActor(actor.Ref, MeshReadyDomains.Application);
             kind = request ? MeshRecordKind.ActorRequest : MeshRecordKind.ActorSend;
             operationKind = MeshOperationKind.ActorRequest;
         }
@@ -13542,39 +13533,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         var delta = (long)Math.Ceiling(duration.TotalSeconds * Stopwatch.Frequency);
         return checked(timestamp + delta);
-    }
-
-    private readonly record struct MailboxKey(
-        MeshOwnerKind OwnerKind,
-        string Identity,
-        ulong Generation,
-        MeshReadyDomains Domain,
-        string SpotId,
-        ActorRef Actor
-    )
-    {
-        internal static MailboxKey ForNode(MeshReadyDomains domain, string? channelName = null) =>
-            new(MeshOwnerKind.Node, channelName ?? string.Empty, 0, domain, string.Empty, default);
-
-        internal static MailboxKey ForSpot(ZLinkManagedSpot spot, MeshReadyDomains domain) =>
-            new(
-                MeshOwnerKind.Spot,
-                spot.SpotId,
-                spot.LifecycleGeneration,
-                domain,
-                spot.SpotId,
-                default
-            );
-
-        internal static MailboxKey ForActor(ManagedActor actor, MeshReadyDomains domain) =>
-            new(
-                MeshOwnerKind.Actor,
-                actor.Ref.ActorId,
-                actor.Ref.ObjectGeneration,
-                domain,
-                string.Empty,
-                actor.Ref
-            );
     }
 
     private readonly record struct ObservedSpotAuthorityKey(RoutingId NodeRid, string SpotId);

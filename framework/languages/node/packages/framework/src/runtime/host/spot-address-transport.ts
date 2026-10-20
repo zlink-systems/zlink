@@ -1,3 +1,4 @@
+import { mapZLinkRequestReply } from '../messaging/request-result';
 import type { ServiceInstanceColdActivationTarget } from '../foundation/service-stateful-wire-codec';
 import { ZLinkFrameworkException, ZLinkSpotKind, type RoutingId } from '../../contracts';
 import {
@@ -332,13 +333,15 @@ export class ZLinkHostSpotAddressTransport implements ZLinkSpotAddressTransport 
       existing.targetNodeRid
     );
     const reply = await awaitWithAbort(
-      this.options.routed.requestToSpot<TReply>(existing, request, {
-        instanceSpot: call.instanceSpot,
-        timeoutMs: deadline.requireRemaining(),
-        signal: deadline.signal,
-        metadata: call.metadata,
-        onAdmitted: call.onAdmitted
-      }),
+      mapZLinkRequestReply(
+        this.options.routed.requestToSpot<TReply>(existing, request, {
+          instanceSpot: call.instanceSpot,
+          timeoutMs: deadline.requireRemaining(),
+          signal: deadline.signal,
+          metadata: call.metadata,
+          onAdmitted: call.onAdmitted
+        })
+      ),
       deadline.signal
     );
     this.traceInstanceAddress(

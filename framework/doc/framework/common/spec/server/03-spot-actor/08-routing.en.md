@@ -390,14 +390,9 @@ initial route. An overload where the source pre-queries the current route
 from the Location Store before bind, or takes a local Actor instance, isn't
 provided.
 
-The Actor owner checks whether the following values match the current
-state, registers a binding generation, and returns a terminal reply.
-
-- `ActorId` and `ObjectGeneration`
-- Target `NodeGeneration`
-- `AuthorityOwnerGeneration`
-- Current owner lease
-- Session owner and Session lifecycle identity
+The Actor owner's bind admission, binding generation registration, and
+terminal reply are defined by
+[Session and Actor binding §5](../04-session/02-session-actor-binding.en.md#5-bind-and-relay).
 
 Once bind succeeds, the Session owner stores the following information per
 Actor in one [binding route](../00-foundation/02-glossary.en.md#binding-route).
@@ -410,15 +405,13 @@ Actor in one [binding route](../00-foundation/02-glossary.en.md#binding-route).
 | Session owner RID/lifecycle generation, binding generation/token | Rejects a late message from a previous connection or a replaced binding. |
 | [Session sequence](../00-foundation/02-glossary.en.md#session-sequence) — the value marking the order in which one STREAM session accepted ingress messages | Preserves the order of messages accepted on the same Session. |
 
-When rebinding to a different owner or a different Actor generation, the
-target Actor owner registers the new identity, then submits a tombstone to
-the previous owner. Only after receiving the previous owner's ACK does
-it return the bind terminal reply. The Session owner keeps the existing
-route until the terminal reply, and atomically switches to the new route
-afterward. So the Session owner doesn't keep a separate durable retry
-journal after switching, and doesn't record the binding route in the
-Location Store or Relocation Store. On an atomic replacement under the same
-owner, the previous identity's tombstone must not remove the new identity.
+Rebind registration, the terminal reply, and the notification to the
+previous Session are defined by
+[Session and Actor binding §6](../04-session/02-session-actor-binding.en.md#6-rebind-and-replacing-the-previous-connection).
+The Session owner keeps the existing route until the terminal reply, and
+atomically switches to the new route afterward. So the Session owner doesn't
+keep a separate durable retry journal after switching, and doesn't record the
+binding route in the Location Store or Relocation Store.
 
 ### 3.2 Sending a Message Using the Stored Route
 

@@ -27,6 +27,7 @@ public final class ZLinkServiceLivenessRegistry {
     // only moves a peer's deadline later, so the value stays an early bound.
     private volatile long nextDueNanos;
     private volatile boolean nextDueKnown;
+    private volatile Long admissionActivityNanos;
 
     public ZLinkServiceLivenessRegistry() {
         this(DEFAULT_PROBE_INTERVAL, DEFAULT_PEER_TIMEOUT);
@@ -161,6 +162,35 @@ public final class ZLinkServiceLivenessRegistry {
                 : new Tick(
                         probes == null ? List.of() : List.copyOf(probes),
                         timedOut == null ? List.of() : List.copyOf(timedOut));
+    }
+
+    /** MeshNode §7.1: admission reuses the liveness management deadline. */
+    public void setAdmissionPending(boolean pending, long nowNanos) {
+        if (pending == (admissionActivityNanos != null)) return;
+        inStateLane(
+                () -> {
+                    if (!pending) admissionActivityNanos = null;
+                    else if (admissionActivityNanos == null) admissionActivityNanos = nowNanos;
+                    return null;
+                });
+    }
+
+    public boolean tickAdmission(long nowNanos) {
+        Long activity = admissionActivityNanos;
+        if (activity == null || nowNanos - activity < probeIntervalNanos) return false;
+        return inStateLane(
+                () -> {
+                    Long current = admissionActivityNanos;
+                    if (current == null || nowNanos - current < probeIntervalNanos) return false;
+                    admissionActivityNanos = nowNanos;
+                    return true;
+                });
+    }
+
+    public long nextDeadlineNanos(long nowNanos) {
+        long due = nextDueKnown ? nextDueNanos : nowNanos;
+        Long activity = admissionActivityNanos;
+        return activity == null ? due : earlier(due, addExact(activity, probeIntervalNanos));
     }
 
     private static long earlier(long first, long second) {
