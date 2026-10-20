@@ -19,6 +19,8 @@ import type { ZLinkRuntimeAdmissionGate } from '../admission';
 import type { ZLinkActivationAdmission } from '../activation-admission';
 
 export interface ZLinkActorJoinRuntimeResult<TReply> {
+  /** Relay-ready transferred completion; this continuation only releases source work. */
+  readonly sourceCleanup?: () => Promise<void>;
   readonly accepted: boolean;
   readonly actor?: import('../../contracts').ActorRef;
   readonly reply?: TReply;

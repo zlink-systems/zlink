@@ -471,6 +471,10 @@ export class ZLinkLocalNativeActorJoin {
       admission.parts[0]?.close();
       throw error;
     }
+    if (relocated.sourceCleanup !== undefined) {
+      admission.parts[0]?.close();
+      return { accepted: false, sourceCleanup: relocated.sourceCleanup };
+    }
     state.setNativeActorRef(relocated.actorRef);
     if (entrySpot) {
       state.clearJoinedSpot();
