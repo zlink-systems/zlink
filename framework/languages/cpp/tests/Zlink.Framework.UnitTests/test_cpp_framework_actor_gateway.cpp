@@ -6576,11 +6576,12 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation,
     runtime::host::pending_operation_t native_operation;
     auto native_completion = native_operation.completion->task ();
     const auto native_terminals = std::make_shared<std::atomic_int> (0);
-    const auto native_terminal_observed = std::make_shared<task_completion_source_t<void>> ();
+    const auto native_terminal_observed =
+      std::make_shared<task_completion_source_t<runtime::host::operation_completion_t>> ();
     detail::observe_task_terminal (
-      native_completion, [native_terminals, native_terminal_observed] (const auto &) {
+      native_completion, [native_terminals, native_terminal_observed] (const auto &result) {
           native_terminals->fetch_add (1, std::memory_order_acq_rel);
-          native_terminal_observed->complete (result_t<void>::success ());
+          native_terminal_observed->complete (result);
       });
     using operation_clock_t = runtime::foundation::operation_registry_t::clock_t;
     operation_clock_t::time_point registered_before;
@@ -6709,15 +6710,30 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation,
                   != 0
                 || native_completion.await_ready ())
                 return 14;
-            if (fixture.reply_host->transport ().expire_requests (registered_after
-                                                                  + std::chrono::seconds (30))
-                != 1)
+            // Only the observation includes the wheel's 1ms rounding bound;
+            // the request's registered timeout remains 30s.
+            const auto expiry_time =
+              registered_after + std::chrono::seconds (30) + std::chrono::milliseconds (1);
+            const auto expiry_count =
+              fixture.reply_host->transport ().expire_requests (expiry_time);
+            if (expiry_count != 1) {
+                std::cerr << "native deadline expiry count=" << expiry_count
+                          << " registration_span_ns="
+                          << std::chrono::duration_cast<std::chrono::nanoseconds> (
+                               registered_after - registered_before)
+                               .count ()
+                          << " observation_ticks=" << expiry_time.time_since_epoch ().count ()
+                          << " elapsed_since_registration_ns="
+                          << std::chrono::duration_cast<std::chrono::nanoseconds> (
+                               operation_clock_t::now () - registered_after)
+                               .count ()
+                          << '\n';
                 return 15;
-            const auto terminal = finite_task_result (std::move (native_completion));
-            const auto observed = finite_task_result (native_terminal_observed->task ());
+            }
+            const auto terminal = finite_task_result (native_terminal_observed->task ());
             if (!terminal || *terminal
-                || terminal->error_kind () != framework_error_kind_t::deadline_exceeded || !observed
-                || !*observed || native_operation.id != original_operation
+                || terminal->error_kind () != framework_error_kind_t::deadline_exceeded
+                || native_operation.id != original_operation
                 || record.operation_id != original_operation
                 || record.reply_route_id != original_reply_route
                 || native_terminals->load (std::memory_order_acquire) != 1)
@@ -6729,18 +6745,15 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation,
                        && native_terminals->load (std::memory_order_acquire) == 1
                        && fixture.probe->calls.load (std::memory_order_acquire) == 0
                        && spots.cleanup_expired_actor_admissions_at (expired_at) == 0
-                       && fixture.reply_host->transport ().expire_requests (
-                            registered_after + std::chrono::seconds (30))
-                            == 0
+                       && fixture.reply_host->transport ().expire_requests (expiry_time) == 0
                        && node->lane.run ([&] { return node->pending_handoff_requests.empty (); })
                             .get ()
                      ? 0
                      : 17;
         }
         spots.cancel_local_actor_handoff (actor);
-        const auto terminal = finite_task_result (std::move (native_completion));
-        const auto observed = finite_task_result (native_terminal_observed->task ());
-        if (!terminal || !*terminal || !observed || !*observed
+        const auto terminal = finite_task_result (native_terminal_observed->task ());
+        if (!terminal || !*terminal
             || terminal->value ().record.operation_id != native_operation.id)
             return 12;
         const auto native_reply =

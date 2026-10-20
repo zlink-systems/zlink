@@ -674,10 +674,10 @@ task_t<bool> settle_handoff_packet (std::shared_ptr<detail::spot_node_builder_st
             co_return record->complete_native (std::nullopt);
         auto header = runtime::stateful::with_accepted_application (
           *record->payload, [] (auto, const auto &application) {
-              return runtime::messaging::envelope_codec_t{}.decode_header (
+              return detail::decode_actor_packet_header (
                 runtime::messaging::message_parts_t (
                   runtime::protocol::decode_application_parts (application)),
-                false);
+                detail::stream_message_kind_t::request, false);
           });
         if (!header)
             std::rethrow_exception (header.exception ());
