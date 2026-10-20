@@ -566,72 +566,48 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     }
 
     private CompletionStage<SpotTransportAddress> resolveJoinTarget() {
-        CompletionStage<SpotTransportAddress> resolved =
-                internalRouteChannel == null
-                        ? explicitRouterChannelId != null && !explicitRouterChannelId.isBlank()
-                                ? CompletableFuture.completedFuture(
-                                        new SpotTransportAddress(
-                                                explicitRouterChannelId,
-                                                explicitTargetNode,
-                                                spotId,
-                                                0L,
-                                                0L,
-                                                ZLinkSpotKind.ENTRY))
-                                : resolveHandle(services.remoteAddressResolver(), spotId)
-                                        .thenCompose(services.remoteAddressResolver()::resolve)
-                                        .thenApply(
-                                                address ->
-                                                        address.map(
-                                                                value ->
-                                                                        explicitTargetNode == null
-                                                                                ? value
-                                                                                : new SpotTransportAddress(
-                                                                                        value
-                                                                                                .routerChannelId(),
-                                                                                        explicitTargetNode,
-                                                                                        spotId,
-                                                                                        value
-                                                                                                .spotGeneration(),
-                                                                                        value
-                                                                                                .targetNodeGeneration(),
-                                                                                        value
-                                                                                                .authorityOwnerGeneration(),
-                                                                                        value
-                                                                                                .ownerLeaseGeneration(),
-                                                                                        value
-                                                                                                .spotKind())))
-                                        .thenApply(
-                                                address ->
-                                                        address.orElseThrow(
-                                                                () ->
-                                                                        new ZLinkFrameworkException(
-                                                                                ZLinkFrameworkErrorKind
-                                                                                        .UNAVAILABLE,
-                                                                                "SPOT transport"
-                                                                                        + " address was"
-                                                                                        + " not found: "
-                                                                                        + spotId)))
-                        : resolveRemoteAddress(spotId)
-                                .thenApply(
-                                        address -> {
-                                            if (!internalTargetNode.equals(
-                                                    address.targetNodeRid())) {
-                                                throw new ZLinkConfigurationException(
-                                                        "resolved drain target does not match"
-                                                                + " selected node: "
-                                                                + internalTargetNode);
-                                            }
-                                            return new SpotTransportAddress(
-                                                    internalRouteChannel,
-                                                    address.targetNodeRid(),
-                                                    address.spotId(),
-                                                    address.spotGeneration(),
-                                                    address.targetNodeGeneration(),
-                                                    address.authorityOwnerGeneration(),
-                                                    address.ownerLeaseGeneration(),
-                                                    address.spotKind());
-                                        });
-        return resolved;
+        if (internalRouteChannel == null
+                && explicitRouterChannelId != null
+                && !explicitRouterChannelId.isBlank()) {
+            return CompletableFuture.completedFuture(
+                    new SpotTransportAddress(
+                            explicitRouterChannelId,
+                            explicitTargetNode,
+                            spotId,
+                            0L,
+                            0L,
+                            ZLinkSpotKind.ENTRY));
+        }
+        return resolveRemoteAddress(spotId)
+                .thenApply(
+                        address -> {
+                            if (internalRouteChannel != null) {
+                                if (!internalTargetNode.equals(address.targetNodeRid())) {
+                                    throw new ZLinkConfigurationException(
+                                            "resolved drain target does not match selected node: "
+                                                    + internalTargetNode);
+                                }
+                                return new SpotTransportAddress(
+                                        internalRouteChannel,
+                                        address.targetNodeRid(),
+                                        address.spotId(),
+                                        address.spotGeneration(),
+                                        address.targetNodeGeneration(),
+                                        address.authorityOwnerGeneration(),
+                                        address.ownerLeaseGeneration(),
+                                        address.spotKind());
+                            }
+                            if (explicitTargetNode == null) return address;
+                            return new SpotTransportAddress(
+                                    address.routerChannelId(),
+                                    explicitTargetNode,
+                                    spotId,
+                                    address.spotGeneration(),
+                                    address.targetNodeGeneration(),
+                                    address.authorityOwnerGeneration(),
+                                    address.ownerLeaseGeneration(),
+                                    address.spotKind());
+                        });
     }
 
     private CompletionStage<ZLinkActorJoinOutcome> joinRemoteRoutedSpot(

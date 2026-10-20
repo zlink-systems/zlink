@@ -43,6 +43,7 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -127,6 +128,26 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
 
     @Test
     void sameNodeJoinSelectsLocalAfterTargetAppearsDuringResolution() throws Exception {
+        assertResolvedOwnerSnapshot(OwnerSnapshot.COMPLETE);
+    }
+
+    @Test
+    void joinRejectsAnOwnerSnapshotWithoutANodeBeforeSelectingThePath() throws Exception {
+        assertResolvedOwnerSnapshot(OwnerSnapshot.MISSING_NODE);
+    }
+
+    @Test
+    void joinRejectsAnOwnerSnapshotWithoutAGenerationBeforeSelectingThePath() throws Exception {
+        assertResolvedOwnerSnapshot(OwnerSnapshot.MISSING_GENERATION);
+    }
+
+    private enum OwnerSnapshot {
+        COMPLETE,
+        MISSING_NODE,
+        MISSING_GENERATION
+    }
+
+    private void assertResolvedOwnerSnapshot(OwnerSnapshot snapshot) throws Exception {
         PLAYER_CONTEXT.set(null);
         resolvedRoom = null;
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
@@ -156,98 +177,143 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
                     assertInstanceOf(
                             ZLinkActorRuntime.DefaultActorContext.class, PLAYER_CONTEXT.get());
             var actors = (ZLinkActorRuntime) runtime.actorManager();
-            var routes =
+            try (var routes =
                     new ZLinkStoreLocationResolvers(
                             ZLinkRegisteredLocationStores.fromUnified(
                                     new ZLinkProviderLocationRepository(store)),
-                            new ZLinkLocationOptions());
-            var handles =
-                    new ZLinkStoreSpotHandleResolver(
-                            new ZLinkStoreLocationResolvers.AddressResolvers(
-                                    List.of("entry-join"), routes));
-            var resolutions = new AtomicInteger();
-            class Resolver implements SpotHandleResolver, SpotTransportAddressResolver {
-                public CompletionStage<Optional<SpotHandle>> resolveSpotHandle(String spotId) {
-                    resolutions.incrementAndGet();
-                    return runtime.spotManager()
-                            .getOrCreate(spotId, "resolved-room")
-                            .submit()
-                            .thenCompose(ignored -> handles.resolveSpotHandle(spotId));
-                }
+                            new ZLinkLocationOptions())) {
+                var handles =
+                        new ZLinkStoreSpotHandleResolver(
+                                new ZLinkStoreLocationResolvers.AddressResolvers(
+                                        List.of("entry-join"), routes));
+                var resolutions = new AtomicInteger();
+                class Resolver implements SpotHandleResolver, SpotTransportAddressResolver {
+                    public CompletionStage<Optional<SpotHandle>> resolveSpotHandle(String spotId) {
+                        resolutions.incrementAndGet();
+                        return runtime.spotManager()
+                                .getOrCreate(spotId, "resolved-room")
+                                .submit()
+                                .thenCompose(ignored -> handles.resolveSpotHandle(spotId));
+                    }
 
-                public CompletionStage<Optional<SpotHandle>> resolveSpotHandle(
-                        String mesh, String spotId) {
-                    return resolveSpotHandle(spotId);
-                }
+                    public CompletionStage<Optional<SpotHandle>> resolveSpotHandle(
+                            String mesh, String spotId) {
+                        return resolveSpotHandle(spotId);
+                    }
 
-                public CompletionStage<Optional<SpotTransportAddress>> resolve(String spotId) {
-                    return handles.resolve(spotId);
+                    public CompletionStage<Optional<SpotTransportAddress>> resolve(String spotId) {
+                        return handles.resolve(spotId)
+                                .thenApply(
+                                        address ->
+                                                address.map(
+                                                        value ->
+                                                                new SpotTransportAddress(
+                                                                        value.routerChannelId(),
+                                                                        snapshot
+                                                                                        == OwnerSnapshot
+                                                                                                .MISSING_NODE
+                                                                                ? null
+                                                                                : value
+                                                                                        .targetNodeRid(),
+                                                                        value.spotId(),
+                                                                        snapshot
+                                                                                        == OwnerSnapshot
+                                                                                                .MISSING_GENERATION
+                                                                                ? 0L
+                                                                                : value
+                                                                                        .spotGeneration(),
+                                                                        value
+                                                                                .targetNodeGeneration(),
+                                                                        value
+                                                                                .authorityOwnerGeneration(),
+                                                                        value
+                                                                                .ownerLeaseGeneration(),
+                                                                        value.spotKind())));
+                    }
                 }
+                var transports = new AtomicInteger();
+                var canonical =
+                        (ZLinkInternalMeshNode)
+                                Proxy.newProxyInstance(
+                                        ZLinkInternalMeshNode.class.getClassLoader(),
+                                        new Class<?>[] {ZLinkInternalMeshNode.class},
+                                        (proxy, method, args) -> {
+                                            transports.incrementAndGet();
+                                            throw new AssertionError(
+                                                    "Same-node Join reached " + method.getName());
+                                        });
+                var entry =
+                        (ZLinkBackendSpot)
+                                Proxy.newProxyInstance(
+                                        ZLinkBackendSpot.class.getClassLoader(),
+                                        new Class<?>[] {ZLinkBackendSpot.class},
+                                        (proxy, method, args) -> {
+                                            if (method.getName().equals("rememberSpotAuthority"))
+                                                return null;
+                                            throw new UnsupportedOperationException(
+                                                    method.getName());
+                                        });
+                var sourceNode =
+                        (ZLinkInternalSpotNode)
+                                Proxy.newProxyInstance(
+                                        ZLinkInternalSpotNode.class.getClassLoader(),
+                                        new Class<?>[] {ZLinkInternalSpotNode.class},
+                                        (proxy, method, args) -> {
+                                            if (method.getName().equals("entrySpot")) return entry;
+                                            if (method.getName().equals("routingId"))
+                                                return context.actorRef().nodeRid();
+                                            throw new UnsupportedOperationException(
+                                                    method.getName());
+                                        });
+                var services =
+                        new ZLinkActorSpotJoinCall.Services(
+                                sourceNode,
+                                ignored -> resolvedRoom,
+                                new Resolver(),
+                                null,
+                                (address, parts, timeout, internal) -> {
+                                    transports.incrementAndGet();
+                                    return CompletableFuture.failedFuture(
+                                            new AssertionError("Fallback transport"));
+                                },
+                                canonical,
+                                ignored -> "player",
+                                null,
+                                null,
+                                actors,
+                                null);
+                var initialSpotId = context.spotId();
+                var outcome =
+                        new ZLinkActorSpotJoinCall(
+                                        context,
+                                        "resolved-room",
+                                        Message.from(new byte[0]),
+                                        Duration.ofSeconds(3),
+                                        services)
+                                .execute()
+                                .toCompletableFuture();
+                if (snapshot == OwnerSnapshot.COMPLETE) {
+                    assertInstanceOf(
+                            ZLinkActorJoinOutcome.Accepted.class, outcome.get(5, TimeUnit.SECONDS));
+                    assertEquals("resolved-room", context.spotId().orElseThrow());
+                } else {
+                    var failure =
+                            assertThrows(
+                                    ExecutionException.class,
+                                    () -> outcome.get(5, TimeUnit.SECONDS));
+                    var configuration =
+                            assertInstanceOf(
+                                    systems.zlink.framework.errors.ZLinkConfigurationException
+                                            .class,
+                                    failure.getCause());
+                    assertEquals(
+                            "SPOT remote address resolver returned an incomplete owner snapshot: resolved-room",
+                            configuration.getMessage());
+                    assertEquals(initialSpotId, context.spotId());
+                }
+                assertEquals(1, resolutions.get());
+                assertEquals(0, transports.get());
             }
-            var transports = new AtomicInteger();
-            var canonical =
-                    (ZLinkInternalMeshNode)
-                            Proxy.newProxyInstance(
-                                    ZLinkInternalMeshNode.class.getClassLoader(),
-                                    new Class<?>[] {ZLinkInternalMeshNode.class},
-                                    (proxy, method, args) -> {
-                                        transports.incrementAndGet();
-                                        throw new AssertionError(
-                                                "Same-node Join reached " + method.getName());
-                                    });
-            var entry =
-                    (ZLinkBackendSpot)
-                            Proxy.newProxyInstance(
-                                    ZLinkBackendSpot.class.getClassLoader(),
-                                    new Class<?>[] {ZLinkBackendSpot.class},
-                                    (proxy, method, args) -> {
-                                        if (method.getName().equals("rememberSpotAuthority"))
-                                            return null;
-                                        throw new UnsupportedOperationException(method.getName());
-                                    });
-            var sourceNode =
-                    (ZLinkInternalSpotNode)
-                            Proxy.newProxyInstance(
-                                    ZLinkInternalSpotNode.class.getClassLoader(),
-                                    new Class<?>[] {ZLinkInternalSpotNode.class},
-                                    (proxy, method, args) -> {
-                                        if (method.getName().equals("entrySpot")) return entry;
-                                        if (method.getName().equals("routingId"))
-                                            return context.actorRef().nodeRid();
-                                        throw new UnsupportedOperationException(method.getName());
-                                    });
-            var services =
-                    new ZLinkActorSpotJoinCall.Services(
-                            sourceNode,
-                            ignored -> resolvedRoom,
-                            new Resolver(),
-                            null,
-                            (address, parts, timeout, internal) -> {
-                                transports.incrementAndGet();
-                                return CompletableFuture.failedFuture(
-                                        new AssertionError("Fallback transport"));
-                            },
-                            canonical,
-                            ignored -> "player",
-                            null,
-                            null,
-                            actors,
-                            null);
-            var result =
-                    new ZLinkActorSpotJoinCall(
-                                    context,
-                                    "resolved-room",
-                                    Message.from(new byte[0]),
-                                    Duration.ofSeconds(3),
-                                    services)
-                            .execute()
-                            .toCompletableFuture()
-                            .get(5, TimeUnit.SECONDS);
-            assertInstanceOf(ZLinkActorJoinOutcome.Accepted.class, result);
-            assertEquals("resolved-room", context.spotId().orElseThrow());
-            assertEquals(1, resolutions.get());
-            assertEquals(0, transports.get());
-            routes.close();
         }
     }
 
