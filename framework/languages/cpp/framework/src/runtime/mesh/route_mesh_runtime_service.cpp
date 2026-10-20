@@ -121,6 +121,7 @@ struct route_mesh_runtime_service_t::state_t
     location_runtime_query_t *location_runtime = nullptr;
     location_repository_t *location_store = nullptr;
     std::shared_ptr<detail::monitoring_runtime_state_t> monitoring;
+    std::function<framework_runtime_state_t ()> host_state;
     mutable std::mutex drain_mutex;
     std::optional<std::chrono::system_clock::time_point> drain_deadline;
     bool work_sealed = false;
@@ -314,12 +315,14 @@ route_mesh_runtime_service_t::route_mesh_runtime_service_t (
   std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> nodes,
   location_runtime_query_t *location_runtime,
   location_repository_t *location_store,
-  std::shared_ptr<detail::monitoring_runtime_state_t> monitoring) :
+  std::shared_ptr<detail::monitoring_runtime_state_t> monitoring,
+  std::function<framework_runtime_state_t ()> host_state) :
     _state (std::make_shared<state_t> ())
 {
     _state->location_runtime = location_runtime;
     _state->location_store = location_store;
     _state->monitoring = std::move (monitoring);
+    _state->host_state = std::move (host_state);
     for (auto &node : nodes)
         _state->hubs.emplace (node->mesh_name (), std::make_shared<state_t::hub_t> (node));
 }
@@ -347,9 +350,8 @@ void route_mesh_runtime_service_t::start ()
           });
         hub->stopped.store (false, std::memory_order_release);
         const auto state = _state;
-        // Prime the descriptor cache before exposing the runtime. Snapshot
-        // callers must see the initial local placement data without forcing a
-        // Store read on every query.
+        // Prime Store capacity and remote descriptor observations before
+        // exposing the runtime, without a Store read on every query.
         state->poll_location_descriptors (*hub);
         hub->pump = std::thread ([state, hub] {
             while (!hub->stopped.load (std::memory_order_acquire)) {
@@ -503,12 +505,10 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
                     });
     const auto mapped_state =
       hub->stopped.load (std::memory_order_acquire) ? topology_state_t::stopped
-      : local_location != location_descriptors.end ()
-        ? detail::topology_state_for_host (local_location->state, transport_state)
-        : transport_state;
+      : state->host_state ? detail::topology_state_for_host (state->host_state (), transport_state)
+                          : transport_state;
     const auto local_role =
-      local_location != location_descriptors.end ()                   ? local_location->object_role
-      : descriptor.object_role == mesh::service_object_role_t::client ? object_role_t::client
+      descriptor.object_role == mesh::service_object_role_t::client   ? object_role_t::client
       : descriptor.object_role == mesh::service_object_role_t::server ? object_role_t::server
                                                                       : object_role_t::none;
     std::map<std::string, int> local_channels;
@@ -554,22 +554,14 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
     }
 
     mesh_node_descriptor_t placement;
-    placement.mesh_name = mesh_name;
-    placement.rid = node_rid;
-    placement.lifecycle_generation = descriptor.lifecycle_generation;
-    placement.descriptor_revision = descriptor.descriptor_revision;
-    placement.endpoint = descriptor.advertised_endpoint;
-    placement.object_role =
-      descriptor.object_role == mesh::service_object_role_t::client   ? object_role_t::client
-      : descriptor.object_role == mesh::service_object_role_t::server ? object_role_t::server
-                                                                      : object_role_t::none;
+    placement.object_role = local_role;
     placement.placement_weight = descriptor.placement_weight;
     placement.capacity.actors.limit = actor_limit;
     placement.capacity.spots.limit = spot_limit;
-    placement.activation_concurrency.limit = hub->node->activation_admission ().limit ();
-    placement.activation_concurrency.active = hub->node->activation_admission ().active ();
+    // Local descriptor values belong to the runtime. Store observations only
+    // contribute the capacity reservation projection (MeshNode §5.1).
     if (local_location != location_descriptors.end ())
-        placement = *local_location;
+        placement.capacity = local_location->capacity;
     // Runtime monitoring §5: report this MeshNode's local activation records.
     placement.capacity.actors.active = active_actor_count;
     placement.capacity.spots.active = active_spot_count;

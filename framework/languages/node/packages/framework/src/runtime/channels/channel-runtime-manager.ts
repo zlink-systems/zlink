@@ -1,3 +1,9 @@
+import {
+  prepareZLinkRequestReply,
+  identityRequestReply,
+  rejectZLinkRequestReply,
+  type ZLinkRequestResult
+} from '../messaging/request-result';
 import type { ZLinkListenerRecords } from '../foundation/listener-records';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { RoutingId } from '../../contracts';
@@ -242,7 +248,7 @@ export class ZLinkChannelRuntimeManager {
     return this.outbound.send(channelName, packetName, message, metadata);
   }
 
-  async request<TReply>(
+  request<TReply>(
     channelName: string,
     packetName: string | undefined,
     request: unknown,
@@ -250,16 +256,21 @@ export class ZLinkChannelRuntimeManager {
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>,
     onAdmitted?: () => void
-  ): Promise<TReply> {
-    return this.outbound.request<TReply>(
-      channelName,
-      packetName,
-      request,
-      timeoutMs,
-      signal,
-      metadata,
-      onAdmitted
-    );
+  ): ZLinkRequestResult<TReply> {
+    try {
+      const pending = this.outbound.request<TReply>(
+        channelName,
+        packetName,
+        request,
+        timeoutMs,
+        signal,
+        metadata,
+        onAdmitted
+      );
+      return prepareZLinkRequestReply(pending, identityRequestReply);
+    } catch (error) {
+      return rejectZLinkRequestReply(error);
+    }
   }
 
   tryPublish(

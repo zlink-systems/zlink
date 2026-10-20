@@ -1,3 +1,4 @@
+import type { ZLinkRequestResult } from '../messaging/request-result';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkBackendSpot } from '../backend/contracts';
 import type { ZLinkSubmitResult } from '../messaging/submission-result';
@@ -13,7 +14,7 @@ export interface ZLinkActorRoutedJoinTransport {
     request: unknown,
     timeoutMs: number | undefined,
     signal?: AbortSignal
-  ): Promise<TReply>;
+  ): ZLinkRequestResult<TReply>;
   submit?(
     routerChannelId: string,
     targetNodeRid: string,
@@ -49,7 +50,7 @@ export interface ZLinkActorRoutedJoinTransport {
       readonly signal?: AbortSignal;
       readonly onAdmitted?: () => void;
     }
-  ): Promise<TReply>;
+  ): ZLinkRequestResult<TReply>;
   requestFromSpotToSpot?<TReply = unknown>(
     sourceSpot: ZLinkBackendSpot,
     spotRouteTarget: ZLinkSpotRouteTarget,
@@ -60,7 +61,7 @@ export interface ZLinkActorRoutedJoinTransport {
       readonly signal?: AbortSignal;
       readonly onAdmitted?: () => void;
     }
-  ): Promise<TReply>;
+  ): ZLinkRequestResult<TReply>;
   requestRawFromSpotToSpot?(
     sourceSpot: ZLinkBackendSpot,
     spotRouteTarget: ZLinkSpotRouteTarget,
