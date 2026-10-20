@@ -137,7 +137,7 @@ public final class ZLinkJavaIngressAllocationTest {
                             && allocated.endsWith("$ListItr")) managementIterators++;
                     if ("tickLiveness".equals(firstFrameworkMethod)
                             && allocated.contains("$$Lambda")) managementCallbacks++;
-                    if ("managementWaitTimeout".equals(firstFrameworkMethod)
+                    if ("prepareManagementWait".equals(firstFrameworkMethod)
                             && allocated.equals("java.time.Duration")) managementDurations++;
                     if ("finishRequestedIntentCloses".equals(firstFrameworkMethod)
                             && allocated.endsWith("$KeyIterator")) closeIterators++;
@@ -166,7 +166,7 @@ public final class ZLinkJavaIngressAllocationTest {
             assertEquals(0, byteIterators, "byte accounting indexes the existing message list");
             assertEquals(0, managementIterators, "management lists need no cursor object");
             assertEquals(0, managementCallbacks, "timeout iteration needs no capturing callback");
-            assertEquals(0, managementDurations, "the bounded wait reuses its existing Duration");
+            assertEquals(0, managementDurations, "an unchanged deadline needs no timer interval");
             assertEquals(
                     0, closeIterators, "peer close work needs a close request or route change");
         } finally {

@@ -7,6 +7,38 @@ public sealed class MeshReceiveWakeTests
 {
     private static readonly TimeSpan CompletionBound = TimeSpan.FromSeconds(5);
 
+    [Fact]
+    public async Task IdleReceiveOwnerWaitsForReadinessWithoutAPeriodicDeadline()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var poller = new ControlledReceivePoller { CaptureIdleWait = true };
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "idle-wait",
+            receivePollerFactory: () => poller
+        );
+        node.SetRoutingId(RoutingId.From("idle-wait"));
+        node.Start();
+        Assert.Equal(
+            Timeout.InfiniteTimeSpan,
+            await poller.IdleWait.Task.WaitAsync(CompletionBound)
+        );
+        Assert.True(poller.MonitorRegistered);
+    }
+
+    [Fact]
+    public async Task LongManagedDeadlineWakesAnOtherwiseUnboundedWait()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "long-deadline-wake");
+        var wake = new CountingWakeTimer();
+        node._receiveWakeTimer = wake;
+        Assert.True(
+            node.TryBeginOperation(MeshOperationKind.NodeRequest, TimeSpan.FromSeconds(30), out _)
+        );
+        Assert.Equal(1, wake.Starts);
+    }
+
     [Theory]
     [InlineData(1, 20)]
     [InlineData(100, 20)]
@@ -225,6 +257,11 @@ public sealed class MeshReceiveWakeTests
         internal int ResumeThread { get; private set; }
         internal bool FailRearm { get; init; }
         internal bool RespectTimeoutAfterWake { get; init; }
+        internal bool CaptureIdleWait { get; init; }
+        internal bool MonitorRegistered { get; private set; }
+        internal readonly TaskCompletionSource<TimeSpan> IdleWait = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
 
         internal ControlledReceivePoller() => _inner.Add(_control, ControlSlot);
 
@@ -245,6 +282,13 @@ public sealed class MeshReceiveWakeTests
 
         public int Wait(Span<PollEvent> destination, TimeSpan timeout)
         {
+            if (CaptureIdleWait)
+            {
+                if (++_waitCount == 1)
+                    return 0;
+                IdleWait.TrySetResult(timeout);
+                return _inner.Wait(destination, Timeout.InfiniteTimeSpan);
+            }
             if (++_waitCount == 1)
             {
                 OwnerThread = Environment.CurrentManagedThreadId;
@@ -285,8 +329,11 @@ public sealed class MeshReceiveWakeTests
         public void Add(IZlinkSocket socket, PollEventFlags events, nuint slot) =>
             _inner.Add(socket, events, slot);
 
-        public void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot) =>
+        public void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot)
+        {
+            MonitorRegistered = true;
             _inner.Add(monitor, events, slot);
+        }
 
         public void Add(IZlinkTimer timer, nuint slot) => _inner.Add(timer, slot);
 
