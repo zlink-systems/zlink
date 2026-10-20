@@ -22,6 +22,7 @@ import systems.zlink.framework.runtime.internal.messaging.ZLinkOwnedMessageSeria
 import systems.zlink.framework.spots.SpotRef;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Set;
@@ -76,29 +77,40 @@ public final class ZLinkJsonMessageSerializer
 
     @Override
     public <T> T deserialize(ZLinkEncodedPayload payload, Class<T> type) {
-        return decodeJson(payload.bytes(), type);
+        return decodeJson(ByteBuffer.wrap(payload.bytes()), type);
     }
 
     @Override
     public <T> T deserializeBorrowed(Message message, Class<T> type) {
-        return decodeJson(message.toByteArray(), type);
+        return decodeJson(message.dataBuffer(), type);
     }
 
-    private <T> T decodeJson(byte[] bytes, Class<T> type) {
+    // Package-private for the heap-range regression test.
+    <T> T decodeJson(ByteBuffer bytes, Class<T> type) {
         if (type == Message.class) {
             return type.cast(Message.from(bytes));
         }
+        byte[] owned;
+        if (bytes.hasArray()
+                && bytes.arrayOffset() == 0
+                && bytes.position() == 0
+                && bytes.remaining() == bytes.array().length) {
+            owned = bytes.array();
+        } else {
+            owned = new byte[bytes.remaining()];
+            bytes.get(owned);
+        }
         if (type == byte[].class) {
-            return type.cast(bytes);
+            return type.cast(owned);
         }
         try {
-            return mapper.readValue(bytes, type);
+            return mapper.readValue(owned, type);
         } catch (IOException ex) {
             throw new IllegalArgumentException(
                     "failed to deserialize JSON message as "
                             + type.getName()
                             + " payload="
-                            + new String(bytes, StandardCharsets.UTF_8),
+                            + new String(owned, StandardCharsets.UTF_8),
                     ex);
         }
     }

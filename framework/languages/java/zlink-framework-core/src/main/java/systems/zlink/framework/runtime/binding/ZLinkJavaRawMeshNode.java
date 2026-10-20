@@ -1207,11 +1207,15 @@ final class ZLinkJavaRawMeshNode
                                 }));
     }
 
+    ZLinkStateLane descriptorStateLaneForTest() {
+        return descriptorStateLane;
+    }
+
     private void signalLifecycleEnded() {
         signalLifecycleEnded(null);
     }
 
-    private CompletionStage<Void> signalLifecycleEnded(RoutingId target) {
+    CompletionStage<Void> signalLifecycleEnded(RoutingId target) {
         var observers =
                 stateListeners.stream()
                         .filter(
@@ -7793,7 +7797,7 @@ final class ZLinkJavaRawMeshNode
         return String.join(",", fields);
     }
 
-    private CompletionStage<Void> runDescriptorTurn(Runnable command) {
+    CompletionStage<Void> runDescriptorTurn(Runnable command) {
         if (!descriptorStateLane.isOnLane())
             return descriptorStateLane.runNowOrQueue(
                     () -> {

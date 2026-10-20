@@ -816,7 +816,7 @@ void validate_stream_frame_size (std::size_t header_size,
 
 } // namespace
 
-class stream_host_service_t::listener_t
+class stream_host_service_t::listener_t : public std::enable_shared_from_this<listener_t>
 {
   public:
     listener_t (detail::stream_runtime_t runtime,
@@ -1398,7 +1398,6 @@ class stream_host_service_t::listener_t
         }
     };
 
-    static std::string core_session_key (const zlink::routing_id_t &rid) { return rid.to_hex (); }
 
     /* Coroutine invariant (session-reconnect-and-coroutine-lifetime doc):
      * parameters are taken by value. Callers pass stack locals and
@@ -2231,7 +2230,7 @@ class stream_host_service_t::listener_t
       const zlink::routing_id_t &rid,
       session_liveness_t::clock_t::time_point established = session_liveness_t::clock_t::now ())
     {
-        const auto key = core_session_key (rid);
+        const auto key = runtime::stateful::stream_session_registry_t::connection_key (rid);
         std::lock_guard lock (_core_sessions_mutex);
         if (const auto found = _core_sessions.find (key); found != _core_sessions.end ())
             return found->second;
@@ -2250,7 +2249,10 @@ class stream_host_service_t::listener_t
           key,
           [this, rid] { request_core_peer_disconnect (rid, "session_relocation_seal_timeout"); },
           _mesh_node->routing_id (), _mesh_node->native_node ().status ().lifecycle_generation (),
-          [this, rid] { _core_socket->disconnect_rid (rid); });
+          [this, rid] () -> task_t<void> {
+              _core_socket->disconnect_rid (rid);
+              co_return;
+          });
         detail::session_actor_manager_access_t::attach (actors, stream);
         auto created = std::make_shared<core_session_t> (
           std::move (scope), session, actors, std::move (stream), std::move (transport_connection),
@@ -2317,7 +2319,7 @@ class stream_host_service_t::listener_t
 
     void close_core_session (const zlink::routing_id_t &rid, const char *close_reason) noexcept
     {
-        const auto key = core_session_key (rid);
+        const auto key = runtime::stateful::stream_session_registry_t::connection_key (rid);
         std::shared_ptr<core_session_t> current;
         std::string retirement_id;
         {
@@ -2472,7 +2474,8 @@ class stream_host_service_t::listener_t
             std::shared_ptr<core_session_t> current;
             {
                 const std::lock_guard lock (_core_sessions_mutex);
-                const auto found = _core_sessions.find (core_session_key (rid));
+                const auto found = _core_sessions.find (
+                  runtime::stateful::stream_session_registry_t::connection_key (rid));
                 if (found != _core_sessions.end ())
                     current = found->second;
             }
@@ -2545,7 +2548,8 @@ class stream_host_service_t::listener_t
                 std::shared_ptr<core_session_t> current;
                 {
                     const std::lock_guard lock (_core_sessions_mutex);
-                    const auto found = _core_sessions.find (core_session_key (intent.rid));
+                    const auto found = _core_sessions.find (
+                      runtime::stateful::stream_session_registry_t::connection_key (intent.rid));
                     if (found != _core_sessions.end ())
                         current = found->second;
                 }
@@ -2761,7 +2765,7 @@ class stream_host_service_t::listener_t
         bool active = false;
     };
 
-    struct tcp_connection_t : std::enable_shared_from_this<tcp_connection_t>
+    struct tcp_connection_t
     {
         asio::io_context io;
         tcp::socket socket;
@@ -2931,12 +2935,23 @@ class stream_host_service_t::listener_t
 #endif
     }
 
+    template <typename T, typename... Args> std::shared_ptr<T> make_transport (Args &&...args)
+    {
+        // Destroy the transport before the listener's execution context, including
+        // when Session cleanup retains it beyond the listener stop terminal.
+        using owner_t = std::pair<std::shared_ptr<listener_t>, T>;
+        auto owner = std::make_shared<owner_t> (
+          std::piecewise_construct, std::forward_as_tuple (shared_from_this ()),
+          std::forward_as_tuple (std::forward<Args> (args)...));
+        return {owner, &owner->second};
+    }
+
     void start_boost_accept ()
     {
         if (_stop->load (std::memory_order_acquire)) {
             return;
         }
-        auto connection = std::make_shared<tcp_connection_t> (_io);
+        auto connection = make_transport<tcp_connection_t> (_io);
         _acceptor.async_accept (connection->socket,
                                 [this, connection] (const boost::system::error_code &error) {
                                     handle_boost_accept (connection, error);
@@ -2966,7 +2981,7 @@ class stream_host_service_t::listener_t
         track_socket (connection);
         if (stream_uses_websocket (_stream)) {
             auto websocket_connection =
-              std::make_shared<websocket_stream_t> (std::move (connection->socket));
+              make_transport<websocket_stream_t> (std::move (connection->socket));
             {
                 const std::lock_guard<std::mutex> lock (_sockets_mutex);
                 _sockets.erase (&connection->socket);
@@ -2981,7 +2996,7 @@ class stream_host_service_t::listener_t
             }
         } else if (stream_uses_tls (_stream)) {
 #ifdef ZLINK_FRAMEWORK_STREAM_WITH_OPENSSL
-            auto tls_connection = std::make_shared<ssl::stream<tcp::socket>> (
+            auto tls_connection = make_transport<ssl::stream<tcp::socket>> (
               std::move (connection->socket), *_tls_context);
             {
                 const std::lock_guard<std::mutex> lock (_sockets_mutex);
@@ -3045,6 +3060,27 @@ class stream_host_service_t::listener_t
                 });
             }
         };
+    }
+
+    template <typename TStream>
+    task_t<void> close_transport (std::shared_ptr<tcp_connection_t> owner,
+                                  std::shared_ptr<TStream> connection)
+    {
+        auto completion = std::make_shared<task_completion_source_t<void>> ();
+        auto pending = completion->task ();
+        asio::post (_io, [owner, connection, completion] {
+            owner->request_close ();
+            boost::system::error_code error;
+            auto &socket = tcp_socket (*connection);
+            socket.cancel (error);
+            socket.close (error);
+            if (error)
+                completion->complete (
+                  result_t<void>::failure (framework_error_kind_t::unavailable, error.message ()));
+            else
+                completion->complete (result_t<void>::success ());
+        });
+        co_await pending;
     }
 
     void request_close (tcp::socket *socket) noexcept
@@ -3318,9 +3354,10 @@ class stream_host_service_t::listener_t
         if (_mesh_node) {
             session_registry = &_mesh_node->native_node ().sessions ();
             transport_connection = session_registry->open (
-              stream_instance.session_id (), [this, connection] { request_close (*connection); },
-              _mesh_node->routing_id (),
-              _mesh_node->native_node ().status ().lifecycle_generation ());
+              runtime::stateful::stream_session_registry_t::connection_key (session_rid),
+              [this, connection] { request_close (*connection); }, _mesh_node->routing_id (),
+              _mesh_node->native_node ().status ().lifecycle_generation (),
+              [this, owner, connection] { return close_transport (owner, connection); });
         }
         auto connection_state = std::make_shared<stream_connection_state_t> (
           std::move (scope), &session, std::move (stream_instance), &session_actors,
@@ -3574,15 +3611,17 @@ class stream_host_service_t::listener_t
             owner->io.restart ();
             owner->io.run ();
             auto dispatch_disconnect = [this, &session, &stream, connection_state] {
-                auto completed = [this, connection_state] (const result_t<void> &) {
-                    trace_stream_host ("dispatch-disconnected-end", _stream);
+                auto completed = [self = shared_from_this (),
+                                  connection_state] (const result_t<void> &) {
+                    trace_stream_host ("dispatch-disconnected-end", self->_stream);
                     if (!connection_state->transport_connection)
                         return;
                     const auto session_rid = connection_state->stream.routing_id ().value_or (
                       zlink::routing_id_t::from (connection_state->stream.session_id ()));
-                    retire_actor_session_bindings_async (
+                    self->retire_actor_session_bindings_async (
                       *connection_state->transport_connection, session_rid,
-                      *connection_state->actors, [connection_state] { (void) connection_state; });
+                      *connection_state->actors,
+                      [self, connection_state] { (void) connection_state; });
                 };
                 auto submitted = _runtime.dispatch_disconnected_async (session, stream, completed);
                 if (!submitted) {
@@ -3777,7 +3816,7 @@ task_t<void> stream_host_service_t::start (service_provider_t &services)
                                           ? std::optional<std::string>{}
                                           : advertise->second;
             validate_stream_listener_identity (stream, advertise_host);
-            auto listener = std::make_unique<listener_t> (
+            auto listener = std::make_shared<listener_t> (
               _runtime, stream, advertise_host, factory->second, services, _delay_owner, _stop,
               _drain_flag, _monitoring, _runtime_failures, _mesh_node, _application_jobs,
               _session_replacement_callback_timeout,

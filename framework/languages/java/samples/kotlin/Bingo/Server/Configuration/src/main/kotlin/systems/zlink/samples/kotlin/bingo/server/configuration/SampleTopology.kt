@@ -2,6 +2,7 @@ package systems.zlink.samples.kotlin.bingo.server.configuration
 
 import org.springframework.boot.context.properties.ConfigurationProperties
 import org.springframework.boot.context.properties.bind.ConstructorBinding
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 
 @ConfigurationProperties("sample")
 data class SampleTopology
@@ -25,6 +26,7 @@ constructor(
     val playNode: String,
     val sessionNode: String,
     val logDirectory: String,
+    val diagnosticsLevel: ZLinkMessageFlowLogMode = ZLinkMessageFlowLogMode.NORMAL,
 ) {
     init {
         listOf(

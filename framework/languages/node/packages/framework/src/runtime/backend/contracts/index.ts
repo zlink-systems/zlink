@@ -63,7 +63,9 @@ export type ZLinkBackendObjectPlacement =
 
 export type ZLinkBackendRequestSourceAcceptance = (
   nodeRid: string,
-  nodeGeneration: bigint
+  nodeGeneration: bigint,
+  nodeRidStorageHex: string,
+  signal?: AbortSignal
 ) =>
   | import('../../locations/request-source-resolver').ZLinkRequestSourceFence
   | undefined

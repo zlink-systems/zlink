@@ -76,6 +76,25 @@ namespace zlink::framework::runtime::host
 // between two management passes without waiting for time to pass.
 struct public_host_runtime_test_access_t
 {
+    static auto admit_seal (public_host_runtime_t &host,
+                            const protocol::session_relocation_seal_t &seal)
+    {
+        return host.admit_session_relocation_seal (
+          seal,
+          {seal.session_owner_id, static_cast<std::int64_t> (seal.session_owner_lease_generation)},
+          {}, {}, {});
+    }
+    static void expire_seal_results (public_host_runtime_t &host)
+    {
+        host._relocation_session_terminal_lane
+          .run ([&] {
+              for (auto &[key, record] : host._session_seal_terminals)
+                  record.expires_at = std::chrono::steady_clock::time_point::min ();
+          })
+          .get ();
+        host.flush_pending_session_relocation_seals ();
+    }
+
     static void set_dispatch (public_host_runtime_t &host, dispatch_options_t options)
     {
         host._options.mesh.dispatch = std::move (options);
@@ -1626,7 +1645,7 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
     assert (bind_error == stateful::stateful_error_t::none);
     const auto sealed = session_owner->sessions ().seal_remote_route (
       connection.connection_id, binding.binding_generation, previous.key,
-      previous.object_generation);
+      previous.object_generation, binding.owner_lease_generation);
     assert (sealed.error == stateful::stateful_error_t::none);
     auto target = previous;
     target.node_id = source_node.to_string ();
@@ -3039,9 +3058,9 @@ void verify_session_ingress_sequence_is_scoped_by_actor_binding ()
         .first
       == stateful::stateful_error_t::conflict);
 
-    const auto sealed_a =
-      sessions.seal_remote_route (connection.connection_id, binding_a.binding_generation,
-                                  actor_a.key, actor_a.object_generation);
+    const auto sealed_a = sessions.seal_remote_route (
+      connection.connection_id, binding_a.binding_generation, actor_a.key,
+      actor_a.object_generation, binding_a.owner_lease_generation);
     assert (sealed_a.error == stateful::stateful_error_t::none);
     assert (sealed_a.last_accepted_sequence == 1);
 
@@ -3050,9 +3069,9 @@ void verify_session_ingress_sequence_is_scoped_by_actor_binding ()
     assert (admit_b_second_error == stateful::stateful_error_t::none);
     assert (admitted_b_second && admitted_b_second->inbound_sequence == 2);
     assert (sessions.complete_inbound (*admitted_b_second) == stateful::stateful_error_t::none);
-    const auto sealed_b =
-      sessions.seal_remote_route (connection.connection_id, binding_b.binding_generation,
-                                  actor_b.key, actor_b.object_generation);
+    const auto sealed_b = sessions.seal_remote_route (
+      connection.connection_id, binding_b.binding_generation, actor_b.key,
+      actor_b.object_generation, binding_b.owner_lease_generation);
     assert (sealed_b.error == stateful::stateful_error_t::none);
     assert (sealed_b.last_accepted_sequence == 2);
     assert (sessions.abort_barrier (sealed_b.barrier) == stateful::stateful_error_t::none);
@@ -3093,8 +3112,9 @@ void verify_session_route_supports_repeated_relocation ()
     assert (first && first->inbound_sequence == 1);
     assert (sessions.complete_inbound (*first) == stateful::stateful_error_t::none);
 
-    const auto first_seal = sessions.seal_remote_route (
-      connection.connection_id, binding.binding_generation, source.key, source.object_generation);
+    const auto first_seal =
+      sessions.seal_remote_route (connection.connection_id, binding.binding_generation, source.key,
+                                  source.object_generation, binding.owner_lease_generation);
     assert (first_seal.error == stateful::stateful_error_t::none);
     assert (first_seal.last_accepted_sequence == 1);
     auto remote = source;
@@ -3115,7 +3135,8 @@ void verify_session_route_supports_repeated_relocation ()
     assert (sessions.complete_inbound (*second) == stateful::stateful_error_t::none);
 
     const auto return_seal = sessions.seal_remote_route (
-      connection.connection_id, binding.binding_generation, remote.key, remote.object_generation);
+      connection.connection_id, binding.binding_generation, remote.key, remote.object_generation,
+      first_commit.binding->owner_lease_generation);
     assert (return_seal.error == stateful::stateful_error_t::none);
     assert (return_seal.last_accepted_sequence == 2);
     auto returned = remote;
@@ -3141,8 +3162,9 @@ void verify_session_route_commit_stores_target_lease ()
       stateful::object_kind_t::actor, "deferred-lease-actor", 7, 11, "mesh-a", "node-a"};
     const auto [bind_error, binding] = sessions.bind_remote (connection, source, 13, 17);
     assert (bind_error == stateful::stateful_error_t::none);
-    const auto sealed = sessions.seal_remote_route (
-      connection.connection_id, binding.binding_generation, source.key, source.object_generation);
+    const auto sealed =
+      sessions.seal_remote_route (connection.connection_id, binding.binding_generation, source.key,
+                                  source.object_generation, binding.owner_lease_generation);
     assert (sealed.error == stateful::stateful_error_t::none);
 
     auto target = source;
@@ -4616,6 +4638,153 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
     assert (current->owner_lease_generation == 13);
     assert (!local->sessions ().remote_route_sealed (actor_object->key));
 
+    local->close ();
+}
+
+void verify_absent_session_seal ()
+{
+    auto local = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("absent-session-owner"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      "entry",
+      {"player"}});
+    local->configure_session_relocation_store (std::make_shared<memory_relocation_repository_t> ());
+    local->configure_session_route_owner ([] {
+        return std::make_optional (zlink::framework::location_owner_token_t{"absent-owner", 19});
+    });
+    int late_routes = 0;
+    local->configure_late_session_route_update ([&] (const auto &) { ++late_routes; });
+    local->start ();
+    const auto status = local->status ();
+    const auto actor = local->create_actor ("player", "absent-actor");
+    const auto object = local->resolve_actor (actor.ref ()).value ();
+    const auto rid = zlink::routing_id_t::from ("absent-session");
+    const auto original_connection = local->sessions ().open (rid.to_hex ());
+    const auto [original_error, original] =
+      local->sessions ().bind (original_connection, object, status.lifecycle_generation (), 23);
+    assert (original_error == stateful::stateful_error_t::none);
+    assert (local->sessions ().unbind (original).first == stateful::stateful_error_t::none);
+    const protocol::session_relocation_seal_t seal{
+      {81, 82},
+      {"coordinator", 7, status.routing_id ().to_bytes (), status.lifecycle_generation (),
+       "store-v1"},
+      protocol::relocation_role_t::source,
+      {object.key, object.object_generation, status.routing_id ().to_bytes (),
+       status.lifecycle_generation (), object.authority_owner_generation, 23},
+      status.routing_id ().to_bytes (),
+      status.lifecycle_generation (),
+      "absent-owner",
+      19,
+      rid.to_bytes (),
+      original.binding_generation,
+      status.routing_id ().to_bytes (),
+      status.lifecycle_generation ()};
+    const auto submit = [&] (const auto &request) {
+        std::optional<host::session_relocation_seal_result_t> result;
+        const bool admitted =
+          local
+            ->seal_session_remote (
+              status.routing_id (), request, 2s, std::chrono::steady_clock::now () + 2s,
+              [] { return std::vector<std::uint8_t>{0x41}; },
+              [&] (foundation::operation_terminal_t terminal, auto value) {
+                  assert (terminal == foundation::operation_terminal_t::completed);
+                  result = std::move (value);
+              })
+            .result ()
+            .value ();
+        return std::pair{admitted, result};
+    };
+    const auto [admitted, result] = submit (seal);
+    assert (admitted && result);
+    const auto encoded = protocol::encode_session_relocation_sealed (result->sealed);
+    assert (protocol::decode_session_relocation_sealed_43 (encoded).seal_result
+            == protocol::service_wire_pilot_session_seal_result::binding_absent);
+    assert (!local->sessions ().remote_route_sealed (object.key));
+    const auto connection = original_connection;
+    const auto [error, binding] =
+      local->sessions ().bind (connection, object, status.lifecycle_generation (), 23);
+    assert (error == stateful::stateful_error_t::none);
+    // A retained absence result is replayed even after a binding appears.
+    auto changed = seal;
+    ++changed.binding_generation;
+    assert (!submit (changed).first);
+    const auto repeated = submit (seal);
+    assert (repeated.first && repeated.second && repeated.second->sealed == result->sealed);
+    auto mismatch = seal;
+    ++mismatch.relocation.low;
+    mismatch.binding_generation = original.binding_generation;
+    assert (!submit (mismatch).first);
+    assert (local->sessions ().is_current (binding));
+    host::public_host_runtime_test_access_t::expire_seal_results (*local);
+    assert (!host::public_host_runtime_test_access_t::admit_seal (*local, seal).first);
+    assert (!local->sessions ().remote_route_sealed (object.key));
+    assert (local->sessions ().unbind (binding).first == stateful::stateful_error_t::none);
+    const auto absent_again = host::public_host_runtime_test_access_t::admit_seal (*local, seal);
+    assert (absent_again.first && absent_again.second);
+    assert (protocol::decode_session_relocation_sealed_43 (
+              protocol::encode_session_relocation_sealed (*absent_again.second))
+              .seal_result
+            == protocol::service_wire_pilot_session_seal_result::binding_absent);
+    const protocol::session_relocation_route_t late_route{
+      seal.relocation,
+      seal.coordinator,
+      protocol::relocation_role_t::target,
+      {object.key, object.object_generation},
+      seal.session_owner_node_routing_id,
+      seal.session_owner_node_generation,
+      seal.session_owner_id,
+      seal.session_owner_lease_generation,
+      seal.session_routing_id,
+      seal.binding_generation,
+      {protocol::session_relocation_route_action_t::commit, object.authority_owner_generation,
+       object.authority_owner_generation + 1, status.routing_id ().to_bytes (),
+       status.lifecycle_generation (), 0, 23}};
+    assert (local->route_session_remote (status.routing_id (), late_route).result ().value ());
+    local->dispatch_ready ([] (const auto &, const auto &, auto) {}).result ().value ();
+    assert (late_routes == 1);
+    assert (!local->sessions ().current_binding (object.key));
+    const auto [next_error, next_binding] =
+      local->sessions ().bind (connection, object, status.lifecycle_generation (), 23);
+    assert (next_error == stateful::stateful_error_t::none);
+    auto next_seal = seal;
+    ++next_seal.relocation.low;
+    next_seal.binding_generation = next_binding.binding_generation;
+    auto stale_owner = next_seal;
+    --stale_owner.actor.owner_lease_generation;
+    assert (!host::public_host_runtime_test_access_t::admit_seal (*local, stale_owner).first);
+    const auto sealed = host::public_host_runtime_test_access_t::admit_seal (*local, next_seal);
+    assert (sealed.first && sealed.second);
+    assert (protocol::decode_session_relocation_sealed_43 (
+              protocol::encode_session_relocation_sealed (*sealed.second))
+              .seal_result
+            == protocol::service_wire_pilot_session_seal_result::sealed);
+    auto committed = late_route;
+    committed.relocation = next_seal.relocation;
+    committed.binding_generation = next_binding.binding_generation;
+    assert (local->route_session_remote (status.routing_id (), committed).result ().value ());
+    local->dispatch_ready ([] (const auto &, const auto &, auto) {}).result ().value ();
+    assert (!local->sessions ().remote_route_sealed (object.key));
+    const auto closed_record =
+      host::public_host_runtime_test_access_t::admit_seal (*local, next_seal);
+    assert (closed_record.first && !closed_record.second);
+    const auto current = local->sessions ().current_binding (object.key);
+    assert (current
+            && local->sessions ().unbind (*current).first == stateful::stateful_error_t::none);
+    const auto [replacement_error, replacement] = local->sessions ().bind_remote (
+      connection, current->actor, current->target_node_generation, current->owner_lease_generation);
+    assert (replacement_error == stateful::stateful_error_t::none);
+    assert (replacement.binding_generation != current->binding_generation);
+    assert (!host::public_host_runtime_test_access_t::admit_seal (*local, next_seal).first);
+    assert (local->sessions ().is_current (replacement));
+    assert (local->sessions ().unbind (replacement).first == stateful::stateful_error_t::none);
+    const auto removed = host::public_host_runtime_test_access_t::admit_seal (*local, next_seal);
+    assert (removed.first && removed.second);
+    assert (protocol::decode_session_relocation_sealed_43 (
+              protocol::encode_session_relocation_sealed (*removed.second))
+              .seal_result
+            == protocol::service_wire_pilot_session_seal_result::binding_absent);
     local->close ();
 }
 
@@ -8124,6 +8293,10 @@ int main (int argc, char **argv)
         verify_public_host_fifo_drains_before_liveness_probe ();
         return 0;
     }
+    if (argc == 2 && std::string_view (argv[1]) == "--binding-absent") {
+        verify_absent_session_seal ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--session-owner-route") {
         verify_same_node_session_seal_waits_for_active_ingress ();
         verify_session_relocation_gateway_commit_is_atomic ();
@@ -8184,6 +8357,7 @@ int main (int argc, char **argv)
     verify_pending_relocation_management_bounds_dispatch_wait ();
     verify_failed_relay_persistence_rearms_dispatch_wait ();
     verify_root_location_session_seal_timeout_is_startup_snapshot ();
+    verify_absent_session_seal ();
     verify_same_node_session_seal_waits_for_active_ingress ();
     verify_configured_session_seal_timeout_closes_actual_owner ();
     verify_location_store_accepted_record_authority ();

@@ -32,7 +32,7 @@ function createBingoApiModule() {
           builder.options({
             metrics: { meterProvider: bingoMeterProvider }
           });
-          builder.configureDispatch().messageFlow('normal');
+          builder.configureDispatch().messageFlow(config.diagnosticsLevel);
           builder.addLocationStore(createBingoLocationStore(config));
           bingoLocationOptions(builder.configureLocations());
           // --8<-- [start:doc-codec-register]
