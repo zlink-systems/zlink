@@ -46,7 +46,6 @@ const detachedMeshDispatchScope = AsyncLocalStorage.snapshot();
 
 export interface ZLinkMeshDispatchPumpOptions {
   readonly readyCapacity?: number;
-  readonly messageCapacity?: number;
   readonly partCapacity?: number;
   readonly dispatch: (owner: ReadyRecord, record: ReceiveRecord) => void | Promise<void>;
   readonly applicationJobQueue: ApplicationJobQueuePort;
