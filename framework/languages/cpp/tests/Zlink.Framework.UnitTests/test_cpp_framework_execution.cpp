@@ -10341,6 +10341,72 @@ bool verify_barrier_phase_completion_allows_reentrant_phase (bool shared)
     return passed;
 }
 
+bool verify_nested_barrier_phases (bool shared, bool cancel)
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    fw::test::manual_internal_scheduler_t worker;
+    auto queue = std::make_shared<rt::serial_execution_queue_t> (
+      worker, rt::serial_execution_queue_options_t{},
+      rt::serial_execution_queue_t::error_handler_t{},
+      shared ? rt::serial_lane_policy_t::spot_wide ()
+             : rt::serial_lane_policy_t::per_actor_spot ());
+    auto reserved = queue->reserve_barrier_next ("nested-running-phase");
+    if (!reserved)
+        return false;
+    const auto barrier = reserved.value ();
+    fw::task_completion_source_t<void> release;
+    bool outer_entered = false, inner_entered = false, activated = false;
+    int outer_completions = 0, inner_completions = 0;
+    std::optional<fw::task_t<void>> inner;
+    auto outer = barrier->run ([&] () -> fw::task_t<void> {
+        outer_entered = true;
+        inner = barrier->run ([&] {
+            inner_entered = true;
+            return release.task ();
+        });
+        co_await *inner;
+    });
+    fw::detail::observe_task_terminal (outer, [&] (const fw::result_t<void> &result) {
+        ++outer_completions;
+        if (!cancel && result)
+            (void) barrier->activate ([&] { activated = true; });
+    });
+    worker.run_all ();
+    if (inner)
+        fw::detail::observe_task_terminal (
+          *inner, [&] (const fw::result_t<void> &) { ++inner_completions; });
+    const bool nested =
+      outer_entered && inner_entered && inner && !inner->await_ready () && !outer.await_ready ();
+    bool settled = false;
+    if (cancel) {
+        queue->cancel_pending ();
+        worker.run_all ();
+        settled = outer.await_ready () && !outer.result ()
+                  && outer.result ().error_kind () == fw::framework_error_kind_t::shutting_down
+                  && inner && inner->await_ready () && !inner->result ()
+                  && inner->result ().error_kind () == fw::framework_error_kind_t::shutting_down;
+    }
+    release.complete (fw::result_t<void>::success ());
+    worker.run_all ();
+    if (!cancel)
+        settled = outer.await_ready () && outer.result () && inner && inner->await_ready ()
+                  && inner->result () && activated && barrier->terminal ().await_ready ()
+                  && barrier->terminal ().result ();
+    const bool passed = nested && settled && outer_completions == 1 && inner_completions == 1;
+    barrier->cancel ();
+    worker.run_all ();
+    queue->close ();
+    queue->drain ();
+    worker.retire ();
+    std::cout << "nested-barrier-phases shared=" << shared << " cancel=" << cancel
+              << " outer_entered=" << outer_entered << " inner_entered=" << inner_entered
+              << " outer_completions=" << outer_completions
+              << " inner_completions=" << inner_completions << " settled=" << settled
+              << " passed=" << passed << '\n';
+    return passed;
+}
+
 int main (int argc, char **argv)
 {
     bool phases_passed = true;
@@ -10352,6 +10418,8 @@ int main (int argc, char **argv)
                                 && phases_passed;
         phases_passed =
           verify_barrier_phase_completion_allows_reentrant_phase (shared) && phases_passed;
+        for (const bool cancel : {false, true})
+            phases_passed = verify_nested_barrier_phases (shared, cancel) && phases_passed;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--cancel-running-barrier-phase")
         return phases_passed ? EXIT_SUCCESS : EXIT_FAILURE;
