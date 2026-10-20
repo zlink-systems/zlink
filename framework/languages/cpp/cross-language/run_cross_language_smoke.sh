@@ -1123,6 +1123,24 @@ stage_dotnet_spot_route_client_java_host() {
   RESULTS+=("spot-route: .NET client -> Java host (reply + framework not_found + application rejected)")
 }
 
+# Every cell has an isolated two-node mesh. .NET Object-role sources have a
+# framework-assigned RID, so those cells exclude the known target RID instead.
+assert_source_actor_create() {
+  local source_events="$1" source_rid="$2" target_rid="$3"
+  local owner_event="${4:-user-spot-source-actor-created|status=created}"
+  local owner
+  wait_for_line "${source_events}" "${owner_event}|node=" 60
+  owner="$(sed -n "s/^${owner_event}|node=\\([^|]*\\).*$/\\1/p" "${source_events}" | head -n 1)"
+  if [[ -z "${owner}" || "${owner}" == none || "${owner}" == undefined \
+    || "${owner}" == "${target_rid}" \
+    || ( -n "${source_rid}" && "${owner}" != "${source_rid}" ) ]]; then
+    echo "source Actor create stage: expected source ${source_rid:-(non-target node)}, got '${owner}' (target=${target_rid})" >&2
+    grep -F "${owner_event}" "${source_events}" >&2
+    exit 1
+  fi
+  echo "source Actor create: node=${owner}"
+}
+
 # --- entry-spot relocation: Node source -> .NET target ------------------------
 # Spec 28-relocation-flow.ko.md:589-591: "source와 target이 서로 다른 언어
 # runtime인 relocation이 chunk 전송, checksum 검증과 owner 전환을 같은 결과로
@@ -1155,14 +1173,6 @@ stage_node_source_dotnet_target_relocation() {
   # pre-relocation reply (still answered by the source) apart from a real
   # post-relocation one (answered by itself), without needing to predict its
   # own assigned id.
-  start_dotnet dotnet-relocation-target entry-spot-target \
-    --mesh-name cross.relocation \
-    --peer-rid node-relocation-source \
-    --bind-endpoint "${target_endpoint}" \
-    --redis-endpoint "127.0.0.1:${redis_port}" \
-    --actor-id cross-lang-relocation-actor \
-    --event-file "${target_events}"
-  wait_for_ready "${RUN_DIR}/dotnet-relocation-target.ready" 180
   start_node node-relocation-source entry-spot-relocate \
     --role source \
     --mesh-name cross.relocation \
@@ -1174,7 +1184,18 @@ stage_node_source_dotnet_target_relocation() {
     --actor-id cross-lang-relocation-actor \
     --payload-bytes 100000 \
     --event-file "${source_events}"
-  wait_for_line "${source_events}" "entry-spot-owner-before|node=node-relocation-source" 60
+  wait_for_line "${source_events}" "entry-spot-create|status=created" 60
+  assert_source_actor_create "${source_events}" "node-relocation-source" "dotnet-relocation-target" "entry-spot-owner-before"
+  # Start the relocation destination only after source creation is proven;
+  # it cannot become an initial placement candidate while the source boots.
+  start_dotnet dotnet-relocation-target entry-spot-target \
+    --mesh-name cross.relocation \
+    --peer-rid node-relocation-source \
+    --bind-endpoint "${target_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --actor-id cross-lang-relocation-actor \
+    --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/dotnet-relocation-target.ready" 180
   wait_for_line "${source_events}" "relocate-result|outcome=Relocated" 60
   wait_for_line "${target_events}" "entry-spot-probe|nodeRid=" 90
   if grep -qF "entry-spot-probe|nodeRid=node-relocation-source" "${target_events}"; then
@@ -1207,6 +1228,7 @@ stage_node_source_dotnet_target_user_spot_join() {
 
   start_redis user-spot-join-redis "${redis_port}"
   start_dotnet dotnet-user-spot-target user-spot-target \
+    --placement-weight 0 \
     --mesh-name cross.user-spot-join \
     --peer-rid node-user-spot-join-source \
     --bind-endpoint "${target_endpoint}" \
@@ -1233,6 +1255,8 @@ stage_node_source_dotnet_target_user_spot_join() {
   wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 60
   wait_for_line "${target_events}" "user-spot-source-peer-ready|ready=true" 60
   touch "${start_file}"
+
+  assert_source_actor_create "${source_events}" "node-user-spot-join-source" "dotnet-user-spot-join-target"
 
   # This line is emitted only after the generated command-28 decoder has read
   # the actual frames handed to the Node service transport and found the
@@ -1276,6 +1300,7 @@ stage_dotnet_source_node_target_user_spot_join() {
 
   start_redis user-spot-join-redis-dotnet-node "${redis_port}"
   start_node_user_spot_join node-user-spot-target user-spot-target \
+    --placement-weight 0 \
     --mesh-name cross.user-spot-join \
     --node-rid node-user-spot-join-target \
     --bind-endpoint "${target_endpoint}" \
@@ -1297,7 +1322,7 @@ stage_dotnet_source_node_target_user_spot_join() {
     --event-file "${source_events}"
   wait_for_ready "${RUN_DIR}/dotnet-user-spot-join-source.ready" 180
   wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 60
-  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  assert_source_actor_create "${source_events}" "" "node-user-spot-join-target"
   wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
   wait_for_canonical_actor_join "${target_events}.flow"
   wait_for_line "${target_events}" "user-spot-admission|accepted=true" 60
@@ -1326,6 +1351,7 @@ stage_java_source_dotnet_target_user_spot_join() {
 
   start_redis user-spot-join-redis-java-dotnet "${redis_port}"
   start_dotnet dotnet-user-spot-target-java user-spot-target \
+    --placement-weight 0 \
     --mesh-name cross.user-spot-join \
     --peer-rid java-user-spot-join-source \
     --bind-endpoint "${target_endpoint}" \
@@ -1352,7 +1378,7 @@ stage_java_source_dotnet_target_user_spot_join() {
   wait_for_line "${target_events}" "user-spot-source-peer-ready|ready=true" 90
   touch "${start_file}"
 
-  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  assert_source_actor_create "${source_events}" "java-user-spot-join-source" "dotnet-user-spot-join-target"
   wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
   wait_for_line "${target_events}" "user-spot-admission|accepted=true" 60
   wait_for_line "${target_events}" "user-spot-joined|actor=cross-lang-user-spot-actor" 90
@@ -1367,7 +1393,7 @@ stage_java_source_dotnet_target_user_spot_join() {
 
 # --- User-Spot JoinSpot: Node source -> Java target, canonical actorJoin(28) --
 # Reuses the Node source mode verbatim; the Java host owns the fixed target
-# User Spot (and, unlike the .NET target, also registers an Entry Spot).
+# User Spot and registers an Entry Spot, like the other target hosts.
 stage_node_source_java_target_user_spot_join() {
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events start_file
@@ -1380,6 +1406,7 @@ stage_node_source_java_target_user_spot_join() {
 
   start_redis user-spot-join-redis-node-java "${redis_port}"
   start_java java-user-spot-target user-spot-target \
+    --placement-weight 0 \
     --mesh-name cross.user-spot-join \
     --node-rid java-user-spot-join-target \
     --peer-rid node-user-spot-join-source \
@@ -1407,6 +1434,7 @@ stage_node_source_java_target_user_spot_join() {
   wait_for_line "${target_events}" "user-spot-source-peer-ready|ready=true" 90
   touch "${start_file}"
 
+  assert_source_actor_create "${source_events}" "node-user-spot-join-source" "java-user-spot-join-target"
   wait_for_canonical_actor_join "${source_events}.flow"
   wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
   wait_for_line "${target_events}" "user-spot-admission|accepted=true" 60
@@ -1421,14 +1449,9 @@ stage_node_source_java_target_user_spot_join() {
 }
 
 # --- User-Spot JoinSpot: Node source -> C++ target, canonical actorJoin(28) ---
-# Reuses the Node source mode verbatim (same mode the node->dotnet and
-# node->java cells drive); the C++ cross-language host owns the fixed target
-# User Spot. Like the .NET and Node targets -- and unlike the Java one -- the
-# C++ target registers a Spot factory and the Actor factory but NO Entry Spot,
-# so it can never be an Entry-Spot placement candidate for the source's Actor;
-# it additionally drops its placement weight to zero once the fixed Spot
-# exists. The canonical-28 wire assertion is kept here because the line is
-# produced by the Node source's own decode probe.
+# Reuses the Node source mode; the C++ target registers both the User Spot
+# factory and Entry Spot. Zero placement weight excludes initial Actor creation
+# on the target. The Node source emits the canonical-28 wire evidence.
 stage_node_source_cpp_target_user_spot_join() {
   local redis_port source_port target_port source_endpoint target_endpoint
   local source_events target_events start_file
@@ -1441,6 +1464,7 @@ stage_node_source_cpp_target_user_spot_join() {
 
   start_redis user-spot-join-redis-node-cpp "${redis_port}"
   start_cpp cpp-user-spot-target user-spot-target \
+    --placement-weight 0 \
     --mesh-name cross.user-spot-join \
     --node-rid cpp-user-spot-join-target \
     --peer-rid node-user-spot-join-source \
@@ -1469,6 +1493,7 @@ stage_node_source_cpp_target_user_spot_join() {
   wait_for_line "${target_events}" "user-spot-source-peer-ready|ready=true" 90
   touch "${start_file}"
 
+  assert_source_actor_create "${source_events}" "node-user-spot-join-source" "cpp-user-spot-join-target"
   wait_for_canonical_actor_join "${source_events}.flow"
   wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
   wait_for_line "${target_events}" "user-spot-admission|accepted=true" 60
@@ -1502,6 +1527,7 @@ stage_cpp_source_dotnet_target_user_spot_join() {
 
   start_redis user-spot-join-redis-cpp-dotnet "${redis_port}"
   start_dotnet dotnet-user-spot-target-cpp user-spot-target \
+    --placement-weight 0 \
     --mesh-name cross.user-spot-join \
     --peer-rid cpp-user-spot-join-source \
     --bind-endpoint "${target_endpoint}" \
@@ -1529,7 +1555,7 @@ stage_cpp_source_dotnet_target_user_spot_join() {
   wait_for_line "${target_events}" "user-spot-source-peer-ready|ready=true" 90
   touch "${start_file}"
 
-  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  assert_source_actor_create "${source_events}" "cpp-user-spot-join-source" "dotnet-user-spot-join-target"
   wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
   wait_for_line "${target_events}" "user-spot-admission|accepted=true" 60
   wait_for_line "${target_events}" "user-spot-joined|actor=cross-lang-user-spot-actor" 90
@@ -1563,6 +1589,7 @@ stage_dotnet_source_java_target_user_spot_join() {
 
   start_redis user-spot-join-redis-dotnet-java "${redis_port}"
   start_java java-user-spot-target-dotnet user-spot-target \
+    --placement-weight 0 \
     --mesh-name cross.user-spot-join --node-rid java-user-spot-join-target \
     --bind-endpoint "${target_endpoint}" \
     --redis-endpoint "127.0.0.1:${redis_port}" --redis-key-prefix zlink-cross-user-spot-join \
@@ -1576,7 +1603,7 @@ stage_dotnet_source_java_target_user_spot_join() {
     --actor-id cross-lang-user-spot-actor --event-file "${source_events}"
   wait_for_ready "${RUN_DIR}/dotnet-user-spot-join-source-java.ready" 180
   wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 60
-  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  assert_source_actor_create "${source_events}" "" "java-user-spot-join-target"
   wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
   wait_for_user_spot_target_outcome "${target_events}"
   stop_all
@@ -1594,6 +1621,7 @@ stage_java_source_node_target_user_spot_join() {
 
   start_redis user-spot-join-redis-java-node "${redis_port}"
   start_node_user_spot_join node-user-spot-target-java user-spot-target \
+    --placement-weight 0 \
     --mesh-name cross.user-spot-join --node-rid node-user-spot-join-target \
     --bind-endpoint "${target_endpoint}" --redis-endpoint "127.0.0.1:${redis_port}" \
     --redis-key-prefix zlink-cross-user-spot-join --spot-id cross-lang-user-spot \
@@ -1607,7 +1635,7 @@ stage_java_source_node_target_user_spot_join() {
     --actor-id cross-lang-user-spot-actor --event-file "${source_events}" --start-file "${start_file}"
   wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 90
   touch "${start_file}"
-  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  assert_source_actor_create "${source_events}" "java-user-spot-join-source" "node-user-spot-join-target"
   wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
   wait_for_user_spot_target_outcome "${target_events}"
   stop_all
@@ -1624,6 +1652,7 @@ stage_dotnet_source_cpp_target_user_spot_join() {
 
   start_redis user-spot-join-redis-dotnet-cpp "${redis_port}"
   start_cpp cpp-user-spot-target-dotnet user-spot-target \
+    --placement-weight 0 \
     --mesh-name cross.user-spot-join --node-rid cpp-user-spot-join-target \
     --bind-endpoint "${target_endpoint}" \
     --redis-endpoint "127.0.0.1:${redis_port}" --redis-key-prefix zlink-cross-user-spot-join \
@@ -1638,7 +1667,7 @@ stage_dotnet_source_cpp_target_user_spot_join() {
     --actor-id cross-lang-user-spot-actor --event-file "${source_events}"
   wait_for_ready "${RUN_DIR}/dotnet-user-spot-join-source-cpp.ready" 180
   wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 60
-  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  assert_source_actor_create "${source_events}" "" "cpp-user-spot-join-target"
   wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
   wait_for_user_spot_target_outcome "${target_events}"
   stop_all
@@ -1656,6 +1685,7 @@ stage_cpp_source_node_target_user_spot_join() {
 
   start_redis user-spot-join-redis-cpp-node "${redis_port}"
   start_node_user_spot_join node-user-spot-target-cpp user-spot-target \
+    --placement-weight 0 \
     --mesh-name cross.user-spot-join --node-rid node-user-spot-join-target \
     --bind-endpoint "${target_endpoint}" --redis-endpoint "127.0.0.1:${redis_port}" \
     --redis-key-prefix zlink-cross-user-spot-join --spot-id cross-lang-user-spot \
@@ -1670,7 +1700,7 @@ stage_cpp_source_node_target_user_spot_join() {
     --start-file "${start_file}" --ready-file "${RUN_DIR}/cpp-user-spot-join-source-node.ready"
   wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 90
   touch "${start_file}"
-  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  assert_source_actor_create "${source_events}" "cpp-user-spot-join-source" "node-user-spot-join-target"
   wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
   wait_for_user_spot_target_outcome "${target_events}"
   stop_all
@@ -1688,6 +1718,7 @@ stage_java_source_cpp_target_user_spot_join() {
 
   start_redis user-spot-join-redis-java-cpp "${redis_port}"
   start_cpp cpp-user-spot-target-java user-spot-target \
+    --placement-weight 0 \
     --mesh-name cross.user-spot-join --node-rid cpp-user-spot-join-target \
     --peer-rid java-user-spot-join-source --bind-endpoint "${target_endpoint}" \
     --redis-endpoint "127.0.0.1:${redis_port}" --redis-key-prefix zlink-cross-user-spot-join \
@@ -1703,7 +1734,7 @@ stage_java_source_cpp_target_user_spot_join() {
   wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 90
   wait_for_line "${target_events}" "user-spot-source-peer-ready|ready=true" 90
   touch "${start_file}"
-  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  assert_source_actor_create "${source_events}" "java-user-spot-join-source" "cpp-user-spot-join-target"
   wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
   wait_for_user_spot_target_outcome "${target_events}"
   stop_all
@@ -1721,6 +1752,7 @@ stage_cpp_source_java_target_user_spot_join() {
 
   start_redis user-spot-join-redis-cpp-java "${redis_port}"
   start_java java-user-spot-target-cpp user-spot-target \
+    --placement-weight 0 \
     --mesh-name cross.user-spot-join --node-rid java-user-spot-join-target \
     --peer-rid cpp-user-spot-join-source --bind-endpoint "${target_endpoint}" \
     --redis-endpoint "127.0.0.1:${redis_port}" --redis-key-prefix zlink-cross-user-spot-join \
@@ -1736,7 +1768,7 @@ stage_cpp_source_java_target_user_spot_join() {
   wait_for_line "${source_events}" "user-spot-source-peer-ready|ready=true" 90
   wait_for_line "${target_events}" "user-spot-source-peer-ready|ready=true" 90
   touch "${start_file}"
-  wait_for_line "${source_events}" "user-spot-source-actor-created|status=created" 60
+  assert_source_actor_create "${source_events}" "cpp-user-spot-join-source" "java-user-spot-join-target"
   wait_for_line "${source_events}" "user-spot-join-request-reply|accepted=true" 90
   wait_for_user_spot_target_outcome "${target_events}"
   stop_all
@@ -1962,14 +1994,6 @@ stage_java_source_dotnet_target_relocation() {
   source_events="${RUN_DIR}/java-relocation-source.events"
   target_events="${RUN_DIR}/dotnet-relocation-target-java.events"
   start_redis relocation-redis-java-dotnet "${redis_port}"
-  start_dotnet dotnet-relocation-target-java entry-spot-target \
-    --mesh-name cross.relocation \
-    --peer-rid java-relocation-source \
-    --bind-endpoint "${target_endpoint}" \
-    --redis-endpoint "127.0.0.1:${redis_port}" \
-    --actor-id cross-lang-relocation-actor \
-    --event-file "${target_events}"
-  wait_for_ready "${RUN_DIR}/dotnet-relocation-target-java.ready" 180
   start_java java-relocation-source entry-spot-source \
     --mesh-name cross.relocation \
     --node-rid java-relocation-source \
@@ -1978,7 +2002,18 @@ stage_java_source_dotnet_target_relocation() {
     --actor-id cross-lang-relocation-actor \
     --payload-bytes 100000 \
     --event-file "${source_events}"
-  wait_for_line "${source_events}" "entry-spot-owner-before|node=java-relocation-source" 60
+  wait_for_line "${source_events}" "entry-spot-create|status=created" 60
+  assert_source_actor_create "${source_events}" "java-relocation-source" "dotnet-relocation-target" "entry-spot-owner-before"
+  # Start the relocation destination only after source creation is proven;
+  # it cannot become an initial placement candidate while the source boots.
+  start_dotnet dotnet-relocation-target-java entry-spot-target \
+    --mesh-name cross.relocation \
+    --peer-rid java-relocation-source \
+    --bind-endpoint "${target_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --actor-id cross-lang-relocation-actor \
+    --event-file "${target_events}"
+  wait_for_ready "${RUN_DIR}/dotnet-relocation-target-java.ready" 180
   wait_for_line "${source_events}" "relocate-result|outcome=RELOCATED" 150
   wait_for_line "${target_events}" "entry-spot-probe|nodeRid=" 150
   if grep -qF "entry-spot-probe|nodeRid=java-relocation-source" "${target_events}"; then
@@ -2001,6 +2036,17 @@ stage_dotnet_source_java_target_relocation() {
   source_events="${RUN_DIR}/dotnet-relocation-source-java.events"
   target_events="${RUN_DIR}/java-relocation-target.events"
   start_redis relocation-redis-dotnet-java "${redis_port}"
+  start_dotnet dotnet-relocation-source-java entry-spot-source \
+    --mesh-name cross.relocation \
+    --bind-endpoint "${source_endpoint}" \
+    --redis-endpoint "127.0.0.1:${redis_port}" \
+    --actor-id cross-lang-relocation-actor \
+    --payload-bytes 100000 \
+    --event-file "${source_events}"
+  wait_for_line "${source_events}" "entry-spot-create|status=created" 60
+  assert_source_actor_create "${source_events}" "" "java-relocation-target" "entry-spot-owner-before"
+  # Start the relocation destination only after source creation is proven;
+  # it cannot become an initial placement candidate while the source boots.
   start_java java-relocation-target entry-spot-target \
     --mesh-name cross.relocation \
     --node-rid java-relocation-target \
@@ -2009,14 +2055,6 @@ stage_dotnet_source_java_target_relocation() {
     --actor-id cross-lang-relocation-actor \
     --event-file "${target_events}"
   wait_for_ready "${RUN_DIR}/java-relocation-target.ready" 60
-  start_dotnet dotnet-relocation-source-java entry-spot-source \
-    --mesh-name cross.relocation \
-    --bind-endpoint "${source_endpoint}" \
-    --redis-endpoint "127.0.0.1:${redis_port}" \
-    --actor-id cross-lang-relocation-actor \
-    --payload-bytes 100000 \
-    --event-file "${source_events}"
-  wait_for_line "${source_events}" "entry-spot-owner-before|node=" 60
   wait_for_line "${source_events}" "relocate-result|outcome=Relocated" 150
   wait_for_line "${target_events}" "entry-spot-probe|nodeRid=java-relocation-target" 150
   stop_all
