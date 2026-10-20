@@ -1,5 +1,11 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
-import { createZLinkRequest } from '../messaging/request-result';
+import {
+  createZLinkRequest,
+  mapZLinkRequestReply,
+  prepareZLinkRequestReply,
+  identityRequestReply,
+  type ZLinkRequestResult
+} from '../messaging/request-result';
 import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
 import type {
   ZLinkChannelClient,
@@ -315,14 +321,23 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
       () => {
         this.requireSpotTransport();
       },
-      (_packetName, timeoutMs, metadata, signal, onAdmitted) =>
-        requestToSpotHandle(this.requireSpotTransport(), spot, request, {
-          timeoutMs,
-          signal,
-          metadata,
-          onAdmitted,
-          spotRouterChannelIdForMesh: this.spotRouterChannelIdForMesh
-        }),
+      <TReply>(
+        _packetName: string | undefined,
+        timeoutMs: number | undefined,
+        metadata: ReadonlyMap<string, string>,
+        signal?: AbortSignal,
+        onAdmitted?: () => void
+      ) =>
+        prepareZLinkRequestReply(
+          requestToSpotHandle<TReply>(this.requireSpotTransport(), spot, request, {
+            timeoutMs,
+            signal,
+            metadata,
+            onAdmitted,
+            spotRouterChannelIdForMesh: this.spotRouterChannelIdForMesh
+          }),
+          identityRequestReply
+        ),
       this.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     );
   }
@@ -528,7 +543,7 @@ type ZLinkRequestSubmitter = <TReply>(
   signal?: AbortSignal,
   onAdmitted?: () => void,
   message?: unknown
-) => Promise<TReply>;
+) => ZLinkRequestResult<TReply>;
 
 class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
   private timeoutMs?: number;
@@ -589,7 +604,7 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
       undefined,
       this.message
     );
-    return turn.yieldFrameworkPromise(pending);
+    return turn.yieldFrameworkPromise(mapZLinkRequestReply(pending));
   }
 }
 

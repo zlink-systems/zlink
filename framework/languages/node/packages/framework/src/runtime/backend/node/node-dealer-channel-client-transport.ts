@@ -1,3 +1,8 @@
+import {
+  prepareZLinkRequestReply,
+  rejectZLinkRequestReply,
+  type ZLinkRequestResult
+} from '../../messaging/request-result';
 import { bindingRequestReply } from './node-backend-adapter-support';
 import type { DealerSocket, Message, PubSocket } from '@zlink-systems/zlink';
 import { ZLinkConfigurationException } from '../../configuration';
@@ -51,7 +56,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     return { status: ZLinkSubmitStatus.Submitted };
   }
 
-  async request<TReply>(
+  request<TReply>(
     channelName: string,
     packetName: string | undefined,
     request: Message,
@@ -59,42 +64,48 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     signal?: AbortSignal,
     metadata: ReadonlyMap<string, string> = EMPTY_METADATA,
     onAdmitted?: () => void
-  ): Promise<TReply> {
-    throwIfAborted(signal);
-    const operation = runWithOutboundFlow(true, () =>
-      appendParts(
-        this.dealer.request(),
-        encodeChannelEnvelopeParts(
-          ZLinkChannelMessageKind.Request,
-          channelName,
-          packetName,
-          request,
-          timeoutMs,
-          undefined,
-          undefined,
-          undefined,
-          true,
-          metadata
-        )
-      )
-    );
-    if (timeoutMs !== undefined) operation.timeout(timeoutMs);
-    const reply = await submitRequestOperation(
-      {
-        submit: () =>
-          bindingRequestReply(
-            operation.submit(),
-            timeoutMs === undefined ? undefined : performance.now() + timeoutMs,
-            undefined,
-            onAdmitted
-          )
-      },
-      'channel request'
-    );
+  ): ZLinkRequestResult<TReply> {
     try {
-      return decodeChannelReply<TReply>(reply);
-    } finally {
-      for (const part of reply) part.close();
+      throwIfAborted(signal);
+      const operation = runWithOutboundFlow(true, () =>
+        appendParts(
+          this.dealer.request(),
+          encodeChannelEnvelopeParts(
+            ZLinkChannelMessageKind.Request,
+            channelName,
+            packetName,
+            request,
+            timeoutMs,
+            undefined,
+            undefined,
+            undefined,
+            true,
+            metadata
+          )
+        )
+      );
+      if (timeoutMs !== undefined) operation.timeout(timeoutMs);
+      const pending = submitRequestOperation(
+        {
+          submit: () =>
+            bindingRequestReply(
+              operation.submit(),
+              timeoutMs === undefined ? undefined : performance.now() + timeoutMs,
+              undefined,
+              onAdmitted
+            )
+        },
+        'channel request'
+      );
+      return prepareZLinkRequestReply(pending, (reply) => {
+        try {
+          return decodeChannelReply<TReply>(reply);
+        } finally {
+          for (const part of reply) part.close();
+        }
+      });
+    } catch (error) {
+      return rejectZLinkRequestReply(error);
     }
   }
 

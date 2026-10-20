@@ -1462,6 +1462,242 @@ void verify_request_to_never_admitted_target_reports_not_found ()
     service.stop ();
 }
 
+// Holds the first Store result after it has captured the old descriptor. The
+// monitor starts on another thread because its initial Store refresh is synchronous.
+class delayed_monitoring_mesh_store_t final
+    : public zlink::framework::runtime::in_memory_location_repository_t
+{
+  public:
+    explicit delayed_monitoring_mesh_store_t (zlink::framework::mesh_node_descriptor_t descriptor) :
+        _descriptor (std::move (descriptor)), _release (_released.get_future ().share ())
+    {
+    }
+
+    std::future<void> first_read () { return _read.get_future (); }
+    void release () { _released.set_value (); }
+
+    zlink::framework::task_t<
+      zlink::framework::location_page_t<zlink::framework::mesh_node_descriptor_t>>
+    list_mesh_nodes (std::string, zlink::framework::location_page_request_t = {}) override
+    {
+        zlink::framework::location_page_t<zlink::framework::mesh_node_descriptor_t> page;
+        page.items.push_back (_descriptor);
+        std::call_once (_first_read, [&] {
+            _read.set_value ();
+            _release.wait ();
+        });
+        co_return page;
+    }
+
+  private:
+    zlink::framework::mesh_node_descriptor_t _descriptor;
+    std::promise<void> _read;
+    std::promise<void> _released;
+    std::shared_future<void> _release;
+    std::once_flag _first_read;
+};
+
+void LocalPlacementIgnoresStaleStoreResult ()
+{
+    namespace fw = zlink::framework;
+    // The positive control must retain availability; the zero-weight case must
+    // retain CapacityExceeded before and after the old Store result arrives.
+    for (const int weight : {100, 0}) {
+        auto registration = make_node ("tcp://127.0.0.1:0", "stale-store-placement");
+        registration->placement_weight = 100;
+        auto node = std::make_shared<fw::detail::mesh_node_runtime_t> (registration);
+        node->start ();
+        const auto status = node->status ();
+        fw::mesh_node_descriptor_t stale;
+        stale.mesh_name = "vertical-mesh";
+        stale.rid = status.routing_id ();
+        stale.lifecycle_generation = status.lifecycle_generation ();
+        stale.descriptor_revision = 1;
+        stale.object_role = fw::object_role_t::server;
+        stale.state = fw::framework_runtime_state_t::serving;
+        stale.placement_weight = 100;
+        delayed_monitoring_mesh_store_t store (stale);
+        auto read = store.first_read ();
+        fw::runtime::route_mesh_runtime_service_t runtime ({node}, nullptr, &store);
+        std::jthread starter ([&] { runtime.start (); });
+        read.wait ();
+
+        std::mutex event_mutex;
+        std::condition_variable event_ready;
+        std::vector<fw::observed_status_t<fw::mesh_node_snapshot_t>> received;
+        auto existing = runtime.observe ("vertical-mesh", 16, [&] (const auto &observed) {
+            {
+                std::lock_guard lock (event_mutex);
+                received.push_back (observed);
+            }
+            event_ready.notify_one ();
+        });
+        {
+            std::unique_lock lock (event_mutex);
+            assert (event_ready.wait_for (lock, 2s, [&] { return !received.empty (); }));
+            assert (received.back ().status.placement.is_available);
+        }
+        fw::runtime::route_mesh_runtime_options_service_t options ({node});
+        options.mesh ("vertical-mesh").placement_weight (weight);
+        const auto assert_placement = [weight] (const fw::mesh_node_snapshot_t &snapshot) {
+            assert (snapshot.placement.is_available == (weight > 0));
+            assert (snapshot.placement.unavailable_reason
+                    == (weight > 0 ? std::nullopt
+                                   : std::optional (fw::topology_reason_t::capacity_exceeded)));
+        };
+        assert_placement (runtime.snapshot ("vertical-mesh"));
+        {
+            std::unique_lock lock (event_mutex);
+            assert (event_ready.wait_for (lock, 2s, [&] {
+                return !received.empty ()
+                       && received.back ().status.placement.is_available == (weight > 0);
+            }));
+            assert_placement (received.back ().status);
+        }
+
+        std::fprintf (stderr,
+                      "LocalPlacementIgnoresStaleStoreResult weight=%d before release passed\n",
+                      weight);
+        store.release ();
+        starter.join ();
+        std::fprintf (
+          stderr, "LocalPlacementIgnoresStaleStoreResult weight=%d stale result applied\n", weight);
+        assert_placement (runtime.snapshot ("vertical-mesh"));
+        {
+            std::lock_guard lock (event_mutex);
+            assert_placement (received.back ().status);
+        }
+        std::promise<fw::observed_status_t<fw::mesh_node_snapshot_t>> first;
+        std::once_flag first_delivery;
+        auto fresh = runtime.observe ("vertical-mesh", 1, [&] (const auto &observed) {
+            std::call_once (first_delivery, [&] { first.set_value (observed); });
+        });
+        const auto observed = first.get_future ().get ();
+        assert_placement (observed.status);
+        assert (observed.loss.coalesced_count == 0);
+        assert (observed.loss.discarded_terminal_count == 0);
+        fresh->close ();
+        existing->close ();
+        runtime.stop ();
+        node->stop ();
+        std::fprintf (stderr, "LocalPlacementIgnoresStaleStoreResult weight=%d passed\n", weight);
+    }
+}
+
+// A shutdown can seal a node while an earlier startup/Serving Store read is pending.
+void LocalLifecycleIgnoresStaleStoreResult ()
+{
+    namespace fw = zlink::framework;
+    for (const auto stale_state :
+         {fw::framework_runtime_state_t::serving, fw::framework_runtime_state_t::preparing}) {
+        auto registration = make_node ("tcp://127.0.0.1:0", "stale-store-lifecycle");
+        auto node = std::make_shared<fw::detail::mesh_node_runtime_t> (registration);
+        node->start ();
+        const auto status = node->status ();
+        fw::mesh_node_descriptor_t stale;
+        stale.mesh_name = "vertical-mesh";
+        stale.rid = status.routing_id ();
+        stale.lifecycle_generation = status.lifecycle_generation ();
+        stale.descriptor_revision = 1;
+        stale.object_role = fw::object_role_t::server;
+        stale.state = stale_state;
+        stale.placement_weight = 100;
+        delayed_monitoring_mesh_store_t store (stale);
+        auto read = store.first_read ();
+        fw::runtime::route_mesh_runtime_service_t runtime ({node}, nullptr, &store);
+        std::jthread starter ([&] { runtime.start (); });
+        read.wait ();
+
+        std::mutex event_mutex;
+        std::condition_variable event_ready;
+        std::vector<fw::observed_status_t<fw::mesh_node_snapshot_t>> received;
+        auto existing = runtime.observe ("vertical-mesh", 16, [&] (const auto &observed) {
+            {
+                std::lock_guard lock (event_mutex);
+                received.push_back (observed);
+            }
+            event_ready.notify_one ();
+        });
+        {
+            std::unique_lock lock (event_mutex);
+            assert (event_ready.wait_for (lock, 2s, [&] { return !received.empty (); }));
+            assert (received.back ().status.is_ready);
+        }
+        node->request_stop ();
+        node->native_node ().transport ().publish_draining ().result ().value ();
+        const auto assert_draining = [] (const fw::mesh_node_snapshot_t &snapshot) {
+            assert (snapshot.state == fw::topology_state_t::stopping);
+            assert (!snapshot.is_ready);
+            assert (!snapshot.placement.is_available);
+            assert (snapshot.placement.unavailable_reason == fw::topology_reason_t::draining);
+            assert (std::all_of (snapshot.channels.begin (), snapshot.channels.end (),
+                                 [] (const auto &channel) { return !channel.is_ready; }));
+        };
+        assert_draining (runtime.snapshot ("vertical-mesh"));
+        {
+            std::unique_lock lock (event_mutex);
+            assert (event_ready.wait_for (lock, 2s, [&] {
+                return received.back ().status.state == fw::topology_state_t::stopping;
+            }));
+            assert_draining (received.back ().status);
+        }
+        std::fprintf (stderr,
+                      "LocalLifecycleIgnoresStaleStoreResult old=%d before release passed\n",
+                      static_cast<int> (stale_state));
+        store.release ();
+        starter.join ();
+        std::fprintf (stderr, "LocalLifecycleIgnoresStaleStoreResult old=%d stale result applied\n",
+                      static_cast<int> (stale_state));
+        assert_draining (runtime.snapshot ("vertical-mesh"));
+        {
+            std::lock_guard lock (event_mutex);
+            assert_draining (received.back ().status);
+        }
+        std::promise<fw::observed_status_t<fw::mesh_node_snapshot_t>> first;
+        std::once_flag first_delivery;
+        auto fresh = runtime.observe ("vertical-mesh", 1, [&] (const auto &observed) {
+            std::call_once (first_delivery, [&] { first.set_value (observed); });
+        });
+        const auto observed = first.get_future ().get ();
+        assert_draining (observed.status);
+        assert (observed.loss.coalesced_count == 0);
+        assert (observed.loss.discarded_terminal_count == 0);
+        fresh->close ();
+        existing->close ();
+        runtime.stop ();
+        node->stop ();
+        std::fprintf (stderr, "LocalLifecycleIgnoresStaleStoreResult old=%d passed\n",
+                      static_cast<int> (stale_state));
+    }
+}
+
+// Host lifecycle is visible before descriptor publication changes the native node.
+void verify_local_host_lifecycle_uses_runtime_owner ()
+{
+    namespace fw = zlink::framework;
+    auto registration = make_node ("tcp://127.0.0.1:0", "local-host-lifecycle");
+    auto node = std::make_shared<fw::detail::mesh_node_runtime_t> (registration);
+    node->start ();
+    std::atomic host_state{fw::framework_runtime_state_t::serving};
+    fw::runtime::route_mesh_runtime_service_t runtime ({node}, nullptr, nullptr, nullptr,
+                                                       [&] { return host_state.load (); });
+    runtime.start ();
+    assert (runtime.snapshot ("vertical-mesh").placement.is_available);
+
+    // The host admission seal precedes native Draining publication (host relocation §14).
+    host_state.store (fw::framework_runtime_state_t::draining);
+    const auto snapshot = runtime.snapshot ("vertical-mesh");
+    assert (snapshot.state == fw::topology_state_t::stopping);
+    assert (!snapshot.is_ready);
+    assert (!snapshot.placement.is_available);
+    assert (snapshot.placement.unavailable_reason == fw::topology_reason_t::draining);
+    assert (node->native_node ().transport ().topology ().local_descriptor ().state
+            == fw::runtime::mesh::service_node_state_t::serving);
+    runtime.stop ();
+    node->stop ();
+    std::fprintf (stderr, "Local host Draining before native publication passed\n");
+}
+
 void verify_observation_starts_with_weight_changed_before_subscription ()
 {
     namespace fw = zlink::framework;
@@ -1548,9 +1784,10 @@ void verify_public_runtime_surface ()
     monitoring_store.set_local (local_descriptor);
     assert (registration->listen_endpoint == node->status ().local_endpoint ());
     assert (registration->listen_endpoint != "tcp://127.0.0.1:0");
+    std::atomic host_state{zlink::framework::framework_runtime_state_t::serving};
     auto runtime = std::make_shared<zlink::framework::runtime::route_mesh_runtime_service_t> (
       std::vector<std::shared_ptr<zlink::framework::detail::mesh_node_runtime_t>>{node}, nullptr,
-      &monitoring_store);
+      &monitoring_store, nullptr, [&] { return host_state.load (); });
     runtime->start ();
     zlink::framework::runtime::route_mesh_runtime_options_service_t runtime_options ({node});
 
@@ -1716,6 +1953,8 @@ void verify_public_runtime_surface ()
     }));
     assert (runtime->is_ready ("vertical-mesh"));
 
+    // Local weight changes enter through the same owner as runtime option reads.
+    runtime_options.mesh ("vertical-mesh").placement_weight (0);
     auto unavailable = monitoring_store.local ();
     ++unavailable.descriptor_revision;
     unavailable.placement_weight = 0;
@@ -1727,6 +1966,7 @@ void verify_public_runtime_surface ()
                     == zlink::framework::topology_reason_t::capacity_exceeded;
     }));
 
+    runtime_options.mesh ("vertical-mesh").placement_weight (100);
     unavailable.placement_weight = 100;
     // The reserved slots alone exhaust both limits (MeshNode §5.1).
     unavailable.capacity.actors.limit = 2;
@@ -1744,6 +1984,7 @@ void verify_public_runtime_surface ()
     assert (
       wait_for_snapshot ([] (const auto &snapshot) { return snapshot.placement.is_available; }));
 
+    host_state.store (zlink::framework::framework_runtime_state_t::relocating);
     unavailable.state = zlink::framework::framework_runtime_state_t::relocating;
     ++unavailable.descriptor_revision;
     (void) monitoring_store.update_mesh_node (unavailable,
@@ -1757,6 +1998,7 @@ void verify_public_runtime_surface ()
     }));
     assert (!runtime->is_ready ("vertical-mesh"));
 
+    host_state.store (zlink::framework::framework_runtime_state_t::serving);
     unavailable.state = zlink::framework::framework_runtime_state_t::serving;
     ++unavailable.descriptor_revision;
     (void) monitoring_store.update_mesh_node (unavailable,
@@ -2929,7 +3171,17 @@ int main (int argc, char **argv)
         verify_monitor_pump_does_not_wait_for_spot_lane ();
         return 0;
     }
+    if (argc == 2 && std::string_view (argv[1]) == "--stale-local-lifecycle") {
+        LocalLifecycleIgnoresStaleStoreResult ();
+        verify_local_host_lifecycle_uses_runtime_owner ();
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--stale-local-placement") {
+        LocalPlacementIgnoresStaleStoreResult ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--monitor-snapshot") {
+        LocalPlacementIgnoresStaleStoreResult ();
         verify_observation_starts_with_weight_changed_before_subscription ();
         verify_public_runtime_surface ();
         verify_manual_peer_public_status ();
@@ -2945,6 +3197,9 @@ int main (int argc, char **argv)
     if (argc == 2 && std::string_view (argv[1]) == "--cross-process")
         return run_cross_process_delivery ();
 #endif
+    LocalLifecycleIgnoresStaleStoreResult ();
+    verify_local_host_lifecycle_uses_runtime_owner ();
+    LocalPlacementIgnoresStaleStoreResult ();
     verify_local_join_timeout_releases_membership ();
     verify_unselected_object_role_defaults_to_none ();
     verify_automatic_identity_and_port_builder ();
