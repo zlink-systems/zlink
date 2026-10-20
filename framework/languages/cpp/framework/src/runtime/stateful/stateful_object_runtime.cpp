@@ -51,10 +51,10 @@ stateful_object_runtime_t::~stateful_object_runtime_t ()
 
 void stateful_object_runtime_t::retire_population_metrics ()
 {
-    if (!_actor_metric)
-        return;
     _lane
       .run ([this] {
+          if (!_actor_metric)
+              return;
           // Lifecycle teardown may visit retained objects. Observable collection
           // never enumerates this population, and closed handles cannot keep a
           // stopped host in the process's current Actor count.

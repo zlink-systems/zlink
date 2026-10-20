@@ -1200,16 +1200,19 @@ void public_host_runtime_t::configure_late_session_route_update (
 
 void public_host_runtime_t::start ()
 {
-    _lifecycle_configuration_lane
-      .run ([&] {
-          if (_started || _closing) {
-              return;
-          }
-          _objects.configure_population_metrics (_options.mesh.descriptor.mesh_name);
-          _transport->start ();
-          _started = true;
-      })
-      .get ();
+    auto population_metrics = _lifecycle_configuration_lane
+                                .run ([&] {
+                                    if (_started || _closing) {
+                                        return task_t<void> (result_t<void>::success ());
+                                    }
+                                    auto configured = _objects.configure_population_metrics (
+                                      _options.mesh.descriptor.mesh_name);
+                                    _transport->start ();
+                                    _started = true;
+                                    return configured;
+                                })
+                                .get ();
+    population_metrics.result ().value ();
 }
 
 void public_host_runtime_t::close () noexcept

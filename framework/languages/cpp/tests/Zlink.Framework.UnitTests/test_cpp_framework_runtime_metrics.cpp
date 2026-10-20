@@ -7,10 +7,33 @@
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/spots/activation_admission.hpp"
+#include "runtime/stateful/stateful_object_runtime.hpp"
+#include <future>
 #include <zlink/framework.hpp>
 #include <cmath>
 #include <iostream>
 #include <thread>
+
+namespace zlink::framework::runtime::stateful
+{
+struct stateful_object_runtime_test_access_t
+{
+    static std::promise<void> hold_lane (stateful_object_runtime_t &objects)
+    {
+        std::promise<void> release;
+        std::promise<void> entered;
+        auto held = release.get_future ().share ();
+        auto running = entered.get_future ();
+        if (!objects._lane.try_post ([held, &entered] {
+                entered.set_value ();
+                held.wait ();
+            }))
+            throw std::runtime_error ("object lane is closed");
+        running.wait ();
+        return release;
+    }
+};
+} // namespace zlink::framework::runtime::stateful
 
 using namespace zlink::framework;
 using namespace zlink::framework::runtime;
@@ -68,6 +91,40 @@ void require_one_current_host_state (metric_test::provider_t &provider)
     }
     require (total == 1, "host has more than one current state");
 }
+void population_retirement_orders_after_pending_configuration ()
+{
+    metric_test::provider_t provider;
+    stateful::stateful_object_runtime_t objects;
+    objects.replace_placement_candidates ({{.mesh_name = "population-mesh",
+                                            .node_id = "local-node",
+                                            .stable_types = {"player"},
+                                            .active_capacity = 1,
+                                            .pending_capacity = 1}});
+    const auto created = objects.begin_create ({.kind = stateful::object_kind_t::actor,
+                                                .key = "actor",
+                                                .stable_type = "player",
+                                                .mesh_name = "population-mesh"});
+    require (created.status == stateful::create_status_t::reserved, "Actor reservation failed");
+    require (objects.commit_create (created.attempt) == stateful::stateful_error_t::none,
+             "Actor commit failed");
+    auto release = stateful::stateful_object_runtime_test_access_t::hold_lane (objects);
+    auto configured = objects.configure_population_metrics ("population-mesh");
+    std::promise<void> retiring;
+    auto retirement_started = retiring.get_future ();
+    auto retirement = std::async (std::launch::async, [&] {
+        retiring.set_value ();
+        objects.retire_population_metrics ();
+    });
+    retirement_started.wait ();
+    const bool ordered = retirement.wait_for (50ms) == std::future_status::timeout;
+    release.set_value ();
+    retirement.get ();
+    configured.result ().value ();
+    require (point (provider, "zlink.actor.count", {{"mesh_name", "population-mesh"}}) == 0,
+             "retirement left a population counter from pending configuration");
+    require (ordered, "retirement bypassed the pending object lane configuration");
+}
+
 void activation_metrics_configured_once ()
 {
     metric_test::provider_t provider;
@@ -405,6 +462,7 @@ void contract_rejects_wrong_metadata ()
 int main ()
 {
     try {
+        population_retirement_orders_after_pending_configuration ();
         activation_metrics_configured_once ();
         host_lifecycle ();
         serving_relocated_stopped ();

@@ -344,6 +344,7 @@ class shutdown_session_control_t final
     void record_destroyed () { record (_destroyed, "destroyed"); }
 
     bool wait_connected () { return wait_for (_connected, 1); }
+    bool wait_destroyed () { return wait_for (_destroyed, 1); }
     bool wait_disconnected () { return wait_for (_disconnected, 1); }
     bool wait_packet_entered () { return wait_for (_packet_entered, 1); }
 
@@ -949,7 +950,9 @@ bool contains_error_frame (const zlink::framework::detail::stream_runtime_t &run
     return false;
 }
 
-double stream_metric_sum (metric_test::provider_t &provider, std::string_view name)
+double stream_metric_sum (metric_test::provider_t &provider,
+                          std::string_view name,
+                          std::string_view close_reason = {})
 {
     const auto data = provider.collect ();
     metric_test::validate_metric_contract (data);
@@ -960,6 +963,10 @@ double stream_metric_sum (metric_test::provider_t &provider, std::string_view na
             continue;
         found = true;
         for (const auto &point : metric.point_data_attr_) {
+            if (!close_reason.empty ()
+                && opentelemetry::nostd::get<std::string> (point.attributes.at ("close_reason"))
+                     != close_reason)
+                continue;
             const auto &sum =
               opentelemetry::nostd::get<metric_test::sdk::SumPointData> (point.point_data);
             total += opentelemetry::nostd::get<double> (sum.value_);
@@ -979,6 +986,22 @@ enum class connection_close_case_t
     heartbeat_timeout
 };
 
+const char *expected_close_reason (connection_close_case_t close_case)
+{
+    switch (close_case) {
+        case connection_close_case_t::connected_rejected:
+            return "transport_error";
+        case connection_close_case_t::client_close:
+        case connection_close_case_t::disconnect_rejected:
+            return "client_close";
+        case connection_close_case_t::server_stop:
+            return "server_shutdown";
+        case connection_close_case_t::heartbeat_timeout:
+            return "heartbeat_timeout";
+    }
+    throw std::logic_error ("unknown close case");
+}
+
 int core_connected_rejection_cleanup (
   metric_test::provider_t &metrics,
   connection_close_case_t close_case = connection_close_case_t::connected_rejected)
@@ -986,6 +1009,9 @@ int core_connected_rejection_cleanup (
     using namespace zlink::framework;
     const auto opened = stream_metric_sum (metrics, "zlink.stream.connections.opened");
     const auto closed = stream_metric_sum (metrics, "zlink.stream.connections.closed");
+    const auto reason = expected_close_reason (close_case);
+    const auto closed_with_reason =
+      stream_metric_sum (metrics, "zlink.stream.connections.closed", reason);
     service_collection_t services;
     handler_registry_t handlers;
     serializer_registry_t serializers;
@@ -1096,6 +1122,10 @@ int core_connected_rejection_cleanup (
             && !control->wait_disconnected ())
             return 344;
     }
+    if ((close_case == connection_close_case_t::connected_rejected
+         || close_case == connection_close_case_t::disconnect_rejected)
+        && !control->wait_destroyed ())
+        return 346;
     host.stop ();
     host.stop ();
     close_native_client (client);
@@ -1115,17 +1145,23 @@ int core_connected_rejection_cleanup (
         return 340;
     if (stream_metric_sum (metrics, "zlink.stream.connections.opened") - opened != 1
         || stream_metric_sum (metrics, "zlink.stream.connections.closed") - closed != 1
-        || stream_metric_sum (metrics, "zlink.stream.connections.active") != 0) {
+        || stream_metric_sum (metrics, "zlink.stream.connections.active") != 0
+        || stream_metric_sum (metrics, "zlink.stream.connections.closed", reason)
+               - closed_with_reason
+             != 1) {
         std::cerr << "FAIL connection metrics case=" << static_cast<int> (close_case) << " opened="
                   << stream_metric_sum (metrics, "zlink.stream.connections.opened") - opened
                   << " closed="
                   << stream_metric_sum (metrics, "zlink.stream.connections.closed") - closed
                   << " active=" << stream_metric_sum (metrics, "zlink.stream.connections.active")
+                  << " expected_close_reason=" << reason << " matching_closed="
+                  << stream_metric_sum (metrics, "zlink.stream.connections.closed", reason)
+                       - closed_with_reason
                   << '\n';
         return 342;
     }
     std::cout << "PASS connection metrics case=" << static_cast<int> (close_case)
-              << " opened=closed=1 active=0\n";
+              << " opened=closed=1 active=0 close_reason=" << reason << '\n';
     return 0;
 }
 

@@ -275,28 +275,26 @@ class stateful_object_runtime_t
     friend struct stateful_object_runtime_test_access_t;
 
   public:
-    void configure_population_metrics (std::string mesh_name)
+    task_t<void> configure_population_metrics (std::string mesh_name)
     {
-        _lane
-          .run ([this, mesh_name = std::move (mesh_name)] () mutable {
-              if (_actor_metric)
-                  return;
-              _metric_mesh = std::move (mesh_name);
-              auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
-              if (!dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ())) {
-                  auto meter = provider->GetMeter ("zlink.framework");
-                  if (!meter)
-                      return;
-                  _actor_metric =
-                    meter->CreateDoubleUpDownCounter ("zlink.actor.count", "", "{actor}");
-                  if (_actor_metric) {
-                      _actor_metric->Add (0, {{"mesh_name", _metric_mesh}});
-                      for (const auto &[key, object] : _objects)
-                          record_actor_population (object, 1);
-                  }
-              }
-          })
-          .get ();
+        return _lane.run_task ([this, mesh_name = std::move (mesh_name)] () mutable {
+            if (_actor_metric)
+                return;
+            _metric_mesh = std::move (mesh_name);
+            auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
+            if (!dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ())) {
+                auto meter = provider->GetMeter ("zlink.framework");
+                if (!meter)
+                    return;
+                _actor_metric =
+                  meter->CreateDoubleUpDownCounter ("zlink.actor.count", "", "{actor}");
+                if (_actor_metric) {
+                    _actor_metric->Add (0, {{"mesh_name", _metric_mesh}});
+                    for (const auto &[key, object] : _objects)
+                        record_actor_population (object, 1);
+                }
+            }
+        });
     }
 
     void retire_population_metrics ();
