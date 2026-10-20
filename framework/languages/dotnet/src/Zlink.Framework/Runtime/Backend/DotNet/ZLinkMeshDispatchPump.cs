@@ -709,7 +709,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             return;
         }
 
-        (nodeRoutes ??= new(ZLinkReceiveBatchBudget.MaximumRecords)).Add(received);
+        (nodeRoutes ??= new(batch.Count)).Add(received);
     }
 
     private ValueTask DispatchNodeRoutes(
