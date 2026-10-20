@@ -2160,7 +2160,12 @@ public final class ZLinkFrameworkRuntime implements AutoCloseable, ZLinkMessageF
     @Override
     public void close() {
         try {
-            closeAsync().toCompletableFuture().get();
+            var termination = activeTermination.get();
+            if (termination != null) {
+                termination.get();
+            } else {
+                closeAsync().toCompletableFuture().get();
+            }
         } catch (InterruptedException error) {
             Thread.currentThread().interrupt();
             throw new ZLinkConfigurationException("framework shutdown was interrupted", error);
