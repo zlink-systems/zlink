@@ -2255,6 +2255,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_instance_spot_activation PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_use_zlink_gtest_main(test_cpp_framework_instance_spot_activation)
+  target_link_libraries(test_cpp_framework_instance_spot_activation PRIVATE opentelemetry-cpp::metrics)
   # The channel messaging test reaches the service wire codec headers, which include the
   # schema-generated constants header (see test_cpp_framework_service_wire_codec above).
   target_include_directories(test_cpp_framework_channel_messaging PRIVATE

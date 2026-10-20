@@ -285,7 +285,7 @@ test('Instance activation does not start payload put when its deadline expires d
   try {
     runtime.registerAsyncInstanceActivationAuthority({
       async read() {
-        context.mock.timers.setTime(Number(deadline) + 1);
+        context.mock.timers.tick(Number(deadline) - Date.now() + 1);
         return { kind: 'missing' };
       },
       reserve(activation, signal) {
