@@ -6499,8 +6499,7 @@ struct native_actor_relay_fixture_t
                    std::string payload)
     {
         auto encoded =
-          zlink::framework::runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
-            header, zlink::message_t::from (payload));
+          zlink::framework::detail::encode_actor_packet (header, zlink::message_t::from (payload));
         auto parts = std::move (encoded).take_items ();
         return dispatch_parts (spots, record, parts);
     }
@@ -6528,18 +6527,18 @@ int local_relay_failure_returns_without_waiting_for_handoff_deadline ()
     if (!fixture.dispatch (spots, record, header, "ping")
         || fixture.reply.wait_for (std::chrono::seconds (2)) != std::future_status::ready)
         return 1;
-    const auto failed = runtime::messaging::envelope_codec_t{}.decode_header (
-      runtime::messaging::message_parts_t (fixture.reply.get ()));
+    const auto failed =
+      decode_actor_reply (runtime::messaging::message_parts_t (fixture.reply.get ()));
     const auto pending_empty =
       node->lane.run ([&] { return node->pending_handoff_requests.empty (); }).get ();
-    return failed && failed.value ().kind == runtime::messaging::message_kind_t::error
-               && failed.value ().error_code == "not_found"
+    return !failed && failed.error_kind () == framework_error_kind_t::not_found
                && fixture.probe->calls.load (std::memory_order_acquire) == 1 && pending_empty
              ? 0
              : 2;
 }
 
-int local_relay_preserves_handoff_request_route (bool has_original_operation)
+int local_relay_preserves_handoff_request_route (bool has_original_operation,
+                                                 bool expire_native = false)
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -6559,8 +6558,6 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
     header.message_name = "LocalRelayProbe";
     header.content_type = "application/octet-stream";
     header.correlation_id = "local-relay-correlation";
-    header.deadline =
-      has_original_operation ? "2099-01-01T09:00:00.1234567+09:00" : "2099-01-01T00:00:00.123Z";
     const auto source = has_original_operation ? zlink::routing_id_t::from ("upstream-node")
                                                : zlink::routing_id_t::from (std::uint32_t{0});
     const auto operation = has_original_operation ? runtime::protocol::wire_operation_id_t{41, 43}
@@ -6578,6 +6575,16 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
     native_actor_relay_fixture_t fixture (node, actor);
     runtime::host::pending_operation_t native_operation;
     auto native_completion = native_operation.completion->task ();
+    const auto native_terminals = std::make_shared<std::atomic_int> (0);
+    const auto native_terminal_observed = std::make_shared<task_completion_source_t<void>> ();
+    detail::observe_task_terminal (
+      native_completion, [native_terminals, native_terminal_observed] (const auto &) {
+          native_terminals->fetch_add (1, std::memory_order_acq_rel);
+          native_terminal_observed->complete (result_t<void>::success ());
+      });
+    using operation_clock_t = runtime::foundation::operation_registry_t::clock_t;
+    operation_clock_t::time_point registered_before;
+    operation_clock_t::time_point registered_after;
     auto record = fixture.request_record (source, {operation.high, operation.low},
                                           has_original_operation ? 47 : 0);
     if (has_original_operation) {
@@ -6598,10 +6605,12 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
           });
         fixture.reply_host->start ();
         const auto native_actor = fixture.reply_host->create_actor ("player", "local-relay-actor");
-        auto encoded = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
-          header, zlink::message_t::from (std::string ("payload")));
+        auto encoded =
+          encode_actor_packet (header, zlink::message_t::from (std::string ("payload")));
+        registered_before = operation_clock_t::now ();
         const auto submitted = finite_task_result (fixture.reply_host->request_to_actor (
           native_actor.ref (), encoded.items (), native_operation, std::chrono::seconds (30)));
+        registered_after = operation_clock_t::now ();
         if (!submitted || !*submitted || submitted->value () != zlink::submit_result_t::ok)
             return 7;
         bool received = false;
@@ -6621,9 +6630,7 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
     auto backlog = spots.take_actor_handoff_backlog (actor);
     if (backlog.size () != 1 || !backlog.front ().is_request
         || backlog.front ().packet_name != "LocalRelayProbe"
-        || backlog.front ().metadata.at ("__zlink.actorRequestId") != header.correlation_id
-        || backlog.front ().metadata.at (std::string (actor_handoff_deadline_key))
-             != *header.deadline)
+        || backlog.front ().metadata.at ("__zlink.actorRequestId") != header.correlation_id)
         return 2;
     const auto &metadata = backlog.front ().metadata;
     if (has_original_operation
@@ -6694,22 +6701,58 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
             || !node->lane.run ([&] { return node->pending_handoff_requests.empty (); }).get ())
             return 4;
         node->actor_transfer_coordinator.prepend_source_suffix (key, std::move (backlog));
+        if (expire_native) {
+            const auto original_operation = native_operation.id;
+            const auto original_reply_route = record.reply_route_id;
+            if (fixture.reply_host->transport ().expire_requests (
+                  registered_before + std::chrono::seconds (30) - operation_clock_t::duration (1))
+                  != 0
+                || native_completion.await_ready ())
+                return 14;
+            if (fixture.reply_host->transport ().expire_requests (registered_after
+                                                                  + std::chrono::seconds (30))
+                != 1)
+                return 15;
+            const auto terminal = finite_task_result (std::move (native_completion));
+            const auto observed = finite_task_result (native_terminal_observed->task ());
+            if (!terminal || *terminal
+                || terminal->error_kind () != framework_error_kind_t::deadline_exceeded || !observed
+                || !*observed || native_operation.id != original_operation
+                || record.operation_id != original_operation
+                || record.reply_route_id != original_reply_route
+                || native_terminals->load (std::memory_order_acquire) != 1)
+                return 16;
+            spots.cancel_local_actor_handoff (actor);
+            const auto expired_at =
+              std::chrono::steady_clock::now () + std::chrono::hours (24 * 365 * 100);
+            return !native_record->native_reply && !native_record->complete_native (std::nullopt)
+                       && native_terminals->load (std::memory_order_acquire) == 1
+                       && fixture.probe->calls.load (std::memory_order_acquire) == 0
+                       && spots.cleanup_expired_actor_admissions_at (expired_at) == 0
+                       && fixture.reply_host->transport ().expire_requests (
+                            registered_after + std::chrono::seconds (30))
+                            == 0
+                       && node->lane.run ([&] { return node->pending_handoff_requests.empty (); })
+                            .get ()
+                     ? 0
+                     : 17;
+        }
         spots.cancel_local_actor_handoff (actor);
         const auto terminal = finite_task_result (std::move (native_completion));
-        if (!terminal || !*terminal
+        const auto observed = finite_task_result (native_terminal_observed->task ());
+        if (!terminal || !*terminal || !observed || !*observed
             || terminal->value ().record.operation_id != native_operation.id)
             return 12;
-        const auto native_header = runtime::messaging::envelope_codec_t{}.decode_header (
-          runtime::messaging::message_parts_t (terminal->value ().parts));
-        if (!native_header
-            || native_header.value ().kind != runtime::messaging::message_kind_t::error
-            || native_header.value ().error_code != "unavailable"
-            || native_header.value ().correlation_id != header.correlation_id)
+        const auto native_reply =
+          decode_actor_reply (runtime::messaging::message_parts_t (terminal->value ().parts));
+        if (native_reply || native_reply.error_kind () != framework_error_kind_t::unavailable
+            || native_terminals->load (std::memory_order_acquire) != 1)
             return 13;
         const auto expired_at =
           std::chrono::steady_clock::now () + std::chrono::hours (24 * 365 * 100);
         return !native_record->native_reply && !native_record->complete_native (std::nullopt)
                    && fixture.probe->calls.load (std::memory_order_acquire) == 0
+                   && native_terminals->load (std::memory_order_acquire) == 1
                    && spots.cleanup_expired_actor_admissions_at (expired_at) == 0
                    && node->lane.run ([&] { return node->pending_handoff_requests.empty (); })
                         .get ()
@@ -6727,7 +6770,9 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
                    && pending.first.operation_high == record.operation_id.high
                    && pending.first.operation_low == record.operation_id.low
                    && pending.second.reply_route_id == record.reply_route_id
-                   && pending.second.reply_token.has_value ();
+                   && pending.second.reply_token.has_value ()
+                   && pending.second.request_header.correlation_id == header.correlation_id
+                   && pending.second.request_header.message_name == header.message_name;
         })
         .get ();
     if (fixture.reply.wait_for (std::chrono::milliseconds::zero ()) == std::future_status::ready)
@@ -6740,12 +6785,9 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
     if (fixture.reply.wait_for (std::chrono::seconds (2)) != std::future_status::ready)
         return 8;
     auto completed = fixture.reply.get ();
-    const auto reply_header = runtime::messaging::envelope_codec_t{}.decode_header (
-      runtime::messaging::message_parts_t (completed));
+    const auto reply = decode_actor_reply (runtime::messaging::message_parts_t (completed));
 
-    return reply_header && reply_header.value ().kind == runtime::messaging::message_kind_t::error
-               && reply_header.value ().error_code == "unavailable"
-               && reply_header.value ().correlation_id == header.correlation_id
+    return !reply && reply.error_kind () == framework_error_kind_t::unavailable
                && fixture.probe->calls.load (std::memory_order_acquire) == 1
                && spots.cleanup_expired_actor_admissions_at (expired_at) == 0
                && fixture.probe->calls.load (std::memory_order_acquire) == 1
@@ -8020,6 +8062,8 @@ int main (int argc, char **argv)
             return local_relay_preserves_handoff_request_route (true);
         if (test == "--native-relay-operation")
             return local_relay_preserves_handoff_request_route (false);
+        if (test == "--native-relay-deadline")
+            return local_relay_preserves_handoff_request_route (false, true);
         if (test == "--native-relay-missing")
             return local_relay_failure_returns_without_waiting_for_handoff_deadline ();
         if (test == "--native-relay-replay")
@@ -8050,6 +8094,8 @@ int main (int argc, char **argv)
         return 450 + route;
     if (const auto route = local_relay_preserves_handoff_request_route (false); route != 0)
         return 455 + route;
+    if (const auto deadline = local_relay_preserves_handoff_request_route (false, true); deadline != 0)
+        return 465 + deadline;
     if (const auto failure = local_relay_failure_returns_without_waiting_for_handoff_deadline ();
         failure != 0)
         return 460 + failure;

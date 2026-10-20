@@ -9201,8 +9201,11 @@ task_t<void> spot_node_runtime_t::seal_actor_application_suffix (const actor_ref
           *record->payload, [&] (auto kind, const auto &application) {
               const runtime::messaging::message_parts_t parts (
                 runtime::protocol::decode_application_parts (application));
-              const auto header =
-                runtime::messaging::envelope_codec_t{}.decode_header (parts, false);
+              const auto header = decode_actor_packet_header (
+                parts, kind == runtime::protocol::frozen_record_kind_t::actor_request
+                         ? stream_message_kind_t::request
+                         : stream_message_kind_t::send,
+                false);
               if (!header)
                   std::rethrow_exception (header.exception ());
               packet.packet_name = header.value ().message_name;
