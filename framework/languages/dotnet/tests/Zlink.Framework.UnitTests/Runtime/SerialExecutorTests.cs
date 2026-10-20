@@ -6,6 +6,57 @@ namespace Zlink.Framework.UnitTests;
 public sealed class SerialExecutorTests
 {
     [Fact]
+    public async Task RelocationSnapshotsShareTheAdmissionOwnedPayloadMaterialization()
+    {
+        await using var queue = CreateQueue(CancellationToken.None);
+        var seal = await queue.TrySealRelocationAsync();
+        Assert.NotNull(seal);
+        var materialized = 0;
+        Assert.Equal(
+            ZLinkAcceptedWorkAdmission.Accepted,
+            queue.TryPostAccepted(
+                1,
+                () =>
+                {
+                    Interlocked.Increment(ref materialized);
+                    return new byte[] { 7 };
+                },
+                static _ => ValueTask.CompletedTask,
+                static () => { },
+                false,
+                out _
+            )
+        );
+        var snapshots = await Task.WhenAll(
+            queue.TryFreezeRelocationIngressAsync(seal).AsTask(),
+            queue.TryFreezeRelocationIngressAsync(seal).AsTask()
+        );
+        Assert.All(snapshots, snapshot => Assert.True(snapshot.Item1));
+        Assert.Equal(1, materialized);
+        var (committed, held) = await queue.TryCommitRelocationAsync(seal);
+        Assert.True(committed);
+        Assert.Equal(new byte[] { 7 }, Assert.Single(held).Payload.ToArray());
+        Assert.Equal(1, materialized);
+    }
+
+    [Fact]
+    public void AcceptedPayloadFactoryAddsNoSeparateSynchronizationObject()
+    {
+        const int count = 1000;
+        Func<CancellationToken, ValueTask> callback = static _ => ValueTask.CompletedTask;
+        Func<ReadOnlyMemory<byte>> factory = static () => ReadOnlyMemory<byte>.Empty;
+        _ = new ZLinkSerialWorkItem(callback, acceptedPayloadFactory: factory);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < count; i++)
+            GC.KeepAlive(new ZLinkSerialWorkItem(callback));
+        var baseline = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < count; i++)
+            GC.KeepAlive(new ZLinkSerialWorkItem(callback, acceptedPayloadFactory: factory));
+        Assert.Equal(baseline, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
     public void ApplicationScopeAllocatesOnlyItsClaimAndAmbientCarrier()
     {
         Exception? failure = null;

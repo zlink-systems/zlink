@@ -7,9 +7,7 @@ internal sealed class ZLinkSerialWorkItem
     private readonly Func<CancellationToken, ValueTask> _callback;
     private readonly ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease? _operation;
     private readonly Action? _relocationRelease;
-    private readonly Func<ReadOnlyMemory<byte>>? _acceptedPayloadFactory;
-    private readonly object? _acceptedPayloadGate;
-    private bool _acceptedPayloadCreated;
+    private Func<ReadOnlyMemory<byte>>? _acceptedPayloadFactory;
     private ReadOnlyMemory<byte> _acceptedPayload;
 
     private readonly TaskCompletionSource? _completion;
@@ -37,8 +35,6 @@ internal sealed class ZLinkSerialWorkItem
         AcceptedSequence = acceptedSequence;
         _acceptedPayload = acceptedPayload;
         _acceptedPayloadFactory = acceptedPayloadFactory;
-        _acceptedPayloadGate = acceptedPayloadFactory is null ? null : new object();
-        _acceptedPayloadCreated = acceptedPayloadFactory is null;
         ReservationHeld = reservationHeld;
         Ready = ready;
     }
@@ -71,17 +67,12 @@ internal sealed class ZLinkSerialWorkItem
     {
         get
         {
-            if (_acceptedPayloadFactory is null)
-                return _acceptedPayload;
-            lock (_acceptedPayloadGate!)
+            if (_acceptedPayloadFactory is not null)
             {
-                if (!_acceptedPayloadCreated)
-                {
-                    _acceptedPayload = _acceptedPayloadFactory();
-                    _acceptedPayloadCreated = true;
-                }
-                return _acceptedPayload;
+                _acceptedPayload = _acceptedPayloadFactory();
+                _acceptedPayloadFactory = null;
             }
+            return _acceptedPayload;
         }
     }
     public bool IsAccepted => AcceptedSequence != 0;
