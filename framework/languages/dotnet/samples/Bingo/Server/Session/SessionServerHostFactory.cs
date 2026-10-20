@@ -35,7 +35,7 @@ public static class SessionServerHostFactory
                     redis.KeyPrefix = configuration.RedisKeyPrefix;
                 })
             );
-            options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            options.ConfigureDispatch().Diagnostics.SetLevel(configuration.DiagnosticsLevel);
             options.AddHandlersFromAssemblyOf(typeof(SessionServerHostFactory));
             options.Codecs.Use(ZLinkProtobufCodec.Default);
             // --8<-- [start:doc-bingo-session-register]

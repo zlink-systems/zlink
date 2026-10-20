@@ -4,6 +4,9 @@
 # framework's real-timer tests (5 s probes, 15 s expiries, deadlines) miss by
 # scheduler noise; a test that fails twice in a row is reported as a failure.
 # Tolerances inside the tests are never changed here.
+# A test that runs longer than the hang limit is dumped and aborted, so a hang
+# fails the job with a dump in the uploaded results instead of running until
+# the job is cancelled.
 set -euo pipefail
 
 project="$1"; configuration="$2"; framework="$3"
@@ -13,7 +16,8 @@ rm -rf "$results"; mkdir -p "$results"
 run_tests() {
   local trx="$1"; shift
   dotnet test "$project" -c "$configuration" -f "$framework" --no-build \
-    --logger "trx;LogFileName=${trx}" --results-directory "$results" "$@"
+    --logger "trx;LogFileName=${trx}" --results-directory "$results" \
+    --blame-hang --blame-hang-timeout 10m --blame-hang-dump-type full "$@"
 }
 
 if run_tests first.trx; then

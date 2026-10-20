@@ -1,12 +1,9 @@
 package systems.zlink.framework.runtime.messaging;
 
 import com.fasterxml.jackson.core.JsonFactory;
-import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
-import com.fasterxml.jackson.core.io.SerializedString;
 import com.fasterxml.jackson.core.util.JsonRecyclerPools;
-import com.fasterxml.jackson.databind.ObjectMapper;
 
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -16,16 +13,14 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
-import java.nio.charset.StandardCharsets;
+import java.nio.ByteBuffer;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.UUID;
-import java.util.concurrent.ArrayBlockingQueue;
 
 /**
  * Shared cross-language channel/SPOT-route wire envelope: a two-part frame of {@code [JSON header,
@@ -46,39 +41,10 @@ public final class ZLinkChannelEnvelope {
 
     public static final String DEFAULT_CONTENT_TYPE = "application/json";
 
-    // Jackson's default recycler is thread-local. Framework handlers use
-    // virtual threads, so use Jackson's own bounded shared pool instead.
-    private static final ObjectMapper JSON =
-            new ObjectMapper(
-                    JsonFactory.builder()
-                            .recyclerPool(JsonRecyclerPools.sharedBoundedPool())
-                            .build());
+    private static final JsonFactory JSON =
+            JsonFactory.builder().recyclerPool(JsonRecyclerPools.sharedBoundedPool()).build();
     private static final int CORRELATION_ID_MAX_BYTES = 64;
     private static final int CORRELATION_ID_MAX_CHARACTER = 0x7f;
-    private static final int HEADER_INITIAL_CAPACITY = 256;
-    private static final int HEADER_WRITER_POOL_CAPACITY =
-            Math.max(1, Runtime.getRuntime().availableProcessors());
-    private static final ArrayBlockingQueue<HeaderWriter> HEADER_WRITERS =
-            new ArrayBlockingQueue<>(HEADER_WRITER_POOL_CAPACITY);
-    // Reuse canonical fixed-header tokens; metadata keys remain dynamic and
-    // are never cached.
-    private static final SerializedString FORMAT_MARKER_FIELD =
-            new SerializedString("formatMarker");
-    private static final SerializedString FLOW_ID_FIELD = new SerializedString("flowId");
-    private static final SerializedString FLOW_ORIGIN_FIELD = new SerializedString("flowOrigin");
-    private static final SerializedString KIND_FIELD = new SerializedString("kind");
-    private static final SerializedString CHANNEL_NAME_FIELD = new SerializedString("channelName");
-    private static final SerializedString MESSAGE_NAME_FIELD = new SerializedString("messageName");
-    private static final SerializedString CONTENT_TYPE_FIELD = new SerializedString("contentType");
-    private static final SerializedString CORRELATION_ID_FIELD =
-            new SerializedString("correlationId");
-    private static final SerializedString DEADLINE_FIELD = new SerializedString("deadline");
-    private static final SerializedString TOPIC_FIELD = new SerializedString("topic");
-    private static final SerializedString ERROR_CODE_FIELD = new SerializedString("errorCode");
-    private static final SerializedString ERROR_MESSAGE_FIELD =
-            new SerializedString("errorMessage");
-    private static final SerializedString SOURCE_FIELD = new SerializedString("source");
-    private static final SerializedString METADATA_FIELD = new SerializedString("metadata");
 
     private ZLinkChannelEnvelope() {}
 
@@ -223,31 +189,34 @@ public final class ZLinkChannelEnvelope {
                 request == null ? null : request.flowOrigin());
     }
 
-    private static String metadataJson(Map<String, String> metadata) {
-        if (metadata.isEmpty()) return "{}";
-        StringBuilder json = new StringBuilder();
-        writeMetadata(metadata, json);
-        return json.toString();
-    }
-
-    private static void writeMetadata(Map<String, String> metadata, StringBuilder json) {
-        if (metadata.isEmpty()) return;
+    private static long writeMetadata(Map<String, String> metadata, ByteBuffer json) {
+        if (metadata.isEmpty()) return ascii(json, "{}");
         long size = 2;
-        if (json != null) json.append('{');
-        for (Map.Entry<String, String> entry : metadata.entrySet()) {
-            if (entry.getKey() == null || entry.getKey().isEmpty() || entry.getValue() == null) {
-                throw protocolError(
-                        "ZLink envelope metadata requires nonempty keys and string values", null);
+        ascii(json, "{");
+        try {
+            for (Map.Entry<String, String> entry : metadata.entrySet()) {
+                String key = entry.getKey();
+                String value = entry.getValue();
+                if (key == null || key.isEmpty() || value == null) {
+                    throw protocolError(
+                            "ZLink envelope metadata requires nonempty keys and string values",
+                            null);
+                }
+                if (key.indexOf('\0') >= 0 || value.indexOf('\0') >= 0) {
+                    throw protocolError("ZLink envelope metadata must not contain NUL", null);
+                }
+                if (size > 2) {
+                    size++;
+                    ascii(json, ",");
+                }
+                size += jsonString(json, key, true) + 1;
+                ascii(json, ":");
+                size += jsonString(json, value, true);
             }
-            if (size > 2) {
-                size++;
-                if (json != null) json.append(',');
-            }
-            size += appendMetadataString(json, entry.getKey()) + 1;
-            if (json != null) json.append(':');
-            size += appendMetadataString(json, entry.getValue());
+        } catch (IOException ex) {
+            throw protocolError("ZLink envelope metadata must be valid UTF-8", ex);
         }
-        if (json != null) json.append('}');
+        ascii(json, "}");
         if (size > ServiceWireConstants.METADATA_BYTES) {
             throw protocolError(
                     "ZLink envelope metadata exceeds "
@@ -255,18 +224,27 @@ public final class ZLinkChannelEnvelope {
                             + " UTF-8 bytes",
                     null);
         }
+        return size;
     }
 
-    private static long appendMetadataString(StringBuilder json, String value) {
+    private static int ascii(ByteBuffer json, String text) {
+        if (json != null) {
+            for (int index = 0; index < text.length(); index++) {
+                json.put((byte) text.charAt(index));
+            }
+        }
+        return text.length();
+    }
+
+    private static long jsonString(ByteBuffer json, String value, boolean metadata)
+            throws IOException {
+        if (value == null) return ascii(json, "null");
         long size = 2;
-        if (json != null) json.append('"');
+        ascii(json, "\"");
         for (int index = 0; index < value.length(); index++) {
             char c = value.charAt(index);
             String escape =
                     switch (c) {
-                        case 0 ->
-                                throw protocolError(
-                                        "ZLink envelope metadata must not contain NUL", null);
                         case '"' -> "\\\"";
                         case '\\' -> "\\\\";
                         case '\b' -> "\\b";
@@ -277,51 +255,121 @@ public final class ZLinkChannelEnvelope {
                         default -> null;
                     };
             if (escape != null) {
-                size += escape.length();
-                if (json != null) json.append(escape);
+                size += ascii(json, escape);
             } else if (c < 0x20) {
-                size += 6;
-                if (json != null) {
-                    json.append("\\u00")
-                            .append(Character.forDigit(c >>> 4, 16))
-                            .append(Character.forDigit(c & 15, 16));
-                }
-            } else if (Character.isSurrogate(c)) {
-                if (!Character.isHighSurrogate(c)
-                        || index + 1 == value.length()
-                        || !Character.isLowSurrogate(value.charAt(index + 1))) {
-                    throw protocolError("ZLink envelope metadata must be valid UTF-8", null);
-                }
-                size += 4;
-                char low = value.charAt(++index);
-                if (json != null) json.append(c).append(low);
+                size += unicodeEscape(json, c, metadata);
             } else {
-                size += c < 0x80 ? 1 : c < 0x800 ? 2 : 3;
-                if (json != null) json.append(c);
+                int codePoint = c;
+                if (Character.isSurrogate(c)) {
+                    // UTF8JsonGenerator escapes each UTF-16 surrogate in header fields.
+                    if (!metadata) {
+                        size += unicodeEscape(json, c, false);
+                        continue;
+                    }
+                    if (!Character.isHighSurrogate(c)
+                            || index + 1 == value.length()
+                            || !Character.isLowSurrogate(value.charAt(index + 1))) {
+                        throw new IOException("ZLink envelope string must be valid UTF-8");
+                    }
+                    char low = value.charAt(++index);
+                    codePoint = Character.toCodePoint(c, low);
+                }
+                int length =
+                        codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4;
+                size += length;
+                if (json != null) {
+                    if (length == 1) {
+                        json.put((byte) codePoint);
+                    } else {
+                        json.put(
+                                (byte)
+                                        ((0xff << (8 - length))
+                                                | (codePoint >>> (6 * (length - 1)))));
+                        for (int shift = 6 * (length - 2); shift >= 0; shift -= 6) {
+                            json.put((byte) (0x80 | ((codePoint >>> shift) & 0x3f)));
+                        }
+                    }
+                }
             }
         }
-        if (json != null) json.append('"');
+        ascii(json, "\"");
         return size;
+    }
+
+    private static int unicodeEscape(ByteBuffer json, char value, boolean metadata) {
+        ascii(json, "\\u");
+        if (json != null) {
+            for (int shift = Character.SIZE - 4; shift >= 0; shift -= 4) {
+                char digit = Character.forDigit((value >>> shift) & 0xf, 16);
+                json.put((byte) (metadata ? digit : Character.toUpperCase(digit)));
+            }
+        }
+        return 6;
+    }
+
+    private static int jsonInt(ByteBuffer json, int value) {
+        long magnitude = Math.abs((long) value);
+        int digits = 1;
+        for (long rest = magnitude; rest >= 10; rest /= 10) digits++;
+        int size = digits + (value < 0 ? 1 : 0);
+        if (json != null) {
+            int end = json.position() + size;
+            for (int index = end - 1; index >= end - digits; index--) {
+                json.put(index, (byte) ('0' + magnitude % 10));
+                magnitude /= 10;
+            }
+            if (value < 0) json.put((byte) '-');
+            json.position(end);
+        }
+        return size;
+    }
+
+    private static long field(ByteBuffer json, String prefix, String value) throws IOException {
+        return ascii(json, prefix) + jsonString(json, value, false);
+    }
+
+    private static long writeHeader(Header header, ByteBuffer json) throws IOException {
+        long size = ascii(json, "{\"formatMarker\":") + jsonInt(json, FORMAT_MARKER);
+        size += field(json, ",\"flowId\":", header.flowId());
+        size += ascii(json, ",\"flowOrigin\":");
+        size +=
+                header.flowId() == null
+                        ? ascii(json, "null")
+                        : jsonInt(json, flowOriginWireValue(header.flowOrigin()));
+        size += ascii(json, ",\"kind\":") + jsonInt(json, header.kind());
+        size += field(json, ",\"channelName\":", header.channelName());
+        size += field(json, ",\"messageName\":", header.messageName());
+        size += field(json, ",\"contentType\":", header.contentType());
+        size += field(json, ",\"correlationId\":", header.correlationId());
+        size += field(json, ",\"deadline\":", header.deadline());
+        size += field(json, ",\"topic\":", header.topic());
+        size += field(json, ",\"errorCode\":", header.errorCode());
+        size += field(json, ",\"errorMessage\":", header.errorMessage());
+        size += field(json, ",\"source\":", header.source());
+        size += ascii(json, ",\"metadata\":") + writeMetadata(header.metadata(), json);
+        return size + ascii(json, "}");
     }
 
     public static Message encodeHeader(Header header) {
         validateFlowPair(header.flowId(), header.flowOrigin());
-        String metadata = metadataJson(header.metadata());
-        HeaderWriter writer = borrowWriter();
-        boolean complete = false;
         try {
-            Message encoded = writer.encode(header, metadata);
-            complete = true;
-            return encoded;
+            long size = writeHeader(header, null);
+            if (size > Integer.MAX_VALUE)
+                throw new IOException("ZLink envelope header is too large");
+            Message encoded = Message.allocate((int) size);
+            boolean complete = false;
+            try {
+                writeHeader(header, encoded.mutableDataBuffer());
+                complete = true;
+                return encoded;
+            } finally {
+                if (!complete) encoded.close();
+            }
         } catch (IOException ex) {
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
                     "ZLink envelope header could not be encoded",
                     ex);
-        } finally {
-            if (complete) {
-                HEADER_WRITERS.offer(writer);
-            }
         }
     }
 
@@ -337,7 +385,7 @@ public final class ZLinkChannelEnvelope {
      * captureFlow} is set (spec 27 §4).
      */
     public static Header decodeHeader(Message headerPart, boolean captureFlow) {
-        try (JsonParser json = JSON.getFactory().createParser(new MessageInputStream(headerPart))) {
+        try (JsonParser json = JSON.createParser(new MessageInputStream(headerPart))) {
             return decodeHeader(json, captureFlow);
         } catch (Exception ex) {
             if (ex instanceof ZLinkFrameworkException frameworkError) {
@@ -765,115 +813,6 @@ public final class ZLinkChannelEnvelope {
         }
         if (flowId != null && !ZLinkFlowContext.isValidFlowId(flowId)) {
             throw protocolError("ZLink envelope flow id must be UUIDv7", null);
-        }
-    }
-
-    private static void writeNullableString(
-            JsonGenerator json, SerializedString field, String value) throws IOException {
-        json.writeFieldName(field);
-        if (value == null) {
-            json.writeNull();
-        } else {
-            json.writeString(value);
-        }
-    }
-
-    private static HeaderWriter borrowWriter() {
-        HeaderWriter writer = HEADER_WRITERS.poll();
-        if (writer != null) {
-            return writer;
-        }
-        try {
-            return new HeaderWriter();
-        } catch (IOException ex) {
-            throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
-                    "ZLink envelope header writer could not be initialized",
-                    ex);
-        }
-    }
-
-    /** A single borrower owns the generator and its output buffer at a time. */
-    private static final class HeaderWriter {
-        private final ReusableByteArrayOutputStream bytes =
-                new ReusableByteArrayOutputStream(HEADER_INITIAL_CAPACITY);
-        private final JsonGenerator json;
-        private String channelName;
-        private SerializedString channelNameToken;
-        private String messageName;
-        private SerializedString messageNameToken;
-        private String contentType;
-        private SerializedString contentTypeToken;
-
-        HeaderWriter() throws IOException {
-            json = JSON.getFactory().createGenerator(bytes);
-            json.setRootValueSeparator(null);
-        }
-
-        Message encode(Header header, String metadata) throws IOException {
-            cacheStableValues(header);
-            bytes.reset();
-            json.writeStartObject();
-            json.writeFieldName(FORMAT_MARKER_FIELD);
-            json.writeNumber(FORMAT_MARKER);
-            writeNullableString(json, FLOW_ID_FIELD, header.flowId());
-            json.writeFieldName(FLOW_ORIGIN_FIELD);
-            if (header.flowId() == null) {
-                json.writeNull();
-            } else {
-                json.writeNumber(flowOriginWireValue(header.flowOrigin()));
-            }
-            json.writeFieldName(KIND_FIELD);
-            json.writeNumber(header.kind());
-            json.writeFieldName(CHANNEL_NAME_FIELD);
-            json.writeRawValue(channelNameToken);
-            json.writeFieldName(MESSAGE_NAME_FIELD);
-            json.writeRawValue(messageNameToken);
-            json.writeFieldName(CONTENT_TYPE_FIELD);
-            json.writeRawValue(contentTypeToken);
-            writeNullableString(json, CORRELATION_ID_FIELD, header.correlationId());
-            writeNullableString(json, DEADLINE_FIELD, header.deadline());
-            writeNullableString(json, TOPIC_FIELD, header.topic());
-            writeNullableString(json, ERROR_CODE_FIELD, header.errorCode());
-            writeNullableString(json, ERROR_MESSAGE_FIELD, header.errorMessage());
-            writeNullableString(json, SOURCE_FIELD, header.source());
-            json.writeFieldName(METADATA_FIELD);
-            json.writeRawValue(metadata);
-            json.writeEndObject();
-            json.flush();
-            return Message.from(bytes.buffer(), 0, bytes.size());
-        }
-
-        private void cacheStableValues(Header header) throws IOException {
-            if (!Objects.equals(channelName, header.channelName())) {
-                channelName = header.channelName();
-                channelNameToken = quotedScalar(channelName);
-            }
-            if (!Objects.equals(messageName, header.messageName())) {
-                messageName = header.messageName();
-                messageNameToken = quotedScalar(messageName);
-            }
-            if (!Objects.equals(contentType, header.contentType())) {
-                contentType = header.contentType();
-                contentTypeToken = quotedScalar(contentType);
-            }
-        }
-
-        private SerializedString quotedScalar(String value) throws IOException {
-            bytes.reset();
-            json.writeString(value);
-            json.flush();
-            return new SerializedString(bytes.toString(StandardCharsets.UTF_8));
-        }
-    }
-
-    private static final class ReusableByteArrayOutputStream extends ByteArrayOutputStream {
-        ReusableByteArrayOutputStream(int size) {
-            super(size);
-        }
-
-        byte[] buffer() {
-            return buf;
         }
     }
 

@@ -33,7 +33,7 @@ public static class ApiServerHostFactory
                     redis.KeyPrefix = configuration.RedisKeyPrefix;
                 })
             );
-            options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            options.ConfigureDispatch().Diagnostics.SetLevel(configuration.DiagnosticsLevel);
             options.AddHandlersFromAssemblyOf(typeof(ApiServerHostFactory));
             // --8<-- [start:doc-codec-register]
             // Every payload this process sends is encoded with Protobuf instead of the default codec.
