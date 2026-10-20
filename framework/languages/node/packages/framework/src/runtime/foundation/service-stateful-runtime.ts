@@ -1972,7 +1972,17 @@ export class ServiceStatefulRuntime {
       );
       return pending;
     }
-    const generation = this.nextSessionSequence++;
+    const deliveryKey = actorKey(actor);
+    const previousDelivery = this.sessionDeliveries.get(deliveryKey);
+    const previousBinding = previousDelivery?.binding;
+    const generation =
+      previousBinding !== undefined &&
+      sameActorRef(previousBinding.actor, actor) &&
+      previousBinding.sessionRid === sessionRid &&
+      previousBinding.sessionOwnerNodeRid === sessionOwner.nodeRid &&
+      previousBinding.sessionOwnerNodeGeneration === sessionOwner.nodeGeneration
+        ? previousBinding.bindingGeneration
+        : this.nextSessionSequence++;
     const localBinding: ServiceSessionBinding = {
       actor,
       sessionRid,
@@ -1989,7 +1999,6 @@ export class ServiceStatefulRuntime {
       ...(close === undefined ? {} : { close }),
       ...(onBindingReplaced === undefined ? {} : { onBindingReplaced })
     };
-    const deliveryKey = actorKey(actor);
     if (actor.nodeRid === this.nodeRid) {
       let installedDelivery: ServiceSessionDelivery | undefined;
       try {
@@ -2013,18 +2022,7 @@ export class ServiceStatefulRuntime {
           });
           return pending;
         }
-        const previousDelivery = this.sessionDeliveries.get(deliveryKey);
-        const binding = this.registry.bindSession(
-          actor,
-          sessionRid,
-          sessionOwner.nodeRid,
-          sessionOwner.nodeGeneration,
-          sessionOwner.ownerId,
-          sessionOwner.leaseGeneration
-        );
-        if (previousDelivery !== undefined && previous !== undefined) {
-          this.retiredSessionDeliveries.set(sessionDeliveryKey(previous), previousDelivery);
-        }
+        const binding = this.registry.installSessionBinding(localBinding);
         installedDelivery = { ...delivery, binding };
         this.sessionDeliveries.set(deliveryKey, installedDelivery);
         this.operations.reply(pending.id, {
@@ -2032,7 +2030,10 @@ export class ServiceStatefulRuntime {
           failureCode: 0,
           kindData: undefined
         });
-        if (previous !== undefined) {
+        if (previous !== undefined && previous !== binding) {
+          if (previousDelivery !== undefined) {
+            this.retiredSessionDeliveries.set(sessionDeliveryKey(previous), previousDelivery);
+          }
           this.sendBoundSessionReplacement(
             previous,
             actorAuthorityFromRoute(
@@ -2057,7 +2058,6 @@ export class ServiceStatefulRuntime {
       }
       return pending;
     }
-    const previousDelivery = this.sessionDeliveries.get(deliveryKey);
     let bindingActorFence: ServiceActorRouteFence;
     let header: Buffer;
     try {
@@ -2105,7 +2105,10 @@ export class ServiceStatefulRuntime {
             // Publish the exact Location authority used by command 38 in the
             // same Session-owner completion turn as the binding route. Actor
             // lookup only carries a peer-lifecycle fallback for owner lease.
-            this.rememberActorRoute(bindingActorFence);
+            this.rememberActorRoute({
+              ...bindingActorFence,
+              authorityOwnerGeneration: result.streamBinding.authorityOwnerGeneration
+            });
             this.sessionDeliveries.set(deliveryKey, committed);
           }
         }
@@ -3691,7 +3694,6 @@ export class ServiceStatefulRuntime {
           ingress.sourceNodeGeneration ?? this.peerGeneration(ingress.sourceRoutingId)
         );
         const actor = this.validateActorFence(record.actor);
-        const previous = this.registry.binding(actor.ref);
         const binding = sessionBindingFromWire(
           actor.ref,
           record.sessionRid,
@@ -3702,35 +3704,31 @@ export class ServiceStatefulRuntime {
           sessionOwner.ownerId,
           sessionOwner.leaseGeneration
         );
-        if (previous !== undefined && sameSessionIdentity(previous, binding)) {
-          // Registry publication is the last step of the first binding owner
-          // turn, so an observable same-Session binding already has every
-          // Actor route projection installed and can complete idempotently.
-          this.replyWire(ingress, record.correlation, RequestResult.Ok, 0, undefined, {
-            kind: 'streamBind',
-            bindingGeneration: previous.bindingGeneration,
-            authorityOwnerGeneration: actor.authorityOwnerGeneration
-          });
-          return 'infrastructure';
-        }
+        let completedBinding = binding;
         const accepted = this.enqueueActorBindingControl(
           ingress,
           binding,
           record.actor,
           (terminalResult, failureCode) => {
-            let completedBinding = binding;
             let replacedBinding: ServiceSessionBinding | undefined;
             if (terminalResult === RequestResult.Ok) {
               // This callback runs inside the Actor binding control turn,
-              // after the Host has installed its Actor-to-session projection.
+              // before the Host copies the accepted Actor-to-session projection.
               // Publish the authority-owned registry view in that same turn
               // before making the terminal reply observable.
               const turnCurrent = this.registry.binding(actor.ref);
-              if (turnCurrent !== undefined && sameSessionIdentity(turnCurrent, binding)) {
-                completedBinding = turnCurrent;
-              } else {
-                replacedBinding = turnCurrent;
-                this.registry.installSessionBinding(binding);
+              try {
+                completedBinding = this.registry.installSessionBinding(binding);
+                if (turnCurrent !== completedBinding) replacedBinding = turnCurrent;
+              } catch (error) {
+                const result = failure(error);
+                this.replyWire(
+                  ingress,
+                  record.correlation,
+                  result.terminalResult,
+                  result.failureCode
+                );
+                return false;
               }
             }
             this.replyWire(
@@ -3761,7 +3759,8 @@ export class ServiceStatefulRuntime {
               );
             }
             return true;
-          }
+          },
+          () => completedBinding
         );
         if (!accepted) {
           const result = failure(
@@ -4319,10 +4318,11 @@ export class ServiceStatefulRuntime {
     ingress: RawServiceIngressRecord,
     binding: ServiceSessionBinding,
     actorAuthority: ServiceBoundSessionActorAuthority,
-    reply: NonNullable<ServiceStatefulMailboxData['reply']>
+    reply: NonNullable<ServiceStatefulMailboxData['reply']>,
+    acceptedBinding: () => ServiceSessionBinding
   ): boolean {
     const actor = binding.actor;
-    const sessionOwner = requireSessionOwnerIdentity(binding);
+    requireSessionOwnerIdentity(binding);
     const header = Buffer.from([
       SERVICE_WIRE_MAGIC[0],
       SERVICE_WIRE_MAGIC[1],
@@ -4347,12 +4347,27 @@ export class ServiceStatefulRuntime {
           actorNodeGeneration: actorAuthority.targetNodeGeneration,
           authorityOwnerGeneration: actorAuthority.authorityOwnerGeneration,
           ownerLeaseGeneration: actorAuthority.ownerLeaseGeneration,
-          bindingGeneration: binding.bindingGeneration,
-          sessionNodeRid: binding.sessionOwnerNodeRid as never,
-          sessionRid: binding.sessionRid as never,
-          sessionOwnerNodeGeneration: sessionOwner.nodeGeneration,
-          sessionOwnerId: sessionOwner.ownerId,
-          sessionOwnerLeaseGeneration: sessionOwner.leaseGeneration
+          // The Host reads only Session identity fields before `reply` installs the
+          // binding; installation keeps that identity. Generation and owner fields
+          // are read after `reply`, so they always come from the accepted binding.
+          get bindingGeneration() {
+            return acceptedBinding().bindingGeneration;
+          },
+          get sessionNodeRid() {
+            return acceptedBinding().sessionOwnerNodeRid as never;
+          },
+          get sessionRid() {
+            return acceptedBinding().sessionRid as never;
+          },
+          get sessionOwnerNodeGeneration() {
+            return acceptedBinding().sessionOwnerNodeGeneration!;
+          },
+          get sessionOwnerId() {
+            return acceptedBinding().sessionOwnerId!;
+          },
+          get sessionOwnerLeaseGeneration() {
+            return acceptedBinding().sessionOwnerLeaseGeneration!;
+          }
         },
         reply
       } satisfies ServiceStatefulMailboxData,
@@ -5843,9 +5858,7 @@ function sameSessionOwnerIdentity(
 ): boolean {
   return (
     left.sessionOwnerNodeRid === right.sessionOwnerNodeRid &&
-    left.sessionOwnerNodeGeneration === right.sessionOwnerNodeGeneration &&
-    left.sessionOwnerId === right.sessionOwnerId &&
-    left.sessionOwnerLeaseGeneration === right.sessionOwnerLeaseGeneration
+    left.sessionOwnerNodeGeneration === right.sessionOwnerNodeGeneration
   );
 }
 

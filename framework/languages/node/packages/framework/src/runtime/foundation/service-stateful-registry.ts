@@ -119,7 +119,6 @@ export class ServiceStatefulRegistry {
   private readonly reservationAttempts = new Map<string, bigint>();
   private readonly turns = new Map<string, Promise<void>>();
   private nextReservationId = 1n;
-  private nextBindingGeneration = 1n;
 
   constructor(
     readonly nodeRid: string,
@@ -397,49 +396,35 @@ export class ServiceStatefulRegistry {
     return current;
   }
 
-  bindSession(
-    actor: ServiceActorRef,
-    sessionRid: string,
-    sessionOwnerNodeRid: string,
-    sessionOwnerNodeGeneration?: bigint,
-    sessionOwnerId?: string,
-    sessionOwnerLeaseGeneration?: bigint
-  ): ServiceSessionBinding {
-    const current = this.requireActorCore(actor);
-    encodeServiceWireRoutingId(sessionRid, 'sessionRid', ZLINK_MAX_ROUTING_ID_BYTES, (message) => {
-      throw new RangeError(message);
-    });
-    requireText(sessionOwnerNodeRid, 'sessionOwnerNodeRid');
-    const binding: ServiceSessionBinding = Object.freeze({
-      actor: Object.freeze({ ...current.ref }),
-      sessionRid,
-      sessionOwnerNodeRid,
-      ...(sessionOwnerNodeGeneration === undefined ? {} : { sessionOwnerNodeGeneration }),
-      ...(sessionOwnerId === undefined ? {} : { sessionOwnerId }),
-      ...(sessionOwnerLeaseGeneration === undefined ? {} : { sessionOwnerLeaseGeneration }),
-      bindingGeneration: this.nextBindingGeneration++,
-      membershipEpoch: current.membershipEpoch
-    });
-    this.bindings.set(actorKey(actor), binding);
-    return binding;
-  }
-
-  installSessionBinding(binding: ServiceSessionBinding): void {
+  installSessionBinding(binding: ServiceSessionBinding): ServiceSessionBinding {
     this.requireActorCore(binding.actor);
+    encodeServiceWireRoutingId(
+      binding.sessionRid,
+      'sessionRid',
+      ZLINK_MAX_ROUTING_ID_BYTES,
+      (message) => {
+        throw new RangeError(message);
+      }
+    );
+    requireText(binding.sessionOwnerNodeRid, 'sessionOwnerNodeRid');
     requirePositive(binding.bindingGeneration, 'bindingGeneration');
     const current = this.bindings.get(actorKey(binding.actor));
     if (
       current !== undefined &&
       current.sessionOwnerNodeRid === binding.sessionOwnerNodeRid &&
       current.sessionOwnerNodeGeneration === binding.sessionOwnerNodeGeneration &&
-      current.sessionOwnerId === binding.sessionOwnerId &&
-      current.sessionOwnerLeaseGeneration === binding.sessionOwnerLeaseGeneration &&
       current.bindingGeneration >= binding.bindingGeneration
     ) {
+      if (
+        current.bindingGeneration === binding.bindingGeneration &&
+        current.sessionRid === binding.sessionRid
+      )
+        return current;
       throw new ServiceStaleGenerationError('binding', binding.actor.actorId);
     }
-    this.nextBindingGeneration = max(this.nextBindingGeneration, binding.bindingGeneration + 1n);
-    this.bindings.set(actorKey(binding.actor), Object.freeze({ ...binding }));
+    const accepted = Object.freeze({ ...binding });
+    this.bindings.set(actorKey(binding.actor), accepted);
+    return accepted;
   }
 
   binding(actor: ServiceActorRef): ServiceSessionBinding | undefined {

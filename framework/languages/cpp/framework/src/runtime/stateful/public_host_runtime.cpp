@@ -5487,9 +5487,11 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     if (admission == bound_session_bind_admission_t::ready && session_owner) {
                         operation_result = bound_session_operations.bind (
                           bind, session_owner_rid, mailbox_record.source_node_generation,
-                          *session_owner, [this, &mailbox_record, &terminal_replied] {
-                              terminal_replied =
-                                _transport->reply_bound_session_bind (mailbox_record, 0u, 0u);
+                          *session_owner,
+                          [this, &mailbox_record,
+                           &terminal_replied] (const protocol::stream_bind_reply_tail_t &binding) {
+                              terminal_replied = _transport->reply_bound_session_bind (
+                                mailbox_record, 0u, 0u, binding);
                               return terminal_replied;
                           });
                     }
@@ -5504,9 +5506,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         ? std::pair{terminal_t::conflict, code_t::actorLocationStale}
                       : admission == bound_session_bind_admission_t::actor_not_ready
                         ? std::pair{terminal_t::busy, code_t::none}
-                      : admission == bound_session_bind_admission_t::ready && !session_owner
-                        ? std::pair{terminal_t::internalError, code_t::routeNotConnected}
-                        : std::pair{terminal_t::notFound, code_t::actorSessionNotBound};
+                        : std::pair{terminal_t::internalError, code_t::routeNotConnected};
                     const auto replied = terminal_replied
                                          || _transport->reply_bound_session_bind (
                                            mailbox_record, static_cast<std::uint32_t> (terminal),

@@ -6496,6 +6496,30 @@ test('Actor binding stores the binding identity without a relocation fence', () 
 });
 test('authority-confirmed successor binding replaces the one Actor binding with its own generation', () => {
   const state = new framework.ZLinkActorRuntimeState('actor-session-successor-install');
+  const {
+    ServiceStatefulRegistry,
+    ServiceStaleGenerationError
+  } = require('../../packages/framework/dist/runtime/foundation/service-stateful-registry');
+  const registry = new ServiceStatefulRegistry('actor-node', 1n);
+  const actor = registry.createActor('actor-session-successor-install');
+  const install = (binding) => {
+    try {
+      registry.installSessionBinding({
+        actor: actor.ref,
+        sessionRid: binding.sessionRid.toHex(),
+        sessionOwnerNodeRid: binding.sessionNodeRid.toHex(),
+        sessionOwnerNodeGeneration: binding.sessionOwnerNodeGeneration,
+        sessionOwnerId: binding.sessionOwnerId,
+        sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
+        bindingGeneration: binding.bindingGeneration,
+        membershipEpoch: actor.membershipEpoch
+      });
+    } catch (error) {
+      assert.ok(error instanceof ServiceStaleGenerationError);
+      return false;
+    }
+    return state.installBoundSessionBinding(binding);
+  };
   const predecessor = {
     routerChannelId: 'room.route',
     targetNodeRid: zlink.RoutingId.from('session-node'),
@@ -6508,11 +6532,11 @@ test('authority-confirmed successor binding replaces the one Actor binding with 
     bindingGeneration: 100n,
     relocationSealId: 'seal-predecessor'
   };
-  assert.equal(state.installBoundSessionBinding(predecessor), true);
+  assert.equal(install(predecessor), true);
   assert.equal(state.boundSession.relocationSealId, undefined);
 
   assert.equal(
-    state.installBoundSessionBinding({
+    install({
       routerChannelId: 'room.route',
       targetNodeRid: zlink.RoutingId.from('session-node'),
       spotId: zlink.RoutingId.from('session-entry'),
@@ -6533,7 +6557,7 @@ test('authority-confirmed successor binding replaces the one Actor binding with 
   assert.equal(state.boundSession.relocationSealId, undefined);
 
   assert.equal(
-    state.installBoundSessionBinding({
+    install({
       routerChannelId: 'room.route',
       targetNodeRid: zlink.RoutingId.from('session-node'),
       spotId: zlink.RoutingId.from('session-entry'),
@@ -6551,7 +6575,7 @@ test('authority-confirmed successor binding replaces the one Actor binding with 
   assert.equal(state.boundSession.bindingGeneration, 2n);
 
   assert.equal(
-    state.installBoundSessionBinding({
+    install({
       routerChannelId: 'room.route',
       targetNodeRid: zlink.RoutingId.from('session-node'),
       spotId: zlink.RoutingId.from('session-entry'),
@@ -6567,7 +6591,7 @@ test('authority-confirmed successor binding replaces the one Actor binding with 
   assert.equal(state.boundSessionBindingGeneration, 3n);
   assert.equal(state.boundSession.sessionRid.toHex(), '00000002');
   assert.equal(
-    state.installBoundSessionBinding({
+    install({
       routerChannelId: 'room.route',
       targetNodeRid: zlink.RoutingId.from('session-node'),
       spotId: zlink.RoutingId.from('session-entry'),
