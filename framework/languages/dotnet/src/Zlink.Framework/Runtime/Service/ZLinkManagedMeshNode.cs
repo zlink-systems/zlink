@@ -9920,24 +9920,35 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void ProcessInfrastructure(long now)
     {
-        var retries = RunInboundOperationState(() =>
+        (ControlSendKey Key, byte[] Head)[] CollectDueHelloRetries()
         {
-            var activity = _admissionActivityTicks;
-            var elapsed = _deadlineClock.Elapsed.Ticks;
+            var activity = Volatile.Read(ref _admissionActivityTicks);
             if (
                 activity == NoAdmissionActivityTicks
-                || elapsed - activity < ZLinkServiceLiveness.ProbeInterval.Ticks
+                || _deadlineClock.Elapsed.Ticks - activity < ZLinkServiceLiveness.ProbeInterval.Ticks
             )
-                return Array.Empty<(ControlSendKey Key, byte[] Head)>();
-            Volatile.Write(ref _admissionActivityTicks, elapsed);
-            return _controlSends
-                .Where(entry =>
-                    entry.Key.Command == ServiceWireConstants.Command.Hello
-                    && entry.Value.Pending is not null
+                return [];
+            return RunInboundOperationState(() =>
+            {
+                // Admission or another management turn may have changed activity.
+                var activity = _admissionActivityTicks;
+                var elapsed = _deadlineClock.Elapsed.Ticks;
+                if (
+                    activity == NoAdmissionActivityTicks
+                    || elapsed - activity < ZLinkServiceLiveness.ProbeInterval.Ticks
                 )
-                .Select(entry => (entry.Key, entry.Value.Pending!))
-                .ToArray();
-        });
+                    return Array.Empty<(ControlSendKey Key, byte[] Head)>();
+                Volatile.Write(ref _admissionActivityTicks, elapsed);
+                return _controlSends
+                    .Where(entry =>
+                        entry.Key.Command == ServiceWireConstants.Command.Hello
+                        && entry.Value.Pending is not null
+                    )
+                    .Select(entry => (entry.Key, entry.Value.Pending!))
+                    .ToArray();
+            });
+        }
+        var retries = CollectDueHelloRetries();
         // Spec 08 §4.2: the management work of a receive rotation reads the
         // node state in one node turn — the intents that still need a Hello and
         // the liveness activity of every admitted peer.
