@@ -1357,23 +1357,42 @@ public sealed class StandaloneActorRelocationPrecommitTests
         );
     }
 
-    [Fact]
-    public async Task Source_abort_reconciles_more_than_eight_version_conflicts()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(18)]
+    public async Task Source_abort_reports_only_a_confirmed_preserve_after_version_conflicts(
+        int conflicts
+    )
     {
         var inner = new ZLinkInMemoryLocationStore();
         var source = await PrepareCapturedSourceAsync(inner);
         var store = new LostStoredResponseAuthorityStore(inner);
-        store.ReturnAuxiliaryConflicts(18);
+        store.ReturnAuxiliaryConflicts(conflicts);
+        var observed = 0;
 
         var restored = await new ZLinkStandaloneActorRelocationPrecommitCoordinator(
             store
-        ).AbortSourceAsync(source.Key, source.RelocationId, CancellationToken.None);
+        ).AbortSourceAsync(
+            source.Key,
+            source.RelocationId,
+            CancellationToken.None,
+            () => observed++
+        );
 
         Assert.Equal(source.Steady.OwnerId, restored.OwnerId);
-        Assert.Equal(19, store.CompareExchangeCount);
+        Assert.Equal(conflicts + 1, store.CompareExchangeCount);
+        Assert.Equal(1, observed);
         Assert.False(
             ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(restored.Payload.Span, out _)
         );
+        _ = await new ZLinkStandaloneActorRelocationPrecommitCoordinator(store).AbortSourceAsync(
+            source.Key,
+            source.RelocationId,
+            CancellationToken.None,
+            () => observed++
+        );
+        Assert.Equal(1, observed);
+        Assert.Equal(conflicts + 1, store.CompareExchangeCount);
     }
 
     private static async Task<ForeignCutover> PrepareForeignCutoverAsync(
