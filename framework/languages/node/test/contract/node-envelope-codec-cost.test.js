@@ -163,3 +163,16 @@ test('warmed serializer lookup does not allocate preparation closure contexts', 
   const allocations = await trackedCodecAllocations('/runtime/messaging/payload-codec.js', lookup);
   assert.equal(allocations.get('serializerSelectionPlanOf')?.objects ?? 0, 0);
 });
+
+test('correlation IDs use the fixed zero prefix without constructing padStart intermediates', t => {
+  const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+  const padStart = t.mock.method(String.prototype, 'padStart');
+  const ids = new Set();
+  for (let index = 0; index < 1000; index++) {
+    const id = codec.newChannelCorrelationId();
+    assert.match(id, /^[0-9a-f]{32}$/);
+    ids.add(id);
+  }
+  assert.equal(ids.size, 1000);
+  assert.equal(padStart.mock.callCount(), 0);
+});

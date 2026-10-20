@@ -109,9 +109,11 @@ let channelCorrelationCounter = 0;
 
 export function newChannelCorrelationId(): string {
   channelCorrelationCounter += 1;
+  const suffix = channelCorrelationCounter.toString(16);
   return (
     CHANNEL_CORRELATION_PREFIX +
-    channelCorrelationCounter.toString(16).padStart(CHANNEL_CORRELATION_TEXT_LENGTH / 2, '0')
+    PREPARED_CHANNEL_CORRELATION.slice(suffix.length, CHANNEL_CORRELATION_TEXT_LENGTH / 2) +
+    suffix
   );
 }
 
