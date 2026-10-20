@@ -5,6 +5,128 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class SerialExecutorTests
 {
+    [Fact]
+    public void SerialTurnConcurrentSuspensionObservationDoesNotLoseSignals()
+    {
+        const int iterations = 1000;
+        var item = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
+        var turn = new ZLinkSerialTurn(
+            static (_, _) => ZLinkSerialPostAdmission.Closed,
+            static _ => false,
+            static _ => { },
+            CancellationToken.None,
+            item
+        );
+        using var phases = new Barrier(2);
+        var signaler = new Thread(() =>
+        {
+            for (var i = 0; i < iterations; i++)
+            {
+                phases.SignalAndWait();
+                turn.SignalSuspended();
+                phases.SignalAndWait();
+            }
+        });
+        signaler.Start();
+        var completed = 0;
+        try
+        {
+            for (var i = 0; i < iterations; i++)
+            {
+                turn.ResetSuspension();
+                phases.SignalAndWait();
+                var signal = turn.Suspended;
+                phases.SignalAndWait();
+                if (signal.IsCompletedSuccessfully)
+                    completed++;
+            }
+        }
+        finally
+        {
+            signaler.Join();
+        }
+        Assert.Equal(iterations, completed);
+    }
+
+    [Fact]
+    public void SerialTurnConstructionAllocatesOnlyItsOwnStorage()
+    {
+        var item = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
+        ZLinkSerialTurn Create() =>
+            new(
+                static (_, _) => ZLinkSerialPostAdmission.Closed,
+                static _ => false,
+                static _ => { },
+                CancellationToken.None,
+                item
+            );
+        GC.KeepAlive(Create());
+        GC.KeepAlive(
+            System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
+                typeof(ZLinkSerialTurn)
+            )
+        );
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+            GC.KeepAlive(
+                System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
+                    typeof(ZLinkSerialTurn)
+                )
+            );
+        var storage = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+            GC.KeepAlive(Create());
+        Assert.Equal(storage, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
+    public void SerialTurnWithoutYieldDoesNotAllocateSuspensionSignals()
+    {
+        var item = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
+        var turn = new ZLinkSerialTurn(
+            static (_, _) => ZLinkSerialPostAdmission.Closed,
+            static _ => false,
+            static _ => { },
+            CancellationToken.None,
+            item
+        );
+        for (var i = 0; i < 1000; i++)
+            turn.ResetSuspension();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+            turn.ResetSuspension();
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
+    public void SerialTurnSuspensionSignalPreservesObservationAndReset()
+    {
+        var item = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
+        var turn = new ZLinkSerialTurn(
+            static (_, _) => ZLinkSerialPostAdmission.Closed,
+            static _ => false,
+            static _ => { },
+            CancellationToken.None,
+            item
+        );
+        var first = turn.Suspended;
+        Assert.Same(first, turn.Suspended);
+        Assert.False(first.IsCompleted);
+        turn.SignalSuspended();
+        Assert.True(first.IsCompletedSuccessfully);
+        turn.ResetSuspension();
+        turn.SignalSuspended();
+        var second = turn.Suspended;
+        Assert.NotSame(first, second);
+        Assert.True(second.IsCompletedSuccessfully);
+        turn.ResetSuspension();
+        var third = turn.Suspended;
+        Assert.False(third.IsCompleted);
+        turn.SignalSuspended();
+        Assert.True(third.IsCompletedSuccessfully);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

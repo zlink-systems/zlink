@@ -1483,7 +1483,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         _sharedOwner is null
         || ZLinkSerialTurn.Current is { } turn
             && ReferenceEquals(turn.ExecutionGate, _sharedOwner)
-            && !turn.Suspended.IsCompleted;
+            && !turn.IsSuspended;
 
     private void RequireSharedGate()
     {
