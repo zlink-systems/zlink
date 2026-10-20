@@ -391,12 +391,8 @@ export class ZLinkSpotSerialTurnExecutor {
         release?.();
       }
     );
-    owner.then(resolve, reject);
     return Promise.race([
-      owner.then(
-        () => undefined,
-        () => undefined
-      ),
+      owner.then(resolve, reject),
       turn.suspended
     ]);
   }

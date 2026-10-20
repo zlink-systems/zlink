@@ -353,14 +353,18 @@ export class ZLinkSerialExecutionQueue {
       terminal = Promise.reject(error);
     }
     void terminal.then(
-      (value) => this.finishMailbox(record, () => record.resolve(value)),
-      (error) => this.finishMailbox(record, () => record.reject(error))
+      (value) => this.finishMailbox(record, record.resolve, value),
+      (error) => this.finishMailbox(record, record.reject, error)
     );
   }
 
-  private finishMailbox(record: SerialWorkRecord<unknown>, settle: () => void): void {
+  private finishMailbox(
+    record: SerialWorkRecord<unknown>,
+    settle: (value: unknown) => void,
+    value: unknown
+  ): void {
     this.enqueueMailboxTurn(() => {
-      settle();
+      settle(value);
       record.release();
       record.preparation?.cancel();
       this.activeRecord = undefined;
