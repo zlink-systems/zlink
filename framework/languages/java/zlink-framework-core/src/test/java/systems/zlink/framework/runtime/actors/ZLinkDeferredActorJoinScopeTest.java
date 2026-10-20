@@ -20,6 +20,7 @@ import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
@@ -149,30 +150,56 @@ final class ZLinkDeferredActorJoinScopeTest {
     }
 
     @Test
-    void claimRemainsUntilTheMailboxBarrierCompletesAfterTheOperation() {
+    void completionReleasesClaimBeforeTheMailboxOpensItsNextTurn() {
         Object runtime = new Object();
+        Object claim = new Object();
+        Object nextClaim = new Object();
+        var actorState =
+                new ZLinkActorContextState(
+                        new ZLinkBackendActorRef(RoutingId.from("claim-node"), "actor-a", 1),
+                        "mesh",
+                        "entry");
+        assertTrue(actorState.tryClaimDeferredJoin(claim));
+        CompletableFuture<Void> completionCallback = new CompletableFuture<>();
         CompletableFuture<Void> barrier = new CompletableFuture<>();
         AtomicReference<Supplier<CompletionStage<Void>>> queued = new AtomicReference<>();
         AtomicInteger releases = new AtomicInteger();
         try (var scope = ZLinkDeferredActorJoinScope.enterHandler(runtime, id -> true)) {
             ZLinkDeferredActorJoinScope.registerWithActorBarrier(
                     runtime,
-                    new Object(),
+                    actorState,
                     "actor-a",
                     Long.MAX_VALUE,
-                    () -> CompletableFuture.completedFuture(null),
+                    () -> completionCallback,
                     operation -> {
                         queued.set(operation);
                         return barrier;
                     },
-                    releases::incrementAndGet);
+                    () -> {
+                        releases.incrementAndGet();
+                        actorState.releaseDeferredJoin(claim);
+                    });
             scope.finish(CompletableFuture.completedFuture(null), null)
                     .toCompletableFuture()
                     .join();
-            queued.get().get().toCompletableFuture().join();
+            CompletionStage<Void> operation = queued.get().get();
+            assertFalse(actorState.tryClaimDeferredJoin(nextClaim));
             assertEquals(0, releases.get());
+            // The mailbox can open the next turn as soon as this stage ends,
+            // before publishing its own returned future to external observers.
+            CompletionStage<Void> nextTurn =
+                    operation.thenRun(
+                            () -> {
+                                assertEquals(1, releases.get());
+                                assertTrue(actorState.tryClaimDeferredJoin(nextClaim));
+                            });
+            completionCallback.complete(null);
+            nextTurn.toCompletableFuture().join();
+            assertFalse(barrier.isDone());
             barrier.complete(null);
             assertEquals(1, releases.get());
+            assertFalse(actorState.tryClaimDeferredJoin(new Object()));
+            actorState.releaseDeferredJoin(nextClaim);
         }
         assertEquals(1, releases.get());
     }

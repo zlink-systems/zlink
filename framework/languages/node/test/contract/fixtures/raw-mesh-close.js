@@ -80,11 +80,12 @@ function fixture(taskRunner) {
   return f;
 }
 
-async function closeDuringHello() {
+async function closeDuringHello(onHelloSubmitted) {
   const f = fixture();
   const stopped = deferred();
   let first = true;
-  f.onSubmit = () => {
+  f.onSubmit = (target) => {
+    onHelloSubmitted?.(target);
     if (first) {
       first = false;
       queueMicrotask(() => {

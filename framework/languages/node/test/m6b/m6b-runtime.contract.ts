@@ -1,3 +1,9 @@
+import {
+  prepareZLinkRequestReply,
+  mapZLinkRequestReply,
+  identityRequestReply,
+  type ZLinkRequestResult
+} from '../../packages/framework/src/runtime/messaging/request-result';
 import { encodeBoundSessionCloseCommand } from '../../packages/framework/src/runtime/protocol/service_wire_codec.generated';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
@@ -6730,8 +6736,13 @@ test('public SpotId call reaches production host Missing Instance placement with
       async sendToSpot() {
         throw new Error('Ready route must not be used for Missing authority.');
       },
-      async requestToSpot() {
-        throw new Error('request is not used by this test.');
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            throw new Error('request is not used by this test.');
+          })(),
+          identityRequestReply
+        );
       }
     },
     meshNames: () => ['mesh'],
@@ -6832,8 +6843,13 @@ test('Missing Instance distinguishes unsupported types from exhausted placement 
         async sendToSpot() {
           throw new Error('Ready route must not be used.');
         },
-        async requestToSpot() {
-          throw new Error('Ready route must not be used.');
+        requestToSpot() {
+          return prepareZLinkRequestReply(
+            (async () => {
+              throw new Error('Ready route must not be used.');
+            })(),
+            identityRequestReply
+          );
         }
       },
       meshNames: () => ['mesh'],
@@ -6912,8 +6928,13 @@ test('Missing Instance placement capacity fails without polling or retaining a c
       async sendToSpot() {
         throw new Error('Ready route must not be used.');
       },
-      async requestToSpot() {
-        throw new Error('Ready route must not be used.');
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            throw new Error('Ready route must not be used.');
+          })(),
+          identityRequestReply
+        );
       }
     },
     meshNames: () => ['mesh'],
@@ -6996,8 +7017,13 @@ test('Missing Instance request classifies an actorLocationStale terminal as Unav
       async sendToSpot() {
         throw new Error('Ready route must not be used.');
       },
-      async requestToSpot() {
-        throw new Error('Ready route must not be used.');
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            throw new Error('Ready route must not be used.');
+          })(),
+          identityRequestReply
+        );
       }
     },
     meshNames: () => ['mesh'],
@@ -7062,15 +7088,20 @@ test('Ready Instance request ends on a disconnected stale route without resubmis
       async sendToSpot() {
         throw new Error('send is not used by this test.');
       },
-      async requestToSpot<TReply>(route: unknown): Promise<TReply> {
-        attempts += 1;
-        if (attempts === 1) {
-          throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-            `stale route ${String((route as { targetNodeRid: string }).targetNodeRid)}`
-          );
-        }
-        return 'unexpected' as TReply;
+      requestToSpot<TReply>(route: unknown): ZLinkRequestResult<TReply> {
+        return prepareZLinkRequestReply(
+          (async () => {
+            attempts += 1;
+            if (attempts === 1) {
+              throw createInternalFrameworkException(
+                ZLinkFrameworkInternalErrorKind.ActorLocationStale,
+                `stale route ${String((route as { targetNodeRid: string }).targetNodeRid)}`
+              );
+            }
+            return 'unexpected' as TReply;
+          })(),
+          identityRequestReply
+        );
       }
     },
     meshNames: () => ['mesh'],
@@ -7169,9 +7200,14 @@ test('Instance target-not-found completes once and a new call cold-activates Mis
       async sendToSpot() {
         throw new Error('send is not used by this test.');
       },
-      async requestToSpot() {
-        directAttempts += 1;
-        throw targetFailure;
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            directAttempts += 1;
+            throw targetFailure;
+          })(),
+          identityRequestReply
+        );
       }
     },
     meshNames: () => ['mesh'],
@@ -7265,8 +7301,13 @@ test('accepted Instance one-way admission keeps the positive route cache', async
       async sendToSpot() {
         return { status: ZLinkSubmitStatus.Submitted };
       },
-      async requestToSpot() {
-        throw new Error('request is not used by this test.');
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            throw new Error('request is not used by this test.');
+          })(),
+          identityRequestReply
+        );
       }
     },
     meshNames: () => ['mesh'],
@@ -7316,8 +7357,13 @@ test('successful Instance request keeps the positive route cache', async () => {
       async sendToSpot() {
         throw new Error('send is not used by this test.');
       },
-      async requestToSpot<TReply>(): Promise<TReply> {
-        return 'reply' as TReply;
+      requestToSpot<TReply>(): ZLinkRequestResult<TReply> {
+        return prepareZLinkRequestReply(
+          (async () => {
+            return 'reply' as TReply;
+          })(),
+          identityRequestReply
+        );
       }
     },
     meshNames: () => ['mesh'],
@@ -7366,8 +7412,13 @@ test('Instance one-way admission invalidates a route rejected by the target', as
       async sendToSpot() {
         return { status: ZLinkSubmitStatus.RouteNotConnected };
       },
-      async requestToSpot() {
-        throw new Error('request is not used by this test.');
+      requestToSpot() {
+        return prepareZLinkRequestReply(
+          (async () => {
+            throw new Error('request is not used by this test.');
+          })(),
+          identityRequestReply
+        );
       }
     },
     meshNames: () => ['mesh'],
@@ -7531,13 +7582,15 @@ test('Ready Instance routes use command 39 with the complete authority fence', a
   });
   assert.equal(sentMetadata, metadata);
 
-  const reply = await transport.requestToSpot<string>(
-    target,
-    { hello: true },
-    {
-      packetName: 'Ping',
-      metadata
-    }
+  const reply = await mapZLinkRequestReply(
+    transport.requestToSpot<string>(
+      target,
+      { hello: true },
+      {
+        packetName: 'Ping',
+        metadata
+      }
+    )
   );
   assert.equal(reply, 'instance-reply');
   assert.deepEqual(requestedRoute, sentRoute);
@@ -7596,7 +7649,10 @@ test('stateful request failure codes preserve typed Instance route errors', asyn
     );
 
     await assert.rejects(
-      () => transport.requestToSpot(target, { ping: true }, { packetName: 'Ping' }),
+      () =>
+        mapZLinkRequestReply(
+          transport.requestToSpot(target, { ping: true }, { packetName: 'Ping' })
+        ),
       (error: unknown) =>
         error instanceof ZLinkFrameworkException &&
         internalFrameworkErrorKind(error) === expectedKind &&

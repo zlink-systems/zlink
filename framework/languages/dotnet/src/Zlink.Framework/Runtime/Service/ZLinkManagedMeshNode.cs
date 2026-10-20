@@ -14,6 +14,7 @@ using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Messaging;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
+using MailboxKey = Zlink.Framework.Runtime.Service.MeshMailboxKey;
 using OwnedMailbox = Zlink.Framework.Runtime.Service.ZLinkMeshNodeOwnedMailbox;
 using Peer = Zlink.Framework.Runtime.Service.ZLinkMeshPeer;
 using QueuedRecord = Zlink.Framework.Runtime.Service.ZLinkMeshQueuedRecord;
@@ -165,6 +166,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private Tuple<RawMeshMonitor[], MeshNodeState> _monitorState = new([], MeshNodeState.Created);
     private readonly HashSet<Task> _inboundOperations = [];
     private readonly Dictionary<ControlSendKey, ControlSendState> _controlSends = [];
+
+    // Written on the inbound-operation lane; the deadline owner only observes it.
+    private const long NoAdmissionActivityTicks = -1;
+    private long _admissionActivityTicks = NoAdmissionActivityTicks;
     private readonly ulong _lifecycleGeneration = NewNonZeroToken();
 
     // Observation-only tracer (spec 26/27). Wired by the framework
@@ -2686,62 +2691,52 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         if ((domains & MeshReadyDomains.All) == 0)
             return ValueTask.FromResult(false);
 
-        var comparer = Comparer<(
-            MeshReadyDomains Domain,
-            MeshOwnerKind OwnerKind,
-            string Identity
-        )>.Create(
-            static (left, right) =>
-            {
-                var domainOrder = (
-                    left.Domain == MeshReadyDomains.Infrastructure ? 0 : 1
-                ).CompareTo(right.Domain == MeshReadyDomains.Infrastructure ? 0 : 1);
-                if (domainOrder != 0)
-                    return domainOrder;
-                var ownerOrder = Comparer<MeshOwnerKind>.Default.Compare(
-                    left.OwnerKind,
-                    right.OwnerKind
-                );
-                return ownerOrder != 0
-                    ? ownerOrder
-                    : StringComparer.Ordinal.Compare(left.Identity, right.Identity);
-            }
-        );
         Volatile.Write(ref _readyPosted, 0);
-        foreach (
-            var entry in _readyMailboxes
-                .Where(entry => entry.Value && (entry.Key.Domain & domains) != 0)
-                .OrderBy(
-                    static entry => (entry.Key.Domain, entry.Key.OwnerKind, entry.Key.Identity),
-                    comparer
-                )
-        )
+        var first = batch.Count;
+        var count = first;
+        try
         {
-            if (batch.Count >= batch.MaximumRecords)
-                return ValueTask.FromResult(true);
-            if (!_readyMailboxes.TryUpdate(entry.Key, false, true))
-                continue;
-            if (!_ownedMailboxes.TryGetValue(entry.Key, out var mailbox))
-                continue;
-            batch.Add(
-                new MeshReadyRecord(
-                    entry.Key.OwnerKind,
-                    entry.Key.Domain,
-                    entry.Key.SpotId,
-                    entry.Key.Actor
-                ),
-                new MeshClaim
+            foreach (var entry in _readyMailboxes)
+                if (entry.Value && (entry.Key.Domain & domains) != 0)
+                    batch.AddCandidate(entry.Key);
+
+            // Reuse the caller's batch for candidates. Keep the original ordinal
+            // as the final key so the in-place sort preserves equal-key order.
+            var entries = batch.Entries;
+            entries[first..].Sort();
+            for (var index = first; index < entries.Length; index++)
+            {
+                if (count >= batch.MaximumRecords)
+                    return ValueTask.FromResult(true);
+                var key = entries[index].Key;
+                if (!_readyMailboxes.TryUpdate(key, false, true))
+                    continue;
+                // Keep the captured mailbox inside this scope: a full output
+                // batch must return before the compiler allocates its closure.
                 {
-                    Receiver = (receiveBatch, receiveFlags) =>
-                        mailbox.ClaimAndDrainAsync(
-                            receiveBatch,
-                            Math.Min(ReceiveBatchSize, receiveBatch.MaximumRecords)
-                        ),
-                    Releaser = () => mailbox.Release(),
+                    if (!_ownedMailboxes.TryGetValue(key, out var mailbox))
+                        continue;
+                    entries[count++] = new(
+                        key,
+                        new MeshClaim
+                        {
+                            Receiver = (receiveBatch, receiveFlags) =>
+                                mailbox.ClaimAndDrainAsync(
+                                    receiveBatch,
+                                    Math.Min(ReceiveBatchSize, receiveBatch.MaximumRecords)
+                                ),
+                            Releaser = () => mailbox.Release(),
+                        },
+                        index
+                    );
                 }
-            );
+            }
+            return ValueTask.FromResult(false);
         }
-        return ValueTask.FromResult(false);
+        finally
+        {
+            batch.Truncate(count);
+        }
     }
 
     public ISpot CreateSpot()
@@ -3792,7 +3787,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         _pendingRawMulticast?.Dispose();
         _pendingRawMulticast = null;
         RunState(_selectedRoutes.Clear);
-        RunInboundOperationState(_controlSends.Clear);
+        RunInboundOperationState(() =>
+        {
+            _controlSends.Clear();
+            Volatile.Write(ref _admissionActivityTicks, NoAdmissionActivityTicks);
+        });
         foreach (var spot in _spots.Values)
             await spot.DisposeAsync().ConfigureAwait(false);
         _spots.Clear();
@@ -5197,7 +5196,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     : 0
             );
             EnqueueOwned(
-                MailboxKey.ForActor(actor, MeshReadyDomains.Application),
+                MailboxKey.ForActor(actor.Ref, MeshReadyDomains.Application),
                 record,
                 retained,
                 requestAdmission: operation?.RequestAdmission
@@ -8521,7 +8520,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 return false;
             }
             admittedActor = actor;
-            owner = MailboxKey.ForActor(actor, MeshReadyDomains.Application);
+            owner = MailboxKey.ForActor(actor.Ref, MeshReadyDomains.Application);
             kind = request ? MeshRecordKind.ActorRequest : MeshRecordKind.ActorSend;
             operationKind = MeshOperationKind.ActorRequest;
         }
@@ -9723,6 +9722,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 peer.LifecycleGeneration = admission.LifecycleGeneration;
                 peer.DescriptorRevision = admission.DescriptorRevision;
                 peer.Admission = admission;
+                if (command == ServiceWireConstants.Command.Admit)
+                    RetireHelloSubmissions(sourceRid, routeGeneration);
                 peer.Admitted = false;
                 peer.State = MeshPeerState.NotRequired;
                 peer.LastChangedMs = checked((ulong)Environment.TickCount64);
@@ -9828,6 +9829,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     ? hello.HelloDescriptor?.DescriptorRevision ?? 0
                     : 0
             );
+            RetireHelloSubmissions(peer.PhysicalRoutingId, peer.RouteGeneration);
             if (helloRevision != 0 && _descriptorRevision > helloRevision)
                 SendAdmissionCore(peer, ServiceWireConstants.Command.Update);
         }
@@ -9961,6 +9963,36 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private void ProcessInfrastructure(long now)
     {
+        (ControlSendKey Key, byte[] Head)[] CollectDueHelloRetries()
+        {
+            var activity = Volatile.Read(ref _admissionActivityTicks);
+            if (
+                activity == NoAdmissionActivityTicks
+                || _deadlineClock.Elapsed.Ticks - activity
+                    < ZLinkServiceLiveness.ProbeInterval.Ticks
+            )
+                return [];
+            return RunInboundOperationState(() =>
+            {
+                // Admission or another management turn may have changed activity.
+                var activity = _admissionActivityTicks;
+                var elapsed = _deadlineClock.Elapsed.Ticks;
+                if (
+                    activity == NoAdmissionActivityTicks
+                    || elapsed - activity < ZLinkServiceLiveness.ProbeInterval.Ticks
+                )
+                    return Array.Empty<(ControlSendKey Key, byte[] Head)>();
+                Volatile.Write(ref _admissionActivityTicks, elapsed);
+                return _controlSends
+                    .Where(entry =>
+                        entry.Key.Command == ServiceWireConstants.Command.Hello
+                        && entry.Value.Pending is not null
+                    )
+                    .Select(entry => (entry.Key, entry.Value.Pending!))
+                    .ToArray();
+            });
+        }
+        var retries = CollectDueHelloRetries();
         // Spec 08 §4.2: the management work of a receive rotation reads the
         // node state in one node turn — the intents that still need a Hello and
         // the liveness activity of every admitted peer.
@@ -9970,38 +10002,44 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 (Node: this, Now: now)
             )
         );
-        bool? admissionSealed = null;
-
-        foreach (var intent in intents ?? [])
+        if (
+            (retries.Length != 0 || intents is { Count: > 0 })
+            && _peerAdmissionSealed?.Invoke() != true
+        )
         {
-            admissionSealed ??= _peerAdmissionSealed?.Invoke() == true;
-            if (admissionSealed.Value)
-                break;
-            var (target, routeGeneration, unboundRoutes) = RunState(() =>
+            foreach (var (key, head) in retries)
+                SendControl(key.Target, key.RouteGeneration, key.Command, head);
+
+            foreach (var intent in intents ?? [])
             {
-                if (
-                    !_peersByIntent.TryGetValue(intent.Id, out var current)
-                    || !ReferenceEquals(current, intent)
-                )
-                    return (default(RoutingId), 0UL, Array.Empty<RoutingId>());
-                var rid =
-                    current.ExpectedRid
-                    ?? (NeedsUnboundHelloRouteUnderLock(current) ? default : current.ResolvedRid);
-                if (!rid.IsEmpty)
+                var (target, routeGeneration, unboundRoutes) = RunState(() =>
                 {
-                    return (rid, _selectedRoutes.GenerationOf(rid), Array.Empty<RoutingId>());
-                }
-                return (default(RoutingId), 0UL, UnboundSelectedRoutesUnderLock(current));
-            });
-            if (!target.IsEmpty && routeGeneration != 0)
-                SendControl(target, routeGeneration, ServiceWireConstants.Command.Hello, null);
-            foreach (var routingId in unboundRoutes)
-                SendControl(
-                    routingId,
-                    RunState(() => _selectedRoutes.GenerationOf(routingId)),
-                    ServiceWireConstants.Command.Hello,
-                    null
-                );
+                    if (
+                        !_peersByIntent.TryGetValue(intent.Id, out var current)
+                        || !ReferenceEquals(current, intent)
+                    )
+                        return (default(RoutingId), 0UL, Array.Empty<RoutingId>());
+                    var rid =
+                        current.ExpectedRid
+                        ?? (
+                            NeedsUnboundHelloRouteUnderLock(current) ? default : current.ResolvedRid
+                        );
+                    if (!rid.IsEmpty)
+                    {
+                        return (rid, _selectedRoutes.GenerationOf(rid), Array.Empty<RoutingId>());
+                    }
+                    return (default(RoutingId), 0UL, UnboundSelectedRoutesUnderLock(current));
+                });
+                if (!target.IsEmpty && routeGeneration != 0)
+                    SendControl(target, routeGeneration, ServiceWireConstants.Command.Hello, null);
+                foreach (var routingId in unboundRoutes)
+                    SendControl(
+                        routingId,
+                        RunState(() => _selectedRoutes.GenerationOf(routingId)),
+                        ServiceWireConstants.Command.Hello,
+                        null
+                    );
+            }
         }
 
         foreach (var activity in activities ?? [])
@@ -12034,6 +12072,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private TimeSpan ReadOperationWaitDeadline()
     {
         var pollDeadline = _deadlineClock.Elapsed + PollInterval;
+        var activity = Volatile.Read(ref _admissionActivityTicks);
+        if (activity != NoAdmissionActivityTicks)
+        {
+            var admissionDeadline =
+                TimeSpan.FromTicks(activity) + ZLinkServiceLiveness.ProbeInterval;
+            if (admissionDeadline < pollDeadline)
+                pollDeadline = admissionDeadline;
+        }
         var tick = NextOccupiedDeadlineTick();
         if (tick < 0)
             return pollDeadline;
@@ -12857,8 +12903,18 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     )
                     .ToArray()
             )
-                _controlSends.Remove(key);
+                RemoveControlSendUnderLock(key);
         });
+
+    private void RemoveControlSendUnderLock(ControlSendKey key)
+    {
+        _controlSends.Remove(key);
+        if (
+            key.Command == ServiceWireConstants.Command.Hello
+            && !_controlSends.Keys.Any(key => key.Command == ServiceWireConstants.Command.Hello)
+        )
+            Volatile.Write(ref _admissionActivityTicks, NoAdmissionActivityTicks);
+    }
 
     private bool SendControl(
         RoutingId target,
@@ -12878,28 +12934,60 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         bool start;
         try
         {
-            (state, start) = RunInboundOperationState(() =>
-            {
-                if (_inboundOperationAdmissionClosed)
-                    return ((ControlSendState?)null, false);
-                if (_controlSends.TryGetValue(key, out var current))
+            (ControlSendState? State, bool Start) PrepareSubmission() =>
+                RunInboundOperationState(() =>
                 {
-                    if (command == ServiceWireConstants.Command.Hello)
-                        // 같은 generation의 진행 중인 제출 또는 수락 기록을 재사용한다.
+                    if (_inboundOperationAdmissionClosed)
+                        return ((ControlSendState?)null, false);
+                    if (_controlSends.TryGetValue(key, out var current))
+                    {
+                        if (command == ServiceWireConstants.Command.Hello)
+                        {
+                            // Only a due management turn supplies the accepted HELLO bytes.
+                            // Pending is empty while Core still owns a submission.
+                            if (head is null || current.Pending is null)
+                                return (current, false);
+                            head = current.Pending;
+                            current.Pending = null;
+                            return (current, true);
+                        }
+                        // Admission and liveness are retryable state signals. If a
+                        // previous attempt is still waiting for Core admission,
+                        // retain only the newest signal for this peer epoch and
+                        // command. This bounds temporal amplification without
+                        // moving retry or completion ownership out of Core.
+                        current.Pending = head!;
                         return (current, false);
-                    // Admission and liveness are retryable state signals. If a
-                    // previous attempt is still waiting for Core admission,
-                    // retain only the newest signal for this peer epoch and
-                    // command. This bounds temporal amplification without
-                    // moving retry or completion ownership out of Core.
-                    current.Pending = head!;
-                    return (current, false);
-                }
+                    }
 
-                var created = new ControlSendState();
-                _controlSends.Add(key, created);
-                return (created, true);
-            });
+                    // ADMIT or route termination may have retired a due snapshot.
+                    if (command == ServiceWireConstants.Command.Hello && head is not null)
+                        return ((ControlSendState?)null, false);
+                    var created = new ControlSendState();
+                    _controlSends.Add(key, created);
+                    if (
+                        command == ServiceWireConstants.Command.Hello
+                        && _admissionActivityTicks == NoAdmissionActivityTicks
+                    )
+                        Volatile.Write(ref _admissionActivityTicks, _deadlineClock.Elapsed.Ticks);
+                    return (created, true);
+                });
+            (state, start) =
+                command == ServiceWireConstants.Command.Hello && head is null
+                    ? RunState(() =>
+                    {
+                        // Admission and creating the first HELLO share the node turn.
+                        // A collected intent may already have received its ADMIT.
+                        if (
+                            !_peersByIntent.Values.Any(intent =>
+                                IsHelloOwnedByIntentUnderLock(intent, target)
+                                && !HasIntentPeerUnderLock(intent)
+                            )
+                        )
+                            return ((ControlSendState?)null, false);
+                        return PrepareSubmission();
+                    })
+                    : PrepareSubmission();
         }
         catch (ObjectDisposedException)
         {
@@ -12956,7 +13044,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         _controlSends.TryGetValue(key, out var current)
                         && ReferenceEquals(current, state)
                     )
-                        _controlSends.Remove(key);
+                        RemoveControlSendUnderLock(key);
                 });
         }
     }
@@ -12968,12 +13056,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         CancellationToken cancellationToken
     )
     {
-        var accepted = false;
         try
         {
             while (true)
             {
-                accepted = await SendControlAttemptAsync(
+                await SendControlAttemptAsync(
                         key.Target,
                         key.RouteGeneration,
                         key.Command,
@@ -12990,16 +13077,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     )
                         return null;
                     if (key.Command == ServiceWireConstants.Command.Hello)
-                    {
-                        // 수락 뒤의 entry가 HELLO 제출 사실을 소유한다. 실패는 새 기회를 막지 않는다.
-                        if (!accepted)
-                            _controlSends.Remove(key);
                         return null;
-                    }
                     var pending = state.Pending;
                     state.Pending = null;
                     if (pending is null)
-                        _controlSends.Remove(key);
+                        RemoveControlSendUnderLock(key);
                     return pending;
                 });
                 if (next is null)
@@ -13009,15 +13091,20 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         finally
         {
-            if (!accepted || key.Command != ServiceWireConstants.Command.Hello)
-                RunInboundOperationState(() =>
+            RunInboundOperationState(() =>
+            {
+                if (
+                    _controlSends.TryGetValue(key, out var current)
+                    && ReferenceEquals(current, state)
+                )
                 {
-                    if (
-                        _controlSends.TryGetValue(key, out var current)
-                        && ReferenceEquals(current, state)
-                    )
-                        _controlSends.Remove(key);
-                });
+                    if (key.Command == ServiceWireConstants.Command.Hello)
+                        // Core completion returns the original bytes to the management owner.
+                        state.Pending = head;
+                    else
+                        RemoveControlSendUnderLock(key);
+                }
+            });
         }
     }
 
@@ -13498,39 +13585,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     {
         var delta = (long)Math.Ceiling(duration.TotalSeconds * Stopwatch.Frequency);
         return checked(timestamp + delta);
-    }
-
-    private readonly record struct MailboxKey(
-        MeshOwnerKind OwnerKind,
-        string Identity,
-        ulong Generation,
-        MeshReadyDomains Domain,
-        string SpotId,
-        ActorRef Actor
-    )
-    {
-        internal static MailboxKey ForNode(MeshReadyDomains domain, string? channelName = null) =>
-            new(MeshOwnerKind.Node, channelName ?? string.Empty, 0, domain, string.Empty, default);
-
-        internal static MailboxKey ForSpot(ZLinkManagedSpot spot, MeshReadyDomains domain) =>
-            new(
-                MeshOwnerKind.Spot,
-                spot.SpotId,
-                spot.LifecycleGeneration,
-                domain,
-                spot.SpotId,
-                default
-            );
-
-        internal static MailboxKey ForActor(ManagedActor actor, MeshReadyDomains domain) =>
-            new(
-                MeshOwnerKind.Actor,
-                actor.Ref.ActorId,
-                actor.Ref.ObjectGeneration,
-                domain,
-                string.Empty,
-                actor.Ref
-            );
     }
 
     private readonly record struct ObservedSpotAuthorityKey(RoutingId NodeRid, string SpotId);
