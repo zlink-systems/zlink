@@ -5452,7 +5452,16 @@ final class ZLinkJavaRawMeshNode
                                                                         .DEADLINE_EXCEEDED)
                                                 || cause instanceof TimeoutException
                                         ? ZLinkDispatchErrorReason.ACTIVATION_TIMEOUT
-                                        : ZLinkDispatchErrorReason.ACTIVATION_REJECTED,
+                                        : (cause instanceof ZLinkFrameworkException typed
+                                                                && typed.kind()
+                                                                        == ZLinkFrameworkErrorKind
+                                                                                .SHUTTING_DOWN)
+                                                        || cause
+                                                                instanceof
+                                                                java.util.concurrent
+                                                                        .CancellationException
+                                                ? ZLinkDispatchErrorReason.SHUTDOWN
+                                                : ZLinkDispatchErrorReason.ACTIVATION_REJECTED,
                                 activationFlow);
             }
             reporter.report(

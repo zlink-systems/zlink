@@ -44,6 +44,90 @@ final class InstanceSpotColdActivationTest {
     }
 
     @Test
+    void initializationEndsAtActivationDeadline() throws Exception {
+        entered = new CompletableFuture<>();
+        release = new CompletableFuture<>();
+        var dropped = new CompletableFuture<String>();
+        String spotId = "initialization-deadline-" + UUID.randomUUID();
+        var logger =
+                java.util.logging.Logger.getLogger(
+                        "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer");
+        var listener =
+                new java.util.logging.Handler() {
+                    public void publish(java.util.logging.LogRecord record) {
+                        if (record.getMessage().contains(spotId)
+                                && record.getMessage().contains("phase=dropped"))
+                            dropped.complete(record.getMessage());
+                    }
+
+                    public void flush() {}
+
+                    public void close() {}
+                };
+        logger.addHandler(listener);
+        var options = new DefaultZLinkFrameworkOptions();
+        options.configureDispatch()
+                .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.addRelocationStore(new InMemoryRelocationStore());
+        options.addRouteMesh("cold-test")
+                .listen("inproc://init-deadline-" + UUID.randomUUID())
+                .setDefaultRequestTimeout(Duration.ofMillis(200))
+                .objects()
+                .server()
+                .addInstanceSpotFactory(
+                        "cold", WaitingInstance.class, factory -> factory.disableRelocation());
+        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+            try (var probe =
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                            .install()) {
+                try {
+                    runtime.route()
+                            .sendToSpot(spotId, new Initial("first"))
+                            .instanceSpot("cold")
+                            .submit()
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS);
+                    entered.get(5, TimeUnit.SECONDS);
+                    String event = dropped.get(2, TimeUnit.SECONDS);
+                    assertTrue(event.contains("reason=activation_timeout"), event);
+                    assertTrue(event.contains("error_type=ZLinkFrameworkException"), event);
+                    assertEquals(
+                            "timed_out",
+                            probe.only("zlink.instance_spot.activations").tags().get("outcome"));
+                    assertFalse(
+                            release.isDone(),
+                            "Initialization remains suspended at the terminal deadline.");
+                } finally {
+                    release.complete(null);
+                }
+            }
+        } finally {
+            logger.removeHandler(listener);
+        }
+    }
+
+    public static final class WaitingInstance implements ZLinkInstanceSpot {
+        private final ZLinkInstanceSpotContext context;
+
+        public WaitingInstance(ZLinkInstanceSpotContext context) {
+            this.context = context;
+        }
+
+        public ZLinkInstanceSpotContext context() {
+            return context;
+        }
+
+        public CompletionStage<Void> onInitialize() {
+            entered.complete(null);
+            return release;
+        }
+    }
+
+    @Test
     @SuppressWarnings("unchecked")
     void remoteTargetCreatesAndRepliesWhileSourceNeverReserves() throws Exception {
         initialized = new AtomicInteger();

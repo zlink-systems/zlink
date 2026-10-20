@@ -150,7 +150,9 @@ final class ZLinkInstanceActivationFailureFlowTest {
                             "reason="
                                     + (scenario.equals("deadline")
                                             ? "activation_timeout"
-                                            : "activation_rejected")),
+                                            : scenario.equals("shutdown")
+                                                    ? "shutdown"
+                                                    : "activation_rejected")),
                     drop);
             assertTrue(drop.contains(flow.flowId()), drop);
             assertTrue(drop.contains("origin=application"), drop);
