@@ -117,6 +117,10 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         using (ExecutionContext.SuppressFlow())
         {
             var workers = new Task[Math.Max(MinimumApplicationWorkers, Environment.ProcessorCount)];
+            // The pump lifetime owns this registration until all workers have joined.
+            // Release every waiter together: an exiting worker must not unregister
+            // a cancellation callback that still owes another worker a wakeup.
+            _stop.Token.UnsafeRegister(_ => _signal.Release(workers.Length), null);
             for (var index = 0; index < workers.Length; index++)
                 workers[index] = _applicationTaskRunner is { } runner
                     ? runner.Run("mesh-application-worker", _ => RunAsync(_stop.Token))
@@ -281,19 +285,10 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 
     private async ValueTask RunAsync(CancellationToken cancellationToken)
     {
-        // One shared token becomes canceled before any waiter is released.
-        // Each worker then releases one waiter on shutdown; joining the workers
-        // precedes signal disposal.
-        // Keep cancellation registration with the worker lifetime instead of
-        // wrapping every readiness wait in a cancellable Task.
-        using var wakeOnStop = cancellationToken.UnsafeRegister(
-            static signal => ((SemaphoreSlim)signal!).Release(),
-            _signal
-        );
         using var readyBatch = new MeshReadyBatch { MaximumRecords = 1 };
         using var receiveBatch = new MeshReceiveBatch();
         // These are handler-returned asynchronous results, not another queue of
-        // records. Keep their lifetime inside the persistent worker registration.
+        // records. Keep their lifetime inside the persistent worker.
         var pending = new List<Task>();
         try
         {
