@@ -785,6 +785,7 @@ export class ZLinkFrameworkRuntimeHost
       shutdownSignal: () => this.executionState?.abortController.signal
     });
     this.serviceRelocation = new ZLinkHostServiceRelocationRuntime({
+      flowCreationEnabled: () => this.flowCreationEnabled(),
       registration: options.registration,
       targetAdmissionSealed: () => this.shutdownOperationStartedAt !== undefined,
       requestPeerReconcile: (meshName, peerRid) =>

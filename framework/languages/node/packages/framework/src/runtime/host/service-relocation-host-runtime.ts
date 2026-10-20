@@ -231,6 +231,7 @@ const SERVICE_CONTROL_TERMINAL_CAPACITY = 4096;
 const INITIAL_MEMBERSHIP_EPOCH = 1n;
 
 interface ZLinkHostRelocationOptions {
+  readonly flowCreationEnabled?: () => boolean;
   readonly registration: ZLinkFrameworkRegistration;
   readonly providerResolver?: ZLinkProviderResolver;
   readonly locationStore: () => ZLinkLocationStore | undefined;
@@ -3801,7 +3802,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         participantId,
         completion,
         packet,
-        this.options.registration.messageSerializers
+        this.options.registration.messageSerializers,
+        this.options.flowCreationEnabled?.() ?? false
       ),
       source,
       signal
@@ -5641,7 +5643,8 @@ function maintenanceReplyRelay(
   participantId: bigint,
   completion: RelocationTerminalCompletion,
   packet: ZLinkActorHandoffPacket,
-  serializers: Parameters<typeof encodeActorReply>[3]
+  serializers: Parameters<typeof encodeActorReply>[3],
+  flowEnabled: boolean
 ): ServiceMaintenanceReplyRelay {
   const value = completion.result.ok ? completion.result.response : undefined;
   const direct = packet.messageFollowOrigin?.requestSource !== undefined;
@@ -5653,7 +5656,8 @@ function maintenanceReplyRelay(
               Buffer.from(packet.header, 'base64'),
               ZLinkStreamMessageKind.Response,
               value,
-              serializers
+              serializers,
+              flowEnabled
             ),
             SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
             SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
