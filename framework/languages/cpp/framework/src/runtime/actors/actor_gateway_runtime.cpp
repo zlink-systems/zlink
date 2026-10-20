@@ -14,6 +14,9 @@
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 
+#include "runtime/messaging/failure_origin_wire.hpp"
+#include "runtime/messaging/request_failure_mapper.hpp"
+#include <nlohmann/json.hpp>
 #include <algorithm>
 #include <atomic>
 #include <limits>
@@ -556,6 +559,9 @@ namespace detail
 
 namespace
 {
+// Service command correlation owns Actor replies; STREAM requires a nonzero sequence.
+constexpr std::uint64_t actor_wire_request_sequence = 1;
+
 thread_local std::vector<stream_header_t> stream_relay_headers;
 
 stream_header_t actor_relay_header (stream_message_kind_t kind, std::string packet_name)
@@ -564,6 +570,112 @@ stream_header_t actor_relay_header (stream_message_kind_t kind, std::string pack
                             std::move (packet_name));
 }
 
+}
+
+runtime::messaging::message_parts_t
+encode_actor_packet (const runtime::messaging::envelope_header_t &header, zlink::message_t body)
+{
+    using runtime::messaging::message_kind_t;
+    stream_header_t wire (
+      header.kind == message_kind_t::command ? stream_message_kind_t::send
+                                             : stream_message_kind_t::request,
+      stream_codec_from_content_type (header.content_type), stream_header_flags_t::none,
+      header.kind == message_kind_t::command ? std::nullopt
+                                             : std::make_optional (actor_wire_request_sequence),
+      header.message_name, stream_metadata_t (header.metadata));
+    if (!header.correlation_id.empty ())
+        wire.with_correlation_id (header.correlation_id);
+    if (header.flow_id && header.flow_origin)
+        wire.with_flow (*header.flow_id, *header.flow_origin);
+    stream_runtime_t::propagate_flow (wire);
+    auto encoded = stream_runtime_t (nullptr).encode_header (wire);
+    return {zlink::message_t::from (std::move (encoded.value ())), std::move (body)};
+}
+
+result_t<runtime::messaging::envelope_header_t>
+decode_actor_packet_header (const runtime::messaging::message_parts_t &parts,
+                            stream_message_kind_t expected_kind,
+                            bool capture_flow)
+{
+    using runtime::messaging::envelope_header_t;
+    using runtime::messaging::message_kind_t;
+    if (parts.size () != 2)
+        return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
+                                                     "Actor typed message requires two parts");
+    auto decoded = stream_runtime_t::decode_header (parts[0].to_bytes (), capture_flow);
+    if (!decoded)
+        return result_t<envelope_header_t>::failure (decoded.error_kind (),
+                                                     decoded.error ()->what ());
+    const auto &wire = decoded.value ();
+    if (wire.kind () != expected_kind)
+        return result_t<envelope_header_t>::failure (
+          framework_error_kind_t::protocol_error,
+          "Actor STREAM kind does not match its service command");
+    envelope_header_t header;
+    header.kind = wire.kind () == stream_message_kind_t::send ? message_kind_t::command
+                                                              : message_kind_t::request;
+    header.channel_name = actor_message_channel_name;
+    header.message_name = wire.packet_name ();
+    header.content_type = stream_content_type (wire.codec ());
+    header.metadata = wire.metadata ().values ();
+    if (const auto correlation = wire.correlation_id ())
+        header.correlation_id = *correlation;
+    if (const auto flow = wire.flow_id ())
+        header.flow_id = std::string (*flow);
+    header.flow_origin = wire.flow_origin ();
+    return result_t<envelope_header_t>::success (std::move (header));
+}
+
+runtime::messaging::message_parts_t
+encode_actor_reply (const runtime::messaging::envelope_header_t &header, zlink::message_t body)
+{
+    const bool error = header.kind == runtime::messaging::message_kind_t::error;
+    stream_header_t wire (error ? stream_message_kind_t::error : stream_message_kind_t::response,
+                          error ? stream_codec_t::json
+                                : stream_codec_from_content_type (header.content_type),
+                          stream_header_flags_t::none, actor_wire_request_sequence, "",
+                          stream_metadata_t (header.metadata));
+    if (error) {
+        body = stream_error_payload (
+          header.error_code.value_or (stream_error_code (framework_error_kind_t::internal_failure)),
+          header.error_message.value_or ("Actor handler failed"));
+    }
+    stream_runtime_t::propagate_flow (wire);
+    auto encoded = stream_runtime_t (nullptr).encode_frame (wire, body);
+    return runtime::messaging::message_parts_t (
+      std::vector<zlink::message_t>{zlink::message_t::from (std::move (encoded.value ()))});
+}
+
+result_t<std::optional<zlink::message_t>>
+decode_actor_reply (const runtime::messaging::message_parts_t &parts)
+{
+    try {
+        auto [header, body] = stream_runtime_t::decode_frame (parts.items (), false);
+        if (!header.packet_name ().empty ()
+            || (header.kind () != stream_message_kind_t::response
+                && header.kind () != stream_message_kind_t::error))
+            return result_t<std::optional<zlink::message_t>>::failure (
+              framework_error_kind_t::protocol_error,
+              "Actor reply requires an unnamed Response or Error");
+        if (header.kind () == stream_message_kind_t::error) {
+            const auto payload = nlohmann::json::parse (body.to_string ());
+            auto error = runtime::messaging::request_failure_mapper_t{}.error_header_exception (
+              payload.at ("code").get<std::string> (), payload.at ("message").get<std::string> (),
+              "Actor request");
+            runtime::messaging::envelope_header_t context;
+            context.metadata = header.metadata ().values ();
+            return detail::result_access_t::failure<std::optional<zlink::message_t>> (
+              runtime::messaging::restore_failure_origin (context, std::move (error)));
+        }
+        return result_t<std::optional<zlink::message_t>>::success (std::move (body));
+    }
+    catch (const framework_exception_t &error) {
+        return detail::result_access_t::failure<std::optional<zlink::message_t>> (error);
+    }
+    catch (const nlohmann::json::exception &error) {
+        return result_t<std::optional<zlink::message_t>>::failure (
+          framework_error_kind_t::protocol_error, error.what ());
+    }
 }
 
 stream_relay_dispatch_scope_t::stream_relay_dispatch_scope_t (stream_header_t header)
