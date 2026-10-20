@@ -7,7 +7,9 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalActorReply;
 import systems.zlink.framework.runtime.internal.backend.*;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
@@ -217,7 +219,27 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                 ZLinkBackendActorReceived headerPart = read.headerPart();
                 ZLinkBackendActorReceived bodyPart = read.bodyPart();
                 try {
-                    ActorPacketFrames.Header packetHeader = ActorPacketFrames.decode(headerPart);
+                    ActorPacketFrames.Header packetHeader;
+                    try {
+                        packetHeader = ActorPacketFrames.decode(headerPart);
+                    } catch (RuntimeException invalidFrame) {
+                        try (headerPart;
+                                bodyPart) {
+                            if (host.dispatchErrorsEnabled()) {
+                                host.reportDispatchError(
+                                        DispatchFailureReport.of(
+                                                        ZLinkDispatchErrorSurface.SPOT_ACTOR,
+                                                        ZLinkDispatchMessageKind.ACTOR_SEND,
+                                                        ZLinkDispatchErrorReason.INVALID_FRAME,
+                                                        ZLinkDispatchErrorAction.DROP)
+                                                .spotId(context.spotId())
+                                                .actorId(headerPart.actor().actorId())
+                                                .sourceRid(headerPart.sourceNodeRid())
+                                                .error(invalidFrame));
+                            }
+                        }
+                        continue;
+                    }
                     if (!host.actorSessions().available()) {
                         host.closePendingActorHeader(headerPart, pendingHeader);
                         continue;

@@ -1807,6 +1807,7 @@ assert_remote_actor_create() {
     grep -F "user-spot-source-actor-created" "${source_events}" >&2
     exit 1
   fi
+  wait_for_line "${source_events}"     "user-spot-join-request-reply|accepted=true|actor=cross-lang-remote-create-actor|spot=cross-lang-user-spot" 90
   grep -F "user-spot-source-actor-created" "${source_events}"
 }
 
