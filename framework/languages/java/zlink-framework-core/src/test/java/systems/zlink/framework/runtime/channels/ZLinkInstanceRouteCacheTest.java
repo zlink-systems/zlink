@@ -25,7 +25,6 @@ import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkInstanceRouteCacheTest {
@@ -131,12 +130,10 @@ final class ZLinkInstanceRouteCacheTest {
                                                             "Ready route entered coordinator: "
                                                                     + method.getName());
                                         });
-        var scheduler = Executors.newSingleThreadScheduledExecutor();
         var runtime =
                 new ZLinkChannelCallRuntime(
                         new ZLinkMessageFlowTracer(
                                 new ZLinkDispatchOptionsRegistration(), null, Runnable::run),
-                        scheduler,
                         null,
                         (channel, target, spot, generation, authority, lease, parts) ->
                                 CompletableFuture.failedFuture(terminal),
@@ -194,7 +191,6 @@ final class ZLinkInstanceRouteCacheTest {
             return new int[] {reads.get(), leases.get()};
         } finally {
             runtime.beginClose();
-            scheduler.shutdownNow();
             routes.close();
         }
     }

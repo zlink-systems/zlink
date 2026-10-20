@@ -24,11 +24,22 @@ export interface PendingOperation<T> {
   readonly promise: Promise<T>;
 }
 
+/**
+ * Receives an operation's terminal at the place it is taken from the
+ * registry. One long-lived observer serves every observed operation, so an
+ * observed registration creates no Promise or per-operation callback.
+ */
+export interface OperationObserver<T, Context> {
+  operationCompleted(id: bigint, value: T, context: Context | undefined): void;
+  operationFailed(id: bigint, reason: unknown, context: Context | undefined): void;
+}
+
 interface Entry<T, Context> {
   readonly context: Context | undefined;
-  readonly deadlineMs?: number;
-  readonly resolve: (value: T | PromiseLike<T>) => void;
-  readonly reject: (reason: unknown) => void;
+  deadlineMs?: number;
+  resolve?: (value: T | PromiseLike<T>) => void;
+  reject?: (reason: unknown) => void;
+  observer?: OperationObserver<T, Context>;
 }
 
 const systemClock: OperationClock = {
@@ -40,7 +51,14 @@ export class OperationRegistry<T, Context = unknown> {
   private readonly entries = new Map<bigint, Entry<T, Context>>();
   private nextId = 1n;
   private deadlineCursor?: MapIterator<[bigint, Entry<T, Context>]>;
+  /**
+   * A lower bound of the earliest pending deadline. Completed entries only
+   * leave it early; a full expiry pass replaces it with the exact value.
+   */
+  private earliestDeadlineMs = Number.POSITIVE_INFINITY;
+  private scanEarliestDeadlineMs = Number.POSITIVE_INFINITY;
   private closed = false;
+  private pendingCount = 0;
 
   constructor(
     private readonly clock: OperationClock = systemClock,
@@ -63,28 +81,56 @@ export class OperationRegistry<T, Context = unknown> {
       resolve = onResolve;
       reject = onReject;
     });
-    const entry: Entry<T, Context> = {
-      context,
-      deadlineMs: timeoutOwner === 'registry' ? this.clock.now() + timeoutMs : undefined,
-      resolve,
-      reject
-    };
+    const deadlineMs = timeoutOwner === 'registry' ? this.clock.now() + timeoutMs : undefined;
+    const entry: Entry<T, Context> = { context, deadlineMs, resolve, reject };
     this.entries.set(id, entry);
-    if (this.entries.size === 1) this.onPendingChanged?.();
+    this.notePending(deadlineMs);
     return { id, promise };
   }
 
-  complete(id: bigint, value: T): boolean {
+  /** Registers an operation whose terminal goes to `observer` instead of a Promise. */
+  registerObserved(
+    timeoutMs: number,
+    observer: OperationObserver<T, Context>,
+    context?: Context
+  ): bigint {
+    if (this.closed) throw new Error('Operation registry is closed.');
+    if (!Number.isFinite(timeoutMs) || timeoutMs < 0) {
+      throw new RangeError('timeoutMs must be a non-negative finite number.');
+    }
+    const id = this.nextId++;
+    const deadlineMs = this.clock.now() + timeoutMs;
+    this.entries.set(id, { context, deadlineMs, observer });
+    this.notePending(deadlineMs);
+    return id;
+  }
+
+  /** The time the next expiry pass has work, as a lower bound (spec 08 §4.2). */
+  nextDeadlineMs(): number {
+    return this.earliestDeadlineMs;
+  }
+
+  private notePending(deadlineMs: number | undefined): void {
+    this.pendingCount++;
+    const earlier = deadlineMs !== undefined && deadlineMs < this.earliestDeadlineMs;
+    if (earlier) this.earliestDeadlineMs = deadlineMs;
+    if (earlier || this.pendingCount === 1) this.onPendingChanged?.();
+  }
+
+  complete(id: bigint, value: T, terminalContextRetentionMs = 0): boolean {
     const entry = this.take(id);
     if (entry === undefined) return false;
-    entry.resolve(value);
+    if (entry.observer !== undefined) entry.observer.operationCompleted(id, value, entry.context);
+    else entry.resolve!(value);
+    this.retainTerminal(id, entry, terminalContextRetentionMs);
     return true;
   }
 
   fail(id: bigint, reason: unknown): boolean {
     const entry = this.take(id);
     if (entry === undefined) return false;
-    entry.reject(reason);
+    if (entry.observer !== undefined) entry.observer.operationFailed(id, reason, entry.context);
+    else entry.reject!(reason);
     return true;
   }
 
@@ -93,7 +139,7 @@ export class OperationRegistry<T, Context = unknown> {
   }
 
   isPending(id: bigint): boolean {
-    return this.entries.has(id);
+    return this.pendingEntry(id) !== undefined;
   }
 
   context(id: bigint): Context | undefined {
@@ -104,35 +150,67 @@ export class OperationRegistry<T, Context = unknown> {
     if (this.closed) return;
     this.closed = true;
     for (const id of this.entries.keys()) this.cancel(id, reason);
+    this.entries.clear();
     this.deadlineCursor = undefined;
   }
 
+  failAll(reason: unknown): void {
+    for (const id of this.entries.keys()) this.fail(id, reason);
+  }
+
   get size(): number {
-    return this.entries.size;
+    return this.pendingCount;
   }
 
   expire(nowMs: number, turnDeadlineMs: number): number {
     let expired = 0;
     while (this.clock.now() < turnDeadlineMs) {
-      this.deadlineCursor ??= this.entries.entries();
+      if (this.deadlineCursor === undefined) {
+        this.deadlineCursor = this.entries.entries();
+        this.scanEarliestDeadlineMs = Number.POSITIVE_INFINITY;
+      }
       const current = this.deadlineCursor.next();
       if (current.done === true) {
         this.deadlineCursor = undefined;
+        // Entries registered during the pass are appended and were scanned.
+        this.earliestDeadlineMs = this.scanEarliestDeadlineMs;
         break;
       }
       const [id, entry] = current.value;
-      if (entry.deadlineMs !== undefined && entry.deadlineMs <= nowMs) {
-        if (this.fail(id, new OperationTimeoutError(id))) expired++;
+      if (entry.deadlineMs === undefined) continue;
+      if (entry.deadlineMs <= nowMs) {
+        if (!this.isPending(id)) this.entries.delete(id);
+        else if (this.fail(id, new OperationTimeoutError(id))) expired++;
+      } else if (entry.deadlineMs < this.scanEarliestDeadlineMs) {
+        this.scanEarliestDeadlineMs = entry.deadlineMs;
       }
     }
     return expired;
   }
 
   private take(id: bigint): Entry<T, Context> | undefined {
-    const entry = this.entries.get(id);
+    const entry = this.pendingEntry(id);
     if (entry === undefined) return undefined;
     this.entries.delete(id);
-    if (this.entries.size === 0) this.onPendingChanged?.();
+    this.pendingCount--;
+    if (this.pendingCount === 0) this.onPendingChanged?.();
     return entry;
+  }
+
+  private pendingEntry(id: bigint): Entry<T, Context> | undefined {
+    const entry = this.entries.get(id);
+    return entry !== undefined && (entry.resolve !== undefined || entry.observer !== undefined)
+      ? entry
+      : undefined;
+  }
+
+  private retainTerminal(id: bigint, entry: Entry<T, Context>, retentionMs: number): void {
+    if (this.closed || entry.context === undefined || retentionMs === 0) return;
+    entry.resolve = undefined;
+    entry.reject = undefined;
+    entry.observer = undefined;
+    entry.deadlineMs = this.clock.now() + retentionMs;
+    this.entries.set(id, entry);
+    this.earliestDeadlineMs = Math.min(this.earliestDeadlineMs, entry.deadlineMs);
   }
 }

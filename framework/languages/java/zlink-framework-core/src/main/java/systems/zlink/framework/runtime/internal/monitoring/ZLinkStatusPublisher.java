@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.internal.monitoring;
 
 import systems.zlink.framework.monitoring.ZLinkObservationLoss;
 import systems.zlink.framework.monitoring.ZLinkObservedStatus;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
 
 import java.util.ArrayDeque;
 import java.util.ArrayList;
@@ -436,6 +437,10 @@ public final class ZLinkStatusPublisher<T> implements Flow.Publisher<ZLinkObserv
 
             if (isTerminal || isPreserved) {
                 if (retained.size() >= capacity) {
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.increment(
+                            ZLinkRuntimeMetrics.Metric.OBSERVABILITY_EVENTS_OVERFLOW.metricName(),
+                            java.util.Map.of(
+                                    ZLinkRuntimeMetrics.Tag.SOURCE.wire(), "runtime_status"));
                     Pending<T> discarded = retained.removeFirst();
                     discardedTerminalCount = saturatingIncrement(discardedTerminalCount);
                     if (discarded.terminal()) {

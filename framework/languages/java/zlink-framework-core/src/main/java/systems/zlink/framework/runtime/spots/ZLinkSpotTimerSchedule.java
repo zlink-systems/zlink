@@ -68,7 +68,7 @@ final class ZLinkSpotTimerSchedule {
                 options.overrunPolicy() == ZLinkTimerOverrunPolicy.DELAY_NEXT_TICK
                         ? 0L
                         : scheduledIndex - lastScheduledIndex - 1L;
-        long index = ++deliveryIndex;
+        long index = deliveryIndex + 1L;
         long scheduledElapsedNanos = saturatedMultiply(periodNanos, scheduledIndex);
         ZLinkTimerTick tick =
                 new ZLinkTimerTick(
@@ -86,6 +86,7 @@ final class ZLinkSpotTimerSchedule {
     }
 
     void markDelivered(PendingTick pendingTick) {
+        deliveryIndex = pendingTick.tick().deliveryIndex();
         lastScheduledIndex = pendingTick.scheduledIndex();
     }
 

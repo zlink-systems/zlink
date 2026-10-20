@@ -181,10 +181,7 @@ task_t<actor_create_result_t> actor_create_call_t::async ()
 
 task_t<actor_create_result_t> actor_create_call_t::yield ()
 {
-    if (!detail::current_serial_turn_allows_yield ()) {
-        return detail::unsupported_yield_task<actor_create_result_t> ();
-    }
-    return detail::release_turn_on_suspend (async ());
+    return detail::yield_call<actor_create_result_t> ([this] { return async (); });
 }
 
 actor_manager_t::actor_manager_t () : _state (std::make_shared<detail::actor_manager_state_t> ())
@@ -321,7 +318,7 @@ request_task_t<message_t> actor_request_call_t::async_message ()
 
 task_t<message_t> actor_request_call_t::yield_message ()
 {
-    return detail::release_turn_on_suspend<message_t> (start (true));
+    return detail::yield_call<message_t> ([this] { return start (true); });
 }
 
 request_task_t<message_t> actor_request_call_t::start (bool release_turn)
@@ -337,9 +334,6 @@ request_task_t<message_t> actor_request_call_t::start (bool release_turn)
               framework_error_kind_t::invalid_operation,
               "awaited request to the current Actor cannot complete while its FIFO claim is held"));
         }
-    }
-    if (release_turn && !detail::current_serial_turn_allows_yield ()) {
-        return request_task_t<message_t> (detail::unsupported_yield_task<message_t> ().result ());
     }
     // A Yield releases the turn where the handler suspends (task.hpp); until
     // then the reply decoding resumes in the held turn like an async call.
@@ -384,12 +378,14 @@ class actor_client_impl_t final : public actor_client_t
                          serializer_registry_t &serializers,
                          std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes,
                          std::shared_ptr<actor_location_observer_t> actor_locations,
-                         location_options_t options) :
+                         location_options_t options,
+                         detail::delay_owner_t &delays) :
         _store (&store),
         _serializers (&serializers),
         _mesh_nodes (std::move (mesh_nodes)),
         _actor_locations (std::move (actor_locations)),
-        _location_options (std::move (options))
+        _location_options (std::move (options)),
+        _delays (delays)
     {
         _message_follow_subscriptions.reserve (_mesh_nodes.size ());
         try {
@@ -586,7 +582,7 @@ class actor_client_impl_t final : public actor_client_t
             // thread it runs on, so a serial lane or worker stays free for
             // other work in the meantime (session-actor-dispatch.en.md
             // 187,193).
-            co_await detail::delay (detail::actor_lookup_retry_interval);
+            co_await detail::delay (_delays, detail::actor_lookup_retry_interval);
         }
     }
 
@@ -1020,6 +1016,7 @@ class actor_client_impl_t final : public actor_client_t
     std::mutex _route_cache_gate;
     std::map<std::string, cached_actor_t> _route_cache;
     std::chrono::milliseconds _default_timeout{std::chrono::seconds (30)};
+    detail::delay_owner_t &_delays;
     const std::string _request_id_prefix =
       std::to_string (reinterpret_cast<std::uintptr_t> (this)) + "-";
     std::atomic<std::uint64_t> _request_id_seq{1};
@@ -1030,10 +1027,12 @@ make_actor_client (live_location_reader_t &store,
                    serializer_registry_t &serializers,
                    std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> mesh_nodes,
                    std::shared_ptr<actor_location_observer_t> actor_locations,
-                   location_options_t options)
+                   location_options_t options,
+                   detail::delay_owner_t &delays)
 {
     return std::make_shared<actor_client_impl_t> (store, serializers, std::move (mesh_nodes),
-                                                  std::move (actor_locations), std::move (options));
+                                                  std::move (actor_locations), std::move (options),
+                                                  delays);
 }
 
 task_t<void> send_to_actor_ref (actor_client_t &client,

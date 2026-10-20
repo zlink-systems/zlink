@@ -215,6 +215,7 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
     public async ValueTask StageAsync(
         ZLinkSpotRetireReservation reservation,
         ZLinkPreparedSpotRetireStaging relocation,
+        DateTimeOffset deadline,
         CancellationToken cancellationToken
     )
     {
@@ -279,7 +280,8 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
                 checked((ulong)transferPayload.TotalLength),
                 checked((uint)transferPayload.ChunkCount),
                 transferPayload.ChecksumCrc32c,
-                checked((ulong)registration.ApplicationVersion)
+                checked((ulong)registration.ApplicationVersion),
+                checked((ulong)deadline.ToUnixTimeMilliseconds())
             );
             _ = await canonical
                 .PrepareCanonicalRelocationAsync(
@@ -895,17 +897,6 @@ internal sealed class ZLinkSpotRetireTargetRuntime(
         CancellationToken cancellationToken
     )
     {
-        var admission = (
-            await runtime.TryAdmitInboundOperationAsync(countAsRequest: false).ConfigureAwait(false)
-        ).EnterInbound();
-        if (!admission.Accepted)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.ShuttingDown,
-                "SPOT relocation target admission is sealed for drain."
-            );
-        // The existing operation drain keeps an accepted prepare alive until
-        // its stage is registered; the target owner then settles the seal.
-        using var operationLease = admission.Lease;
         if (prepare.Object.Kind == 1)
             throw new InvalidOperationException(
                 "Standalone Actor relocation must be handled by the Actor maintenance owner."

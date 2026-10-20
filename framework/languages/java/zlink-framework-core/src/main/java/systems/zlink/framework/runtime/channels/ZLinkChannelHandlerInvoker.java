@@ -13,7 +13,6 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
-import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
@@ -59,44 +58,12 @@ final class ZLinkChannelHandlerInvoker {
     }
 
     <T> CompletionStage<T> executeHandler(Supplier<CompletionStage<T>> operation) {
-        CompletableFuture<T> result = new CompletableFuture<>();
-        var flow = ZLinkFlowContext.current();
-        var applicationJob = ZLinkApplicationJobContext.transferToQueuedJob();
         try {
-            Runnable invocation =
-                    () -> {
-                        try (var ignored = ZLinkApplicationJobContext.enterQueued(applicationJob)) {
-                            ZLinkApplicationJobContext.beforeFirstApplicationInstruction();
-                            operation
-                                    .get()
-                                    .whenComplete(
-                                            (value, error) -> {
-                                                ZLinkFlowContext.run(
-                                                        flow,
-                                                        () -> {
-                                                            if (error != null) {
-                                                                result.completeExceptionally(error);
-                                                            } else {
-                                                                result.complete(value);
-                                                            }
-                                                        });
-                                            });
-                        } catch (RuntimeException ex) {
-                            result.completeExceptionally(ex);
-                        } finally {
-                            if (applicationJob != null) {
-                                applicationJob.close();
-                            }
-                        }
-                    };
-            invocation.run();
-        } catch (RuntimeException ex) {
-            if (applicationJob != null) {
-                applicationJob.close();
-            }
-            result.completeExceptionally(ex);
+            return ZLinkFlowContext.propagate(
+                    Objects.requireNonNull(operation.get(), "handler stage"));
+        } catch (RuntimeException error) {
+            return CompletableFuture.failedFuture(error);
         }
-        return result;
     }
 
     @SuppressWarnings({"unchecked", "rawtypes"})
@@ -223,8 +190,7 @@ final class ZLinkChannelHandlerInvoker {
                     .thenApply(
                             reply ->
                                     ZLinkMessagePayloads.message(
-                                            ZLinkCodecRegistration.serializeForDeclaredType(
-                                                    serializer, reply, registration.replyType())));
+                                            serializer, reply, registration.replyType()));
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
@@ -431,12 +397,9 @@ final class ZLinkChannelHandlerInvoker {
                                     .thenApply(
                                             reply ->
                                                     ZLinkMessagePayloads.message(
-                                                            ZLinkCodecRegistration
-                                                                    .serializeForDeclaredType(
-                                                                            serializer,
-                                                                            reply,
-                                                                            registration
-                                                                                    .replyType()))));
+                                                            serializer,
+                                                            reply,
+                                                            registration.replyType())));
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }

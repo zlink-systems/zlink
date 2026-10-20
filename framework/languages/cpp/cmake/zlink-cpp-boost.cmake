@@ -18,7 +18,10 @@ function(zlink_framework_cpp_add_boost_headers target_name)
     target_include_directories(${target_name} BEFORE PRIVATE
       "${ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR}")
   elseif(TARGET Boost::headers)
-    target_link_libraries(${target_name} PRIVATE Boost::headers)
+    # A static archive's PRIVATE link dependencies are exported as LINK_ONLY, so
+    # without BUILD_INTERFACE the installed config would send every consumer
+    # looking for the Boost this archive was compiled with.
+    target_link_libraries(${target_name} PRIVATE "$<BUILD_INTERFACE:Boost::headers>")
   elseif(Boost_FOUND AND Boost_INCLUDE_DIRS)
     target_include_directories(${target_name} BEFORE PRIVATE ${Boost_INCLUDE_DIRS})
   elseif(Boost_FOUND AND Boost_INCLUDE_DIR)

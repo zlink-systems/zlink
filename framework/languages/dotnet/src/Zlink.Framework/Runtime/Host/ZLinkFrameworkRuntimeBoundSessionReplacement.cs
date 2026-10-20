@@ -31,10 +31,13 @@ internal sealed partial class ZLinkFrameworkRuntime
                 )
             );
         if (
-            nodeRuntime is null
-            || nodeRuntime.Node.MeshStatus().LifecycleGeneration
-                != retired.SessionOwnerNodeGeneration
-            || !MatchesLocalSessionOwnerFence(nodeRuntime, retired)
+            nodeRuntime?.LocalSessionOwner is not { } sessionOwner
+            || !sessionOwner.IdentifiesSessionOwner(
+                retired.SessionOwnerNodeRid,
+                retired.SessionOwnerNodeGeneration,
+                retired.SessionOwnerId,
+                retired.SessionOwnerLeaseGeneration
+            )
         )
             return false;
 
@@ -42,7 +45,7 @@ internal sealed partial class ZLinkFrameworkRuntime
         // Actor here. It only authenticates the transport source above; the
         // retired session identity is the sole lookup key on this node.
         if (
-            _actorBoundSessionCoordinator.GetExactRetiredSessionBinding(
+            GetExactRetiredSessionBinding(
                 ZLinkActorId.FromBoundary(authority.ActorId, nameof(authority.ActorId)),
                 retired.SessionOwnerNodeRid,
                 retired.SessionRid,
@@ -63,32 +66,28 @@ internal sealed partial class ZLinkFrameworkRuntime
             retired.SessionOwnerId,
             retired.SessionOwnerLeaseGeneration,
             retired.SessionRid,
-            retired.RetiredBindingGeneration,
-            binding.BindingToken
+            retired.RetiredBindingGeneration
         );
     }
 
-    private static bool MatchesLocalSessionOwnerFence(
-        ZLinkSpotNodeRuntime nodeRuntime,
-        ZLinkServiceWireCodec.BoundSessionReplacedRetiredSession retired
-    )
-    {
-        try
-        {
-            var local = nodeRuntime.LocalRequestSource;
-            return string.Equals(local.OwnerId, retired.SessionOwnerId, StringComparison.Ordinal)
-                && local.LeaseGeneration == retired.SessionOwnerLeaseGeneration;
-        }
-        catch (InvalidOperationException)
-        {
-            return string.Equals(
-                    retired.SessionOwnerId,
-                    retired.SessionOwnerNodeRid.ToHex(),
-                    StringComparison.Ordinal
-                )
-                && retired.SessionOwnerLeaseGeneration == retired.SessionOwnerNodeGeneration;
-        }
-    }
+    internal ZLinkSessionBindingEntry? GetExactRetiredSessionBinding(
+        ZLinkActorId actorId,
+        RoutingId sessionOwnerNodeRid,
+        RoutingId sessionRid,
+        ulong sessionOwnerNodeGeneration,
+        string sessionOwnerId,
+        ulong sessionOwnerLeaseGeneration,
+        ulong bindingGeneration
+    ) =>
+        _actorBoundSessionCoordinator.GetExactRetiredSessionBinding(
+            actorId,
+            sessionOwnerNodeRid,
+            sessionRid,
+            sessionOwnerNodeGeneration,
+            sessionOwnerId,
+            sessionOwnerLeaseGeneration,
+            bindingGeneration
+        );
 
     private void ScheduleBoundSessionReplacedNotification(
         IZLinkBackendSpotNode sourceNode,

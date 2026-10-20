@@ -52,26 +52,17 @@ internal static class ZLinkApplicationExecutionContext
         return new Revert(previous, claim);
     }
 
-    public static ZLinkSerialTurn RequireYieldTurn(string operation)
-    {
-        if (Current is not { YieldAllowed: true } || ZLinkSerialTurn.Current is not { } turn)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.InvalidOperation,
-                $"{operation} Yield is only valid in a SpotWide User Spot or Instance Spot application callback."
-            );
-
-        return turn;
-    }
+    public static ZLinkSerialTurn RequireYieldTurn(string operation) =>
+        RequireYieldTurn(ZLinkSerialTurn.Current, operation);
 
     public static ZLinkSerialTurn RequireYieldTurn(ZLinkSerialTurn? capturedTurn, string operation)
     {
-        var current = RequireYieldTurn(operation);
-        if (!ReferenceEquals(current, capturedTurn))
+        if (ZLinkSerialTurn.Current is not { } turn)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.InvalidOperation,
-                $"{operation} Yield must execute in the callback turn that created the call."
+                $"{operation} Yield requires a current SpotWide application turn."
             );
-        return current;
+        return turn.AdmitYield(capturedTurn, operation);
     }
 
     public static void ValidateActorRequest(

@@ -828,15 +828,15 @@
       "kind": "bound-session-relocation-barrier-integrity",
       "sequence": [
         "source-sessionRelocationSeal",
-        "session-owner-reversible-ingress-seal",
-        "session-owner-holds-post-seal-ingress-with-payload-and-reply-context",
-        "session-owner-sessionRelocationSealed-exact-result-without-sequence-or-high-water",
+        "session-owner-reversible-ingress-seal-only-if-sealed",
+        "session-owner-holds-post-seal-ingress-with-payload-and-reply-context-only-if-sealed",
+        "session-owner-sessionRelocationSealed-terminal-sealResult-without-sequence-or-high-water",
         "source-captured-relocation",
         "target-restores-saved-session-work-once-and-receives-post-capture-ingress-relay",
         "target-owner-membership-cas",
         "target-merges-queues-switches-regular-route-finishes-lifecycle-and-opens-dispatch",
-        "target-sessionRelocationRoute-commit-one-way",
-        "session-owner-atomically-switches-route-submits-held-and-releases-seal"
+        "target-sessionRelocationRoute-commit-one-way-only-for-sealed-participants",
+        "session-owner-atomically-switches-route-submits-held-and-releases-exact-seal"
       ],
       "asyncConvergence": [
         "completed-authority-cas",
@@ -853,9 +853,23 @@
       "commitPhase": "after-target-cas-queue-merge-route-switch-lifecycle-and-dispatch-open",
       "routeControl": "one-way-no-response-command-45-reserved-never-sent-or-accepted",
       "sealTimeout": "3000ms-then-close-physical-session-and-clean-binding-held-messages-and-seal",
-      "abort": "before-cutover-source-sends-matching-sessionRelocationRoute-abort-one-way-session-owner-releases-only-exact-seal-and-resubmits-held-to-source-route-target-discards-temporary-queue-and-source-restores-store-payload",
-      "duplicate": "idempotent-if-identical-else-protocol-error",
-      "sessionOwnerRestart": "stale-node-generation-protocol-error-no-route-switch"
+      "abort": "before-cutover-durable-abort-and-source-queue-restore-before-matching-sessionRelocationRoute-abort-one-way-only-for-sealed-participants",
+      "duplicate": "same-relocation-and-actor-returns-recorded-sealResult-closed-seal-record-ignored-with-warning-coordinator-uses-first-result-only",
+      "sessionOwnerRestart": "stale-node-generation-protocol-error-no-route-switch",
+      "sealResultType": "session-seal-result",
+      "sealDecisionOwner": "session-actor-binding-section-8.3-session-owner-only",
+      "bindingAbsent": "terminal-without-binding-seal-held-messages-or-seal-timeout-excluded-from-sessionBindings-and-command-44",
+      "resultRecord": {
+        "identity": "relocation-identity-and-actor-id",
+        "lookup": "recorded-result-before-current-binding-reassessment",
+        "sealedLifetime": "open-until-command-44-abort-or-seal-timeout-then-closed-record-kept-per-binding-until-next-seal-or-binding-removal",
+        "bindingAbsentLifetime": "SessionRelocationSealTimeout-from-decision",
+        "afterExpiry": "bindingAbsent-only-reassess-current-binding-cannot-match-old-binding-generation",
+        "duplicateFence": "original-request-fields-must-match-else-protocol-error",
+        "staleFence": "expectedOwnerLeaseGeneration-below-current-binding-route-owner-lease-generation-is-mismatch",
+        "closedRecordReplacement": "next-seal-replaces-closed-record-earlier-relocation-42-cannot-follow-later-42-same-pipe-order-or-router-discards-earlier-pipe-on-new-selection-and-no-resend-after-terminal"
+      },
+      "lateBindingAbsentRoute": "warning-late_session_route_update-ignore-without-changing-new-binding-or-another-relocation-seal"
     },
     {
       "kind": "transport-admission-integrity",
@@ -2587,6 +2601,21 @@
         },
         {
           "name": "sourceLeaseExpired",
+          "value": 2
+        }
+      ]
+    },
+    {
+      "name": "session-seal-result",
+      "kind": "enum",
+      "encoding": "u8",
+      "values": [
+        {
+          "name": "sealed",
+          "value": 1
+        },
+        {
+          "name": "bindingAbsent",
           "value": 2
         }
       ]
@@ -7823,6 +7852,10 @@
         {
           "name": "applicationVersion",
           "$ref": "application-version"
+        },
+        {
+          "name": "deadlineUnixMs",
+          "$ref": "nonzero-u64"
         }
       ],
       "payload": "forbidden"
@@ -7873,6 +7906,14 @@
         {
           "name": "bindingGeneration",
           "$ref": "nonzero-u64"
+        },
+        {
+          "name": "targetNodeRid",
+          "$ref": "rid"
+        },
+        {
+          "name": "targetNodeGeneration",
+          "$ref": "nonzero-u64"
         }
       ],
       "payload": "forbidden"
@@ -7919,6 +7960,10 @@
         {
           "name": "bindingGeneration",
           "$ref": "nonzero-u64"
+        },
+        {
+          "name": "sealResult",
+          "$ref": "session-seal-result"
         }
       ],
       "payload": "forbidden"
@@ -8256,6 +8301,28 @@
         "source-restores-captured-payload-and-finishes-operation-failure"
       ],
       "payload": "forbidden"
+    },
+    {
+      "id": 54,
+      "name": "boundSessionClose",
+      "domain": "infrastructure",
+      "allowedFlags": [],
+      "requiredFlags": [],
+      "body": [
+        {
+          "name": "correlation",
+          "$ref": "nonzero-u64"
+        },
+        {
+          "name": "actor",
+          "$ref": "actor-ref"
+        },
+        {
+          "name": "session",
+          "$ref": "retired-bound-session-route-fence"
+        }
+      ],
+      "payload": "forbidden"
     }
   ],
   "relocationStateMachine": {
@@ -8346,7 +8413,7 @@
         ],
         "duplicate": "idempotent-if-identical-else-protocol-error",
         "reorder": "hold-until-preparing-authority",
-        "loss": "retransmit-until-sealed-or-deadline"
+        "loss": "retransmit-until-sealed-or-bindingAbsent-terminal-or-deadline"
       },
       {
         "command": "sessionRelocationSealed",
@@ -8354,9 +8421,9 @@
         "phases": [
           "preparing"
         ],
-        "duplicate": "idempotent-if-identical-else-protocol-error",
-        "reorder": "hold-until-matching-sessionRelocationSeal",
-        "loss": "retransmit-until-captured-or-abort"
+        "duplicate": "same-relocation-and-actor-returns-recorded-sealResult-closed-seal-record-ignored-with-warning-coordinator-uses-first-result-only",
+        "reorder": "first-result-for-matching-sessionRelocationSeal-is-terminal-ignore-later-results",
+        "loss": "duplicate-sessionRelocationSeal-replays-recorded-result-within-result-lifetime"
       },
       {
         "command": "sessionRelocationRoute",
@@ -8545,7 +8612,7 @@
       "last": 45
     },
     {
-      "first": 54,
+      "first": 55,
       "last": 255
     }
   ]

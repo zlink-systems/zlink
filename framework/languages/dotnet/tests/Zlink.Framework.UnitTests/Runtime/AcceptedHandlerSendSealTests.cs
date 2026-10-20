@@ -23,6 +23,43 @@ public sealed partial class EntrySpotActorDispatchTests
     private const string AcceptedSendRequestPacket = "accepted-send-request";
     private const string AcceptedRelayNodeId = "accepted-relay-node";
 
+    [Fact]
+    public async Task Actor_request_after_shutdown_seal_decodes_as_shutting_down()
+    {
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        try
+        {
+            runtime.SealApplicationAdmissionsForDrain(CancellationToken.None);
+            var refusal = await Record.ExceptionAsync(async () =>
+                await new ZLinkActorClient(runtime)
+                    .RequestToActor(actorRef.ActorId, new ProbeRouteMessage("late-request"))
+                    .Async<ProbeReply>()
+            );
+            Assert.NotNull(refusal);
+            var reply = ZLinkActorReply.FromError(refusal);
+            using var frame = Message.From(
+                reply.EncodeFrame(
+                    new ZlinkStreamHeader(
+                        ZlinkStreamMessageKind.Error,
+                        ZlinkStreamCodec.Json,
+                        ZlinkStreamHeaderFlags.HasRequestSeq,
+                        new ZlinkStreamRequestSeq(1),
+                        string.Empty,
+                        ZlinkStreamMetadata.Empty
+                    )
+                )
+            );
+            var received = Assert.Throws<ZLinkFrameworkException>(() =>
+                ZLinkActorReplyDecoder.Decode<ProbeReply>([frame])
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, received.Kind);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     public enum AcceptedSendPath
     {
         NativeActorFrames,
@@ -205,16 +242,18 @@ public sealed partial class EntrySpotActorDispatchTests
                 probe.Started.Task.IsCompletedSuccessfully,
                 System.Text.Json.JsonSerializer.Serialize(flow.Events)
             );
-            var rejected = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            var rejected = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
                 await actor.Context.BoundSession.Send(new ProbeRouteMessage("new-send")).Async()
             );
             Assert.Contains("application admission is sealed", rejected.Message);
-            var requestRejected = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, rejected.Kind);
+            var requestRejected = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
                 await new ZLinkActorClient(runtime)
                     .RequestToActor(actorRef.ActorId, new ProbeRouteMessage("new-request"))
                     .Async<ProbeReply>()
             );
             Assert.Contains("application admission is sealed", requestRejected.Message);
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, requestRejected.Kind);
             probe.Release.TrySetResult();
             probe.WarmRelease.TrySetResult();
             probe.SubmissionRelease.TrySetResult();
@@ -249,7 +288,11 @@ public sealed partial class EntrySpotActorDispatchTests
     )
     {
         using var operation = (await runtime.AdmitOperationAsync()).Enter();
-        var seal = await activation.SealRelocationAsync(CancellationToken.None);
+        // A canonical replay runs under the target admission seal
+        // (StageInboundSpotAggregateAsync), not under a source unit seal.
+        var seal =
+            await activation.TrySealRelocationAsync()
+            ?? throw new InvalidOperationException("The target admission seal was refused.");
         const string handoffId = "accepted-replay";
         var state = probe.ActorState;
         var actorRef = state.NativeActorRef!.Value;
@@ -436,6 +479,197 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
+    // #1877: host relocation committed its admission fence, but this Actor's
+    // unit is not sealed yet (no handoff capture). The Session node relays a
+    // bound-session frame to the still-current owner. Host relocation §15
+    // (`Relocating`): "Spot·Actor direct: Unit seal 전까지 payload와 timer를
+    // 계속 처리한다" - the frame must reach the Actor, not be dropped. The
+    // shutdown seal (`Draining`) still refuses the same frame. A blocked
+    // relocation rolls back (§13) while that frame's turn is still running:
+    // rollback must not wait for or fail on existing-owner traffic.
+    public enum UnsealedRelaySeal
+    {
+        RelocationFence,
+        Shutdown,
+        RelocationRollback,
+    }
+
+    [Theory]
+    [InlineData(UnsealedRelaySeal.RelocationFence)]
+    [InlineData(UnsealedRelaySeal.Shutdown)]
+    [InlineData(UnsealedRelaySeal.RelocationRollback)]
+    public async Task Relayed_bound_session_frame_reaches_unsealed_actor_only_during_relocation_fence(
+        UnsealedRelaySeal seal
+    )
+    {
+        var shutdown = seal == UnsealedRelaySeal.Shutdown;
+        var node = new CapturingSpotNode();
+        var probe = new AcceptedSendProbe();
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, acceptedSendProbe: probe);
+        using var services = new ServiceCollection().AddSingleton(probe).BuildServiceProvider();
+        var nativeSpot = new CapturingSpot();
+        await using var activation = new ZLinkUserSpotActivation(
+            runtime,
+            services.CreateAsyncScope(),
+            nativeSpot,
+            AcceptedSendSpotId,
+            node.RoutingId,
+            "entry",
+            "entry",
+            AcceptedSendWait,
+            ZLinkUserSpotExecutionMode.PerActor
+        );
+        activation.AttachSpot(new AcceptedSendSpot(activation));
+        ((IZLinkSpotContext)activation).Handlers.AddHandler<AcceptedSendHandler>(
+            AcceptedSendPacket
+        );
+        await activation.BindDescriptorsAsync(CancellationToken.None);
+        var actor = RegisterProbeActor(runtime, actorRef);
+        probe.Actor = actor;
+        var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+        probe.ActorState = state;
+        activation.StageRelocatedPerActorMember(actor, state);
+        activation.PublishRelocatedPerActorMember(actor, state);
+        var sessionRid = RoutingId.From(AcceptedRelayNodeId);
+        var bindingToken = ZLinkActorBoundSessionBindingToken.Native(sessionRid);
+        runtime.BindActorSession(
+            actorRef.ActorId,
+            sessionRid,
+            sessionRid,
+            bindingToken,
+            objectGeneration: actorRef.Generation,
+            authorityOwnerGeneration: 1,
+            meshName: "entry",
+            ownerLeaseGeneration: 1
+        );
+        activation.AttachNativeDispatch();
+        Task? relayed = null;
+        ZLinkRelocationAdmissionFence? fence = null;
+        try
+        {
+            if (shutdown)
+                runtime.SealApplicationAdmissionsForDrain(CancellationToken.None);
+            else
+            {
+                fence = await runtime.TryBeginRelocationAdmissionFenceAsync(
+                    runtime.SnapshotOperationAdmissions(),
+                    runtime.DrainAdmission.SnapshotActorAdmissions(),
+                    new ZLinkActorHandoffDrainSnapshot(0, true),
+                    CancellationToken.None
+                );
+                Assert.NotNull(fence);
+            }
+            Assert.True(runtime.DrainAdmission.IsSealed);
+            Assert.False(state.Handoff.BlocksLocalDispatch);
+            var metadata = ZLinkActorBoundSessionHandoffMetadata.Encode(
+                new ZLinkActorBoundSessionHandoffFence(
+                    actorRef.ActorId,
+                    actorRef.Generation,
+                    sessionRid,
+                    bindingToken,
+                    1,
+                    1
+                )
+            );
+            relayed = DispatchAcceptedRemoteActorFrameAsync(
+                runtime,
+                node,
+                actorRef,
+                admittedCaller: false,
+                "after-fence",
+                metadata
+            );
+            // The handler signals Started on entry; a refused admission
+            // completes the relay task with the drop instead.
+            var first = await Task.WhenAny(probe.Started.Task, relayed).WaitAsync(AcceptedSendWait);
+            if (shutdown)
+            {
+                Assert.Same(relayed, first);
+                var dropped = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => relayed);
+                Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, dropped.Kind);
+                Assert.False(probe.Started.Task.IsCompleted);
+            }
+            else
+            {
+                if (first == relayed)
+                    await relayed;
+                Assert.True(probe.Started.Task.IsCompletedSuccessfully);
+            }
+            if (seal == UnsealedRelaySeal.RelocationRollback)
+            {
+                // The handler is parked on probe.Release, so its operation is
+                // still active while the drain executor acquires rollback.
+                Assert.False(relayed.IsCompleted);
+                using var rollback = runtime.TryAcquireRelocationRollbackLease(fence!.Value);
+                Assert.NotNull(rollback);
+                Assert.True(runtime.TryReopenRetireAdmissionsAfterRollback(fence.Value, rollback));
+                Assert.False(runtime.DrainAdmission.IsSealed);
+                probe.Release.TrySetResult();
+                await relayed.WaitAsync(AcceptedSendWait);
+            }
+        }
+        finally
+        {
+            probe.Release.TrySetResult();
+            if (relayed is not null)
+                await Task.WhenAny(relayed);
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    // #1877: rollback still races with new-owner admission (relocation target
+    // staging takes the drain gate's actor admission). One accepted before
+    // the fence keeps rollback refused until it leaves, exactly as before.
+    [Fact]
+    public async Task Relocation_rollback_is_refused_while_owner_opening_inbound_is_in_flight()
+    {
+        var (runtime, _) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        var admitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        Task? staging = null;
+        try
+        {
+            staging = Task.Run(async () =>
+            {
+                Assert.True(runtime.DrainAdmission.TryEnterActorAdmission(out var ownerAdmission));
+                var admission = (
+                    await runtime.TryAdmitInboundOperationAsync(countAsRequest: false)
+                ).EnterInbound();
+                Assert.True(admission.Accepted);
+                using (ownerAdmission)
+                using (admission.Lease)
+                {
+                    admitted.TrySetResult();
+                    await release.Task;
+                }
+            });
+            await admitted.Task.WaitAsync(AcceptedSendWait);
+            var fence = await runtime.TryBeginRelocationAdmissionFenceAsync(
+                runtime.SnapshotOperationAdmissions(),
+                runtime.DrainAdmission.SnapshotActorAdmissions(),
+                new ZLinkActorHandoffDrainSnapshot(0, true),
+                CancellationToken.None
+            );
+            Assert.NotNull(fence);
+            Assert.False(runtime.DrainAdmission.TryEnterActorAdmission(out _));
+
+            Assert.Null(runtime.TryAcquireRelocationRollbackLease(fence.Value));
+
+            release.TrySetResult();
+            await staging.WaitAsync(AcceptedSendWait);
+            using var rollback = runtime.TryAcquireRelocationRollbackLease(fence.Value);
+            Assert.NotNull(rollback);
+            Assert.True(runtime.TryReopenRetireAdmissionsAfterRollback(fence.Value, rollback));
+        }
+        finally
+        {
+            release.TrySetResult();
+            if (staging is not null)
+                await Task.WhenAny(staging);
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     private static async Task DispatchNestedSpotRouteAsync(
         ZLinkFrameworkRuntime runtime,
         CapturingSpot spot,
@@ -606,7 +840,11 @@ public sealed partial class EntrySpotActorDispatchTests
         try
         {
             using var operation = (await runtime.AdmitOperationAsync()).Enter();
-            var seal = await activation.SealRelocationAsync(CancellationToken.None);
+            // A canonical replay runs under the target admission seal
+            // (StageInboundSpotAggregateAsync), not under a source unit seal.
+            var seal =
+                await activation.TrySealRelocationAsync()
+                ?? throw new InvalidOperationException("The target admission seal was refused.");
             state.Handoff.BeginCanonicalMaintenanceImport(handoffId, []);
             state.Handoff.MarkAuthorityCommitted(
                 handoffId,

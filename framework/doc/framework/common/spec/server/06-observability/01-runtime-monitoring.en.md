@@ -198,6 +198,12 @@ tracks this snapshot's values is defined by
 [Runtime Metrics §3](02-runtime-metrics.en.md#3-host-core-hwm-and-application-job-queue);
 this document only covers what can be queried at one point in time.
 
+**A change in capacity values is not a status publication trigger.** A returned permit, a pressure-state switch, a
+Reset, or a change in Core bytes is reflected in the status published by the next query or by a change in another
+field; whether a status is published and how `Sequence` changes are defined by
+[§6](#6-observing-state-changes--sequence-and-the-complete-status). To track capacity continuously, use the instruments of
+[Runtime Metrics §3](02-runtime-metrics.en.md#3-host-core-hwm-and-application-job-queue).
+
 This status doesn't include payload, Actor ID,
 [Spot ID](../00-foundation/02-glossary.en.md#spot-id) — a Spot's global
 logical address — session ID, RID, endpoint, message type, or a per-owner

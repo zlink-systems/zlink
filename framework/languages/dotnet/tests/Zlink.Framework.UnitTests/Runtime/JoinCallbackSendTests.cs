@@ -1,11 +1,112 @@
 using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Contracts.Messaging;
+using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class JoinCallbackSendTests
 {
+    [Fact]
+    public async Task Cross_node_join_tracks_committed_authority_before_target_lifecycle()
+    {
+        using var flowListener = Environment.GetEnvironmentVariable(
+            RelocationBehaviorHost.FlowPathEnvironmentVariable
+        )
+            is { } flowPath
+            ? new TestHostMessageFlowListener(flowPath)
+            : null;
+        var trace = new RelocationBehaviorTrace();
+        trace.ReleaseJoinHandler.SetResult();
+        trace.ReleaseSourceLeave.SetResult();
+        trace.ReleaseTargetLifecycle.SetResult();
+        var locationStore = new RecordingLocationStore(
+            new ZLinkInMemoryProviderLocationStore(),
+            trace
+        );
+        var relocationStore = new SynchronizedRelocationStore();
+        await using var source = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            locationStore,
+            relocationStore,
+            registerTargetSpot: false
+        );
+        var actorId = $"join-owner-actor-{Guid.NewGuid():N}";
+        var created = Assert.IsType<ZLinkActorCreateResult.Created>(
+            await source
+                .Services.GetRequiredService<IZLinkActorManager>()
+                .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+                .InMesh(RelocationBehaviorHost.MeshName)
+                .Request(new BehaviorCreate(7))
+                .Async()
+        );
+        await using var target = await RelocationBehaviorHost.StartAsync(
+            "target",
+            trace,
+            locationStore,
+            relocationStore,
+            registerTargetSpot: true
+        );
+        var ownershipUpdate = new TaskCompletionSource<Exception?>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var completionObserved = new TaskCompletionSource<Exception?>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        trace.OnPublicJoinCompleted = async actor =>
+        {
+            var failure = await Record.ExceptionAsync(async () =>
+            {
+                var authority = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+                    await target
+                        .Runtime.Registration.Locations.ResolveStore()!
+                        .ReadAuthorityAsync(
+                            ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.ActorId)
+                        )
+                );
+                Assert.False(
+                    ZLinkCanonicalRelocationAuthorityStateCodec.TryRead(
+                        authority.Snapshot.Payload.Span,
+                        out _
+                    )
+                );
+                Assert.True(target.Runtime.TryGetActorState(actor.ActorId, out var state));
+                Assert.False(state.Handoff.TargetActivation.IsCompleted);
+                Assert.Empty(trace.DeliveredMarkers);
+            });
+            completionObserved.SetResult(failure);
+        };
+        trace.OnTargetJoined = async actor =>
+        {
+            var failure = await Record.ExceptionAsync(async () =>
+            {
+                Assert.True(target.Runtime.TryGetActorState(actor.ActorId, out var state));
+                var actorRef = Assert.IsType<ZLinkBackendActorRef>(state.NativeActorRef);
+                await target.Runtime.LocationLifecycle!.ActorOwnership.PublishActorRefAsync(
+                    state.RuntimeActorId,
+                    actorRef.ToNative(RelocationBehaviorHost.MeshName)
+                );
+            });
+            ownershipUpdate.SetResult(failure);
+        };
+        var spot = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
+            .GetOrCreate($"join-owner-spot-{Guid.NewGuid():N}", RelocationBehaviorHost.SpotType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Async();
+        Assert.NotEqual(created.Actor.NodeRid, spot.Spot.NodeRid);
+        _ = await source
+            .Services.GetRequiredService<IZLinkActorClient>()
+            .RequestToActor(actorId, new BeginBehaviorJoin(spot.Spot.SpotId))
+            .Async<BehaviorAck>();
+        await trace.WaitAsync("publicJoinCompleted");
+
+        Assert.True(ownershipUpdate.Task.IsCompleted);
+        Assert.Null(await ownershipUpdate.Task);
+        Assert.Null(await completionObserved.Task.WaitAsync(TimeSpan.FromSeconds(5)));
+    }
+
     [Fact]
     public async Task Ordinary_local_send_is_accepted_and_delivered_without_join()
     {

@@ -23,11 +23,13 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.SessionRelocationRouteAction;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.SessionRelocationSeal;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.SessionRelocationSealed;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.HexFormat;
+import java.util.List;
 
 final class ZLinkServiceM6BSessionRelocationWireCodecTest {
     private static final RoutingId SOURCE = RoutingId.from("source");
@@ -35,6 +37,34 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
     private static final RoutingId SESSION = RoutingId.from("session");
 
     private final ZLinkServiceM6BWireCodec codec = new ZLinkServiceM6BWireCodec();
+
+    @Test
+    void bindingAbsentIsAValidWireAndRuntimeResult() throws Exception {
+        var context = new ServiceWireCodec.DecoderContext(null, null, null, null, null);
+        for (String name : List.of("sessionRelocationSealed", "sessionRelocationBindingAbsent")) {
+            byte[] input = golden(name);
+            var generated =
+                    (ServiceWireCodec.SessionRelocationSealedCommand)
+                            ServiceWireCodec.decodeCommand(List.of(input), context);
+            assertEquals(
+                    name.equals("sessionRelocationSealed")
+                            ? ServiceWireCodec.SessionSealResult.SEALED
+                            : ServiceWireCodec.SessionSealResult.BINDING_ABSENT,
+                    generated.sealResult());
+            assertArrayEquals(input, ServiceWireCodec.encodeCommand(generated, context));
+        }
+        JsonNode fixture = new ObjectMapper().readTree(Files.readString(sharedFixture()));
+        for (JsonNode entry : fixture.path("malformed")) {
+            byte[] input = HexFormat.of().parseHex(entry.path("hex").asText());
+            assertThrows(
+                    Exception.class, () -> ServiceWireCodec.decodeCommand(List.of(input), context));
+        }
+        byte[] bytes = golden("sessionRelocationBindingAbsent");
+        var absent = codec.decodeSessionRelocationSealed(bytes);
+        assertEquals(ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT, absent.result());
+        assertFalse(absent.sealed());
+        assertArrayEquals(bytes, codec.encodeSessionRelocationSealed(absent));
+    }
 
     @Test
     void commands42And43MatchTheExactSharedShape() throws Exception {
@@ -45,7 +75,11 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
 
         SessionRelocationSealed sealed =
                 new SessionRelocationSealed(
-                        seal.relocation(), seal.coordinator(), seal.actor(), seal.session());
+                        seal.relocation(),
+                        seal.coordinator(),
+                        seal.actor(),
+                        seal.session(),
+                        ServiceWirePilotCodec.SessionSealResult.SEALED);
         assertEquals(
                 sealed,
                 codec.decodeSessionRelocationSealed(codec.encodeSessionRelocationSealed(sealed)));
@@ -57,7 +91,8 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
                                 seal.relocation(),
                                 seal.coordinator(),
                                 seal.actor(),
-                                new SessionOwnerFence(SOURCE, 2, "session-owner", 8, SESSION, 7))
+                                new SessionOwnerFence(SOURCE, 2, "session-owner", 8, SESSION, 7),
+                                ServiceWirePilotCodec.SessionSealResult.SEALED)
                         .echoes(seal));
     }
 
@@ -83,7 +118,11 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
         byte[] sealed =
                 codec.encodeSessionRelocationSealed(
                         new SessionRelocationSealed(
-                                relocation(), coordinator(), actorRoute(), session()));
+                                relocation(),
+                                coordinator(),
+                                actorRoute(),
+                                session(),
+                                ServiceWirePilotCodec.SessionSealResult.SEALED));
         assertThrows(
                 ZLinkServiceWireException.class,
                 () ->
@@ -138,12 +177,20 @@ final class ZLinkServiceM6BSessionRelocationWireCodecTest {
                                 coordinator(),
                                 RelocationRole.TARGET,
                                 actorRoute(),
-                                session()));
+                                session(),
+                                TARGET,
+                                4));
     }
 
     private static SessionRelocationSeal seal() {
         return new SessionRelocationSeal(
-                relocation(), coordinator(), RelocationRole.SOURCE, actorRoute(), session());
+                relocation(),
+                coordinator(),
+                RelocationRole.SOURCE,
+                actorRoute(),
+                session(),
+                TARGET,
+                4);
     }
 
     private static ActorRouteFence actorRoute() {

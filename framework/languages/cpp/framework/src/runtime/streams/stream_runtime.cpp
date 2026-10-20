@@ -315,24 +315,34 @@ class stream_session_dispatcher_t
         auto work = [session_executor, callback = std::move (callback),
                      completion = std::move (completion),
                      started = std::move (started)] (auto complete) mutable {
-            auto finish = [session_executor, complete = std::move (complete),
-                           completion =
-                             std::move (completion)] (const result_t<void> &result) mutable {
-                complete (
-                  [session_executor, completion = std::move (completion), result] () mutable {
-                      if (completion) {
-                          completion (result);
-                      }
-                  });
+            struct callback_completion_t
+            {
+                dispatch_callback_t callback;
+                std::shared_ptr<runtime::session_serial_executor_t> session_executor;
+                decltype (complete) complete_turn;
+                stream_runtime_t::async_dispatch_completion_t completion;
+
+                void operator() (const result_t<void> &result)
+                {
+                    // The terminal owns callback captures until the task settles.
+                    // Release them before publishing completion or allowing drain.
+                    callback = {};
+                    complete_turn ([session_executor = std::move (session_executor),
+                                    completion = std::move (completion), result] () mutable {
+                        if (completion) {
+                            completion (result);
+                        }
+                    });
+                }
             };
+            callback_completion_t finish{std::move (callback), session_executor,
+                                         std::move (complete), std::move (completion)};
             try {
                 if (started) {
                     started ();
                 }
-                auto callback_task = callback ();
-                detail::observe_task_completion (
-                  callback_task, [finish = std::move (finish)] (
-                                   const result_t<void> &result) mutable { finish (result); });
+                auto callback_task = finish.callback ();
+                detail::observe_task_completion (callback_task, std::move (finish));
             }
             catch (const framework_exception_t &error) {
                 finish (detail::result_access_t::failure<void> (error));
@@ -850,12 +860,26 @@ stream_write_call_t stream_t::write_packet_with_header (detail::stream_header_t 
     if (!header.flow_id () && header.kind () != stream_message_kind_t::control) {
         if (const auto &flow = runtime::flow_context_t::current ();
             flow && !flow->flow_id.empty ()
-            && flow->diagnostics_mode != message_flow_log_mode_t::off) {
+            && runtime::flow_context_t::tracing (flow->diagnostics_mode)) {
             header.with_flow (flow->flow_id, flow->origin);
         }
     }
     return stream_write_call_t (std::move (header), std::move (payload), _state->compression_codec,
                                 stream_submitter (_state));
+}
+
+stream_write_call_t stream_t::reply_packet (const zlink::framework::message_t &payload)
+{
+    if (!_state->serializers) {
+        return stream_write_call_t (result_t<void>::failure (
+          framework_error_kind_t::protocol_error, "STREAM reply requires a serializer registry"));
+    }
+    try {
+        return reply_packet (detail::message_to_raw (payload, *_state->serializers));
+    }
+    catch (const framework_exception_t &error) {
+        return stream_write_call_t (detail::result_access_t::failure<void> (error));
+    }
 }
 
 stream_write_call_t stream_t::reply_packet (const zlink::message_t &payload)
@@ -1462,7 +1486,7 @@ stream_runtime_t::decode_header (const std::vector<std::uint8_t> &bytes) const
             return result_t<stream_header_t>::failure (framework_error_kind_t::protocol_error,
                                                        "STREAM header flow fields are incomplete");
         }
-        if (detail::message_flow_tracer_t (_state->dispatch).capture_enabled ()) {
+        if (detail::message_flow_tracer_t (_state->dispatch).flow_tracing ()) {
             flow_id = std::string (
               bytes.begin () + static_cast<std::ptrdiff_t> (offset),
               bytes.begin ()
@@ -1790,13 +1814,13 @@ result_t<void> stream_runtime_t::dispatch_packet (packet_stream_session_t &sessi
     const detail::message_flow_tracer_t flow_tracer (_state->dispatch);
     const auto flow_mode = flow_tracer.mode ();
     std::optional<std::string> inbound_flow_id;
-    if (flow_mode != message_flow_log_mode_t::off) {
+    if (runtime::flow_context_t::tracing (flow_mode)) {
         if (auto id = header.flow_id ())
             inbound_flow_id = std::string (*id);
     }
     auto flow_scope = runtime::flow_context_t::enter (
       std::move (inbound_flow_id), header.flow_origin (), flow_mode, flow_origin_t::inbound,
-      flow_mode == message_flow_log_mode_t::off || !stream.routing_id ()
+      !runtime::flow_context_t::tracing (flow_mode) || !stream.routing_id ()
         ? std::nullopt
         : std::optional<std::string> (stream.routing_id ()->to_hex ()));
     flow_tracer.trace (message_flow_outcome_t::received, [&] {
@@ -1861,13 +1885,13 @@ result_t<void> stream_runtime_t::dispatch_packet_async (packet_stream_session_t 
     const detail::message_flow_tracer_t flow_tracer (_state->dispatch);
     const auto flow_mode = flow_tracer.mode ();
     std::optional<std::string> inbound_flow_id;
-    if (flow_mode != message_flow_log_mode_t::off) {
+    if (runtime::flow_context_t::tracing (flow_mode)) {
         if (auto id = header.flow_id ())
             inbound_flow_id = std::string (*id);
     }
     auto flow_scope = runtime::flow_context_t::enter (
       std::move (inbound_flow_id), header.flow_origin (), flow_mode, flow_origin_t::inbound,
-      flow_mode == message_flow_log_mode_t::off || !stream.routing_id ()
+      !runtime::flow_context_t::tracing (flow_mode) || !stream.routing_id ()
         ? std::nullopt
         : std::optional<std::string> (stream.routing_id ()->to_hex ()));
     flow_tracer.trace (message_flow_outcome_t::received, [&] {

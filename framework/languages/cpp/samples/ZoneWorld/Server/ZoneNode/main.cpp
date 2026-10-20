@@ -269,7 +269,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
         // --8<-- [start:doc-zw-border-subscribe]
         for (const auto &from : adjacent_zones (_context.spot_id ()))
             _context.handlers ().add_subscribe<&zone_spot_t::border> (
-              border_topic (from, _context.spot_id ()));
+              names_t::zone_channel, border_topic (from, _context.spot_id ()));
         // --8<-- [end:doc-zw-border-subscribe]
     }
 
@@ -548,6 +548,7 @@ class zone_spot_t final : public fw::spot_t<player_actor_t>
                           });
             _context
               .publish (
+                names_t::zone_channel,
                 border_topic (_context.spot_id (), to),
                 zone_border_event_t{_context.spot_id (), to, _tick, std::move (border_players)})
               .async ();

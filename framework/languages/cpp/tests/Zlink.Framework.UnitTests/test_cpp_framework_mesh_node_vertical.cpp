@@ -1,4 +1,5 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/session_disconnect_probe_spot.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/mesh/mesh_node_runtime.hpp"
@@ -10,6 +11,7 @@
 #include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "runtime/mesh/mesh_metadata_codec.hpp"
+#include <service_wire_codec.hpp>
 #include "runtime/mesh/route_mesh_runtime_options_service.hpp"
 #include "runtime/mesh/route_mesh_runtime_service.hpp"
 #include "runtime/messaging/client_call_codec.hpp"
@@ -34,6 +36,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <future>
+#include <latch>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -50,6 +53,26 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
+
+namespace zlink::framework::runtime
+{
+// Reaches the two steps of one status query so a test can order two queries between them.
+struct route_mesh_runtime_service_test_access_t
+{
+    static mesh_node_snapshot_t query_projection (const route_mesh_runtime_service_t &runtime,
+                                                  const std::string &mesh_name)
+    {
+        return runtime.query_projection (mesh_name);
+    }
+
+    static mesh_node_snapshot_t complete_query (const route_mesh_runtime_service_t &runtime,
+                                                const std::string &mesh_name,
+                                                mesh_node_snapshot_t projection)
+    {
+        return runtime.complete_query (mesh_name, std::move (projection));
+    }
+};
+} // namespace zlink::framework::runtime
 
 namespace
 {
@@ -513,7 +536,7 @@ zlink::message_t make_route_multicast_frame (std::string_view packet_name,
     namespace messaging = zlink::framework::runtime::messaging;
     messaging::envelope_header_t header;
     header.kind = messaging::message_kind_t::publish;
-    header.channel_name = "vertical-mesh";
+    header.channel_name = "work";
     header.message_name = packet_name;
     header.content_type = messaging::envelope_codec_t::default_content_type;
     header.topic = std::string (topic);
@@ -568,19 +591,33 @@ void verify_route_internal_packets_precede_application_dispatch ()
     context->mesh_name = "vertical-mesh";
     context->spot_id = spot_id_t ("internal-route-spot");
     context->spot_name = "internal-route-spot";
-    context->spot_instance = std::make_shared<int> (1);
     context->serial_executor = worker;
 
+    auto application_jobs = std::make_shared<runtime::application_job_queue_t> (
+      runtime::application_job_queue_configuration_t{application_job_queue_profile_t::balanced,
+                                                     std::uint32_t{1}, 1, 1});
+    auto ingress_supply = application_jobs->try_reserve_supply ();
+    assert (ingress_supply);
+    auto ingress_entered = std::make_shared<std::latch> (1);
     auto multicast_received = std::make_shared<std::promise<std::string>> ();
     auto multicast_future = multicast_received->get_future ();
     context->handlers.push_back (spot_handler_descriptor_t{
       spot_handler_kind_t::subscription, "Rel358MulticastPayload", "rel-358-topic",
       std::type_index (typeid (int)), std::type_index (typeid (void)),
-      std::type_index (typeid (void)), std::type_index (typeid (void))});
+      std::type_index (typeid (void)), std::type_index (typeid (void)), "work"});
     context->handler_invokers.push_back (
-      [multicast_received] (void *, void *, service_provider_t &, serializer_registry_t &,
-                            const zlink::message_t &message,
-                            const spot_inbound_message_t &) -> task_t<zlink::message_t> {
+      [multicast_received, ingress_entered,
+       application_jobs] (void *, void *, service_provider_t &, serializer_registry_t &,
+                          const zlink::message_t &message,
+                          const spot_inbound_message_t &inbound) -> task_t<zlink::message_t> {
+          assert (ingress_entered->try_wait ());
+          const auto capacity = application_jobs->snapshot ();
+          assert (capacity.effective_max_queued_application_jobs == 1);
+          assert (capacity.queued_application_jobs == 0);
+          assert (inbound.channel_name == "work");
+          assert (
+            (inbound.values
+             == std::map<std::string, std::string>{{"trace-key", "native-receive-snapshot"}}));
           multicast_received->set_value (message.to_string ());
           co_return zlink::message_t{};
       });
@@ -591,7 +628,8 @@ void verify_route_internal_packets_precede_application_dispatch ()
         disconnect_called.store (true, std::memory_order_release);
         co_return;
     };
-    context->actor_admissions.emplace (std::type_index (typeid (int)), std::move (actor_callbacks));
+    test::register_session_disconnect_probe (context,
+                                             std::move (actor_callbacks.on_disconnect_actor));
     registration->spot_state->spot_contexts_by_id.emplace (context->spot_id,
                                                            spot_context_access_t::create (context));
 
@@ -607,6 +645,9 @@ void verify_route_internal_packets_precede_application_dispatch ()
     registration->spot_state->actor_spot_ids.emplace ("vertical.actor:internal-route-actor",
                                                       context->spot_id);
     registration->spot_state->actor_generations.emplace ("vertical.actor:internal-route-actor", 1);
+    record_actor_instance_index_unlocked (
+      *registration->spot_state, actor,
+      registration->spot_state->actor_instances.at ("vertical.actor:internal-route-actor").get ());
 
     serializer_registry_t serializers;
     service_collection_t services;
@@ -619,43 +660,69 @@ void verify_route_internal_packets_precede_application_dispatch ()
       std::make_unique<runtime::location_runtime_t> (location_store));
     register_mesh_location_resolvers (services);
     auto provider = services.build_provider ();
+    auto &actor_gateway = provider.get_required<actor_gateway_runtime_t> ();
     auto &location_runtime = provider.get_required<runtime::location_runtime_t> ();
     location_runtime.start (*registration->routing_id);
     runtime::mesh_node_host_service_t service (
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
-      serializers);
+      serializers, {}, {}, application_jobs);
     service.start (provider);
     const auto node = service.nodes ().front ();
     auto native_spot = std::make_shared<host::spot_handle_t> (
       node->native_node ().get_or_create_spot (std::string (context->spot_id)));
     registration->spot_state->lane.run ([&] { context->native_spot = native_spot; }).get ();
 
-    messaging::client_call_codec_t route_codec;
-    auto multicast_header = route_codec.create_envelope (messaging::message_kind_t::command, "work",
-                                                         spot_multicast_route_send_t::packet_name);
-    const auto multicast = spot_multicast_route_send_t{
-      "rel-358-topic", make_route_multicast_frame ("Rel358MulticastPayload", "rel-358-topic",
-                                                   "multicast-through-host")
-                         .to_bytes ()};
-    auto multicast_parts =
-      route_codec.encode_envelope_parts (multicast_header, multicast, serializers);
-    host::ready_record_t channel_owner;
-    channel_owner.owner_kind = host::owner_kind_t::channel;
-    channel_owner.channel_name = "work";
-    host::receive_record_t channel_record;
-    channel_record.kind = host::record_kind_t::channel_send;
-    channel_record.channel_name = "work";
-    channel_record.source_node_rid = zlink::routing_id_t::from ("route-source");
-    enqueue_application_route (node, std::move (channel_owner), std::move (channel_record),
-                               std::move (multicast_parts).take_items ());
+    native_spot->set_subscription ("work", "rel-358-topic");
+    namespace wire = runtime::protocol::generated::detail;
+    wire::logicalMulticast_23_t multicast;
+    multicast.flags = static_cast<std::uint8_t> (runtime::protocol::flag::metadata);
+    multicast.channelName.value = "work";
+    multicast.topic.value = "rel-358-topic";
+    multicast.sourceSpotId.value = "source-spot";
+    wire::writer_t multicast_header;
+    assert (wire::encode_head_logicalMulticast_23 (multicast_header, multicast)
+            == wire::error_code::ok);
+    runtime::mesh::service_mailbox_record_t multicast_record;
+    multicast_record.owner =
+      runtime::mesh::service_mailbox_t::application_owner (host::owner_kind_t::node);
+    multicast_record.domain = runtime::mesh::service_mailbox_domain_t::application;
+    multicast_record.source_routing_id = zlink::routing_id_t::from ("route-source").to_bytes ();
+    auto ingress_permit =
+      std::make_shared<runtime::application_job_queue_t::permit_t> (std::move (*ingress_supply));
+    ingress_supply.reset ();
+    ingress_permit->mark_queued ();
+    multicast_record.before_application_handler = [permit = std::move (ingress_permit),
+                                                   ingress_entered] {
+        permit->release_for_handler_entry ();
+        ingress_entered->count_down ();
+    };
+    const auto queued_ingress = application_jobs->snapshot ();
+    assert (queued_ingress.effective_max_queued_application_jobs == 1);
+    assert (queued_ingress.queued_application_jobs == 1);
+    assert (queued_ingress.permits_in_use == 1);
+    multicast_record.parts = {
+      zlink::message_t::from (std::move (multicast_header.data)),
+      zlink::message_t::from (
+        mesh_metadata_codec_t::encode ({{"trace-key", "native-receive-snapshot"}})),
+      zlink::message_t::from (runtime::protocol::encode_application_payload (
+        runtime::protocol::application_payload_t::from_parts ({make_route_multicast_frame (
+          "Rel358MulticastPayload", "rel-358-topic", "multicast-through-host")})))};
+    assert (
+      node->native_node ().transport ().mailbox ().try_enqueue (std::move (multicast_record)));
     assert (multicast_future.wait_for (1s) == std::future_status::ready);
     assert (multicast_future.get () == "multicast-through-host");
 
-    auto disconnect_header =
-      route_codec.create_envelope (messaging::message_kind_t::request, "work",
-                                   spot_actor_disconnect_route_request_t::packet_name);
+    messaging::client_call_codec_t route_codec;
+    auto disconnect_header = route_codec.create_envelope (
+      messaging::message_kind_t::request, "work", spot_actor_packet_route_request_t::packet_name);
     auto disconnect_parts = route_codec.encode_envelope_parts (
-      disconnect_header, make_spot_actor_disconnect_route_request (actor), serializers);
+      disconnect_header,
+      make_spot_actor_packet_route_request (
+        actor, context->spot_id, runtime::protocol::session_disconnected_packet_name,
+        zlink::message_t::from (runtime::protocol::encode_session_disconnected (
+          {zlink::routing_id_t::from ("session-owner").to_bytes (), 2, 7})),
+        {}),
+      serializers);
     auto disconnect_reply = std::make_shared<std::promise<std::vector<zlink::message_t>>> ();
     auto disconnect_reply_future = disconnect_reply->get_future ();
     host::ready_record_t node_owner;
@@ -669,15 +736,19 @@ void verify_route_internal_packets_precede_application_dispatch ()
           disconnect_reply->set_value (parts);
           return true;
       };
+    const auto binding_before = actor_gateway.bound_session_route_async (actor).result ();
+    assert (binding_before && !binding_before.value ());
     enqueue_application_route (node, std::move (node_owner), std::move (node_record),
                                std::move (disconnect_parts).take_items ());
     assert (disconnect_reply_future.wait_for (1s) == std::future_status::ready);
     auto reply_parts = messaging::message_parts_t (disconnect_reply_future.get ());
-    const auto reply = route_codec.decode_envelope_reply<spot_actor_disconnect_route_reply_t> (
+    const auto reply = route_codec.decode_envelope_reply<spot_actor_packet_route_reply_t> (
       reply_parts, serializers, "disconnect reply is empty", "disconnect reply is invalid",
       "actor disconnect");
-    assert (reply && reply.value ().accepted);
+    assert (reply && reply.value ().has_reply && reply.value ().payload.empty ());
     assert (disconnect_called.load (std::memory_order_acquire));
+    const auto binding_after = actor_gateway.bound_session_route_async (actor).result ();
+    assert (binding_after && !binding_after.value ());
     assert (service.wait_for_accepted_callbacks_until (std::chrono::steady_clock::now () + 1s));
 
     service.stop ();
@@ -1523,6 +1594,30 @@ void verify_public_runtime_surface ()
     runtime_options.mesh ("vertical-mesh").placement_weight (100);
     assert (runtime_options.mesh ("vertical-mesh").placement_weight () == 100);
 
+    // Runtime monitoring §4 and §6: a query returns the value at that time. Two queries project
+    // from the same published status. The older one (it reports a ready peer the node no longer
+    // has) wins the publication turn; the later query must still return the current state.
+    {
+        using access = zlink::framework::runtime::route_mesh_runtime_service_test_access_t;
+        const auto base = runtime->snapshot ("vertical-mesh");
+        auto older = access::query_projection (*runtime, "vertical-mesh");
+        auto newer = access::query_projection (*runtime, "vertical-mesh");
+        assert (older.sequence == base.sequence);
+        assert (newer.sequence == base.sequence);
+        older.ready_peer_count = base.ready_peer_count + 1;
+        const auto older_published =
+          access::complete_query (*runtime, "vertical-mesh", std::move (older));
+        assert (older_published.ready_peer_count == base.ready_peer_count + 1);
+        assert (older_published.sequence == base.sequence + 1);
+        const auto returned = access::complete_query (*runtime, "vertical-mesh", std::move (newer));
+        if (returned.ready_peer_count != base.ready_peer_count
+            || returned.sequence != base.sequence + 2) {
+            std::cerr << "status query returned the older projection: sequence "
+                      << returned.sequence << " ready peers " << returned.ready_peer_count << '\n';
+            std::abort ();
+        }
+    }
+
     std::mutex event_mutex;
     std::condition_variable event_ready;
     std::vector<zlink::framework::mesh_node_snapshot_t> received;
@@ -1919,6 +2014,11 @@ void verify_automatic_identity_and_port_builder ()
       zlink::framework::detail::mesh_node_runtime_t::registrations (builder);
     assert (registrations.size () == 1);
     const auto &state = registrations.front ();
+    assert (!state->spot_state->snapshot.spot_route_channel_name);
+    assert (state->spot_state->snapshot.accepted_route_channels.empty ());
+    assert (zlink::framework::detail::spot_node_runtime_t (state->spot_state)
+              .actor_route_transport_name ()
+            == "automatic-builder-mesh");
     assert (state->listen_endpoint == "tcp://127.0.0.1:0");
     assert (state->routing_id);
     assert (std::regex_match (

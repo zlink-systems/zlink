@@ -41,6 +41,157 @@ import java.util.function.Supplier;
 
 final class ZLinkSpotTimerRegistryTest {
     @Test
+    void infrastructureResumeRetainsGateThroughTimerHandlerAwait() throws Exception {
+        var scheduledTick = new AtomicReference<Runnable>();
+        var scheduler =
+                new ScheduledThreadPoolExecutor(1) {
+                    @Override
+                    public ScheduledFuture<?> schedule(
+                            Runnable command, long delay, TimeUnit unit) {
+                        scheduledTick.set(command);
+                        return super.schedule(() -> {}, 1, TimeUnit.HOURS);
+                    }
+                };
+        var executor = Executors.newSingleThreadExecutor();
+        var queue =
+                new systems.zlink.framework.execution.ZLinkSerialExecutionQueue(
+                        executor,
+                        systems.zlink.framework.execution.ZLinkExecutionLanePolicy.spot());
+        var releaseOwner = new CompletableFuture<Void>();
+        var ownerEntered = new CompletableFuture<Void>();
+        var attempted = new CompletableFuture<Void>();
+        var handlerEntered = new CountDownLatch(1);
+        var releaseHandler = new CompletableFuture<Void>();
+        var siblingEntered = new AtomicBoolean();
+        var laneRef =
+                new AtomicReference<
+                        systems.zlink.framework.runtime.internal.execution.ZLinkStateLane>();
+        var registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        scheduler,
+                        ignored -> new BlockingTimerHandler(handlerEntered, releaseHandler),
+                        List.of(),
+                        "test",
+                        (timerName, operation) -> {
+                            laneRef.get()
+                                    .runAsync(
+                                            () -> {
+                                                ownerEntered.complete(null);
+                                                releaseOwner.join();
+                                                return null;
+                                            });
+                            ownerEntered.join();
+                            return queue.enqueue(
+                                    () -> {
+                                        var completion = operation.get();
+                                        attempted.complete(null);
+                                        return completion;
+                                    },
+                                    null);
+                        });
+        registry.setSpot(new TestSpot());
+        try {
+            registry.add("timer", Duration.ofDays(1), BlockingTimerHandler.class, null)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            var field = ZLinkSpotTimerRegistry.class.getDeclaredField("stateLane");
+            field.setAccessible(true);
+            var lane =
+                    (systems.zlink.framework.runtime.internal.execution.ZLinkStateLane)
+                            field.get(registry);
+            laneRef.set(lane);
+            scheduledTick.get().run();
+            attempted.get(3, TimeUnit.SECONDS);
+            queue.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            releaseOwner.complete(null);
+            assertTrue(handlerEntered.await(3, TimeUnit.SECONDS));
+            executor.submit(() -> {}).get(3, TimeUnit.SECONDS);
+            var sibling =
+                    queue.enqueue(
+                            () -> {
+                                siblingEntered.set(true);
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            null);
+            executor.submit(() -> {}).get(3, TimeUnit.SECONDS);
+            boolean overlapped = siblingEntered.get();
+            releaseHandler.complete(null);
+            sibling.toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertFalse(overlapped, "ordinary timer handler await must retain the resumed gate");
+            assertTrue(siblingEntered.get());
+        } finally {
+            releaseOwner.complete(null);
+            releaseHandler.complete(null);
+            registry.closeAsync().toCompletableFuture().get(3, TimeUnit.SECONDS);
+            scheduler.shutdownNow();
+            queue.close();
+            executor.shutdownNow();
+        }
+    }
+
+    @Test
+    void throwingCallbackConsumesItsNominalTick() throws Exception {
+        var scheduledTicks = new java.util.concurrent.LinkedBlockingQueue<Runnable>();
+        var scheduler =
+                new ScheduledThreadPoolExecutor(1) {
+                    @Override
+                    public ScheduledFuture<?> schedule(
+                            Runnable command, long delay, TimeUnit unit) {
+                        scheduledTicks.add(command);
+                        return super.schedule(() -> {}, 1, TimeUnit.HOURS);
+                    }
+                };
+        scheduler.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
+        var delivered = new java.util.ArrayList<ZLinkTimerTick>();
+        var handler =
+                new Object() {
+                    public void handle(ZLinkSpot<?> spot, ZLinkTimerTick tick) {
+                        delivered.add(tick);
+                        throw new IllegalStateException("timer failure");
+                    }
+                };
+        var registry =
+                new ZLinkSpotTimerRegistry(
+                        "spot",
+                        scheduler,
+                        ignored -> handler,
+                        List.of(),
+                        "test",
+                        (timerName, operation) -> operation.get());
+        registry.setSpot(new TestSpot());
+        try {
+            registry.add(
+                            "timer",
+                            Duration.ofDays(1),
+                            handler.getClass(),
+                            new ZLinkTimerOptions(
+                                    ZLinkTimerOverrunPolicy.SKIP_LATE_TICKS, 1, false))
+                    .toCompletableFuture()
+                    .join();
+            for (int index = 0; index < 3; index++) {
+                scheduledTicks.take().run();
+            }
+            scheduledTicks.take();
+            assertEquals(
+                    List.of(1L, 2L, 3L),
+                    delivered.stream().map(ZLinkTimerTick::deliveryIndex).toList());
+            assertEquals(
+                    List.of(1L, 2L, 3L),
+                    delivered.stream().map(ZLinkTimerTick::scheduledIndex).toList());
+            assertEquals(
+                    List.of(0L, 0L, 0L),
+                    delivered.stream().map(ZLinkTimerTick::skippedTicks).toList());
+        } finally {
+            registry.closeAsync().toCompletableFuture().join();
+            scheduler.shutdown();
+            assertTrue(scheduler.awaitTermination(3, TimeUnit.SECONDS));
+        }
+    }
+
+    @Test
     void cancelWhileOwnerIsBusyPreventsHandlerAfterGateReacquisition() throws Exception {
         var scheduledTick = new AtomicReference<Runnable>();
         var scheduler =
@@ -66,7 +217,6 @@ final class ZLinkSpotTimerRegistryTest {
                         scheduler,
                         ignored -> new PreviousTimerHandler(handled),
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> {
                             try {
@@ -178,7 +328,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         handlers,
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
@@ -219,7 +368,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         handlers,
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
@@ -256,7 +404,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         ignored -> handler,
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> {
                             enteredDispatch.set(true);
@@ -285,7 +432,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         ignored -> new BlockingTimerHandler(started, release),
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
@@ -323,7 +469,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         ignored -> new PreviousTimerHandler(new AtomicBoolean()),
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
@@ -369,7 +514,6 @@ final class ZLinkSpotTimerRegistryTest {
                                         ? new PreviousTimerHandler(previousHandled)
                                         : new ReplacementTimerHandler(replacementHandled),
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
@@ -400,7 +544,6 @@ final class ZLinkSpotTimerRegistryTest {
                         sourceExecutor,
                         ignored -> new PreviousTimerHandler(sourceHandled),
                         List.of(),
-                        null,
                         "source",
                         (timerName, operation) -> {
                             queued.set(operation);
@@ -443,7 +586,6 @@ final class ZLinkSpotTimerRegistryTest {
                         targetExecutor,
                         ignored -> new RestoredTimerHandler(restored, restoredTick),
                         List.of(),
-                        null,
                         "target",
                         (timerName, operation) -> operation.get());
         target.setSpot(new TestSpot());
@@ -478,7 +620,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         ignored -> new PreviousTimerHandler(new AtomicBoolean()),
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
@@ -512,7 +653,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         ignored -> new ReplacementTimerHandler(handled),
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
@@ -550,7 +690,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         ignored -> new PreviousTimerHandler(new AtomicBoolean()),
                         List.of(),
-                        null,
                         "test",
                         (timerName, operation) ->
                                 operation
@@ -580,7 +719,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         ignored -> new ThrowingTimerHandler(new AtomicInteger()),
                         List.of(),
-                        null,
                         "freeze-observer",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());
@@ -628,7 +766,6 @@ final class ZLinkSpotTimerRegistryTest {
                         executor,
                         ignored -> new ThrowingTimerHandler(new AtomicInteger()),
                         List.of(),
-                        null,
                         "stop-freeze-observer",
                         (timerName, operation) -> operation.get());
         registry.setSpot(new TestSpot());

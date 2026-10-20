@@ -52,10 +52,10 @@ export function zlinkProtobufCodec(): ZLinkProtobufCodecExtension {
 export function createProtobufMessageSerializer(): ZLinkMessageSerializer {
   return {
     serialize<T>(value: T): ZLinkEncodedPayload {
-      return ZLinkEncodedPayload.from(encodeDynamicValue(value));
+      return ZLinkEncodedPayload.fromOwned(encodeDynamicValue(value));
     },
     deserialize<T>(payload: ZLinkEncodedPayload): T {
-      const bytes = payload.data();
+      const bytes = payload.view();
       return decodeDynamicValue(Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength)) as T;
     }
   };
@@ -84,7 +84,7 @@ export function createProtobufEnvelopeMessageSerializer(
   return {
     serialize<T>(value: T): ZLinkEncodedPayload {
       const encoded = options.encode(value, inferMessageType(value));
-      return ZLinkEncodedPayload.from(encoded.payload);
+      return ZLinkEncodedPayload.fromOwned(encoded.payload);
     },
     deserialize<T>(payload: ZLinkEncodedPayload): T {
       return options.decode<T>({

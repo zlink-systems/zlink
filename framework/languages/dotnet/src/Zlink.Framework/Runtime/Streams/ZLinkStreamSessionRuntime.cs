@@ -10,6 +10,10 @@ namespace Zlink.Framework.Runtime.Streams;
 
 internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 {
+    private static readonly TimeSpan ActorBindingReplacementCloseDelay = TimeSpan.FromMilliseconds(
+        100
+    );
+
     private readonly ZLinkSessionContext _context;
     private readonly ZLinkMessageFlowTracer _flow;
     private readonly ZLinkStreamSessionLiveness _liveness;
@@ -24,8 +28,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
     private readonly TimeProvider _timeProvider;
     private readonly ZLinkStateLane _lane = new();
     private readonly HashSet<ActorBindingReplacementIdentity> _receivedBindingReplacements = [];
-    private readonly Dictionary<ActorBindingReplacementIdentity, ITimer> _replacementCloseTimers =
-    [];
     private readonly bool _requireConnectionReady;
     private readonly TaskCompletionSource<(
         string LocalAddr,
@@ -208,7 +210,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     private async Task DisposeCoreAsync()
     {
-        DisposeReplacementCloseTimers();
         var disposeOwnsDisconnect = ClaimCloseForDisposal();
         var failures = new List<Exception>();
         await CaptureAsync(_serial.DisposeAsync).ConfigureAwait(false);
@@ -321,8 +322,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         string sessionOwnerId,
         ulong sessionOwnerLeaseGeneration,
         RoutingId sessionRid,
-        ulong retiredBindingGeneration,
-        string bindingToken
+        ulong retiredBindingGeneration
     )
     {
         var identity = new ActorBindingReplacementIdentity(
@@ -332,8 +332,7 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             sessionOwnerId,
             sessionOwnerLeaseGeneration,
             sessionRid,
-            retiredBindingGeneration,
-            bindingToken
+            retiredBindingGeneration
         );
         if (
             !AwaitStateLane(
@@ -448,27 +447,20 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
 
     public async ValueTask CloseAsync()
     {
-        if (
-            !TryScheduleTerminal(
-                ZlinkStreamCloseReason.ClientClose,
-                () => CompleteAfterTransportClosedAsync(notifyDisconnected: true)
-            )
-        )
-            return;
-
+        TryScheduleTerminal(
+            ZlinkStreamCloseReason.ClientClose,
+            () => CompleteAfterTransportClosedAsync(notifyDisconnected: true)
+        );
         await CloseTransportAsync().ConfigureAwait(false);
     }
 
     public async ValueTask CloseByProxyAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (
-            !TryScheduleTerminal(
-                ZlinkStreamCloseReason.ClientClose,
-                () => CompleteAfterTransportClosedAsync(notifyDisconnected: false)
-            )
-        )
-            return;
+        TryScheduleTerminal(
+            ZlinkStreamCloseReason.ClientClose,
+            () => CompleteAfterTransportClosedAsync(notifyDisconnected: false)
+        );
 
         await CloseTransportAsync().WaitAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -925,60 +917,33 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
             return;
         }
 
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (_replacementCloseTimers.ContainsKey(identity))
-                    return;
-                var timer = _timeProvider.CreateTimer(
-                    static state =>
-                    {
-                        var closure = (ReplacementCloseTimerState)state!;
-                        closure.Owner.OnReplacementCloseTimer(closure.Identity);
-                    },
-                    new ReplacementCloseTimerState(this, identity),
-                    TimeSpan.FromMilliseconds(100),
-                    Timeout.InfiniteTimeSpan
-                );
-                _replacementCloseTimers.Add(identity, timer);
-            })
+        // The grace delay starts without the caller's ExecutionContext, so a
+        // state-lane marker never reaches the delayed close. The pending delay
+        // keeps itself alive until it fires; CloseRetiredSessionIfExactAsync is
+        // the only close decision, including after this session is disposed.
+        _ = ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(() =>
+            CloseRetiredSessionAfterGraceAsync(identity)
         );
     }
 
-    private void OnReplacementCloseTimer(ActorBindingReplacementIdentity identity)
+    private async Task CloseRetiredSessionAfterGraceAsync(ActorBindingReplacementIdentity identity)
     {
-        var timer = AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                if (_replacementCloseTimers.Remove(identity, out var timer))
-                    return timer;
-                return null;
-            })
-        );
-        timer?.Dispose();
-        _ = CloseRetiredSessionIfExactAsync(identity);
+        await Task.Delay(ActorBindingReplacementCloseDelay, _timeProvider).ConfigureAwait(false);
+        await CloseRetiredSessionIfExactAsync(identity).ConfigureAwait(false);
     }
 
     private ValueTask CloseRetiredSessionIfExactAsync(ActorBindingReplacementIdentity identity)
     {
-        if (
-            !_context.Runtime.TryGetSessionActorBinding(
-                identity.ActorId,
-                identity.BindingToken,
-                out var current
-            )
-            || !ReferenceEquals(current.Context, _context)
-            || current.ActorRef.SessionRid != identity.SessionRid
-            || current.BindingGeneration != identity.RetiredBindingGeneration
-            || current.SessionOwnerNodeRid != identity.SessionOwnerNodeRid
-            || current.SessionOwnerNodeGeneration != identity.SessionOwnerNodeGeneration
-            || !string.Equals(
-                current.SessionOwnerId,
-                identity.SessionOwnerId,
-                StringComparison.Ordinal
-            )
-            || current.SessionOwnerLeaseGeneration != identity.SessionOwnerLeaseGeneration
-        )
+        var binding = _context.Runtime.GetExactRetiredSessionBinding(
+            ZLinkActorId.FromBoundary(identity.ActorId, nameof(identity.ActorId)),
+            identity.SessionOwnerNodeRid,
+            identity.SessionRid,
+            identity.SessionOwnerNodeGeneration,
+            identity.SessionOwnerId,
+            identity.SessionOwnerLeaseGeneration,
+            identity.RetiredBindingGeneration
+        );
+        if (binding is null || !ReferenceEquals(binding.Context, _context))
             return ValueTask.CompletedTask;
 
         if (
@@ -994,20 +959,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         // occupies a serial turn while waiting.
         _ = CloseTransportAsync();
         return ValueTask.CompletedTask;
-    }
-
-    private void DisposeReplacementCloseTimers()
-    {
-        var timers = AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                var timers = _replacementCloseTimers.Values.ToArray();
-                _replacementCloseTimers.Clear();
-                return timers;
-            })
-        );
-        foreach (var timer in timers)
-            timer.Dispose();
     }
 
     private bool TryScheduleTerminal(
@@ -1338,12 +1289,6 @@ internal sealed class ZLinkStreamSessionRuntime : IAsyncDisposable
         string SessionOwnerId,
         ulong SessionOwnerLeaseGeneration,
         RoutingId SessionRid,
-        ulong RetiredBindingGeneration,
-        string BindingToken
-    );
-
-    private sealed record ReplacementCloseTimerState(
-        ZLinkStreamSessionRuntime Owner,
-        ActorBindingReplacementIdentity Identity
+        ulong RetiredBindingGeneration
     );
 }

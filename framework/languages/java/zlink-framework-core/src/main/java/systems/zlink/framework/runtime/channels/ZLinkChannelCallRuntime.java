@@ -15,7 +15,9 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
+import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
+import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
@@ -25,7 +27,6 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
@@ -69,16 +70,14 @@ final class ZLinkChannelCallRuntime {
 
     ZLinkChannelCallRuntime(
             ZLinkMessageFlowTracer flow,
-            ScheduledExecutorService timeoutExecutor,
             ZLinkChannelReplyDecoder replyDecoder,
             SpotSend spotSend,
             SpotRequest spotRequest) {
-        this(flow, timeoutExecutor, replyDecoder, spotSend, spotRequest, System::nanoTime);
+        this(flow, replyDecoder, spotSend, spotRequest, System::nanoTime);
     }
 
     ZLinkChannelCallRuntime(
             ZLinkMessageFlowTracer flow,
-            ScheduledExecutorService timeoutExecutor,
             ZLinkChannelReplyDecoder replyDecoder,
             SpotSend spotSend,
             SpotRequest spotRequest,
@@ -86,7 +85,6 @@ final class ZLinkChannelCallRuntime {
         this.flow = flow;
         this.operations =
                 new ZLinkServiceOperationRegistry(
-                        timeoutExecutor,
                         closedFailure(),
                         () -> requestFailure(new TimeoutException("service operation timed out")),
                         nanoTime);
@@ -269,17 +267,17 @@ final class ZLinkChannelCallRuntime {
                             reply.failureCode()));
             return;
         }
-        if (ZLinkChannelRuntime.isFrameworkErrorReply(reply.parts())) {
-            result.completeExceptionally(
-                    new ZLinkFrameworkException(
-                            ZLinkChannelRuntime.frameworkErrorReplyKind(reply.parts()),
-                            ZLinkChannelRuntime.frameworkErrorReplyMessage(reply.parts()),
-                            null,
-                            ZLinkChannelRuntime.frameworkErrorReplyMetadata(reply.parts())));
+        // One header read decides both the error reply and the payload decode.
+        ZLinkChannelEnvelope.Header header =
+                ZLinkChannelEnvelope.tryDecodeHeader(reply.parts(), false);
+        ZLinkFrameworkException errorReply = ZLinkFrameworkErrorReply.failure(header);
+        if (errorReply != null) {
+            result.completeExceptionally(errorReply);
             return;
         }
         result.complete(
-                replyDecoder.decode(reply.parts(), replyType, "route mesh reply decode failed"));
+                replyDecoder.decode(
+                        reply.parts(), header, replyType, "route mesh reply decode failed"));
     }
 
     <TReply> TReply decodeSpotReply(List<Message> replies, Class<TReply> replyType) {

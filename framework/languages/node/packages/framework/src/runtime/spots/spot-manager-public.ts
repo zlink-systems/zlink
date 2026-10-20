@@ -196,7 +196,7 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
       yield: (signal) => {
         const yieldTurn = requireZLinkYieldTurn(turn);
         const pending = this.submit(spotId, stableType, generatedIdentity, state, signal);
-        return yieldTurn.yieldPromise(pending);
+        return yieldTurn.yieldFrameworkPromise(pending);
       }
     };
     return call;
@@ -264,7 +264,7 @@ export class ZLinkPublicSpotManager implements ZLinkSpotManager {
             }
           };
         } catch (error) {
-          this.options.local.abortUserSpotPublication(target.meshName, spotId);
+          await this.options.local.abortUserSpotPublication(target.meshName, spotId);
           throw error;
         }
       },

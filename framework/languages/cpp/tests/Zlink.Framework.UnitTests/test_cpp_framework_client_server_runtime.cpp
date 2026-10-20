@@ -37,6 +37,26 @@
 #include <utility>
 #include <vector>
 
+namespace zlink::framework::runtime::client_server
+{
+// Reaches the two steps of one status query so a test can order two queries between them.
+struct client_server_location_runtime_test_access_t
+{
+    static client_server_channel_snapshot_t
+    query_projection (const client_server_location_runtime_t &runtime, std::string channel_name)
+    {
+        return runtime.query_projection_task (std::move (channel_name)).result ().value ();
+    }
+
+    static client_server_channel_snapshot_t
+    complete_query (const client_server_location_runtime_t &runtime,
+                    client_server_channel_snapshot_t projection)
+    {
+        return runtime.complete_query_task (std::move (projection)).result ().value ();
+    }
+};
+} // namespace zlink::framework::runtime::client_server
+
 namespace client_server = zlink::framework::runtime::client_server;
 namespace protocol = zlink::framework::runtime::protocol;
 using namespace std::chrono_literals;
@@ -1213,6 +1233,31 @@ void verify_client_server_runtime_projection_and_observation ()
     assert (before.local_role == zlink::framework::client_server_role_t::client);
     assert (!before.is_ready);
     assert (before.ready_target_count == 0);
+
+    // Runtime monitoring §4 and §6: a query returns the value at that time. Two queries project
+    // from the same published status. The older one (it reports one ready target the runtime no
+    // longer has) wins the publication turn; the later query must still return the current state.
+    {
+        using access = client_server::client_server_location_runtime_test_access_t;
+        const auto &location_runtime =
+          dynamic_cast<const client_server::client_server_location_runtime_t &> (runtime);
+        auto older = access::query_projection (location_runtime, "client-server-runtime-unit");
+        auto newer = access::query_projection (location_runtime, "client-server-runtime-unit");
+        assert (older.sequence == before.sequence);
+        assert (newer.sequence == before.sequence);
+        older.ready_target_count = 1;
+        const auto older_published = access::complete_query (location_runtime, std::move (older));
+        assert (older_published.ready_target_count == 1);
+        assert (older_published.sequence == before.sequence + 1);
+        const auto returned = access::complete_query (location_runtime, std::move (newer));
+        if (returned.ready_target_count != 0 || returned.sequence != before.sequence + 2) {
+            std::fprintf (stderr,
+                          "status query returned the older projection: sequence %llu ready %u\n",
+                          static_cast<unsigned long long> (returned.sequence),
+                          static_cast<unsigned> (returned.ready_target_count));
+            std::abort ();
+        }
+    }
 
     std::atomic_int event_count{0};
     std::mutex event_mutex;

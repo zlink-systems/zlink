@@ -228,10 +228,6 @@ export class ZLinkLocationRuntimeOwner {
       this.options.registration.locations.options,
       this.currentEvents
     );
-    if (runtime.ownerLeaseUsable) {
-      await spotNodeRuntime.startLocationAutoConnect();
-      await channelRuntime.startLocationAutoConnect();
-    }
     return runtime;
   }
 
@@ -252,7 +248,7 @@ export class ZLinkLocationRuntimeOwner {
     const locations = this.options.registration.locations;
     if (locations.useInMemoryStores) {
       const provider = new ZLinkInMemoryProviderLocationStore();
-      const store = new ZLinkLocationStoreRepository(provider);
+      const store = new ZLinkLocationStoreRepository(provider, undefined, this.options.metrics);
       return {
         locationStore: store,
         authorityStore: store,
@@ -267,7 +263,7 @@ export class ZLinkLocationRuntimeOwner {
     }
     const provider = locations.storeInstance;
     if (provider !== undefined) {
-      const store = new ZLinkLocationStoreRepository(provider);
+      const store = new ZLinkLocationStoreRepository(provider, undefined, this.options.metrics);
       return {
         locationStore: store,
         authorityStore: store,

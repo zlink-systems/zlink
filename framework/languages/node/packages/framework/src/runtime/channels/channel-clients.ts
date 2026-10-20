@@ -177,8 +177,14 @@ interface PreparedNodeSend {
   ) => ZLinkSubmitResult | Promise<ZLinkSubmitResult>;
 }
 
+interface PreparedNodeRequest {
+  readonly validate: () => void;
+  readonly submit: ZLinkRequestSubmitter;
+}
+
 export class DefaultZLinkRouteClient implements ZLinkRouteClient {
   private readonly nodeSends = new Map<string, Map<string, PreparedNodeSend>>();
+  private readonly nodeRequests = new Map<string, Map<string, PreparedNodeRequest>>();
   constructor(
     private readonly registration: ZLinkFrameworkRegistration,
     private readonly transport?: ZLinkRouteClientTransport,
@@ -207,20 +213,31 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
   }
 
   requestToNode(meshName: string, targetNodeRid: string, request: unknown): ZLinkRequestCall {
+    let targets = this.nodeRequests.get(meshName);
+    if (targets === undefined) this.nodeRequests.set(meshName, (targets = new Map()));
+    let prepared = targets.get(targetNodeRid);
+    if (prepared === undefined) {
+      prepared = {
+        validate: () => this.requireMesh(meshName),
+        submit: (packetName, timeoutMs, metadata, signal, onAdmitted, message) =>
+          this.requireTransport().request(
+            meshName,
+            targetNodeRid,
+            packetName,
+            message,
+            timeoutMs,
+            signal,
+            metadata,
+            onAdmitted
+          )
+      };
+      targets.set(targetNodeRid, prepared);
+    }
     return new DefaultZLinkRequestCall(
-      () => this.requireMesh(meshName),
-      (packetName, timeoutMs, metadata, signal, onAdmitted) =>
-        this.requireTransport().request(
-          meshName,
-          targetNodeRid,
-          packetName,
-          request,
-          timeoutMs,
-          signal,
-          metadata,
-          onAdmitted
-        ),
-      this.defaultRequestTimeout(meshName)
+      prepared.validate,
+      prepared.submit,
+      this.defaultRequestTimeout(meshName),
+      request
     );
   }
 
@@ -504,21 +521,26 @@ function normalizeSubmitResult(
     : (result ?? submittedResult);
 }
 
+type ZLinkRequestSubmitter = <TReply>(
+  packetName: string | undefined,
+  timeoutMs: number | undefined,
+  metadata: ReadonlyMap<string, string>,
+  signal?: AbortSignal,
+  onAdmitted?: () => void,
+  message?: unknown
+) => Promise<TReply>;
+
 class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
   private timeoutMs?: number;
   private selectedMetadata?: Map<string, string>;
   private readonly turn: ZLinkSpotSerialTurn | undefined = captureZLinkSpotSerialTurn();
 
+  /** `message` is the request payload a prepared submitter receives per call. */
   constructor(
     private readonly validate: () => void,
-    private readonly submitter: <TReply>(
-      packetName: string | undefined,
-      timeoutMs: number | undefined,
-      metadata: ReadonlyMap<string, string>,
-      signal?: AbortSignal,
-      onAdmitted?: () => void
-    ) => Promise<TReply>,
-    private readonly defaultRequestTimeoutMs?: number
+    private readonly submitter: ZLinkRequestSubmitter,
+    private readonly defaultRequestTimeoutMs?: number,
+    private readonly message?: unknown
   ) {}
 
   metadata(key: string, value: string): this;
@@ -549,7 +571,8 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
         this.timeoutMs ?? this.defaultRequestTimeoutMs,
         this.selectedMetadata === undefined ? EMPTY_CALL_METADATA : new Map(this.selectedMetadata),
         signal,
-        onAdmitted
+        onAdmitted,
+        this.message
       );
     });
   }
@@ -562,9 +585,11 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
       undefined,
       this.timeoutMs ?? this.defaultRequestTimeoutMs,
       this.selectedMetadata === undefined ? EMPTY_CALL_METADATA : new Map(this.selectedMetadata),
-      signal
+      signal,
+      undefined,
+      this.message
     );
-    return turn.yieldPromise(pending);
+    return turn.yieldFrameworkPromise(pending);
   }
 }
 

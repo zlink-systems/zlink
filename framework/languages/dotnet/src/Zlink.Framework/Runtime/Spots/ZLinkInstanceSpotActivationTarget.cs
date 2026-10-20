@@ -470,7 +470,9 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
     ZLinkSpotNodeCatalog catalog,
     IZLinkBackendSpotNode node,
     ZLinkSpotNodeRegistration registration,
-    ZLinkLocationOwnerToken owner
+    // Read when an activation runs: a host without an owner lease builds the
+    // target before the lease is claimed (location runtime §5).
+    Func<ZLinkLocationOwnerToken> owner
 ) : IInstanceSpotActivationTarget
 {
     private const int RecoveryScanPageSize = 128;
@@ -560,8 +562,9 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 $"Instance Spot type '{operation.Target.StableType}' is not registered."
             );
 
-        var requestSource = await ResolveRequestSourceAsync(
-                operation.Target.MeshName,
+        var requestSource = await ZLinkRequestSourceFenceResolver
+            .AcceptOrUnavailableAsync(
+                node,
                 operation.SourceNodeRid,
                 operation.SourceNodeGeneration,
                 cancellationToken
@@ -708,7 +711,7 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                             operation.Target.TargetNodeRid
                         ),
                         operation.Target.TargetNodeGeneration,
-                        owner,
+                        owner(),
                         ZLinkInstanceSpotAuthorityPayloadCodec.Encode(creatingPayload),
                         new ZLinkCapacityVector(
                             0,
@@ -795,7 +798,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                     prepared,
                     readySnapshot.ObjectGeneration,
                     readySnapshot.AuthorityOwnerGeneration,
-                    cancellationToken
+                    cancellationToken,
+                    readyPayload.ActivationRecovery
                 )
                 .ConfigureAwait(false);
             published = true;
@@ -975,8 +979,9 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 "The activation recovery root does not match its authority."
             );
         var sourceNodeRid = RoutingId.From(record.SourceNodeRid.Value);
-        var requestSource = await ResolveRequestSourceAsync(
-                authority.MeshName,
+        var requestSource = await ZLinkRequestSourceFenceResolver
+            .AcceptOrUnavailableAsync(
+                node,
                 sourceNodeRid,
                 record.SourceNodeGeneration.Value,
                 cancellationToken
@@ -1081,7 +1086,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                         prepared,
                         snapshot.ObjectGeneration,
                         snapshot.AuthorityOwnerGeneration,
-                        cancellationToken
+                        cancellationToken,
+                        authority.ActivationRecovery
                     )
                     .ConfigureAwait(false);
             }
@@ -1182,32 +1188,6 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
             recordTerminal
         );
 
-    private async ValueTask<ZLinkServiceWireCodec.RequestSourceFence> ResolveRequestSourceAsync(
-        string meshName,
-        RoutingId sourceNodeRid,
-        ulong sourceNodeGeneration,
-        CancellationToken cancellationToken
-    )
-    {
-        var descriptors = await authorityStore
-            .ListAllMeshNodesAsync(meshName, cancellationToken)
-            .ConfigureAwait(false);
-        var descriptor = descriptors.SingleOrDefault(value =>
-            value.Rid == sourceNodeRid && value.LifecycleGeneration == sourceNodeGeneration
-        );
-        if (descriptor is null || descriptor.LeaseGeneration <= 0)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Rejected,
-                "The Instance Spot activation request-source fence is unavailable."
-            );
-        return new ZLinkServiceWireCodec.RequestSourceFence(
-            descriptor.OwnerId,
-            checked((ulong)descriptor.LeaseGeneration),
-            sourceNodeRid,
-            sourceNodeGeneration
-        );
-    }
-
     private async ValueTask CompleteAndClearRecoveryAsync(
         ZLinkAuthorityKey key,
         ZLinkAuthoritySnapshot readySnapshot,
@@ -1287,18 +1267,21 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
         InstanceSpotActivationOperation operation,
         ZLinkInstanceSpotAuthorityState state,
         ZLinkInstanceSpotActivationRecoveryPointer? activationRecovery
-    ) =>
-        new(
+    )
+    {
+        var ownerToken = owner();
+        return new(
             state,
             operation.Target.TargetSpotId,
             operation.Target.StableType,
             operation.Target.MeshName,
             node.RoutingId,
             node.MeshStatus().LifecycleGeneration,
-            owner.OwnerId,
-            checked((ulong)owner.LeaseGeneration),
+            ownerToken.OwnerId,
+            checked((ulong)ownerToken.LeaseGeneration),
             activationRecovery
         );
+    }
 
     private void ValidateTarget(InstanceSpotActivationOperation operation)
     {

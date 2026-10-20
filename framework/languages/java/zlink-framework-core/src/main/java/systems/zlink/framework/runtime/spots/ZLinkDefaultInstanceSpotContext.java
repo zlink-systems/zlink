@@ -1,9 +1,11 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.execution.ZLinkWorkerPool;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
@@ -43,6 +45,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
             handlerType -> handlers.addHandler(handlerType);
     private final ZLinkSpotTimerRegistry timers;
     private ZLinkInstanceSpot spot;
+    private ZLinkInstanceSpotActivation activation;
 
     DefaultInstanceSpotContext(
             ZLinkSpotContextHost host,
@@ -87,23 +90,67 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
                                 enqueueDispatch(() -> host.runWithOutbound(outbound, operation)));
     }
 
-    void bind(ZLinkInstanceSpot value) {
+    void bind(ZLinkInstanceSpot value, ZLinkInstanceSpotActivation owner) {
+        activation = Objects.requireNonNull(owner, "owner");
         spot = Objects.requireNonNull(value, "spot");
         timers.setSpot(value);
     }
 
     void closeRegistration(Class<?> spotType) {
         handlers.closeRegistration(
-                configured ->
+                (configured, subscriptions) ->
                         handlerLoader.load(
                                 spotType,
                                 configured,
+                                subscriptions,
                                 (name, period, handlerType, options) ->
                                         timers.add(name, period, handlerType, options)));
     }
 
-    CompletionStage<Void> runLifecycle(Supplier<CompletionStage<Void>> operation) {
-        return enqueueDispatch(() -> host.runWithOutbound(outbound, operation));
+    <T> CompletionStage<T> prepareActivation(Supplier<CompletionStage<T>> operation) {
+        return dispatchQueue.prepareActivation(
+                () -> runLifecycleExecution(() -> host.runWithOutbound(outbound, operation)));
+    }
+
+    CompletionStage<Void> openActivationPreparationAdmission() {
+        return dispatchQueue.openActivationPreparationAdmission(
+                message ->
+                        message instanceof ZLinkBackendReceived received
+                                && received.activationMessage().isPresent());
+    }
+
+    CompletionStage<Void> completeRecoveredPreparation(
+            Throwable failure, Supplier<CompletionStage<Void>> discard) {
+        return dispatchQueue.completeActivationPreparation(null, failure, discard);
+    }
+
+    CompletionStage<Void> completeActivationRecovery(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceSpotMessage
+                    message,
+            Throwable failure,
+            Supplier<CompletionStage<Void>> discard) {
+        return dispatchQueue.completeActivationPreparation(
+                candidate -> {
+                    if (!(candidate instanceof ZLinkBackendReceived received)) return false;
+                    return received.activationMessage()
+                            .filter(
+                                    first ->
+                                            first.operationHigh() == message.operationHigh()
+                                                    && first.operationLow()
+                                                            == message.operationLow()
+                                                    && first.sourceNodeRid()
+                                                            .equals(message.sourceNodeRid())
+                                                    && first.sourceNodeGeneration()
+                                                            == message.sourceNodeGeneration())
+                            .isPresent();
+                },
+                failure,
+                discard);
+    }
+
+    CompletionStage<Void> finishActivationPreparation() {
+        return dispatchQueue.finishActivationPreparation();
     }
 
     /**
@@ -258,8 +305,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
                         () -> runLifecycleExecution(operation),
                         dispatch,
                         committed,
-                        message ->
-                                ((ZLinkBackendReceived) message).activationMessage().isPresent());
+                        DefaultInstanceSpotContext::hasInstanceIntent);
         return dispatchQueue.isCurrent() ? ZLinkSerialExecutionQueue.yieldCurrent(close) : close;
     }
 
@@ -270,13 +316,18 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
         host.ensureOwnerAdmissionOpen();
         return dispatchQueue.enqueueMessage(
                 received,
+                DefaultInstanceSpotContext::hasInstanceIntent,
                 systems.zlink.framework.runtime.internal.dispatch.ZLinkReceiveBatchBudget.bytesOf(
                         received.parts(),
                         received.applicationMetadataSize(),
                         received.acceptedJournalRecordSize()),
-                () -> runLifecycleExecution(operation),
+                operation,
                 received::close,
                 admission);
+    }
+
+    private static boolean hasInstanceIntent(Object message) {
+        return ((ZLinkBackendReceived) message).activationMessage().isPresent();
     }
 
     @Override
@@ -288,18 +339,14 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
 
     @Override
     public CompletionStage<Void> enqueueActorDispatch(
-            String actorId, Supplier<CompletionStage<Void>> operation) {
-        return CompletableFuture.failedFuture(
-                new IllegalStateException("Instance Spot does not own Actor dispatch"));
-    }
-
-    @Override
-    public CompletionStage<Void> enqueueActorDispatch(
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
-            CompletableFuture<Void> admission) {
-        return enqueueActorDispatch(actorId, operation);
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
+        return CompletableFuture.failedFuture(
+                new IllegalStateException("Instance Spot does not own Actor dispatch"));
     }
 
     @Override
@@ -309,8 +356,11 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
-            CompletableFuture<Void> admission) {
-        return enqueueActorDispatch(actorId, operation);
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
+        return CompletableFuture.failedFuture(
+                new IllegalStateException("Instance Spot does not own Actor dispatch"));
     }
 
     @Override
@@ -325,8 +375,7 @@ final class DefaultInstanceSpotContext implements ZLinkInstanceSpotContext, Spot
 
     @Override
     public CompletionStage<Boolean> close() {
-        return ZLinkSerialExecutionQueue.yieldCurrent(
-                host.closeInstanceSpot(spotId(), objectGeneration()));
+        return ZLinkSerialExecutionQueue.yieldCurrent(activation.closeExplicit());
     }
 
     @Override

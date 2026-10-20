@@ -172,7 +172,7 @@ Location Store가 기록하는 record와 조건만 §8~§9에서 다시 구체�
    queue에 순서대로 넣는다. Temporary queue 등록을 제거하고 regular route로 전환하되
    dispatch는 닫아 둔다. 필요한 lifecycle callback을 끝낸 뒤 application message 처리를
    시작한다.
-8. Source는 cutover를 보낸 뒤 완료 reply를 기다리지 않고 Message Follow를 유지한다.
+8. Source는 cutover를 보낸 뒤 완료 reply를 기다리지 않고 Message Follow를 유지한다(§10의 연속 이동 예외 제외).
    Memory에 유지한 payload와 relay batch는 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 authority 판정 또는 source lease 만료 terminal까지 유지한다.
 
 **Handoff payload와 owner 변경은 하나의 distributed transaction이나 2PC로 묶지 않는다.**
@@ -433,7 +433,7 @@ record의 cmsgpack `version` member([02 §8](02-location-store-redis.ko.md#8-공
 | `entrySpotId` | Object Server lifecycle의 Entry Spot ID다. `Server` role이 아니면 `null`이다. |
 | `channelWeights` | ClientServer ChannelName마다의 선택 비중이다. Key는 ChannelName, value는 `0..10000` 정수다. |
 | `applicationVersion` | Application 배포 순번이다. |
-| `objectCapabilities` | 등록한 object 종류별 배치 능력 목록이다. 각 원소는 `objectKind`(`actor \| userSpot \| instanceSpot`), `stableType`, `policy`(`unspecified \| disabled \| recreate \| snapshot`), `hasSnapshotAdapter`(boolean)와 `limit`(정수, `0`은 무제한)을 포함한다. 최대 1,024개다. |
+| `objectCapabilities` | 등록한 object 종류별 배치 능력 목록이다. 각 원소는 `objectKind`(`actor \| userSpot \| instanceSpot`), `stableType`, `policy`(`unspecified \| disabled \| recreate \| snapshot`), `hasSnapshotAdapter`(boolean), `limit`(정수, `0`은 무제한)와 `entryAccepted`(boolean)를 포함한다. `entryAccepted`는 `objectKind`가 `actor`이고 그 node에 등록한 Entry Spot type이 그 Actor stable type을 받을 때만 `true`이며, 새 Actor 생성 후보 판정([Actor model §6.3](../03-spot-actor/04-actor-model.ko.md#63-mesh와-placement-target-선택))에 쓴다. 최대 1,024개다. |
 | `objectRole` | `none \| client \| server` 중 하나다. |
 | `placementWeight` | `0..10000`, 기본값 100이다(§4). |
 | `capacity` | §4의 "Descriptor의 count는 운영자가 상태를 확인하기 위한 복사본" 투영이다. `actors`와 `spots`는 각각 `{active, reserved, limit}`이다. `spotTypes`는 `{objectKind, stableType, active, reserved, limit}` 배열이다. Entry Spot은 포함하지 않는다(§4). |
@@ -638,7 +638,7 @@ lease read에서 얻은 만료 시각이 지난 descriptor는 새 target 선택�
 select-one의 후보 갱신도 여기에 포함한다.
 
 Object Server descriptor에는 `Server` role, node-wide placement weight, node별 Actor·Spot
-count와 limit, 지원하는 Spot stable type과 Entry Spot ID가 있다.
+count와 limit, 지원하는 Spot stable type, Entry Spot ID가 있다.
 
 여러 target 후보에 새 object를 배정할 상대 비중을
 [weight](../00-foundation/02-glossary.ko.md#weight)라고 한다. 값이 클수록 다른 조건이 같은 후보보다 자주
@@ -711,7 +711,12 @@ Startup의 최초 owner lease claim도 갱신과 같은 Store 요청이며 renew
 확인하되, 이 확인도 같은 renew timeout 안에서 한다. Renew timeout까지 lease를 확인하지
 못한 host는 deadline이 없는 host로 startup을 마친다 — 위 차단 대상을 모두 막은 채 renew
 interval마다 claim을 계속하고, 확보한 뒤에는 첫 갱신과 같이 deadline을 계산하고 descriptor를
-게시한다. Claim 결과 `Conflict`와 `GenerationExhausted`는 startup error다. Caller가 startup을
+게시한다. Descriptor 게시 확인은 `Serving` 전이의 필수조건이다 — host는 게시를 확인하기 전까지
+[`Preparing`](05-host-relocation-flow.ko.md#3-host-state와-완료-결과)이고, `Serving` 전이는 그 절의 준비 완료
+조건을 따른다. Lease를 확보한 뒤 timeout이나 provider error로 게시 결과를 받지 못하면 §10대로 다시 확인하고,
+그래도 확인하지 못하면 host는 `Preparing`으로 startup을 마치고 renew interval마다 게시를 다시 시도한다.
+다른 owner의 점유로 인한 확정 거절은 startup error다.
+Claim 결과 `Conflict`와 `GenerationExhausted`는 startup error다. Caller가 startup을
 cancellation하면 startup은 취소로 끝나며 이 규칙으로 성공이 되지 않는다. 이미 시작한 claim은
 §10대로 같은 key를 다시 읽어 확인하고, 확인된 lease는 정상 해제하며 heartbeat를 시작하지 않는다.
 
@@ -771,17 +776,27 @@ message다. 이 operation이 steady `Ready` record를 읽었고, 그 record의 o
 정책이 `Disabled`이면 Location repository가 그 record를 해제한다. `Closing`이나 미완료 최초 activation은
 allocation이 `Active`라는 이유로 이 대상이 되지 않으며 각자의 lifecycle·recovery 절차를 따른다. `Reserve`하는 node는 Actor와 User Spot에서는 생성을 요청한
 node이고, Instance Spot에서는 activation envelope를 받은 target이다. 그 node에 type이 등록되어 있지
-않으면 `Disabled`로 보지 않는다. User Spot은 그 SpotId와 `ObjectGeneration`의 Actor membership이
-Location Store에 하나도 없을 때만 해제한다. Repository는 old Spot authority에 기록된 owner lease가
-무효임을 exact read로 확인한 뒤 새 snapshot을 시작해 membership을 끝까지 읽는다. Membership을 추가하는
+않으면 `Disabled`로 보지 않는다. User Spot은 그 SpotId와 `ObjectGeneration`에 남은 Actor membership이
+모두 **owner가 끝난 member**일 때만 해제한다. Membership이 없으면 이 조건을 만족한다. Owner가 끝난
+member는 membership이 가리키는 Actor authority가 같은 SpotId·`ObjectGeneration`을 가리키는 steady
+`Ready`이고, 그 authority에 기록된 owner lease가 없거나 다른 `LeaseGeneration`이거나 만료된 Actor다.
+Owner lease가 유효한 member, relocation 진행 정보나 aggregate에 속한 member, 최초 activation을 끝내지
+않은 member가 하나라도 있으면 아무것도 바꾸지 않는다. 살아 있는 owner의 Actor가 없는 Spot을 가리키게
+되거나 진행 중인 이동을 끊지 않기 위해서다. Repository는 old Spot authority에 기록된 owner lease가
+무효임을 exact read로 확인한 뒤 새 snapshot을 시작해 membership을 끝까지 읽고, 각 member의 Actor
+authority를 같은 snapshot에서 읽는다. Membership을 추가하는
 transaction의 commit 조건은 [Spot·Actor membership §1](../03-spot-actor/05-spot-actor-membership.ko.md#1-identity와-authority)을 따르므로, lease가 무효인
 뒤에는 그 incarnation에 membership이 새로 commit되지 않는다. Snapshot이 만료되면 앞 page의 결과를 버리고
 다시 읽으며, Store failure나 끝까지 읽지 못한 scan을 빈 membership으로 보지 않는다. process 안의 목록으로도
-판정하지 않는다. Member가 남아 있으면 아무것도 바꾸지 않는다. Relocation 진행 정보나
+판정하지 않는다. Relocation 진행 정보나
 aggregate에 속한 record, activation recovery pointer가 남은 Instance Spot은 이 해제 대상이 아니며 각자의
 복구 절차를 따른다. 해제는 위 reservation 해제와 같은 조건(authority `StoreVersion`, owner lease 상태,
 descriptor 상태, 수용 공간 record)을 한 batch로 검사하고, authority와 그 incarnation의 membership을
-함께 지우며 active 수용 공간을 반납한다. 해제가 commit된 뒤에만 `Missing`에서 새 incarnation을
+함께 지우며 active 수용 공간을 반납한다. Owner가 끝난 member가 있으면 같은 batch에서 각 member Actor
+authority의 `StoreVersion`과 owner lease 무효를 함께 조건으로 걸고, 그 Actor authority와 수용 공간도
+같은 방식으로 해제한다. 해제된 member Actor는 `Missing`이 되며, 이후 같은 ActorId의 생성은 새
+incarnation으로 시작한다. 이 batch가 provider의 한 batch 상한을 넘으면 일부만 지우지 않고 아무것도
+바꾸지 않은 채 `Unavailable`을 반환한다. 해제가 commit된 뒤에만 `Missing`에서 새 incarnation을
 만든다 — 이전 incarnation의 상태, 수락된 operation과 recovery 정보는 이어받지 않는다. 해제 판정 전에
 kind와 stable type이 같은지 확인한다(다르면 기존 `TypeMismatch`). Owner lease가 유효하면 type과
 operation에 따른 기존 결과를 반환한다. Owner lease가 무효이고 해제 조건을 만족하지 않으면
@@ -861,7 +876,7 @@ sequenceDiagram
 ```
 
 Target은 `Serving` 상태이고 요청한 stable type을 등록했으며 owner lease와 남은 수용 공간이
-유효해야 한다. Framework는 weight가 0보다 큰 후보 중 하나를 고른다.
+유효해야 한다. 새 Actor 생성의 Entry Spot 조건은 [Actor model §6.3](../03-spot-actor/04-actor-model.ko.md#63-mesh와-placement-target-선택)이 정한다. Framework는 weight가 0보다 큰 후보 중 하나를 고른다.
 
 Location Store의 `Reserve`는 record가 없을 때만 `Creating` record와 사용할 수용 공간을 함께
 기록한다. 이때 `ObjectGeneration`과 `AuthorityOwnerGeneration`도 발급한다. Target 상태나
@@ -892,6 +907,7 @@ Application이 반환한 `Rejected`와 callback exception은 다른 결과다. P
 |---|---|---|
 | 같은 type의 `Ready` | `AlreadyExists` | 기존 ref |
 | 같은 type의 `Creating` | `AlreadyExists` | 진행 중인 생성 결과를 기다린다. |
+| 같은 type의 `Closing` | `AlreadyExists` | User Spot은 [Spot 주소 메시징 §3.2](../03-spot-actor/06-spot-address-messaging.ko.md#32-동시-요청의-수렴)의 authority 변경 대기와 후속 절차를 따른다. |
 | 다른 Actor type | `TypeMismatch` | `TypeMismatch` |
 | 다른 Spot 종류 또는 type | `TypeMismatch` | `TypeMismatch` |
 
@@ -1321,6 +1337,12 @@ Spot admission 준비가 끝나면 `ToSpot`, Create와 Join에 대해 Ready가 �
 `OperationId`와 `ReplyRouteId`는 같은 source host 실행 중에 0이 아니며 재사용하지 않는다.
 값을 모두 사용하면 runtime이 더 진행할 수 없는 오류다.
 
+**Source request 정보의 `OwnerId`와 `LeaseGeneration`은 request를 보낸 admitted peer의 MeshNode descriptor에서
+얻는다. Descriptor를 고르는 규칙과 찾지 못했을 때의 결과는 bind의 Session owner identity와 같다([Session·Actor
+binding §4](../04-session/02-session-actor-binding.ko.md#4-binding이-잇는-값과-보관하는-정보)).** Request를 처음 수락하는
+owner가 수락할 때 이 값을 한 번 읽어 기록한다. Relay나 relocation으로 넘겨받은 request는 기록한 값을 그대로 쓰고
+Store를 다시 읽지 않는다. Peer admission은 Store에서 이 descriptor를 읽을 때까지 기다리지 않는다.
+
 Framework는 각 object의 완료 결과를 object 순서로 저장한다. 같은 source request 정보와
 `OperationId`를 중복해서 넣지 않는다. **새 완료 결과와 payload를 Relocation Store에 먼저
 저장한 뒤 Location Store의 payload 위치, checksum, 완료 수와 전달 대기 수를 CAS 한 번으로
@@ -1337,7 +1359,7 @@ Framework는 각 object의 완료 결과를 object 순서로 저장한다. 같�
 
 Connection 종료나 재연결만으로 완료 결과를 받았다고 판단하지 않는다. Target은 현재 route로
 전달을 계속한다. Source owner lease가 유효한 상태에서 `Relocate` deadline을 넘으면
-`ForceStopped`다. 이 경우 payload와 reply bytes를 24시간 보관한다.
+`ForceStopped`다. 이 경우 relocation root와 payload, reply bytes를 24시간 보관한다.
 
 ### 9.4 Relay-ready accepted 전 취소
 
@@ -1374,7 +1396,41 @@ Restore 유효시간(relocation을 시작한 operation의 deadline)은 source가
 `Preserve`를 실행한다. Source `Preserve` 성공이 확인되면 target의 늦은 CAS는 commit할 수
 없다. Source는 owner로 남아 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의
 보관 작업을 다시 처리한다. 같은 `RelocationId`의 target owner가 이미 확인되면 source는
-target route를 채택한다. `Preserve` 응답이 불확정이면 source lease가 유효한 동안 새 timer 없이 이 절의 Store-failure 정책으로 반복한다. Source lease 만료 또는 source가 다시 읽은 authority가 없음(`Missing`)은 source의 작업을 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 expired-owner terminal로 끝낸다. `Missing`이면 source fence가 성립하지 않으므로 source는 `Preserve`를 시도하지 않는다. Source는 owner lease가
+target route를 채택한다.
+
+**이후 이동이 이어진 경우.** Target이 commit한 뒤 authority를 steady로 정규화하거나 같은 object를 다시
+이동하면, source가 다시 읽은 authority에는 이 `RelocationId`도 첫 target owner도 남지 않는다. Source는
+다시 읽은 authority가 다음 세 조건을 모두 만족하면 이 relocation의 target commit이 확인된 것으로
+판정한다.
+
+- `ObjectGeneration`이 source가 이동한 object와 같다.
+- `AuthorityOwnerGeneration`이 source가 relocation을 시작할 때의 값보다 크다.
+- Owner가 source가 아니다.
+
+근거는 §6.1의 owner 변경 종류다. `ObjectGeneration`을 유지하고 `AuthorityOwnerGeneration`을 올리는
+것은 `NewOwner`와 `SpotWide`의 whole-unit batch(§8.1)뿐이다. Owner lease 만료 뒤의 재생성과
+`Reincarnate`는 새 `ObjectGeneration`을 만든다. Source가 owner인 동안 source에서 owner를 옮기는 이
+두 변경은 진행 중인 이 relocation의 target CAS뿐이다. Source는 한 object에 relocation을 하나만 진행하며,
+이는 그 object가 속한 aggregate relocation에도 같다. 이전 relocation의 늦은 CAS는 source `Preserve`가
+배제한다. 따라서 세 조건이 성립하면 이 relocation의 target CAS가 먼저 commit됐고, 그 뒤의 owner 변경은
+그 target에서 이어진 이동이다. 이 판정은 별도 commit 기록을 추가하지 않는다.
+
+이 경우 source는 보관 사본을 해제하고 source 정리를 한 번 수행한다. Message Follow route는 다시 읽은
+owner에 따라 다르다.
+
+- **Owner가 첫 target이면** source는 다시 읽은 authority의 현재 `AuthorityOwnerGeneration`으로 §7.3의
+  route를 설치한다. 첫 target이 정규화만 했다면 이 값은 첫 commit 값과 같고(§6.1의 `Preserve`는 owner와
+  generation을 유지한다), 다른 node를 거쳐 첫 target으로 돌아왔다면 첫 target이 지금 보유한 authority의
+  값이다. 어느 경우든 route가 전달하는 message는 그 값을 가진 현재 owner가 받는다.
+- **Owner가 첫 target도 source도 아니면**(첫 target에서 다음 이동이 이어졌다) 다시 읽은 authority에는
+  첫 target의 commit 값이 남지 않고, Store는 generation을 전역 counter로 발급하므로 source는 그 값을
+  알 수 없다. Source는 §7.3의 route를 설치하지 않는다. 이 **연속 이동 예외**에서 이후 source로 도착한
+  message는 §7.3의 route 없음 결과(`Unavailable`)로 끝난다. Source는 다시 읽은 현재 owner로 직접 가는
+  route를 만들거나 첫 target의 generation을 추측하지 않는다. Bound Session의 route는 각 target의 command 44와 이후
+  이동의 seal·route 전환([Session과 Actor binding §8](../04-session/02-session-actor-binding.ko.md#8-actor-relocation-중-session의-책임))이
+  옮기며, source의 Message Follow route에 의존하지 않는다. `ObjectGeneration`이
+다르거나 `AuthorityOwnerGeneration`이 커지지 않았는데 owner가 source도 첫 target도 아니면 기존대로
+실패(`DataLost`)로 판정한다. `Preserve` 응답이 불확정이면 source lease가 유효한 동안 새 timer 없이 이 절의 Store-failure 정책으로 반복한다. Source lease 만료 또는 source가 다시 읽은 authority가 없음(`Missing`)은 source의 작업을 [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 expired-owner terminal로 끝낸다. `Missing`이면 source fence가 성립하지 않으므로 source는 `Preserve`를 시도하지 않는다. Source는 owner lease가
 §5에 따라 유효할 때만 dispatch를 재개한다.
 
 `StoreFailureGrace` 동안에는 마지막으로 완전히 읽은 descriptor 목록을 유지한다. 그 목록의
@@ -1397,6 +1453,8 @@ Provider 요청을 시작하기 전에 cancellation되면 Store를 호출하지 
 뒤 cancellation, timeout 또는 provider error가 발생하면 Store 변경 여부를 알 수 없다. 이때
 Framework는 같은 key와 예상 `StoreVersion`을 다시 읽어 결과를 확인한 뒤 필요한 경우에만
 재시도한다.
+MeshNode descriptor 쓰기를 다시 보냈을 때 저장된 record가 보낸 descriptor와 갱신 시각(`updatedAtEpochMs`)만
+다르면 앞선 쓰기가 이미 반영된 것이므로, intent(`NewClaim`·`Renew`)와 관계없이 `Stored`로 끝난다.
 
 Relocation Store 쓰기는 Framework가 미리 정한 같은 reference로 다시 읽거나 다시 저장할 수
 있어야 한다. 이 재확인은 별도 기한을 두지 않고 그 쓰기를 시작한 operation의 deadline 안에서 한다. 같은 bytes가 저장된 것을 확인하면 성공으로 끝난다. 다시 읽은 결과가 없으면 같은 reference에 같은 bytes를 다시 저장한다. 저장이 `Conflict`를 반환하거나 다시 읽은 결과가 다른 bytes이면 같은 충돌로 보고 새 reference로 저장을 다시 시작한다. 재시도 횟수 상한이나 별도 기한 없이 그 operation의 deadline 안에서 진행한다. Location Store가 이미 가리키는 payload가 없거나 checksum이 다르면 이 규칙이 아니라 아래의 `DataLost` 처리를 따른다. Location Store가 가리키지 않는 payload는 보관 기한 뒤 삭제한다. Provider가
@@ -1462,6 +1520,8 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
   네 대상이 막힌다.
 - Lease 없이 startup을 마친 host는 renew interval마다 claim하며, 확보한 뒤에야 descriptor를
   게시한다.
+- Lease를 확보한 뒤 descriptor 게시 결과를 확인하지 못한 host는 startup에 성공하고 `Preparing`으로
+  남으며 renew interval마다 게시를 다시 시도한다. 다른 owner의 점유로 인한 확정 거절은 startup error다.
 - Claim 결과 `Conflict`·`GenerationExhausted`는 startup error다.
 - Startup을 cancellation하면 결과는 취소이며, 이미 commit된 claim은 해제되고 heartbeat가
   시작되지 않는다.
@@ -1481,12 +1541,13 @@ provider conformance test가 store record golden fixture로 관찰하는 key·va
 
 - 동시에 같은 ID를 요청해도 `Creating`이 하나만 생기고 하나의 target만 factory를 실행한다.
 - [§6.1](#61-read와-cas)의 owner가 끝난 record 해제는 provider와 in-memory repository, 네 구현에 같은 입력을
-  적용한다. 해제되는 입력(Disabled Actor, member가 없는 User Spot, steady `Ready` Instance Spot의 새 Instance
+  적용한다. 해제되는 입력(Disabled Actor, member가 없거나 owner가 끝난 member만 남은 User Spot, steady `Ready` Instance Spot의 새 Instance
   intent)은 새 `ObjectGeneration`, 이전 allocation의 공간 반환과 factory 실행 한 번을 확인한다. 해제 조건을
-  하나씩 어긴 입력(유효한 lease, `Disabled`가 아니거나 등록되지 않은 type, member가 남은 User Spot, recovery
+  하나씩 어긴 입력(유효한 lease, `Disabled`가 아니거나 등록되지 않은 type, owner lease가 유효하거나 이동 중인 member가 남은 User Spot, provider 한 batch 상한을 넘는 member, recovery
   pointer, `Closing`, aggregate·relocation 진행, 일반 message·`Find`)은 authority·membership·수용 공간과
   factory 실행 수가 바뀌지 않음을 확인한다. 생성을 요청한 node와 factory target(Instance는 source와 수신
-  target)의 등록 정책이 다른 입력으로 정책의 출처를 확인한다.
+  target)의 등록 정책이 다른 입력으로 정책의 출처를 확인한다. Owner가 끝난 member가 남은 User Spot의 해제는 그 member
+  Actor authority와 수용 공간도 같은 batch에서 해제되고, 이후 같은 ActorId 생성이 새 incarnation으로 시작함을 확인한다.
 - 첫 page 뒤에 member가 있는 scan, snapshot 만료, Store failure를 빈 membership으로 처리하지 않는다. Old
   Spot의 lease 무효화와 늦은 Join commit을 경합시키고, 두 재생성 요청을 경합시켜 old version으로 새
   authority를 지우거나 수용 공간을 두 번 반환하지 않음을 확인한다.

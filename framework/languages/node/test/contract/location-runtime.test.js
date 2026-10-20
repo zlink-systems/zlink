@@ -925,6 +925,95 @@ test('location runtime subtracts Store round trip from local lease eligibility',
   await runtime.stop();
 });
 
+for (const expiresDuringRenewal of [false, true]) {
+  for (const queuedResult of [false, true]) {
+    test(`lease recovery observes admission at result application (expires: ${expiresDuringRenewal}, queued: ${queuedResult})`, async () => {
+      const store = new internal.ZLinkInMemoryLocationStore(() => new Date(0));
+      let monotonicMs = 1_000;
+      let resolveResponse;
+      let rejectResponse;
+      const response = new Promise((resolve, reject) => {
+        resolveResponse = resolve;
+        rejectResponse = reject;
+      });
+      let resolveSubmitted;
+      let rejectSubmitted;
+      const submitted = new Promise((resolve, reject) => {
+        resolveSubmitted = resolve;
+        rejectSubmitted = reject;
+      });
+      const ownerLeaseStore = {
+        claimOwnerLease: store.claimOwnerLease.bind(store),
+        readOwnerLease: store.readOwnerLease.bind(store),
+        renewOwnerLease(...args) {
+          store.renewOwnerLease(...args).then(resolveSubmitted, rejectSubmitted);
+          return response;
+        },
+        releaseOwnerLease: store.releaseOwnerLease.bind(store)
+      };
+      const runtime = runtimeFor(store, {
+        ownerLeaseStore,
+        monotonicNowMs: () => monotonicMs,
+        locationOptions: {
+          ownerLeaseTtlMs: 15_000,
+          ownerLeaseRenewIntervalMs: 5_000,
+          ownerLeaseRenewTimeoutMs: 3_000,
+          ownerLeaseFencingMarginMs: 5_000
+        }
+      });
+      let renewals = 0;
+      let recoveries = 0;
+      runtime.addOwnerLeaseRenewedHandler((_renewal, wasOwnerLeaseUsable) => {
+        renewals += 1;
+        if (!wasOwnerLeaseUsable) recoveries += 1;
+        assert.equal(runtime.ownerLeaseUsable, true);
+      });
+      let renewal;
+      try {
+        await runtime.start(rid('lease-recovery'));
+        renewals = 0;
+        recoveries = 0;
+        monotonicMs = 10_000;
+        assert.equal(runtime.ownerLeaseUsable, true);
+        renewal = runtime.renewOwnerLeaseOnce();
+        const renewed = await submitted;
+        assert.equal(runtime.ownerLeaseUsable, true);
+        if (queuedResult) {
+          resolveResponse(renewed);
+          let usableAtBoundary;
+          let recoveriesAtBoundary;
+          await new Promise(resolve => queueMicrotask(() => {
+            if (expiresDuringRenewal) monotonicMs = 11_000;
+            usableAtBoundary = runtime.ownerLeaseUsable;
+            recoveriesAtBoundary = recoveries;
+            resolve();
+          }));
+          assert.equal(usableAtBoundary, !expiresDuringRenewal);
+          assert.equal(recoveriesAtBoundary, 0, 'the Store response still awaits application');
+        } else {
+          if (expiresDuringRenewal) monotonicMs = 11_000;
+          assert.equal(runtime.ownerLeaseUsable, !expiresDuringRenewal);
+          resolveResponse(renewed);
+        }
+        assert.equal(await renewal, true);
+        assert.equal(runtime.ownerLeaseUsable, true);
+        assert.equal(renewals, 1);
+        assert.equal(recoveries, expiresDuringRenewal ? 1 : 0);
+        monotonicMs = 19_999;
+        assert.equal(runtime.ownerLeaseUsable, true);
+        monotonicMs = 20_000;
+        assert.equal(runtime.ownerLeaseUsable, false, 'renewal retains the request-start deadline');
+      } finally {
+        if (renewal !== undefined) {
+          rejectResponse(new Error('test cleanup'));
+          await renewal;
+        }
+        await runtime.stop();
+      }
+    });
+  }
+}
+
 test('location runtime waits for an in-flight heartbeat before removing the owner lease', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const timers = [];

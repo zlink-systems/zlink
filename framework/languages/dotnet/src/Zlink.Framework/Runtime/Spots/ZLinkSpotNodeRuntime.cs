@@ -35,7 +35,11 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     private IRelocationReplyRelayTarget? _relocationReplyRelayTarget;
     private ZLinkCanonicalRelocationTargetOwner? _canonicalRelocationTargetOwner;
     private ZLinkSessionRelocationBarrierOwner? _sessionRelocationBarrierOwner;
-    private readonly ZLinkServiceWireCodec.RequestSourceFence? _localRequestSource;
+    private readonly ZLinkOwnerLeaseTracker? _leaseTracker;
+
+    // Installed by StartOwnerBoundAsync once the owner lease is held. Its
+    // presence is the one fact that the owner-bound startup step completed.
+    private System.Runtime.CompilerServices.StrongBox<ZLinkServiceWireCodec.RequestSourceFence>? _localRequestSource;
     private IZLinkBackendSpot? _entrySpot;
     private ZLinkEntrySpotDispatchPump? _entryDispatchPump;
     private ZLinkSpotOutboundTransport? _entryOutbound;
@@ -53,7 +57,8 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         string spotChannelName,
         ZLinkLocationLifecycle? locationLifecycle,
         ZLinkMeshNodeStartupState? startupState = null,
-        string? entrySpotId = null
+        string? entrySpotId = null,
+        ZLinkOwnerLeaseTracker? leaseTracker = null
     )
     {
         _services = services;
@@ -103,29 +108,47 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                     )
             );
         }
+        if (node is IZLinkBackendBoundSessionBind boundSessionBind)
+            boundSessionBind.SetBoundSessionBindHandler(
+                (source, generation, request, reply, cancellationToken) =>
+                    runtime.ApplyBoundSessionBindAsync(
+                        node.RoutingId,
+                        source,
+                        generation,
+                        request,
+                        reply,
+                        cancellationToken
+                    )
+            );
+        if (node is IZLinkBackendBoundSessionClose boundSessionClose)
+            boundSessionClose.SetBoundSessionCloseHandler(
+                (request, cancellationToken) =>
+                    runtime.CloseSessionBindingAsync(LocalSessionOwner, request, cancellationToken)
+            );
         if (locationLifecycle is not null)
         {
-            if (node is not IZLinkBackendAuthorityObserver authorityObserver)
+            if (node is not IZLinkBackendAuthorityObserver)
                 throw new InvalidOperationException(
                     "The MeshNode backend does not support authority fencing."
                 );
-            authorityObserver.SetLocalOwnerLeaseGeneration(
-                checked((ulong)locationLifecycle.OwnerToken.LeaseGeneration)
-            );
-            if (node is not IZLinkBackendRequestSourceFenceObserver sourceObserver)
+            if (node is not IZLinkBackendRequestSourceFenceObserver sources)
                 throw new InvalidOperationException(
                     "The MeshNode backend does not preserve request-source fences."
                 );
-            var localRequestSource = new ZLinkServiceWireCodec.RequestSourceFence(
-                locationLifecycle.OwnerToken.OwnerId,
-                checked((ulong)locationLifecycle.OwnerToken.LeaseGeneration),
-                node.RoutingId,
-                node.MeshStatus().LifecycleGeneration
-            );
-            sourceObserver.SetLocalRequestSourceFence(localRequestSource);
-            sourceObserver.ObserveRequestSourceFence(localRequestSource);
-            _localRequestSource = localRequestSource;
+            if (
+                (leaseTracker ?? services.GetService<ZLinkOwnerLeaseTracker>()) is { } leases
+                && services.GetService<IZLinkMeshNodeLocationResolver>() is { } peers
+            )
+                sources.SetRequestSourceAcceptance(
+                    new ZLinkRequestSourceFenceResolver(
+                        peers,
+                        leases,
+                        spotChannelName,
+                        runtime.Flow
+                    )
+                );
         }
+        _leaseTracker = leaseTracker;
         StartupState = startupState;
         EntrySpotId = entrySpotId ?? startupState?.EntrySpotId ?? registration.EntrySpotId;
         _taskRunner = new ZLinkRuntimeTaskRunner(
@@ -181,21 +204,56 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             _canonicalRelocationTargetOwner = new ZLinkCanonicalRelocationTargetOwner(
                 node.RoutingId,
                 canonicalStartup.Descriptor.LifecycleGeneration,
-                frameworkRegistration.DefaultRequestTimeout,
+                runtime.DrainAdmission,
                 targetRuntime: services.GetRequiredService<ZLinkSpotRetireTargetRuntime>(),
                 standaloneActorRuntime: runtime.StandaloneActorRelocationRuntime,
-                awaitTargetReady: async cancellationToken =>
+                awaitTargetReady: async (envelope, cancellationToken) =>
                 {
-                    var routeMesh = services.GetRequiredService<IZLinkRouteMeshRuntime>();
-                    if (routeMesh.GetStatus(spotChannelName).IsReady)
-                        return;
-                    await foreach (
-                        var observed in routeMesh
-                            .ObserveAsync(spotChannelName, cancellationToken)
-                            .ConfigureAwait(false)
+                    foreach (
+                        var owner in envelope
+                            .Participants.Where(static participant =>
+                                participant.SessionBinding is not null
+                            )
+                            .Select(static participant =>
+                                (
+                                    Rid: RoutingId.From(
+                                        participant.SessionBinding!.SessionOwnerNodeRid
+                                    ),
+                                    Generation: participant
+                                        .SessionBinding
+                                        .SessionOwnerNodeGeneration
+                                )
+                            )
+                            .Distinct()
                     )
-                        if (observed.Status.IsReady)
-                            return;
+                    {
+                        if (owner.Rid == node.RoutingId)
+                            continue;
+                        var route = node.ObservePeerRoute(owner.Rid, owner.Generation);
+                        if (route.ReadyGeneration != 0)
+                            continue;
+                        if (services.GetService<ZLinkLocationAutoConnectHost>() is { } autoConnect)
+                            await autoConnect
+                                .ReconcilePeerAsync(spotChannelName, owner.Rid, cancellationToken)
+                                .ConfigureAwait(false);
+                        while (
+                            (
+                                route = node.ObservePeerRoute(owner.Rid, owner.Generation)
+                            ).ReadyGeneration == 0
+                        )
+                            await route.Changed.WaitAsync(cancellationToken).ConfigureAwait(false);
+                    }
+                    var routeMesh = services.GetRequiredService<IZLinkRouteMeshRuntime>();
+                    if (!routeMesh.GetStatus(spotChannelName).IsReady)
+                    {
+                        await foreach (
+                            var observed in routeMesh
+                                .ObserveAsync(spotChannelName, cancellationToken)
+                                .ConfigureAwait(false)
+                        )
+                            if (observed.Status.IsReady)
+                                break;
+                    }
                     cancellationToken.ThrowIfCancellationRequested();
                 }
             );
@@ -225,6 +283,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                 runtime,
                 node,
                 spotChannelName,
+                registration,
                 frameworkRegistration.Codecs
             );
             _actorCreateOperationTarget = actorOperationTarget;
@@ -245,7 +304,7 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                 _spots,
                 node,
                 registration,
-                locationLifecycle.OwnerToken
+                () => locationLifecycle.OwnerToken
             );
             node.SetInstanceSpotActivationTarget(_instanceSpotActivationTarget);
         }
@@ -253,10 +312,17 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     }
 
     internal ZLinkServiceWireCodec.RequestSourceFence LocalRequestSource =>
-        _localRequestSource
+        LocalSessionOwner
         ?? throw new InvalidOperationException(
             "The MeshNode does not have a Location Store owner fence."
         );
+
+    /// <summary>
+    /// Session-Actor binding §4: this host's Session owner identity from its own
+    /// MeshNode descriptor, or null while the node has no Location Store owner fence.
+    /// </summary>
+    internal ZLinkServiceWireCodec.RequestSourceFence? LocalSessionOwner =>
+        Volatile.Read(ref _localRequestSource)?.Value;
 
     internal ZLinkMeshNodeStartupState? StartupState { get; private set; }
 
@@ -842,18 +908,24 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     {
         var failures = new List<Exception>();
         Capture(DetachManualConnections);
-        if (!forceStopToken.CanBeCanceled)
-            await CaptureAsync(CloseLifecycleAsync).ConfigureAwait(false);
-        Capture(RequestStop);
+        await CaptureAsync(async () =>
+            {
+                try
+                {
+                    await CloseLifecycleAsync().ConfigureAwait(false);
+                }
+                finally
+                {
+                    RequestStop();
+                }
+            })
+            .ConfigureAwait(false);
         if (_entryDispatchPump is { } entryDispatchPump)
             await CaptureAsync(entryDispatchPump.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_taskRunner.StopAsync).ConfigureAwait(false);
         if (_nodeRouteDispatcher is { } nodeRouteDispatcher)
             await CaptureAsync(nodeRouteDispatcher.DisposeAsync).ConfigureAwait(false);
-        await CaptureAsync(
-                forceStopToken.CanBeCanceled ? _spots.ForceStopAsync : _spots.DisposeAsync
-            )
-            .ConfigureAwait(false);
+        await CaptureAsync(_spots.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(_bundles.DisposeAsync).ConfigureAwait(false);
         await CaptureAsync(DisposeEntrySpotAsync).ConfigureAwait(false);
         await CaptureAsync(
@@ -873,7 +945,9 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
         {
             try
             {
-                await cleanup().ConfigureAwait(false);
+                // The host bounds observation; the owned cleanup retains its
+                // scopes and resources until its actual completion.
+                await cleanup().AsTask().WaitAsync(forceStopToken).ConfigureAwait(false);
             }
             catch (Exception exception)
             {
@@ -941,6 +1015,73 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
             return;
         _stopSource.Dispose();
         _stopSourceDisposed = true;
+    }
+
+    /// <summary>
+    /// Runs the MeshNode startup steps that act for this host's owner lease:
+    /// the owner fence on the backend, the descriptor claim, the Entry Spot
+    /// location and recovery, manual peer resolution and ingress activation.
+    /// Location runtime §5: a host that finished startup without a lease runs
+    /// these steps only after its heartbeat claims the lease. Publishing
+    /// <see cref="LocalRequestSource"/> marks the step complete; a failed
+    /// attempt is retried by the next one, and a claimed descriptor is not
+    /// claimed again.
+    /// </summary>
+    internal async ValueTask StartOwnerBoundAsync()
+    {
+        if (Volatile.Read(ref _localRequestSource) is not null)
+            return;
+        var lifecycle = _locationLifecycle;
+        ZLinkServiceWireCodec.RequestSourceFence? localRequestSource = null;
+        if (lifecycle is not null)
+        {
+            var owner = lifecycle.OwnerToken;
+            ((IZLinkBackendAuthorityObserver)Node).SetLocalOwnerLeaseGeneration(
+                checked((ulong)owner.LeaseGeneration)
+            );
+            var fence = new ZLinkServiceWireCodec.RequestSourceFence(
+                owner.OwnerId,
+                checked((ulong)owner.LeaseGeneration),
+                Node.RoutingId,
+                Node.MeshStatus().LifecycleGeneration
+            );
+            var sourceObserver = (IZLinkBackendRequestSourceFenceObserver)Node;
+            sourceObserver.SetLocalRequestSourceFence(fence);
+            sourceObserver.ObserveRequestSourceFence(fence);
+            localRequestSource = fence;
+
+            if (StartupState is { StoreGeneration: 0 } unclaimed)
+            {
+                var claim = await lifecycle
+                    .WriteMeshNodeDescriptorAsync(
+                        unclaimed.Descriptor,
+                        ZLinkLocationWriteIntent.NewClaim
+                    )
+                    .ConfigureAwait(false);
+                if (claim.Status != ZLinkLocationWriteStatus.Stored)
+                    throw new ZLinkConfigurationException(
+                        $"MeshNode '{Registration.SpotNodeName}' could not "
+                            + $"claim its descriptor: {claim.Status}."
+                    );
+                UpdateStartupState(unclaimed with { StoreGeneration = claim.Generation });
+            }
+        }
+
+        await InitializeEntrySpotAsync().ConfigureAwait(false);
+        await ZLinkSpotNodeInitializer
+            .ResolveManualPeerRoutingIdsAsync(
+                Registration,
+                Registration.SpotMeshChannelName ?? Registration.SpotNodeName,
+                Node.RoutingId,
+                _frameworkRegistration,
+                lifecycle,
+                _leaseTracker
+            )
+            .ConfigureAwait(false);
+        ZLinkSpotNodeInitializer.ConnectManualPeers(Registration, this);
+        if (localRequestSource is { } installed)
+            Volatile.Write(ref _localRequestSource, new(installed));
+        Node.ActivateIngress();
     }
 
     public async ValueTask InitializeEntrySpotAsync()

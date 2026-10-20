@@ -77,6 +77,7 @@ function targetFixture(runtime = new ZLinkHostServiceRelocationRuntime({}), mesh
     lane: Promise.resolve(),
     cutoverReceived: false,
     boundaryRelay: [],
+    releaseJoinAdmission() {},
     releaseActivation() {
       events.push('release');
     }
@@ -108,9 +109,8 @@ function targetFixture(runtime = new ZLinkHostServiceRelocationRuntime({}), mesh
     kind: 'committed',
     authorities: new Map([['actor-key', authority]])
   });
-  runtime.clearTargetRelocationPublication = async () => {};
+  runtime.clearTargetRelocationPublication = async (_stage, authority) => authority;
   runtime.targetReplyRelayCoordinator = () => coordinator;
-  runtime.relayTerminalReplies = async () => {};
   runtime.targetStages.set('0:17:1', stage);
   const cutover = {
     ...prepare,
@@ -283,3 +283,53 @@ for (const responseKind of ['pending', 'committed', 'unknown']) {
     }
   );
 }
+
+// Host relocation flow 05 result table: a target whose Shutdown admission seal
+// is closed rejects a new PREPARE with typed ShuttingDown (wire routeNotConnected)
+// before any staging, so the source restores and reports Blocked/RelocationFailed.
+function newPrepare() {
+  return {
+    kind: 'prepare',
+    deadlineUnixMs: BigInt(Date.now() + 10000),
+    relocation: { high: 0n, low: 99n },
+    targetAttemptGeneration: 1n,
+    sourceNodeRid: 'source',
+    coordinator: {
+      ownerId: 'source-owner',
+      leaseGeneration: 3n,
+      nodeRid: 'source',
+      nodeGeneration: 2n,
+      expectedAuthorityStoreVersion: 'source-v1'
+    },
+    object: { kind: 'actor', actorId: 'actor', objectGeneration: 5n },
+    target: {
+      nodeRid: 'target',
+      nodeGeneration: 6n,
+      ownerId: 'target-owner',
+      ownerLeaseGeneration: 14n
+    }
+  };
+}
+
+test('a Shutdown-sealed target rejects a new PREPARE with ShuttingDown before staging', async () => {
+  const runtime = new ZLinkHostServiceRelocationRuntime({ targetAdmissionSealed: () => true });
+  await assert.rejects(
+    runtime.handlePrepareControl('mesh', '0:99:1', newPrepare(), 'source'),
+    (error) => {
+      assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.ShuttingDown);
+      return true;
+    }
+  );
+  assert.equal(runtime.targetStages.size, 0);
+});
+
+test('an open target does not report ShuttingDown for a new PREPARE', async () => {
+  const runtime = new ZLinkHostServiceRelocationRuntime({ targetAdmissionSealed: () => false });
+  await assert.rejects(
+    runtime.handlePrepareControl('mesh', '0:99:1', newPrepare(), 'source'),
+    (error) => {
+      assert.notEqual(error.kind, framework.ZLinkFrameworkErrorKind.ShuttingDown);
+      return true;
+    }
+  );
+});

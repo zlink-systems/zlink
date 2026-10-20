@@ -130,6 +130,19 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                 == authorityOwnerGeneration));
     }
 
+    boolean authorityFenceMatches(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence
+                    route) {
+        return context.nodeRid().equals(route.targetNodeRid())
+                && context.spotId().equals(route.targetSpotId())
+                && context.objectGeneration() == route.objectGeneration()
+                && authorityFenceMatches(
+                        route.ownerId(), route.leaseGeneration(), route.authorityOwnerGeneration())
+                && hasExpectedNodeGeneration()
+                && expectedNodeGeneration() == route.targetNodeGeneration();
+    }
+
     void markSealedStoreVersion(String storeVersion) {
         inStateLane(
                 () -> {
@@ -269,7 +282,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                 && !host.isRelocating()
                 && !closeStarted()
                 && System.nanoTime() - lastActivityNanos >= timeout
-                && !hasActiveRouteReceives()
                 && !context.hasActiveTimers();
     }
 
@@ -303,29 +315,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
         return admitRoute(received, null);
     }
 
-    CompletionStage<Void> admitExisting(
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .InstanceSpotMessage
-                    message,
-            ZLinkBackendReceived received) {
-        var route =
-                (systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                                .InstanceRouteFence)
-                        message.route();
-        if (!context.nodeRid().equals(route.targetNodeRid())
-                || !authorityFenceMatches(
-                        route.ownerId(), route.leaseGeneration(), route.authorityOwnerGeneration())
-                || (hasExpectedNodeGeneration()
-                        && expectedNodeGeneration() != route.targetNodeGeneration())) {
-            received.close();
-            return CompletableFuture.failedFuture(
-                    systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin.framework(
-                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
-                            "Instance Spot owner fence changed"));
-        }
-        return admitRoute(received);
-    }
-
     CompletionStage<Void> admitRoute(
             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
         var hostRejection = host.spotHostAdmissionFailure(context.spotId());
@@ -334,7 +323,12 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
             if (admission != null) admission.completeExceptionally(hostRejection);
             return CompletableFuture.failedFuture(hostRejection);
         }
-        trackRouteReceived(received);
+        CompletableFuture<Void> accepted =
+                admission == null ? new CompletableFuture<>() : admission;
+        accepted.whenComplete(
+                (ignored, failure) -> {
+                    if (failure != null) received.close();
+                });
         CompletionStage<Void> admitted;
         try {
             ParsedPacket observed = null;
@@ -348,29 +342,16 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                     : ZLinkSpotFlowFrame.fromEnvelopeHeader(observed.header());
                 } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
                     failRouteInvalidFlow(received, invalidEnvelope);
-                    if (admission != null) admission.complete(null);
+                    accepted.complete(null);
+                    received.close();
                     return CompletableFuture.completedFuture(null);
                 }
             }
             admitted =
                     context.enqueueMessage(
                             received,
-                            () -> {
-                                ParsedPacket packet;
-                                try {
-                                    packet = ZLinkSpotRuntime.parsePacket(received.parts());
-                                } catch (
-                                        systems.zlink.framework.errors.ZLinkFrameworkException
-                                                invalidEnvelope) {
-                                    failRouteInvalidFlow(received, invalidEnvelope);
-                                    return CompletableFuture.completedFuture(null);
-                                } catch (RuntimeException failure) {
-                                    closeRouteReceived(received);
-                                    return CompletableFuture.failedFuture(failure);
-                                }
-                                return dispatchSpotRouteHandler(received, packet);
-                            },
-                            admission);
+                            () -> host.dispatchQueuedInstanceMessage(this, received),
+                            accepted);
             if (observed != null) {
                 try (var ignored =
                         systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext
@@ -392,13 +373,14 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                 }
             }
         } catch (RuntimeException | Error failure) {
-            if (admission != null) admission.completeExceptionally(failure);
+            accepted.completeExceptionally(failure);
             closeRouteReceived(received);
             throw failure;
         }
         return admitted.whenComplete(
                 (done, failure) -> {
                     if (failure != null) {
+                        accepted.completeExceptionally(failure);
                         closeRouteReceived(received);
                     }
                 });
@@ -448,7 +430,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
         return context.enqueueClose(
                         () -> closeOnLifecycle(reason).thenAccept(result::complete),
                         message ->
-                                host.replayClosedInstanceMessage(
+                                host.dispatchQueuedInstanceMessage(
                                         this, (ZLinkBackendReceived) message),
                         () ->
                                 existingCloseCoordinator() != null
@@ -461,6 +443,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     }
 
     private CompletionStage<Boolean> closeOnLifecycle(ZLinkSpotCloseReason reason) {
+        if (!hasExpectedNodeGeneration()) return CompletableFuture.completedFuture(false);
         ZLinkSpotCloseCoordinator existing = existingCloseCoordinator();
         if (existing != null) {
             return existing.close();
@@ -470,9 +453,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                         () -> {
                             boolean retryIdle =
                                     reason == ZLinkSpotCloseReason.IDLE_EVICTED
-                                            && (!isIdleCandidateOnLane()
-                                                    || context.hasActiveTimers()
-                                                    || hasActiveRouteReceives());
+                                            && !isIdleCandidateOnLane();
                             if (retryIdle) {
                                 return new CloseStart(true, null);
                             }
@@ -528,20 +509,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                                     .completedFuture(null);
                                                         }),
                                                 ZLinkSpotCloseCoordinator.Step.operation(
-                                                        () -> {
-                                                            return context.ownerQueue()
-                                                                    .pendingMessages()
-                                                                    .thenAccept(
-                                                                            messages -> {
-                                                                                messages.forEach(
-                                                                                        message ->
-                                                                                                transferRouteReceived(
-                                                                                                        (ZLinkBackendReceived)
-                                                                                                                message));
-                                                                                closeActiveRouteReceives();
-                                                                            });
-                                                        }),
-                                                ZLinkSpotCloseCoordinator.Step.operation(
                                                         context::closeTimersAsync),
                                                 ZLinkSpotCloseCoordinator.Step.operation(
                                                         () -> {
@@ -587,7 +554,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                                                     return null;
                                                                                 }))),
                                         failure ->
-                                                host.reportSpotClosingFailure(
+                                                host.reportSpotLifecycleFailure(
                                                         context.spotId(), failure)));
         coordinatorOwner.set(coordinator);
         host.retainClosingCoordinator(
@@ -622,11 +589,20 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     }
 
     CompletionStage<Void> replayMessage(ZLinkBackendReceived received) {
+        // Pending frames belong to the accepted queue record. Only the executing handler
+        // is registered for terminal dispatch cleanup, on the current incarnation.
         trackRouteReceived(received);
-        return context.runLifecycleExecution(
-                () ->
-                        dispatchSpotRouteHandler(
-                                received, ZLinkSpotRuntime.parsePacket(received.parts())));
+        ParsedPacket packet;
+        try {
+            packet = ZLinkSpotRuntime.parsePacket(received.parts());
+        } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
+            failRouteInvalidFlow(received, invalidEnvelope);
+            return CompletableFuture.completedFuture(null);
+        } catch (RuntimeException failure) {
+            closeRouteReceived(received);
+            return CompletableFuture.failedFuture(failure);
+        }
+        return context.runLifecycleExecution(() -> dispatchSpotRouteHandler(received, packet));
     }
 
     CompletionStage<Void> closeResourcesAsync() {

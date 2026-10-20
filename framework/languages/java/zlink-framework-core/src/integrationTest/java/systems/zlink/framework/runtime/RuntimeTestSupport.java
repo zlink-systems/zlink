@@ -5,6 +5,8 @@ import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOption
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvider;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRouterSocket;
+import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
+import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -18,11 +20,19 @@ final class RuntimeTestSupport {
                 () -> {
                     Method start =
                             ZLinkFrameworkRuntime.class.getDeclaredMethod(
-                                    "start",
+                                    "startHost",
                                     DefaultZLinkFrameworkOptions.class,
-                                    ZLinkBackendAdapterProvider.class);
+                                    ZLinkBackendAdapterProvider.class,
+                                    ZLinkHandlerActivator.class,
+                                    ZLinkRuntimeEventDispatcher.class);
                     start.setAccessible(true);
-                    return (ZLinkFrameworkRuntime) start.invoke(null, options, backendFactory);
+                    return (ZLinkFrameworkRuntime)
+                            start.invoke(
+                                    null,
+                                    options,
+                                    backendFactory,
+                                    ZLinkHandlerActivator.reflection(),
+                                    null);
                 });
     }
 

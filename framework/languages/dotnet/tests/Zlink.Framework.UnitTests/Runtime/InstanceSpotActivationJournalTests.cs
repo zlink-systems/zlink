@@ -93,7 +93,7 @@ public sealed class InstanceSpotActivationJournalTests
             catalog,
             node,
             registration,
-            reservation.TargetOwner
+            () => reservation.TargetOwner
         );
         if (ready)
         {
@@ -193,7 +193,7 @@ public sealed class InstanceSpotActivationJournalTests
             null!,
             node,
             null!,
-            reservation.TargetOwner
+            () => reservation.TargetOwner
         );
         await target.RecoverAsync(CancellationToken.None);
         Assert.IsType<ZLinkAuthorityReadResult.Missing>(
@@ -486,10 +486,11 @@ public sealed class InstanceSpotActivationJournalTests
             null!,
             node,
             null!,
-            new ZLinkLocationOwnerToken(
-                creating.OwnerId,
-                checked((long)creating.OwnerLeaseGeneration)
-            )
+            () =>
+                new ZLinkLocationOwnerToken(
+                    creating.OwnerId,
+                    checked((long)creating.OwnerLeaseGeneration)
+                )
         );
 
         await target.RecoverAsync(CancellationToken.None);
@@ -686,6 +687,10 @@ public sealed class InstanceSpotActivationJournalTests
         ReadOnlySpan<byte> envelope
     ) => new("activation-root", SHA256.HashData(envelope), checked((uint)envelope.Length), 1, 0);
 
+    internal interface IRecoverySpotNode
+        : IZLinkBackendSpotNode,
+            IZLinkBackendRequestSourceFenceObserver;
+
     private class RecoverySpotNode : DispatchProxy
     {
         private RoutingId routingId;
@@ -693,7 +698,7 @@ public sealed class InstanceSpotActivationJournalTests
 
         internal static IZLinkBackendSpotNode Create(RoutingId routingId, ulong generation)
         {
-            var proxy = Create<IZLinkBackendSpotNode, RecoverySpotNode>();
+            var proxy = Create<IRecoverySpotNode, RecoverySpotNode>();
             var state = (RecoverySpotNode)(object)proxy;
             state.routingId = routingId;
             state.generation = generation;
@@ -721,6 +726,16 @@ public sealed class InstanceSpotActivationJournalTests
                     0,
                     0
                 ),
+                // The backend accepts the admitted sender's live descriptor (Location runtime §9.3).
+                nameof(IZLinkBackendRequestSourceFenceObserver.AcceptRequestSourceAsync) =>
+                    ValueTask.FromResult<ZLinkServiceWireCodec.RequestSourceFence?>(
+                        new ZLinkServiceWireCodec.RequestSourceFence(
+                            "recovery-source-owner",
+                            1,
+                            (RoutingId)args![0]!,
+                            (ulong)args[1]!
+                        )
+                    ),
                 _ => throw new NotSupportedException(targetMethod?.Name),
             };
     }

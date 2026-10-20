@@ -26,18 +26,16 @@ import {
   ZLinkRemoteBoundSessionFenceError
 } from '../actors/bound-session-wire';
 import { encodeRemoteActorPacketTarget } from '../actors/actor-packet-relay-wire';
-import { decodeRoutingId as decodeWireRoutingId, routingIdsEqual } from '../routing-id';
+import { routingIdsEqual } from '../routing-id';
 import type { MeshRouterResolver } from './mesh-router-resolver';
 import {
   encodeSessionRelocationRoute,
-  encodeSessionRelocationSeal,
   serviceSessionRelocationIdentityKey,
   type ServiceSessionRelocationRoute,
   type ServiceSessionRelocationSeal,
   type ServiceSessionRelocationSealed
 } from '../foundation/service-stateful-wire-codec';
 import { ServiceWireProtocolError } from '../foundation/service-wire-m6a-codec';
-import { BoundedReplayMap } from './bounded-replay-map';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException
@@ -58,29 +56,14 @@ export interface ZLinkRemoteBoundSessionRelayOptions {
   readonly reportOwnershipRefreshError?: (actorId: string, error: unknown) => void;
 }
 
-const SERVICE_CONTROL_TERMINAL_CAPACITY = 4096;
-
 interface ActiveServiceWireSessionRelocation {
   readonly actorId: string;
-  readonly sealFingerprint: string;
   readonly sealPromise: Promise<ServiceSessionRelocationSealed>;
-  sealed?: ServiceSessionRelocationSealed;
   sealTimer?: ReturnType<typeof setTimeout>;
-  sealController?: AbortController;
   sealAbortCleanup?: () => void;
   terminal?: boolean;
-  routeRequestFingerprint?: string;
   routeFingerprint?: string;
   routePromise?: Promise<void>;
-}
-
-interface TerminalServiceWireSessionRelocation {
-  readonly actorId: string;
-  readonly sealFingerprint: string;
-  readonly sealed: ServiceSessionRelocationSealed;
-  /** Absent only when the Session seal timed out before command 44 arrived. */
-  readonly routeRequestFingerprint?: string;
-  readonly routeFingerprint?: string;
 }
 
 type RemoteBoundSessionSend = ReturnType<typeof decodeRemoteBoundSessionSendPayload>;
@@ -91,10 +74,6 @@ export class ZLinkRemoteBoundSessionRelay {
     string,
     ActiveServiceWireSessionRelocation
   >();
-  private readonly terminalServiceWireRelocations = new BoundedReplayMap<
-    string,
-    TerminalServiceWireSessionRelocation
-  >(SERVICE_CONTROL_TERMINAL_CAPACITY);
 
   constructor(private readonly options: ZLinkRemoteBoundSessionRelayOptions) {}
 
@@ -255,68 +234,29 @@ export class ZLinkRemoteBoundSessionRelay {
 
   async receiveServiceWireSessionRelocationSeal(
     value: ServiceSessionRelocationSeal,
-    signal?: AbortSignal
-  ): Promise<ServiceSessionRelocationSealed> {
-    const key = serviceWireBarrierKey(value);
-    const fingerprint = encodeSessionRelocationSeal(value).toString('base64');
-    const terminal = this.terminalServiceWireRelocations.get(key);
-    if (terminal !== undefined) {
-      if (terminal.sealFingerprint !== fingerprint) {
-        throw new ServiceWireProtocolError(
-          `Session relocation '${key}' repeated command 42 with different bytes.`
-        );
-      }
-      this.terminalServiceWireRelocations.touch(key);
-      return terminal.sealed;
-    }
-    const active = this.activeServiceWireRelocations.get(key);
-    if (active !== undefined) {
-      if (active.sealFingerprint !== fingerprint) {
-        throw new ServiceWireProtocolError(
-          `Session relocation '${key}' repeated command 42 with different bytes.`
-        );
-      }
-      return await active.sealPromise;
-    }
-    const actorId = value.actor.actor.actorId;
-
-    // Register the identity before the first asynchronous owner operation.
-    // Concurrent identical commands join this promise; different bytes for
-    // the same identity fail before they can install another seal.
-    let state!: ActiveServiceWireSessionRelocation;
+    signal?: AbortSignal,
+    onInstalled?: () => void
+  ): Promise<ServiceSessionRelocationSealed | undefined> {
+    const runtime = this.options.streamBindingRuntime();
+    const owner = actorSessionBindingRuntimeOwner(runtime);
     const sealController = new AbortController();
-    const sealPromise = Promise.resolve().then(async () => {
-      await this.validateServiceWireSessionRoute(value);
-      await actorSessionBindingRuntimeOwner(this.options.streamBindingRuntime()).sealRelocation(
-        {
-          actorId,
-          actorGeneration: value.actor.actor.generation,
-          bindingGeneration: value.session.bindingGeneration,
-          sessionIdentity: value.session.sessionRid,
-          actorNodeRid: value.actor.actor.nodeRid,
-          actorNodeGeneration: value.actor.targetNodeGeneration,
-          sealId: key
-        },
-        {
-          objectGeneration: value.actor.actor.generation,
-          bindingGeneration: value.session.bindingGeneration
-        },
-        sealController.signal
-      );
-      return {
-        relocation: value.relocation,
-        coordinator: value.coordinator,
-        actor: value.actor,
-        session: value.session
-      } satisfies ServiceSessionRelocationSealed;
-    });
-    state = {
+    const sealSignal =
+      signal === undefined
+        ? sealController.signal
+        : AbortSignal.any([signal, sealController.signal]);
+    const prepared = await owner.prepareSessionRelocationSeal(value, sealSignal);
+    if (prepared === undefined) return undefined;
+    if (prepared.response.sealResult === 'bindingAbsent') return prepared.response;
+    const key = serviceWireBarrierKey(value);
+    const existing = this.activeServiceWireRelocations.get(key);
+    if (existing !== undefined) return await existing.sealPromise;
+    const actorId = value.actor.actor.actorId;
+    const state: ActiveServiceWireSessionRelocation = {
       actorId,
-      sealFingerprint: fingerprint,
-      sealPromise,
-      sealController
+      sealPromise: prepared.ready.then(() => prepared.response)
     };
     this.activeServiceWireRelocations.set(key, state);
+    onInstalled?.();
     const expire = async (error: unknown): Promise<void> => {
       if (state.terminal === true || state.routePromise !== undefined) return;
       state.terminal = true;
@@ -324,17 +264,8 @@ export class ZLinkRemoteBoundSessionRelay {
       if (this.activeServiceWireRelocations.get(key) === state) {
         this.activeServiceWireRelocations.delete(key);
       }
-      if (state.sealed !== undefined) {
-        this.terminalServiceWireRelocations.remember(key, {
-          actorId,
-          sealFingerprint: state.sealFingerprint,
-          sealed: state.sealed
-        });
-      }
-      const owner = actorSessionBindingRuntimeOwner(this.options.streamBindingRuntime());
-      await owner.clearRelocation(actorId, error);
-      void this.options
-        .streamBindingRuntime()
+      await owner.clearRelocation(actorId, error, key);
+      void runtime
         .closeSessionBinding(actorId, value.session)
         .catch((disconnectError) =>
           this.options.reportOwnershipRefreshError?.(actorId, disconnectError)
@@ -360,26 +291,20 @@ export class ZLinkRemoteBoundSessionRelay {
       else signal.addEventListener('abort', onAbort, { once: true });
     }
     try {
-      const sealed = await sealPromise;
-      state.sealed = sealed;
-      return sealed;
+      return await state.sealPromise;
     } catch (error) {
       clearTimeout(state.sealTimer);
       state.sealAbortCleanup?.();
       if (this.activeServiceWireRelocations.get(key) === state) {
         this.activeServiceWireRelocations.delete(key);
       }
-      if (state.terminal !== true) {
-        const owner = actorSessionBindingRuntimeOwner(this.options.streamBindingRuntime());
-        if ((await owner.relocationSnapshot(actorId, key)) !== undefined) {
-          await owner.clearRelocation(actorId, error);
-          void this.options
-            .streamBindingRuntime()
-            .closeSessionBinding(actorId, value.session)
-            .catch((disconnectError) =>
-              this.options.reportOwnershipRefreshError?.(actorId, disconnectError)
-            );
-        }
+      if (state.terminal !== true && (await owner.relocationSnapshot(actorId, key)) !== undefined) {
+        await owner.clearRelocation(actorId, error, key);
+        void runtime
+          .closeSessionBinding(actorId, value.session)
+          .catch((disconnectError) =>
+            this.options.reportOwnershipRefreshError?.(actorId, disconnectError)
+          );
       }
       throw sealController.signal.aborted ? sealController.signal.reason : error;
     }
@@ -389,38 +314,14 @@ export class ZLinkRemoteBoundSessionRelay {
     value: ServiceSessionRelocationRoute
   ): Promise<void> {
     const key = serviceWireBarrierKey(value);
-    const routeRequestFingerprint = encodeSessionRelocationRoute(value).toString('base64');
-    const fingerprint = routeRequestFingerprint;
-    const terminal = this.terminalServiceWireRelocations.get(key);
-    if (terminal !== undefined) {
-      if (terminal.routeFingerprint === undefined) {
-        // The Session owner already closed this binding at the seal deadline.
-        // A late command 44 is terminal and cannot reactivate the route.
-        this.terminalServiceWireRelocations.touch(key);
-        this.warnLateSessionRouteUpdate(value);
-        return;
-      }
-      if (terminal.routeFingerprint !== fingerprint) {
-        throw new ServiceWireProtocolError(
-          `Session relocation '${key}' repeated command 44 with different bytes.`
-        );
-      }
-      this.terminalServiceWireRelocations.touch(key);
-      this.warnLateSessionRouteUpdate(value);
-      return;
-    }
+    const fingerprint = encodeSessionRelocationRoute(value).toString('base64');
+    const accepted = await actorSessionBindingRuntimeOwner(
+      this.options.streamBindingRuntime()
+    ).acceptSessionRelocationRoute(value);
     const state = this.activeServiceWireRelocations.get(key);
-    if (state === undefined) {
+    if (!accepted || state === undefined) {
       this.warnLateSessionRouteUpdate(value);
       return;
-    }
-    if (
-      state.routeRequestFingerprint !== undefined &&
-      state.routeRequestFingerprint !== routeRequestFingerprint
-    ) {
-      throw new ServiceWireProtocolError(
-        `Session relocation '${key}' repeated command 44 with different bytes.`
-      );
     }
     if (state.routeFingerprint !== undefined) {
       if (state.routeFingerprint !== fingerprint || state.routePromise === undefined) {
@@ -432,7 +333,6 @@ export class ZLinkRemoteBoundSessionRelay {
       await state.routePromise;
       return;
     }
-    state.routeRequestFingerprint = routeRequestFingerprint;
     state.routeFingerprint = fingerprint;
     if (state.sealTimer !== undefined) clearTimeout(state.sealTimer);
     state.sealAbortCleanup?.();
@@ -443,13 +343,6 @@ export class ZLinkRemoteBoundSessionRelay {
     state.routePromise = routePromise;
     try {
       await routePromise;
-      this.terminalServiceWireRelocations.remember(key, {
-        actorId: state.actorId,
-        sealFingerprint: state.sealFingerprint,
-        sealed: state.sealed ?? (await state.sealPromise),
-        routeRequestFingerprint,
-        routeFingerprint: fingerprint
-      });
       if (this.activeServiceWireRelocations.get(key) === state) {
         this.activeServiceWireRelocations.delete(key);
       }
@@ -463,17 +356,10 @@ export class ZLinkRemoteBoundSessionRelay {
       if (this.activeServiceWireRelocations.get(key) === state) {
         this.activeServiceWireRelocations.delete(key);
       }
-      const sealed = state.sealed ?? (await state.sealPromise);
-      this.terminalServiceWireRelocations.remember(key, {
-        actorId: state.actorId,
-        sealFingerprint: state.sealFingerprint,
-        sealed,
-        routeRequestFingerprint,
-        routeFingerprint: fingerprint
-      });
-      actorSessionBindingRuntimeOwner(this.options.streamBindingRuntime()).clearRelocation(
+      await actorSessionBindingRuntimeOwner(this.options.streamBindingRuntime()).clearRelocation(
         state.actorId,
-        error
+        error,
+        key
       );
       await this.options
         .streamBindingRuntime()
@@ -485,12 +371,15 @@ export class ZLinkRemoteBoundSessionRelay {
     }
   }
 
-  clearServiceWireSessionRelocations(): void {
+  async clearServiceWireSessionRelocations(): Promise<void> {
     for (const state of this.activeServiceWireRelocations.values()) {
       if (state.sealTimer !== undefined) clearTimeout(state.sealTimer);
+      state.sealAbortCleanup?.();
     }
     this.activeServiceWireRelocations.clear();
-    this.terminalServiceWireRelocations.clear();
+    await actorSessionBindingRuntimeOwnerIfRegistered(
+      this.options.streamBindingRuntime()
+    )?.clearSessionRelocationResults();
   }
 
   private warnLateSessionRouteUpdate(value: ServiceSessionRelocationRoute): void {
@@ -524,7 +413,7 @@ export class ZLinkRemoteBoundSessionRelay {
         actorId: value.actor.actorId,
         objectGeneration: value.actor.generation,
         meshName: current.meshName,
-        nodeRid: decodeWireRoutingId(committedRoute.targetNodeRid, undefined),
+        nodeRid: committedRoute.targetNodeRid,
         bindingGeneration: value.session.bindingGeneration,
         ownershipGeneration: committedRoute.targetAuthorityOwnerGeneration,
         ownerNodeGeneration: committedRoute.targetNodeGeneration,
@@ -532,7 +421,6 @@ export class ZLinkRemoteBoundSessionRelay {
       } as ActorRef;
       await owner.applyRelocation(value.actor.actorId, key, fingerprint, async () => {
         await runtime.commitActorRoute(targetActorRef, undefined, {
-          confirmRemoteSessionBinding: 'send',
           releaseSeal: { sealId: key }
         });
         const currentGeneration = this.actorOwnershipGenerations.get(value.actor.actorId);
@@ -548,25 +436,6 @@ export class ZLinkRemoteBoundSessionRelay {
       });
     }
     await owner.observeRelocationTerminal(value.actor.actorId, key, fingerprint);
-  }
-
-  private async validateServiceWireSessionRoute(
-    value: ServiceSessionRelocationSeal
-  ): Promise<void> {
-    const current = await this.options
-      .streamBindingRuntime()
-      .sessionRouteFence(value.actor.actor.actorId);
-    if (
-      current === undefined ||
-      current.actor.objectGeneration !== value.actor.actor.generation ||
-      !routingIdsEqual(current.actor.nodeRid, value.actor.actor.nodeRid) ||
-      current.sessionRid.toString() !== value.session.sessionRid ||
-      current.bindingGeneration !== value.session.bindingGeneration
-    ) {
-      throw new ZLinkRemoteBoundSessionFenceError(
-        `Actor '${value.actor.actor.actorId}' command 42 was fenced by its exact Session route.`
-      );
-    }
   }
 
   resolveRemoteBoundSessionTarget(
@@ -602,9 +471,6 @@ export class ZLinkRemoteBoundSessionRelay {
         if (value.sealTimer !== undefined) clearTimeout(value.sealTimer);
         this.activeServiceWireRelocations.delete(key);
       }
-    }
-    for (const [key, value] of this.terminalServiceWireRelocations) {
-      if (value.actorId === actorId) this.terminalServiceWireRelocations.delete(key);
     }
   }
 

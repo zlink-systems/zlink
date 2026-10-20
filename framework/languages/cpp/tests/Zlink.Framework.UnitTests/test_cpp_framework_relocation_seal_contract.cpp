@@ -8,13 +8,18 @@
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "runtime/spots/spot_runtime.hpp"
+#include "runtime/timers/timer_runtime.hpp"
 
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <chrono>
+#include <functional>
 #include <future>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <tuple>
 #include <string>
 #include <utility>
@@ -75,7 +80,8 @@ TEST (FrameworkRelocationSealContract, public_actor_push_submits_while_session_r
 
     host::bound_session_operations_t operations;
     operations.bind = [] (const protocol::bound_session_bind_t &, const zlink::routing_id_t &,
-                          std::uint64_t, std::function<bool ()> submit_terminal_reply) {
+                          std::uint64_t, const location_owner_token_t &,
+                          std::function<bool ()> submit_terminal_reply) {
         (void) submit_terminal_reply ();
         return host::bound_session_bind_operation_result_t{};
     };
@@ -626,4 +632,211 @@ TEST (FrameworkRelocationSealContract, old_drain_failure_preserves_new_binding_s
                stateful::stateful_error_t::none);
     ASSERT_EQ (delivery.wait_for (std::chrono::seconds{2}), std::future_status::ready);
     EXPECT_TRUE (delivery.get ());
+}
+
+TEST (FrameworkRelocationSealContract, session_seal_ack_precedes_source_dispatch_stop)
+{
+    stateful::stateful_object_runtime_t objects;
+    objects.replace_placement_candidates ({{.mesh_name = "mesh",
+                                            .node_id = "node-a",
+                                            .stable_types = {"actor", "spot"},
+                                            .weight = 100,
+                                            .active_capacity = 100,
+                                            .pending_capacity = 100}});
+    std::vector<stateful::object_ref_t> participants;
+    for (const auto kind : {stateful::object_kind_t::actor, stateful::object_kind_t::user_spot}) {
+        const bool actor = kind == stateful::object_kind_t::actor;
+        const auto created = objects.begin_create ({.kind = kind,
+                                                    .key = actor ? "seal-actor" : "seal-spot",
+                                                    .stable_type = actor ? "actor" : "spot",
+                                                    .mesh_name = std::string ("mesh"),
+                                                    .exclusive = true});
+        ASSERT_EQ (created.status, stateful::create_status_t::reserved);
+        ASSERT_EQ (objects.commit_create (created.attempt), stateful::stateful_error_t::none);
+        participants.push_back (created.object);
+        ASSERT_EQ (objects.enqueue (created.object, stateful::turn_domain_t::application, {1, {1}}),
+                   stateful::stateful_error_t::none);
+    }
+
+    std::promise<void> seal_requested;
+    auto requested = seal_requested.get_future ();
+    std::promise<void> acknowledge_session_seal;
+    auto acknowledgement = acknowledge_session_seal.get_future ();
+    stateful::aggregate_relocation_seal_attempt_t result;
+    std::thread source ([&] {
+        result = objects
+                   .try_seal_relocation_aggregate (participants, {},
+                                                   [&] () -> task_t<bool> {
+                                                       seal_requested.set_value ();
+                                                       acknowledgement.get ();
+                                                       co_return result_t<bool>::success (true);
+                                                   })
+                   .result ()
+                   .value ();
+    });
+    requested.get ();
+    // Command 43 has not acknowledged the Session seal. Both source lanes
+    // must still execute work accepted before the relocation request.
+    for (const auto &participant : participants) {
+        const auto [error, claim] =
+          objects.try_claim (participant, stateful::turn_domain_t::application);
+        EXPECT_EQ (error, stateful::stateful_error_t::none);
+        EXPECT_TRUE (claim);
+        if (claim) {
+            EXPECT_EQ (claim->sequence, 1u);
+            EXPECT_EQ (objects.complete_claim (participant, stateful::turn_domain_t::application),
+                       stateful::stateful_error_t::none);
+        }
+        EXPECT_EQ (objects.enqueue (participant, stateful::turn_domain_t::application, {2, {2}}),
+                   stateful::stateful_error_t::none);
+    }
+    acknowledge_session_seal.set_value ();
+    source.join ();
+
+    ASSERT_EQ (result.error, stateful::stateful_error_t::none);
+    ASSERT_EQ (result.seal.participants.size (), participants.size ());
+    for (std::size_t index = 0; index != participants.size (); ++index) {
+        const auto &pending = result.seal.participants[index].pending_application;
+        ASSERT_EQ (pending.size (), 1u);
+        EXPECT_EQ (pending.front ().sequence, 2u);
+        const auto [error, claim] =
+          objects.try_claim (participants[index], stateful::turn_domain_t::application);
+        EXPECT_EQ (error, stateful::stateful_error_t::moving);
+        EXPECT_FALSE (claim);
+    }
+    EXPECT_EQ (objects.abort_relocation_before_cutover (result.seal.token),
+               stateful::stateful_error_t::none);
+
+    const auto refused = objects
+                           .try_seal_relocation_aggregate (
+                             participants, {}, [] () -> task_t<bool> { co_return false; })
+                           .result ()
+                           .value ();
+    EXPECT_EQ (refused.error, stateful::stateful_error_t::conflict);
+    for (const auto &participant : participants) {
+        const auto [error, claim] =
+          objects.try_claim (participant, stateful::turn_domain_t::application);
+        EXPECT_EQ (error, stateful::stateful_error_t::none);
+        ASSERT_TRUE (claim);
+        EXPECT_EQ (claim->sequence, 2u);
+        EXPECT_EQ (objects.complete_claim (participant, stateful::turn_domain_t::application),
+                   stateful::stateful_error_t::none);
+    }
+
+    // The Session request can suspend after submission. Its participant set
+    // must remain the submitted set even if the caller releases its input.
+    const auto submitted = participants;
+    task_completion_source_t<void> session_ack;
+    const std::function<task_t<bool> ()> seal_sessions = [&] () -> task_t<bool> {
+        co_await session_ack.task ();
+        co_return true;
+    };
+    auto pending = objects.try_seal_relocation_aggregate (participants, {}, seal_sessions);
+    EXPECT_FALSE (pending.await_ready ());
+    participants.clear ();
+    (void) session_ack.complete (result_t<void>::success ());
+    const auto captured = pending.result ().value ();
+    EXPECT_EQ (captured.error, stateful::stateful_error_t::none);
+    EXPECT_EQ (captured.seal.participants.size (), submitted.size ());
+    for (const auto &participant : submitted) {
+        const auto [error, claim] =
+          objects.try_claim (participant, stateful::turn_domain_t::application);
+        EXPECT_EQ (error, stateful::stateful_error_t::moving);
+        EXPECT_FALSE (claim);
+    }
+    EXPECT_EQ (objects.abort_relocation_before_cutover (captured.seal.token),
+               stateful::stateful_error_t::none);
+}
+
+TEST (FrameworkRelocationSealContract, sealed_scheduled_timer_keeps_pending_count_without_failure)
+{
+    auto context = std::make_shared<spot_context_state_t> ();
+    context->node = zlink::framework::test::runtime_failure_fixture<spot_node_builder_state_t> (
+      "sealed-timer-node");
+    auto executor = std::make_shared<runtime::offload_executor_t> (1);
+    context->serial_executor = executor;
+    context->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *executor, runtime::serial_execution_queue_options_t{});
+    serializer_registry_t serializers;
+    context->channel_runtime = std::make_shared<channel_runtime_state_t> ();
+    context->channel_runtime->serializers = &serializers;
+    context->spot_instance = std::make_shared<int> (1);
+    auto timer = std::make_shared<timer_state_t> ();
+    timer->name = "pending-sealed-tick";
+    timer->period = std::chrono::milliseconds (1);
+    auto handler = std::make_shared<int> (1);
+    timer->handler_instance = handler;
+    std::vector<timer_tick_t> delivered;
+    timer->handler_invoker = [&] (void *, void *, serializer_registry_t &,
+                                  const timer_tick_t &tick) -> task_t<zlink::message_t> {
+        delivered.push_back (tick);
+        co_return zlink::message_t{};
+    };
+    context->node->lane.run ([&] { context->admission_sealed = true; }).get ();
+    timer_runtime_t::post_fire_count (context, timer, context->serial_queue, 1);
+    timer_runtime_t::post_fire_count (context, timer, context->serial_queue, 1);
+    context->drain_serial ();
+    EXPECT_TRUE (delivered.empty ());
+    EXPECT_EQ (timer->pending_fire_count, 2u);
+    EXPECT_EQ (timer->delivery_index, 0u);
+    EXPECT_TRUE (timer->failure_events.empty ());
+
+    context->node->lane.run ([&] { context->admission_sealed = false; }).get ();
+    timer_runtime_t::post_fire_count (context, timer, context->serial_queue, 0);
+    context->drain_serial ();
+    ASSERT_EQ (delivered.size (), 1u);
+    EXPECT_EQ (delivered.front ().delivery_index, 1u);
+    EXPECT_EQ (delivered.front ().scheduled_index, 2u);
+    EXPECT_EQ (delivered.front ().skipped_ticks, 1u);
+    EXPECT_EQ (timer->pending_fire_count, 0u);
+    EXPECT_TRUE (timer->failure_events.empty ());
+}
+
+TEST (FrameworkRelocationSealContract, bound_session_close_compares_the_current_descriptor_identity)
+{
+    // Session-Actor binding §4: the Session owner identity is the host's descriptor
+    // (OwnerId, LeaseGeneration). The receiving Session owner compares command 54
+    // with its current values exactly.
+    auto session_owner = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("close-session-owner"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
+    const location_owner_token_t descriptor_owner{"session-host-7f3a", 6};
+    session_owner->configure_session_route_owner (
+      [descriptor_owner] { return std::optional<location_owner_token_t> (descriptor_owner); });
+    int physical_closes = 0;
+    const auto session_rid = zlink::routing_id_t::from ("close-session-rid");
+    const auto connection = session_owner->sessions ().open (session_rid.to_hex (), {}, {}, 0,
+                                                             [&] { ++physical_closes; });
+    const stateful::object_ref_t session_actor{
+      stateful::object_kind_t::actor, "close-actor", 7, 11, "player", "close-actor-owner"};
+    const auto [bind_error, binding] =
+      session_owner->sessions ().bind_remote (connection, session_actor, 1, 17);
+    ASSERT_EQ (bind_error, stateful::stateful_error_t::none);
+    const auto local = session_owner->status ();
+    const auto close = [&] (std::string owner_id, std::uint64_t lease_generation) {
+        const protocol::bound_session_close_t request{
+          23,
+          session_actor.key,
+          session_actor.object_generation,
+          {local.routing_id ().to_bytes (), local.lifecycle_generation (), std::move (owner_id),
+           lease_generation, session_rid.to_bytes (), binding.binding_generation}};
+        ASSERT_TRUE (
+          session_owner->transport ().mailbox ().try_enqueue (mesh::service_mailbox_record_t{
+            "bound-session-close", mesh::service_mailbox_domain_t::infrastructure,
+            zlink::framework::detail::backend::materialize_binding_parts (
+              {protocol::encode_bound_session_close (request)}),
+            zlink::routing_id_t::from ("close-actor-owner").to_bytes (), std::nullopt, std::nullopt,
+            1}));
+        const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
+                                       std::vector<zlink::message_t>) {};
+        (void) session_owner->dispatch_ready (noop_dispatch).result ();
+    };
+
+    close ("session-host-other", 6);
+    close ("session-host-7f3a", local.lifecycle_generation ());
+    EXPECT_EQ (physical_closes, 0);
+    close ("session-host-7f3a", 6);
+    EXPECT_EQ (physical_closes, 1);
 }

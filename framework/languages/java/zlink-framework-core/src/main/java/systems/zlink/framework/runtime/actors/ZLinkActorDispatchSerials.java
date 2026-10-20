@@ -1,9 +1,13 @@
 package systems.zlink.framework.runtime.actors;
 
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
+import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
@@ -15,7 +19,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -32,7 +38,7 @@ final class ZLinkActorDispatchSerials {
     // coordinator after that registry entry disappears.
     private final Map<String, QueuedTurn> actorTargets = new HashMap<>();
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
-    private final Map<String, Teardown> teardowns = new HashMap<>();
+    private final Map<String, CompletionStage<Void>> teardowns = new HashMap<>();
     // A deferred Join barrier is queued on the Actor's dispatch target at
     // registration time, but a same-node Join re-targets the Actor to the
     // target Spot as soon as that Spot admits it (spec 05-spot-actor-membership
@@ -150,7 +156,7 @@ final class ZLinkActorDispatchSerials {
                                                 snapshot.incarnation())));
     }
 
-    private CompletionStage<QueuedTurn> prepareAsync(
+    CompletionStage<QueuedTurn> prepareAsync(
             String actorId, ZLinkActorDispatchTarget.ActivationSnapshot snapshot) {
         return onRegistry(() -> prepareOnRegistry(actorId, snapshot, null))
                 .thenCompose(
@@ -201,7 +207,9 @@ final class ZLinkActorDispatchSerials {
             // Both a restored activation and a retargeted activation accept payloads behind
             // their existing lifecycle completion. Admission belongs to the queue commit.
             CompletionStage<Void> lifecycle = barrier;
-            turn.activation().executeLifecycleNext(() -> lifecycle, null);
+            turn.activation()
+                    .executeLifecycleNext(
+                            () -> ZLinkSerialExecutionQueue.yieldCurrent(lifecycle), null);
         }
         return turn;
     }
@@ -221,7 +229,7 @@ final class ZLinkActorDispatchSerials {
     }
 
     CompletionStage<Void> removeAsync(String actorId) {
-        Teardown terminal = new Teardown(null);
+        CompletableFuture<Void> terminal = new CompletableFuture<>();
         return onRegistry(
                         () -> {
                             CompletionStage<Void> existing = teardowns.get(actorId);
@@ -302,7 +310,7 @@ final class ZLinkActorDispatchSerials {
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease) {
-        return enqueue(turn, payloadBytes, operation, relocationRelease, null);
+        return enqueue(turn, payloadBytes, operation, relocationRelease, null, null, null);
     }
 
     CompletionStage<Void> enqueue(
@@ -310,16 +318,20 @@ final class ZLinkActorDispatchSerials {
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
-            CompletableFuture<Void> requestAdmission) {
+            CompletableFuture<Void> requestAdmission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
         Supplier<CompletionStage<Void>> turnOperation = () -> runTurn(turn, operation);
         CompletableFuture<Void> admission =
                 requestAdmission == null ? new CompletableFuture<>() : requestAdmission;
         return enqueueAfterAdmission(
-                turn,
                 admission,
+                header,
+                payload,
                 accepted ->
-                        turn.target.executeActor(
-                                turn.activation, payloadBytes, turnOperation, accepted));
+                        turn.target()
+                                .executeActor(
+                                        turn.activation(), payloadBytes, turnOperation, accepted));
     }
 
     CompletionStage<Void> enqueue(
@@ -337,18 +349,18 @@ final class ZLinkActorDispatchSerials {
         Supplier<CompletionStage<Void>> turnOperation = () -> runTurn(turn, operation);
         CompletableFuture<Void> admission = new CompletableFuture<>();
         return enqueueAfterAdmission(
-                turn,
                 admission,
                 accepted ->
                         acceptedJournalRecord == null || acceptedJournalRecord.length == 0
-                                ? turn.target.executeActor(
-                                        turn.activation, 0, turnOperation, accepted)
-                                : turn.target.executeActor(
-                                        turn.activation,
-                                        acceptedJournalRecord,
-                                        turnOperation,
-                                        relocationRelease,
-                                        accepted));
+                                ? turn.target()
+                                        .executeActor(turn.activation(), 0, turnOperation, accepted)
+                                : turn.target()
+                                        .executeActor(
+                                                turn.activation(),
+                                                acceptedJournalRecord,
+                                                turnOperation,
+                                                relocationRelease,
+                                                accepted));
     }
 
     CompletionStage<Void> enqueueLazyRecord(
@@ -363,6 +375,8 @@ final class ZLinkActorDispatchSerials {
                 acceptedJournalRecordSizeHint,
                 operation,
                 relocationRelease,
+                null,
+                null,
                 null);
     }
 
@@ -372,132 +386,89 @@ final class ZLinkActorDispatchSerials {
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
-            CompletableFuture<Void> requestAdmission) {
+            CompletableFuture<Void> requestAdmission,
+            ZLinkBackendActorReceived header,
+            Message payload) {
         Supplier<CompletionStage<Void>> turnOperation = () -> runTurn(turn, operation);
         CompletableFuture<Void> admission =
                 requestAdmission == null ? new CompletableFuture<>() : requestAdmission;
         return enqueueAfterAdmission(
-                turn,
                 admission,
+                header,
+                payload,
                 accepted ->
-                        turn.target.executeActorLazyRecord(
-                                turn.activation,
-                                acceptedJournalRecord,
-                                acceptedJournalRecordSizeHint,
-                                turnOperation,
-                                relocationRelease,
-                                accepted));
+                        turn.target()
+                                .executeActorLazyRecord(
+                                        turn.activation(),
+                                        acceptedJournalRecord,
+                                        acceptedJournalRecordSizeHint,
+                                        turnOperation,
+                                        relocationRelease,
+                                        accepted));
     }
 
     CompletionStage<Void> awaitTeardown(String actorId) {
-        return onRegistry(() -> teardowns.get(actorId))
-                .thenCompose(terminal -> terminal == null ? COMPLETED : terminal);
+        return onRegistry(() -> teardowns.getOrDefault(actorId, COMPLETED))
+                .thenCompose(terminal -> terminal);
     }
 
     CompletionStage<Void> beginTeardown(String actorId, Supplier<CompletionStage<Void>> cleanup) {
-        return beginTeardown(actorId, null, cleanup);
+        boolean current = isCurrent(actorId);
+        return registerTeardown(actorId, () -> COMPLETED, cleanup)
+                .thenCompose(terminal -> current ? COMPLETED : terminal);
     }
 
-    CompletionStage<Void> beginTeardown(
+    CompletionStage<CompletionStage<Void>> registerTeardown(
             String actorId,
-            ZLinkSerialExecutionQueue.ActiveTurnSealHandle activeTurn,
+            Supplier<CompletionStage<Void>> beforeStart,
             Supplier<CompletionStage<Void>> cleanup) {
-        boolean current = isCurrent(actorId);
         return trackedTurnAsync(actorId)
                 .thenCompose(
-                        resolved -> {
-                            var lane = resolved.activation().relocationLane();
-                            Supplier<TeardownSetup> claim =
-                                    () -> {
-                                        Teardown existing = teardowns.get(actorId);
-                                        if (existing != null)
-                                            return new TeardownSetup(existing, null, false, null);
-                                        Teardown terminal = new Teardown(cleanup);
-                                        teardowns.put(actorId, terminal);
-                                        QueuedTurn tracked =
-                                                actorTargets.computeIfAbsent(
-                                                        actorId, ignored -> resolved);
-                                        return new TeardownSetup(
-                                                terminal,
-                                                tracked,
-                                                true,
-                                                lifecycleBarriers.remove(actorId));
-                                    };
-                            Supplier<CompletionStage<Void>> begin =
-                                    () ->
-                                            onRegistry(claim)
-                                                    .thenCompose(
-                                                            setup -> {
-                                                                if (setup.barrier() != null)
-                                                                    setup.barrier().complete(null);
-                                                                if (setup.created())
-                                                                    startTeardown(actorId, setup);
-                                                                if (activeTurn != null) {
-                                                                    // The registered callback
-                                                                    // belongs
-                                                                    // to its dependent Join turn.
-                                                                    return lane.runInActiveTurn(
-                                                                            activeTurn,
-                                                                            () -> {
-                                                                                lane
-                                                                                        .sealClosingAdmission();
-                                                                                return lane.awaitQuiescence(
-                                                                                                ZLinkSerialExecutionQueue
-                                                                                                        .Quiescence
-                                                                                                        .APPLICATION)
-                                                                                        .thenCompose(
-                                                                                                ignored ->
-                                                                                                        executeTeardownCleanup(
-                                                                                                                setup
-                                                                                                                        .terminal(),
-                                                                                                                lane,
-                                                                                                                activeTurn));
-                                                                            });
-                                                                }
-                                                                return current
-                                                                        ? COMPLETED
-                                                                        : setup.terminal();
-                                                            });
-                            return activeTurn == null
-                                    ? begin.get()
-                                    : lane.runInActiveTurn(activeTurn, begin);
-                        });
-    }
-
-    private CompletionStage<Void> executeTeardownCleanup(
-            Teardown teardown,
-            ZLinkSerialExecutionQueue lane,
-            ZLinkSerialExecutionQueue.ActiveTurnSealHandle activeTurn) {
-        return onRegistry(
-                        () -> {
-                            // A callback has one execution claim and one shared result.
-                            Supplier<CompletionStage<Void>> claimed = teardown.cleanup;
-                            teardown.cleanup = null;
-                            return teardown.cleanupResult.isDone() ? null : claimed;
-                        })
+                        resolved ->
+                                onRegistry(
+                                        () -> {
+                                            CompletionStage<Void> existing = teardowns.get(actorId);
+                                            if (existing != null)
+                                                return new TeardownSetup(
+                                                        existing, null, null, false, null, null);
+                                            CompletableFuture<Void> terminal =
+                                                    new CompletableFuture<>();
+                                            teardowns.put(actorId, terminal);
+                                            QueuedTurn tracked =
+                                                    actorTargets.computeIfAbsent(
+                                                            actorId, ignored -> resolved);
+                                            return new TeardownSetup(
+                                                    terminal,
+                                                    tracked.target(),
+                                                    terminal,
+                                                    true,
+                                                    lifecycleBarriers.remove(actorId),
+                                                    tracked.activation());
+                                        }))
                 .thenCompose(
-                        claimed -> {
-                            if (claimed != null) {
-                                CompletionStage<Void> executed;
-                                try {
-                                    executed =
-                                            activeTurn == null
-                                                    ? lane.underSharedSpotGateAsync(claimed)
-                                                            .thenCompose(stage -> stage)
-                                                    : lane.runInActiveTurn(activeTurn, claimed);
-                                } catch (RuntimeException | Error failure) {
-                                    executed = CompletableFuture.failedFuture(failure);
-                                }
-                                executed.whenComplete(
-                                        (ignored, failure) -> {
-                                            if (failure == null)
-                                                teardown.cleanupResult.complete(null);
-                                            else
-                                                teardown.cleanupResult.completeExceptionally(
-                                                        failure);
-                                        });
-                            }
-                            return teardown.cleanupResult;
+                        setup -> {
+                            if (!setup.created())
+                                return CompletableFuture.completedFuture(setup.teardown());
+                            if (setup.barrier() != null) setup.barrier().complete(null);
+                            return ZLinkHandlerStages.fromStageSupplier(beforeStart)
+                                    .handle(
+                                            (ignored, failure) -> {
+                                                startTeardown(
+                                                        actorId,
+                                                        setup,
+                                                        failure == null
+                                                                ? cleanup
+                                                                : () ->
+                                                                        ZLinkHandlerStages
+                                                                                .completeAll(
+                                                                                        List.of(
+                                                                                                () ->
+                                                                                                        CompletableFuture
+                                                                                                                .failedFuture(
+                                                                                                                        failure),
+                                                                                                cleanup)));
+                                                return setup.teardown();
+                                            });
                         });
     }
 
@@ -593,8 +564,15 @@ final class ZLinkActorDispatchSerials {
     }
 
     private CompletionStage<Void> enqueueAfterAdmission(
-            QueuedTurn turn,
             CompletableFuture<Void> admission,
+            Function<CompletableFuture<Void>, CompletionStage<Void>> enqueue) {
+        return enqueueAfterAdmission(admission, null, null, enqueue);
+    }
+
+    private CompletionStage<Void> enqueueAfterAdmission(
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload,
             Function<CompletableFuture<Void>, CompletionStage<Void>> enqueue) {
         var ownership =
                 systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
@@ -609,6 +587,36 @@ final class ZLinkActorDispatchSerials {
         } catch (RuntimeException | Error failure) {
             queued = CompletableFuture.failedFuture(failure);
         }
+        if (header != null && header.relocationRedirect() != null) {
+            return queued.handle(
+                            (ignored, error) -> {
+                                if (ownership != null) ownership.close();
+                                if (error == null) return COMPLETED;
+                                Throwable cause = error;
+                                while ((cause instanceof CompletionException
+                                                || cause instanceof ExecutionException)
+                                        && cause.getCause() != null) cause = cause.getCause();
+                                if (cause
+                                        instanceof
+                                        ZLinkSerialExecutionQueue.RelocatedOwnerException) {
+                                    // The local candidate never ran. Preserve its operation and
+                                    // reply route through Message Follow (routing spec §2.5), and
+                                    // complete admission only after the relay accepts the frames.
+                                    try {
+                                        if (header.relocationRedirect()
+                                                .redirect(header.message(), payload)) {
+                                            admission.complete(null);
+                                            return COMPLETED;
+                                        }
+                                    } catch (RuntimeException redirectFailure) {
+                                        cause.addSuppressed(redirectFailure);
+                                    }
+                                }
+                                admission.completeExceptionally(cause);
+                                return CompletableFuture.<Void>failedFuture(cause);
+                            })
+                    .thenCompose(stage -> stage);
+        }
         return queued.whenComplete(
                 (ignored, error) -> {
                     if (ownership != null) ownership.close();
@@ -616,25 +624,14 @@ final class ZLinkActorDispatchSerials {
                 });
     }
 
-    private void startTeardown(String actorId, TeardownSetup setup) {
+    private void startTeardown(
+            String actorId, TeardownSetup setup, Supplier<CompletionStage<Void>> cleanup) {
         try {
-            setup.turn().activation().relocationLane().sealClosingAdmission();
-            setup.turn()
-                    .activation()
+            setup.activation().relocationLane().sealClosingAdmission();
+            setup.activation()
                     .relocationLane()
                     .awaitQuiescence(ZLinkSerialExecutionQueue.Quiescence.APPLICATION)
-                    .thenCompose(
-                            ignored ->
-                                    setup.turn()
-                                            .activation()
-                                            .executeLifecycle(
-                                                    () ->
-                                                            executeTeardownCleanup(
-                                                                    setup.terminal(),
-                                                                    setup.turn()
-                                                                            .activation()
-                                                                            .relocationLane(),
-                                                                    null)))
+                    .thenCompose(ignored -> setup.activation().executeLifecycle(cleanup))
                     .whenComplete((ignored, error) -> completeTeardown(actorId, setup, error));
         } catch (RuntimeException failure) {
             completeTeardown(actorId, setup, failure);
@@ -644,8 +641,7 @@ final class ZLinkActorDispatchSerials {
     private void completeTeardown(String actorId, TeardownSetup setup, Throwable error) {
         CompletionStage<Void> removed;
         try {
-            removed =
-                    setup.turn().target().removeActorQueueAsync(actorId, setup.turn().activation());
+            removed = setup.target().removeActorQueueAsync(actorId, setup.activation());
         } catch (RuntimeException | Error failure) {
             removed = CompletableFuture.failedFuture(failure);
         }
@@ -662,7 +658,7 @@ final class ZLinkActorDispatchSerials {
                                                         actorId,
                                                         (id, turn) ->
                                                                 turn.activation()
-                                                                                == setup.turn()
+                                                                                == setup
                                                                                         .activation()
                                                                         ? null
                                                                         : turn);
@@ -694,30 +690,13 @@ final class ZLinkActorDispatchSerials {
                 });
     }
 
-    record QueuedTurn(
-            String actorId,
-            ZLinkActorDispatchTarget target,
-            Object incarnation,
-            ZLinkActorSerialExecutor activation) {}
-
-    private static final class Teardown extends CompletableFuture<Void> {
-        private Supplier<CompletionStage<Void>> cleanup;
-        private final CompletableFuture<Void> cleanupResult = new CompletableFuture<>();
-
-        private Teardown(Supplier<CompletionStage<Void>> cleanup) {
-            this.cleanup = cleanup;
-            if (cleanup == null) cleanupResult.complete(null);
-            // Scheduling or retirement can fail before a callback was claimed. Such a failure
-            // must also finish a dependent owned-turn wait.
-            whenComplete(
-                    (ignored, failure) -> {
-                        if (failure != null) cleanupResult.completeExceptionally(failure);
-                    });
-        }
-    }
-
     private record TeardownSetup(
-            Teardown terminal, QueuedTurn turn, boolean created, CompletableFuture<Void> barrier) {}
+            CompletionStage<Void> teardown,
+            ZLinkActorDispatchTarget target,
+            CompletableFuture<Void> terminal,
+            boolean created,
+            CompletableFuture<Void> barrier,
+            ZLinkActorSerialExecutor activation) {}
 
     private record RemovalClaim(
             ZLinkActorDispatchTarget target,

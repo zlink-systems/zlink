@@ -488,17 +488,15 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         metadata,
         correlationId
       );
-      const completion = await this.submitRequestOperation(
-        meshName,
-        timeoutMs,
-        signal,
-        `MeshNode '${meshName}' request to node '${targetNodeRid}'`,
-        (remainingTimeoutMs) => {
-          const operationId = node.requestToNode(toBackendRoutingId(targetNodeRid), parts, {
-            flags: 1,
-            onAdmitted,
-            timeoutMs: remainingTimeoutMs
-          });
+      const requestOptions = { flags: 1, onAdmitted, timeoutMs: requestTimeoutBudget(timeoutMs) };
+      let completion: ZLinkMeshCompletion;
+      try {
+        completion = await this.completionTable(meshName).submit(() => {
+          const operationId = node.requestToNode(
+            toBackendRoutingId(targetNodeRid),
+            parts,
+            requestOptions
+          );
           this.traceNodeRequest(
             ZLinkMessageFlowOutcome.Sent,
             undefined,
@@ -508,8 +506,13 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
             correlationId
           );
           return operationId;
-        }
-      );
+        }, signal);
+      } catch (error) {
+        throw mapMeshSubmissionError(
+          error,
+          `MeshNode '${meshName}' request to node '${targetNodeRid}'`
+        );
+      }
       const reply = this.decodeMeshReply<TReply>(meshName, completion);
       this.traceNodeRequest(
         ZLinkMessageFlowOutcome.ReplyReceived,
@@ -658,55 +661,31 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     );
     const metric = this.metrics?.startRequest(meshName, 'channel');
     try {
-      const completion = await this.submitRequestOperation(
-        meshName,
-        timeoutMs,
-        signal,
-        `MeshNode '${meshName}' request to channel '${channelName}'`,
-        (remainingTimeoutMs) =>
-          node.requestToChannel(channelName, parts, {
-            flags: 1,
-            timeoutMs: remainingTimeoutMs,
-            onAdmitted
-          })
-      );
+      const requestOptions = { flags: 1, timeoutMs: requestTimeoutBudget(timeoutMs), onAdmitted };
+      let completion: ZLinkMeshCompletion;
+      try {
+        completion = await this.completionTable(meshName).submit(
+          () => node.requestToChannel(channelName, parts, requestOptions),
+          signal
+        );
+      } catch (error) {
+        throw mapMeshSubmissionError(
+          error,
+          `MeshNode '${meshName}' request to channel '${channelName}'`
+        );
+      }
       const reply = this.decodeMeshReply<TReply>(meshName, completion);
       metric?.complete('completed');
       return reply;
     } catch (error) {
-      metric?.complete(requestMetricOutcome(error));
-      if (requestMetricOutcome(error) === 'target_not_found') {
+      metric?.complete(requestMetricOutcome(error, signal));
+      if (
+        error instanceof ZLinkFrameworkException &&
+        internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
+      ) {
         this.metrics?.recordChannelSelectionFailure(meshName, channelName, 'no_ready_target');
       }
       throw error;
-    }
-  }
-
-  private async submitRequestOperation(
-    meshName: string,
-    timeoutMs: number | undefined,
-    signal: AbortSignal | undefined,
-    operation: string,
-    attempt: (
-      remainingTimeoutMs: number
-    ) => ReturnType<Parameters<ZLinkMeshCompletionTable['submit']>[0]>
-  ): Promise<ZLinkMeshCompletion> {
-    const effectiveTimeoutMs = Math.max(1, timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
-    const deadlineMs = performance.now() + effectiveTimeoutMs;
-    const remainingTimeoutMs = deadlineMs - performance.now();
-    if (remainingTimeoutMs <= 0) {
-      throw createInternalFrameworkException(
-        ZLinkFrameworkInternalErrorKind.DeadlineExceeded,
-        `${operation} timed out before submission.`
-      );
-    }
-    try {
-      return await this.completionTable(meshName).submit(
-        () => attempt(Math.max(1, Math.ceil(remainingTimeoutMs))),
-        signal
-      );
-    } catch (error) {
-      throw mapMeshSubmissionError(error, operation);
     }
   }
 
@@ -1169,6 +1148,14 @@ function instanceSpotRouteFence(target: ZLinkSpotRouteTarget): ServiceInstanceRo
   };
 }
 
+/**
+ * The binding request timeout for one submission. The binding owns the
+ * deadline after submit; the completion table slot only waits for it.
+ */
+function requestTimeoutBudget(timeoutMs: number | undefined): number {
+  return Math.max(1, Math.ceil(timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS));
+}
+
 function mapMeshSubmitResult(result: number): ZLinkSubmitResult {
   return classifySubmitResult(result, 'Mesh submission');
 }
@@ -1260,14 +1247,18 @@ export function meshRequestFailure(
   return error;
 }
 
-function requestMetricOutcome(error: unknown): string {
+function requestMetricOutcome(error: unknown, signal?: AbortSignal): string {
   if (error instanceof ZLinkFrameworkException) {
-    if (internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound)
-      return 'target_not_found';
     if (internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.DeadlineExceeded)
       return 'timed_out';
     if (internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RuntimeShutdown)
       return 'shutdown';
   }
+  if (
+    signal?.aborted === true &&
+    (error === signal.reason ||
+      (error instanceof Error && (error.cause === signal.reason || error.name === 'AbortError')))
+  )
+    return 'cancelled';
   return 'failed';
 }

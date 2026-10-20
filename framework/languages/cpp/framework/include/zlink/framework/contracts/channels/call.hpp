@@ -3,7 +3,6 @@
 
 #include <zlink/framework/contracts/detail/call_facade.hpp>
 #include <zlink/framework/contracts/dispatch/request_task.hpp>
-#include <zlink/framework/contracts/dispatch/request_task.hpp>
 #include <zlink/framework/contracts/codecs/serializer.hpp>
 
 #include <chrono>
@@ -87,14 +86,14 @@ template <typename TReply> class request_call_t
         return async ().result ().value ();
     }
 
-    task_t<TReply> yield () { return detail::release_turn_on_suspend<TReply> (start (true)); }
+    task_t<TReply> yield ()
+    {
+        return detail::yield_call<TReply> ([this] { return start (true); });
+    }
 
   private:
     request_task_t<TReply> start (bool release_turn)
     {
-        if (release_turn && !detail::current_serial_turn_allows_yield ()) {
-            return request_task_t<TReply> (detail::unsupported_yield_task<TReply> ().result ());
-        }
         if (_preflight) {
             const auto admitted = _preflight (release_turn);
             if (!admitted) {
@@ -178,7 +177,7 @@ class channel_request_call_t
         return *this;
     }
 
-    template <typename TReply> request_task_t<TReply> async () { return start<TReply> (false); }
+    template <typename TReply> request_task_t<TReply> async () { return start<TReply> (); }
 
     template <typename TReply> TReply submit ()
     {
@@ -188,31 +187,26 @@ class channel_request_call_t
 
     template <typename TReply> task_t<TReply> yield ()
     {
-        return detail::release_turn_on_suspend<TReply> (start<TReply> (true));
+        return detail::yield_call<TReply> ([this] { return start<TReply> (); });
     }
 
   protected:
-    template <typename TReply> request_task_t<TReply> start (bool release_turn)
+    template <typename TReply> request_task_t<TReply> start ()
     {
         /* `async()` and `yield()` are commonly called on a temporary returned
          * by MessageBus::request(). Copy every value needed by the coroutine
          * before the call object can be destroyed. The suspended operation must
          * own its request state instead of retaining this object's address. */
-        return start_owned<TReply> (release_turn, _packet_name, _serializers, _submit, _timeout,
-                                    _metadata);
+        return start_owned<TReply> (_packet_name, _serializers, _submit, _timeout, _metadata);
     }
 
     template <typename TReply>
-    static request_task_t<TReply> start_owned (bool release_turn,
-                                               std::string packet_name,
+    static request_task_t<TReply> start_owned (std::string packet_name,
                                                serializer_registry_t *serializers,
                                                submit_fn_t submit,
                                                std::chrono::milliseconds timeout,
                                                metadata_map_t metadata)
     {
-        if (release_turn && !detail::current_serial_turn_allows_yield ()) {
-            co_return co_await detail::unsupported_yield_task<TReply> ();
-        }
         if (!submit) {
             co_return result_t<TReply>::failure (framework_error_kind_t::protocol_error,
                                                  "request call is not bound to a channel client");
@@ -394,12 +388,20 @@ class publish_call_t
               result_t<void>::failure (framework_error_kind_t::invalid_operation,
                                        "logical multicast call has already been submitted"));
         }
+        if (_preflight) {
+            const auto admitted = _preflight ();
+            if (!admitted) {
+                return task_t<void> (admitted);
+            }
+        }
         if (_immediate) {
             return task_t<void> (*_immediate);
         }
         if (_async_submit) {
             return detail::submit_logical_multicast_async_task (
-              [submit = _async_submit, metadata = _metadata] () mutable {
+              [submit = _async_submit, metadata = _metadata,
+               context_lifetime = _context_lifetime] () mutable {
+                  (void) context_lifetime;
                   if (!submit) {
                       throw framework_exception_t (
                         framework_error_kind_t::protocol_error,
@@ -410,7 +412,9 @@ class publish_call_t
               _timeout);
         }
         return detail::submit_logical_multicast_task (
-          [submit = _submit, metadata = _metadata] () mutable {
+          [submit = _submit, metadata = _metadata,
+           context_lifetime = _context_lifetime] () mutable {
+              (void) context_lifetime;
               if (!submit) {
                   throw framework_exception_t (
                     framework_error_kind_t::protocol_error,
@@ -422,10 +426,15 @@ class publish_call_t
     }
 
   private:
+    friend class spot_context_t;
+
     std::optional<result_t<void>> _immediate;
     metadata_map_t _metadata;
     submit_fn_t _submit;
     async_submit_fn_t _async_submit;
+    std::function<result_t<void> ()> _preflight;
+    // Retain the source Context through submission, as its erased callback did.
+    std::shared_ptr<void> _context_lifetime;
     std::chrono::milliseconds _timeout{std::chrono::seconds (1)};
     std::shared_ptr<detail::submit_once_t> _submission = std::make_shared<detail::submit_once_t> ();
 };

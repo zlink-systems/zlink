@@ -57,6 +57,7 @@ import systems.zlink.framework.runtime.internal.binding.spot.PrepareActorTransfe
 import systems.zlink.framework.runtime.internal.binding.spot.ReadyRecord;
 import systems.zlink.framework.runtime.internal.binding.spot.ReceiveRecord;
 import systems.zlink.framework.runtime.internal.binding.spot.RecordKind;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
@@ -1369,18 +1370,22 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
 
         @Override
         public boolean sendToActor(
-                ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags) {
+                ZLinkServiceM6BWireCodec.ActorRouteFence target,
+                List<Message> parts,
+                SendFlags flags) {
+            ZLinkBackendActorRef actor = target.actor();
             record("sendToActor." + actor.actorId() + "." + firstPart(parts));
             return true;
         }
 
         @Override
         public CompletionStage<List<Message>> requestToActor(
-                ZLinkBackendActorRef actor,
+                ZLinkServiceM6BWireCodec.ActorRouteFence target,
                 List<Message> parts,
                 SendFlags flags,
                 Duration timeout,
                 CompletableFuture<Void> requestAdmission) {
+            ZLinkBackendActorRef actor = target.actor();
             record("requestToActor." + actor.actorId() + "." + firstPart(parts));
             return requestReply(
                     CompletableFuture.completedFuture(List.of(jsonStringMessage("actor-reply"))),
@@ -1729,7 +1734,7 @@ public final class FakeZLinkBackendAdapterFactory implements ZLinkBackendAdapter
         }
 
         @Override
-        public void setSubscription(String topic) {
+        public void setSubscription(String channelName, String topic) {
             record("setSubscription." + topic);
         }
 

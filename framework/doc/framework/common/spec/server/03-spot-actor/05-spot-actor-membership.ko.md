@@ -340,6 +340,11 @@ Session owner에 target route 적용과 seal 해제를 one-way로 알린다.
 뒤 completion callback을 실행한다. Completion이 계속 실패하면 Actor를 sealed 상태로
 유지하고 barrier 뒤의 일반 message를 실행하지 않는다.
 
+한 handler가 여러 Actor의 Join을 등록해도 각 Join은 해당 Actor의 operation이다. 위 표의 "Actor가 이동
+중이다"는 그 Actor 자신의 Join terminal과
+[Deferred Join barrier](../00-foundation/02-glossary.ko.md#deferred-join-barrier)의 completion ordering이
+끝나면 해제한다. 같은 handler가 등록한 다른 Actor의 Join 완료는 해제 조건이 아니다.
+
 Same-node join은 relocation이 아니므로 relocation policy가 `DisableRelocation`이어도 허용한다.
 
 Actor가 이미 요청한 User Spot에 속해 있거나 Entry Spot Actor가 다시
@@ -813,7 +818,7 @@ admission deadline 때문에 message, timer, phase update와 cleanup을 수행�
 ## 9. Message Follow
 
 Commit 뒤 source는 `MessageFollowDuration` 안에서 이전 주소로 도착한 message를 committed
-target으로 relay한다. Relay는 Store를 읽거나 application handler를 실행하지 않으며 original
+target으로 relay한다([Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)의 연속 이동 예외 제외). Relay는 Store를 읽거나 application handler를 실행하지 않으며 original
 operation identity, generation, payload와 reply route를 유지한다. Route duration이 끝난 뒤 이전
 주소로 도착한 request는 `Unavailable`로 끝난다.
 

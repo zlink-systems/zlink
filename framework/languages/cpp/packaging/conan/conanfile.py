@@ -33,7 +33,7 @@ ZLINK_FRAMEWORK_CPP_THIRD_PARTY_REQUIREMENTS = (
 
 class ZlinkFrameworkConan(ConanFile):
     name = "zlink-framework"
-    version = "0.30.0"
+    version = "0.30.1"
     package_type = "static-library"
     license = "zlink License 1.0"
     homepage = "https://github.com/zlink-systems/zlink"
@@ -76,7 +76,7 @@ class ZlinkFrameworkConan(ConanFile):
             if not os.path.isfile(os.path.join(self.source_folder, relative_path)):
                 raise ConanInvalidConfiguration(
                     "Incomplete framework C++ archive: missing " + relative_path
-                    + ". Publish the output of cmake/prepare-source-archive.cmake "
+                    + ". Publish the output of scripts/package-source.py "
                     "and update conandata.yml."
                 )
 

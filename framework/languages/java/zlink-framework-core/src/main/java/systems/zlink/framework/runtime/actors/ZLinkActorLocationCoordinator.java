@@ -134,18 +134,6 @@ final class ZLinkActorLocationCoordinator {
         return findStoredActorRef(actorId);
     }
 
-    CompletionStage<
-                    systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers
-                            .DirectJoinSessionFence>
-            directJoinSessionFence(
-                    String actorId, RoutingId sessionOwnerNodeRid, RoutingId targetNodeRid) {
-        if (resolvers == null) {
-            return CompletableFuture.failedFuture(
-                    new IllegalStateException("Location Store resolver is unavailable"));
-        }
-        return resolvers.resolveDirectJoinSessionFence(actorId, sessionOwnerNodeRid, targetNodeRid);
-    }
-
     CompletionStage<Void> actorJoinedSpot(ZLinkActor actor, String spotId) {
         if (lifecycle == null) {
             return CompletableFuture.completedFuture(null);

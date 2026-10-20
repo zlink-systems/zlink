@@ -108,7 +108,9 @@ internal static class ZLinkSessionRelocationWire
         string actorId,
         RoutingId actorNodeRid,
         ZLinkActorBoundSession session,
-        ZLinkSessionRelocationContext context
+        ZLinkSessionRelocationContext context,
+        RoutingId targetNodeRid,
+        ulong targetNodeGeneration
     )
     {
         var route = new ZLinkRemoteActorBoundSessionRoute(
@@ -126,14 +128,23 @@ internal static class ZLinkSessionRelocationWire
             session.SessionOwnerId,
             session.SessionOwnerLeaseGeneration
         );
-        return CreateSeal(actorId, actorNodeRid, route, context);
+        return CreateSeal(
+            actorId,
+            actorNodeRid,
+            route,
+            context,
+            targetNodeRid,
+            targetNodeGeneration
+        );
     }
 
     internal static ZLinkServiceWireCodec.SessionRelocationSealRecord CreateSeal(
         string actorId,
         RoutingId actorNodeRid,
         ZLinkRemoteActorBoundSessionRoute route,
-        ZLinkSessionRelocationContext context
+        ZLinkSessionRelocationContext context,
+        RoutingId targetNodeRid,
+        ulong targetNodeGeneration
     )
     {
         RequireExact(route, context);
@@ -159,7 +170,9 @@ internal static class ZLinkSessionRelocationWire
                 route.AuthorityOwnerGeneration,
                 route.OwnerLeaseGeneration
             ),
-            CreateSessionFence(route)
+            CreateSessionFence(route),
+            targetNodeRid,
+            targetNodeGeneration
         );
     }
 

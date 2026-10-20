@@ -1367,6 +1367,8 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(requestSource, follower.LastRequestSource);
         Assert.Empty(follower.LastApplicationMetadata);
         Assert.Equal([193], follower.LastPayload);
+        // The reply reaches the caller before the handler's finally runs on the owner thread.
+        await follower.HandlerCompleted.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(follower.DisposedByHandler);
         Assert.All(
             follower.LastMessages,
@@ -1912,14 +1914,12 @@ public sealed partial class StatefulServiceRuntimeTests
                 .SendToSpot(target.RoutingId, spotId, spot.LifecycleGeneration, [payload])
         );
 
+        using var finalReady = new MeshReadyBatch();
         await WaitUntilAsync(() =>
         {
-            using var ready = new MeshReadyBatch();
-            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
-            return ready.Count == 2;
+            target.DrainReady(MeshReadyDomains.Application, finalReady, RecvFlags.DontWait);
+            return finalReady.Count == 2;
         });
-        using var finalReady = new MeshReadyBatch();
-        target.DrainReady(MeshReadyDomains.Application, finalReady, RecvFlags.DontWait);
         Assert.Contains(
             Enumerable.Range(0, finalReady.Count),
             index => finalReady[index].OwnerKind == MeshOwnerKind.Actor
@@ -1935,15 +1935,13 @@ public sealed partial class StatefulServiceRuntimeTests
             SubmitResult.Ok,
             source.RequestToActor(actor, [payload], out var operation, TimeSpan.FromSeconds(1))
         );
-        await WaitUntilAsync(() =>
-        {
-            using var ready = new MeshReadyBatch();
-            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
-            return ready.Count == 1;
-        });
         using (var requestReady = new MeshReadyBatch())
         {
-            target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+            await WaitUntilAsync(() =>
+            {
+                target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+                return requestReady.Count == 1;
+            });
             using var requestClaim = requestReady.TakeClaim(0);
             using var requestBatch = new MeshReceiveBatch();
             Assert.True(requestClaim.Receive(requestBatch, RecvFlags.DontWait));
@@ -2012,15 +2010,13 @@ public sealed partial class StatefulServiceRuntimeTests
             SubmitResult.Ok,
             source.RequestToActor(actor, [payload], out var operation, TimeSpan.FromSeconds(3))
         );
-        await WaitUntilAsync(() =>
-        {
-            using var ready = new MeshReadyBatch();
-            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
-            return ready.Count == 1;
-        });
         using (var requestReady = new MeshReadyBatch())
         {
-            target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+            await WaitUntilAsync(() =>
+            {
+                target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+                return requestReady.Count == 1;
+            });
             using var requestClaim = requestReady.TakeClaim(0);
             using var requestBatch = new MeshReceiveBatch();
             Assert.True(requestClaim.Receive(requestBatch, RecvFlags.DontWait));
@@ -2104,15 +2100,13 @@ public sealed partial class StatefulServiceRuntimeTests
             SubmitResult.Ok,
             source.RequestToActor(actor, [payload], out var operation, TimeSpan.FromSeconds(3))
         );
-        await WaitUntilAsync(() =>
-        {
-            using var ready = new MeshReadyBatch();
-            target.DrainReady(MeshReadyDomains.Application, ready, RecvFlags.DontWait);
-            return ready.Count == 1;
-        });
         using (var requestReady = new MeshReadyBatch())
         {
-            target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+            await WaitUntilAsync(() =>
+            {
+                target.DrainReady(MeshReadyDomains.Application, requestReady, RecvFlags.DontWait);
+                return requestReady.Count == 1;
+            });
             using var requestClaim = requestReady.TakeClaim(0);
             using var requestBatch = new MeshReceiveBatch();
             Assert.True(requestClaim.Receive(requestBatch, RecvFlags.DontWait));
@@ -2289,6 +2283,8 @@ public sealed partial class StatefulServiceRuntimeTests
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var caller = NewNode(context, "reply-terminal-caller");
+        // Drive the receive management owner that processes operation deadlines.
+        caller.Start();
         var requestSource = new ZLinkServiceWireCodec.RequestSourceFence(
             "reply-terminal-owner",
             1,
@@ -5607,6 +5603,13 @@ public sealed partial class StatefulServiceRuntimeTests
 
         public bool DisposedByHandler { get; private set; }
 
+        private readonly TaskCompletionSource _handlerCompleted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        // Completes after DisposedByHandler is set, so a test can order its reads after the handler's finally.
+        public Task HandlerCompleted => _handlerCompleted.Task;
+
         public bool TryFollow(IReadOnlyList<ZLinkBackendActorPart> parts)
         {
             Count++;
@@ -5635,6 +5638,7 @@ public sealed partial class StatefulServiceRuntimeTests
             {
                 ZLinkMessageParts.DisposeAll(LastMessages);
                 DisposedByHandler = true;
+                _handlerCompleted.TrySetResult();
             }
         }
     }

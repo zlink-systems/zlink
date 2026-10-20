@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.actors;
 
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -12,6 +13,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
@@ -182,15 +184,16 @@ final class ZLinkDeferredActorJoinScope {
                         "Actor join defer must target a local Actor allowed by the current"
                                 + " handler");
             }
-            if (state.claimedActorIds.contains(actorId)) {
-                throw failure(
-                        ZLinkFrameworkErrorKind.UNAVAILABLE,
-                        "Actor already has a pending membership transition");
+            for (int intentIndex = 0; intentIndex < state.intents.size(); intentIndex++) {
+                if (state.intents.get(intentIndex).actorId.equals(actorId)) {
+                    throw failure(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "Actor already has a pending membership transition");
+                }
             }
-            state.claimedActorIds.add(actorId);
-            state.claimReleases.add(releaseClaim);
+            Intent intent = new Intent(state, actorId, operation, () -> {}, releaseClaim);
+            state.intents.add(intent);
             if (actorMailbox == null) {
-                state.intents.add(new Intent(deadlineNanos, operation, () -> {}));
                 return;
             }
             CompletableFuture<Boolean> activation = new CompletableFuture<>();
@@ -199,27 +202,24 @@ final class ZLinkDeferredActorJoinScope {
                 barrier =
                         actorMailbox.apply(
                                 () ->
-                                        activation.thenCompose(
-                                                active ->
-                                                        active
-                                                                ? operation.get()
-                                                                : CompletableFuture.completedFuture(
-                                                                        null)));
+                                        ZLinkSerialExecutionQueue.yieldCurrent(activation)
+                                                .thenCompose(
+                                                        active ->
+                                                                active
+                                                                        ? operation.get()
+                                                                        : CompletableFuture
+                                                                                .completedFuture(
+                                                                                        null)));
             } catch (RuntimeException error) {
-                int claimIndex = state.claimedActorIds.lastIndexOf(actorId);
-                state.claimedActorIds.remove(claimIndex);
-                Runnable removedRelease = state.claimReleases.remove(claimIndex);
-                removedRelease.run();
+                state.releaseClaim(intent);
                 throw error;
             }
-            state.intents.add(
-                    new Intent(
-                            deadlineNanos,
-                            () -> {
-                                activation.complete(true);
-                                return barrier;
-                            },
-                            () -> activation.complete(false)));
+            intent.operation =
+                    () -> {
+                        activation.complete(true);
+                        return barrier;
+                    };
+            intent.discard = () -> activation.complete(false);
         }
     }
 
@@ -229,20 +229,22 @@ final class ZLinkDeferredActorJoinScope {
 
     /**
      * Runs one intent's own activation and absorbs its outcome so a single failing join can neither
-     * fail the handler's terminal reply nor stall the intents registered after it (see the
-     * barrier-latch note above). The join's own completion -- accepted, rejected or failed -- still
-     * reaches the caller through {@code onJoinCompleted}; this only stops it from also becoming the
-     * dispatch stage's outcome.
+     * fail the handler's terminal reply nor stall the intents registered after it. The join's own
+     * completion -- accepted, rejected or failed -- still reaches the caller through {@code
+     * onJoinCompleted}; this only stops it from also becoming the dispatch stage's outcome.
      */
     private static CompletionStage<Void> neutralize(Intent intent) {
         try {
-            CompletionStage<Void> operation = intent.operation().get();
-            return operation == null
-                    ? CompletableFuture.completedFuture(null)
-                    : operation.handle((ignored, error) -> null);
+            CompletionStage<Void> operation = intent.operation.get();
+            if (operation != null) {
+                return operation.handle(intent);
+            }
         } catch (RuntimeException error) {
+            intent.owner.releaseClaim(intent);
             return CompletableFuture.completedFuture(null);
         }
+        intent.owner.releaseClaim(intent);
+        return CompletableFuture.completedFuture(null);
     }
 
     static final class Scope implements AutoCloseable {
@@ -278,7 +280,6 @@ final class ZLinkDeferredActorJoinScope {
                                 removeActiveScope();
                                 if (error != null) {
                                     state.discardIntents();
-                                    state.releaseClaims();
                                     CompletionStage<Void> observed =
                                             failureObserver == null
                                                     ? CompletableFuture.completedFuture(null)
@@ -287,28 +288,14 @@ final class ZLinkDeferredActorJoinScope {
                                             nothing ->
                                                     CompletableFuture.failedFuture(unwrap(error)));
                                 }
-                                // Ledger route-mesh-11.0.0 §2.3: the handler reply is already
-                                // terminal once the handler itself succeeds, so a deferred
-                                // join's own failure must never replace it (parity with the
-                                // Node/.NET decoupled shape: Node swallows the activation
-                                // error after capturing the handler result, .NET posts each
-                                // join independently and reports failure only through
-                                // onJoinCompleted). Each intent's own outcome is neutralized
-                                // before the next intent runs -- not only after the whole
-                                // chain -- because a barrier-registered intent already has
-                                // its activation latch reserved on the target actor's queue
-                                // at register() time; skipping straight to the end on a
-                                // failure would leave that latch (and the target's queue)
-                                // stuck forever instead of merely dropping one join.
+                                // Handler and Join completions are independent. Activate in
+                                // registration order even after a Join fails, so later Actors'
+                                // reserved activation latches are not left pending.
                                 CompletionStage<Void> tail =
                                         CompletableFuture.completedFuture(null);
                                 for (Intent intent : List.copyOf(state.intents)) {
                                     tail = tail.thenCompose(nothing -> neutralize(intent));
                                 }
-                                tail.whenComplete(
-                                        (nothing, activationError) -> {
-                                            state.releaseClaims();
-                                        });
                                 // Handler completion and deferred membership completion
                                 // are separate terminals. Barrier-backed intents were
                                 // reserved during registration, so activating their
@@ -328,7 +315,6 @@ final class ZLinkDeferredActorJoinScope {
                 state.sealed = true;
                 removeActiveScope();
                 state.discardIntents();
-                state.releaseClaims();
             }
             if (previous == null) {
                 local.remove();
@@ -351,8 +337,6 @@ final class ZLinkDeferredActorJoinScope {
         private final ActorScopeKey actorKey;
         private final Predicate<String> actorAllowed;
         private final List<Intent> intents = new ArrayList<>();
-        private final List<String> claimedActorIds = new ArrayList<>();
-        private final List<Runnable> claimReleases = new ArrayList<>();
         private volatile boolean sealed;
         private boolean finishStarted;
 
@@ -374,24 +358,45 @@ final class ZLinkDeferredActorJoinScope {
             return actorKey == null || actorKey.equals(candidateActorKey);
         }
 
-        private void releaseClaims() {
-            for (Runnable releaseClaim : List.copyOf(claimReleases)) {
-                releaseClaim.run();
-            }
-            claimReleases.clear();
-            claimedActorIds.clear();
-            intents.clear();
+        private void releaseClaim(Intent intent) {
+            intents.remove(intent);
+            intent.releaseClaim.run();
         }
 
         private void discardIntents() {
             for (Intent intent : List.copyOf(intents)) {
                 intent.discard.run();
+                releaseClaim(intent);
             }
         }
     }
 
-    private record Intent(
-            long deadlineNanos, Supplier<CompletionStage<Void>> operation, Runnable discard) {}
+    private static final class Intent implements BiFunction<Void, Throwable, Void> {
+        private final State owner;
+        private final String actorId;
+        private final Runnable releaseClaim;
+        private Supplier<CompletionStage<Void>> operation;
+        private Runnable discard;
+
+        private Intent(
+                State owner,
+                String actorId,
+                Supplier<CompletionStage<Void>> operation,
+                Runnable discard,
+                Runnable releaseClaim) {
+            this.owner = owner;
+            this.actorId = actorId;
+            this.operation = operation;
+            this.discard = discard;
+            this.releaseClaim = releaseClaim;
+        }
+
+        @Override
+        public Void apply(Void ignored, Throwable error) {
+            owner.releaseClaim(this);
+            return null;
+        }
+    }
 
     private record ActorScopeKey(Object runtimeScope, Object actorIncarnation, String actorId) {}
 

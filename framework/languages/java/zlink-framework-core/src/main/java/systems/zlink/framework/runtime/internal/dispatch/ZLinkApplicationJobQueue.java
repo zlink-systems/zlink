@@ -164,8 +164,8 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
                 return CompletableFuture.failedFuture(
                         new CancellationException("Application Job Queue is closed"));
             }
-            if (waiters.isEmpty() && permitsInUse < effectiveLimit) {
-                permit = reserveUnderLock();
+            if (reserveFreeUnderLock()) {
+                permit = new Permit(this);
                 transition = evaluatePressureUnderLock();
             } else {
                 Waiter waiter = new Waiter(this, null, nanoTime.getAsLong(), metricsEpoch, origin);
@@ -229,7 +229,7 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
                 waiter.future.cancelFromQueue();
                 return result;
             }
-            boolean waiting = !waiters.isEmpty() || permitsInUse >= effectiveLimit;
+            boolean waiting = !admitsNowUnderLock();
             waiters.addLast(waiter);
             if (waiting) {
                 capacityWaitCount = saturatingIncrement(capacityWaitCount);
@@ -261,6 +261,10 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         Objects.requireNonNull(executor, "executor");
         Objects.requireNonNull(resume, "resume");
         Objects.requireNonNull(pending, "pending");
+        Permit immediate = reserveAvailable(origin);
+        if (immediate != null) {
+            return immediate;
+        }
         CompletableFuture<Permit> acquisition = acquire(origin).toCompletableFuture();
         if (acquisition.isDone()) {
             try {
@@ -286,6 +290,80 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
                     }
                 });
         return null;
+    }
+
+    /**
+     * Reserves one permit when capacity is free now and no older waiter exists; otherwise returns
+     * {@code null} without joining the FIFO.
+     */
+    private Permit reserveAvailable(Origin origin) {
+        Objects.requireNonNull(origin, "origin");
+        Permit permit;
+        PressureSnapshot transition;
+        synchronized (lock) {
+            if (!reserveFreeUnderLock()) {
+                return null;
+            }
+            permit = new Permit(this);
+            transition = evaluatePressureUnderLock();
+        }
+        notifyPressureTransition(transition);
+        return permit;
+    }
+
+    /**
+     * Extends one receive rotation's budget (spec 08 §4.1 I1): reserves, in one lock, up to {@code
+     * maximum} further permits that are free now without crossing an older waiter. The owner turns
+     * each into a permit with {@link #takeRotationPermit()} and returns the rest with {@link
+     * #abandonRotationBudget(int)}.
+     */
+    public int reserveRotationBudget(int maximum) {
+        int reserved = 0;
+        PressureSnapshot transition = null;
+        synchronized (lock) {
+            while (reserved < maximum && reserveFreeUnderLock()) {
+                reserved++;
+            }
+            if (reserved > 0) {
+                transition = evaluatePressureUnderLock();
+            }
+        }
+        notifyPressureTransition(transition);
+        return reserved;
+    }
+
+    /** One permit of a budget already counted by {@link #reserveRotationBudget(int)}. */
+    public Permit takeRotationPermit() {
+        return new Permit(this);
+    }
+
+    /** Returns the unused part of a rotation budget in one lock. */
+    public void abandonRotationBudget(int unused) {
+        if (unused <= 0) {
+            return;
+        }
+        ArrayList<Grant> grants = null;
+        PressureSnapshot transition;
+        synchronized (lock) {
+            reservedSupplyPermits -= unused;
+            permitsInUse -= unused;
+            // As many grants as releases, the same as one release per unused permit.
+            Grant grant;
+            for (int granted = 0;
+                    granted < unused
+                            && !closed
+                            && permitsInUse < effectiveLimit
+                            && (grant = grantOldestUnderLock()) != null;
+                    granted++) {
+                if (grants == null) grants = new ArrayList<>();
+                grants.add(grant);
+            }
+            transition = evaluatePressureUnderLock();
+        }
+        notifyPressureTransition(transition);
+        if (grants != null) {
+            grants.forEach(ZLinkApplicationJobQueue::finishGrant);
+        }
     }
 
     /** Returns an unconsumed receive grant and cancels its FIFO wait when the owner closes. */
@@ -337,11 +415,8 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         permits.add(acquireBlocking(origin));
         PressureSnapshot transition = null;
         synchronized (lock) {
-            while (!closed
-                    && waiters.isEmpty()
-                    && permits.size() < maximum
-                    && permitsInUse < effectiveLimit) {
-                permits.add(reserveUnderLock());
+            while (permits.size() < maximum && reserveFreeUnderLock()) {
+                permits.add(new Permit(this));
             }
             if (permits.size() > 1) {
                 transition = evaluatePressureUnderLock();
@@ -591,14 +666,37 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
         return Math.multiplyExact(value, percent) / PERCENT_SCALE;
     }
 
+    /**
+     * The one admission decision for a caller that does not wait: the queue is open, no older
+     * waiter exists and capacity is free now. Every immediate path (acquire, receive reservation,
+     * rotation budget, batch claim) and the FIFO join's wait decision use it.
+     */
+    private boolean admitsNowUnderLock() {
+        return !closed && waiters.isEmpty() && permitsInUse < effectiveLimit;
+    }
+
+    /** Counts one reservation when {@link #admitsNowUnderLock()} admits it. */
+    private boolean reserveFreeUnderLock() {
+        if (!admitsNowUnderLock()) {
+            return false;
+        }
+        countReservationUnderLock();
+        return true;
+    }
+
+    /** Reserves one permit for a waiter the FIFO already chose. */
     private Permit reserveUnderLock() {
         if (permitsInUse >= effectiveLimit) {
             throw new IllegalStateException("Application Job Queue oversubscribed");
         }
+        countReservationUnderLock();
+        return new Permit(this);
+    }
+
+    private void countReservationUnderLock() {
         reservedSupplyPermits++;
         permitsInUse++;
         peakPermitsInUse = Math.max(peakPermitsInUse, permitsInUse);
-        return new Permit(this);
     }
 
     private void queued(Permit permit) {
@@ -627,6 +725,10 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
     }
 
     private void abandonReservation(Permit permit) {
+        if (permit.state != PermitState.RESERVED) {
+            // RESERVED is only ever left, so a transferred or released permit needs no lock.
+            return;
+        }
         Grant grant;
         PressureSnapshot transition;
         synchronized (lock) {
@@ -911,10 +1013,15 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
 
     public static final class Permit implements AutoCloseable {
         private final ZLinkApplicationJobQueue owner;
-        private PermitState state = PermitState.RESERVED;
+        // Written under the queue lock; read without it only to skip a no-op abandon.
+        private volatile PermitState state = PermitState.RESERVED;
 
         private Permit(ZLinkApplicationJobQueue owner) {
             this.owner = owner;
+        }
+
+        ZLinkApplicationJobQueue owner() {
+            return owner;
         }
 
         /** Transfers this receive reservation to one queued application job. */

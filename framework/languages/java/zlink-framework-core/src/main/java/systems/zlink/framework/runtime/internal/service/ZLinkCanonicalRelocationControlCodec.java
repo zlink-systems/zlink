@@ -52,9 +52,16 @@ final class ZLinkCanonicalRelocationControlCodec {
             case ServiceWireConstants.COMMAND_RELOCATION_CUTOVER ->
                     ServiceWirePilotCodec.encodeRelocationCutover34(
                             ServiceWirePilotCodec.decodeRelocationCutover34(bytes));
-            case ServiceWireConstants.COMMAND_RELOCATION_PREPARE ->
-                    ServiceWirePilotCodec.encodeRelocationPrepare40(
-                            ServiceWirePilotCodec.decodeRelocationPrepare40(bytes));
+            case ServiceWireConstants.COMMAND_RELOCATION_PREPARE -> {
+                var context = ZLinkServiceM6BWireCodec.generatedContext();
+                var prepare =
+                        (ServiceWireCodec.RelocationPrepareCommand)
+                                ServiceWireCodec.decodeCommand(java.util.List.of(bytes), context);
+                if (prepare.initiatorRole() != ServiceWireCodec.RelocationRole.SOURCE) {
+                    throw invalid("prepare initiator role");
+                }
+                yield ServiceWireCodec.encodeCommand(prepare, context);
+            }
             case ServiceWireConstants.COMMAND_RELOCATION_STATE ->
                     ServiceWirePilotCodec.encodeRelocationState52(
                             ServiceWirePilotCodec.decodeRelocationState52(bytes));

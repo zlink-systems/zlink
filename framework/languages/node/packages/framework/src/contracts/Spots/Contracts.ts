@@ -16,12 +16,20 @@ export interface ZLinkActorHandlerRegistry {
 }
 
 export interface ZLinkSpotHandlerRegistry extends ZLinkActorHandlerRegistry {
+  /** Declares a timer handler constructor for relocation without registering an endpoint. */
+  addTimerHandler<THandler extends ZLinkSpotTimerHandler<ZLinkSpot>>(
+    handlerType: Type<THandler>
+  ): this;
   addPacket<THandler>(handlerType: Type<THandler>): this;
   addSubscribe<THandler>(handlerType: Type<THandler>, channelName: string, topic: string): this;
 }
 
 export interface ZLinkInstanceSpotHandlerRegistry {
   addPacket<THandler>(handlerType: Type<THandler>): this;
+  /** Declares a timer handler constructor for relocation without registering an endpoint. */
+  addTimerHandler<THandler extends ZLinkSpotTimerHandler<ZLinkInstanceSpot>>(
+    handlerType: Type<THandler>
+  ): this;
 }
 
 export interface ZLinkWorkerCall<T> {

@@ -370,7 +370,7 @@ function createAddressedSpotRequestCall(
       markSubmitted(options);
       rejectSameSpotAsyncRequest(serial, spotId, 'yield');
       const pending = begin<TReply>(signal);
-      return turn.yieldPromise(pending);
+      return turn.yieldFrameworkPromise(pending);
     }
   };
 }
@@ -508,7 +508,7 @@ function wrapRequestCall(
     yield<TReply>(signal?: AbortSignal) {
       const turn = requireZLinkYieldTurn();
       const pending = begin<TReply>(signal);
-      return turn.yieldPromise(pending);
+      return turn.yieldFrameworkPromise(pending);
     }
   };
 }
@@ -626,7 +626,7 @@ function wrapRoutedSpotRequestCall(
       const turn = requireZLinkYieldTurn();
       rejectSameSpotAsyncRequest(serial, spot.spotId, 'yield');
       const pending = begin<TReply>(signal);
-      return turn.yieldPromise(pending);
+      return turn.yieldFrameworkPromise(pending);
     }
   };
 }

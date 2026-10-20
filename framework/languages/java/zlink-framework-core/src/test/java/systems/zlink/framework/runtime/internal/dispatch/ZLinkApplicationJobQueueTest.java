@@ -29,6 +29,68 @@ import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkApplicationJobQueueTest {
     @Test
+    void rotationCountAndResumedSourceRespectOlderFifoWaiters() {
+        try (var queue = queue(1)) {
+            assertEquals(
+                    1, queue.reserveRotationBudget(ZLinkReceiveBatchBudget.DEFAULT_MAX_MESSAGES));
+            var older = queue.acquire(ZLinkApplicationJobQueue.Origin.LOCAL).toCompletableFuture();
+            var tasks = new java.util.ArrayDeque<Runnable>();
+            var pending = new AtomicReference<CompletableFuture<ZLinkApplicationJobQueue.Permit>>();
+            var resumed = new AtomicReference<ZLinkApplicationJobQueue.Permit>();
+            assertNull(
+                    queue.acquireOrResume(
+                            tasks::add,
+                            resumed::set,
+                            pending,
+                            ZLinkApplicationJobQueue.Origin.REMOTE));
+            assertEquals(2, queue.snapshot().capacityWaiters());
+            assertEquals(
+                    0, queue.reserveRotationBudget(ZLinkReceiveBatchBudget.DEFAULT_MAX_MESSAGES));
+            queue.abandonRotationBudget(1);
+            assertTrue(older.isDone());
+            assertTrue(tasks.isEmpty());
+            assertEquals(1, queue.snapshot().capacityWaiters());
+            assertEquals(
+                    0, queue.reserveRotationBudget(ZLinkReceiveBatchBudget.DEFAULT_MAX_MESSAGES));
+            older.join().close();
+            assertEquals(1, tasks.size());
+            tasks.removeFirst().run();
+            assertNull(pending.get());
+            assertEquals(0, queue.snapshot().capacityWaiters());
+            assertEquals(
+                    0,
+                    queue.reserveRotationBudget(ZLinkReceiveBatchBudget.DEFAULT_MAX_MESSAGES - 1));
+            resumed.get().abandonReservation();
+            assertEquals(0, queue.snapshot().permitsInUse());
+        }
+    }
+
+    @Test
+    void rotationBudgetReservesFreeCapacityOnceAndReturnsTheRestToWaiters() {
+        try (var queue = queue(4)) {
+            var first =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE)
+                            .toCompletableFuture()
+                            .join();
+            assertEquals(3, queue.reserveRotationBudget(63));
+            assertEquals(4, queue.snapshot().permitsInUse());
+            var taken = queue.takeRotationPermit();
+            var waiter =
+                    queue.acquire(ZLinkApplicationJobQueue.Origin.REMOTE).toCompletableFuture();
+            assertFalse(waiter.isDone());
+            queue.abandonRotationBudget(2);
+            assertTrue(waiter.isDone(), "a returned budget permit grants the oldest waiter");
+            assertEquals(3, queue.snapshot().permitsInUse());
+            assertEquals(1, queue.reserveRotationBudget(63));
+            queue.abandonRotationBudget(1);
+            waiter.join().close();
+            taken.abandonReservation();
+            first.abandonReservation();
+            assertEquals(0, queue.snapshot().permitsInUse());
+        }
+    }
+
+    @Test
     void inlineAcquireContinuationDoesNotBlockAnotherGrant() throws Exception {
         try (var queue = queue(2)) {
             var heldFirst =

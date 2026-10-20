@@ -91,6 +91,11 @@ struct actor_bound_session_route_t
     //  The first positive sequence admitted on the exact route becomes the
     //  baseline; ordinary initial binds keep the known baseline 0.
     bool session_sequence_baseline_unknown = false;
+    //  Session-Actor binding §4: the Session owner host's descriptor
+    //  (OwnerId, LeaseGeneration), stored at bind and carried unchanged by
+    //  commands 42, 51 and 54. Empty when the route has no binding identity.
+    std::string session_owner_id;
+    std::uint64_t session_owner_lease_generation = 0;
 
     friend bool operator== (const actor_bound_session_route_t &,
                             const actor_bound_session_route_t &) = default;
@@ -131,7 +136,7 @@ struct actor_record_t
 {
     actor_ref_t ref;
     bool bound = false;
-    bool disconnected = false;
+    std::shared_ptr<task_completion_source_t<void>> disconnected;
     stream_codec_t bound_session_codec = stream_codec_t::message_pack;
     bool bound_session_stream_sink = false;
     std::optional<zlink::message_t> create_payload;
@@ -163,6 +168,10 @@ class session_actor_binding_context_t
     std::set<std::string> ready_actors;
     std::map<std::string, std::weak_ptr<stream_state_t>> actor_streams;
     std::function<request_task_t<void> (actor_ref_t, std::uint64_t, std::uint16_t)> native_binder;
+    std::function<std::optional<runtime::stateful::stream_binding_t> (const actor_ref_t &,
+                                                                      std::uint64_t)>
+      disconnect_snapshot;
+    std::function<task_t<void> (runtime::stateful::stream_binding_t)> disconnect_cleanup;
     std::uint32_t next_actor_slot = 1;
 };
 
@@ -179,6 +188,14 @@ class session_actor_manager_access_t
     static std::optional<session_actor_t> find_slot (session_actor_manager_t &manager,
                                                      std::uint16_t actor_slot);
     static void disconnect (session_actor_manager_t &manager) noexcept;
+    static task_t<void> disconnect_async (
+      session_actor_manager_t &manager,
+      std::function<std::vector<runtime::stateful::stream_binding_t> ()> close = {});
+    static void bind_disconnect (
+      session_actor_manager_t &manager,
+      std::function<std::optional<runtime::stateful::stream_binding_t> (const actor_ref_t &,
+                                                                        std::uint64_t)> snapshot,
+      std::function<task_t<void> (runtime::stateful::stream_binding_t)> cleanup);
 };
 
 struct relayed_frame_t
@@ -218,7 +235,8 @@ class actor_gateway_state_t
       const zlink::message_t &,
       std::optional<bound_session_relay_source_t>,
       std::chrono::milliseconds)>;
-    using disconnect_dispatcher_t = std::function<task_t<void> (const actor_ref_t &)>;
+    using disconnect_dispatcher_t = std::function<task_t<void> (
+      const actor_ref_t &, const std::optional<runtime::stateful::stream_binding_t> &)>;
     using bound_session_registrar_t = std::function<result_t<void> (const actor_ref_t &)>;
     using bound_session_sender_t = std::function<task_t<result_t<void>> (
       const actor_ref_t &, std::uint64_t, const stream_header_t &, const zlink::message_t &)>;
@@ -281,6 +299,7 @@ class actor_gateway_state_t
     disconnect_dispatcher_t disconnect_dispatcher;
     bound_session_registrar_t bound_session_registrar;
     bound_session_sender_t bound_session_sender;
+    std::function<task_t<void> (actor_ref_t, actor_bound_session_route_t)> bound_session_closer;
     membership_query_t membership_query;
     join_barrier_reserver_t join_barrier_reserver;
     serializer_registry_t *serializers = nullptr;
@@ -382,7 +401,9 @@ class actor_gateway_runtime_t
                                 std::uint64_t binding_generation = 0,
                                 std::uint64_t binding_token = 0,
                                 std::uint64_t session_sequence = 0,
-                                bool session_sequence_baseline_unknown = false);
+                                bool session_sequence_baseline_unknown = false,
+                                std::string session_owner_id = {},
+                                std::uint64_t session_owner_lease_generation = 0);
     result_t<actor_bound_session_transition_t>
     record_bound_session_route_transition (const actor_ref_t &actor_ref,
                                            actor_bound_session_route_t route,
@@ -458,6 +479,8 @@ class actor_gateway_runtime_t
     void on_join_barrier (actor_gateway_state_t::join_barrier_reserver_t reserver);
     void on_disconnect (actor_gateway_state_t::disconnect_dispatcher_t dispatcher);
     void on_bound_session (actor_gateway_state_t::bound_session_registrar_t registrar);
+    void on_bound_session_close (
+      std::function<task_t<void> (actor_ref_t, actor_bound_session_route_t)> close);
     void on_bound_session_send (actor_gateway_state_t::bound_session_sender_t sender);
     std::shared_ptr<bound_session_delivery_fence_t>
     begin_join_completion_delivery_fence (const actor_ref_t &actor_ref);

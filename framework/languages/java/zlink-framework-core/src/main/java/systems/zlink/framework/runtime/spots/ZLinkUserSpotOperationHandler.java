@@ -500,6 +500,9 @@ final class ZLinkUserSpotOperationHandler
                                                                                         activation
                                                                                                 .backendSpot
                                                                                                 .close();
+                                                                                        lifecycle
+                                                                                                .retireClosed(
+                                                                                                        activation);
                                                                                         return CompletableFuture
                                                                                                 .completedFuture(
                                                                                                         null);
@@ -579,9 +582,6 @@ final class ZLinkUserSpotOperationHandler
                                                                                                             })
                                                                                                     .thenApply(
                                                                                                             ignored -> {
-                                                                                                                lifecycle
-                                                                                                                        .retireClosed(
-                                                                                                                                activation);
                                                                                                                 runtime
                                                                                                                         .releaseClosingCoordinator(
                                                                                                                                 fence
@@ -596,7 +596,7 @@ final class ZLinkUserSpotOperationHandler
                                                                                                             }))),
                                                             failure ->
                                                                     activation.host
-                                                                            .reportSpotClosingFailure(
+                                                                            .reportSpotLifecycleFailure(
                                                                                     fence.spotId(),
                                                                                     failure)));
                             coordinatorOwner.set(coordinator);

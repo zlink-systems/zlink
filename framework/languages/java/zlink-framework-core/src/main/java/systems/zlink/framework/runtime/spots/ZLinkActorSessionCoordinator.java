@@ -13,6 +13,7 @@ import systems.zlink.framework.runtime.actors.ZLinkSessionActorsRuntime.LocalAct
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.spots.ZLinkSpot;
 
@@ -109,17 +110,12 @@ final class ZLinkActorSessionCoordinator {
             systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .ActorRouteFence
                     source,
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .ActorRouteFence
-                    target) {
-        return requireActors().stageRelocationMessageFollowAsync(source, target);
-    }
-
-    void commitRelocationMessageFollow(
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .ActorRouteFence
-                    source) {
-        requireActors().commitRelocationMessageFollow(source);
+            ZLinkBackendActorRef targetActor,
+            CompletionStage<
+                            systems.zlink.framework.runtime.internal.service
+                                    .ZLinkServiceM6BWireCodec.ActorRouteFence>
+                    targetFence) {
+        return requireActors().stageRelocationMessageFollowAsync(source, targetActor, targetFence);
     }
 
     CompletionStage<Void> commitRelocationMessageFollowAsync(
@@ -127,16 +123,6 @@ final class ZLinkActorSessionCoordinator {
                             .ActorRouteFence
                     source) {
         return requireActors().commitRelocationMessageFollowAsync(source);
-    }
-
-    void refreshRelocationMessageFollow(
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .ActorRouteFence
-                    source,
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .ActorRouteFence
-                    target) {
-        requireActors().refreshRelocationMessageFollow(source, target);
     }
 
     CompletionStage<Void> confirmRelocationMessageFollow(
@@ -217,7 +203,23 @@ final class ZLinkActorSessionCoordinator {
             String targetSpotId,
             long authorityOwnerGeneration) {
         requireActors()
-                .publishPreparedTransferredActor(actor, targetSpotId, authorityOwnerGeneration);
+                .publishPreparedTransferredActor(
+                        actor, targetSpotId, authorityOwnerGeneration, null);
+    }
+
+    CompletionStage<java.util.List<CompletableFuture<Void>>> admitRelocationPrefix(
+            ZLinkActorRuntime.PreparedTransferredActor prepared,
+            systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget target,
+            java.util.List<systems.zlink.framework.execution.ZLinkSerialExecutionQueue.QueuedRecord>
+                    records,
+            java.util.function.BiFunction<
+                            systems.zlink.framework.execution.ZLinkSerialExecutionQueue
+                                    .QueuedRecord,
+                            CompletableFuture<Void>,
+                            java.util.function.Supplier<CompletionStage<Void>>>
+                    replay,
+            systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue jobs) {
+        return requireActors().admitRelocationPrefix(prepared, target, records, replay, jobs);
     }
 
     void openRelocatedActorAdmission(ZLinkActorRuntime.PreparedTransferredActor actor) {
@@ -239,7 +241,7 @@ final class ZLinkActorSessionCoordinator {
         return requireActors().hasBoundSession(actor);
     }
 
-    Optional<ZLinkActorRuntime.BoundSessionRouteSnapshot> boundSessionRoute(String actorId) {
+    Optional<ZLinkInternalSpotNode.BoundSessionRoute> boundSessionRoute(String actorId) {
         ZLinkActor actor =
                 localActor(actorId)
                         .orElseThrow(
@@ -251,17 +253,14 @@ final class ZLinkActorSessionCoordinator {
     }
 
     CompletionStage<Void> completeRelocationSource(List<String> actorIds) {
-        return completeRelocationSource(actorIds, null);
-    }
-
-    CompletionStage<Void> completeRelocationSource(
-            List<String> actorIds,
-            systems.zlink.framework.execution.ZLinkSerialExecutionQueue.ActiveTurnSealHandle
-                    activeTurn) {
         List<Supplier<? extends CompletionStage<Void>>> cleanups = new ArrayList<>();
         for (String actorId : List.copyOf(actorIds))
-            cleanups.add(() -> requireActors().completeRelocationSource(actorId, activeTurn));
+            cleanups.add(() -> requireActors().completeRelocationSource(actorId));
         return ZLinkHandlerStages.completeAll(cleanups);
+    }
+
+    CompletionStage<Void> retireCommittedRelocationSource(String actorId) {
+        return requireActors().retireCommittedRelocationSource(actorId);
     }
 
     boolean isActorMember(String spotId, String actorId) {
@@ -525,12 +524,8 @@ final class ZLinkActorSessionCoordinator {
 
     Object spotSurface(
             ZLinkActor actor, Function<String, Object> resolver, Supplier<Object> fallback) {
-        Object current = currentSpotSurface(actor);
-        if (current != null) {
-            return current;
-        }
         if (actors != null) {
-            Object resolved = actors.spotId(actor).map(resolver).orElse(null);
+            Object resolved = actor.context().spotId().map(resolver).orElse(null);
             if (resolved != null) {
                 return resolved;
             }

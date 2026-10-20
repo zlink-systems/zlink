@@ -141,7 +141,10 @@ export interface ZLinkMeshObjectRoleBuilder {
 export interface ZLinkMeshObjectClientBuilder {}
 
 export interface ZLinkMeshObjectServerBuilder {
-  addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(entrySpotType: Type<TEntrySpot>): this;
+  addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(
+    entrySpotType: Type<TEntrySpot>,
+    actorType: string
+  ): this;
   addSpotFactory<TSpot extends ZLinkSpot>(
     spotType: string,
     implementation: Type<TSpot>,

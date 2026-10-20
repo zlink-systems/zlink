@@ -241,35 +241,45 @@ internal sealed partial class ZLinkFrameworkRuntime
         return classification;
     }
 
+    internal const string PacketRouteTarget = "packet";
+    internal const string SpotRouteTarget = "SPOT";
+
     internal void EnsureKnownRouteMeshPeer(
         string routerChannelId,
         RoutingId targetNodeRid,
-        string targetDescription
+        string targetKind,
+        string targetName
     ) =>
         EnsureKnownRouteMeshPeer(
             GetMeshNodeRuntime(routerChannelId),
             routerChannelId,
             targetNodeRid,
-            targetDescription
+            targetKind,
+            targetName
         );
 
     private async ValueTask EnsureKnownRouteMeshPeerAsync(
         string routerChannelId,
         RoutingId targetNodeRid,
-        string targetDescription
+        string targetKind,
+        string targetName
     ) =>
         EnsureKnownRouteMeshPeer(
             await GetMeshNodeRuntimeAsync(routerChannelId).ConfigureAwait(false),
             routerChannelId,
             targetNodeRid,
-            targetDescription
+            targetKind,
+            targetName
         );
 
-    private void EnsureKnownRouteMeshPeer(
+    // The target is named only when a failure is reported, so the accepted
+    // path builds no description string.
+    internal void EnsureKnownRouteMeshPeer(
         ZLinkSpotNodeRuntime nodeRuntime,
         string routerChannelId,
         RoutingId targetNodeRid,
-        string targetDescription
+        string targetKind,
+        string targetName
     )
     {
         if (nodeRuntime.Node.RoutingId == targetNodeRid)
@@ -278,7 +288,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 throw CreateUnknownRouteTargetException(
                     routerChannelId,
                     targetNodeRid,
-                    targetDescription
+                    targetKind,
+                    targetName
                 );
             return;
         }
@@ -292,7 +303,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                 case ZLinkRouteMeshTargetClassification.RequiredNotConnected:
                     throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.Unavailable,
-                        $"Route channel '{routerChannelId}' is not connected to node '{targetNodeRid}' for {targetDescription}.",
+                        $"Route channel '{routerChannelId}' is not connected to node '{targetNodeRid}' for {targetKind} '{targetName}'.",
                         retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff
                     );
                 case ZLinkRouteMeshTargetClassification.ObjectClientTarget:
@@ -300,7 +311,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                     throw CreateUnknownRouteTargetException(
                         routerChannelId,
                         targetNodeRid,
-                        targetDescription
+                        targetKind,
+                        targetName
                     );
                 default:
                     throw new InvalidOperationException("Unknown RouteMesh target classification.");
@@ -314,7 +326,7 @@ internal sealed partial class ZLinkFrameworkRuntime
             case ZLinkRouteMeshTargetClassification.RequiredNotConnected:
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,
-                    $"Route channel '{routerChannelId}' is not connected to node '{targetNodeRid}' for {targetDescription}.",
+                    $"Route channel '{routerChannelId}' is not connected to node '{targetNodeRid}' for {targetKind} '{targetName}'.",
                     retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff
                 );
             case ZLinkRouteMeshTargetClassification.ObjectClientTarget:
@@ -322,7 +334,8 @@ internal sealed partial class ZLinkFrameworkRuntime
                 throw CreateUnknownRouteTargetException(
                     routerChannelId,
                     targetNodeRid,
-                    targetDescription
+                    targetKind,
+                    targetName
                 );
             default:
                 throw new InvalidOperationException("Unknown RouteMesh target classification.");
@@ -351,7 +364,8 @@ internal sealed partial class ZLinkFrameworkRuntime
             await EnsureKnownRouteMeshPeerAsync(
                     routerChannelId,
                     targetNodeRid,
-                    $"SPOT '{targetSpotId}'"
+                    SpotRouteTarget,
+                    targetSpotId
                 )
                 .ConfigureAwait(false);
 
@@ -399,7 +413,7 @@ internal sealed partial class ZLinkFrameworkRuntime
     )
     {
         using var operation = EnterOperation();
-        EnsureKnownRouteMeshPeer(routerChannelId, targetNodeRid, $"SPOT '{targetSpotId}'");
+        EnsureKnownRouteMeshPeer(routerChannelId, targetNodeRid, SpotRouteTarget, targetSpotId);
         return _spotRouteRouter.TrySendOnce(
             routerChannelId,
             targetNodeRid,
@@ -436,13 +450,14 @@ internal sealed partial class ZLinkFrameworkRuntime
                 await AdmitOperationAsync(countAsRequest: true).ConfigureAwait(false)
             ).Enter();
             var metric = ZLinkRuntimeMetrics.StartRequest(routerChannelId, "spot");
-            var outcome = "completed";
+            var outcome = ZLinkRuntimeMetrics.RequestCompleted;
             try
             {
                 await EnsureKnownRouteMeshPeerAsync(
                         routerChannelId,
                         targetNodeRid,
-                        $"SPOT '{targetSpotId}'"
+                        SpotRouteTarget,
+                        targetSpotId
                     )
                     .ConfigureAwait(false);
 
@@ -464,19 +479,13 @@ internal sealed partial class ZLinkFrameworkRuntime
                     )
                     .ConfigureAwait(false);
             }
-            catch (TimeoutException)
+            catch (Exception error)
             {
-                outcome = "timed_out";
-                throw;
-            }
-            catch (OperationCanceledException)
-            {
-                outcome = "cancelled";
-                throw;
-            }
-            catch
-            {
-                outcome = "failed";
+                outcome = ZLinkRuntimeMetrics.RequestFailureOutcome(
+                    error,
+                    cancellationToken,
+                    this.ShutdownToken
+                );
                 throw;
             }
             finally
@@ -493,13 +502,14 @@ internal sealed partial class ZLinkFrameworkRuntime
     private static ZLinkFrameworkException CreateUnknownRouteTargetException(
         string routerChannelId,
         RoutingId targetNodeRid,
-        string targetDescription,
+        string targetKind,
+        string targetName,
         Exception? innerException = null
     )
     {
         return new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.NotFound,
-            $"Route channel '{routerChannelId}' does not know node '{targetNodeRid}' for {targetDescription}.",
+            $"Route channel '{routerChannelId}' does not know node '{targetNodeRid}' for {targetKind} '{targetName}'.",
             innerException: innerException
         );
     }

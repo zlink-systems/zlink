@@ -76,7 +76,7 @@ function selectedRouteRuntime(routes, submit) {
     async send(target, parts) {
       sent.push([target, wire.decodeHeader(parts[0]).command, Buffer.from(parts[0])]);
     },
-    async request(target) {
+    request(target) {
       //  Core decides whether the selected route carries the request.
       requested.push(target);
       throw new ZLinkBackendResultError('request', RequestResult.Busy);
@@ -550,6 +550,38 @@ test('inbound selected route sends HELLO without an outbound intent', async () =
     assert.equal(h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length, 1);
   } finally { h.runtime.close(); }
 });
+// MeshNode §7.1 and hot-path §4.2: an inbound-only route must retain its
+// management wake until ADMIT, even after a crossed HELLO admits its descriptor.
+for (const crossedHello of [false, true]) {
+  test(`maintenance stays due until inbound selected route receives ADMIT (crossedHello=${crossedHello})`, async (t) => {
+    const now = 1000;
+    t.mock.method(performance, 'now', () => now);
+    const h = selectedRouteRuntime(new Map([['peer', 11n]]));
+    const receive = (command) => h.processReceived({
+      sourceRid: 'peer',
+      routeGeneration: 11n,
+      parts: [wire.encodeRouteMeshAdmission(command, descriptor('peer'))]
+    });
+    try {
+      await h.runtime.observeSelectedRoutes();
+      if (crossedHello) await receive(wire.M6aServiceWireCommand.hello);
+      h.runtime.liveness.tick(now);
+      assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), now);
+      const hellos = () => h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length;
+      const initial = hellos();
+      h.runtime.tickLiveness(now);
+      assert.equal(hellos(), initial + 1);
+      await receive(wire.M6aServiceWireCommand.admit);
+      h.runtime.liveness.tick(now);
+      assert.ok(h.runtime.nextMaintenanceDeadlineMs(now) > now);
+      h.runtime.tickLiveness(now);
+      assert.equal(hellos(), initial + 1);
+    } finally {
+      h.runtime.close();
+    }
+  });
+}
+
 test('liveness maintenance resends HELLO until the selected route receives ADMIT', async () => {
   const h = selectedRouteRuntime(new Map([['peer', 11n]]));
   try {
@@ -597,6 +629,46 @@ for (const beforeSnapshot of [false, true]) {
       h.runtime.tickLiveness();
       await turn();
       assert.equal(hellos(), completed);
+    } finally { h.runtime.close(); }
+  });
+}
+
+test('peer route readiness wait uses existing admission notifications and removes listeners', async () => {
+  const h = selectedRouteRuntime(new Map([['peer', 11n]]));
+  const peer = descriptor('peer');
+  try {
+    const ready = h.runtime.waitForPeerRoute('peer', 1n, BigInt(Date.now() + 10000));
+    assert.equal(h.runtime.pendingOperationCount, 1);
+    h.runtime.connectPeerByRoutingId(peer.advertisedEndpoint, 'peer');
+    await h.runtime.observeSelectedRoutes();
+    await h.processReceived({ sourceRid: 'peer', routeGeneration: 11n,
+      parts: [Buffer.from(wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.admit, peer))] });
+    await ready;
+    assert.equal(h.runtime.pendingOperationCount, 0);
+    assert.equal(h.runtime.peerRouteChanged.size, 0);
+    // A different lifecycle must wait even when the RID has a ready route.
+    const stale = h.runtime.waitForPeerRoute('peer', 2n, BigInt(Date.now() + 10000));
+    const rejected = assert.rejects(stale, { name: 'OperationTimeoutError' });
+    h.runtime.expireOperations(performance.now() + 20000, performance.now() + 1000);
+    await rejected;
+    assert.equal(h.runtime.pendingOperationCount, 0);
+    assert.equal(h.runtime.peerRouteChanged.size, 0);
+  } finally { h.runtime.close(); }
+});
+
+for (const terminal of ['deadline', 'cancel', 'close']) {
+  test(`peer route readiness ends on ${terminal} without a relocation timer`, async () => {
+    const h = selectedRouteRuntime(new Map());
+    const controller = new AbortController();
+    try {
+      const wait = h.runtime.waitForPeerRoute('missing', 1n, BigInt(Date.now() + 10000), controller.signal);
+      const rejected = assert.rejects(wait);
+      if (terminal === 'deadline') h.runtime.expireOperations(performance.now() + 20000, performance.now() + 1000);
+      if (terminal === 'cancel') controller.abort(new Error('target stopped'));
+      if (terminal === 'close') h.runtime.close();
+      await rejected;
+      assert.equal(h.runtime.pendingOperationCount, 0);
+      assert.equal(h.runtime.peerRouteChanged.size, 0);
     } finally { h.runtime.close(); }
   });
 }

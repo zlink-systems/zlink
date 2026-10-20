@@ -83,6 +83,7 @@ final class ZLinkProviderDescriptorRepository {
     private static final String FIELD_LEASE_GENERATION = "leaseGeneration";
     private static final String FIELD_LIFECYCLE_GENERATION = "lifecycleGeneration";
     private static final String FIELD_LIMIT = "limit";
+    private static final String FIELD_ENTRY_ACCEPTED = "entryAccepted";
     private static final String FIELD_MAINTENANCE_WAVE = "maintenanceWave";
     private static final String FIELD_MESH_NAME = "meshName";
     private static final String FIELD_OBJECT_CAPABILITIES = "objectCapabilities";
@@ -306,6 +307,28 @@ final class ZLinkProviderDescriptorRepository {
                                                                     && immutableFieldsEqual.test(
                                                                             stored, descriptor);
                                                     if (!renew) {
+                                                        if ((intent
+                                                                                == ZLinkLocationWriteIntent
+                                                                                        .NEW_CLAIM
+                                                                        || (stored
+                                                                                        instanceof
+                                                                                        ZLinkMeshNodeDescriptor
+                                                                                && intent
+                                                                                        == ZLinkLocationWriteIntent
+                                                                                                .RENEW))
+                                                                && sameExceptWriteTime(
+                                                                        found.value().bytes(),
+                                                                        encode.apply(
+                                                                                new StoredDescriptor<>(
+                                                                                        record
+                                                                                                .generation(),
+                                                                                        descriptor)))) {
+                                                            return completed(
+                                                                    ZLinkLocationWriteResult.stored(
+                                                                            record.generation(),
+                                                                            found.value()
+                                                                                    .storeNow()));
+                                                        }
                                                         return provider.read(
                                                                         ownerKey(
                                                                                 identity.ownerId()),
@@ -315,14 +338,16 @@ final class ZLinkProviderDescriptorRepository {
                                                                             if (previousOwner
                                                                                     instanceof
                                                                                     ZLinkStoreReadFound) {
+                                                                                if (intent
+                                                                                        != ZLinkLocationWriteIntent
+                                                                                                .NEW_CLAIM) {
+                                                                                    return completed(
+                                                                                            ZLinkLocationWriteResult
+                                                                                                    .ignoredStale());
+                                                                                }
                                                                                 return completed(
-                                                                                        intent
-                                                                                                        == ZLinkLocationWriteIntent
-                                                                                                                .NEW_CLAIM
-                                                                                                ? ZLinkLocationWriteResult
-                                                                                                        .rejectedConflict()
-                                                                                                : ZLinkLocationWriteResult
-                                                                                                        .ignoredStale());
+                                                                                        ZLinkLocationWriteResult
+                                                                                                .rejectedConflict());
                                                                             }
                                                                             return writeDescriptor(
                                                                                     rowKey,
@@ -551,6 +576,7 @@ final class ZLinkProviderDescriptorRepository {
                             encoded.put(
                                     FIELD_HAS_SNAPSHOT_ADAPTER, capability.hasSnapshotAdapter());
                             encoded.put(FIELD_LIMIT, capability.spotLimit());
+                            encoded.put(FIELD_ENTRY_ACCEPTED, capability.entryAccepted());
                             capabilities.add(encoded);
                         });
         node.set(FIELD_OBJECT_CAPABILITIES, capabilities);
@@ -637,7 +663,10 @@ final class ZLinkProviderDescriptorRepository {
                                                 capability
                                                         .path(FIELD_HAS_SNAPSHOT_ADAPTER)
                                                         .asBoolean(),
-                                                capability.path(FIELD_LIMIT).asInt())));
+                                                capability.path(FIELD_LIMIT).asInt(),
+                                                capability
+                                                        .path(FIELD_ENTRY_ACCEPTED)
+                                                        .asBoolean())));
         JsonNode capacityNode = descriptor.path(FIELD_CAPACITY);
         List<ZLinkSpotTypeCapacity> spotTypes = new ArrayList<>();
         capacityNode
@@ -930,6 +959,25 @@ final class ZLinkProviderDescriptorRepository {
                 value.leaseGeneration(),
                 value.lifecycleGeneration(),
                 value.descriptorRevision());
+    }
+
+    /**
+     * Location runtime §10: a MeshNode write whose result was lost may be repeated by either
+     * NewClaim or Renew. A row differing only in write time confirms the prior write.
+     */
+    private static boolean sameExceptWriteTime(byte[] stored, byte[] next) {
+        try {
+            JsonNode storedRecord = CANONICAL_JSON.readTree(stored);
+            JsonNode nextRecord = CANONICAL_JSON.readTree(next);
+            for (JsonNode record : List.of(storedRecord, nextRecord)) {
+                if (record.path(FIELD_DESCRIPTOR) instanceof ObjectNode descriptor) {
+                    descriptor.remove(FIELD_UPDATED_AT_EPOCH_MS);
+                }
+            }
+            return storedRecord.equals(nextRecord);
+        } catch (IOException error) {
+            throw new IllegalStateException("Location descriptor record is invalid", error);
+        }
     }
 
     private static boolean sameImmutableMesh(

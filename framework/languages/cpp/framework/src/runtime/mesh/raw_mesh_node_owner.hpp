@@ -155,6 +155,13 @@ class raw_mesh_node_owner_t
     task_t<zlink::submit_result_t>
     send_to_node_result (const std::vector<std::uint8_t> &target_routing_id,
                          const protocol::application_payload_t &application_payload);
+    task_t<zlink::submit_result_t>
+    send_logical_multicast (const std::vector<std::uint8_t> &target_routing_id,
+                            const std::string &channel_name,
+                            const std::string &topic,
+                            const std::string &source_spot_id,
+                            const protocol::application_payload_t &application_payload,
+                            const std::vector<std::uint8_t> &metadata);
     task_t<bool> request_to_node (const std::vector<std::uint8_t> &target_routing_id,
                                   const protocol::application_payload_t &application_payload,
                                   std::chrono::milliseconds timeout,
@@ -256,6 +263,8 @@ class raw_mesh_node_owner_t
     task_t<bool>
     send_bound_session_replaced (const std::vector<std::uint8_t> &retired_session_owner_routing_id,
                                  const protocol::bound_session_replaced_t &record);
+    task_t<void> request_bound_session_close (protocol::bound_session_close_t record,
+                                              std::chrono::milliseconds timeout);
     bool reply_bound_session_bind (const service_mailbox_record_t &request,
                                    std::uint32_t terminal_result = 0,
                                    std::uint32_t failure_code = 0);
@@ -324,8 +333,9 @@ class raw_mesh_node_owner_t
     request_relocation_prepare (const std::vector<std::uint8_t> &target_routing_id,
                                 const protocol::relocation_prepare_t &prepare,
                                 std::chrono::milliseconds timeout);
-    bool reply_relocation_ready (const service_mailbox_record_t &request,
-                                 const protocol::relocation_ready_t &ready);
+    task_t<std::function<bool ()>>
+    prepare_relocation_ready_reply (const service_mailbox_record_t &request,
+                                    const protocol::relocation_ready_t &ready);
     bool reply_relocation_failed (const service_mailbox_record_t &request,
                                   const protocol::relocation_failed_t &failure);
     // actorJoin(28): durable admission over the ROUTER port.
@@ -349,6 +359,12 @@ class raw_mesh_node_owner_t
       std::optional<protocol::application_payload_t> application_reply = std::nullopt);
     task_t<raw_mesh_pump_result_t> pump_one (service_liveness_registry_t::clock_t::time_point now,
                                              bool accept_application_receive = true);
+    /* One receive turn polls the ROUTER once: begin_receive_turn observes
+     * readiness and applies a ready route snapshot (nullopt when the poll
+     * failed), then receive_next reads one record per call until the ROUTER
+     * reports none. pump_one is the single-record form of the same turn. */
+    std::optional<zlink::poll_event_flag_t> begin_receive_turn ();
+    raw_mesh_pump_result_t receive_next (service_liveness_registry_t::clock_t::time_point now);
     /* Wait for ROUTER input or an already admitted mailbox/control record.
      * This is the blocking wake-up used by the host ingress loop; it avoids
      * turning an idle node into a timed polling loop. */
@@ -356,6 +372,8 @@ class raw_mesh_node_owner_t
                             bool accept_application_receive = true) noexcept;
     void signal_activity () noexcept;
     std::size_t last_pump_bytes () const;
+    // A rotation with no probe, timeout or admission retry due returns at once (spec 08
+    // section 4.2); the liveness registry owns that decision.
     task_t<service_liveness_tick_t>
     tick_liveness (service_liveness_registry_t::clock_t::time_point now);
     // Polls this ROUTER through its ingress poller and applies the Core
@@ -363,12 +381,25 @@ class raw_mesh_node_owner_t
     // same whenever POLLROUTE is ready; returns the number of RIDs whose
     // selected route changed.
     std::size_t observe_routes ();
+    // Classifies a direct node target from local topology before submit. An
+    // admitted peer is classified by its descriptor's object role; a peer this
+    // node needs no RouteMesh connection to is an Object Client; a target in
+    // neither set is unknown to the topology.
+    enum class node_target_t
+    {
+        application,
+        object_client,
+        unknown
+    };
+    node_target_t classify_node_target (const std::vector<std::uint8_t> &target_routing_id) const;
     // Selected Core route generation and remote ADMIT readiness.
     std::pair<std::uint64_t, bool>
     peer_route (const std::vector<std::uint8_t> &rid,
                 std::optional<std::uint64_t> lifecycle_generation = std::nullopt) const;
 
   private:
+    task_t<service_liveness_tick_t>
+    tick_due_liveness (service_liveness_registry_t::clock_t::time_point now);
     static std::string owner_key (const std::vector<std::uint8_t> &routing_id);
     static foundation::call_id_t operation_id (std::uint64_t lifecycle_generation,
                                                std::uint64_t correlation);
@@ -376,15 +407,6 @@ class raw_mesh_node_owner_t
     take_reply_route_id_locked (std::optional<std::uint64_t> requested = std::nullopt);
     std::uint64_t take_operation_sequence_locked ();
     std::uint64_t next_operation_sequence ();
-    task_t<bool> request_to_target (std::vector<std::uint8_t> target_routing_id,
-                                    const protocol::application_payload_t &application_payload,
-                                    std::chrono::milliseconds timeout,
-                                    foundation::operation_registry_t::callback_t callback,
-                                    const std::optional<std::string> &channel_name,
-                                    std::optional<std::uint64_t> correlation,
-                                    bool target_claimed,
-                                    mesh_request_metric_t request_metric,
-                                    service_liveness_registry_t::connection_t admission = {});
     task_t<bool> send_with_header (const std::vector<std::uint8_t> &target_routing_id,
                                    std::vector<std::uint8_t> header,
                                    const protocol::application_payload_t &application_payload);
@@ -441,7 +463,7 @@ class raw_mesh_node_owner_t
         &decode_reply,
       std::chrono::milliseconds timeout,
       foundation::operation_registry_t::callback_t callback);
-    task_t<bool>
+    bool
     observe_request (foundation::call_id_t operation,
                      std::uint64_t correlation,
                      std::shared_ptr<task_t<detail::backend::raw_request_completion_t>> running);
@@ -453,6 +475,9 @@ class raw_mesh_node_owner_t
     // selected-route snapshot, ends admission of every route that ended or
     // was replaced and starts the handshake on every new route.
     std::size_t apply_route_snapshot (zlink::poll_event_flag_t readiness);
+    bool route_needs_hello_on_lane (const std::vector<std::uint8_t> &rid,
+                                    std::uint64_t generation) const;
+    void refresh_admission_due_on_lane ();
     void submit_pending_hellos_on_lane ();
     bool route_current_locked (const std::vector<std::uint8_t> &node_routing_id,
                                std::uint64_t route_generation) const;

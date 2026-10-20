@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -29,6 +30,7 @@ import systems.zlink.framework.channels.ZLinkRouteSendHandler;
 import systems.zlink.framework.channels.ZLinkSendHandler;
 import systems.zlink.framework.configuration.ZLinkEndpointConnections;
 import systems.zlink.framework.configuration.ZLinkLogLevel;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -70,6 +72,8 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -84,6 +88,7 @@ import java.util.logging.SimpleFormatter;
 
 final class ChannelMessagingTest {
     private static final long ASYNC_TIMEOUT_SECONDS = 2;
+    private static final Duration RAW_REPLY_TIMEOUT = Duration.ofSeconds(2);
     private static final AtomicReference<CountDownLatch> FANOUT_LATCH = new AtomicReference<>();
     private static final AtomicReference<String> FANOUT_MESSAGE = new AtomicReference<>();
     private static final AtomicReference<String> FANOUT_TOPIC = new AtomicReference<>();
@@ -750,6 +755,9 @@ final class ChannelMessagingTest {
         logger.addHandler(fileHandler);
 
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        //  The record must carry flow= — flow IDs exist only while message-flow
+        //  tracing is on, at Normal or Detailed (04-flow-correlation.ko.md:91).
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
         {
             var channel = listenClientServer(options, "profile", "tcp://127.0.0.1:0");
             channel.addRequestHandler(EchoHandler.class, EchoRequest.class, String.class);
@@ -766,6 +774,7 @@ final class ChannelMessagingTest {
             String endpoint =
                     runtime.listenerStatus(ZLinkListenerKind.CLIENT_SERVER, "profile").endpoint();
             DefaultZLinkFrameworkOptions clientOptions = new DefaultZLinkFrameworkOptions();
+            clientOptions.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             clientOptions.addClientServerChannel("profile").client().connect(endpoint);
             try (ZLinkFrameworkRuntime client =
                     RuntimeTestSupport.startFramework(
@@ -849,6 +858,78 @@ final class ChannelMessagingTest {
             logger.removeHandler(fileHandler);
             fileHandler.close();
             Files.deleteIfExists(logPath);
+        }
+    }
+
+    @Test
+    void rawReplyWaitConsumesDataBeforeReply() throws Exception {
+        var adapter =
+                new ZLinkJavaBackendAdapterFactory()
+                        .createChannelAdapter(new ZLinkBackendAdapterOptions(RAW_REPLY_TIMEOUT));
+        try (var context = adapter.createContext();
+                var router = adapter.createRouterSocket(context);
+                var dealer = adapter.createDealerSocket(context);
+                var worker = Executors.newSingleThreadExecutor();
+                Message request = Message.from(new byte[] {1})) {
+            String endpoint = "inproc://raw-data-before-reply-" + UUID.randomUUID();
+            router.bind(endpoint);
+            dealer.connect(endpoint);
+            CompletableFuture<Void> server =
+                    CompletableFuture.runAsync(
+                            () -> {
+                                ZLinkBackendReceived incoming;
+                                do {
+                                    router.waitForReadable(RAW_REPLY_TIMEOUT);
+                                    incoming = router.recv(ZLinkBackendRecvMode.DONT_WAIT);
+                                } while (incoming == null);
+                                try (var received = incoming;
+                                        Message control = Message.from("control");
+                                        Message reply = Message.from("reply")) {
+                                    var admitted =
+                                            router.send(
+                                                            received.routingId().orElseThrow(),
+                                                            List.of(control))
+                                                    .toCompletableFuture();
+                                    while (!admitted.isDone()) {
+                                        router.waitForReadable(RAW_REPLY_TIMEOUT);
+                                    }
+                                    admitted.join();
+                                    received.reply(List.of(reply));
+                                }
+                            },
+                            worker);
+            try {
+                try (var reply = awaitRawReply(dealer, List.of(request))) {
+                    assertEquals("reply", reply.parts().getFirst().toUtf8String());
+                }
+                server.join();
+            } finally {
+                context.shutdown();
+            }
+        }
+    }
+
+    @Test
+    void rawReplyWaitPreservesBindingTimeout() throws Exception {
+        var adapter =
+                new ZLinkJavaBackendAdapterFactory()
+                        .createChannelAdapter(new ZLinkBackendAdapterOptions(RAW_REPLY_TIMEOUT));
+        try (var context = adapter.createContext();
+                var router = adapter.createRouterSocket(context);
+                var dealer = adapter.createDealerSocket(context);
+                Message request = Message.from(new byte[] {1})) {
+            String endpoint = "inproc://raw-reply-timeout-" + UUID.randomUUID();
+            router.bind(endpoint);
+            dealer.connect(endpoint);
+
+            // The peer never replies. The binding owns the request terminal.
+            ExecutionException failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () -> awaitRawReply(dealer, List.of(request)));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
         }
     }
 
@@ -1930,13 +2011,17 @@ final class ChannelMessagingTest {
     private static ZLinkBackendReceived awaitRawReply(
             ZLinkBackendDealerSocket dealer, List<Message> parts) throws Exception {
         CompletableFuture<ZLinkBackendReceived> pending =
-                dealer.request(parts, Duration.ofSeconds(2), dealer.receiveAdmission(), null)
+                dealer.request(parts, RAW_REPLY_TIMEOUT, dealer.receiveAdmission(), null)
                         .toCompletableFuture();
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
-        while (!pending.isDone() && System.nanoTime() < deadline) {
-            dealer.waitForReadable(Duration.ofNanos(Math.max(1, deadline - System.nanoTime())));
+        while (!pending.isDone()) {
+            if (dealer.waitForReadable(RAW_REPLY_TIMEOUT)) {
+                // Core's DEALER FIFO keeps replies behind unread control DATA.
+                try (var control = dealer.recv(ZLinkBackendRecvMode.DONT_WAIT)) {
+                    // This raw fixture has no application DATA consumer.
+                }
+            }
         }
-        return pending.get(0, TimeUnit.SECONDS);
+        return pending.get();
     }
 
     private static List<Message> malformedDecodeRequest() {

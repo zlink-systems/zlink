@@ -470,90 +470,61 @@ public sealed class StandaloneActorRelocationRuntimeTests
     public async Task Canonical_durable_backlog_queues_fifo_one_shared_permit_per_turn()
     {
         using var queue = new ZLinkApplicationJobQueue(
-            new ZLinkApplicationJobQueueCapacity(
-                ZLinkApplicationJobQueueProfile.Balanced,
-                ConfiguredManualMax: 1,
-                EffectiveProcessorCount: 8,
-                EffectiveMaxQueuedApplicationJobs: 1
-            )
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 8, 1)
         );
-        using var serialTurn = new SemaphoreSlim(1, 1);
-        var invoked = Enumerable
-            .Range(0, 3)
-            .Select(static _ => new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously
-            ))
-            .ToArray();
+        var mailbox = new ZLinkActorSerialExecutor();
         var started = Enumerable
             .Range(0, 3)
-            .Select(static _ => new TaskCompletionSource(
+            .Select(_ => new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             ))
             .ToArray();
         var finish = Enumerable
             .Range(0, 3)
-            .Select(static _ => new TaskCompletionSource(
+            .Select(_ => new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             ))
             .ToArray();
         var order = new System.Collections.Concurrent.ConcurrentQueue<int>();
-        var completions = new List<Task>();
+        var owned = 0;
         var active = 0;
         var maxActive = 0;
-
-        async Task Dispatch(int item)
+        var records = Enumerable
+            .Range(0, 3)
+            .Select(index =>
+            {
+                ZLinkApplicationJobQueueLease? permit = null;
+                return new ZLinkActorDurableRecord(
+                    async _ =>
+                    {
+                        using var invocation = ZLinkApplicationJobQueueInvocation.Enter(permit!);
+                        await ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStartAsync();
+                        maxActive = Math.Max(maxActive, Interlocked.Increment(ref active));
+                        order.Enqueue(index + 1);
+                        started[index].SetResult();
+                        await finish[index].Task;
+                        Interlocked.Decrement(ref active);
+                    },
+                    async ct =>
+                    {
+                        permit = await queue.AcquireAsync(ct, ZLinkApplicationJobOrigin.Remote);
+                    },
+                    () => Interlocked.Exchange(ref permit, null)?.Dispose(),
+                    () => owned++
+                );
+            })
+            .ToArray();
+        var terminals = mailbox.AdmitDurablePrefix(records);
+        Assert.Equal(3, owned);
+        for (var index = 0; index < 3; index++)
         {
-            invoked[item - 1].TrySetResult();
-            await serialTurn.WaitAsync();
-            try
-            {
-                await ZLinkApplicationJobQueueInvocation.ReleaseForHandlerStartAsync();
-                var nowActive = Interlocked.Increment(ref active);
-                maxActive = Math.Max(maxActive, nowActive);
-                order.Enqueue(item);
-                started[item - 1].TrySetResult();
-                await finish[item - 1].Task;
-            }
-            finally
-            {
-                Interlocked.Decrement(ref active);
-                serialTurn.Release();
-            }
+            await started[index].Task;
+            Assert.Equal(Enumerable.Range(1, index + 1), order);
+            Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+            Assert.Equal(0UL, queue.GetStatus().CapacityWaiters);
+            finish[index].SetResult();
         }
-
-        var scheduling = ZLinkFrameworkRuntime
-            .QueueDurableBacklogWithSharedPermitsAsync(
-                queue,
-                new[] { 1, 2, 3 },
-                Dispatch,
-                completions,
-                CancellationToken.None,
-                static _ => ZLinkApplicationJobOrigin.Remote
-            )
-            .AsTask();
-
-        await started[0].Task;
-        await invoked[1].Task;
-        for (var attempt = 0; attempt < 100 && queue.GetStatus().CapacityWaiters != 1; attempt++)
-            await Task.Delay(10);
-        Assert.False(scheduling.IsCompleted);
-        Assert.False(invoked[2].Task.IsCompleted);
-        Assert.Equal(1UL, queue.GetStatus().QueuedApplicationJobs);
-        Assert.Equal(1UL, queue.GetStatus().CapacityWaiters);
-        Assert.Equal(new[] { 1 }, order.ToArray());
-
-        finish[0].TrySetResult();
-        await started[1].Task;
-        await invoked[2].Task;
-        Assert.Equal(new[] { 1, 2 }, order.ToArray());
-
-        finish[1].TrySetResult();
-        await started[2].Task;
-        finish[2].TrySetResult();
-        await scheduling;
-        await Task.WhenAll(completions);
-
-        Assert.Equal(new[] { 1, 2, 3 }, order.ToArray());
+        await Task.WhenAll(terminals);
         Assert.Equal(1, maxActive);
         Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
     }
@@ -562,25 +533,24 @@ public sealed class StandaloneActorRelocationRuntimeTests
     public async Task Canonical_durable_backlog_failure_returns_the_shared_permit()
     {
         using var queue = new ZLinkApplicationJobQueue(
-            new ZLinkApplicationJobQueueCapacity(
-                ZLinkApplicationJobQueueProfile.Balanced,
-                ConfiguredManualMax: 1,
-                EffectiveProcessorCount: 8,
-                EffectiveMaxQueuedApplicationJobs: 1
-            )
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 8, 1)
         );
-        var completions = new List<Task>();
-
-        await ZLinkFrameworkRuntime.QueueDurableBacklogWithSharedPermitsAsync(
-            queue,
-            new[] { 1 },
-            static _ => Task.FromException(new InvalidOperationException("dispatch failed")),
-            completions,
-            CancellationToken.None,
-            static _ => ZLinkApplicationJobOrigin.Remote
+        var mailbox = new ZLinkActorSerialExecutor();
+        ZLinkApplicationJobQueueLease? permit = null;
+        var terminals = mailbox.AdmitDurablePrefix(
+            new[]
+            {
+                new ZLinkActorDurableRecord(
+                    _ => throw new InvalidOperationException("dispatch failed"),
+                    async ct =>
+                    {
+                        permit = await queue.AcquireAsync(ct, ZLinkApplicationJobOrigin.Remote);
+                    },
+                    () => Interlocked.Exchange(ref permit, null)?.Dispose()
+                ),
+            }
         );
-
-        await Assert.ThrowsAsync<InvalidOperationException>(() => Task.WhenAll(completions));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => Task.WhenAll(terminals));
         Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
         Assert.Equal(0UL, queue.GetStatus().QueuedApplicationJobs);
     }
@@ -1113,190 +1083,6 @@ public sealed class StandaloneActorRelocationRuntimeTests
     }
 
     [Fact]
-    public async Task Relocation_source_validation_rejects_a_forged_owner()
-    {
-        var now = DateTimeOffset.UtcNow;
-        var source = new ZLinkServiceWireCodec.RequestSourceFence(
-            "forged-owner",
-            3,
-            RoutingId.From("caller"),
-            7
-        );
-        var accepted = AcceptedRecords(source);
-
-        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-            ZLinkActorRequestSourceFenceValidator
-                .ValidateAsync(
-                    "mesh",
-                    LocalNodeStatus(),
-                    [AdmittedPeer(source.NodeRid, source.NodeGeneration)],
-                    accepted,
-                    TimeSpan.FromSeconds(5),
-                    (_, _) =>
-                        ValueTask.FromResult<ZLinkOwnerLeaseReadResult>(
-                            new ZLinkOwnerLeaseReadResult.Found(
-                                new ZLinkLocationOwnerToken("forged-owner", 3),
-                                now.AddMinutes(1),
-                                now
-                            )
-                        ),
-                    _ =>
-                        ValueTask.FromResult<IReadOnlyList<ZLinkMeshNodeDescriptor>>([
-                            RequestSourceDescriptor(source) with
-                            {
-                                OwnerId = "actual-owner",
-                            },
-                        ]),
-                    CancellationToken.None
-                )
-                .AsTask()
-        );
-
-        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
-        Assert.True(error.RetryAdvice != ZLinkRetryAdvice.DoNotRetry);
-    }
-
-    [Fact]
-    public async Task Relocation_source_validation_rejects_an_expired_lease()
-    {
-        var now = DateTimeOffset.UtcNow;
-        var source = new ZLinkServiceWireCodec.RequestSourceFence(
-            "caller-owner",
-            3,
-            RoutingId.From("caller"),
-            7
-        );
-
-        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-            ZLinkActorRequestSourceFenceValidator
-                .ValidateAsync(
-                    "mesh",
-                    LocalNodeStatus(),
-                    [AdmittedPeer(source.NodeRid, source.NodeGeneration)],
-                    AcceptedRecords(source),
-                    TimeSpan.FromSeconds(5),
-                    (_, _) =>
-                        ValueTask.FromResult<ZLinkOwnerLeaseReadResult>(
-                            new ZLinkOwnerLeaseReadResult.Found(
-                                new ZLinkLocationOwnerToken("caller-owner", 3),
-                                now,
-                                now
-                            )
-                        ),
-                    _ =>
-                        ValueTask.FromResult<IReadOnlyList<ZLinkMeshNodeDescriptor>>([
-                            RequestSourceDescriptor(source),
-                        ]),
-                    CancellationToken.None
-                )
-                .AsTask()
-        );
-
-        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
-    }
-
-    [Fact]
-    public async Task Relocation_source_validation_fences_a_same_rid_restart()
-    {
-        var now = DateTimeOffset.UtcNow;
-        var source = new ZLinkServiceWireCodec.RequestSourceFence(
-            "caller-owner",
-            3,
-            RoutingId.From("caller"),
-            7
-        );
-
-        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
-            ZLinkActorRequestSourceFenceValidator
-                .ValidateAsync(
-                    "mesh",
-                    LocalNodeStatus(),
-                    [AdmittedPeer(source.NodeRid, 8)],
-                    AcceptedRecords(source),
-                    TimeSpan.FromSeconds(5),
-                    (_, _) =>
-                        ValueTask.FromResult<ZLinkOwnerLeaseReadResult>(
-                            new ZLinkOwnerLeaseReadResult.Found(
-                                new ZLinkLocationOwnerToken("caller-owner", 3),
-                                now.AddMinutes(1),
-                                now
-                            )
-                        ),
-                    _ =>
-                        ValueTask.FromResult<IReadOnlyList<ZLinkMeshNodeDescriptor>>([
-                            RequestSourceDescriptor(source) with
-                            {
-                                LifecycleGeneration = 8,
-                            },
-                        ]),
-                    CancellationToken.None
-                )
-                .AsTask()
-        );
-
-        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
-    }
-
-    [Fact]
-    public async Task Relocation_source_validation_deduplicates_valid_records()
-    {
-        var now = DateTimeOffset.UtcNow;
-        var first = new ZLinkServiceWireCodec.RequestSourceFence(
-            "owner-a",
-            3,
-            RoutingId.From("caller-a"),
-            7
-        );
-        var second = new ZLinkServiceWireCodec.RequestSourceFence(
-            "owner-b",
-            4,
-            RoutingId.From("caller-b"),
-            8
-        );
-        var leaseReads = new Dictionary<string, int>(StringComparer.Ordinal);
-        var descriptorReads = 0;
-
-        await ZLinkActorRequestSourceFenceValidator.ValidateAsync(
-            "mesh",
-            LocalNodeStatus(),
-            [
-                AdmittedPeer(first.NodeRid, first.NodeGeneration),
-                AdmittedPeer(second.NodeRid, second.NodeGeneration),
-            ],
-            [.. AcceptedRecords(first), .. AcceptedRecords(first), .. AcceptedRecords(second)],
-            TimeSpan.FromSeconds(5),
-            (ownerId, _) =>
-            {
-                lock (leaseReads)
-                {
-                    leaseReads[ownerId] = leaseReads.GetValueOrDefault(ownerId) + 1;
-                }
-                var source = ownerId == first.OwnerId ? first : second;
-                return ValueTask.FromResult<ZLinkOwnerLeaseReadResult>(
-                    new ZLinkOwnerLeaseReadResult.Found(
-                        new ZLinkLocationOwnerToken(ownerId, checked((long)source.LeaseGeneration)),
-                        now.AddMinutes(1),
-                        now
-                    )
-                );
-            },
-            _ =>
-            {
-                Interlocked.Increment(ref descriptorReads);
-                return ValueTask.FromResult<IReadOnlyList<ZLinkMeshNodeDescriptor>>([
-                    RequestSourceDescriptor(first),
-                    RequestSourceDescriptor(second),
-                ]);
-            },
-            CancellationToken.None
-        );
-
-        Assert.Equal(2, leaseReads.Count);
-        Assert.All(leaseReads.Values, count => Assert.Equal(1, count));
-        Assert.Equal(1, descriptorReads);
-    }
-
-    [Fact]
     public void Direct_handoff_admission_rejects_a_missing_source_fence()
     {
         var handoff = new ZLinkActorHandoffState("actor-1", TimeProvider.System);
@@ -1524,29 +1310,31 @@ public sealed class StandaloneActorRelocationRuntimeTests
             participant.AuthorityKey,
             PublishedSnapshot(canonicalPayload, targetAuthority, 12)
         );
-        var committed = await authorityStore.ReadAuthorityAsync(participant.AuthorityKey);
-        Assert.True(
-            ZLinkStandaloneActorRelocationRuntime.IsExactCommittedTargetAuthority(
-                committed,
+        ValueTask<ZLinkSourceSettlementResult> SettleSourceAsync() =>
+            ZLinkStandaloneActorRelocationRuntime.SettleSourceAsync(
+                authorityStore,
+                participant.AuthorityKey,
                 SourceAuthority(),
-                stored.Root,
                 relocationId,
                 target,
-                1,
-                requireActivated: false
-            )
+                TimeSpan.MaxValue,
+                static () => true,
+                static _ =>
+                    throw new InvalidOperationException("The target CAS is already committed."),
+                TimeSpan.Zero,
+                CancellationToken.None,
+                static () =>
+                    throw new InvalidOperationException(
+                        "A committed authority needs no route observation."
+                    )
+            );
+        // Location runtime §10 confirms the target CAS independently of activation progress.
+        var committed = Assert.IsType<ZLinkAuthorityReadResult.Found>(
+            await authorityStore.ReadAuthorityAsync(participant.AuthorityKey)
         );
-        Assert.False(
-            ZLinkStandaloneActorRelocationRuntime.IsExactCommittedTargetAuthority(
-                committed,
-                SourceAuthority(),
-                stored.Root,
-                relocationId,
-                target,
-                1,
-                requireActivated: true
-            )
-        );
+        var beforeActivation = await SettleSourceAsync();
+        Assert.Equal(ZLinkSourceSettlement.TargetCommitted, beforeActivation.Outcome);
+        Assert.Equal(committed.Snapshot.StoreVersion, beforeActivation.Snapshot!.StoreVersion);
         var owner = new ZLinkLocationOwnerToken(target.OwnerId, target.LeaseGeneration);
         var coordinator = new ZLinkStandaloneActorRelocationProgressCoordinator(
             authorityStore,
@@ -1592,26 +1380,15 @@ public sealed class StandaloneActorRelocationRuntimeTests
             (byte)ZLinkStandaloneActorCanonicalPhase.Activated,
             activated.Canonical!.Phase
         );
-        var activatedRoot = new ZLinkRelocationStored(
-            activated.Canonical.State.RelocationReference,
-            activated.Canonical.State.RelocationChecksumCrc32c,
-            stored.Root.ExpiresAt,
-            stored.Root.StoreNow
-        );
         var activatedAuthority = Assert.IsType<ZLinkAuthorityReadResult.Found>(
             await authorityStore.ReadAuthorityAsync(participant.AuthorityKey)
         );
         var observedVersion = activatedAuthority.Snapshot.StoreVersion;
-        Assert.True(
-            ZLinkStandaloneActorRelocationRuntime.IsExactCommittedTargetAuthority(
-                activatedAuthority,
-                SourceAuthority(),
-                activatedRoot,
-                relocationId,
-                target,
-                1,
-                requireActivated: true
-            )
+        var afterActivation = await SettleSourceAsync();
+        Assert.Equal(ZLinkSourceSettlement.TargetCommitted, afterActivation.Outcome);
+        Assert.Equal(
+            activatedAuthority.Snapshot.StoreVersion,
+            afterActivation.Snapshot!.StoreVersion
         );
         Assert.Equal(
             observedVersion,
@@ -1863,59 +1640,6 @@ public sealed class StandaloneActorRelocationRuntimeTests
             replyRouteId
         );
     }
-
-    private static ZLinkActorAcceptedRecord[] AcceptedRecords(
-        ZLinkServiceWireCodec.RequestSourceFence source
-    ) => [new ZLinkActorAcceptedRecord(AcceptedRequestFrame(source, replyRouteId: 91), source)];
-
-    private static ZLinkMeshNodeDescriptor RequestSourceDescriptor(
-        ZLinkServiceWireCodec.RequestSourceFence source
-    ) =>
-        new(
-            "mesh",
-            source.NodeRid,
-            source.NodeGeneration,
-            1,
-            "tcp://127.0.0.1:1",
-            new Dictionary<string, int>(),
-            "plain",
-            source.OwnerId,
-            checked((long)source.LeaseGeneration),
-            DateTimeOffset.UtcNow
-        );
-
-    private static MeshNodeStatus LocalNodeStatus() =>
-        new(
-            MeshNodeState.Ready,
-            RoutingId.From("relocation-source"),
-            "mesh",
-            "tcp://127.0.0.1:2",
-            11,
-            1,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0,
-            0
-        );
-
-    private static MeshNodePeer AdmittedPeer(RoutingId rid, ulong lifecycleGeneration) =>
-        new(
-            1,
-            MeshPeerSource.Discovery,
-            MeshPeerState.Admitted,
-            rid,
-            lifecycleGeneration,
-            1,
-            "tcp://127.0.0.1:3",
-            0,
-            0,
-            0
-        );
 
     private static bool IsDisposed(Message message)
     {

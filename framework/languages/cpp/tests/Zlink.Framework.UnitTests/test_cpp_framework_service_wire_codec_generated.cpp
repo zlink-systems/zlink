@@ -591,6 +591,61 @@ int main ()
     bool passed = true;
     const auto context = maximum_codec_context ();
 
+    const auto close_fixture = load_json (protocolRoot / "golden/bound-session-close-v1.json");
+    const auto close_bytes =
+      from_hex (close_fixture.at ("canonical").at ("hex").get<std::string> ());
+    const auto close = codec::decode_boundSessionClose_54_frames ({close_bytes});
+    if (!close || !codec::encode_boundSessionClose_54_frames (close.value)
+        || codec::encode_boundSessionClose_54_frames (close.value).value
+             != std::vector<std::vector<std::uint8_t>>{close_bytes}) {
+        std::cerr << "command 54 shared canonical bytes failed\n";
+        passed = false;
+    }
+    for (const auto &malformed : close_fixture.at ("malformed")) {
+        if (codec::decode_boundSessionClose_54_frames (
+              {from_hex (malformed.at ("hex").get<std::string> ())})) {
+            std::cerr << "command 54 accepted " << malformed.at ("name") << '\n';
+            passed = false;
+        }
+    }
+    if (codec::decode_boundSessionClose_54_frames ({close_bytes, {}})) {
+        std::cerr << "command 54 accepted a payload frame\n";
+        passed = false;
+    }
+
+    const auto barrier = load_json (protocolRoot / "golden/session-relocation-barrier-v1.json");
+    for (const auto &item : barrier.at ("canonical")) {
+        if (item.at ("command") != 43)
+            continue;
+        const auto input = from_hex (item.at ("hex").get<std::string> ());
+        auto decoded = codec::decode_sessionRelocationSealed_43_frames ({input});
+        const auto expected = item.at ("decoded").at ("sealResult") == "sealed"
+                                ? codec::session_seal_result_t::sealed
+                                : codec::session_seal_result_t::bindingAbsent;
+        if (!decoded || decoded.value.sealResult != expected) {
+            std::cerr << "command 43 sealResult decode failed\n";
+            passed = false;
+            continue;
+        }
+        const auto encoded = codec::encode_sessionRelocationSealed_43_frames (decoded.value);
+        if (!encoded || encoded.value != std::vector<std::vector<std::uint8_t>>{input}) {
+            std::cerr << "command 43 sealResult encode failed\n";
+            passed = false;
+        }
+        decoded.value.sealResult = static_cast<codec::session_seal_result_t> (3);
+        if (codec::encode_sessionRelocationSealed_43_frames (decoded.value)) {
+            std::cerr << "command 43 accepted unknown sealResult\n";
+            passed = false;
+        }
+    }
+    for (const auto &item : barrier.at ("malformed")) {
+        const auto input = from_hex (item.at ("hex").get<std::string> ());
+        if (codec::decode_sessionRelocationSealed_43_frames ({input})) {
+            std::cerr << "command 43 accepted malformed bytes: " << item.at ("name") << '\n';
+            passed = false;
+        }
+    }
+
     for (const auto &entry : index.at ("fixtures")) {
         const auto fixture =
           load_json (protocolRoot / entry.at ("goldenFixture").get<std::string> ());

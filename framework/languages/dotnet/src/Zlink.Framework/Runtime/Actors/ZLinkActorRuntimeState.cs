@@ -301,6 +301,10 @@ internal sealed class ZLinkActorRuntimeState(
     internal ZLinkActorSerialExecutor.BarrierReservation ReserveHandoffRestoreBarrier() =>
         _dispatchMailbox.ReserveBarrier();
 
+    internal IReadOnlyList<Task> AdmitDurablePrefix(
+        IReadOnlyList<ZLinkActorDurableRecord> records
+    ) => _dispatchMailbox.AdmitDurablePrefix(records);
+
     public void EnsureDeferredJoinIdentity(IZLinkActor actor, ulong objectGeneration)
     {
         if (
@@ -318,6 +322,7 @@ internal sealed class ZLinkActorRuntimeState(
     public void ReleaseDeferredJoinBarrier()
     {
         Volatile.Write(ref _deferredJoinPending, 0);
+        _dispatchMailbox.NotifyReadiness();
     }
 
     public void BeginReservedCreation()
@@ -508,7 +513,8 @@ internal sealed class ZLinkActorRuntimeState(
         ulong acceptedHighWater,
         string sessionOwnerId = "",
         ulong sessionOwnerLeaseGeneration = 0,
-        Action<ZLinkActorRuntimeState>? acceptAuthority = null
+        Action<ZLinkActorRuntimeState>? acceptAuthority = null,
+        Action? beforePublish = null
     )
     {
         return RunState(() =>
@@ -535,11 +541,14 @@ internal sealed class ZLinkActorRuntimeState(
             if (_boundSession is { } current && SameBindingToken(current, replacement))
             {
                 EnsureExactBindingIdentity(current, replacement);
+                beforePublish?.Invoke();
                 return new ZLinkActorSessionBindingTransition(replacement, null, Changed: false);
             }
             var previous = _boundSession;
             if (previous is { } retired)
-                RememberRetiredSessionBinding(retired);
+                RememberRetiredSessionBinding(retired, beforePublish);
+            else
+                beforePublish?.Invoke();
             _boundSession = replacement;
             return new ZLinkActorSessionBindingTransition(replacement, previous, Changed: true);
         });
@@ -646,7 +655,10 @@ internal sealed class ZLinkActorRuntimeState(
         );
     }
 
-    private void RememberRetiredSessionBinding(ZLinkActorBoundSession binding)
+    private void RememberRetiredSessionBinding(
+        ZLinkActorBoundSession binding,
+        Action? beforePublish = null
+    )
     {
         PurgeExpiredSessionBindingTombstones();
         if (
@@ -658,6 +670,7 @@ internal sealed class ZLinkActorRuntimeState(
                 $"Actor '{ActorId}' session binding tombstone capacity is exhausted.",
                 ZLinkRetryAdvice.RetryAfterBackoff
             );
+        beforePublish?.Invoke();
         _sessionBindingTombstones[binding.BindingToken] = new ZLinkActorSessionBindingTombstone(
             binding,
             _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp())
@@ -1008,25 +1021,25 @@ internal sealed class ZLinkActorRuntimeState(
         });
     }
 
-    public void TombstoneSession(ZLinkActorBoundSession expected)
+    public void TombstoneSession(
+        ZLinkActorBoundSession expected,
+        Action<ZLinkActorRuntimeState>? acceptAuthority = null,
+        Action? reply = null
+    )
     {
         RunState(() =>
         {
+            acceptAuthority?.Invoke(this);
             PurgeExpiredSessionBindingTombstones();
             if (_sessionBindingTombstones.TryGetValue(expected.BindingToken, out var tombstone))
             {
-                EnsureExactBindingIdentity(tombstone.Binding, expected);
+                reply?.Invoke();
                 return;
             }
-            if (_boundSession is not { } current || !SameBindingToken(current, expected))
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    $"Actor '{ActorId}' no longer has the exact session binding selected for replacement.",
-                    ZLinkRetryAdvice.RetryAfterBackoff
-                );
-            EnsureExactBindingIdentity(current, expected);
-            RememberRetiredSessionBinding(current);
-            _boundSession = null;
+            RememberRetiredSessionBinding(expected);
+            if (_boundSession is { } current && SameBindingToken(current, expected))
+                _boundSession = null;
+            reply?.Invoke();
         });
     }
 
@@ -1120,10 +1133,8 @@ internal sealed class ZLinkActorRuntimeState(
             pending.TargetOwnerLeaseGeneration,
             route.SessionOwnerNodeGeneration,
             route.AcceptedHighWater,
-            route.SessionOwnerId ?? route.NodeRid!.Value.ToHex(),
-            route.SessionOwnerLeaseGeneration == 0
-                ? route.SessionOwnerNodeGeneration
-                : route.SessionOwnerLeaseGeneration
+            route.SessionOwnerId ?? "",
+            route.SessionOwnerLeaseGeneration
         );
     }
 
@@ -1268,9 +1279,24 @@ internal sealed class ZLinkActorRuntimeState(
         public object? GetService(Type serviceType) => null;
     }
 
-    public void PrepareForTransferredActivation() => RunState(PrepareForTransferredActivationCore);
+    internal async ValueTask PrepareForTransferredActivationAsync(
+        CancellationToken cancellationToken
+    )
+    {
+        var terminal = await ExecuteLockedAsync(
+                () => _terminalLifecycleCompletion,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        if (terminal is not null)
+            // Framework API §11: source retirement publishes its handoff result
+            // before async handler disposal finishes. Reentry needs that existing
+            // terminal fence; the source finalizer owns reporting disposal errors.
+            await Task.WhenAny(terminal).WaitAsync(cancellationToken).ConfigureAwait(false);
 
-    internal void PrepareForTransferredActivationOnLane() => PrepareForTransferredActivationCore();
+        await ExecuteLockedAsync(PrepareForTransferredActivationCore, cancellationToken)
+            .ConfigureAwait(false);
+    }
 
     private void PrepareForTransferredActivationCore()
     {
@@ -1589,6 +1615,7 @@ internal sealed class ZLinkActorRuntimeState(
             && ReferenceEquals(ownership.State, this)
         )
         {
+            await Handoff.WithdrawDeferredSuffixAsync().ConfigureAwait(false);
             return await ExecuteLockedAsync(
                     () =>
                     {
@@ -1602,7 +1629,10 @@ internal sealed class ZLinkActorRuntimeState(
                 .ConfigureAwait(false);
         }
 
-        using var turn = await _dispatchMailbox.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var turn = await _dispatchMailbox
+            .EnterLifecycleAsync(cancellationToken)
+            .ConfigureAwait(false);
+        await Handoff.WithdrawDeferredSuffixAsync().ConfigureAwait(false);
         return await ExecuteLockedAsync(
                 () =>
                 {
@@ -1678,7 +1708,9 @@ internal sealed class ZLinkActorRuntimeState(
         CancellationToken cancellationToken
     )
     {
-        using var turn = await _dispatchMailbox.EnterAsync(cancellationToken).ConfigureAwait(false);
+        using var turn = await _dispatchMailbox
+            .EnterLifecycleAsync(cancellationToken)
+            .ConfigureAwait(false);
         if (
             ContextInvalidated
             || NativeActorRef is not { Generation: var currentGeneration }
@@ -1855,18 +1887,11 @@ internal readonly record struct ZLinkActorBoundSession(
     {
         if (SessionNodeRid is not { } previousNodeRid)
             return false;
-        var previousOwnerId = string.IsNullOrWhiteSpace(SessionOwnerId)
-            ? previousNodeRid.ToHex()
-            : SessionOwnerId;
-        var previousOwnerLease =
-            SessionOwnerLeaseGeneration == 0
-                ? SessionOwnerNodeGeneration
-                : SessionOwnerLeaseGeneration;
         return previousNodeRid == sessionNodeRid
             && SessionOwnerNodeGeneration == sessionOwnerNodeGeneration
             && SessionRid == sessionRid
-            && string.Equals(previousOwnerId, sessionOwnerId, StringComparison.Ordinal)
-            && previousOwnerLease == sessionOwnerLeaseGeneration;
+            && string.Equals(SessionOwnerId, sessionOwnerId, StringComparison.Ordinal)
+            && SessionOwnerLeaseGeneration == sessionOwnerLeaseGeneration;
     }
 }
 

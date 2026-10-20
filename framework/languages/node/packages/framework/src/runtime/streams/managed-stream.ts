@@ -1,3 +1,4 @@
+import { routingIdsEqual } from '../routing-id';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -225,7 +226,8 @@ export class ZLinkManagedStream implements ZLinkStream {
                 : (_actorId, retiredSession, replacedActor) => {
                     onBindingReplaced(replacedActor, retiredSession);
                   },
-              toStreamSessionActorAuthorityFence(authorityFence)
+              toStreamSessionActorAuthorityFence(authorityFence),
+              () => this.close()
             ),
           signal
         ),
@@ -307,7 +309,7 @@ export class ZLinkManagedStream implements ZLinkStream {
         resolved === undefined ||
         resolved.actorId !== actor.actorId ||
         resolved.generation !== actor.objectGeneration ||
-        String(resolved.nodeRid) !== String(actor.nodeRid)
+        !routingIdsEqual(resolved.nodeRid, actor.nodeRid)
       ) {
         throw createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.ActorRouteNotFound,

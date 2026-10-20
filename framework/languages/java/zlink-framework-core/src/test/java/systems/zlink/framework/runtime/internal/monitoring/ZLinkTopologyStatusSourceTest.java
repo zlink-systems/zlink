@@ -120,6 +120,85 @@ final class ZLinkTopologyStatusSourceTest {
     }
 
     @Test
+    void newerProjectionIsPublishedAfterAnOlderProjectionWinsThePublicationTurn() throws Exception {
+        var state = new AtomicReference<>(ZLinkTopologyState.READY);
+        var olderReader = new AtomicReference<Thread>();
+        var newerReader = new AtomicReference<Thread>();
+        var olderProjected = new CountDownLatch(1);
+        var newerProjected = new CountDownLatch(1);
+        var releaseOlder = new CompletableFuture<Void>();
+        var releaseNewer = new CompletableFuture<Void>();
+        var source =
+                new ZLinkTopologyStatusSource<Status>(
+                        (key, previous) -> {
+                            var projected = new Status(key, state.get(), 0);
+                            Thread self = Thread.currentThread();
+                            if (olderReader.compareAndSet(self, null)) {
+                                olderProjected.countDown();
+                                await(releaseOlder);
+                            } else if (newerReader.compareAndSet(self, null)) {
+                                newerProjected.countDown();
+                                await(releaseNewer);
+                            }
+                            return projected;
+                        },
+                        Status::state,
+                        (status, sequence) -> new Status(status.key(), status.state(), sequence),
+                        Status::sequence,
+                        status -> status.state() == ZLinkTopologyState.STOPPED,
+                        status -> status.state() == ZLinkTopologyState.STOPPING);
+        source.snapshot("mesh");
+        try (var older = Executors.newSingleThreadExecutor();
+                var newer = Executors.newSingleThreadExecutor()) {
+            try {
+                state.set(ZLinkTopologyState.DEGRADED);
+                var olderQuery =
+                        older.submit(
+                                () -> {
+                                    olderReader.set(Thread.currentThread());
+                                    return source.snapshot("mesh");
+                                });
+                org.junit.jupiter.api.Assertions.assertTrue(
+                        olderProjected.await(1, TimeUnit.SECONDS));
+                state.set(ZLinkTopologyState.STOPPING);
+                var newerQuery =
+                        newer.submit(
+                                () -> {
+                                    newerReader.set(Thread.currentThread());
+                                    return source.snapshot("mesh");
+                                });
+                org.junit.jupiter.api.Assertions.assertTrue(
+                        newerProjected.await(1, TimeUnit.SECONDS));
+
+                // The projection taken before STOPPING wins the publication turn first.
+                releaseOlder.complete(null);
+                assertEquals(
+                        ZLinkTopologyState.DEGRADED, olderQuery.get(1, TimeUnit.SECONDS).state());
+                // The query that started after STOPPING still returns it.
+                releaseNewer.complete(null);
+                var newest = newerQuery.get(1, TimeUnit.SECONDS);
+                assertEquals(ZLinkTopologyState.STOPPING, newest.state());
+                assertEquals(3, newest.sequence());
+                assertEquals(newest, source.snapshot("mesh"));
+            } finally {
+                releaseOlder.complete(null);
+                releaseNewer.complete(null);
+            }
+        }
+    }
+
+    private static void await(CompletableFuture<Void> release) {
+        try {
+            release.get(1, TimeUnit.SECONDS);
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+            throw new CompletionException(interrupted);
+        } catch (ExecutionException | TimeoutException failure) {
+            throw new CompletionException(failure);
+        }
+    }
+
+    @Test
     void firstQueryPublishesSequenceOneWithoutObservers() {
         var state = new AtomicReference<>(ZLinkTopologyState.READY);
         var source = source(state);

@@ -1,6 +1,7 @@
 import { type ActorRef, type RoutingId, ZLinkFrameworkException } from '../../contracts';
 
 import type { Message } from '../../contracts/Common/Message';
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import { zlinkDefaultLocationOptions } from '../../contracts/Locations/Options';
 import { releaseApplicationJobPermitForDurableHandoff } from '../application-jobs/application-job-queue-scope';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
@@ -10,12 +11,22 @@ import {
   type MessageFollowSuppressionFence
 } from '../foundation/message-follow-suppression-registry';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
+import { RELOCATION_REPLY_RETENTION_MS } from '../foundation/service-stateful-registry';
+import type { ServiceActorRouteFence } from '../foundation/service-stateful-wire-codec';
+import { OPERATION_IDENTITY_BYTES } from '../foundation/operation-identity';
+import { UINT64_BYTES } from '@zlink-systems/stream-wire';
 import {
   createInternalFrameworkException,
   internalFrameworkErrorKind,
   ZLinkFrameworkInternalErrorKind
 } from '../framework-errors-internal';
-import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
+import { waitRequestReply } from '../messaging/request-deadline';
+import {
+  decodeRoutingId,
+  encodeRoutingIdStorageHex,
+  routingIdsEqual,
+  routingIdWireHex
+} from '../routing-id';
 import type { ZLinkSpotRouteTarget } from '../spots/spot-routing-internal';
 import { decodeActorRequestDeadlineUnixMs, decodeStreamHeader } from '../streams/protocol';
 import {
@@ -43,7 +54,7 @@ import type { ZLinkRemoteBoundSessionTarget } from './actor-runtime-state';
 
 export const DEFAULT_MESSAGE_FOLLOW_DURATION_MS =
   zlinkDefaultLocationOptions.messageFollowDurationMs;
-const RELOCATION_REPLY_RETENTION_MS = 24 * 60 * 60 * 1_000;
+export const RELOCATED_REQUEST_OWNED_BY_REQUESTER = Symbol('relocated request owned by requester');
 
 export interface ZLinkActorHandoffPacket {
   readonly index: number;
@@ -74,6 +85,7 @@ export interface ZLinkActorHandoffRequestSource {
   readonly ownerId: string;
   readonly ownerLeaseGeneration: string;
   readonly nodeRid: string;
+  readonly nodeRidHex?: string;
   readonly nodeGeneration: string;
   readonly replyRouteId: string;
 }
@@ -119,6 +131,7 @@ export interface ZLinkActorHandoffPrefixAdmission {
 }
 
 export interface ZLinkActorHandoffPrefixRecord {
+  readonly onWithdrawable?: (withdraw: () => boolean) => void;
   readonly drain: (dispatch: ZLinkActorHandoffDispatch) => Promise<void>;
   readonly preparation?: {
     prepare(signal: AbortSignal): Promise<void>;
@@ -139,6 +152,7 @@ export type ZLinkActorHandoffPrefixQueue = (
 ) => ZLinkActorHandoffPrefixAdmission;
 
 interface PendingPacket {
+  withdraw?: () => boolean;
   readonly origin: ApplicationJobOrigin;
   readonly packet: ZLinkActorHandoffPacket;
   readonly resolve?: (value: unknown) => void;
@@ -290,7 +304,12 @@ function requireExactTargetOwnerFence(
 /** Owns packet ordering from relocation start through Message Follow removal. */
 export class ZLinkActorHandoffCoordinator {
   private readonly active = new Map<string, ActiveHandoff>();
-  private readonly messageFollowRoutes = new Map<string, MessageFollowRoute>();
+  // Each route is stored once: Actor -> native fence -> location owner id.
+  // Native ingress has the complete fence except the location owner's text id.
+  private readonly messageFollowRoutes = new Map<
+    string,
+    Map<string, Map<string, MessageFollowRoute>>
+  >();
   private readonly messageFollowSuppression = new MessageFollowSuppressionRegistry();
   // Relocation preserves ObjectGeneration, so (nodeRid, objectGeneration) alone
   // also matches a tenure that later RETURNS to a previously-visited node. The
@@ -322,7 +341,10 @@ export class ZLinkActorHandoffCoordinator {
     oldGeneration: bigint,
     phase: 'relocating' | 'provisional'
   ): void {
-    if (this.active.has(actorId)) {
+    // A releasing handoff has returned its hold to the Actor FIFO; only its
+    // durable prefix drain remains, and the next hold takes over its ingress.
+    const previous = this.active.get(actorId);
+    if (this.isActive(actorId)) {
       throw new Error(`Actor '${actorId}' already has an active packet handoff.`);
     }
     if (oldGeneration <= 0n) {
@@ -362,6 +384,24 @@ export class ZLinkActorHandoffCoordinator {
       nodeGeneration: source.nodeGeneration,
       authorityOwnerGeneration: source.authorityOwnerGeneration
     });
+    const pending: PendingPacket[] = [];
+    if (previous?.prefixRelease !== undefined) {
+      // Only records still in the FIFO belong to the new barrier. Running
+      // records keep their existing terminal; withdrawn records surrender
+      // readiness and move their payload before later ingress can arrive.
+      for (let index = 0; index < previous.pending.length;) {
+        const record = previous.pending[index]!;
+        if (record.withdraw?.() === true) {
+          record.withdraw = undefined;
+          pending.push(record);
+          previous.pending.splice(index, 1);
+          previous.prefixRelease.cursor -= 1;
+          previous.pendingBytes -= packetBytes(record.packet);
+        } else {
+          index += 1;
+        }
+      }
+    }
     this.active.set(actorId, {
       oldGeneration,
       oldNodeRid: sourceOwner.nodeRid,
@@ -371,27 +411,21 @@ export class ZLinkActorHandoffCoordinator {
       phase,
       deferredJoin: phase === 'provisional',
       connectionBoundSealed: false,
-      pending: [],
-      nextIndex: 0,
+      pending,
+      nextIndex: pending.reduce((next, record) => Math.max(next, record.packet.index + 1), 0),
       snapshotIndex: -1,
-      pendingBytes: 0
+      pendingBytes: pending.reduce((bytes, record) => bytes + packetBytes(record.packet), 0)
     });
   }
 
+  /** True while a hold owns this Actor's ingress, before its release to the Actor FIFO. */
   isActive(actorId: string): boolean {
-    return this.active.has(actorId);
+    const handoff = this.active.get(actorId);
+    return handoff !== undefined && handoff.phase !== 'releasing';
   }
 
   isProvisional(actorId: string): boolean {
     return this.active.get(actorId)?.phase === 'provisional';
-  }
-
-  promoteProvisional(actorId: string): void {
-    const handoff = this.active.get(actorId);
-    if (handoff?.phase !== 'provisional') {
-      throw new Error(`Actor '${actorId}' does not have a provisional packet handoff.`);
-    }
-    handoff.phase = 'relocating';
   }
 
   sealConnectionBoundIngress(actorId: string): void {
@@ -456,6 +490,44 @@ export class ZLinkActorHandoffCoordinator {
   ): ZLinkActorHandoffPrefixAdmission {
     const handoff = this.active.get(actorId);
     if (handoff === undefined) return { terminal: Promise.resolve() };
+    return this.admitHandoffPrefix(actorId, handoff, queue, preparation, start);
+  }
+
+  /** Installs a restored target's payload in the same owner used by local handoffs. */
+  admitTransferredPrefix(
+    actorId: string,
+    objectGeneration: bigint,
+    packets: readonly ZLinkActorHandoffPacket[],
+    queue: ZLinkActorHandoffPrefixQueue,
+    preparation: ZLinkActorHandoffReplayPreparation | undefined,
+    start: Promise<void>,
+    onResult: (packet: ZLinkActorHandoffPacket, result: ZLinkActorHandoffResult) => void
+  ): ZLinkActorHandoffPrefixAdmission {
+    this.beginProvisional(actorId, objectGeneration);
+    const handoff = this.requireActive(actorId);
+    for (const packet of packets) {
+      handoff.pending.push({
+        packet,
+        origin: 'remote',
+        resolve: (response) => {
+          if (response !== RELOCATED_REQUEST_OWNED_BY_REQUESTER) {
+            onResult(packet, { index: packet.index, ok: true, response });
+          }
+        },
+        reject: (error) =>
+          onResult(packet, {
+            index: packet.index,
+            ok: false,
+            error: error instanceof Error ? error.message : String(error),
+            errorKind:
+              error instanceof ZLinkFrameworkException
+                ? internalFrameworkErrorKind(error)
+                : undefined
+          })
+      });
+      handoff.nextIndex = Math.max(handoff.nextIndex, packet.index + 1);
+      handoff.pendingBytes += packetBytes(packet);
+    }
     return this.admitHandoffPrefix(actorId, handoff, queue, preparation, start);
   }
 
@@ -551,6 +623,9 @@ export class ZLinkActorHandoffCoordinator {
       prepared = undefined;
     };
     return {
+      onWithdrawable: (withdraw) => {
+        pending.withdraw = withdraw;
+      },
       payloadBytes: packetBytes(pending.packet),
       preparation: {
         prepare: async (signal) => {
@@ -572,6 +647,9 @@ export class ZLinkActorHandoffCoordinator {
         cancel
       },
       drain: async (replay) => {
+        // The FIFO claim, rather than this prefix's eventual terminal,
+        // ends the record's durable ownership and transfer capability.
+        pending.withdraw = undefined;
         const admission =
           prepared === undefined
             ? undefined
@@ -779,11 +857,38 @@ export class ZLinkActorHandoffCoordinator {
     provisionalReplay?: ZLinkActorHandoffDispatch,
     onAdmitted?: () => void
   ): Promise<unknown> | undefined {
-    const incomingContext = actorMessageFollowContext(fallbackActorRef);
+    let incomingContext = actorMessageFollowContext(fallbackActorRef);
     const originalDeadlineUnixMs =
       deadlineUnixMs ?? incomingContext?.deadlineUnixMs ?? packetDeadlineUnixMs(parts);
-    const handoff = this.active.get(actorId);
+    const followRoute = this.findMessageFollowRoute(
+      actorId,
+      incomingContext,
+      messageFollowOrigin?.target
+    );
+    // An exact departed tenure belongs to its committed route, even while the
+    // same Actor incarnation is performing a later Join on this node.
+    const handoff = followRoute === undefined ? this.active.get(actorId) : undefined;
+    if (
+      incomingContext === undefined &&
+      followRoute !== undefined &&
+      messageFollowOrigin?.target !== undefined
+    ) {
+      incomingContext = this.createInitialIngressContext(
+        followRoute.sourceOwner,
+        messageFollowOrigin.target.actor.generation,
+        parts,
+        returnResponse,
+        originalDeadlineUnixMs,
+        messageFollowOrigin
+      );
+    }
     if (handoff !== undefined) {
+      if (
+        handoff.phase === 'releasing' &&
+        handoff.prefixRelease !== undefined &&
+        handoff.pending.at(-1)?.withdraw === undefined
+      )
+        return undefined;
       if (parts.length < 2) return Promise.resolve(undefined);
       if (
         handoff.connectionBoundSealed &&
@@ -806,10 +911,15 @@ export class ZLinkActorHandoffCoordinator {
           handoff.oldGeneration,
           parts,
           returnResponse,
-          originalDeadlineUnixMs
+          originalDeadlineUnixMs,
+          messageFollowOrigin
         );
       try {
         this.validateContext(actorId, context, parts, returnResponse, fallbackActorRef);
+        // Accepted handoff retains its original deadline; Message Follow uses a local relay window.
+        if (context.deadlineUnixMs !== undefined && Date.now() >= context.deadlineUnixMs) {
+          throw actorDeadlineExceeded(actorId);
+        }
       } catch (error) {
         return Promise.reject(error);
       }
@@ -844,8 +954,25 @@ export class ZLinkActorHandoffCoordinator {
         return Promise.resolve(undefined);
       }
       const result = new Promise((resolve, reject) => {
-        const source = this.captureRequestSource(handoff.sourceEvidence, context.replyRouteId);
+        const original = messageFollowOrigin?.requestSource;
+        const originalRidHex =
+          original === undefined ? undefined : routingIdWireHex(original.nodeRid);
+        const source =
+          original === undefined
+            ? this.captureRequestSource(handoff.sourceEvidence, context.replyRouteId)
+            : {
+                ownerId: original.ownerId,
+                ownerLeaseGeneration: original.leaseGeneration.toString(),
+                nodeRid: String(original.nodeRid),
+                ...(originalRidHex === undefined ? {} : { nodeRidHex: originalRidHex }),
+                nodeGeneration: original.nodeGeneration.toString(),
+                replyRouteId: messageFollowOrigin!.originalReplyRouteId.toString()
+              };
         const requestPacket = { ...packet, source };
+        if (original !== undefined) {
+          handoff.pending.push({ packet: requestPacket, origin, resolve, reject });
+          return;
+        }
         const route: ReplyRoute = {
           actorId,
           operationId: requestPacket.messageFollowContext.operationId,
@@ -885,7 +1012,6 @@ export class ZLinkActorHandoffCoordinator {
       return result;
     }
 
-    const followRoute = this.findMessageFollowRoute(actorId, incomingContext);
     const staleGeneration = fallbackActorRef?.objectGeneration;
     if (
       fallbackActorRef !== undefined &&
@@ -984,19 +1110,6 @@ export class ZLinkActorHandoffCoordinator {
     return handoff.pending.map((entry) => entry.packet);
   }
 
-  snapshotCoreBacklog(actorId: string): readonly ZLinkActorHandoffPacket[] {
-    const handoff = this.requireActive(actorId);
-    let snapshotIndex = -1;
-    while (
-      snapshotIndex + 1 < handoff.pending.length &&
-      handoff.pending[snapshotIndex + 1].packet.returnResponse === false
-    ) {
-      snapshotIndex++;
-    }
-    handoff.snapshotIndex = snapshotIndex;
-    return handoff.pending.slice(0, snapshotIndex + 1).map((entry) => entry.packet);
-  }
-
   /**
    * Freezes the post-capture ingress segment immediately before the caller
    * appends the one-way cutover on the same relocation lane. Records returned
@@ -1015,14 +1128,25 @@ export class ZLinkActorHandoffCoordinator {
     target: ZLinkSpotRouteTarget,
     targetActorRef: ActorRef,
     results: readonly ZLinkActorHandoffResult[],
-    targetOwnerFence: ZLinkActorMessageFollowOwnerFence
+    targetOwnerFence: ZLinkActorMessageFollowOwnerFence | null
   ): void {
     const handoff = this.requireActive(actorId);
-    const committedTargetOwner = requireExactTargetOwnerFence(actorId, targetOwnerFence);
+    const committedTargetOwner =
+      targetOwnerFence === null ? null : requireExactTargetOwnerFence(actorId, targetOwnerFence);
     this.active.delete(actorId);
+    // Location runtime §10: a later owner has no source-local Follow route.
+    if (committedTargetOwner === null) {
+      const unavailable = actorLocationStale(actorId);
+      for (const pending of handoff.pending) this.failReleasedPending(pending, unavailable);
+      return;
+    }
     const byIndex = new Map(results.map((result) => [result.index, result]));
     for (let i = 0; i <= handoff.snapshotIndex; i++) {
       const pending = handoff.pending[i];
+      if (pending.packet.messageFollowOrigin?.requestSource !== undefined) {
+        pending.resolve?.(RELOCATED_REQUEST_OWNED_BY_REQUESTER);
+        continue;
+      }
       if (pending.packet.source !== undefined) continue;
       const result = byIndex.get(pending.packet.index);
       if (result?.ok === false) {
@@ -1074,11 +1198,16 @@ export class ZLinkActorHandoffCoordinator {
   }
 
   messageFollowCount(actorId?: string): number {
-    return actorId === undefined
-      ? this.messageFollowRoutes.size
-      : [...this.messageFollowRoutes.values()].filter(
-          (route) => route.targetActorRef.actorId === actorId
-        ).length;
+    let count = 0;
+    if (actorId === undefined) {
+      for (const id of this.messageFollowRoutes.keys()) count += this.messageFollowCount(id);
+    } else {
+      const routes = this.messageFollowRoutes.get(actorId);
+      if (routes !== undefined) {
+        for (const owners of routes.values()) count += owners.size;
+      }
+    }
+    return count;
   }
 
   pendingCount(actorId: string): number {
@@ -1087,7 +1216,7 @@ export class ZLinkActorHandoffCoordinator {
 
   isKnownStale(actor: ActorRef): boolean {
     return (
-      this.messageFollowCount(actor.actorId) === 0 &&
+      !this.messageFollowRoutes.has(actor.actorId) &&
       this.options.isCurrentActorRef?.(actor.actorId, actor) !== true &&
       this.isKnownStaleRef(actor.actorId, actor)
     );
@@ -1244,8 +1373,24 @@ export class ZLinkActorHandoffCoordinator {
         refs.set(exactRefKey, departedAuthorityOwnerGeneration);
       }
     }
-    const key = messageFollowRouteKey(actorId, oldGeneration, sourceOwner);
-    const previous = this.messageFollowRoutes.get(key);
+    const key = messageFollowRouteKey(
+      oldGeneration,
+      sourceOwner.nodeRidHex ?? encodeRoutingIdStorageHex(sourceOwner.nodeRid),
+      sourceOwner.nodeGeneration,
+      sourceOwner.authorityOwnerGeneration,
+      sourceOwner.ownerLeaseGeneration
+    );
+    let routes = this.messageFollowRoutes.get(actorId);
+    if (routes === undefined) {
+      routes = new Map();
+      this.messageFollowRoutes.set(actorId, routes);
+    }
+    let owners = routes.get(key);
+    if (owners === undefined) {
+      owners = new Map();
+      routes.set(key, owners);
+    }
+    const previous = owners.get(sourceOwner.ownerId);
     if (previous !== undefined) clearTimeout(previous.deadline);
     const suppressionFence = actorMessageFollowSuppressionFence(
       actorId,
@@ -1281,15 +1426,21 @@ export class ZLinkActorHandoffCoordinator {
     } else {
       this.messageFollowSuppression.replaceRoute(previous.suppressionFence, suppressionFence);
     }
-    this.messageFollowRoutes.set(key, entry);
+    owners.set(sourceOwner.ownerId, entry);
     this.options.onMarker?.('message_follow_registered', actorId, this.messageFollowDurationMs);
     return entry;
   }
 
   private removeMessageFollowRoute(entry: MessageFollowRoute): void {
-    if (this.messageFollowRoutes.get(entry.key) !== entry) return;
+    const actorId = entry.targetActorRef.actorId;
+    const routes = this.messageFollowRoutes.get(actorId);
+    if (routes === undefined) return;
+    const owners = routes.get(entry.key);
+    if (owners?.get(entry.sourceOwner.ownerId) !== entry) return;
     clearTimeout(entry.deadline);
-    this.messageFollowRoutes.delete(entry.key);
+    owners.delete(entry.sourceOwner.ownerId);
+    if (owners.size === 0) routes.delete(entry.key);
+    if (routes.size === 0) this.messageFollowRoutes.delete(actorId);
     this.messageFollowSuppression.expireRoute(entry.suppressionFence);
     this.pruneStaleTenureRecords(entry);
     this.options.onMarker?.('message_follow_route_removed', entry.targetActorRef.actorId);
@@ -1328,22 +1479,54 @@ export class ZLinkActorHandoffCoordinator {
 
   private findMessageFollowRoute(
     actorId: string,
-    context: ZLinkActorMessageFollowContext | undefined
+    context: ZLinkActorMessageFollowContext | undefined,
+    nativeTarget?: ServiceActorRouteFence
   ): MessageFollowRoute | undefined {
-    if (context === undefined) return undefined;
-    return this.messageFollowRoutes.get(
-      messageFollowRouteKey(actorId, BigInt(context.objectGeneration), context.targetOwner)
-    );
+    const routes = this.messageFollowRoutes.get(actorId);
+    if (routes === undefined) return undefined;
+    if (context === undefined) {
+      if (nativeTarget === undefined || nativeTarget.actor.actorId !== actorId) return undefined;
+      return routes
+        .get(
+          messageFollowRouteKey(
+            nativeTarget.actor.generation,
+            encodeRoutingIdStorageHex(nativeTarget.actor.nodeRid),
+            nativeTarget.targetNodeGeneration,
+            nativeTarget.authorityOwnerGeneration,
+            nativeTarget.ownerLeaseGeneration
+          )
+        )
+        ?.values()
+        .next().value;
+    }
+    const owner = context.targetOwner;
+    return routes
+      .get(
+        messageFollowRouteKey(
+          BigInt(context.objectGeneration),
+          owner.nodeRidHex ?? encodeRoutingIdStorageHex(owner.nodeRid),
+          owner.nodeGeneration,
+          owner.authorityOwnerGeneration,
+          owner.ownerLeaseGeneration
+        )
+      )
+      ?.get(owner.ownerId);
   }
 
   private hasMessageFollowRouteForStaleRef(actorId: string, actorRef: ActorRef): boolean {
-    return [...this.messageFollowRoutes.values()].some(
-      (route) =>
-        route.targetActorRef.actorId === actorId &&
-        actorRef.objectGeneration === route.oldGeneration &&
-        (route.oldNodeRid === undefined ||
-          routingIdsEqual(actorRef.nodeRid, messageFollowOwnerNodeRid(route.sourceOwner)))
-    );
+    const routes = this.messageFollowRoutes.get(actorId);
+    if (routes === undefined) return false;
+    for (const owners of routes.values()) {
+      for (const route of owners.values()) {
+        if (
+          actorRef.objectGeneration === route.oldGeneration &&
+          (route.oldNodeRid === undefined ||
+            routingIdsEqual(actorRef.nodeRid, messageFollowOwnerNodeRid(route.sourceOwner)))
+        )
+          return true;
+      }
+    }
+    return false;
   }
 
   private createInitialIngressContext(
@@ -1351,9 +1534,21 @@ export class ZLinkActorHandoffCoordinator {
     generation: bigint,
     parts: readonly Message[],
     request: boolean,
-    deadlineUnixMs?: number
+    deadlineUnixMs?: number,
+    origin?: ZLinkMessageFollowOrigin
   ): ZLinkActorMessageFollowContext {
-    const operationId = createMessageFollowId();
+    let operationId: string;
+    if (origin === undefined) {
+      operationId = createMessageFollowId();
+    } else {
+      const bytes = Buffer.allocUnsafe(OPERATION_IDENTITY_BYTES);
+      bytes.writeBigUInt64BE(BigInt.asUintN(UINT64_BYTES * 8, origin.originalOperation.high));
+      bytes.writeBigUInt64BE(
+        BigInt.asUintN(UINT64_BYTES * 8, origin.originalOperation.low),
+        UINT64_BYTES
+      );
+      operationId = bytes.toString('hex');
+    }
     return Object.freeze({
       operationId,
       objectGeneration: generation.toString(),
@@ -1361,7 +1556,11 @@ export class ZLinkActorHandoffCoordinator {
       targetOwner: sourceOwner,
       deadlineUnixMs,
       correlationId: request ? createMessageFollowId() : undefined,
-      replyRouteId: request ? createMessageFollowId() : undefined,
+      replyRouteId: request
+        ? origin === undefined
+          ? createMessageFollowId()
+          : operationId
+        : undefined,
       request,
       hopCount: 0,
       visitedOwners: Object.freeze([messageFollowOwnerFenceKey(sourceOwner)]),
@@ -1384,9 +1583,6 @@ export class ZLinkActorHandoffCoordinator {
     }
     if (context.objectGeneration === '0' || context.request !== request) {
       throw actorLocationStale(actorId);
-    }
-    if (context.deadlineUnixMs !== undefined && Date.now() >= context.deadlineUnixMs) {
-      throw actorDeadlineExceeded(actorId);
     }
     verifyActorMessageFollowPayload(context, parts);
   }
@@ -1433,7 +1629,10 @@ export class ZLinkActorHandoffCoordinator {
       return BigInt(context.targetOwner.authorityOwnerGeneration);
     }
     const current = this.options.currentOwnerFence?.(actorId);
-    if (current !== undefined && current.nodeRid === String(actor.nodeRid)) {
+    if (
+      current !== undefined &&
+      routingIdsEqual(messageFollowOwnerNodeRid(current), actor.nodeRid)
+    ) {
       return BigInt(current.authorityOwnerGeneration);
     }
     return undefined;
@@ -1526,15 +1725,16 @@ export class ZLinkActorHandoffCoordinator {
       await this.messageFollowRelayed(actorId, entry, packet, advanced);
       return undefined;
     }
-    const remainingMs = remainingRequestTime(actorId, packet.messageFollowContext.deadlineUnixMs);
+    const timeoutMs = this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    const relayDeadlineMs = performance.now() + timeoutMs;
     if (this.options.routedTransport.requestRawToSpot === undefined) {
-      const reply = await awaitBeforeDeadline(
+      const reply = await waitRequestReply(
         this.options.routedTransport.requestToSpot<Record<string, unknown>>(target, payload, {
           packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-          timeoutMs: remainingMs ?? this.options.requestTimeoutMs
+          timeoutMs
         }),
         actorId,
-        remainingMs
+        relayDeadlineMs
       );
       if (reply.ok === false) {
         throw actorRelayError(actorId, reply.errorKind, reply.error);
@@ -1542,12 +1742,12 @@ export class ZLinkActorHandoffCoordinator {
       await this.messageFollowRelayed(actorId, entry, packet, advanced);
       return reply.response;
     }
-    const response = await awaitBeforeDeadline(
+    const response = await waitRequestReply(
       requestRoutedJsonReply(
         this.options.routedTransport,
         target,
         payload,
-        { timeoutMs: remainingMs ?? this.options.requestTimeoutMs },
+        { timeoutMs },
         `Actor Message Follow raw request is not available for '${actorId}'.`,
         (parts) => {
           if (parts.length === 0) {
@@ -1566,7 +1766,7 @@ export class ZLinkActorHandoffCoordinator {
         }
       ),
       actorId,
-      remainingMs
+      relayDeadlineMs
     );
     await this.messageFollowRelayed(actorId, entry, packet, advanced);
     return response;
@@ -1775,35 +1975,6 @@ function packetDeadlineUnixMs(parts: readonly Message[]): number | undefined {
   }
 }
 
-function remainingRequestTime(
-  actorId: string,
-  deadlineUnixMs: number | undefined
-): number | undefined {
-  if (deadlineUnixMs === undefined) return undefined;
-  const remaining = deadlineUnixMs - Date.now();
-  if (remaining <= 0) throw actorDeadlineExceeded(actorId);
-  return Math.max(1, Math.ceil(remaining));
-}
-
-async function awaitBeforeDeadline<T>(
-  operation: Promise<T>,
-  actorId: string,
-  remainingMs: number | undefined
-): Promise<T> {
-  if (remainingMs === undefined) return await operation;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      operation,
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(actorDeadlineExceeded(actorId)), remainingMs);
-      })
-    ]);
-  } finally {
-    if (timer !== undefined) clearTimeout(timer);
-  }
-}
-
 async function waitForHandoffReplayStart(start: Promise<void>, signal: AbortSignal): Promise<void> {
   if (signal.aborted) throw signal.reason;
   let abort!: () => void;
@@ -1819,11 +1990,13 @@ async function waitForHandoffReplayStart(start: Promise<void>, signal: AbortSign
 }
 
 function messageFollowRouteKey(
-  actorId: string,
   objectGeneration: bigint,
-  sourceOwner: ZLinkActorMessageFollowOwnerFence
+  nodeRidHex: string,
+  nodeGeneration: bigint | string,
+  authorityOwnerGeneration: bigint | string,
+  ownerLeaseGeneration: bigint | string
 ): string {
-  return `${actorId}\u0000${objectGeneration}\u0000${messageFollowOwnerFenceKey(sourceOwner)}`;
+  return `${objectGeneration}\u0000${nodeRidHex}\u0000${nodeGeneration}\u0000${authorityOwnerGeneration}\u0000${ownerLeaseGeneration}`;
 }
 
 function actorRefKey(nodeRid: ActorRef['nodeRid'], generation: bigint): string {
@@ -1846,7 +2019,10 @@ function requestSourcesEqual(
     expected.replyRouteId === actual.replyRouteId &&
     expected.ownerId === actual.ownerId &&
     expected.ownerLeaseGeneration === actual.ownerLeaseGeneration &&
-    expected.nodeRid === actual.nodeRid &&
+    routingIdsEqual(
+      decodeRoutingId(expected.nodeRid, expected.nodeRidHex),
+      decodeRoutingId(actual.nodeRid, actual.nodeRidHex)
+    ) &&
     expected.nodeGeneration === actual.nodeGeneration &&
     /^[1-9][0-9]*$/.test(actual.ownerLeaseGeneration) &&
     /^[1-9][0-9]*$/.test(actual.nodeGeneration)

@@ -81,37 +81,41 @@ final class ZLinkSpotActivationFactory {
                         null,
                         relocationCoordinationModes.getOrDefault(
                                 spotType, ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED));
-        ZLinkSpot<?> spot;
-        try {
-            spot = createSpot(spotType, context);
-        } catch (RuntimeException failure) {
-            return SpotActivationBase.finishCleanup(failure, context.closeResourcesAsync())
-                    .thenApply(ignored -> null);
-        }
-        if (spot == null) {
-            return CompletableFuture.completedFuture(
-                    new SpotActivationCreateResult(
-                            new SpotActivation(host, handlerInvoker, null, backendSpot, context),
-                            ZLinkSpotCreateResponse.accept()));
-        }
-        try {
-            context.setSpot(spot);
-            spot.configure();
-            context.closeRegistration();
-            context.bindSubscriptions(backendSpot);
-        } catch (RuntimeException failure) {
-            return SpotActivationBase.finishCleanup(failure, context.closeResourcesAsync())
-                    .thenApply(ignored -> null);
-        }
-        return context.runLifecycleExecution(
-                        () ->
-                                host.runWithOutbound(
-                                        context.dispatchOutbound(),
-                                        () ->
+        return context.prepareActivation(
+                        () -> {
+                            ZLinkSpot<?> spot = createSpot(spotType, context);
+                            if (spot == null) {
+                                return CompletableFuture.completedFuture(
+                                        new SpotActivationCreateResult(
+                                                new SpotActivation(
+                                                        host,
+                                                        handlerInvoker,
+                                                        null,
+                                                        backendSpot,
+                                                        context),
+                                                ZLinkSpotCreateResponse.accept()));
+                            }
+                            context.setSpot(spot);
+                            spot.configure();
+                            context.closeRegistration();
+                            SpotActivation activation =
+                                    new SpotActivation(
+                                            host, handlerInvoker, spot, backendSpot, context);
+                            registerDispatchHandler(backendSpot, activation);
+                            context.bindSubscriptions(backendSpot);
+                            return host.runWithOutbound(
+                                    context.dispatchOutbound(),
+                                    () -> {
+                                        CompletionStage<ZLinkSpotCreateResponse> creating =
                                                 ZLinkHandlerStages.fromStageSupplier(
-                                                        () -> spot.onCreate(effectiveRequest))))
-                .thenCompose(
-                        response -> initializeAcceptedSpot(spot, backendSpot, context, response))
+                                                        () -> spot.onCreate(effectiveRequest));
+                                        return ZLinkSerialExecutionQueue.manageCurrent(creating)
+                                                .thenCompose(
+                                                        response ->
+                                                                initializeAcceptedSpot(
+                                                                        activation, response));
+                                    });
+                        })
                 .handle(
                         (activation, error) -> {
                             if (error == null) {
@@ -128,7 +132,8 @@ final class ZLinkSpotActivationFactory {
     CompletionStage<SpotActivationCreateResult> activateRelocation(
             Class<? extends ZLinkSpot<?>> spotType,
             ZLinkBackendSpot backendSpot,
-            RoutingId nodeRid) {
+            RoutingId nodeRid,
+            byte[] timerEnvelope) {
         DefaultSpotContext context =
                 new DefaultSpotContext(
                         host,
@@ -143,42 +148,85 @@ final class ZLinkSpotActivationFactory {
                         null,
                         relocationCoordinationModes.getOrDefault(
                                 spotType, ZLinkSpotRelocationCoordinationMode.FRAMEWORK_MANAGED));
-        ZLinkSpot<?> spot;
-        try {
-            spot = createSpot(spotType, context);
-            if (spot == null) {
-                throw new ZLinkConfigurationException(
-                        "relocation target Spot factory returned no instance: "
-                                + spotType.getName());
-            }
-            context.setSpot(spot);
-            spot.configure();
-            context.closeRegistration();
-            context.bindSubscriptions(backendSpot);
-        } catch (RuntimeException failure) {
-            return SpotActivationBase.finishCleanup(failure, context.closeResourcesAsync())
-                    .thenApply(ignored -> null);
-        }
-
-        // Relocation has no creation request. The old activate() reuse ran
-        // onCreate/onInitialize before the target ingress seal was acquired.
-        return CompletableFuture.completedFuture(
-                new SpotActivationCreateResult(
-                        new SpotActivation(host, handlerInvoker, spot, backendSpot, context),
-                        ZLinkSpotCreateResponse.accept()));
+        return context.prepareRelocationTarget(
+                        () -> {
+                            ZLinkSpot<?> spot = createSpot(spotType, context);
+                            if (spot == null) {
+                                throw new ZLinkConfigurationException(
+                                        "relocation target Spot factory returned no instance: "
+                                                + spotType.getName());
+                            }
+                            context.setSpot(spot);
+                            context.stageTimerRelocationEnvelope(timerEnvelope);
+                            return context.runTimerRelocationInitialization(
+                                    () -> {
+                                        spot.configure();
+                                        context.closeRegistration();
+                                        context.bindSubscriptions(backendSpot);
+                                        return CompletableFuture.completedFuture(
+                                                new SpotActivationCreateResult(
+                                                        new SpotActivation(
+                                                                host,
+                                                                handlerInvoker,
+                                                                spot,
+                                                                backendSpot,
+                                                                context),
+                                                        ZLinkSpotCreateResponse.accept()));
+                                    });
+                        })
+                .exceptionallyCompose(
+                        failure ->
+                                SpotActivationBase.finishCleanup(
+                                                failure,
+                                                context.discardActivationPreparation()
+                                                        .thenCompose(
+                                                                ignored ->
+                                                                        context
+                                                                                .releaseRelocationPreparation())
+                                                        .thenCompose(
+                                                                ignored ->
+                                                                        context
+                                                                                .closeResourcesAsync()))
+                                        .thenApply(ignored -> null));
     }
 
     CompletionStage<Void> initializeRelocation(SpotActivation activation) {
         return activation
                 .context
-                .runLifecycleExecution(
+                .runTimerRelocationInitialization(
                         () ->
-                                host.runWithOutbound(
-                                        activation.context.dispatchOutbound(),
+                                activation.context.runLifecycleExecution(
                                         () ->
-                                                ZLinkHandlerStages.fromStageSupplier(
-                                                        activation.spot()::onInitialize)))
-                .thenRun(() -> registerDispatchHandler(activation.backendSpot, activation));
+                                                host.runWithOutbound(
+                                                        activation.context.dispatchOutbound(),
+                                                        () ->
+                                                                ZLinkHandlerStages
+                                                                        .fromStageSupplier(
+                                                                                activation.spot()
+                                                                                        ::onInitialize)
+                                                                        .handle(
+                                                                                (ignored,
+                                                                                        failure) -> {
+                                                                                    if (failure
+                                                                                            != null)
+                                                                                        host
+                                                                                                .reportSpotLifecycleFailure(
+                                                                                                        activation
+                                                                                                                .context
+                                                                                                                .spotId(),
+                                                                                                        failure);
+                                                                                    return (Void)
+                                                                                            null;
+                                                                                }))))
+                .thenRun(() -> registerDispatchHandler(activation.backendSpot, activation))
+                .thenCompose(
+                        ignored ->
+                                activation.context.runRelocationReadyCompletion(
+                                        systems.zlink.framework.spots
+                                                .ZLinkSpotRelocationReadyOutcome.RELOCATED,
+                                        failure ->
+                                                host.reportSpotLifecycleFailure(
+                                                        activation.context.spotId(), failure)));
     }
 
     CompletionStage<EntrySpotActivation> activateEntry(
@@ -292,70 +340,68 @@ final class ZLinkSpotActivationFactory {
                         nodeRid,
                         backendSpot,
                         ownerQueue);
-        ZLinkInstanceSpot spot;
-        try {
-            spot =
-                    (ZLinkInstanceSpot)
-                            ZLinkHandlerActivator.services(handlerFactory)
-                                    .add(ZLinkInstanceSpotContext.class, context)
-                                    .create(spotType);
-        } catch (RuntimeException error) {
-            return SpotActivationBase.finishCleanup(
-                            new ZLinkConfigurationException(
-                                    "failed to create Instance Spot: " + spotType.getName(), error),
-                            context.closeResourcesAsync())
-                    .thenApply(ignored -> null);
-        }
-        if (spot == null || spot.context() != context) {
-            return SpotActivationBase.finishCleanup(
-                            new ZLinkConfigurationException(
-                                    "Instance Spot must expose the context provided by the runtime:"
-                                            + " "
-                                            + spotType.getName()),
-                            context.closeResourcesAsync())
-                    .thenApply(ignored -> null);
-        }
-        try {
-            context.bind(spot);
-            try {
-                spot.configure();
-            } catch (RuntimeException failure) {
-                throw ownerQueue == null ? failure : instanceInitializationFailure(failure);
-            }
-            context.closeRegistration(spotType);
-        } catch (RuntimeException failure) {
-            return SpotActivationBase.finishCleanup(failure, context.closeResourcesAsync())
-                    .thenApply(ignored -> null);
-        }
+        java.util.function.Supplier<CompletionStage<ZLinkInstanceSpotActivation>> initialize =
+                () -> {
+                    ZLinkInstanceSpot spot;
+                    try {
+                        spot =
+                                (ZLinkInstanceSpot)
+                                        ZLinkHandlerActivator.services(handlerFactory)
+                                                .add(ZLinkInstanceSpotContext.class, context)
+                                                .create(spotType);
+                    } catch (RuntimeException error) {
+                        throw new ZLinkConfigurationException(
+                                "failed to create Instance Spot: " + spotType.getName(), error);
+                    }
+                    if (spot == null || spot.context() != context) {
+                        throw new ZLinkConfigurationException(
+                                "Instance Spot must expose the context provided by the runtime: "
+                                        + spotType.getName());
+                    }
+                    var preparedActivation =
+                            new ZLinkInstanceSpotActivation(
+                                    host, handlerInvoker, spot, backendSpot, context);
+                    context.bind(spot, preparedActivation);
+                    spot.configure();
+                    context.closeRegistration(spotType);
+                    return spot.onInitialize()
+                            .thenApply(
+                                    ignored -> {
+                                        // Instance Spots do not register Logical Multicast
+                                        // handlers.
+                                        registerDispatchHandler(
+                                                backendSpot,
+                                                preparedActivation::handleDispatchEvent,
+                                                preparedActivation::admitRoute,
+                                                message -> null,
+                                                preparedActivation::admitActor);
+                                        return preparedActivation;
+                                    });
+                };
         return (ownerQueue == null
-                        ? context.runLifecycle(spot::onInitialize)
-                        : systems.zlink.framework.execution.ZLinkSerialExecutionQueue.yieldCurrent(
-                                context.runLifecycleExecution(spot::onInitialize)
+                        ? context.prepareActivation(initialize)
+                        : ZLinkSerialExecutionQueue.manageCurrent(
+                                context.runLifecycleExecution(initialize)
                                         .exceptionallyCompose(
                                                 failure ->
                                                         CompletableFuture.failedFuture(
                                                                 instanceInitializationFailure(
                                                                         failure)))))
-                .thenApply(
-                        ignored -> {
-                            var activation =
-                                    new ZLinkInstanceSpotActivation(
-                                            host, handlerInvoker, spot, backendSpot, context);
-                            // Instance Spots do not register Logical Multicast handlers.
-                            registerDispatchHandler(
-                                    backendSpot,
-                                    activation::handleDispatchEvent,
-                                    activation::admitRoute,
-                                    message -> null,
-                                    activation::admitActor);
-                            return activation;
-                        })
                 .handle(
                         (activation, failure) ->
                                 failure == null
                                         ? CompletableFuture.completedFuture(activation)
                                         : SpotActivationBase.finishCleanup(
-                                                        failure, context.closeResourcesAsync())
+                                                        failure,
+                                                        context.closeResourcesAsync()
+                                                                .handle(
+                                                                        (ignored, cleanupFailure) ->
+                                                                                SpotActivationBase
+                                                                                        .finishCleanup(
+                                                                                                cleanupFailure,
+                                                                                                context
+                                                                                                        .finishActivationPreparation()))
+                                                                .thenCompose(stage -> stage))
                                                 .thenApply(
                                                         ignored ->
                                                                 (ZLinkInstanceSpotActivation) null))
@@ -375,14 +421,12 @@ final class ZLinkSpotActivationFactory {
     }
 
     private CompletionStage<SpotActivationCreateResult> initializeAcceptedSpot(
-            ZLinkSpot<?> spot,
-            ZLinkBackendSpot backendSpot,
-            DefaultSpotContext context,
-            ZLinkSpotCreateResponse response) {
+            SpotActivation activation, ZLinkSpotCreateResponse response) {
+        var context = activation.context;
         ZLinkSpotCreateResponse effectiveResponse =
                 response == null ? ZLinkSpotCreateResponse.accept() : response;
         if (!effectiveResponse.accepted()) {
-            return context.closeResourcesAsync()
+            return ZLinkSerialExecutionQueue.yieldCurrent(context.closeResourcesAsync())
                     .thenApply(ignored -> new SpotActivationCreateResult(null, effectiveResponse));
         }
         return context.runLifecycleExecution(
@@ -391,15 +435,9 @@ final class ZLinkSpotActivationFactory {
                                         context.dispatchOutbound(),
                                         () ->
                                                 ZLinkHandlerStages.fromStageSupplier(
-                                                        spot::onInitialize)))
+                                                        activation.spot()::onInitialize)))
                 .thenApply(
-                        ignored -> {
-                            SpotActivation activation =
-                                    new SpotActivation(
-                                            host, handlerInvoker, spot, backendSpot, context);
-                            registerDispatchHandler(backendSpot, activation);
-                            return new SpotActivationCreateResult(activation, effectiveResponse);
-                        });
+                        ignored -> new SpotActivationCreateResult(activation, effectiveResponse));
     }
 
     private static void registerDispatchHandler(

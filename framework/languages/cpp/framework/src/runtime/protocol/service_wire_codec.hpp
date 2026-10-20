@@ -38,7 +38,21 @@ class service_wire_error_t : public std::runtime_error
 std::vector<std::uint8_t>
 pack_infrastructure_reply (const std::vector<std::vector<std::uint8_t>> &parts);
 std::vector<std::vector<std::uint8_t>>
-unpack_infrastructure_reply (const std::vector<std::uint8_t> &packed);
+unpack_infrastructure_reply (std::span<const std::uint8_t> packed);
+
+inline constexpr char session_disconnected_packet_name[] =
+  "zlink.framework.actor.session_disconnected";
+
+struct session_disconnected_identity_t
+{
+    std::vector<std::uint8_t> session_owner_node_rid;
+    std::uint64_t session_owner_node_generation = 0;
+    std::uint64_t binding_generation = 0;
+};
+
+std::vector<std::uint8_t>
+encode_session_disconnected (const session_disconnected_identity_t &identity);
+session_disconnected_identity_t decode_session_disconnected (std::span<const std::uint8_t> bytes);
 
 struct liveness_record_t
 {
@@ -170,6 +184,27 @@ struct retired_bound_session_route_fence_t
     friend bool operator== (const retired_bound_session_route_fence_t &,
                             const retired_bound_session_route_fence_t &) = default;
 };
+
+/* Session-Actor binding §4: the receiving Session owner compares the Session
+ * owner identity a command carries with its current values exactly. */
+inline bool same_session_owner_identity (const retired_bound_session_route_fence_t &carried,
+                                         const retired_bound_session_route_fence_t &current)
+{
+    return carried.session_owner_node_routing_id == current.session_owner_node_routing_id
+           && carried.session_owner_node_generation == current.session_owner_node_generation
+           && carried.session_owner_id == current.session_owner_id
+           && carried.session_owner_lease_generation == current.session_owner_lease_generation;
+}
+
+struct bound_session_close_t
+{
+    std::uint64_t correlation = 0;
+    std::string actor_id;
+    std::uint64_t object_generation = 0;
+    retired_bound_session_route_fence_t session;
+};
+std::vector<std::uint8_t> encode_bound_session_close (const bound_session_close_t &record);
+bound_session_close_t decode_bound_session_close (std::span<const std::uint8_t> bytes);
 
 struct bound_session_replaced_t
 {
@@ -321,6 +356,7 @@ struct relocation_prepare_t
     std::uint32_t payload_chunk_count = 0;
     std::uint32_t payload_checksum_crc32c = 0;
     std::uint64_t application_version = 0;
+    std::uint64_t deadline_unix_ms = 0;
     friend bool operator== (const relocation_prepare_t &, const relocation_prepare_t &) = default;
 };
 
@@ -571,6 +607,8 @@ struct session_relocation_seal_t
     std::uint64_t session_owner_lease_generation = 0;
     std::vector<std::uint8_t> session_routing_id;
     std::uint64_t binding_generation = 0;
+    std::vector<std::uint8_t> target_node_routing_id;
+    std::uint64_t target_node_generation = 0;
 
     friend bool operator== (const session_relocation_seal_t &,
                             const session_relocation_seal_t &) = default;
@@ -612,6 +650,8 @@ struct session_relocation_route_t
 
 struct reply_header_t
 {
+    static constexpr std::size_t encoded_size =
+      prefix_size + sizeof (std::uint64_t) + 2 * sizeof (std::uint32_t);
     std::uint64_t correlation;
     std::uint32_t terminal_result;
     std::uint32_t failure_code;

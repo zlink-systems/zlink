@@ -93,7 +93,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
             (ulong)payload.TotalLength,
             (uint)payload.ChunkCount,
             payload.ChecksumCrc32c,
-            1
+            1,
+            checked((ulong)DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds())
         );
         var preparationStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -161,7 +162,8 @@ public sealed class CanonicalActorJoinIngressReplyTests
             (ulong)payload.TotalLength,
             (uint)payload.ChunkCount,
             payload.ChecksumCrc32c,
-            1
+            1,
+            checked((ulong)DateTimeOffset.UtcNow.AddMinutes(1).ToUnixTimeMilliseconds())
         );
         Assert.True(
             ZLinkServiceWireCodec.TryDecodeRelocationPrepare(
@@ -1213,6 +1215,58 @@ public sealed class CanonicalActorJoinIngressReplyTests
         await Task.Delay(TimeSpan.FromSeconds(3));
 
         Assert.Equal(1UL, runtime.Target.Status().AdmittedPeerCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task PumpCloseRejectsNewImmediateSendsBeforeNodeDisposal(
+        bool publishDrainingAfterClose
+    )
+    {
+        await using var runtime = await ConnectedRuntime.CreateAsync(_ => SubmitResult.Ok);
+        var pump = new Zlink.Framework.Runtime.Backend.DotNet.ZLinkMeshDispatchPump(
+            runtime.Target,
+            runtime.Target.Completions
+        );
+        await pump.DisposeAsync();
+        if (publishDrainingAfterClose)
+            runtime.Target.PublishDraining();
+        Assert.Equal(MeshNodeState.Stopped, runtime.Target.Status().State);
+        using var payload = Message.From(new byte[] { 1 });
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await runtime.Target.SendToNodeDirectAsync(
+                runtime.SourceRid,
+                [payload],
+                SendFlags.None,
+                default,
+                CancellationToken.None
+            )
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, error.Kind);
+    }
+
+    [Fact]
+    public async Task ImmediatelyAdmittedSend_CompletesFromTheSubmitResultWithoutACompletionEntry()
+    {
+        await using var runtime = await ConnectedRuntime.CreateAsync(_ => SubmitResult.Ok);
+        // Spec 01-submit-and-completion §10: an immediately admitted send completes
+        // from its submit result and makes no completion-table entry, so the
+        // submitter holds a completed send and a closed table cannot reject it.
+        runtime.Target.Completions.FailAll(RequestResult.Terminated);
+        for (var index = 0; index < 16; index++)
+        {
+            using var payload = Message.From(new byte[] { 1 });
+            var send = runtime.Target.SendToNodeDirectAsync(
+                runtime.SourceRid,
+                [payload],
+                SendFlags.None,
+                default,
+                CancellationToken.None
+            );
+            Assert.True(send.IsCompletedSuccessfully);
+            await send;
+        }
     }
 
     [Fact]

@@ -8,6 +8,7 @@
 #include "runtime/locations/aggregate_inventory.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
+#include "runtime/locations/location_store_limits.hpp"
 #include "runtime/execution/task_result.hpp"
 #include "runtime/transport/endpoint_notation.hpp"
 #include <zlink/framework/contracts/locations/stores.hpp>
@@ -882,15 +883,17 @@ class provider_location_repository_t final : public location_repository_t
             if (lease.token.owner_id != current.owner.owner_id)
                 throw framework_exception_t (framework_error_kind_t::data_lost,
                                              "Location Store owner lease record is invalid");
-            owner_live = lease.token.lease_generation == current.owner.lease_generation
-                         && lease.lease_expires_at > lease.store_now;
+            owner_live = owner_lease_is_live (lease, current.owner);
             stale_owner_condition = version_condition (owner_key, found->value.version);
         }
+        std::vector<authority_entry_t> members;
+        std::optional<store_condition_t> authority_lock_condition;
+        std::vector<store_condition_t> member_lock_conditions;
         if (active) {
             if (owner_live)
                 co_return stale_authority_reclaim_result_t::owner_live;
-            const auto mutation_locked =
-              co_await authority_mutation_locked_async (object_key (request->key));
+            const auto mutation_locked = co_await authority_mutation_locked_async (
+              object_key (request->key), &authority_lock_condition.emplace ());
             if ((actor && actor->has_relocation_state) || mutation_locked)
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Object authority requires relocation recovery");
@@ -909,6 +912,8 @@ class provider_location_repository_t final : public location_repository_t
                     || spot->stable_type != request->intent.stable_type)
                     throw framework_exception_t (framework_error_kind_t::unavailable,
                                                  "User Spot is not steady Ready");
+                // Location runtime §6.1: read every membership of this incarnation from one
+                // complete snapshot; an expired snapshot discards earlier pages and restarts.
                 std::optional<authority_scan_cursor_t> cursor;
                 do {
                     if (request->operation_deadline != std::chrono::system_clock::time_point{}
@@ -920,16 +925,33 @@ class provider_location_repository_t final : public location_repository_t
                     const auto *page = std::get_if<authority_page_t> (&scanned);
                     if (!page) {
                         cursor.reset ();
+                        members.clear ();
+                        member_lock_conditions.clear ();
                         continue;
                     }
                     for (const auto &entry : page->items) {
                         const auto member =
                           decode_direct_actor_authority_payload (entry.snapshot.payload);
-                        if (member && member->current_spot_kind == actor_authority_spot_kind_t::user
-                            && member->current_spot_id == spot->spot_id
-                            && member->current_spot_generation == current.object_generation)
-                            throw framework_exception_t (framework_error_kind_t::unavailable,
-                                                         "User Spot still has membership");
+                        if (!member
+                            || member->current_spot_kind != actor_authority_spot_kind_t::user
+                            || member->current_spot_id != spot->spot_id
+                            || member->current_spot_generation != current.object_generation)
+                            continue;
+                        // A relocating, aggregate-locked or unactivated member keeps the Spot.
+                        bool member_unavailable =
+                          entry.snapshot.allocation.state != placement_allocation_state_t::active
+                          || member->state != actor_authority_state_t::ready
+                          || member->has_relocation_state;
+                        store_condition_t lock_condition;
+                        if (!member_unavailable)
+                            member_unavailable = co_await authority_mutation_locked_async (
+                              entry.key.value, &lock_condition);
+                        if (member_unavailable)
+                            throw framework_exception_t (
+                              framework_error_kind_t::unavailable,
+                              "User Spot still has a relocating or unactivated member");
+                        members.push_back (entry);
+                        member_lock_conditions.push_back (std::move (lock_condition));
                     }
                     cursor = page->next_cursor;
                     if (!cursor)
@@ -963,24 +985,97 @@ class provider_location_repository_t final : public location_repository_t
         if (!active && !current.pending_creation)
             co_return stale_authority_reclaim_result_t::recovery_required;
 
-        auto capacity = co_await read_capacity_async (current.allocation.target);
         store_write_request_t write_request{
           {version_condition (authority_key, stored_authority.value.version),
-           std::move (stale_owner_condition), std::move (descriptor_condition), capacity.condition},
+           std::move (stale_owner_condition), std::move (descriptor_condition)},
           {store_delete_t{authority_key}}};
-        if (!std::holds_alternative<store_missing_condition_t> (capacity.condition)) {
-            if (!adjust_capacity (capacity.record, current.allocation.capacity_bundle,
-                                  active ? 0 : -1, active ? -1 : 0)) {
-                const auto observed = co_await _store.read (authority_key);
-                const auto *found = std::get_if<store_found_t> (&observed);
-                if (!found || found->value.version.value != stored_authority.value.version.value)
-                    co_return stale_authority_reclaim_result_t::conflict;
-                throw framework_exception_t (framework_error_kind_t::data_lost,
-                                             "Location Store capacity record is inconsistent");
+        if (authority_lock_condition)
+            write_request.conditions.push_back (std::move (*authority_lock_condition));
+        for (auto &condition : member_lock_conditions)
+            write_request.conditions.push_back (std::move (condition));
+        // §6.1: each ended-owner member is released in the same batch, fenced by its
+        // authority version and the observed (invalid) state of its own owner lease.
+        const auto *spot_owner = std::get_if<store_found_t> (&owner);
+        std::map<std::string, std::optional<store_found_t>> member_owners{
+          {current.owner.owner_id,
+           spot_owner ? std::optional<store_found_t>{*spot_owner} : std::nullopt}};
+        for (const auto &member : members) {
+            const auto member_key = key_authority (member.key.value);
+            const auto &member_owner = member.snapshot.owner;
+            if (!member_owners.contains (member_owner.owner_id)) {
+                const auto member_owner_key = key_owner (member_owner.owner_id);
+                auto lease_read = co_await _store.read (member_owner_key);
+                const auto *found = std::get_if<store_found_t> (&lease_read);
+                write_request.conditions.push_back (
+                  found ? version_condition (member_owner_key, found->value.version)
+                        : missing_condition (member_owner_key));
+                member_owners.emplace (member_owner.owner_id,
+                                       found ? std::optional<store_found_t>{*found} : std::nullopt);
             }
-            write_request.mutations.push_back (
-              store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt});
+            if (const auto &found = member_owners.at (member_owner.owner_id)) {
+                const auto lease = decode_owner_lease (*found);
+                if (lease.token.owner_id != member_owner.owner_id)
+                    throw framework_exception_t (framework_error_kind_t::data_lost,
+                                                 "Location Store owner lease record is invalid");
+                if (owner_lease_is_live (lease, member_owner))
+                    throw framework_exception_t (
+                      framework_error_kind_t::unavailable,
+                      "User Spot still has a member with a live owner lease");
+            }
+            write_request.conditions.push_back (
+              version_condition (member_key, store_version_t{member.snapshot.store_version}));
+            write_request.mutations.push_back (store_delete_t{member_key});
         }
+        std::vector<stored_capacity_t> capacities;
+        const auto release_capacity = [&] (const placement_allocation_t &allocation,
+                                           std::int64_t pending_delta,
+                                           std::int64_t active_delta) -> task_t<bool> {
+            const auto key =
+              key_capacity (allocation.target.mesh_name, allocation.target.node_rid.value ());
+            auto existing =
+              std::find_if (capacities.begin (), capacities.end (),
+                            [&] (const auto &capacity) { return capacity.key.value == key.value; });
+            if (existing == capacities.end ()) {
+                capacities.push_back (co_await read_capacity_async (allocation.target));
+                existing = std::prev (capacities.end ());
+            }
+            co_return std::holds_alternative<store_missing_condition_t> (existing->condition)
+              || adjust_capacity (existing->record, allocation.capacity_bundle, pending_delta,
+                                  active_delta);
+        };
+        bool consistent =
+          co_await release_capacity (current.allocation, active ? 0 : -1, active ? -1 : 0);
+        for (const auto &member : members)
+            if (consistent)
+                consistent = co_await release_capacity (member.snapshot.allocation, 0, -1);
+        if (!consistent) {
+            const auto observed = co_await _store.read (authority_key);
+            const auto *found = std::get_if<store_found_t> (&observed);
+            if (!found || found->value.version.value != stored_authority.value.version.value)
+                co_return stale_authority_reclaim_result_t::conflict;
+            for (const auto &member : members) {
+                const auto observed_member =
+                  co_await _store.read (key_authority (member.key.value));
+                const auto *stored_member = std::get_if<store_found_t> (&observed_member);
+                if (!stored_member
+                    || stored_member->value.version.value != member.snapshot.store_version)
+                    co_return stale_authority_reclaim_result_t::conflict;
+            }
+            throw framework_exception_t (framework_error_kind_t::data_lost,
+                                         "Location Store capacity record is inconsistent");
+        }
+        for (auto &capacity : capacities) {
+            write_request.conditions.push_back (capacity.condition);
+            if (!std::holds_alternative<store_missing_condition_t> (capacity.condition))
+                write_request.mutations.push_back (store_put_t{
+                  capacity.key, encode_capacity_record (capacity.record), std::nullopt});
+        }
+        // Every mutated key is also a condition key, so the condition count is the batch's
+        // unique key count. The Spot and its members are released together or not at all.
+        if (write_request.conditions.size () > location_store_limits::write_keys)
+            throw framework_exception_t (
+              framework_error_kind_t::unavailable,
+              "User Spot member release exceeds one Location Store batch");
         const auto written = co_await write_async (std::move (write_request));
         co_return std::holds_alternative<store_write_applied_t> (written)
           ? stale_authority_reclaim_result_t::reclaimed
@@ -1718,7 +1813,7 @@ class provider_location_repository_t final : public location_repository_t
             // target descriptor, and the target owner lease condition. Bound that
             // set before any committing page is installed; a provider must never
             // reject the terminal CAS after authority pages have been staged.
-            if (descriptors.size () + capacities.size () + 2 > aggregate_commit_final_key_limit)
+            if (descriptors.size () + capacities.size () + 2 > location_store_limits::write_keys)
                 co_return aggregate_commit_result_t::stale;
 
             const auto commit_pages = split_aggregate_commit_entries (entries);
@@ -2174,7 +2269,6 @@ class provider_location_repository_t final : public location_repository_t
     static constexpr std::size_t aggregate_commit_page_byte_limit =
       aggregate_inventory::page_byte_limit;
     static constexpr std::size_t aggregate_commit_fixed_key_count = 3;
-    static constexpr std::size_t aggregate_commit_final_key_limit = 2048;
 
     static json_t
     encode_aggregate_commit_page (std::size_t page_index,
@@ -2304,10 +2398,16 @@ class provider_location_repository_t final : public location_repository_t
         }
     }
 
-    task_t<std::optional<aggregate_lock_t>> read_aggregate_lock_async (std::string authority_key)
+    task_t<std::optional<aggregate_lock_t>>
+    read_aggregate_lock_async (std::string authority_key,
+                               store_condition_t *observed_condition = nullptr)
     {
-        auto value = co_await _store.read (key_aggregate_lock (authority_key));
+        auto key = key_aggregate_lock (authority_key);
+        auto value = co_await _store.read (observed_condition ? key : std::move (key));
         const auto *found = std::get_if<store_found_t> (&value);
+        if (observed_condition)
+            *observed_condition =
+              found ? version_condition (key, found->value.version) : missing_condition (key);
         if (!found)
             co_return std::nullopt;
         auto lock = decode_aggregate_lock (found->value.bytes);
@@ -2349,9 +2449,10 @@ class provider_location_repository_t final : public location_repository_t
         co_return decode_authority (entry.before, raw_version, store_now);
     }
 
-    task_t<bool> authority_mutation_locked_async (std::string authority_key)
+    task_t<bool> authority_mutation_locked_async (std::string authority_key,
+                                                  store_condition_t *observed_condition = nullptr)
     {
-        const auto lock = co_await read_aggregate_lock_async (authority_key);
+        const auto lock = co_await read_aggregate_lock_async (authority_key, observed_condition);
         if (!lock
             || (lock->status != aggregate_status::prepared
                 && lock->status != aggregate_status::committing))
@@ -2814,7 +2915,31 @@ class provider_location_repository_t final : public location_repository_t
             const auto stored_owner = record_owner_id (stored);
             const auto stored_lease = record_lease_generation (stored);
             const auto previous_owner = co_await _store.read (key_owner (stored_owner));
-            const auto previous_owner_live = std::holds_alternative<store_found_t> (previous_owner);
+            const auto *previous_lease = std::get_if<store_found_t> (&previous_owner);
+            const auto previous_owner_live =
+              previous_lease && previous_lease->value.expires_at
+              && *previous_lease->value.expires_at > previous_lease->value.store_now
+              && owner_generation (previous_lease->value.bytes) == stored_lease;
+            if (intent == location_write_intent_t::new_claim
+                || (intent == location_write_intent_t::renew
+                    && record.at (location_record_fields::descriptor)
+                         .contains (location_record_fields::meshName))) {
+                auto previous = stored;
+                auto requested = record;
+                previous.at (location_record_fields::descriptor)
+                  .erase (location_record_fields::updatedAt);
+                previous.at (location_record_fields::descriptor)
+                  .erase (location_record_fields::updatedAtEpochMs);
+                requested.at (location_record_fields::descriptor)
+                  .erase (location_record_fields::updatedAt);
+                requested.at (location_record_fields::descriptor)
+                  .erase (location_record_fields::updatedAtEpochMs);
+                if (previous == requested)
+                    co_return location_write_result_t::stored (
+                      static_cast<std::int64_t> (provider_generation_known ? provider_generation
+                                                                           : 1),
+                      found->value.store_now);
+            }
             if (intent == location_write_intent_t::new_claim && previous_owner_live)
                 co_return location_write_result_t{
                   location_write_status_t::rejected_conflict, 0, {}};
@@ -3008,6 +3133,12 @@ class provider_location_repository_t final : public location_repository_t
                && same_owner (left.owner, right.owner);
     }
 
+    static bool owner_lease_is_live (const owner_lease_found_t &lease,
+                                     const location_owner_token_t &owner)
+    {
+        return same_owner (lease.token, owner) && lease.lease_expires_at > lease.store_now;
+    }
+
     task_t<bool> owner_is_live_async (location_owner_token_t owner)
     {
         co_return (co_await read_live_owner_async (std::move (owner))).has_value ();
@@ -3023,8 +3154,7 @@ class provider_location_repository_t final : public location_repository_t
         if (lease.token.owner_id != owner.owner_id)
             throw framework_exception_t (framework_error_kind_t::internal_failure,
                                          "Location Store owner lease record is invalid");
-        if (lease.token.lease_generation != owner.lease_generation
-            || lease.lease_expires_at <= lease.store_now)
+        if (!owner_lease_is_live (lease, owner))
             co_return std::nullopt;
         co_return *found;
     }
@@ -3420,7 +3550,8 @@ class provider_location_repository_t final : public location_repository_t
                {location_record_fields::stableType, item.stable_type},
                {location_record_fields::policy, maintenance_policy_name (item.policy)},
                {location_record_fields::hasSnapshotAdapter, item.has_snapshot_adapter},
-               {location_record_fields::limit, item.spot_limit}});
+               {location_record_fields::limit, item.spot_limit},
+               {location_record_fields::entryAccepted, item.entry_accepted}});
         json_t spot_types = json_t::array ();
         for (const auto &item : value.capacity.spot_types)
             spot_types.push_back (
@@ -3482,7 +3613,7 @@ class provider_location_repository_t final : public location_repository_t
             return lhs.object_kind == rhs.object_kind && lhs.stable_type == rhs.stable_type
                    && lhs.policy == rhs.policy
                    && lhs.has_snapshot_adapter == rhs.has_snapshot_adapter
-                   && lhs.spot_limit == rhs.spot_limit;
+                   && lhs.spot_limit == rhs.spot_limit && lhs.entry_accepted == rhs.entry_accepted;
         };
         return std::equal (left.object_capabilities.begin (), left.object_capabilities.end (),
                            right.object_capabilities.begin (), capabilities_equal)
@@ -3828,7 +3959,8 @@ class provider_location_repository_t final : public location_repository_t
                parse_maintenance_policy (
                  item.at (location_record_fields::policy).get<std::string> ()),
                item.at (location_record_fields::hasSnapshotAdapter).get<bool> (),
-               item.at (location_record_fields::limit).get<std::int32_t> ()});
+               item.at (location_record_fields::limit).get<std::int32_t> (),
+               item.value (location_record_fields::entryAccepted, false)});
         result.object_role =
           parse_object_role (value.at (location_record_fields::objectRole).get<std::string> ());
         result.placement_weight = value.at (location_record_fields::placementWeight).get<int> ();

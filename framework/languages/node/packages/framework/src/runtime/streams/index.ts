@@ -48,7 +48,10 @@ import {
   registerActorSessionBindingRuntimeOwner
 } from './actor-session-binding-runtime-owner';
 import { ZLinkActorSessionLifecycleCoordinator } from './actor-session-lifecycle-coordinator';
-import { ZLinkBoundActorRelaySender } from './bound-actor-relay-sender';
+import {
+  ZLinkBoundActorRelaySender,
+  type ZLinkBoundActorRelaySenderOptions
+} from './bound-actor-relay-sender';
 import {
   DefaultZLinkBoundSessionResponseTarget,
   type ZLinkBoundSessionResponseTarget
@@ -140,7 +143,7 @@ export interface ZLinkStreamBindingRuntimeOptions {
     header: ZLinkStreamFrameHeader,
     payload: Message
   ) => Promise<boolean>;
-  readonly notifyDisconnected?: (actor: ZLinkSessionActor, signal?: AbortSignal) => Promise<void>;
+  readonly notifyDisconnected?: ZLinkBoundActorRelaySenderOptions['notifyDisconnected'];
   readonly flowCreationEnabled?: () => boolean;
   readonly metrics?: import('../diagnostics').ZLinkRuntimeMetrics;
 }
@@ -459,14 +462,15 @@ export class ZLinkStreamBindingRuntime {
       actorSessionLifecycle
     );
     registerActorSessionBindingRuntimeOwner(this, {
+      prepareSessionRelocationSeal: (...args) => this.routes.prepareSessionRelocationSeal(...args),
+      acceptSessionRelocationRoute: (value) => this.routes.acceptSessionRelocationRoute(value),
+      clearSessionRelocationResults: () => this.routes.clearSessionRelocationResults(),
       actorSlot: async (actorId, sessionRid) =>
         (await this.routes.routeForSessionBinding(actorId, sessionRid))?.actorSlot,
-      sealRelocation: (claim, expected, signal) =>
-        this.routes.sealRelocation(claim, expected, signal),
       relocationSnapshot: (actorId, sealId) => this.routes.relocationSnapshot(actorId, sealId),
       applyRelocation: (...args) => this.routes.applyRelocation(...args),
       observeRelocationTerminal: (...args) => this.routes.observeRelocationTerminal(...args),
-      clearRelocation: (actorId, error) => this.routes.clearRelocation(actorId, error),
+      clearRelocation: (...args) => this.routes.clearRelocation(...args),
       committedRoute: async (actorId) => {
         const route = await this.routes.route(actorId);
         return route === undefined
@@ -739,9 +743,10 @@ export class ZLinkStreamBindingRuntime {
   async disconnectNativeBoundSession(
     node: ZLinkBackendActorSessionNode,
     actorRef: ActorRef,
+    timeoutMs: number,
     signal?: AbortSignal
   ): Promise<void> {
-    await this.boundSessions.disconnectNativeBoundSession(node, actorRef, signal);
+    await this.boundSessions.disconnectNativeBoundSession(node, actorRef, timeoutMs, signal);
   }
 
   async disconnectBoundSession(actorId: string, signal?: AbortSignal): Promise<void> {

@@ -71,6 +71,7 @@ import java.util.concurrent.atomic.AtomicReference;
 final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     private static final String CLOSE_METHOD_NAME = "close";
     private static final String PRE_DESTROY_ANNOTATION_CLASS_NAME = "jakarta.annotation.PreDestroy";
+    private static final String ACTIVATION_BEAN_NAME_SUFFIX = "#zlinkActivation";
     private final AutowireCapableBeanFactory beanFactory;
     private final Map<Class<?>, HandlerPlan> handlerPlans = new ConcurrentHashMap<>();
 
@@ -224,7 +225,9 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     }
 
     private void destroyOwned(Object instance) {
-        boolean springInvokesClose = springInvokesClose(instance.getClass());
+        HandlerPlan plan = handlerPlans.get(instance.getClass());
+        boolean springInvokesClose =
+                plan != null ? plan.springInvokesClose() : springInvokesClose(instance.getClass());
         beanFactory.destroyBean(instance);
         if (!springInvokesClose && instance instanceof AutoCloseable closeable) {
             try {
@@ -264,30 +267,34 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
         return false;
     }
 
+    /**
+     * One dispatch scope. Its owner ({@code ZLinkHandlerInstanceOwner}) serializes every call on
+     * its state lane, so the scope holds no lock of its own. Scoped dependencies are recorded only
+     * when a prototype dependency is created.
+     */
     private final class SpringActivation implements Activation {
-        private final Map<Object, Object> scopedDependencies = new LinkedHashMap<>();
-        private final List<Object> ownedDependencies = new ArrayList<>();
+        private Map<Object, Object> scopedDependencies;
+        private List<Object> ownedDependencies;
         private boolean closed;
 
         @Override
-        public synchronized Object create(Class<?> handlerType) {
+        public Object create(Class<?> handlerType) {
             return create(handlerType, ignored -> null);
         }
 
         @Override
-        public synchronized Object create(
-                Class<?> handlerType, DependencyResolver dependencyResolver) {
+        public Object create(Class<?> handlerType, DependencyResolver dependencyResolver) {
             if (closed) {
                 throw new IllegalStateException("Spring handler activation is closed");
             }
             RuntimeException lastFailure = null;
-            for (ConstructorPlan constructor : handlerPlan(handlerType).constructors()) {
+            HandlerPlan plan = handlerPlan(handlerType);
+            for (ConstructorPlan constructor : plan.constructors()) {
                 try {
                     Object[] arguments = resolveArguments(constructor, dependencyResolver);
                     Object instance = constructor.constructor().newInstance(arguments);
                     beanFactory.autowireBean(instance);
-                    return beanFactory.initializeBean(
-                            instance, handlerType.getName() + "#zlinkActivation");
+                    return beanFactory.initializeBean(instance, plan.beanName());
                 } catch (BeansException | ReflectiveOperationException failure) {
                     lastFailure =
                             new IllegalStateException(
@@ -305,7 +312,7 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
         private Object[] resolveArguments(
                 ConstructorPlan constructor, DependencyResolver dependencyResolver) {
             ParameterPlan[] parameters = constructor.parameters();
-            Object[] arguments = new Object[parameters.length];
+            Object[] arguments = parameters.length == 0 ? null : new Object[parameters.length];
             for (int index = 0; index < parameters.length; index++) {
                 ParameterPlan parameter = parameters[index];
                 Object supplied = dependencyResolver.resolve(parameter.type());
@@ -313,12 +320,17 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
                     arguments[index] = supplied;
                     continue;
                 }
-                Object aggregate = scopedDependencies.get(parameter.key());
+                Object aggregate = scopedDependency(parameter.key());
                 if (aggregate != null) {
                     arguments[index] = aggregate;
                     continue;
                 }
                 String shortcut = parameter.shortcut().get();
+                Object singleton = createdSingleton(shortcut);
+                if (singleton != null) {
+                    arguments[index] = singleton;
+                    continue;
+                }
                 HashSet<String> beanNames = shortcut == null ? new HashSet<>() : null;
                 DependencyDescriptor descriptor =
                         new DependencyDescriptor(parameter.descriptor()) {
@@ -337,15 +349,14 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
                             @Override
                             public Object resolveCandidate(
                                     String beanName, Class<?> requiredType, BeanFactory factory) {
-                                Object cached = scopedDependencies.get(beanName);
+                                Object cached = scopedDependency(beanName);
                                 if (cached != null) {
                                     return cached;
                                 }
                                 Object dependency =
                                         super.resolveCandidate(beanName, requiredType, factory);
                                 if (factory.isPrototype(beanName)) {
-                                    scopedDependencies.put(beanName, dependency);
-                                    ownedDependencies.add(dependency);
+                                    own(beanName, dependency);
                                 }
                                 return dependency;
                             }
@@ -364,8 +375,7 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
                 if (shortcut == null) {
                     Optional<String> scalar = shortcutCandidate(parameter, beanNames);
                     if (scalar.isEmpty() && beanNames.stream().anyMatch(beanFactory::isPrototype)) {
-                        scopedDependencies.put(parameter.key(), dependency);
-                        ownedDependencies.add(dependency);
+                        own(parameter.key(), dependency);
                     }
                     scalar.filter(
                                     ignored ->
@@ -382,6 +392,31 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
             return arguments;
         }
 
+        /**
+         * A shortcut that names an already created singleton resolves to that instance; Spring's
+         * resolution would return the same object, so no per-dispatch descriptor is built.
+         */
+        private Object createdSingleton(String shortcut) {
+            return shortcut != null
+                            && beanFactory instanceof ConfigurableListableBeanFactory configurable
+                            && configurable.containsSingleton(shortcut)
+                    ? configurable.getBean(shortcut)
+                    : null;
+        }
+
+        private Object scopedDependency(Object key) {
+            return scopedDependencies == null ? null : scopedDependencies.get(key);
+        }
+
+        private void own(Object key, Object dependency) {
+            if (scopedDependencies == null) {
+                scopedDependencies = new LinkedHashMap<>();
+                ownedDependencies = new ArrayList<>();
+            }
+            scopedDependencies.put(key, dependency);
+            ownedDependencies.add(dependency);
+        }
+
         @Override
         public void destroy(Object instance) {
             destroyOwned(instance);
@@ -389,16 +424,13 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
 
         @Override
         public void close() {
-            List<Object> dependencies;
-            synchronized (this) {
-                if (closed) {
-                    return;
-                }
-                closed = true;
-                dependencies = new ArrayList<>(ownedDependencies);
-                ownedDependencies.clear();
-                scopedDependencies.clear();
+            if (closed) {
+                return;
             }
+            closed = true;
+            List<Object> dependencies = ownedDependencies == null ? List.of() : ownedDependencies;
+            ownedDependencies = null;
+            scopedDependencies = null;
             RuntimeException firstFailure = null;
             for (int index = dependencies.size() - 1; index >= 0; index--) {
                 try {
@@ -465,7 +497,12 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
         return Optional.of(beanName);
     }
 
-    private record HandlerPlan(List<ConstructorPlan> constructors) {
+    /**
+     * Decided once per handler type: constructor order, the bean name used for initialization and
+     * whether Spring's destroy callback already closes the instance.
+     */
+    private record HandlerPlan(
+            List<ConstructorPlan> constructors, String beanName, boolean springInvokesClose) {
         static HandlerPlan create(Class<?> handlerType) {
             return new HandlerPlan(
                     Arrays.stream(handlerType.getConstructors())
@@ -475,7 +512,9 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
                                             .thenComparingInt(Constructor::getParameterCount)
                                             .reversed())
                             .map(ConstructorPlan::create)
-                            .toList());
+                            .toList(),
+                    handlerType.getName() + ACTIVATION_BEAN_NAME_SUFFIX,
+                    ZLinkSpringHandlerFactory.springInvokesClose(handlerType));
         }
     }
 

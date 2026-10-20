@@ -22,7 +22,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         IZLinkBackendCanonicalActorJoin,
         IZLinkBackendActorMessageFollowIngress,
         IZLinkBackendMessageFollowNotifications,
-        IZLinkBackendBoundSessionReplacementNotifications
+        IZLinkBackendBoundSessionReplacementNotifications,
+        IZLinkBackendBoundSessionClose,
+        IZLinkBackendBoundSessionBind
 {
     private readonly ZLinkManagedMeshNode _node;
     private readonly ZLinkMeshCompletionTable _completions;
@@ -52,6 +54,37 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         _node.SetActorMessageFollowIngressTarget(_messageFollowIngress);
     }
 
+    public void SetBoundSessionBindHandler(
+        Func<
+            RoutingId,
+            ulong,
+            ServiceWireCodec.BoundSessionBind38,
+            Action,
+            CancellationToken,
+            ValueTask
+        > handler
+    ) => _node.SetBoundSessionBindHandler(handler);
+
+    public ValueTask<ServiceWireCodec.RequestSpecificTailCase2?> BindBoundSessionAsync(
+        ServiceWireCodec.BoundSessionBind38 request,
+        TimeSpan timeout,
+        CancellationToken cancellationToken
+    ) => _node.BindBoundSessionAsync(request, timeout, cancellationToken);
+
+    public void SetBoundSessionCloseHandler(
+        Func<
+            Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionClose54,
+            CancellationToken,
+            ValueTask
+        > handler
+    ) => _node.SetBoundSessionCloseHandler(handler);
+
+    public ValueTask CloseBoundSessionAsync(
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionClose54 request,
+        TimeSpan timeout,
+        CancellationToken cancellationToken
+    ) => _node.CloseBoundSessionAsync(request, timeout, cancellationToken);
+
     internal ZLinkManagedMeshNode NativeNode => _node;
 
     public void SetFlowTracer(ZLinkMessageFlowTracer flow) => _node.SetFlowTracer(flow);
@@ -78,6 +111,20 @@ internal sealed class ZLinkBackendSpotNodeWrapper
 
     public void ObserveRequestSourceFence(ZLinkServiceWireCodec.RequestSourceFence source) =>
         _pump.ObserveRequestSourceFence(source);
+
+    public ZLinkServiceWireCodec.RequestSourceFence? ResolveRequestSourceFence(
+        RoutingId sourceNodeRid,
+        ulong sourceNodeGeneration
+    ) => _pump.ResolveRequestSourceFence(sourceNodeRid, sourceNodeGeneration);
+
+    public void SetRequestSourceAcceptance(IZLinkBackendRequestSourceAcceptance acceptance) =>
+        _pump.SetRequestSourceAcceptance(acceptance);
+
+    public ValueTask<ZLinkServiceWireCodec.RequestSourceFence?> AcceptRequestSourceAsync(
+        RoutingId sourceNodeRid,
+        ulong sourceNodeGeneration,
+        CancellationToken cancellationToken
+    ) => _pump.AcceptRequestSourceAsync(sourceNodeRid, sourceNodeGeneration, cancellationToken);
 
     public void SetActorMessageFollowIngressHandler(
         Func<IReadOnlyList<ZLinkBackendActorPart>, bool> handler
@@ -294,8 +341,10 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         _node.SetCanonicalRelocationTarget(target);
     }
 
-    public ZLinkPeerRouteObservation ObservePeerRoute(RoutingId target) =>
-        _node.ObservePeerRoute(target);
+    public ZLinkPeerRouteObservation ObservePeerRoute(
+        RoutingId target,
+        ulong lifecycleGeneration = 0
+    ) => _node.ObservePeerRoute(target, lifecycleGeneration);
 
     public ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareCanonicalRelocationAsync(
         RoutingId targetNodeRid,
@@ -339,6 +388,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
     {
         _node.SetSessionRelocationBarrierTarget(target);
     }
+
+    public void CompleteSessionRelocation(Guid relocationId) =>
+        _node.CompleteSessionRelocation(relocationId);
 
     public ValueTask<ZLinkServiceWireCodec.SessionRelocationSealedRecord> SealSessionRelocationAsync(
         RoutingId sessionOwnerNodeRid,

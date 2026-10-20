@@ -37,10 +37,21 @@
     </ItemGroup>
 
     <ItemGroup>
+        <Compile Include="Runtime/CanonicalSessionBindCrossLanguageTests.cs" Condition="'$(ZLinkCrossLanguageBind)' == 'true'"/>
+        <Compile Include="Runtime/BoundSessionDisconnectTests.cs"/>
+        <Compile Include="Runtime/BoundSessionReplacementCloseTests.cs"/>
         <Compile Include="AssemblyInfo.cs"/>
+        <Compile Include="Runtime/InstanceReadyAdmissionTests.cs"/>
+        <Compile Include="Runtime/SessionFailureClassificationTests.cs"/>
+        <Compile Include="Runtime/SpotShutdownExecutionTests.cs"/>
         <Compile Include="Runtime/MeshLivenessPhysicalCloseTests.cs"/>
         <Compile Include="Runtime/RequestAdmissionStageTests.cs"/>
+        <Compile Include="Runtime/SpotRequestSourceDiscoveryTests.cs"/>
+        <Compile Include="Runtime/SourceRequestOwnerContractTests.cs"/>
         <Compile Include="Runtime/HostRelocationSealStageTests.cs"/>
+        <Compile Include="Runtime/StartupStoreStallTests.cs"/>
+        <Compile Include="Runtime/PreReadyLogicalMulticastTests.cs"/>
+        <Compile Include="Runtime/SpotWideMemberSealCaptureTests.cs"/>
         <Compile Include="TestCompletionPollerDriver.cs"/>
         <Compile Include="../../cross-language/Zlink.Framework.TestHost/TestHostMessageFlowListener.cs" Link="Support/TestHostMessageFlowListener.cs"/>
         <Compile Include="Configuration/Registration/Channels.cs"/>
@@ -94,6 +105,7 @@
         <Compile Include="Runtime/MeshChannelSelectionHotPathTests.cs"/>
         <Compile Include="Runtime/EnvelopeHeaderCacheHotPathTests.cs"/>
         <Compile Include="Runtime/MeshApplicationWorkerTests.cs"/>
+        <Compile Include="Runtime/MeshWorkerWaitCostTests.cs"/>
         <Compile Include="Runtime/SmallStateOwnershipMechanismTests.cs"/>
         <Compile Include="Runtime/ActorBoundSessionRelayTests.cs"/>
         <Compile Include="Runtime/ApplicationJobQueueTests.cs"/>
@@ -108,6 +120,9 @@
         <Compile Include="Runtime/ChannelOutboundTerminalTests.cs"/>
         <Compile Include="Runtime/ChannelApplicationDispatchQueueShutdownTests.cs"/>
         <Compile Include="Runtime/ClientServerChannelRuntimeTests.cs"/>
+        <Compile Include="Runtime/ChannelEnvelopeHandoffTests.cs"/>
+        <Compile Include="Runtime/ClientServerLivenessLaneTests.cs"/>
+        <Compile Include="Runtime/ClientServerClientAckTests.cs"/>
         <Compile Include="Runtime/ClientServerLoopOwnershipTests.cs"/>
         <Compile Include="Runtime/ControllableTimeProvider.cs"/>
         <Compile Include="Runtime/CapacityMonitoringProjectionTests.cs"/>
@@ -120,7 +135,9 @@
         <Compile Include="Runtime/ActorRelocationCompletionOrderingTests.cs"/>
         <Compile Include="Runtime/DirectReplyCompletionRegistryTests.cs"/>
         <Compile Include="Runtime/DescriptorOwnerLeaseSelectionTests.cs"/>
+        <Compile Include="Runtime/ActorCreationEntryCandidateTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.cs"/>
+        <Compile Include="Runtime/EntrySpotActorFifoActivationTests.cs"/>
         <Compile Include="Runtime/AcceptedHandlerSendSealTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.StartupIdentity.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.SourceRetirement.cs"/>
@@ -140,6 +157,7 @@
         <Compile Include="Runtime/GeneratedNodeIdentityTests.cs"/>
         <Compile Include="Runtime/GeneratedRelocationCodecConformanceTests.cs"/>
         <Compile Include="Runtime/GeneratedServiceWireCommandCodecConformanceTests.cs"/>
+        <Compile Include="Runtime/SessionOwnerIdentityContractTests.cs"/>
         <Compile Include="Runtime/GenerationTokenRangeTests.cs"/>
         <Compile Include="Runtime/FrameworkJsonProfileTests.cs"/>
         <Compile Include="Runtime/ConnectorJsonProfileTests.cs"/>
@@ -155,6 +173,7 @@
         <Compile Include="Runtime/InstanceSpotSendDeadlineTests.cs"/>
         <Compile Include="Runtime/SpotStoreFailureKindTests.cs"/>
         <Compile Include="Runtime/LocationRuntimeTests.cs"/>
+        <Compile Include="Runtime/LocationStoreOperationMetricsTests.cs"/>
         <Compile Include="Runtime/MaintenanceRuntimeTests.cs"/>
         <Compile Include="Runtime/LogicalMulticastSubmitTests.cs"/>
         <Compile Include="Runtime/SharedAsyncDisposalTests.cs"/>
@@ -174,7 +193,9 @@
         <Compile Include="Runtime/MeshCompletionTableConvergenceTests.cs"/>
         <Compile Include="Runtime/CompletionDispatcherIsolationTests.cs"/>
         <Compile Include="Runtime/MeshNodeRouteDispatcherTests.cs"/>
+        <Compile Include="Runtime/MeshNodeRouteBatchAdmissionTests.cs"/>
         <Compile Include="Runtime/MeshNodeShutdownSealTests.cs"/>
+        <Compile Include="Runtime/MeshNodeLifecycleStateTests.cs"/>
         <Compile Include="Runtime/MeshNodeHelloSubmissionTests.cs"/>
         <Compile Include="Runtime/PublicContractSnapshotTests.cs"/>
         <Compile Include="Runtime/SerialExecutionQueueBenchmarkTests.cs"/>
@@ -204,6 +225,7 @@
         <Compile Include="Runtime/StreamRequestRoundTripLatencyTests.cs"/>
         <Compile Include="Runtime/SessionJobQueueLoadTests.cs"/>
         <Compile Include="Runtime/TimerLifecycleTests.cs"/>
+        <Compile Include="Runtime/ActivationReadyTests.cs"/>
         <Compile Include="Runtime/SpotHandlerInvokerTests.cs"/>
         <Compile Include="Runtime/SpotIdValidationTests.cs"/>
         <Compile Include="Runtime/SpotLifecycleKindTests.cs"/>

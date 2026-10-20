@@ -144,9 +144,11 @@ scheduled timestamp, and skipped-tick count. Native timer handles and callback
 continuations are not part of this frozen saved-work record.
 
 `sessionBindings` carries, for each participant sealed under §4.1, the Session owner
-identity confirmed by command 43 (`sessionOwnerNodeRid`, `sessionOwnerNodeGeneration`,
+identity confirmed by command 43 with `sealResult = sealed` (`sessionOwnerNodeRid`, `sessionOwnerNodeGeneration`,
 `sessionOwnerId`, `sessionOwnerLeaseGeneration`) together with `sessionRid` and
-`bindingGeneration`. A participant without a binding has no entry. The target builds the
+`bindingGeneration`. A participant without a binding, and a participant whose command 43 is
+`bindingAbsent`, has no entry
+([Session and Actor Binding §8.3](../04-session/02-session-actor-binding.en.md#83-sealing-an-already-cleaned-binding)). The target builds the
 command 44 commit of
 [Session and Actor Binding §8.2](../04-session/02-session-actor-binding.en.md#82-control-messages-42-43-44)
 from this entry.
@@ -217,6 +219,20 @@ Restored existing queue work and timers are kept in a dispatch-closed saved-work
 and aren't mixed with source relay.
 
 The temporary queue and saved-work span form an ordered durable backlog before dispatch and own their payloads after finite handoff. Permit return and later acquisition for staging ingress and runnable callbacks follow [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order).
+
+**Before reporting ready to receive relay, the target secures a ready route to the Session owner of
+each incoming binding.** For each entry in the relocation envelope's `sessionBindings` (§4.2) whose Session
+owner is a node other than the target, the target checks whether a
+[ready](../00-foundation/02-glossary.en.md#ready) route to that Session owner node exists. A Session
+owner on the target node itself needs no route. If not, it asks its auto-connect owner to reconcile that peer immediately
+([MeshNode §7.1](../03-spot-actor/03-mesh-node.en.md#71-peer-connection)) and doesn't send ready to
+receive relay until the route is ready. The time limit of this wait is the source operation deadline
+(`deadlineUnixMs`) that command 40 carries, and the target creates no new timer or retry. It waits in
+the target attempt's continuation without occupying an infrastructure receive loop or an application
+handler turn. If that deadline or target shutdown ends the wait, the target sends an explicit failure
+reply instead of ready to receive relay and removes the staging it was assembling. The source is still owner, so it restores the source queue and the
+matching Session seal as for §9's explicit failure. Because the target finishes this preparation
+before commit, the first Actor→Session push after commit doesn't fail for a missing route.
 
 Once the temporary queue and Restore are ready, the target reports **ready to receive
 relay** to the source. This notification isn't relocation completion. The Location
@@ -327,15 +343,15 @@ required lifecycle callbacks.
 guarantee is not implemented by running callbacks while holding exclusive access.** That
 approach can easily create a structure in which an external callback reacquires the same
 exclusive-access primitive, which [State Ownership And State Lanes §6](../01-execution/06-state-ownership-and-lanes.en.md#6-structuring-so-reentrancy-cannot-arise)
-prohibits. This guarantee is provided by a linearization point in one of the following
-two forms.
-
-- Before opening dispatch, fix placeholder ownership claims for the backlog share in an
-  owning turn; fill individual execution claims outside exclusive access, then settle
-  the placeholders in the same owning turn while opening ordinary admission.
-- Or switch to ordinary dispatch only when the backlog is observed atomically to be
-  empty — ordinary ingress cannot get ahead of backlog turns posted before that
-  observation.
+prohibits. The target preserves the order above and fixes, in one owning turn, the payload
+ownership and owner-queue position of each record that has not run. The takeover of later records
+and the suffix transfer below apply to Actor records. After the required lifecycle
+and Join completion order is met, the target ends the previous move before the first taken-over
+handler starts, and this completion does not wait for the handler terminals of the taken-over
+records. When a taken-over record registers a new Deferred Join, the payload ownership and order
+of the suffix that has not started are transferred atomically to the next handoff at that
+barrier's boundary. A running or finished record is not part of the suffix, and the next handoff
+does not wait for the handler terminals of the whole earlier prefix.
 
 Permit acquisition and return for runnable backlog turns follow [Application job queue §3](../01-execution/04-application-job-queue-and-backpressure.en.md#3-ordinary-ingress-permit-order). Items waiting for a permit remain owned by the backlog payload owner. A timer keeps its original timer lifecycle and follows the relevant ingress rule
 when its callback turn becomes runnable.
@@ -586,6 +602,8 @@ defined by [Complete Host Relocation Flow](05-host-relocation-flow.en.md).
 | Timing | Owner and queue kept | Result and follow-up |
 |---|---|---|
 | Failure before target selection or preparation | Source | Doesn't block source dispatch and fails the operation. |
+| Command 43 is `bindingAbsent` | Source, relocation continues | Treats that participant as unbound and leaves it out of `sessionBindings` and command 44 ([Session and Actor Binding §8.3](../04-session/02-session-actor-binding.en.md#83-sealing-an-already-cleaned-binding)). |
+| No command 43 received by the seal wait deadline (including command 42 rejection by the Session owner) | Source | Confirms restoration of every participant capture already started to the source queue, then sends the matching command 44 abort to participants already `sealed`, and fails the operation. The order is the abort order of [Session and Actor Binding §8.1](../04-session/02-session-actor-binding.en.md#81-seal-held-messages-and-route-switchover). |
 | Explicit failure after Session seal but before the ready-to-receive-relay reply reaches its accepted state | Source | Doesn't run the target's temporary queue. Restores source queue and matching Session seal from the payload kept in memory. |
 | Chunk assembly result doesn't match the Restore request's checksum | Source | Target doesn't start restoration, sends an explicit failure reply, and removes the chunks being assembled. Source restores the queue from the memory payload and fails the operation. No retry. |
 | A Restore request with the same relocation identity arrives with a length or checksum different from the first | Source | Target neither reuses nor overwrites the existing assembly and ends with an explicit conflict failure. Source restores as with the explicit failure above. |
@@ -625,7 +643,9 @@ redefine those values and only adds the following two.
 
 - **Session connection and relay depend on this forwarding path.** Without it, a
   session connected to a moved Actor silently disconnects even if the move itself
-  succeeds. So Message Follow isn't an optional performance optimization.
+  succeeds. So Message Follow isn't an optional performance optimization. The only exception is
+  [Location runtime §10](01-location-runtime.en.md#10-when-a-store-response-isnt-received)'s
+  chained-move exception, where each target's command 44 moves the Session routes.
 - Message Follow's forwarding volume has no separate cap set by this handoff — beyond
   the hop count and duration limit Location Runtime sets, no relocation-specific record
   count or byte cap is added.

@@ -1,3 +1,4 @@
+import { routingIdsEqual } from '../routing-id';
 import { ZLINK_DEFAULT_PUBLIC_WEIGHT } from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { ZLinkPeerLocationFilter } from '../../contracts/Locations/Keys';
@@ -8,13 +9,13 @@ import { ZLinkLocationAutoConnectType } from '../../contracts/Locations/Values';
 import { ZLinkFrameworkRuntimeState, ZLinkLocationRole } from '../../contracts';
 import type { ZLinkSpotNodeOptions } from '../configuration';
 import type { ZLinkBackendMeshNode } from '../backend/contracts';
-import { AsyncResource } from 'node:async_hooks';
-import { ZLinkStateLane } from '../execution/state-lane';
+import { startOutsideStateLane, ZLinkStateLane } from '../execution/state-lane';
 import { toBackendRoutingId as toBackendRoutingId } from '../routing-id';
 import { MeshPeerRuntimeState } from '../foundation/service-runtime-contracts';
 import {
   ZLinkLocationRuntime,
   ZLinkOwnerLeaseTracker,
+  ZLinkRequestSourceResolver,
   type IZLinkAutoConnectExecutor,
   type ZLinkAutoConnectLocal,
   type ZLinkAutoConnectTarget,
@@ -28,6 +29,7 @@ export interface ZLinkSpotNodeLocationAutoConnectContext {
   readonly options: ZLinkLocationOptionOverrides;
   readonly leaseTracker: ZLinkOwnerLeaseTracker;
   readonly resolver: ZLinkPeerLocationResolver;
+  readonly requestSources: ZLinkRequestSourceResolver;
   readonly events?: ZLinkLocationEventSink;
   readonly changeStampStore?: Pick<ZLinkLocationStore, 'getMeshNodeChangeStamp'>;
 }
@@ -48,12 +50,17 @@ export function createSpotNodeLocationAutoConnectContext(
     store: stores.ownerLeaseStore,
     options
   });
+  const requestSources = new ZLinkRequestSourceResolver({
+    listLiveMeshNodes: (meshName, signal) => runtime.listLiveMeshNodes(meshName, signal),
+    remainingOwnerTokenLeaseMs: (owner, signal) => runtime.remainingOwnerTokenLeaseMs(owner, signal)
+  });
   return {
     runtime,
     stores,
     options,
     leaseTracker,
-    resolver: meshDescriptorPeerResolver(runtime),
+    resolver: meshDescriptorPeerResolver(runtime, requestSources),
+    requestSources,
     events,
     // The opaque provider has no cross-process change notification primitive.
     // A process-local inherited stamp would hide descriptors written by peers,
@@ -86,14 +93,16 @@ export function spotNodeAutoConnectCapability(
       (channel) => channel.server === true
     )
   };
-  const manualConnections = hasManualRouterConnections(spotNode);
   return {
     local,
-    executor: new ZLinkSpotNodeAutoConnectExecutor(node, manualConnections)
+    executor: new ZLinkSpotNodeAutoConnectExecutor(node)
   };
 }
 
-function meshDescriptorPeerResolver(runtime: ZLinkLocationRuntime): ZLinkPeerLocationResolver {
+function meshDescriptorPeerResolver(
+  runtime: ZLinkLocationRuntime,
+  requestSources: ZLinkRequestSourceResolver
+): ZLinkPeerLocationResolver {
   return {
     async listLivePeers(
       filter: ZLinkPeerLocationFilter,
@@ -108,6 +117,8 @@ function meshDescriptorPeerResolver(runtime: ZLinkLocationRuntime): ZLinkPeerLoc
         return [];
       }
       const descriptors = await runtime.listLiveMeshNodes(filter.meshName, signal);
+      // The auto-connect poll owns the live descriptors; request acceptance reads them.
+      await requestSources.observeLiveDescriptors(filter.meshName, descriptors, signal);
       return descriptors
         .map((descriptor): ZLinkPeerLocation => ({
           autoConnectType: ZLinkLocationAutoConnectType.RouteMesh,
@@ -130,21 +141,12 @@ function meshDescriptorPeerResolver(runtime: ZLinkLocationRuntime): ZLinkPeerLoc
         }))
         .filter(
           (peer) =>
-            (filter.nodeRid === undefined || String(peer.nodeRid) === String(filter.nodeRid)) &&
+            (filter.nodeRid === undefined || routingIdsEqual(peer.nodeRid, filter.nodeRid)) &&
             (filter.endpoint === undefined || peer.endpoint === filter.endpoint)
         );
     }
   };
 }
-
-function hasManualRouterConnections(spotNode: ZLinkSpotNodeOptions): boolean {
-  return (
-    (spotNode.router?.manualConnections?.length ?? 0) > 0 ||
-    (spotNode.router?.manualPeerConnections?.length ?? 0) > 0
-  );
-}
-
-const detachedSpotNodeAutoConnectResource = new AsyncResource('zlink:spot-node-autoconnect');
 
 interface ZLinkSpotNodeConnectionIntent {
   connectionIntentId?: bigint;
@@ -154,10 +156,7 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
   private readonly lane = new ZLinkStateLane();
   private readonly connectionIntents = new Map<string, ZLinkSpotNodeConnectionIntent>();
 
-  constructor(
-    private readonly node: ZLinkBackendMeshNode,
-    private readonly manualConnections: boolean
-  ) {}
+  constructor(private readonly node: ZLinkBackendMeshNode) {}
 
   onDisconnected(handler: (endpoint: string) => void): void {
     this.node.onPeerDisconnected?.(handler);
@@ -172,30 +171,12 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
       return false;
     const intent = await this.lane.run(() => this.prepareConnectCore(key));
     if (intent === undefined) return true;
-    return await runDetachedSpotNodeAutoConnect(() => this.connectPeer(target, key, intent));
+    return await startOutsideStateLane(() => this.connectPeer(target, key, intent));
   }
 
   disconnect(target: ZLinkAutoConnectTarget): void {
     if (!this.connectionIntents.has(connectionKey(target))) return;
     this.disconnectPeer(target);
-  }
-
-  disconnectStalePeers(targets: readonly ZLinkAutoConnectTarget[]): void {
-    if (this.manualConnections) return;
-    const current = new Map(
-      targets
-        .filter((target) => target.nodeRid !== undefined)
-        .map((target) => [String(target.nodeRid), target])
-    );
-    const peers = this.node.peers();
-    for (const peer of peers) {
-      if (peer.routingId === null) continue;
-      const target = current.get(String(peer.routingId));
-      if (target !== undefined && peer.endpoint === target.endpoint) {
-        continue;
-      }
-      this.node.disconnectPeer(peer.routingId, peer.lifecycleGeneration);
-    }
   }
 
   isDisconnected(target: ZLinkAutoConnectTarget): boolean {
@@ -209,7 +190,7 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
         (peer) =>
           peer.routingId !== null &&
           peer.endpoint === target.endpoint &&
-          (target.nodeRid === undefined || String(peer.routingId) === String(target.nodeRid)) &&
+          (target.nodeRid === undefined || routingIdsEqual(peer.routingId, target.nodeRid)) &&
           peer.lifecycleGeneration === target.lifecycleGeneration &&
           peer.state === MeshPeerRuntimeState.Serving
       );
@@ -291,16 +272,12 @@ class ZLinkSpotNodeAutoConnectExecutor implements IZLinkAutoConnectExecutor {
       if (peer.endpoint !== target.endpoint) {
         continue;
       }
-      if (target.nodeRid !== undefined && String(peer.routingId) !== String(target.nodeRid)) {
+      if (target.nodeRid !== undefined && !routingIdsEqual(peer.routingId, target.nodeRid)) {
         continue;
       }
       this.node.disconnectPeer(peer.routingId, peer.lifecycleGeneration);
     }
   }
-}
-
-function runDetachedSpotNodeAutoConnect<T>(work: () => Promise<T>): Promise<T> {
-  return detachedSpotNodeAutoConnectResource.runInAsyncScope(work);
 }
 
 function connectionKey(target: ZLinkAutoConnectTarget): string {

@@ -199,7 +199,8 @@ session, not a global directory.
 connection the current binding token specifies. If the connection is
 replaced or the binding generation changes, the previous operation
 isn't retargeted to the new connection or hidden-retried. Disconnect
-only releases the binding — Actor and Spot membership are kept.
+follows [Session–Actor binding §5 and §7](../../../04-session/02-session-actor-binding.en.md) for physical connection
+close and binding cleanup; Actor and Spot membership remain unchanged.
 
 The public trace category is `actor-relocation`. The meaning and
 verification criteria are owned by

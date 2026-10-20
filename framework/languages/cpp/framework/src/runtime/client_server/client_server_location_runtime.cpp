@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/client_server/client_server_location_runtime.hpp"
+
+#include "runtime/execution/task_result.hpp"
 #include "runtime/diagnostics/topology_projection.hpp"
 #include "runtime/execution/infrastructure_wait_guard.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
@@ -236,6 +238,7 @@ struct client_server_location_runtime_t::pump_task_state_t
 struct client_server_location_runtime_t::worker_request_t
 {
     std::function<void ()> transport_turn;
+    location_write_intent_t intent = location_write_intent_t::renew;
     task_completion_source_t<bool> completion;
 };
 
@@ -443,13 +446,30 @@ client_server_location_runtime_t::snapshot_source_locked (const std::string &cha
 task_t<client_server_channel_snapshot_t>
 client_server_location_runtime_t::snapshot_task (std::string channel_name) const
 {
+    auto projection = co_await query_projection_task (std::move (channel_name));
+    co_return co_await complete_query_task (std::move (projection));
+}
+
+task_t<client_server_channel_snapshot_t>
+client_server_location_runtime_t::query_projection_task (std::string channel_name) const
+{
     auto source = co_await _lane.run_task ([this, channel_name = std::move (channel_name)] {
         return snapshot_source_locked (channel_name);
     });
-    auto current = co_await build_snapshot_task (std::move (source));
-    co_return co_await _lane.run_task ([this, current = std::move (current)] () mutable {
-        return publish_snapshot_locked (std::move (current));
-    });
+    co_return co_await build_snapshot_task (std::move (source));
+}
+
+task_t<client_server_channel_snapshot_t> client_server_location_runtime_t::complete_query_task (
+  client_server_channel_snapshot_t projection) const
+{
+    auto channel_name = projection.channel_name;
+    auto published =
+      co_await _lane.run_task ([this, projection = std::move (projection)] () mutable {
+          return publish_snapshot_locked (std::move (projection));
+      });
+    if (published)
+        co_return std::move (*published);
+    co_return co_await snapshot_task (std::move (channel_name));
 }
 
 task_t<client_server_channel_snapshot_t>
@@ -569,15 +589,19 @@ bool client_server_location_runtime_t::is_ready (std::string channel_name) const
     return snapshot (std::move (channel_name)).is_ready;
 }
 
-client_server_channel_snapshot_t client_server_location_runtime_t::publish_snapshot_locked (
+// Runtime monitoring §4·§6: a projection is published only from the status it was taken from.
+// When another publication won the turn first, either projection may describe the later
+// channel state, so this returns nothing and the caller projects again from the winner. A new
+// observer registered with the projection's source has already received that publication.
+std::optional<client_server_channel_snapshot_t>
+client_server_location_runtime_t::publish_snapshot_locked (
   client_server_channel_snapshot_t current,
   const std::shared_ptr<observer_t> &initial_observer) const
 {
     const auto &channel_name = current.channel_name;
     const auto previous = _last_snapshots.find (channel_name);
-    if (previous != _last_snapshots.end () && current.sequence < previous->second.sequence) {
-        current = previous->second;
-    }
+    if (previous != _last_snapshots.end () && current.sequence < previous->second.sequence)
+        return std::nullopt;
     const bool changed =
       previous == _last_snapshots.end () || !snapshot_equivalent (previous->second, current);
     if (changed) {
@@ -614,11 +638,15 @@ task_t<void> client_server_location_runtime_t::publish_snapshot_changes ()
     snapshots.reserve (sources.size ());
     for (auto &source : sources)
         snapshots.push_back (co_await build_snapshot_task (std::move (source)));
-    co_await _lane.run_task ([this, snapshots = std::move (snapshots)] () mutable {
-        for (auto &current : snapshots)
-            current = publish_snapshot_locked (std::move (current));
-        return std::move (snapshots);
-    });
+    const bool lost =
+      co_await _lane.run_task ([this, snapshots = std::move (snapshots)] () mutable {
+          bool any_lost = false;
+          for (auto &current : snapshots)
+              any_lost = !publish_snapshot_locked (std::move (current)) || any_lost;
+          return any_lost;
+      });
+    if (lost)
+        co_await publish_snapshot_changes ();
 }
 
 void client_server_location_runtime_t::start ()
@@ -727,16 +755,14 @@ void client_server_location_runtime_t::start_server (
     entry->owner = std::move (raw);
     if (publication_owner) {
         auto descriptor = to_descriptor (entry->owner->descriptor (), *publication_owner);
-        const auto stored =
-          _store->update_client_server (descriptor, location_write_intent_t::new_claim)
-            .result ()
-            .value ();
-        if (stored.status != location_write_status_t::stored) {
-            entry->owner->mailbox ().bind_application_dispatch ({}, {});
-            entry->owner->close ();
-            throw std::runtime_error ("ClientServer descriptor publication was fenced");
-        }
-        entry->published_descriptor = std::move (descriptor);
+        const auto stored = infrastructure_result ([&] {
+                                return _locations->descriptor_write_confirmed ([&] {
+                                    return _store->update_client_server (
+                                      descriptor, location_write_intent_t::new_claim);
+                                });
+                            }).value ();
+        if (stored)
+            entry->published_descriptor = std::move (descriptor);
     }
     const auto endpoint = entry->owner->endpoint ();
     _servers.emplace (channel.name, std::move (entry));
@@ -772,15 +798,17 @@ bool client_server_location_runtime_t::publish_descriptor_state (
     return state != framework_runtime_state_t::draining || request_publication ();
 }
 
-bool client_server_location_runtime_t::republish_after_store_recovery ()
+bool client_server_location_runtime_t::republish_after_store_recovery (
+  location_write_intent_t intent)
 {
     // stop() owns descriptor removal, so a stopping runtime has nothing to republish.
-    return empty () || _stop->load (std::memory_order_acquire) || request_publication ();
+    return empty () || _stop->load (std::memory_order_acquire) || request_publication (intent);
 }
 
-bool client_server_location_runtime_t::request_publication () noexcept
+bool client_server_location_runtime_t::request_publication (location_write_intent_t intent) noexcept
 {
     auto request = std::make_shared<worker_request_t> ();
+    request->intent = intent;
     auto result = request->completion.task ();
     {
         std::lock_guard lock (_server_progress_mutex);
@@ -912,7 +940,15 @@ void client_server_location_runtime_t::run ()
             }
             if (!serving.empty () || now >= next_reconcile) {
                 _client_pump_snapshot.clear ();
-                pending_maintenance = std::make_shared<task_t<bool>> (publish_servers_task ());
+                const auto intent =
+                  std::any_of (serving.begin (), serving.end (),
+                               [] (const auto &request) {
+                                   return request->intent == location_write_intent_t::new_claim;
+                               })
+                    ? location_write_intent_t::new_claim
+                    : location_write_intent_t::renew;
+                pending_maintenance =
+                  std::make_shared<task_t<bool>> (publish_servers_task (intent));
                 detail::observe_task_terminal (
                   *pending_maintenance,
                   [wake = _wake_timer] (const result_t<bool> &) { wake->signal (); });
@@ -995,7 +1031,7 @@ void client_server_location_runtime_t::run ()
     }
 }
 
-task_t<bool> client_server_location_runtime_t::publish_servers_task ()
+task_t<bool> client_server_location_runtime_t::publish_servers_task (location_write_intent_t intent)
 {
     const auto owner = co_await _locations->current_owner_token_task ();
     if (!owner) {
@@ -1015,6 +1051,10 @@ task_t<bool> client_server_location_runtime_t::publish_servers_task ()
         if (!new_owner && server->published_descriptor->weight == weight
             && server->published_descriptor->state == state)
             continue;
+        if (new_owner && intent == location_write_intent_t::renew) {
+            published = false;
+            continue;
+        }
 
         auto admission = co_await server->owner->descriptor_task ();
         if (admission.descriptor_revision == std::numeric_limits<std::uint64_t>::max ())
@@ -1028,10 +1068,12 @@ task_t<bool> client_server_location_runtime_t::publish_servers_task ()
         admission.weight = static_cast<std::uint32_t> (weight);
         admission.state = client_server_service_state (state);
         auto descriptor = to_descriptor (admission, *owner);
-        const auto written = co_await _store->update_client_server (
-          descriptor,
-          new_owner ? location_write_intent_t::new_claim : location_write_intent_t::renew);
-        if (written.status == location_write_status_t::stored)
+        const auto written = co_await _locations->descriptor_write_confirmed ([&] {
+            return _store->update_client_server (descriptor, new_owner
+                                                               ? location_write_intent_t::new_claim
+                                                               : location_write_intent_t::renew);
+        });
+        if (written)
             server->published_descriptor = std::move (descriptor);
         else
             published = false;

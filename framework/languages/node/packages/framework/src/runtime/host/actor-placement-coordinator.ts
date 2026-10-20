@@ -1,6 +1,8 @@
+import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
+  internalFrameworkErrorKindFromWireReply,
   wireReplyFailureException
 } from '../framework-errors-internal';
 import { createHash } from 'node:crypto';
@@ -9,6 +11,7 @@ import type { ActorRef, RoutingId, ZLinkActorCreateResult } from '../../contract
 import { ZLinkSpotKind } from '../../contracts';
 import type {
   ZLinkAuthoritySnapshot,
+  ZLinkAuthorityReadResult,
   ZLinkCreationOperationIdentity,
   ZLinkLocationOwnerToken,
   ZLinkObjectReserveResult,
@@ -102,6 +105,15 @@ export class ZLinkActorPlacementCoordinator {
       for (;;) {
         const target = await this.options.target(meshName, stableType, deadline.signal, excluded);
         if (target === undefined) {
+          // Entry eligibility limits new creation, not lookup of a Ready Actor (Actor model §6.3, §6.5).
+          if (!createOnly) {
+            const current = await this.options.store.readAuthority(
+              encodeAuthorityKey('actor', actorId),
+              deadline.signal
+            );
+            const existing = existingActor(current, actorId, stableType);
+            if (existing !== undefined) return { status: 'existing', actor: existing };
+          }
           throw createInternalFrameworkException(
             ZLinkFrameworkInternalErrorKind.PlacementCapacityExhausted,
             `No eligible Actor placement target is ready for '${stableType}'.`,
@@ -158,7 +170,7 @@ export class ZLinkActorPlacementCoordinator {
           );
         }
         if (reserved.kind === 'placementCapacityExhausted') {
-          excluded.add(String(target.nodeRid));
+          excluded.add(encodeRoutingIdStorageHex(target.nodeRid));
           continue;
         }
         if (reserved.kind === 'alreadyExists' || reserved.kind === 'conflict') {
@@ -203,6 +215,15 @@ export class ZLinkActorPlacementCoordinator {
           }
         }
         if (remote === undefined) throw transportFailure;
+        if (
+          internalFrameworkErrorKindFromWireReply(remote.terminalResult, remote.failureCode) ===
+          ZLinkFrameworkInternalErrorKind.RouteNotConnected
+        ) {
+          //  The target refused before the callback and cancelled its reservation
+          //  (Actor model §6.3); exclude this host run like a Reserve failure.
+          excluded.add(encodeRoutingIdStorageHex(target.nodeRid));
+          continue;
+        }
         if (remote.terminalResult !== RequestResult.Ok || remote.failureCode !== 0) {
           //  Classify the (terminal, fine failure code) pair via the shared
           //  ownership-aware translator instead of collapsing every non-OK
@@ -443,16 +464,18 @@ function creationTarget(snapshot: ZLinkAuthoritySnapshot) {
 }
 
 function existingActor(
-  reserved: ZLinkObjectReserveResult,
+  current: ZLinkObjectReserveResult | ZLinkAuthorityReadResult,
   actorId: string,
   stableType: string
 ): ActorRef | undefined {
   const snapshot =
-    reserved.kind === 'alreadyExists'
-      ? reserved.current
-      : reserved.kind === 'conflict' && reserved.current.kind === 'snapshot'
-        ? reserved.current
-        : undefined;
+    current.kind === 'snapshot'
+      ? current
+      : current.kind === 'alreadyExists'
+        ? current.current
+        : current.kind === 'conflict' && current.current.kind === 'snapshot'
+          ? current.current
+          : undefined;
   if (
     snapshot === undefined ||
     snapshot.allocation.state !== 'active' ||
@@ -542,7 +565,7 @@ function requireExactReservation(
     current.allocation.stableType !== record.stableType ||
     current.objectGeneration !== record.reservation.objectGeneration ||
     current.authorityOwnerGeneration !== record.reservation.authorityOwnerGeneration ||
-    String(current.allocation.descriptor.rid) !== record.reservation.targetNodeRid ||
+    !routingIdsEqual(current.allocation.descriptor.rid, record.reservation.targetNodeRid) ||
     current.allocation.descriptorLifecycleGeneration !== record.reservation.targetNodeGeneration ||
     current.ownerId !== record.reservation.targetOwnerId ||
     current.ownerLeaseGeneration !== record.reservation.targetOwnerLeaseGeneration ||

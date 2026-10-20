@@ -44,11 +44,6 @@ internal sealed class ZLinkBoundSessionDispatchScope : IAsyncDisposable
         return new ZLinkBoundSessionDispatchScope(actorId);
     }
 
-    public static bool TryDeferClose(string actorId, Func<CancellationToken, ValueTask> closeAsync)
-    {
-        return TryDefer(actorId, closeAsync);
-    }
-
     public static bool TryDefer(
         string actorId,
         Func<CancellationToken, ValueTask> operationAsync

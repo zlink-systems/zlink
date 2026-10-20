@@ -411,6 +411,13 @@ runs the completion callback after processing the lifecycle callback and
 source membership cleanup. If completion keeps failing, the Actor is kept
 sealed, and regular messages behind the barrier aren't run.
 
+When one handler registers Joins for several Actors, each Join is an operation
+for its own Actor. "The Actor is moving" in the table above is cleared when that
+Actor's own Join terminal and the completion ordering of its
+[Deferred Join barrier](../00-foundation/02-glossary.en.md#deferred-join-barrier)
+have finished. Completion of other Actors' Joins registered by the same handler is
+not a condition for clearing it.
+
 A same-node join isn't relocation, so it's allowed even if the relocation
 policy is `DisableRelocation`.
 
@@ -991,7 +998,8 @@ owner lease, and local admission deadline.
 ## 9. Message Follow
 
 After commit and within `MessageFollowDuration`, the source relays
-messages arriving at the old address to the committed target. Relay
+messages arriving at the old address to the committed target (except under
+[Location runtime §10](../05-location-relocation/01-location-runtime.en.md#10-when-a-store-response-isnt-received)'s chained-move exception). Relay
 doesn't read the Store or run an application handler, and it preserves
 original operation identity, generation, payload, and reply route. After
 route duration ends, a request arriving at the old address ends with

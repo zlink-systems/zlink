@@ -263,6 +263,14 @@ public final class ZLinkInMemoryLocationStore
                                     new ZLinkMeshNodeDescriptorKey(
                                             descriptor.meshName(), descriptor.rid()));
                     ZLinkMeshNodeDescriptor current = meshNodes.rows.get(key);
+                    if (current != null
+                            && (intent == ZLinkLocationWriteIntent.NEW_CLAIM
+                                    || intent == ZLinkLocationWriteIntent.RENEW)
+                            && hasSameDescriptorFields(current, descriptor)) {
+                        return completed(
+                                ZLinkLocationWriteResult.stored(
+                                        current.lifecycleGeneration(), current.updatedAt()));
+                    }
                     String entryAuthorityKey =
                             descriptor.entrySpotId().map(ZLinkAuthorityKeyCodec::spot).orElse(null);
                     EntrySpotClaim entryClaim =
@@ -298,11 +306,6 @@ public final class ZLinkInMemoryLocationStore
                     if (intent == ZLinkLocationWriteIntent.RENEW
                             && current != null
                             && descriptor.descriptorRevision() == current.descriptorRevision()) {
-                        if (hasSameDescriptorFields(current, descriptor)) {
-                            return completed(
-                                    ZLinkLocationWriteResult.stored(
-                                            current.lifecycleGeneration(), current.updatedAt()));
-                        }
                         throw new IllegalArgumentException(
                                 "same descriptor revision has different bytes");
                     }
@@ -941,7 +944,8 @@ public final class ZLinkInMemoryLocationStore
                     || !left.stableType().equals(right.stableType())
                     || left.policy() != right.policy()
                     || left.hasSnapshotAdapter() != right.hasSnapshotAdapter()
-                    || left.spotLimit() != right.spotLimit()) {
+                    || left.spotLimit() != right.spotLimit()
+                    || left.entryAccepted() != right.entryAccepted()) {
                 return false;
             }
         }
@@ -959,8 +963,10 @@ public final class ZLinkInMemoryLocationStore
                 && current.applicationVersion() == candidate.applicationVersion()
                 && current.objectCapabilities().equals(candidate.objectCapabilities())
                 && current.objectRole() == candidate.objectRole()
+                && current.entrySpotId().equals(candidate.entrySpotId())
                 && current.placementWeight() == candidate.placementWeight()
                 && current.capacity().equals(candidate.capacity())
+                && current.activationConcurrency().equals(candidate.activationConcurrency())
                 && current.maintenanceWave().equals(candidate.maintenanceWave())
                 && current.state() == candidate.state()
                 && current.securityIdentity().equals(candidate.securityIdentity())

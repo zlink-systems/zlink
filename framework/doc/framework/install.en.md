@@ -48,7 +48,6 @@ need them.
     | --- | --- | --- |
     | `lz4` | STREAM compression | `-DZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4=OFF -DZLINK_STREAM_CONNECTOR_WITH_LZ4=OFF` |
     | `openssl` | Stream Connector TLS | `-DZLINK_STREAM_CONNECTOR_WITH_TLS=OFF` |
-    | `boost` (asio, beast) | HTTP and transport | Cannot be turned off. Core and the framework must use the **same Boost tree** |
     | `nlohmann_json` | Default JSON serializer | Cannot be turned off |
     | `opentelemetry-cpp` | Observation | Cannot be turned off |
     | `protobuf` | Protobuf codec | Only when that target is linked |
@@ -109,7 +108,7 @@ need them.
 === "Java"
 
     ```kotlin
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.30.0")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.30.1")
     ```
 
     | Included package | Role |
@@ -135,8 +134,8 @@ need them.
 === "Kotlin"
 
     ```kotlin
-    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.30.0")
-    implementation("systems.zlink:zlink-framework-kotlin:0.30.0")
+    implementation("systems.zlink:zlink-framework-spring-boot-starter:0.30.1")
+    implementation("systems.zlink:zlink-framework-kotlin:0.30.1")
     ```
 
     | Included package | Role |
@@ -209,7 +208,7 @@ sandbox.
     pinned tag the browser bundle drifts from the server version.
 
     ```
-    https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.30.0
+    https://github.com/zlink-systems/zlink.git?path=framework/languages/unity/com.zlink.stream-connector.webgl#framework-node/v0.30.1
     ```
 
     The UPM adapter carries the npm package's browser bundle and provides only the jslib and C#
@@ -282,7 +281,7 @@ sandbox.
     |---|---|---|
     | `.NET` | `Zlink.Stream.Connector` | nuget.org |
     | C++ | `zlink::stream_e2e_client` — the connector plus scenario helpers | vcpkg · Conan · source |
-    | Java · Kotlin | `systems.zlink:zlink-stream-connector:0.30.0` | Maven Central |
+    | Java · Kotlin | `systems.zlink:zlink-stream-connector:0.30.1` | Maven Central |
     | Node.js | `@zlink-systems/stream-connector` | npm |
 
     Only C++ has a dedicated target. `zlink::stream_e2e_client` adds scenario-writing helpers on

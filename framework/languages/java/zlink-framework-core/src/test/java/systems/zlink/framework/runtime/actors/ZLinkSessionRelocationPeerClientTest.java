@@ -1,5 +1,6 @@
 package systems.zlink.framework.runtime.actors;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
@@ -8,6 +9,7 @@ import org.junit.jupiter.api.Test;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
+import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
@@ -82,7 +84,10 @@ final class ZLinkSessionRelocationPeerClientTest {
                                             seal.relocation(),
                                             seal.coordinator(),
                                             seal.actor(),
-                                            seal.session());
+                                            seal.session(),
+                                            systems.zlink.framework.runtime.protocol
+                                                    .ServiceWirePilotCodec.SessionSealResult
+                                                    .SEALED);
                             return CompletableFuture.completedFuture(
                                     codec.encodeSessionRelocationSealed(echoed));
                         });
@@ -97,6 +102,37 @@ final class ZLinkSessionRelocationPeerClientTest {
         assertEquals(seal.coordinator(), sealed.coordinator());
         assertEquals(seal.actor(), sealed.actor());
         assertEquals(seal.session(), sealed.session());
+    }
+
+    @Test
+    void bindingAbsentCommand43CompletesTheSealWithoutRetransmission() throws Exception {
+        var codec = new ZLinkServiceM6BWireCodec();
+        var seal = seal();
+        var generated = codec.decodeSessionRelocationSeal(codec.encodeSessionRelocationSeal(seal));
+        byte[] absent =
+                codec.encodeSessionRelocationSealed(
+                        new ZLinkServiceM6BWireCodec.SessionRelocationSealed(
+                                generated.relocation(),
+                                generated.coordinator(),
+                                generated.actor(),
+                                generated.session(),
+                                ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT));
+        AtomicInteger requests = new AtomicInteger();
+        ZLinkInternalMeshNode node =
+                proxy(
+                        (method, arguments) -> {
+                            requests.incrementAndGet();
+                            return CompletableFuture.completedFuture(absent);
+                        });
+
+        var reply =
+                new ZLinkSessionRelocationPeerClient(node, codec)
+                        .sealRouteUntilAck(seal, Duration.ofMillis(200))
+                        .toCompletableFuture()
+                        .join();
+
+        assertArrayEquals(absent, codec.encodeSessionRelocationSealed(reply));
+        assertEquals(1, requests.get(), "the first command 43 of the participant is used");
     }
 
     private static ZLinkInternalMeshNode proxy(Invocation invocation) {
@@ -123,7 +159,9 @@ final class ZLinkSessionRelocationPeerClientTest {
                         10,
                         11),
                 new ZLinkServiceM6BWireCodec.SessionOwnerFence(
-                        SESSION_OWNER, 7, "session-owner", 8, SESSION, 9));
+                        SESSION_OWNER, 7, "session-owner", 8, SESSION, 9),
+                RoutingId.from("relocation-target"),
+                7);
     }
 
     private static ZLinkServiceM6BWireCodec.SessionRelocationRoute command() {

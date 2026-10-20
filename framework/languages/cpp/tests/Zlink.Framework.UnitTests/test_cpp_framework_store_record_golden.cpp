@@ -589,10 +589,10 @@ int main ()
         descriptor.entry_spot_id = "entry-1";
         descriptor.channel_weights = {{"billing", 100}};
         descriptor.application_version = 2;
-        descriptor.object_capabilities = {
-          {placement_object_kind_t::actor, "chat", maintenance_policy_kind_t::disabled, false, 0},
-          {placement_object_kind_t::user_spot, "game", maintenance_policy_kind_t::snapshot, true,
-           500}};
+        descriptor.object_capabilities = {{placement_object_kind_t::actor, "chat",
+                                           maintenance_policy_kind_t::disabled, false, 0, true},
+                                          {placement_object_kind_t::user_spot, "game",
+                                           maintenance_policy_kind_t::snapshot, true, 500}};
         descriptor.object_role = object_role_t::server;
         descriptor.placement_weight = 100;
         descriptor.capacity.actors = {3, 1, 0};

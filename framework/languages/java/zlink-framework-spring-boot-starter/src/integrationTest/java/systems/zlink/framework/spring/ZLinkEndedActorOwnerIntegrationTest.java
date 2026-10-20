@@ -14,17 +14,23 @@ import systems.zlink.framework.actors.*;
 import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.locationprovider.ZLinkStoreKey;
 import systems.zlink.framework.locationprovider.ZLinkStoreReadFound;
+import systems.zlink.framework.locationprovider.ZLinkStoreReadMissing;
+import systems.zlink.framework.locationprovider.ZLinkStoreScanItem;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanPageResult;
 import systems.zlink.framework.locationprovider.ZLinkStoreScanRequest;
 import systems.zlink.framework.locations.redis.*;
+import systems.zlink.framework.monitoring.ZLinkFrameworkRuntimeStatus;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
+import systems.zlink.framework.monitoring.ZLinkObservedStatus;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.spots.*;
 
 import java.io.IOException;
 import java.io.UncheckedIOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -33,6 +39,12 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 public class ZLinkEndedActorOwnerIntegrationTest {
+    private static final String CREATED_PREFIX = "CREATED generation=";
+    private static final Pattern CREATED =
+            Pattern.compile(Pattern.quote(CREATED_PREFIX) + "(\\d+)");
+    private static final Pattern LISTENER_ENDPOINT =
+            Pattern.compile("LISTEN_ENDPOINT=tcp://127\\.0\\.0\\.1:(\\d+)");
+
     @Configuration(proxyBeanMethods = false)
     @EnableZLinkFramework
     @Import(ZLinkFrameworkAutoConfiguration.class)
@@ -46,9 +58,7 @@ public class ZLinkEndedActorOwnerIntegrationTest {
                 var node = options.addRouteMesh("probe");
                 node.listen("tcp://127.0.0.1:0")
                         .setRoutingId(RoutingId.from(System.getProperty("probe.node")));
-                node.objects()
-                        .server()
-                        .addSpotFactory("entry", Entry.class, f -> f.disableRelocation());
+                node.objects().server().addEntrySpot(Entry.class);
                 node.objects()
                         .server()
                         .addActorFactory(
@@ -84,23 +94,175 @@ public class ZLinkEndedActorOwnerIntegrationTest {
         }
     }
 
-    public static final class Entry implements ZLinkSpot<ZLinkActor> {
-        private final ZLinkSpotContext context;
+    public static final class Entry implements ZLinkEntrySpot<Player> {
+        private final ZLinkEntrySpotContext context;
 
-        public Entry(ZLinkSpotContext context) {
+        public Entry(ZLinkEntrySpotContext context) {
             this.context = context;
         }
 
-        public ZLinkSpotContext context() {
+        public ZLinkEntrySpotContext context() {
             return context;
         }
 
-        public CompletionStage<Void> onJoinedActor(ZLinkActor actor) {
+        public CompletionStage<Void> onJoinedActor(Player actor) {
             return CompletableFuture.completedFuture(null);
         }
 
-        public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
+        public CompletionStage<Void> onLeaveActor(Player actor) {
             return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    private static final class ActorProcess implements AutoCloseable {
+        private final Process process;
+        private final ExecutorService outputReader;
+        private final CompletableFuture<String> createdOutput;
+        private final Future<?> outputTask;
+
+        private ActorProcess(
+                Process process,
+                ExecutorService outputReader,
+                CompletableFuture<String> createdOutput,
+                Future<?> outputTask) {
+            this.process = process;
+            this.outputReader = outputReader;
+            this.createdOutput = createdOutput;
+            this.outputTask = outputTask;
+        }
+
+        private static ActorProcess start(
+                String redis, String prefix, String mode, boolean hold, Path output)
+                throws IOException {
+            var command =
+                    new ArrayList<>(
+                            List.of(
+                                    Path.of(System.getProperty("java.home"), "bin", "java")
+                                            .toString(),
+                                    "--enable-native-access=ALL-UNNAMED",
+                                    "-Dprobe.redis=" + redis,
+                                    "-Dprobe.prefix=" + prefix,
+                                    "-Dprobe.node=restarted-node",
+                                    "-cp",
+                                    System.getProperty("zlink.test.classpath"),
+                                    ZLinkEndedActorOwnerIntegrationTest.class.getName(),
+                                    mode));
+            if (hold) command.add("hold");
+            Process process = new ProcessBuilder(command).redirectErrorStream(true).start();
+            var outputReader =
+                    Executors.newSingleThreadExecutor(
+                            task -> new Thread(task, "ended-actor-owner-output"));
+            var createdOutput = new CompletableFuture<String>();
+            var outputTask =
+                    outputReader.submit(
+                            () -> {
+                                var content = new StringBuilder();
+                                try (var reader = process.inputReader(StandardCharsets.UTF_8);
+                                        var writer = Files.newBufferedWriter(output)) {
+                                    String line;
+                                    while ((line = reader.readLine()) != null) {
+                                        writer.write(line);
+                                        writer.newLine();
+                                        writer.flush();
+                                        content.append(line).append('\n');
+                                        if (line.startsWith(CREATED_PREFIX))
+                                            createdOutput.complete(content.toString());
+                                    }
+                                    createdOutput.completeExceptionally(
+                                            new AssertionError(
+                                                    "Public Actor creation did not complete: "
+                                                            + content));
+                                } catch (IOException failure) {
+                                    createdOutput.completeExceptionally(failure);
+                                    throw new UncheckedIOException(failure);
+                                }
+                            });
+            return new ActorProcess(process, outputReader, createdOutput, outputTask);
+        }
+
+        private long awaitCreated(long previous) throws Exception {
+            String content = createdOutput.get(60, TimeUnit.SECONDS);
+            Matcher created = CREATED.matcher(content);
+            Assertions.assertTrue(created.find(), content);
+            long generation = Long.parseLong(created.group(1));
+            Matcher listener = LISTENER_ENDPOINT.matcher(content);
+            Assertions.assertTrue(listener.find(), content);
+            Assertions.assertTrue(Integer.parseInt(listener.group(1)) > 0);
+            Assertions.assertTrue(generation > previous);
+            Assertions.assertTrue(content.contains("FACTORY_INIT pid=" + process.pid()));
+            return generation;
+        }
+
+        @Override
+        public void close() throws Exception {
+            try {
+                process.getOutputStream().close();
+            } finally {
+                try {
+                    process.waitFor();
+                } finally {
+                    try {
+                        outputTask.get();
+                    } finally {
+                        outputReader.shutdown();
+                    }
+                }
+            }
+        }
+    }
+
+    @Test
+    void disabledFactoryRecreatesActorFromEndedOwnerRecordsAfterNormalProcessExit()
+            throws Exception {
+        String redis = System.getenv("ZLINK_REDIS_LOCATION_ENDPOINT");
+        Assumptions.assumeTrue(redis != null && !redis.isBlank());
+        var logs = Files.createTempDirectory("zlink-1570-public-");
+        System.out.println("Ended Actor owner logs: " + logs);
+        String prefix = "actor-reclaim-" + UUID.randomUUID() + ":";
+        try (var store =
+                new ZLinkRedisLocationStore(
+                        new ZLinkRedisLocationOptions()
+                                .setConnectionString(redis)
+                                .setKeyPrefix(prefix))) {
+            long previous = 0;
+            for (int index = 0; index < 3; index++) {
+                String mode = index == 1 ? "getOrCreate" : "create";
+                var output = logs.resolve("node-" + index + ".log");
+                ZLinkStoreKey ownerKey = null;
+                List<ZLinkStoreScanItem> retained = List.of();
+                var child = ActorProcess.start(redis, prefix, mode, index < 2, output);
+                try (child) {
+                    long generation = child.awaitCreated(previous);
+                    previous = generation;
+                    System.out.println(mode + " generation=" + generation);
+                    if (index < 2) {
+                        var page =
+                                Assertions.assertInstanceOf(
+                                        ZLinkStoreScanPageResult.class,
+                                        store.scan(
+                                                        new ZLinkStoreScanRequest(
+                                                                "owner-lease\0", null, 2),
+                                                        () -> false)
+                                                .toCompletableFuture()
+                                                .get());
+                        Assertions.assertEquals(1, page.value().items().size());
+                        ownerKey = page.value().items().get(0).key();
+                        retained = ZLinkEndedOwnerStoreFixture.snapshot(store);
+                        child.process.getOutputStream().close();
+                        Assertions.assertTrue(child.process.waitFor(10, TimeUnit.SECONDS));
+                    } else {
+                        Assertions.assertTrue(child.process.waitFor(30, TimeUnit.SECONDS));
+                    }
+                }
+                Assertions.assertEquals(0, child.process.exitValue());
+                if (index < 2) {
+                    ZLinkEndedOwnerStoreFixture.restore(store, retained);
+                    Assertions.assertInstanceOf(
+                            ZLinkStoreReadMissing.class,
+                            store.read(ownerKey, () -> false).toCompletableFuture().get());
+                    System.out.println("OWNER_LEASE_ENDED node=" + index);
+                }
+            }
         }
     }
 
@@ -120,50 +282,9 @@ public class ZLinkEndedActorOwnerIntegrationTest {
             for (int index = 0; index < 3; index++) {
                 String mode = index == 1 ? "getOrCreate" : "create";
                 var output = logs.resolve("node-" + index + ".log");
-                var command =
-                        new ArrayList<>(
-                                List.of(
-                                        Path.of(System.getProperty("java.home"), "bin", "java")
-                                                .toString(),
-                                        "--enable-native-access=ALL-UNNAMED",
-                                        "-Dprobe.redis=" + redis,
-                                        "-Dprobe.prefix=" + prefix,
-                                        "-Dprobe.node=restarted-node",
-                                        "-cp",
-                                        System.getProperty("zlink.test.classpath"),
-                                        getClass().getName(),
-                                        mode));
-                if (index < 2) command.add("hold");
-                Process child =
-                        new ProcessBuilder(command)
-                                .redirectErrorStream(true)
-                                .redirectOutput(output.toFile())
-                                .start();
-                try {
-                    long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(60);
-                    String content;
-                    Matcher created;
-                    while (true) {
-                        content = Files.readString(output);
-                        created = Pattern.compile("CREATED generation=(\\d+)").matcher(content);
-                        if (created.find()) break;
-                        Assertions.assertTrue(
-                                child.isAlive() && System.nanoTime() < deadline,
-                                () ->
-                                        "Public Actor creation failed: "
-                                                + output
-                                                + "\n"
-                                                + readOutput(output));
-                        Thread.sleep(10);
-                    }
-                    long generation = Long.parseLong(created.group(1));
-                    Matcher listener =
-                            Pattern.compile("LISTEN_ENDPOINT=tcp://127\\.0\\.0\\.1:(\\d+)")
-                                    .matcher(content);
-                    Assertions.assertTrue(listener.find(), content);
-                    Assertions.assertTrue(Integer.parseInt(listener.group(1)) > 0);
-                    Assertions.assertTrue(generation > previous);
-                    Assertions.assertTrue(content.contains("FACTORY_INIT pid=" + child.pid()));
+                var child = ActorProcess.start(redis, prefix, mode, index < 2, output);
+                try (child) {
+                    long generation = child.awaitCreated(previous);
                     previous = generation;
                     System.out.println(mode + " generation=" + generation);
                     if (index < 2) {
@@ -177,50 +298,98 @@ public class ZLinkEndedActorOwnerIntegrationTest {
                                                 .toCompletableFuture()
                                                 .get());
                         Assertions.assertEquals(1, page.value().items().size());
+                        Assertions.assertNull(page.value().nextCursor());
                         ZLinkStoreKey ownerKey = page.value().items().get(0).key();
-                        child.destroyForcibly();
-                        Assertions.assertTrue(child.waitFor(10, TimeUnit.SECONDS));
-                        while (true) {
-                            var lease =
-                                    store.read(ownerKey, () -> false).toCompletableFuture().get();
-                            if (!(lease instanceof ZLinkStoreReadFound found)) break;
-                            Assertions.assertNotNull(found.value().expiresAt());
-                            if (!found.value().expiresAt().isAfter(found.value().storeNow())) break;
-                            Assertions.assertTrue(
-                                    System.nanoTime() < deadline,
-                                    "Owner lease did not expire in the existing test deadline");
-                            Thread.sleep(10);
+                        var leaseExpiry = page.value().items().get(0).value().expiresAt();
+                        Assertions.assertNotNull(leaseExpiry);
+                        var durableRecords = ZLinkEndedOwnerStoreFixture.snapshot(store);
+                        child.process.destroyForcibly();
+                        Assertions.assertTrue(child.process.waitFor(10, TimeUnit.SECONDS));
+                        Assertions.assertNotEquals(
+                                0,
+                                child.process.exitValue(),
+                                "Owner must end through process crash");
+                        var lease = store.read(ownerKey, () -> false).toCompletableFuture().get();
+                        if (lease instanceof ZLinkStoreReadFound found)
+                            leaseExpiry = found.value().expiresAt();
+                        // A local timer can finish before the provider clock reaches expiry.
+                        while (lease instanceof ZLinkStoreReadFound found) {
+                            Assertions.assertNotNull(leaseExpiry);
+                            Assertions.assertEquals(leaseExpiry, found.value().expiresAt());
+                            var remaining = Duration.between(found.value().storeNow(), leaseExpiry);
+                            Assertions.assertTrue(remaining.isPositive());
+                            CompletableFuture.runAsync(
+                                            () -> {},
+                                            CompletableFuture.delayedExecutor(
+                                                    remaining.toNanos(), TimeUnit.NANOSECONDS))
+                                    .get();
+                            lease = store.read(ownerKey, () -> false).toCompletableFuture().get();
+                        }
+                        var expired =
+                                Assertions.assertInstanceOf(ZLinkStoreReadMissing.class, lease);
+                        Assertions.assertFalse(leaseExpiry.isAfter(expired.storeNow()));
+                        for (var record : durableRecords) {
+                            Assertions.assertNull(record.value().expiresAt());
+                            var persisted =
+                                    Assertions.assertInstanceOf(
+                                                    ZLinkStoreReadFound.class,
+                                                    store.read(record.key(), () -> false)
+                                                            .toCompletableFuture()
+                                                            .get())
+                                            .value();
+                            Assertions.assertEquals(record.value().version(), persisted.version());
+                            Assertions.assertArrayEquals(record.value().bytes(), persisted.bytes());
                         }
                         System.out.println("OWNER_LEASE_ENDED node=" + index);
                     } else {
-                        Assertions.assertTrue(child.waitFor(30, TimeUnit.SECONDS));
-                        Assertions.assertEquals(0, child.exitValue());
-                    }
-                } finally {
-                    if (child.isAlive()) {
-                        child.destroyForcibly();
-                        child.waitFor();
+                        Assertions.assertTrue(child.process.waitFor(30, TimeUnit.SECONDS));
                     }
                 }
+                if (index == 2) Assertions.assertEquals(0, child.process.exitValue());
             }
-        }
-    }
-
-    private static String readOutput(Path path) {
-        try {
-            return Files.readString(path);
-        } catch (IOException failure) {
-            throw new UncheckedIOException(failure);
         }
     }
 
     public static void main(String[] args) throws Exception {
         try (var app =
                 new SpringApplicationBuilder(Config.class).web(WebApplicationType.NONE).run()) {
+            var runtime = app.getBean(ZLinkFrameworkRuntime.class);
+            // Startup can return with owner admission closed until lease recovery finishes.
+            var ready = new CompletableFuture<Void>();
+            runtime.observe()
+                    .subscribe(
+                            new Flow.Subscriber<
+                                    ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus>>() {
+                                private Flow.Subscription subscription;
+
+                                public void onSubscribe(Flow.Subscription value) {
+                                    subscription = value;
+                                    value.request(Long.MAX_VALUE);
+                                }
+
+                                public void onNext(
+                                        ZLinkObservedStatus<ZLinkFrameworkRuntimeStatus> value) {
+                                    if (value.status().isReady()) {
+                                        ready.complete(null);
+                                        subscription.cancel();
+                                    }
+                                }
+
+                                public void onError(Throwable failure) {
+                                    ready.completeExceptionally(failure);
+                                }
+
+                                public void onComplete() {
+                                    ready.completeExceptionally(
+                                            new IllegalStateException(
+                                                    "Host observation completed before READY"));
+                                }
+                            });
+            ready.get();
+            Assertions.assertTrue(runtime.isReady());
             System.out.println(
                     "LISTEN_ENDPOINT="
-                            + app.getBean(ZLinkFrameworkRuntime.class)
-                                    .listenerStatus(ZLinkListenerKind.ROUTE_MESH, "probe")
+                            + runtime.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "probe")
                                     .endpoint());
             var actors = app.getBean(ZLinkActorManager.class);
             var result =
@@ -237,9 +406,9 @@ public class ZLinkEndedActorOwnerIntegrationTest {
                                     .get();
             if (!(result instanceof ZLinkActorCreateResult.Created created))
                 throw new AssertionError("Expected Created, got " + result);
-            System.out.println("CREATED generation=" + created.actor().objectGeneration());
+            System.out.println(CREATED_PREFIX + created.actor().objectGeneration());
             System.out.flush();
-            if (args.length > 1) new CountDownLatch(1).await();
+            if (args.length > 1) System.in.read();
         }
     }
 }

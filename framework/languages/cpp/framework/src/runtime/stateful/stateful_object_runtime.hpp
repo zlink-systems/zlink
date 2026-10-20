@@ -301,6 +301,20 @@ class stateful_object_runtime_t
     create_result_t activate_instance (create_request_t request,
                                        const std::function<bool (const object_ref_t &)> &factory);
     std::optional<object_ref_t> find (object_kind_t kind, const std::string &key) const;
+    std::optional<object_ref_t> resolve_spot (const std::string &key) const;
+    stateful_error_t set_subscription (const object_ref_t &spot,
+                                       const std::string &channel_name,
+                                       const std::string &topic);
+    void unset_subscription (const object_ref_t &spot,
+                             const std::string &channel_name,
+                             const std::string &topic);
+    task_t<std::vector<object_ref_t>> multicast_local_targets (std::string channel_name,
+                                                               std::string topic) const;
+    task_t<bool> contains_async (object_ref_t reference) const;
+    // Observes the existing source seal; does not resolve Store authority.
+    bool finalized_relocation_source (object_kind_t kind,
+                                      const std::string &key,
+                                      std::uint64_t object_generation) const;
 
     std::pair<stateful_error_t, membership_token_t>
     begin_membership_move (const object_ref_t &actor, const object_ref_t &target_spot);
@@ -334,8 +348,9 @@ class stateful_object_runtime_t
                                          std::vector<std::uint8_t> payload);
     std::vector<logical_timer_t> timers (const object_ref_t &owner) const;
     std::vector<object_inventory_t> inventory () const;
-    std::optional<std::vector<object_inventory_t>> try_begin_maintenance_inventory ();
-    void end_maintenance_inventory () noexcept;
+    task_t<std::vector<object_inventory_t>> actor_inventory () const;
+    task_t<std::optional<std::vector<object_inventory_t>>> try_begin_maintenance_inventory ();
+    task_t<void> end_maintenance_inventory ();
     task_t<aggregate_relocation_seal_attempt_t>
     try_seal_relocation_aggregate (const std::vector<object_ref_t> &participants,
                                    std::stop_token cancellation = {},
@@ -350,7 +365,10 @@ class stateful_object_runtime_t
     stateful_error_t abort_relocation_before_cutover (std::uint64_t token);
     // Makes the source permanently follow-only once Cutover has been queued
     // (or its enqueue outcome is uncertain).
-    stateful_error_t finalize_relocation_cutover (std::uint64_t token);
+    stateful_error_t finalize_relocation_cutover (
+      std::uint64_t token,
+      std::optional<std::function<void (const object_ref_t &, const turn_record_t &)>> deliver =
+        std::nullopt);
     stateful_error_t abort_relocation (std::uint64_t token);
     std::pair<stateful_error_t, std::vector<object_ref_t>>
     commit_relocation_aggregate (std::uint64_t token, std::string target_node_id);
@@ -411,6 +429,7 @@ class stateful_object_runtime_t
         std::optional<relocation_restore_identity_t> restore_identity;
         queue_t queue;
         std::map<std::uint64_t, logical_timer_t> timers;
+        std::set<std::pair<std::string, std::string>> subscriptions;
         std::uint64_t barrier_generation = 0;
     };
 
@@ -430,6 +449,7 @@ class stateful_object_runtime_t
         std::function<void (const object_ref_t &, const turn_record_t &)> deliver;
     };
 
+    bool finalized_relocation_source_on_lane (const object_record_t &object) const;
     static bool valid_text (const std::string &value);
     static bool same_exact_ref (const object_ref_t &left, const object_ref_t &right);
     /* Return-relocation remnant (spec 28 §2/§8): after this node handed an

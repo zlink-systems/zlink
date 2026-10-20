@@ -39,7 +39,8 @@ internal static partial class ZLinkServiceWireCodec
         ulong PayloadTotalLength,
         uint PayloadChunkCount,
         uint PayloadChecksumCrc32c,
-        ulong ApplicationVersion
+        ulong ApplicationVersion,
+        ulong DeadlineUnixMs
     );
 
     internal sealed record RelocationReadyRecord(
@@ -116,6 +117,7 @@ internal static partial class ZLinkServiceWireCodec
         _ = ToGenerated(record.Object);
         if (
             record.SourceNodeRid.IsEmpty
+            || record.DeadlineUnixMs == 0
             || record.SourceNodeGeneration == 0
             || record.ApplicationVersion > long.MaxValue
             || record.PayloadTotalLength > RelocationLogicalBytesBound
@@ -135,7 +137,8 @@ internal static partial class ZLinkServiceWireCodec
                 record.PayloadTotalLength,
                 record.PayloadChunkCount,
                 record.PayloadChecksumCrc32c,
-                checked((long)record.ApplicationVersion)
+                checked((long)record.ApplicationVersion),
+                record.DeadlineUnixMs
             )
         );
     }
@@ -304,7 +307,8 @@ internal static partial class ZLinkServiceWireCodec
             generated.PayloadTotalLength,
             generated.PayloadChunkCount,
             generated.PayloadChecksumCrc32c,
-            checked((ulong)generated.ApplicationVersion)
+            checked((ulong)generated.ApplicationVersion),
+            generated.DeadlineUnixMs
         );
         return true;
     }

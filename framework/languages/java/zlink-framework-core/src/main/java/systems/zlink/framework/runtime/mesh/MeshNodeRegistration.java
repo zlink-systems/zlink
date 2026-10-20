@@ -23,6 +23,7 @@ import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotFactoryBuilder;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
+import systems.zlink.framework.runtime.handlers.ZLinkGenericTypeResolver;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.InstanceSpotFactoryConfiguration;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocatableActorFactory;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration.RelocatableInstanceSpotFactory;
@@ -228,6 +229,32 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     public RelocationPolicy actorRelocationPolicy(String stableType) {
         var factory = relocatableActorFactories.get(stableType);
         return factory == null ? null : factory.relocationPolicy();
+    }
+
+    /**
+     * Whether an Entry Spot type registered on this node accepts the Actor type that the factory
+     * for {@code stableType} produces. The one decision behind both the published {@code
+     * entryAccepted} capability and the target-side refusal (Actor model §6.3).
+     */
+    public boolean acceptsNewActor(String stableType) {
+        var factory = relocatableActorFactories.get(stableType);
+        return factory != null
+                && entrySpots.stream()
+                        .anyMatch(
+                                entry ->
+                                        entryActorType(entry)
+                                                .isAssignableFrom(factory.actorType()));
+    }
+
+    private static Class<?> entryActorType(Class<? extends ZLinkEntrySpot<?>> entrySpotType) {
+        var entryInterface =
+                ZLinkGenericTypeResolver.findInterface(entrySpotType, ZLinkEntrySpot.class);
+        if (entryInterface == null) {
+            throw new ZLinkConfigurationException(
+                    "Entry Spot type does not name its Actor type: " + entrySpotType.getName());
+        }
+        return ZLinkGenericTypeResolver.requireClassArgument(
+                entrySpotType, entryInterface.getActualTypeArguments()[0]);
     }
 
     public boolean objectRoleEnabled() {
@@ -485,7 +512,8 @@ public final class MeshNodeRegistration implements ZLinkMeshNodeBuilder {
     }
 
     private void registerEntrySpot(Class<? extends ZLinkEntrySpot<?>> entrySpotType) {
-        entrySpots.add(Objects.requireNonNull(entrySpotType, "entrySpotType"));
+        entryActorType(Objects.requireNonNull(entrySpotType, "entrySpotType"));
+        entrySpots.add(entrySpotType);
     }
 
     public void validate() {

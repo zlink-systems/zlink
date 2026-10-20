@@ -1,3 +1,4 @@
+import { encodeRoutingIdStorageHex } from '../../packages/framework/src/runtime/routing-id';
 import { ZLinkStatefulAuthorityRouteRuntime } from '../../packages/framework/src/runtime/host/stateful-authority-route-runtime';
 import { encodeServiceInstanceAuthorityPayload } from '../../packages/framework/src/runtime/foundation/service-authority-payload-codec';
 import assert from 'node:assert/strict';
@@ -30,6 +31,7 @@ import {
   storeKey
 } from '../../packages/framework/src/runtime/locations/in-memory-provider-location-store';
 import { ZLinkLocationStoreRepository } from '../../packages/framework/src/runtime/locations/location-store-repository';
+import { opaqueRecordPreimage } from '../../packages/framework/src/runtime/locations/opaque-record-key';
 import { encodeAuthorityKey } from '../../packages/framework/src/runtime/locations/authority-key-codec';
 import { ZLinkUserSpotCreationCoordinator } from '../../packages/framework/src/runtime/host/user-spot-creation-coordinator';
 import { ZLinkActorPlacementCoordinator } from '../../packages/framework/src/runtime/host/actor-placement-coordinator';
@@ -43,6 +45,7 @@ import {
   encodeCreationOperationTerminalV1
 } from '../../packages/framework/src/runtime/protocol/service_wire_codec.generated';
 import { publishInitialActorAuthority } from '../../packages/framework/src/runtime/actors/actor-authority-publication';
+import { encodeActorAuthorityPayload } from '../../packages/framework/src/runtime/actors/actor-authority-payload-codec';
 import { DefaultZLinkActorManager } from '../../packages/framework/src/runtime/actors';
 import { decodeFrameworkCreationPayload } from '../../packages/framework/src/runtime/messaging/creation-payload-codec';
 import {
@@ -107,6 +110,14 @@ for (const backend of ['provider', 'memory'] as const) {
               ...descriptor,
               objectCapabilities: [
                 {
+                  objectKind: 'actor',
+                  stableType: 'player',
+                  policy: 'disabled',
+                  hasSnapshotAdapter: false,
+                  entryAccepted: false,
+                  limit: 0
+                },
+                {
                   objectKind: kind,
                   stableType: 'room',
                   policy:
@@ -114,11 +125,13 @@ for (const backend of ['provider', 'memory'] as const) {
                       ? 'recreate'
                       : 'disabled',
                   hasSnapshotAdapter: false,
+                  entryAccepted: false,
                   limit: 0
                 }
               ],
               populationCapacity: {
                 ...descriptor.populationCapacity,
+                actors: { active: 0, reserved: 0, limit: 2 },
                 spotTypes: [
                   { objectKind: kind, stableType: 'room', active: 0, reserved: 0, limit: 1 }
                 ]
@@ -175,25 +188,61 @@ for (const backend of ['provider', 'memory'] as const) {
         });
         assert.equal(committed.kind, 'committed');
         if (committed.kind !== 'committed') throw new Error('Ready missing');
-        const member = {
-          meshName: 'mesh',
-          actorId: 'member',
-          actorType: 'player',
-          actorRef: {
-            actorId: 'member',
-            objectGeneration: 1n,
-            meshName: 'mesh',
-            nodeRid: 'node-a'
-          },
-          ownerNodeRid: 'node-a',
-          ownerNodeGeneration: 1n,
-          spotKind: ZLinkSpotKind.User,
-          spotId: request.key.globalId,
-          spotGeneration: committed.ready.objectGeneration,
-          membershipEpoch: 1n,
-          ownerId: old.ownerId,
-          leaseGeneration: old.leaseGeneration,
-          updatedAt: now
+        const addAuthority = async (
+          actorId: string,
+          spotKind: ZLinkSpotKind.Entry | ZLinkSpotKind.User
+        ) => {
+          const actorRequest = {
+            key: { kind: 'actor' as const, globalId: actorId },
+            intent: {
+              stableType: 'player',
+              requestContentReference: `request:${actorId}`,
+              requestSha256: Buffer.alloc(32, 2),
+              requestEncodedSize: 10n
+            },
+            target: request.target,
+            creatingPayload: Buffer.from('creating'),
+            capacity: { actors: 1, spots: 0 },
+            actorRelocationPolicy: 'disabled' as const
+          };
+          const member = await store.reserve(actorRequest);
+          if (member.kind !== 'reserved') throw new Error('Actor reservation missing');
+          assert.equal(
+            (
+              await store.completeCreation({
+                key: actorRequest.key,
+                target: actorRequest.target,
+                reservationId: member.reservationId,
+                expectedStoreVersion: member.creating.storeVersion.value,
+                completion: {
+                  kind: 'created',
+                  readyPayload: encodeActorAuthorityPayload({
+                    state: 'ready',
+                    stableType: 'player',
+                    actorId,
+                    currentSpotKind: spotKind,
+                    currentSpotId: request.key.globalId,
+                    currentSpotGeneration: committed.ready.objectGeneration,
+                    ownerId: old.ownerId,
+                    ownerLeaseGeneration: old.leaseGeneration,
+                    meshName: 'mesh',
+                    nodeRid: 'node-a',
+                    nodeGeneration: 1n
+                  }),
+                  terminal: {
+                    operation: {
+                      sourceNodeRid: 'node-a',
+                      sourceNodeGeneration: 1n,
+                      operationId: { high: 3n, low: actorId === 'member' ? 1n : 2n }
+                    },
+                    terminalEnvelope: Buffer.from('member-terminal'),
+                    operationDeadline: new Date(Date.now() + 60_000)
+                  }
+                }
+              })
+            ).kind,
+            'created'
+          );
         };
         if (
           scenario === 'member' ||
@@ -201,23 +250,12 @@ for (const backend of ['provider', 'memory'] as const) {
           scenario === 'scanExpired' ||
           scenario === 'scanExpiredClearsMember'
         ) {
-          if (
-            scenario === 'laterPageMember' ||
-            scenario === 'scanExpired' ||
-            scenario === 'scanExpiredClearsMember'
-          )
-            await store.updateActor(
-              {
-                ...member,
-                actorId: scenario === 'scanExpiredClearsMember' ? 'z-last' : 'a-first',
-                spotKind: ZLinkSpotKind.Entry
-              },
-              ZLinkLocationWriteIntent.NewClaim
+          if (scenario !== 'member')
+            await addAuthority(
+              scenario === 'scanExpiredClearsMember' ? 'z-last' : 'a-first',
+              ZLinkSpotKind.Entry
             );
-          assert.equal(
-            (await store.updateActor(member, ZLinkLocationWriteIntent.NewClaim)).status,
-            ZLinkLocationWriteStatus.Stored
-          );
+          await addAuthority('member', ZLinkSpotKind.User);
         }
         if (scenario === 'relocation') {
           const updated = await store.compareExchangeAuthority(
@@ -373,16 +411,7 @@ for (const backend of ['provider', 'memory'] as const) {
               error.kind === ZLinkFrameworkErrorKind.Unavailable
           );
         } else if (
-          [
-            'recreate',
-            'unregistered',
-            'closing',
-            'snapshot',
-            'member',
-            'laterPageMember',
-            'scanExpired',
-            'recovery'
-          ].includes(scenario)
+          ['recreate', 'unregistered', 'closing', 'snapshot', 'recovery'].includes(scenario)
         ) {
           await assert.rejects(
             store.reserve(next),
@@ -390,14 +419,6 @@ for (const backend of ['provider', 'memory'] as const) {
               error instanceof ZLinkFrameworkException &&
               error.kind === ZLinkFrameworkErrorKind.Unavailable
           );
-          if (scenario === 'scanExpired') {
-            assert.deepEqual(scanRequests.slice(0, 3), [
-              { prefix: 'zlink:v11:actor:', continued: false },
-              { prefix: 'zlink:v11:actor:', continued: true },
-              { prefix: 'zlink:v11:actor:', continued: false }
-            ]);
-            assert.ok(scanRequests.length >= 4);
-          }
           const retained = await store.readAuthority(
             encodeAuthorityKey(kind, request.key.globalId)
           );
@@ -409,7 +430,27 @@ for (const backend of ['provider', 'memory'] as const) {
         } else if (scenario === 'live') {
           assert.equal((await store.reserve(next)).kind, 'alreadyExists');
         } else {
-          if (scenario === 'lateJoin')
+          if (scenario === 'lateJoin') {
+            const member = {
+              meshName: 'mesh',
+              actorId: 'member',
+              actorType: 'player',
+              actorRef: {
+                actorId: 'member',
+                objectGeneration: 1n,
+                meshName: 'mesh',
+                nodeRid: 'node-a'
+              },
+              ownerNodeRid: 'node-a',
+              ownerNodeGeneration: 1n,
+              spotKind: ZLinkSpotKind.User,
+              spotId: request.key.globalId,
+              spotGeneration: committed.ready.objectGeneration,
+              membershipEpoch: 1n,
+              ownerId: old.ownerId,
+              leaseGeneration: old.leaseGeneration,
+              updatedAt: now
+            };
             assert.equal(
               (
                 await store.updateActor(
@@ -423,6 +464,7 @@ for (const backend of ['provider', 'memory'] as const) {
               ).status,
               ZLinkLocationWriteStatus.RejectedConflict
             );
+          }
           const results =
             scenario === 'race'
               ? await Promise.all([store.reserve(next), store.reserve(next)])
@@ -432,11 +474,18 @@ for (const backend of ['provider', 'memory'] as const) {
           if (winner?.kind !== 'reserved') throw new Error('winner missing');
           assert.ok(winner.creating.objectGeneration > committed.ready.objectGeneration);
           assert.deepEqual(winner.creating.payload, request.creatingPayload);
-          if (scenario === 'scanExpiredClearsMember') {
+          // Ended authority members on every page are released with the Spot.
+          if (scenario === 'member' || scenario === 'laterPageMember' || scenario === 'scanExpired')
+            assert.equal(
+              (await store.readAuthority(encodeAuthorityKey('actor', 'member'))).kind,
+              'missing'
+            );
+          if (scenario === 'scanExpired') assert.ok(scanRequests.length >= 4);
+          if (scenario === 'scanExpired' || scenario === 'scanExpiredClearsMember') {
             assert.deepEqual(scanRequests.slice(0, 3), [
-              { prefix: 'zlink:v11:actor:', continued: false },
-              { prefix: 'zlink:v11:actor:', continued: true },
-              { prefix: 'zlink:v11:actor:', continued: false }
+              { prefix: 'authority\0actor\0', continued: false },
+              { prefix: 'authority\0actor\0', continued: true },
+              { prefix: 'authority\0actor\0', continued: false }
             ]);
           }
           if (backend === 'provider') {
@@ -452,6 +501,428 @@ for (const backend of ['provider', 'memory'] as const) {
         }
       });
     }
+  }
+}
+
+for (const backend of ['provider', 'memory'] as const) {
+  for (const scenario of [
+    'dead',
+    'staleRoute',
+    'live',
+    'moving',
+    'aggregate',
+    'unactivated',
+    'batchBound',
+    'batchFits',
+    ...(backend === 'provider'
+      ? (['memberReclaimed', 'memberCapacityCorrupt', 'memberMissingExpiry'] as const)
+      : [])
+  ] as const) {
+    test(`ended User Spot member release: ${backend} ${scenario}`, async () => {
+      let now = new Date(100);
+      const provider = new ZLinkInMemoryProviderLocationStore(() => now);
+      const store =
+        backend === 'provider'
+          ? new ZLinkLocationStoreRepository(provider, () => now)
+          : new ZLinkInMemoryLocationStore(() => now);
+      // Batch keys: Spot authority, owner lease, descriptor and capacity plus one key per
+      // member (all members share the Spot's owner and node). member-a plus 2,043 bulk
+      // members fill the unchanged 2,048-key bound exactly; route rows are not counted.
+      const bulk = scenario === 'batchFits' ? 2043 : scenario === 'batchBound' ? 2044 : 0;
+      const configure = async (descriptor: Awaited<ReturnType<typeof writeTargetDescriptor>>) => {
+        await store.removeMeshNode({ meshName: 'mesh', rid: descriptor.rid }, descriptor);
+        const configured = {
+          ...descriptor,
+          objectCapabilities: [
+            ...descriptor.objectCapabilities,
+            {
+              objectKind: 'actor' as const,
+              stableType: 'player',
+              policy: 'disabled' as const,
+              hasSnapshotAdapter: false,
+              entryAccepted: false,
+              limit: 0
+            }
+          ],
+          populationCapacity: {
+            ...descriptor.populationCapacity,
+            actors: { active: 0, reserved: 0, limit: Math.max(2, bulk + 1) }
+          }
+        };
+        assert.equal(
+          (await store.updateMeshNode(configured, ZLinkLocationWriteIntent.NewClaim)).status,
+          ZLinkLocationWriteStatus.Stored
+        );
+        return configured;
+      };
+      const old = await configure(await writeTargetDescriptor(store, 'owner-a', 'node-a', 60_000));
+      const live = await configure(
+        await writeTargetDescriptor(store, 'owner-c', 'node-c', 600_000)
+      );
+      const placement = (descriptor: typeof old) => ({
+        meshName: 'mesh',
+        nodeRid: descriptor.rid,
+        nodeLifecycleGeneration: descriptor.lifecycleGeneration,
+        owner: owner(descriptor.ownerId, descriptor.leaseGeneration)
+      });
+      const spotId = `member-release-${scenario}`;
+      const request = {
+        ...reserveRequest(spotId, placement(old)),
+        actorRelocationPolicy: 'disabled' as const
+      };
+      const first = await store.reserve(request);
+      if (first.kind !== 'reserved') throw new Error('Spot reservation missing');
+      const committed = await store.commit({
+        key: request.key,
+        target: request.target,
+        reservationId: first.reservationId,
+        expectedStoreVersion: first.creating.storeVersion.value,
+        readyPayload: encodeServiceUserSpotAuthorityPayload({
+          state: 'ready',
+          stableType: 'room',
+          spotId,
+          ownerId: old.ownerId,
+          ownerLeaseGeneration: old.leaseGeneration,
+          ownerMeshName: 'mesh',
+          ownerNodeRid: 'node-a',
+          ownerNodeGeneration: 1n
+        })
+      });
+      if (committed.kind !== 'committed') throw new Error('Spot Ready missing');
+      const memberPayload = (
+        actorId: string,
+        descriptor: typeof old,
+        state: 'creating' | 'ready'
+      ) =>
+        encodeActorAuthorityPayload({
+          state,
+          stableType: 'player',
+          actorId,
+          currentSpotId: spotId,
+          currentSpotGeneration: committed.ready.objectGeneration,
+          currentSpotKind: ZLinkSpotKind.User,
+          ownerId: descriptor.ownerId,
+          ownerLeaseGeneration: descriptor.leaseGeneration,
+          meshName: 'mesh',
+          nodeRid: descriptor.rid,
+          nodeGeneration: 1n
+        });
+      let operations = 0;
+      const addMember = async (
+        actorId: string,
+        descriptor: typeof old,
+        options: { activated?: boolean; wrap?: (payload: Buffer) => Uint8Array } = {}
+      ) => {
+        const actorRequest = {
+          key: { kind: 'actor' as const, globalId: actorId },
+          intent: {
+            stableType: 'player',
+            requestContentReference: `request:${actorId}`,
+            requestSha256: Buffer.alloc(32, 2),
+            requestEncodedSize: 10n
+          },
+          target: placement(descriptor),
+          creatingPayload:
+            options.activated === false
+              ? memberPayload(actorId, descriptor, 'creating')
+              : Buffer.from('creating'),
+          capacity: { actors: 1, spots: 0 },
+          actorRelocationPolicy: 'disabled' as const
+        };
+        const reserved = await store.reserve(actorRequest);
+        if (reserved.kind !== 'reserved') throw new Error(`member ${actorId} not reserved`);
+        if (options.activated === false) return actorRequest.key;
+        const ready = memberPayload(actorId, descriptor, 'ready');
+        const result = await store.completeCreation({
+          key: actorRequest.key,
+          target: actorRequest.target,
+          reservationId: reserved.reservationId,
+          expectedStoreVersion: reserved.creating.storeVersion.value,
+          completion: {
+            kind: 'created',
+            readyPayload: options.wrap?.(ready) ?? ready,
+            terminal: {
+              operation: {
+                sourceNodeRid: descriptor.rid,
+                sourceNodeGeneration: 1n,
+                operationId: { high: 2n, low: BigInt(++operations) }
+              },
+              terminalEnvelope: Buffer.from('member-terminal'),
+              operationDeadline: new Date(Date.now() + 60_000)
+            }
+          }
+        });
+        assert.equal(result.kind, 'created');
+        return actorRequest.key;
+      };
+      const memberDescriptor =
+        scenario === 'memberReclaimed' ||
+        scenario === 'memberCapacityCorrupt' ||
+        scenario === 'memberMissingExpiry'
+          ? await configure(await writeTargetDescriptor(store, 'owner-d', 'node-d', 60_000))
+          : old;
+      const members =
+        scenario === 'staleRoute' ? [] : [await addMember('member-a', memberDescriptor)];
+      // A route projection is not Actor authority and must not determine membership.
+      const routeOwner = live;
+      assert.equal(
+        (
+          await store.updateActor(
+            {
+              meshName: 'mesh',
+              actorId: 'member-row',
+              actorType: 'player',
+              actorRef: {
+                actorId: 'member-row',
+                objectGeneration: 1n,
+                meshName: 'mesh',
+                nodeRid: 'node-a'
+              },
+              ownerNodeRid: 'node-a',
+              ownerNodeGeneration: 1n,
+              spotKind: ZLinkSpotKind.User,
+              spotId,
+              spotGeneration: committed.ready.objectGeneration,
+              membershipEpoch: 1n,
+              ownerId: routeOwner.ownerId,
+              leaseGeneration: routeOwner.leaseGeneration,
+              updatedAt: now
+            },
+            ZLinkLocationWriteIntent.NewClaim
+          )
+        ).status,
+        ZLinkLocationWriteStatus.Stored
+      );
+      if (scenario === 'live') members.push(await addMember('member-live', live));
+      if (scenario === 'moving')
+        members.push(
+          await addMember('member-moving', old, {
+            wrap: (payload) =>
+              new ServiceRelocationAuthorityPayloadCodec().publish(payload, {
+                reference: 'member-relocation',
+                checksumCrc32c: 0,
+                aggregateId: '00000000-0000-0000-0000-000000000002',
+                aggregateGeneration: 1n,
+                inventoryDigest: '00'.repeat(32),
+                targetOwnerId: 'owner-c',
+                targetOwnerLeaseGeneration: 1n
+              })
+          })
+        );
+      if (scenario === 'unactivated')
+        members.push(await addMember('member-unactivated', old, { activated: false }));
+      if (scenario === 'aggregate') {
+        const current = await store.readAuthority(encodeAuthorityKey('actor', 'member-a'));
+        if (current.kind !== 'snapshot') throw new Error('member authority missing');
+        const prepared = await store.prepareAggregate({
+          aggregateId: { value: '44444444-4444-4444-8444-444444444444' } as ZLinkAggregateId,
+          aggregateGeneration: 1n,
+          participants: [
+            {
+              authorityKey: encodeAuthorityKey('actor', 'member-a'),
+              expectedStoreVersion: current.storeVersion,
+              ownerTransition: 'newOwner',
+              authorityPayload: Buffer.from('aggregate-member'),
+              membershipMutation: Buffer.from('aggregate-membership')
+            }
+          ],
+          inventoryDigest: Buffer.alloc(32, 7),
+          targetDescriptor: { meshName: 'mesh', rid: 'node-c' },
+          targetDescriptorLifecycleGeneration: live.lifecycleGeneration,
+          capacity: { actors: 1, spots: 0 },
+          targetOwner: owner(live.ownerId, live.leaseGeneration)
+        });
+        assert.equal(prepared.kind, 'prepared');
+      }
+      for (let index = 0; index < bulk; index++)
+        members.push(await addMember(`member-bulk-${String(index).padStart(4, '0')}`, old));
+      const versions = async () =>
+        Promise.all(
+          [request.key, ...members].map(async (key) => {
+            const read = await store.readAuthority(encodeAuthorityKey(key.kind, key.globalId));
+            return read.kind === 'snapshot' ? read.storeVersion.value : 'missing';
+          })
+        );
+      const memberRow = async () =>
+        backend === 'provider'
+          ? (await provider.read(storeKey('zlink:v11:actor:mesh:member-row'))).kind
+          : (await store.resolveActor({ meshName: 'mesh', actorId: 'member-row' })) === undefined
+            ? 'missing'
+            : 'found';
+      const before = await versions();
+      now = new Date(61_000);
+      const next = {
+        ...request,
+        target: placement(live),
+        actorRelocationPolicy: 'disabled' as const
+      };
+      if (scenario === 'memberMissingExpiry') {
+        const memberOwnerKey = storeKey(
+          opaqueRecordPreimage('owner-lease', memberDescriptor.ownerId)
+        );
+        assert.equal(
+          (
+            await provider.write({
+              conditions: [],
+              mutations: [
+                {
+                  kind: 'put',
+                  key: memberOwnerKey,
+                  bytes: Buffer.from(
+                    JSON.stringify({
+                      recordVersion: 1,
+                      ownerId: memberDescriptor.ownerId,
+                      leaseGeneration: memberDescriptor.leaseGeneration.toString()
+                    })
+                  )
+                }
+              ]
+            })
+          ).kind,
+          'applied'
+        );
+        const capacityKey = storeKey('zlink:v11:capacity:mesh:node-d');
+        const capacityBefore = await provider.read(capacityKey);
+        const write = provider.write.bind(provider);
+        let writes = 0;
+        provider.write = async (...args: Parameters<typeof write>) => {
+          writes++;
+          return write(...args);
+        };
+        await assert.rejects(store.reserve(next), /owner lease record is invalid/i);
+        assert.equal(writes, 0);
+        assert.deepEqual(await versions(), before);
+        assert.deepEqual(await provider.read(capacityKey), capacityBefore);
+        return;
+      }
+      if (scenario === 'memberCapacityCorrupt') {
+        const capacityKey = storeKey('zlink:v11:capacity:mesh:node-d');
+        const capacity = await provider.read(capacityKey);
+        if (capacity.kind !== 'found') throw new Error('member capacity missing');
+        const corrupted = JSON.parse(Buffer.from(capacity.value.bytes).toString('utf8'));
+        corrupted.active.actors = 0;
+        assert.equal(
+          (
+            await provider.write({
+              conditions: [{ kind: 'version', key: capacityKey, expected: capacity.value.version }],
+              mutations: [
+                { kind: 'put', key: capacityKey, bytes: Buffer.from(JSON.stringify(corrupted)) }
+              ]
+            })
+          ).kind,
+          'applied'
+        );
+        const write = provider.write.bind(provider);
+        let writes = 0;
+        provider.write = async (...args: Parameters<typeof write>) => {
+          writes++;
+          return write(...args);
+        };
+        await assert.rejects(
+          store.reserve(next),
+          (error: unknown) =>
+            error instanceof ZLinkFrameworkException &&
+            error.kind === ZLinkFrameworkErrorKind.DataLost
+        );
+        assert.equal(writes, 0);
+        assert.deepEqual(await versions(), before);
+        return;
+      }
+      if (scenario === 'memberReclaimed') {
+        const read = provider.read.bind(provider);
+        let replacementGeneration: bigint | undefined;
+        let replacementVersion: string | undefined;
+        provider.read = async (...args: Parameters<typeof read>) => {
+          if (args[0].value === 'zlink:v11:capacity:mesh:node-d') {
+            provider.read = read;
+            const replacement = await store.reserve({
+              key: { kind: 'actor', globalId: 'member-a' },
+              intent: {
+                stableType: 'player',
+                requestContentReference: 'request:member-a-reclaimed',
+                requestSha256: Buffer.alloc(32, 3),
+                requestEncodedSize: 10n
+              },
+              target: placement(live),
+              creatingPayload: Buffer.from('creating'),
+              capacity: { actors: 1, spots: 0 },
+              actorRelocationPolicy: 'disabled'
+            });
+            assert.equal(replacement.kind, 'reserved');
+            if (replacement.kind !== 'reserved') throw new Error('member replacement missing');
+            replacementGeneration = replacement.creating.objectGeneration;
+            replacementVersion = replacement.creating.storeVersion.value;
+            const unchangedSpot = await store.readAuthority(
+              encodeAuthorityKey(request.key.kind, spotId)
+            );
+            assert.equal(unchangedSpot.kind, 'snapshot');
+            if (unchangedSpot.kind === 'snapshot')
+              assert.equal(unchangedSpot.storeVersion.value, before[0]);
+          }
+          return read(...args);
+        };
+        const recreated = await store.reserve(next);
+        assert.equal(recreated.kind, 'reserved');
+        if (recreated.kind !== 'reserved') throw new Error('Spot replacement missing');
+        assert.ok(recreated.creating.objectGeneration > committed.ready.objectGeneration);
+        assert.notEqual(replacementGeneration, undefined);
+        const retained = await store.readAuthority(encodeAuthorityKey('actor', 'member-a'));
+        assert.equal(retained.kind, 'snapshot');
+        if (retained.kind !== 'snapshot') throw new Error('member replacement lost');
+        assert.equal(retained.objectGeneration, replacementGeneration);
+        assert.equal(retained.storeVersion.value, replacementVersion);
+        assert.equal(retained.allocation.state, 'reserved');
+        const releasedCapacity = await provider.read(storeKey('zlink:v11:capacity:mesh:node-d'));
+        if (releasedCapacity.kind !== 'found') throw new Error('member capacity missing');
+        assert.equal(
+          JSON.parse(Buffer.from(releasedCapacity.value.bytes).toString('utf8')).active.actors,
+          0
+        );
+        return;
+      }
+      if (scenario === 'dead' || scenario === 'staleRoute' || scenario === 'batchFits') {
+        const recreated = await store.reserve(next);
+        assert.equal(recreated.kind, 'reserved');
+        if (recreated.kind !== 'reserved') return;
+        assert.ok(recreated.creating.objectGeneration > committed.ready.objectGeneration);
+        assert.ok((await versions()).slice(1).every((version) => version === 'missing'));
+        assert.equal(await memberRow(), 'found');
+        if (backend === 'provider') {
+          const capacity = await provider.read(storeKey('zlink:v11:capacity:mesh:node-a'));
+          if (capacity.kind !== 'found') throw new Error('capacity missing');
+          assert.equal(
+            JSON.parse(Buffer.from(capacity.value.bytes).toString('utf8')).active.actors,
+            0
+          );
+        }
+        // A released member is Missing: its next creation starts a new incarnation.
+        const again = await store.reserve({
+          key: { kind: 'actor', globalId: 'member-a' },
+          intent: {
+            stableType: 'player',
+            requestContentReference: 'request:member-a-again',
+            requestSha256: Buffer.alloc(32, 3),
+            requestEncodedSize: 10n
+          },
+          target: placement(live),
+          creatingPayload: Buffer.from('creating'),
+          capacity: { actors: 1, spots: 0 },
+          actorRelocationPolicy: 'disabled'
+        });
+        assert.equal(again.kind, 'reserved');
+        if (again.kind === 'reserved' && members.length > 0)
+          assert.ok(again.creating.objectGeneration > committed.ready.objectGeneration);
+        return;
+      }
+      await assert.rejects(
+        store.reserve(next),
+        (error: unknown) =>
+          error instanceof ZLinkFrameworkException &&
+          error.kind === ZLinkFrameworkErrorKind.Unavailable
+      );
+      assert.deepEqual(await versions(), before);
+      assert.equal(await memberRow(), 'found');
+    });
   }
 }
 
@@ -504,6 +975,7 @@ for (const backend of ['provider', 'memory'] as const) {
               stableType: 'player',
               policy: 'disabled',
               hasSnapshotAdapter: false,
+              entryAccepted: false,
               limit: 0
             }
           ]
@@ -572,6 +1044,7 @@ for (const backend of ['provider', 'memory'] as const) {
               stableType: 'player',
               policy: 'disabled',
               hasSnapshotAdapter: false,
+              entryAccepted: false,
               limit: 0
             }
           ]
@@ -924,30 +1397,132 @@ test('provider reclaims Reserved after descriptor lifecycle replacement with a l
   assert.equal(next.kind, 'reserved');
 });
 
-test('owner lease uses exact claim read renew and release fencing', async () => {
-  let now = 100;
-  const store = new ZLinkInMemoryLocationStore(() => new Date(now));
-  const claimed = await store.claimOwnerLease('owner-a', 50);
-  assert.equal(claimed.kind, 'claimed');
-  if (claimed.kind !== 'claimed') return;
-  assert.equal(claimed.token.leaseGeneration, 1n);
-  assert.deepEqual(await store.claimOwnerLease('owner-a', 50), { kind: 'conflict' });
-  const found = await store.readOwnerLease('owner-a');
-  assert.equal(found.kind, 'found');
-  assert.deepEqual(await store.renewOwnerLease({ ownerId: 'owner-a', leaseGeneration: 2n }, 50), {
-    kind: 'stale'
+for (const backend of ['provider', 'memory'] as const) {
+  test(`owner lease uses exact claim read renew and release fencing: ${backend}`, async () => {
+    let now = 100;
+    const store =
+      backend === 'provider'
+        ? new ZLinkLocationStoreRepository(
+            new ZLinkInMemoryProviderLocationStore(() => new Date(now)),
+            () => new Date(now)
+          )
+        : new ZLinkInMemoryLocationStore(() => new Date(now));
+    assert.equal((await store.readOwnerLease('missing-owner')).kind, 'missing');
+    assert.deepEqual(await store.renewOwnerLease(owner('missing-owner', 1n), 50), {
+      kind: 'stale'
+    });
+    assert.equal(await store.releaseOwnerLease(owner('missing-owner', 1n)), 'stale');
+    const claimed = await store.claimOwnerLease('owner-a', 50);
+    assert.equal(claimed.kind, 'claimed');
+    if (claimed.kind !== 'claimed') return;
+    assert.equal(claimed.token.leaseGeneration, 1n);
+    assert.deepEqual(await store.claimOwnerLease('owner-a', 50), { kind: 'conflict' });
+    const found = await store.readOwnerLease('owner-a');
+    assert.equal(found.kind, 'found');
+    assert.deepEqual(await store.renewOwnerLease({ ownerId: 'owner-a', leaseGeneration: 2n }, 50), {
+      kind: 'stale'
+    });
+    const renewed = await store.renewOwnerLease(claimed.token, 50);
+    assert.equal(renewed.kind, 'renewed');
+    assert.equal(
+      await store.releaseOwnerLease({ ownerId: 'owner-a', leaseGeneration: 2n }),
+      'stale'
+    );
+    assert.equal(await store.releaseOwnerLease(claimed.token), 'released');
+    now++;
+    const reclaimed = await store.claimOwnerLease('owner-a', 50);
+    assert.equal(reclaimed.kind, 'claimed');
+    if (reclaimed.kind === 'claimed') {
+      assert.ok(reclaimed.token.leaseGeneration > claimed.token.leaseGeneration);
+      now += 50;
+      assert.equal((await store.readOwnerLease('owner-a')).kind, 'missing');
+      assert.deepEqual(await store.renewOwnerLease(reclaimed.token, 50), { kind: 'stale' });
+      assert.equal(await store.releaseOwnerLease(reclaimed.token), 'stale');
+    }
   });
-  const renewed = await store.renewOwnerLease(claimed.token, 50);
-  assert.equal(renewed.kind, 'renewed');
-  assert.equal(await store.releaseOwnerLease({ ownerId: 'owner-a', leaseGeneration: 2n }), 'stale');
-  assert.equal(await store.releaseOwnerLease(claimed.token), 'released');
-  now++;
-  const reclaimed = await store.claimOwnerLease('owner-a', 50);
-  assert.equal(reclaimed.kind, 'claimed');
-  if (reclaimed.kind === 'claimed') {
-    assert.ok(reclaimed.token.leaseGeneration > claimed.token.leaseGeneration);
-  }
-});
+}
+
+for (const operation of [
+  'read',
+  'reserve',
+  'publish',
+  'removeAll',
+  'abort',
+  'abortDescriptorMissing'
+] as const) {
+  test(`provider owner lease rejects missing expiry before ${operation}`, async () => {
+    const provider = new ZLinkInMemoryProviderLocationStore(() => new Date(100));
+    const store = new ZLinkLocationStoreRepository(provider, () => new Date(100));
+    const descriptor = await writeTargetDescriptor(store, 'owner-a', 'node-a', 60_000);
+    const token = owner(descriptor.ownerId, descriptor.leaseGeneration);
+    const request = reserveRequest('malformed-owner-object', {
+      ...target('node-a', 'owner-a'),
+      owner: token
+    });
+    const reserved = operation === 'reserve' ? undefined : await store.reserve(request);
+    if (reserved !== undefined) assert.equal(reserved.kind, 'reserved');
+    if (operation === 'abortDescriptorMissing') {
+      assert.equal(
+        await store.removeMeshNode({ meshName: 'mesh', rid: 'node-a' }, token),
+        ZLinkLocationWriteStatus.Stored
+      );
+      assert.deepEqual((await store.listMeshNodes('mesh')).items, []);
+    }
+    const ownerKey = storeKey(opaqueRecordPreimage('owner-lease', token.ownerId));
+    const existing = await provider.read(ownerKey);
+    if (existing.kind !== 'found') throw new Error('owner lease missing');
+    assert.equal(
+      (
+        await provider.write({
+          conditions: [{ kind: 'version', key: ownerKey, expected: existing.value.version }],
+          mutations: [{ kind: 'put', key: ownerKey, bytes: existing.value.bytes }]
+        })
+      ).kind,
+      'applied'
+    );
+    const corrupted = await provider.read(ownerKey);
+    if (corrupted.kind !== 'found') throw new Error('owner lease missing');
+    assert.equal(corrupted.value.expiresAt, undefined);
+    const authorityKey = encodeAuthorityKey(request.key.kind, request.key.globalId);
+    const authorityBefore = await store.readAuthority(authorityKey);
+    const capacityKey = storeKey('zlink:v11:capacity:mesh:node-a');
+    const capacityBefore = await provider.read(capacityKey);
+    const write = provider.write.bind(provider);
+    let writes = 0;
+    provider.write = async (...args: Parameters<typeof write>) => {
+      writes++;
+      return write(...args);
+    };
+    await assert.rejects(async () => {
+      switch (operation) {
+        case 'read':
+          return store.readOwnerLease(token.ownerId);
+        case 'reserve':
+          return store.reserve(request);
+        case 'publish':
+          return store.updateMeshNode(
+            { ...descriptor, descriptorRevision: 2n },
+            ZLinkLocationWriteIntent.Renew
+          );
+        case 'removeAll':
+          return store.removeAllByOwner(token);
+        case 'abort':
+        case 'abortDescriptorMissing':
+          if (reserved?.kind !== 'reserved') throw new Error('reservation missing');
+          return store.abort({
+            key: request.key,
+            target: request.target,
+            reservationId: reserved.reservationId,
+            expectedStoreVersion: reserved.creating.storeVersion.value
+          });
+      }
+    }, /owner lease record is invalid/i);
+    assert.equal(writes, 0);
+    assert.deepEqual(await provider.read(ownerKey), corrupted);
+    assert.deepEqual(await store.readAuthority(authorityKey), authorityBefore);
+    assert.deepEqual(await provider.read(capacityKey), capacityBefore);
+  });
+}
 
 test('User Spot target selection excludes an expired descriptor owner and continues with the live owner', async () => {
   let now = 100;
@@ -1844,8 +2419,12 @@ test('public User Spot coordinator hides Pending, runs one factory, then publish
       spotId: request.spotId,
       state: ZLinkSpotCreateState.Created,
       publication: {
-        publish: () => publicationOrder.push('publish'),
-        abort: () => publicationOrder.push('abort')
+        publish: () => {
+          publicationOrder.push('publish');
+        },
+        abort: () => {
+          publicationOrder.push('abort');
+        }
       }
     };
   });
@@ -2067,7 +2646,8 @@ test('User Spot placement excludes a capacity-race loser and reserves the next c
   const coordinator = new ZLinkUserSpotCreationCoordinator({
     store,
     target: async (_request, _signal, excluded) => {
-      const node = excluded?.has('node-a') === true ? 'node-b' : 'node-a';
+      const node =
+        excluded?.has(encodeRoutingIdStorageHex('node-a')) === true ? 'node-b' : 'node-a';
       return {
         meshName: 'mesh',
         nodeRid: node,
@@ -2529,7 +3109,9 @@ test('exact User Spot manager call is single-use and returns the committed SpotR
   const outsideTurn = manager.getOrCreate('room-outside', 'room').inMesh('mesh');
   assert.throws(
     () => outsideTurn.yield(),
-    /yield requires a SpotWide User Spot or Instance Spot application handler/
+    (error: unknown) =>
+      error instanceof ZLinkFrameworkException &&
+      error.kind === ZLinkFrameworkErrorKind.InvalidOperation
   );
   assert.equal((await outsideTurn.submit()).state, ZLinkSpotCreateState.Created);
 
@@ -2540,7 +3122,9 @@ test('exact User Spot manager call is single-use and returns the committed SpotR
     entryTurn = call;
     assert.throws(
       () => call.yield(),
-      /yield requires a SpotWide User Spot or Instance Spot application handler/
+      (error: unknown) =>
+        error instanceof ZLinkFrameworkException &&
+        error.kind === ZLinkFrameworkErrorKind.InvalidOperation
     );
   });
   assert.equal((await entryTurn!.submit()).state, ZLinkSpotCreateState.Created);
@@ -3087,6 +3671,7 @@ async function writeTargetDescriptor(
         stableType: 'room',
         policy: 'disabled' as const,
         hasSnapshotAdapter: false,
+        entryAccepted: false,
         limit: 0
       }
     ],
@@ -3226,3 +3811,75 @@ function authorityKey(value: string): ZLinkAuthorityKey {
 function owner(ownerId: string, generation: bigint): ZLinkLocationOwnerToken {
   return { ownerId, leaseGeneration: generation };
 }
+
+test('capacity Store observations follow reserve commit external polling and failed reads', async () => {
+  const provider = new ZLinkInMemoryProviderLocationStore();
+  let fail = false;
+  let reads = 0;
+  const watched = {
+    read: async (...args: Parameters<typeof provider.read>) => {
+      reads++;
+      if (fail) throw new Error('capacity read failed');
+      return provider.read(...args);
+    },
+    write: provider.write.bind(provider),
+    scan: provider.scan.bind(provider)
+  };
+  const store = new ZLinkLocationStoreRepository(watched);
+  const other = new ZLinkLocationStoreRepository(provider);
+  const descriptor = await writeTargetDescriptor(store, 'owner-a', 'node-a', 60_000);
+  const limits = {
+    ...descriptor.populationCapacity,
+    spots: { active: 0, reserved: 0, limit: 8 },
+    spotTypes: descriptor.populationCapacity.spotTypes.map((type) => ({ ...type, limit: 8 }))
+  };
+  await store.updateMeshNode(
+    { ...descriptor, populationCapacity: limits, descriptorRevision: 2n },
+    ZLinkLocationWriteIntent.Renew
+  );
+  const key = { meshName: 'mesh', rid: 'node-a' };
+  assert.equal(store.confirmedCapacity(key, limits), undefined);
+  reads = 0;
+  assert.equal(store.confirmedCapacity(key, limits), undefined);
+  assert.equal(reads, 0);
+  const placement = target('node-a', 'owner-a');
+  const first = await store.reserve(reserveRequest('capacity-one', placement));
+  assert.equal(first.kind, 'reserved');
+  if (first.kind !== 'reserved') throw new Error('missing reservation');
+  assert.equal(store.confirmedCapacity(key, limits)?.spots.reserved, 1);
+  assert.equal(store.confirmedCapacity(key, limits)?.spotTypes[0]?.reserved, 1);
+  assert.equal(store.confirmedCapacity(key, limits)?.spots.limit, 8);
+  assert.equal(
+    (
+      await store.commit({
+        key: { kind: 'user_spot', globalId: 'capacity-one' },
+        reservationId: first.reservationId,
+        expectedStoreVersion: first.creating.storeVersion.value,
+        target: placement,
+        readyPayload: Buffer.from('ready')
+      })
+    ).kind,
+    'committed'
+  );
+  assert.equal(store.confirmedCapacity(key, limits)?.spots.active, 1);
+  assert.equal(store.confirmedCapacity(key, limits)?.spots.reserved, 0);
+  assert.equal((await other.reserve(reserveRequest('capacity-two', placement))).kind, 'reserved');
+  assert.equal(store.confirmedCapacity(key, limits)?.spots.reserved, 0);
+  // RouteMesh polling uses this descriptor query, whose existing capacity read is also the observation.
+  await store.listMeshNodes('mesh');
+  assert.equal(store.confirmedCapacity(key, limits)?.spots.reserved, 1);
+  assert.equal(store.confirmedCapacity(key, limits)?.spotTypes[0]?.active, 1);
+  const saved = store.confirmedCapacity(key, limits);
+  reads = 0;
+  store.confirmedCapacity(key, limits);
+  assert.equal(reads, 0);
+  fail = true;
+  await assert.rejects(
+    store.listMeshNodes('mesh'),
+    /capacity read failed|provider is unavailable/i
+  );
+  assert.deepEqual(store.confirmedCapacity(key, limits), saved);
+  fail = false;
+  assert.equal(await store.removeMeshNode(key, placement.owner), ZLinkLocationWriteStatus.Stored);
+  assert.equal(store.confirmedCapacity(key, limits), undefined);
+});

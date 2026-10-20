@@ -99,9 +99,19 @@ public sealed class ApplicationJobQueueTests
         using var queue = new ZLinkApplicationJobQueue(
             new(ZLinkApplicationJobQueueProfile.Balanced, 4, 1, 4)
         );
-        var leases = new ZLinkApplicationJobQueueLease?[4];
-        Assert.Equal(4, queue.TryAcquireBatch(leases, 0, 4, ZLinkApplicationJobOrigin.Remote));
-        queue.MarkQueuedBatch(leases, 3);
+        var reservation = new ZLinkApplicationJobQueueReservation(
+            queue,
+            ZLinkApplicationJobOrigin.Remote,
+            null
+        );
+        reservation.ReserveAvailable(4);
+        Assert.Equal(4, reservation.Count);
+        var leases = new ZLinkApplicationJobQueueLease[3];
+        for (var index = 0; index < leases.Length; index++)
+        {
+            leases[index] = reservation.Claim()!;
+            leases[index].MarkQueued();
+        }
         Assert.Equal(3UL, queue.GetStatus().QueuedApplicationJobs);
         Assert.Equal(1UL, queue.GetStatus().ReservedSupplyPermits);
 
@@ -117,16 +127,18 @@ public sealed class ApplicationJobQueueTests
             .AsTask();
         cancellation.Cancel();
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelled);
-        queue.ReleaseBatch(leases);
+        // The one unclaimed permit and two claimed leases return; FIFO skips the
+        // cancelled waiter and admits the first and last.
+        reservation.Dispose();
         using var firstLease = await first.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(last.IsCompleted);
+        leases[0].Dispose();
         using var lastLease = await last.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(2UL, queue.GetStatus().ReservedSupplyPermits);
-        Assert.Equal(0UL, queue.GetStatus().QueuedApplicationJobs);
+        Assert.Equal(2UL, queue.GetStatus().QueuedApplicationJobs);
         foreach (var lease in leases)
-        {
-            lease!.MarkQueued();
             lease.Dispose();
-        }
+        reservation.Dispose();
         Assert.Equal(2UL, queue.GetStatus().PermitsInUse);
         firstLease.Dispose();
         lastLease.Dispose();
@@ -139,35 +151,211 @@ public sealed class ApplicationJobQueueTests
         using var queue = new ZLinkApplicationJobQueue(
             new(ZLinkApplicationJobQueueProfile.Balanced, 3, 1, 3)
         );
-        var leases = new ZLinkApplicationJobQueueLease?[64];
-        Assert.Equal(
-            3,
-            queue.TryAcquireBatch(leases, 0, leases.Length, ZLinkApplicationJobOrigin.Remote)
-        );
+        Assert.Equal(3, queue.TryReserveBatch(64));
         Assert.Equal(3UL, queue.GetStatus().PermitsInUse);
-        Assert.Equal(
-            0,
-            queue.TryAcquireBatch(
-                new ZLinkApplicationJobQueueLease?[64],
-                0,
-                64,
-                ZLinkApplicationJobOrigin.Remote
-            )
-        );
+        Assert.Equal(0, queue.TryReserveBatch(64));
         var waiting = queue
             .AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
             .AsTask();
         Assert.False(waiting.IsCompleted);
-        leases[0]!.Dispose();
-        leases[0] = null;
+        queue.ReleaseReserved(1);
         using var oldest = await waiting.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(0, queue.TryAcquireBatch(leases, 0, 1, ZLinkApplicationJobOrigin.Remote));
-        leases[1]!.Dispose();
-        leases[1] = null;
-        Assert.Equal(1, queue.TryAcquireBatch(leases, 0, 1, ZLinkApplicationJobOrigin.Remote));
-        foreach (var lease in leases)
-            lease?.Dispose();
+        Assert.Equal(0, queue.TryReserveBatch(1));
+        queue.ReleaseReserved(1);
+        Assert.Equal(1, queue.TryReserveBatch(1));
+        queue.ReleaseReserved(2);
         oldest.Dispose();
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task ReceiveRotation_ReservesAvailableCountAndLeasesAtClaim(int capacity)
+    {
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, (ulong)capacity, 1, (ulong)capacity)
+        );
+        var reservation = await queue.AcquireBatchAsync(
+            ZLinkReceiveBatchBudget.MaximumRecords,
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        Assert.Equal(capacity, reservation.Count);
+        Assert.Equal((ulong)capacity, queue.GetStatus().ReservedSupplyPermits);
+        using var claimed = reservation.Claim()!;
+        Assert.Equal(capacity - 1, reservation.Count);
+        claimed.MarkQueued();
+        Assert.Equal(1UL, queue.GetStatus().QueuedApplicationJobs);
+        reservation.Dispose();
+        reservation.Dispose();
+        Assert.Equal(0UL, queue.GetStatus().ReservedSupplyPermits);
+        Assert.Equal(1UL, queue.GetStatus().PermitsInUse);
+        await claimed.ReleaseForHandlerStartAsync();
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+    }
+
+    [Fact]
+    public async Task ReceiveRotation_BulkReturnGrantsCountsInSourceFifoOrder()
+    {
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 3, 1, 3)
+        );
+        var held = await queue.AcquireBatchAsync(
+            3,
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        var first = queue.AcquireBatchAsync(
+            2,
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        var second = queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Local);
+        Assert.False(first.IsCompleted);
+        Assert.False(second.IsCompleted);
+        Assert.Equal(2UL, queue.GetStatus().CapacityWaiters);
+        Assert.Equal(0, queue.TryReserveBatch(3));
+        held.Dispose();
+        var granted = await first;
+        using var single = await second;
+        Assert.Equal(2, granted.Count);
+        Assert.Equal(3UL, queue.GetStatus().PermitsInUse);
+        Assert.Equal(0UL, queue.GetStatus().CapacityWaiters);
+        granted.Dispose();
+        single.Dispose();
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task ReceiveRotation_TwoSourcesAtZeroCapacityWaitUntilCancellationOrClose(
+        bool close
+    )
+    {
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        using var held = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        using var stop = new CancellationTokenSource();
+        var first = queue
+            .AcquireBatchAsync(
+                ZLinkReceiveBatchBudget.MaximumRecords,
+                stop.Token,
+                ZLinkApplicationJobOrigin.Remote
+            )
+            .AsTask();
+        var second = queue
+            .AcquireBatchAsync(
+                ZLinkReceiveBatchBudget.MaximumRecords,
+                stop.Token,
+                ZLinkApplicationJobOrigin.Remote
+            )
+            .AsTask();
+        Assert.Equal(2UL, queue.GetStatus().CapacityWaiters);
+        Assert.False(first.IsCompleted);
+        Assert.False(second.IsCompleted);
+        if (close)
+            queue.Dispose();
+        else
+            stop.Cancel();
+        foreach (var pending in new[] { first, second })
+        {
+            if (close)
+                await Assert.ThrowsAsync<ObjectDisposedException>(() => pending);
+            else
+                await Assert.ThrowsAnyAsync<OperationCanceledException>(() => pending);
+        }
+        Assert.Equal(0UL, queue.GetStatus().CapacityWaiters);
+        held.Dispose();
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+    }
+
+    [Fact]
+    public async Task Reservation_LeasesOnlyClaimedPermitsAndReturnsTheRestExactlyOnce()
+    {
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 4, 1, 4)
+        );
+        var reservation = new ZLinkApplicationJobQueueReservation(
+            queue,
+            ZLinkApplicationJobOrigin.Remote,
+            null
+        );
+        reservation.ReserveAvailable(64);
+        Assert.Equal(4, reservation.Count);
+        Assert.Equal(4UL, queue.GetStatus().ReservedSupplyPermits);
+
+        // A claim moves one counted permit to a lease without a queue turn.
+        using var claimed = reservation.Claim()!;
+        Assert.Equal(3, reservation.Count);
+        Assert.Equal(4UL, queue.GetStatus().ReservedSupplyPermits);
+        var first = queue
+            .AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+            .AsTask();
+        var second = queue
+            .AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
+            .AsTask();
+        Assert.False(first.IsCompleted);
+
+        // The three unclaimed permits return at once and admit both waiters
+        // in FIFO order; the claimed lease still holds its own permit.
+        reservation.Dispose();
+        using var firstLease = await first.WaitAsync(TimeSpan.FromSeconds(5));
+        using var secondLease = await second.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(3UL, queue.GetStatus().PermitsInUse);
+        reservation.Dispose();
+        Assert.Equal(3UL, queue.GetStatus().PermitsInUse);
+        Assert.Throws<InvalidOperationException>(() => reservation.Claim());
+
+        claimed.Dispose();
+        firstLease.Dispose();
+        secondLease.Dispose();
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+        Assert.Equal(4UL, queue.GetStatus().PeakPermitsInUse);
+    }
+
+    [Fact]
+    public void Reservation_ReturnCrossesTheResumeThresholdOnceAndAppliesItToReceiveFlow()
+    {
+        // Pause at 8 permits, resume at 6 (80 % / 60 % of 10).
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 10, 1, 10)
+        );
+        var applied = new List<ReceiveFlowState>();
+        queue.RegisterReceiveFlowSocket(new object(), applied.Add);
+        var reservation = new ZLinkApplicationJobQueueReservation(
+            queue,
+            ZLinkApplicationJobOrigin.Remote,
+            null
+        );
+        reservation.ReserveAvailable(64);
+        Assert.Equal(ZLinkApplicationJobQueuePressureState.Paused, queue.GetStatus().PressureState);
+        var claimed = new ZLinkApplicationJobQueueLease[5];
+        for (var index = 0; index < claimed.Length; index++)
+        {
+            claimed[index] = reservation.Claim()!;
+            claimed[index].MarkQueued();
+        }
+
+        // Returning five unclaimed permits drops 10 -> 5: one Running
+        // transition, applied to the registered socket after the queue turn.
+        reservation.Dispose();
+        var metrics = queue.GetPressureMetrics();
+        Assert.Equal(ZLinkApplicationJobQueuePressureState.Running, metrics.State);
+        Assert.Equal(1UL, metrics.PausedTransitionCount);
+        Assert.Equal(1UL, metrics.RunningTransitionCount);
+        Assert.Equal(
+            new[] { ReceiveFlowState.Running, ReceiveFlowState.Paused, ReceiveFlowState.Running },
+            applied
+        );
+        Assert.Equal(5UL, queue.GetStatus().QueuedApplicationJobs);
+        foreach (var lease in claimed)
+            lease.Dispose();
         Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
     }
 
@@ -426,12 +614,14 @@ public sealed class ApplicationJobQueueTests
             ZLinkApplicationJobOrigin.Remote
         );
         blockPause = true;
-        var secondTask = Task.Run(async () =>
+        var secondTask = RunOnDedicatedThread(async () =>
             await queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
         );
 
         Assert.True(pauseEntered.Wait(TimeSpan.FromSeconds(1)));
-        var releaseTask = Task.Run(async () => await first.ReleaseForHandlerStartAsync());
+        var releaseTask = RunOnDedicatedThread(async () =>
+            await first.ReleaseForHandlerStartAsync()
+        );
         Assert.True(
             SpinWait.SpinUntil(
                 () =>
@@ -545,18 +735,18 @@ public sealed class ApplicationJobQueueTests
                 releasePause.Wait();
             }
         );
-        var acquire = Task.Run(async () =>
+        var acquire = RunOnDedicatedThread(async () =>
             await queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
         );
         Assert.True(pauseEntered.Wait(TimeSpan.FromSeconds(1)));
 
-        var dispose = Task.Run(queue.Dispose);
+        var dispose = RunOnDedicatedThread(queue.Dispose);
         await dispose.WaitAsync(TimeSpan.FromSeconds(1));
 
         var unregisterStarted = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var unregister = Task.Run(async () =>
+        var unregister = RunOnDedicatedThread(async () =>
         {
             unregisterStarted.SetResult();
             await registration.DisposeAsync();
@@ -586,7 +776,7 @@ public sealed class ApplicationJobQueueTests
                 releasePause.Wait();
             }
         );
-        var acquire = Task.Run(async () =>
+        var acquire = RunOnDedicatedThread(async () =>
             await queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
         );
         try
@@ -713,7 +903,7 @@ public sealed class ApplicationJobQueueTests
             ZLinkApplicationJobOrigin.Remote
         );
         time.Arm();
-        var waiting = Task.Run(async () =>
+        var waiting = RunOnDedicatedThread(async () =>
             await queue.AcquireAsync(CancellationToken.None, ZLinkApplicationJobOrigin.Remote)
         );
 
@@ -925,6 +1115,40 @@ public sealed class ApplicationJobQueueTests
         Assert.Equal(1UL, currentEpoch.CapacityWaitCount);
         Assert.Equal(TimeSpan.FromSeconds(2), currentEpoch.CapacityWaitDuration);
     }
+
+    // A test that parks a receive-flow or clock callback must not park a
+    // ThreadPool worker, and the actor it then times against a budget must not
+    // wait for one. The test host keeps a worker in its socket loop, so with
+    // two effective processors the parked callback leaves no worker for a
+    // Task.Run item until ThreadPool starvation injection, which a one-second
+    // budget does not cover.
+    private static Task RunOnDedicatedThread(Action work) =>
+        Task.Factory.StartNew(
+            work,
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default
+        );
+
+    private static Task RunOnDedicatedThread(Func<Task> work) =>
+        Task
+            .Factory.StartNew(
+                work,
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default
+            )
+            .Unwrap();
+
+    private static Task<T> RunOnDedicatedThread<T>(Func<Task<T>> work) =>
+        Task
+            .Factory.StartNew(
+                work,
+                CancellationToken.None,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default
+            )
+            .Unwrap();
 
     private static ZLinkApplicationJobQueue CreateQueue(
         ulong limit,

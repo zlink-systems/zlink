@@ -6,7 +6,6 @@ import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -38,9 +37,10 @@ final class ZLinkStandaloneActorRelocationScheduler {
         return ZLinkRelocationHandOff.run(
                         client,
                         request,
-                        () -> source.relayCapturedIngress(client, timeout),
+                        settlement -> source.relayCapturedIngress(client, timeout, settlement),
                         timeout,
-                        restoreDeadline)
+                        restoreDeadline,
+                        source.metrics)
                 .handle(
                         (settlement, failure) ->
                                 failure == null
@@ -58,18 +58,10 @@ final class ZLinkStandaloneActorRelocationScheduler {
         return switch (settlement) {
             case TARGET_COMMITTED -> {
                 yield ZLinkRelocationHandOff.completeSourceCleanup(
-                                List.of(
-                                        source::completeSourceQueueCommit,
-                                        source::cleanupLocal,
-                                        source::discardInitialAfterCommit))
-                        .thenRun(
-                                () ->
-                                        systems.zlink.framework.runtime.internal.metrics
-                                                .ZLinkRuntimeMetrics.increment(
-                                                systems.zlink.framework.runtime.internal.metrics
-                                                        .ZLinkRuntimeMetrics
-                                                        .DRAIN_ACTORS_HANDED_OFF_NAME,
-                                                Map.of()));
+                        List.of(
+                                source::completeSourceQueueCommit,
+                                source::cleanupLocal,
+                                source::discardInitialAfterCommit));
             }
             case SOURCE_PRESERVED ->
                     source.abort()

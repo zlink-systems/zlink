@@ -70,6 +70,13 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                     new ZLinkLocationOwnerToken(current!.OwnerId, current.LeaseGeneration),
                     now
                 );
+            _meshNodes.Generations.TryGetValue(key, out var last);
+            if (
+                exists
+                && intent is ZLinkLocationWriteIntent.NewClaim or ZLinkLocationWriteIntent.Renew
+                && ZLinkLocationDescriptorComparison.SameExceptWriteTime(current!, descriptor)
+            )
+                return ZLinkLocationWriteResult.Stored(last, current!.UpdatedAt);
             if (intent == ZLinkLocationWriteIntent.NewClaim && currentOwnerLive)
                 return ZLinkLocationWriteResult.RejectedConflict;
             if (intent == ZLinkLocationWriteIntent.Takeover && currentOwnerLive)
@@ -89,7 +96,6 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
             if (!CanPublishEntrySpotIdNoLock(descriptor, key, now))
                 return ZLinkLocationWriteResult.RejectedConflict;
 
-            _meshNodes.Generations.TryGetValue(key, out var last);
             var generation = intent == ZLinkLocationWriteIntent.Renew ? last : checked(last + 1);
             _meshNodes.Generations[key] = generation;
             _meshNodes.Rows[key] = WithCurrentPlacementCapacity(
@@ -477,7 +483,7 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
         && current
             .ChannelWeights.Keys.ToHashSet(StringComparer.Ordinal)
             .SetEquals(incoming.ChannelWeights.Keys)
-        && ObjectCapabilitiesEqual(current.ObjectCapabilities, incoming.ObjectCapabilities)
+        && current.ObjectCapabilities.SequenceEqual(incoming.ObjectCapabilities)
         && current.Capacity.Actors.Limit == incoming.Capacity.Actors.Limit
         && current.Capacity.Spots.Limit == incoming.Capacity.Spots.Limit;
 
@@ -498,29 +504,6 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                 .ThenBy(static capability => capability.StableType, Utf8StringComparer.Instance)
                 .ToArray(),
         };
-
-    private static bool ObjectCapabilitiesEqual(
-        IReadOnlyList<ZLinkObjectCapability> current,
-        IReadOnlyList<ZLinkObjectCapability> incoming
-    )
-    {
-        if (current.Count != incoming.Count)
-            return false;
-        for (var index = 0; index < current.Count; index++)
-        {
-            var left = current[index];
-            var right = incoming[index];
-            if (
-                left.ObjectKind != right.ObjectKind
-                || left.StableType != right.StableType
-                || left.Policy != right.Policy
-                || left.HasSnapshotAdapter != right.HasSnapshotAdapter
-                || left.Limit != right.Limit
-            )
-                return false;
-        }
-        return true;
-    }
 
     private static void ValidateMeshNodeDescriptor(ZLinkMeshNodeDescriptor descriptor)
     {
@@ -588,6 +571,8 @@ internal partial class ZLinkInMemoryLocationStore : IZLinkLocationRepository
                     != capability.HasSnapshotAdapter
                 || capability.Limit < 0
                 || capability.ObjectKind == ZLinkPlacementObjectKind.Actor && capability.Limit != 0
+                || capability.ObjectKind != ZLinkPlacementObjectKind.Actor
+                    && capability.EntryAccepted
             )
                 throw new ArgumentException(
                     "The MeshNode object capabilities are invalid.",

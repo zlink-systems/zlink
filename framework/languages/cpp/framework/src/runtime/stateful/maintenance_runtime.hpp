@@ -29,6 +29,11 @@
 #include <utility>
 #include <vector>
 
+namespace zlink::framework::detail
+{
+class delay_owner_t;
+}
+
 namespace zlink::framework::runtime::stateful
 {
 
@@ -150,7 +155,25 @@ enum class relocation_authority_t
     unsettled,
     target_committed,
     source_preserved,
-    source_lease_expired
+    source_lease_expired,
+    data_lost
+};
+
+struct relocation_object_key_less_t
+{
+    using is_transparent = void;
+    template <class Left, class Right> bool operator() (const Left &left, const Right &right) const
+    {
+        return std::tie (left.first, left.second) < std::tie (right.first, right.second);
+    }
+};
+
+struct source_relocation_settlement_t
+{
+    relocation_authority_t outcome = relocation_authority_t::unsettled;
+    // Only current first-target tenures can receive Message Follow.
+    std::map<std::pair<object_kind_t, std::string>, std::uint64_t, relocation_object_key_less_t>
+      follow_generations;
 };
 
 /* The primary participant whose authority row carries the unit's fence: the
@@ -171,9 +194,8 @@ class authority_relocation_port_t
 {
   public:
     virtual ~authority_relocation_port_t () = default;
-    /* Reads the unit's primary row: target owner -> target_committed; a
-     * StoreVersion other than the expected one -> source_preserved (the
-     * target CAS can no longer commit); otherwise unsettled. */
+    /* Target-side current-CAS observation. Source settlement below also
+     * recognizes later owner moves, which cannot authorize target dispatch. */
     virtual relocation_authority_t observe_relocation (const relocation_authority_fence_t &fence)
     {
         const auto current = read (fence.kind, fence.key);
@@ -182,12 +204,12 @@ class authority_relocation_port_t
                  ? relocation_authority_t::target_committed
                  : relocation_authority_t::unsettled;
     }
-    /* The source Preserve fence (01 §6.1): an expected-StoreVersion CAS that
-     * keeps the source owner and requires its live owner lease. */
-    virtual relocation_authority_t preserve_relocation (const relocation_authority_fence_t &fence)
-    {
-        return observe_relocation (fence);
-    }
+    /* Source-side historical commit and current first-target Follow decision
+     * (Location runtime §10), shared by observation and Preserve conflicts. */
+    virtual source_relocation_settlement_t
+    settle_source_relocation (const relocation_authority_fence_t &fence,
+                              const std::vector<object_ref_t> &participants,
+                              bool preserve) = 0;
     /* True/false when the Store confirmed the lease state; nullopt when the
      * read is indeterminate. */
     virtual std::optional<bool> owner_lease_live (const location_owner_token_t &)
@@ -332,13 +354,13 @@ struct eligible_relocation_unit_t
         std::function<task_t<bool> (const std::vector<protocol::relocation_data_t> &,
                                     const relocation_ingress_batch_t &)>
           send_relocation_data;
-        std::function<void (const object_ref_t &, const turn_record_t &)> send_application;
+        std::function<void (
+          const object_ref_t &, const turn_record_t &, std::optional<std::uint64_t>)>
+          send_application;
         std::function<task_t<bool> (const protocol::relocation_cutover_t &)> send_cutover;
         /* The unit Restore absolute deadline, owned by the source: from it the
          * source settles authority with its Preserve fence (01 §10). */
         std::chrono::steady_clock::time_point restore_deadline{};
-        /* The existing host lifecycle ends source settlement after shutdown. */
-        std::function<bool ()> source_stopped;
         // Core selected generation and admission readiness, observed by MeshNode.
         std::function<std::pair<std::uint64_t, bool> ()> target_route;
         // This is valid only after an exact target failure and before a
@@ -348,34 +370,11 @@ struct eligible_relocation_unit_t
     std::optional<canonical_wire_context_t> canonical_wire;
 };
 
-enum class target_preflight_status_t
-{
-    eligible,
-    target_unavailable,
-    store_unavailable,
-    relocation_disabled,
-    state_incompatible
-};
-
-struct target_preflight_result_t
-{
-    target_preflight_status_t status = target_preflight_status_t::target_unavailable;
-    std::vector<eligible_relocation_unit_t> units;
-};
-
-class target_preflight_port_t
-{
-  public:
-    virtual ~target_preflight_port_t () = default;
-    virtual target_preflight_result_t preflight (const std::vector<relocation_unit_t> &units) = 0;
-};
-
 struct maintenance_provider_set_t
 {
     std::shared_ptr<authority_relocation_port_t> authority;
     std::shared_ptr<aggregate_authority_port_t> aggregate_authority;
     std::shared_ptr<relocation_store_port_t> relocations;
-    std::shared_ptr<target_preflight_port_t> targets;
 };
 
 struct relocation_limits_t
@@ -461,6 +460,7 @@ struct relocation_result_t
     /* S0 (source admission seal) to S1 (cutover submit terminal), on the
      * source clock. Zero when the unit never reached the seal. */
     std::chrono::steady_clock::duration source_stall{};
+    source_relocation_settlement_t settlement;
 };
 
 struct aggregate_relocation_result_t
@@ -470,6 +470,7 @@ struct aggregate_relocation_result_t
     std::vector<authority_relocation_reference_t> authority;
     std::vector<protocol::relocation_data_t> replay_records;
     std::optional<target_only_cas_t> target_handoff;
+    source_relocation_settlement_t settlement;
 };
 
 class raw_relocation_replay_coordinator_t;
@@ -522,6 +523,7 @@ class maintenance_runtime_t
       std::uint64_t advertised_receive_chunk_limit_bytes = 0);
 
     void attach_relocation_wire (raw_relocation_replay_coordinator_t &wire) noexcept;
+    void bind_delay_owner (detail::delay_owner_t &owner) noexcept { _delay_owner = &owner; }
     /* Expired-owner terminal (28 §4.4): replies Unavailable once to each
      * pending request of the object and drops its accepted records. */
     void attach_unavailable_terminal (std::function<void (const object_ref_t &)> terminal) noexcept;
@@ -607,13 +609,13 @@ class maintenance_runtime_t
     std::uint64_t effective_in_flight_budget () const noexcept;
     task_t<void> acquire_transfer_budget (std::uint64_t bytes);
     void release_transfer_budget (std::uint64_t bytes) noexcept;
-    task_t<relocation_authority_t>
+    task_t<source_relocation_settlement_t>
     settle_relocation (std::shared_ptr<relocation_terminal_state_t> state,
                        std::vector<object_ref_t> participants);
     std::pair<relocation_terminal_t, relocation_reason_t>
     apply_relocation_settlement (const std::shared_ptr<relocation_terminal_state_t> &state,
                                  const std::vector<object_ref_t> &participants,
-                                 relocation_authority_t settled);
+                                 const source_relocation_settlement_t &settled);
     void retain_message_follow (std::shared_ptr<relocation_terminal_state_t> state);
     /* SafeToShutdown must observe a relocation unit as pending from the
      * moment it is sealed (registered), not only once it reaches S1
@@ -641,6 +643,9 @@ class maintenance_runtime_t
     send_boundary_records (const eligible_relocation_unit_t::canonical_wire_context_t &context,
                            const std::vector<protocol::relocation_data_t> &records,
                            const relocation_ingress_batch_t &batch);
+    task_t<void>
+    submit_cutover (const eligible_relocation_unit_t::canonical_wire_context_t &context,
+                    const protocol::relocation_cutover_t &cutover);
     bool abort_target_before_cutover (
       const eligible_relocation_unit_t::canonical_wire_context_t &context) noexcept;
 
@@ -650,6 +655,7 @@ class maintenance_runtime_t
     std::shared_ptr<relocation_store_port_t> _relocations;
     relocation_limits_t _limits;
     observer_t _observer;
+    detail::delay_owner_t *_delay_owner = nullptr;
     mutable std::mutex _gate_mutex;
     relocation_gate_snapshot_t _gate;
     raw_relocation_replay_coordinator_t *_relocation_wire = nullptr;
@@ -681,98 +687,43 @@ class maintenance_runtime_t
       _budget_waiters;
 };
 
-// This state gates maintenance admission only. The public seven-state host
-// lifecycle projects into it one way; callers must not treat this narrower
-// state machine as the public host authority.
-enum class maintenance_admission_state_t
-{
-    preparing,
-    serving,
-    retiring,
-    draining,
-    stopped,
-    error
-};
-
-enum class termination_intent_t
-{
-    retire,
-    shutdown
-};
-
 enum class termination_outcome_t
 {
     stopped,
-    blocked,
     force_stopped
 };
 
 enum class termination_reason_t
 {
     none,
-    target_unavailable,
-    store_unavailable,
-    relocation_disabled,
-    state_incompatible,
-    deadline_exceeded,
-    relocation_failed,
-    teardown_failed,
-    runtime_not_ready
+    teardown_failed
 };
 
 struct termination_result_t
 {
-    termination_intent_t effective_intent = termination_intent_t::shutdown;
-    termination_outcome_t outcome = termination_outcome_t::blocked;
-    termination_reason_t reason = termination_reason_t::runtime_not_ready;
-
-    friend bool operator== (const termination_result_t &, const termination_result_t &) = default;
+    termination_outcome_t outcome = termination_outcome_t::stopped;
+    termination_reason_t reason = termination_reason_t::none;
 };
 
 class host_maintenance_runtime_t
 {
   public:
-    using observer_t = std::function<void (const termination_result_t &)>;
-
     host_maintenance_runtime_t (stateful_object_runtime_t &objects,
                                 stream_session_registry_t &sessions,
-                                maintenance_runtime_t &relocation,
-                                std::shared_ptr<target_preflight_port_t> targets,
-                                observer_t observer = {},
                                 std::function<task_t<void> ()> seal_targets = {});
 
-    void mark_serving ();
-    void mark_error ();
-    maintenance_admission_state_t state () const;
-    task_t<termination_result_t> terminate (termination_intent_t intent);
-    std::optional<termination_result_t> terminal_result () const;
-    std::optional<termination_intent_t> intent_snapshot () const;
+    task_t<termination_result_t> terminate ();
 
   private:
-    static std::vector<relocation_unit_t>
-    inventory_units (std::vector<object_inventory_t> inventory);
-    task_t<termination_result_t> run_retire ();
-    task_t<termination_result_t> run_termination_attempt (termination_intent_t intent,
-                                                          std::uint64_t attempt);
-    task_t<termination_result_t> run_shutdown (termination_intent_t effective_intent);
-    void complete_attempt (std::uint64_t attempt, const termination_result_t &result);
+    task_t<termination_result_t> run_termination ();
+    task_t<termination_result_t> run_shutdown ();
+    void complete_termination (const termination_result_t &result);
 
     stateful_object_runtime_t &_objects;
     stream_session_registry_t &_sessions;
-    maintenance_runtime_t &_relocation;
-    std::shared_ptr<target_preflight_port_t> _targets;
-    observer_t _observer;
     std::function<task_t<void> ()> _seal_targets;
     offload_executor_t _lane_executor;
     mutable state_lane_t _lane;
-    maintenance_admission_state_t _state = maintenance_admission_state_t::preparing;
-    bool _active = false;
-    bool _inventory_sealed = false;
-    bool _shutdown_claimed = false;
-    std::optional<termination_intent_t> _effective_intent;
-    std::uint64_t _active_attempt = 0;
-    std::uint64_t _next_attempt = 1;
-    std::map<std::uint64_t, termination_result_t> _attempt_results;
     std::shared_ptr<task_completion_source_t<termination_result_t>> _active_completion;
     std::optional<termination_result_t> _terminal;
 };

@@ -68,8 +68,9 @@ does not apply.
 
 - **Milestone** = release. Create one per release (`1.0` for Core 1.0 · bindings 1.0.0 · framework 1.0.0)
   and attach the Issues that must ship in it. The pre-tag condition is "every Issue in the milestone
-  was closed **by a merged PR**, and the main commit to be tagged contains all of those PRs" (manual
-  closes do not count; `work.sh status --milestone 1.0` checks both). The milestone name is given by
+  was closed **by a PR merged to main**, and the release-branch commit to be tagged (§7) contains the
+  changes of all of those PRs" (manual closes do not count; `work.sh status --milestone 1.0` checks the
+  first part and the `git cherry` check in §7 the second). The milestone name is given by
   `work.sh start --milestone`; the default is `current_milestone` in `scripts/dev/work.conf` (one place
   to change after a release).
 - **Project** = the board `ZLink` (https://github.com/users/zlink-systems/projects/1, also linked in the
@@ -202,8 +203,28 @@ still uses a branch and a PR. The only thing that bypasses a PR is not a commit:
 
 ## 7. Relation to releases
 
-- Releases start from a tag as in `CONTRIBUTING.md` §8 and `doc/building/release-pipeline.md`. The
-  tagged commit is a main commit that satisfies the §3 milestone condition (`work.sh status --milestone`).
+The branching strategy is **trunk-based development with release branches** (the same structure as
+Microsoft's Release Flow and the Chromium and Kubernetes release branches). main is the single trunk
+and keeps taking PRs; a release is verified and tagged on a release branch cut from main.
+
+- **Cut.** When the release scope is set, create `release/framework-<version>` (for a binding,
+  `release/bindings-<language>-<version>`) from main at that point.
+- **main does not stop.** During release verification, approved PRs are merged to main right away. Do
+  not hold PRs with conditions such as "merge after the tag" — held PRs must take main again and
+  repeat the full label run and the review.
+- **Fix main first (upstream first).** A fix for the release also goes Issue branch → PR → merge to
+  main, and the commit is then moved to the release branch with `git cherry-pick -x`. Do not merge
+  main into the release branch — it would bring in changes meant for the next version. Do not make
+  fixes that exist only on the release branch.
+- **Work on the release branch.** The gate and partial re-verification, the version bump
+  (`sync-version.py --write`), release notes, the Framework C++ recipes
+  (`release-check.sh --write framework cpp`), `release-check.sh` and the tag. The tag goes on a
+  release-branch commit as in `CONTRIBUTING.md` §8 and `doc/building/release-pipeline.md`. To confirm
+  inclusion, run `git cherry -v release/framework-<version> origin/main` and check that no milestone
+  PR change is missing.
+- **After the tag.** The release branch's version-bump and release-note commits are merged to main
+  through a PR. The release branch is then deleted (the tag is the reference point). A follow-up fix
+  for a published version cuts the next patch branch from the tag in the same way.
 - Fixes discovered during a release also go through a PR.
 
 ## 8. First application (2026-09-10) — the manual procedure until `work.sh` exists

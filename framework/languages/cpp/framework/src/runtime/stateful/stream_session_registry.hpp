@@ -3,6 +3,7 @@
 
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/diagnostics/dispatch_events.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
 
@@ -27,6 +28,8 @@ struct stream_connection_t
 {
     std::string connection_id;
     std::uint64_t connection_generation = 0;
+    std::optional<zlink::routing_id_t> owner_node_rid;
+    std::uint64_t owner_node_generation = 0;
 
     friend bool operator== (const stream_connection_t &, const stream_connection_t &) = default;
 };
@@ -87,6 +90,13 @@ struct stream_route_seal_admission_t
     std::uint64_t last_accepted_sequence = 0;
 };
 
+struct stream_close_result_t
+{
+    bool closed = false;
+    std::vector<stream_binding_t> bindings;
+    operator bool () const noexcept { return closed; }
+};
+
 class stream_session_registry_t
 {
   public:
@@ -97,8 +107,14 @@ class stream_session_registry_t
                                         std::function<void ()> activity_handler = {});
 
     stream_connection_t open (std::string connection_id,
-                              std::function<void ()> close_connection = {});
-    bool close (const stream_connection_t &connection);
+                              std::function<void ()> close_connection = {},
+                              std::optional<zlink::routing_id_t> owner_node_rid = {},
+                              std::uint64_t owner_node_generation = 0,
+                              std::function<void ()> physical_close = {});
+    stream_close_result_t close (const stream_connection_t &connection);
+    task_t<void> close_current (protocol::bound_session_close_t request,
+                                protocol::retired_bound_session_route_fence_t owner);
+
     std::vector<stream_binding_t> bindings (const stream_connection_t &connection) const;
     std::pair<stateful_error_t, stream_binding_t> bind (const stream_connection_t &connection,
                                                         const object_ref_t &actor,
@@ -111,7 +127,8 @@ class stream_session_registry_t
                  std::uint64_t owner_lease_generation,
                  binding_publish_t publish = {},
                  std::uint64_t binding_generation = 0);
-    stateful_error_t unbind (const stream_binding_t &binding);
+    std::pair<stateful_error_t, std::optional<stream_binding_t>>
+    unbind (const stream_binding_t &binding);
     /* Restores a binding that was displaced by a later bind operation. This
      * is an internal transaction-compensation step for a failed owner-layer
      * route update; it does not create a new binding generation. */
@@ -166,8 +183,6 @@ class stream_session_registry_t
     void release_all () noexcept;
     void force_close_all () noexcept;
     bool is_current (const stream_binding_t &binding) const;
-    bool is_current_for_connection (const stream_connection_t &connection,
-                                    const stream_binding_t &binding) const;
     std::optional<stream_binding_t> current_binding (const std::string &actor_id) const;
 
   private:
@@ -186,6 +201,7 @@ class stream_session_registry_t
         stream_connection_t connection;
         std::map<std::string, session_binding_aggregate_t> bindings;
         std::function<void ()> close_connection;
+        std::function<void ()> physical_close;
     };
 
     struct actor_binding_locator_t

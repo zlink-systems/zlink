@@ -34,11 +34,14 @@ module systems.zlink.framework {
             zlink.framework.kotlin;
     exports systems.zlink.framework.runtime.internal.handlers to
             zlink.framework.spring.boot.starter,
-            zlink.framework.kotlin;
+            zlink.framework.kotlin,
+            zlink.http.client;
     exports systems.zlink.framework.runtime.internal.host to
             zlink.framework.spring.boot.starter;
     exports systems.zlink.framework.runtime.internal.metrics to
             zlink.framework.spring.boot.starter;
+    exports systems.zlink.framework.runtime.internal.messaging to
+            zlink.framework.codec.protobuf;
     exports systems.zlink.framework.runtime.internal.monitoring to
             zlink.framework.spring.boot.starter;
     exports systems.zlink.framework.runtime.binding to

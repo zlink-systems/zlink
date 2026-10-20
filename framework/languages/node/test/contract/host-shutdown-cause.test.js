@@ -47,3 +47,23 @@ test('host shutdown retains the original teardown exception for its owner', asyn
   assert.equal(result.reason, 'teardown_failed');
   assert.equal(result.error, failure);
 });
+
+test('host state publication before channel construction preserves the startup failure', async () => {
+  const failure = new Error('channel adapter creation failed');
+  const host = new framework.ZLinkFrameworkRuntimeHost({
+    registration: framework.createFrameworkRegistration()
+  }, {
+    backendAdapterFactory: {
+      createChannelAdapter() { throw failure; }
+    }
+  });
+  try {
+    await assert.rejects(host.start(), error => error === failure);
+    assert.equal(host.channelRuntime, undefined);
+    assert.equal(host.isStarted, false);
+    assert.doesNotThrow(() => host.setRuntimeState(framework.ZLinkFrameworkRuntimeState.Draining));
+    assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Draining);
+  } finally {
+    await host.stop();
+  }
+});

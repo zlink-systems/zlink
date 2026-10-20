@@ -47,10 +47,9 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
                         : new systems.zlink.framework.errors.ZLinkFrameworkException(
                                 ZLinkFrameworkErrorKind.UNAVAILABLE, "application failure");
         var probe = new SpotTerminalProbe(terminal, missing);
-        var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
         try (var operations =
-                new systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry(
-                        scheduler)) {
+                new systems.zlink.framework.runtime.internal.service
+                        .ZLinkServiceOperationRegistry()) {
             var backend =
                     (ZLinkBackendSpot)
                             Proxy.newProxyInstance(
@@ -143,8 +142,6 @@ final class ZLinkDefaultSpotOutboundTerminalTest {
                     missing ? 1 : 0,
                     probe.activations,
                     "failure must not create an activation operation");
-        } finally {
-            scheduler.shutdownNow();
         }
     }
 

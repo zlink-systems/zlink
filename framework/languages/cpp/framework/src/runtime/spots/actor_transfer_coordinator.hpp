@@ -2,6 +2,8 @@
 #pragma once
 
 #include "runtime/execution/state_lane.hpp"
+#include <atomic>
+#include <limits>
 
 #include <zlink/framework/contracts/actors/actor.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
@@ -86,7 +88,6 @@ struct expired_actor_admission_t
 struct actor_transfer_cleanup_snapshot_t
 {
     std::vector<expired_actor_admission_t> expired_admissions;
-    std::vector<std::pair<std::string, std::string>> source_remote_transfers;
     std::vector<std::string> blocked_dispatch_keys;
 };
 
@@ -197,12 +198,10 @@ struct actor_transfer_dispatch_state_snapshot_t
 struct actor_transfer_packet_admission_t
 {
     bool matches_message_follow_source = false;
-    bool transfer_in_progress = false;
+    std::optional<bool> queue_submission;
+    std::optional<runtime::protocol::actor_route_fence_t> message_follow_source;
     handoff_append_result_t append_result = handoff_append_result_t::not_moving;
-    // The packet is moved back out when it was not retained, so an ordinary
-    // dispatch that later loses the Actor FIFO admission race against a
-    // relocation barrier can re-admit the very same packet without paying a
-    // second payload/metadata copy on the hot path.
+    // Returned only when neither backlog nor a prepared queue took the packet.
     std::optional<handoff_packet_t> released_packet;
 };
 
@@ -212,6 +211,8 @@ class actor_transfer_coordinator_t
     // The reservation may carry the transfer ID that the deferred join will
     // use, so packets preserved before transfer-out already emit their
     // handoff markers under the final transfer correlation.
+    task_t<void> wait_for_source_completion (std::string actor_key);
+    task_t<void> wait_for_source_completions ();
     bool try_reserve_source (const std::string &actor_key, std::string transfer_id = {});
     bool try_begin_local (const std::string &actor_key);
     bool try_begin_source_remote (const std::string &actor_key, std::string transfer_id = {});
@@ -246,9 +247,6 @@ class actor_transfer_coordinator_t
     std::optional<std::string> transfer_id (const std::string &actor_key) const;
     bool matches_source_remote_transfer (const std::string &actor_key,
                                          const std::string &transfer_id) const;
-    bool try_submit_source_leave (const std::string &actor_key, const std::string &transfer_id);
-    bool source_leave_submitted (const std::string &actor_key,
-                                 const std::string &transfer_id) const;
 
     // In-flight handoff (spot-actor spec §10). Packets are preserved in arrival
     // order until the commit path drains them into the commit request.
@@ -257,11 +255,14 @@ class actor_transfer_coordinator_t
     // Projects the fresh Message Follow/transfer state and makes the backlog
     // admission decision in the same coordinator turn. A packet already on a
     // committed source edge bypasses the local moving backlog.
-    actor_transfer_packet_admission_t
-    admit_dispatch_packet (const std::string &actor_key,
-                           const runtime::protocol::actor_route_fence_t *source_fence,
-                           bool targets_current_authority,
-                           handoff_packet_t packet);
+    actor_transfer_packet_admission_t admit_dispatch_packet (
+      const std::string &actor_key,
+      const runtime::protocol::actor_route_fence_t *source_fence,
+      bool targets_current_authority,
+      handoff_packet_t packet,
+      std::function<bool ()> submit = {},
+      const runtime::protocol::actor_route_fence_t *prepared_authority = nullptr,
+      std::uint64_t prepared_generation = 0);
     // Stages one source-retained batch without allowing live target traffic to
     // interleave between its packets. The exact committing transfer owns the
     // append or the whole batch is rejected.
@@ -381,6 +382,11 @@ class actor_transfer_coordinator_t
     cleanup_expired_async (std::chrono::steady_clock::time_point now,
                            std::vector<std::string> blocked_candidates);
     std::size_t pending_count () const;
+    // True when an admission expiry, a reconcile, or a Message Follow route
+    // removal may be due at now. The coordinator keeps an early bound of its
+    // next due instant (spec 08 section 4.2); next_activity skips its lane
+    // turn when no deadline exists.
+    bool due (std::chrono::steady_clock::time_point now) const noexcept;
     std::optional<std::chrono::steady_clock::time_point> next_activity () const;
     void set_activity_handler (std::function<void ()> handler);
 
@@ -392,7 +398,7 @@ class actor_transfer_coordinator_t
         actor_move_phase_t phase;
         std::string transfer_id;
         std::optional<std::chrono::steady_clock::time_point> transfer_started_at;
-        bool source_leave_submitted = false;
+        std::shared_ptr<task_completion_source_t<void>> source_completion;
         // reconcile is entered for a genuinely ambiguous outcome (e.g. the
         // FINALIZE/cutover submission itself failed, so the source cannot
         // tell whether the target ever received it) where nothing today
@@ -425,6 +431,10 @@ class actor_transfer_coordinator_t
         message_follow_suppression_key_t suppression_key;
     };
 
+    std::optional<runtime::protocol::actor_route_fence_t>
+    message_follow_source_for_generation_unlocked (const std::string &actor_key,
+                                                   std::uint64_t generation,
+                                                   std::chrono::steady_clock::time_point now) const;
     bool matches_message_follow_source_unlocked (
       const std::string &actor_key,
       const runtime::protocol::actor_route_fence_t &source_fence,
@@ -441,8 +451,22 @@ class actor_transfer_coordinator_t
     handoff_append_result_t try_append_backlog_unlocked (const std::string &actor_key,
                                                          handoff_packet_t &packet);
 
+    void erase_move_on_lane (const std::string &actor_key);
+
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
+    // Earliest due instant, written on the lane. A lane turn that adds a
+    // deadline resets it to due_now; the next scan publishes the bound again.
+    static constexpr std::chrono::steady_clock::rep due_now =
+      std::numeric_limits<std::chrono::steady_clock::rep>::min ();
+    static constexpr std::chrono::steady_clock::rep never_due =
+      std::numeric_limits<std::chrono::steady_clock::rep>::max ();
+    mutable std::atomic<std::chrono::steady_clock::rep> _next_due{due_now};
+    void wake_management_on_lane () const noexcept
+    {
+        _next_due.store (due_now, std::memory_order_release);
+    }
+    std::chrono::steady_clock::rep next_due_on_lane () const;
     std::function<void ()> _activity_handler;
     std::map<std::string, move_state_t> _moves;
     std::map<std::string, pending_actor_admission_t> _admissions;

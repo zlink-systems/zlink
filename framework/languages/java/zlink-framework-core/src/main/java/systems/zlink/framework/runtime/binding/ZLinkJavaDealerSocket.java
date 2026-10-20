@@ -7,6 +7,8 @@ import systems.zlink.contracts.sockets.Socket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRecvMode;
+import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
 import java.time.Duration;
 import java.util.List;
@@ -28,6 +30,9 @@ final class ZLinkJavaDealerSocket implements ZLinkBackendDealerSocket, ZLinkJava
 
     private final DealerSocket socket;
     private final ZLinkJavaSocketReceivePoller receivePoller;
+    private final ZLinkServiceOperationRegistry operations =
+            new ZLinkServiceOperationRegistry(
+                    ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
 
     ZLinkJavaDealerSocket(DealerSocket socket) {
         this.socket = socket;
@@ -73,7 +78,7 @@ final class ZLinkJavaDealerSocket implements ZLinkBackendDealerSocket, ZLinkJava
 
     @Override
     public synchronized CompletionStage<Void> send(List<Message> parts) {
-        return ZLinkJavaSocketSupport.submit(socket.send(), parts);
+        return ZLinkJavaSocketSupport.submit(socket.send(), parts, operations);
     }
 
     @Override
@@ -107,6 +112,7 @@ final class ZLinkJavaDealerSocket implements ZLinkBackendDealerSocket, ZLinkJava
 
     @Override
     public synchronized void close() {
+        operations.close();
         receivePoller.close();
         socket.close();
     }

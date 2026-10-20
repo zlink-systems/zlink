@@ -4,6 +4,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locationprovider.*;
 import systems.zlink.framework.locations.*;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.LocationOperation;
 
 import java.time.Duration;
 import java.util.Objects;
@@ -28,87 +29,139 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
         this.authority = new ZLinkProviderAuthorityRepository(this.provider, this.descriptors);
     }
 
+    public systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.Registration
+            registerCapacityObservation() {
+        return authority.registerCapacityObservation();
+    }
+
     @Override
     public CompletionStage<ZLinkLocationWriteResult> updateMeshNode(
             ZLinkMeshNodeDescriptor descriptor, ZLinkLocationWriteIntent intent) {
-        return descriptors.updateMeshNode(descriptor, intent);
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () ->
+                        descriptors
+                                .updateMeshNode(descriptor, intent)
+                                .thenApply(
+                                        result -> {
+                                            if (result.status() == ZLinkLocationWriteStatus.STORED)
+                                                authority.registerCapacityMetrics(descriptor);
+                                            return result;
+                                        }));
     }
 
     @Override
     public CompletionStage<ZLinkLocationWriteStatus> removeMeshNode(
             ZLinkMeshNodeDescriptorKey key, ZLinkLocationOwnerToken owner) {
-        return descriptors.removeMeshNode(key, owner);
+        return observeStore(
+                LocationOperation.RELEASE,
+                () ->
+                        descriptors
+                                .removeMeshNode(key, owner)
+                                .thenApply(
+                                        result -> {
+                                            if (result == ZLinkLocationWriteStatus.STORED)
+                                                authority.removeCapacityMetrics(key);
+                                            return result;
+                                        }));
     }
 
     @Override
     public CompletionStage<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> listMeshNodes(
             String meshName, ZLinkPageRequest page) {
-        return descriptors.listMeshNodes(meshName, page);
+        return observeStore(
+                LocationOperation.READ, () -> descriptors.listMeshNodes(meshName, page));
+    }
+
+    @Override
+    public CompletionStage<Void> refreshCapacityMetrics(ZLinkMeshNodeDescriptorKey local) {
+        CompletionStage<Void> read;
+        try {
+            read = authority.refreshCapacityMetrics(local);
+        } catch (RuntimeException failure) {
+            if (!recordStoreFailure(LocationOperation.READ, failure)) throw failure;
+            return CompletableFuture.completedFuture(null);
+        }
+        return read.handle(
+                (ignored, failure) -> {
+                    if (failure != null && !recordStoreFailure(LocationOperation.READ, failure))
+                        throw new CompletionException(failure);
+                    return null;
+                });
     }
 
     @Override
     public CompletionStage<ZLinkLocationWriteResult> updateClientServer(
             ZLinkClientServerServerDescriptor descriptor, ZLinkLocationWriteIntent intent) {
-        return descriptors.updateClientServer(descriptor, intent);
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () -> descriptors.updateClientServer(descriptor, intent));
     }
 
     @Override
     public CompletionStage<ZLinkLocationWriteStatus> removeClientServer(
             ZLinkClientServerServerDescriptorKey key, ZLinkLocationOwnerToken owner) {
-        return descriptors.removeClientServer(key, owner);
+        return observeStore(
+                LocationOperation.RELEASE, () -> descriptors.removeClientServer(key, owner));
     }
 
     @Override
     public CompletionStage<ZLinkLocationPage<ZLinkClientServerServerDescriptor>> listClientServers(
             String channelName, ZLinkPageRequest page) {
-        return descriptors.listClientServers(channelName, page);
+        return observeStore(
+                LocationOperation.READ, () -> descriptors.listClientServers(channelName, page));
     }
 
     @Override
     public CompletionStage<ZLinkLocationWriteResult> updateFanoutPublisher(
             ZLinkFanoutPublisherDescriptor descriptor, ZLinkLocationWriteIntent intent) {
-        return descriptors.updateFanoutPublisher(descriptor, intent);
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () -> descriptors.updateFanoutPublisher(descriptor, intent));
     }
 
     @Override
     public CompletionStage<ZLinkLocationWriteStatus> removeFanoutPublisher(
             ZLinkFanoutPublisherDescriptorKey key, ZLinkLocationOwnerToken owner) {
-        return descriptors.removeFanoutPublisher(key, owner);
+        return observeStore(
+                LocationOperation.RELEASE, () -> descriptors.removeFanoutPublisher(key, owner));
     }
 
     @Override
     public CompletionStage<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>> listFanoutPublishers(
             String channelName, ZLinkPageRequest page) {
-        return descriptors.listFanoutPublishers(channelName, page);
+        return observeStore(
+                LocationOperation.READ, () -> descriptors.listFanoutPublishers(channelName, page));
     }
 
     @Override
     public CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(
             String ownerId, Duration leaseTtl) {
-        return owners.claim(ownerId, leaseTtl);
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE, () -> owners.claim(ownerId, leaseTtl));
     }
 
     @Override
     public CompletionStage<ZLinkOwnerLeaseReadResult> readOwnerLease(String ownerId) {
-        return owners.read(ownerId);
+        return observeStore(LocationOperation.READ, () -> owners.read(ownerId));
     }
 
     @Override
     public CompletionStage<ZLinkOwnerLeaseRenewResult> renewOwnerLease(
             ZLinkLocationOwnerToken token, Duration leaseTtl) {
-        return owners.renew(token, leaseTtl);
+        return observeStore(LocationOperation.LEASE_RENEW, () -> owners.renew(token, leaseTtl));
     }
 
     @Override
     public CompletionStage<ZLinkOwnerLeaseReleaseResult> releaseOwnerLease(
             ZLinkLocationOwnerToken token) {
-        return owners.release(token);
+        return observeStore(LocationOperation.RELEASE, () -> owners.release(token));
     }
 
     @Override
     public CompletionStage<ZLinkAuthorityReadResult> read(
             String key, ZLinkStoreCancellation cancellation) {
-        return authority().read(key, cancellation);
+        return observeStore(LocationOperation.READ, () -> authority().read(key, cancellation));
     }
 
     @Override
@@ -117,7 +170,9 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
             ZLinkAuthorityExpectation expectation,
             ZLinkAuthorityMutation mutation,
             ZLinkStoreCancellation cancellation) {
-        return authority().compareExchange(key, expectation, mutation, cancellation);
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () -> authority().compareExchange(key, expectation, mutation, cancellation));
     }
 
     @Override
@@ -126,17 +181,24 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
             Optional<ZLinkAuthorityScanCursor> cursor,
             int limit,
             ZLinkStoreCancellation cancellation) {
-        return authority().list(prefix, cursor, limit, cancellation);
+        return observeStore(
+                LocationOperation.READ,
+                () -> authority().list(prefix, cursor, limit, cancellation));
     }
 
     @Override
     public CompletionStage<Boolean> releaseEndedReservation(
             String key, String expectedStoreVersion, ZLinkStoreCancellation cancellation) {
-        return authority()
-                .releaseEndedReservation(
-                        key,
-                        expectedStoreVersion,
-                        cancellation == null ? null : cancellation::isCancellationRequested);
+        return observeStore(
+                LocationOperation.RELEASE,
+                () ->
+                        authority()
+                                .releaseEndedReservation(
+                                        key,
+                                        expectedStoreVersion,
+                                        cancellation == null
+                                                ? null
+                                                : cancellation::isCancellationRequested));
     }
 
     @Override
@@ -144,14 +206,21 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
             ZLinkObjectReservationRequest request,
             String expectedStoreVersion,
             ZLinkStoreCancellation cancellation) {
-        return authority.releaseEndedReservation(
-                request, expectedStoreVersion, cancellation::isCancellationRequested);
+        return observeStore(
+                LocationOperation.RELEASE,
+                () ->
+                        authority.releaseEndedReservation(
+                                request,
+                                expectedStoreVersion,
+                                cancellation::isCancellationRequested));
     }
 
     @Override
     public CompletionStage<ZLinkObjectReserveResult> reserve(
             ZLinkObjectReservationRequest request, ZLinkStoreCancellation cancellation) {
-        return authority().reserve(request, cancellation);
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () -> authority().reserve(request, cancellation));
     }
 
     @Override
@@ -159,7 +228,9 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
             ZLinkObjectReservation reservation,
             byte[] readyPayload,
             ZLinkStoreCancellation cancellation) {
-        return authority.commit(reservation, readyPayload, null, cancellation);
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () -> authority.commit(reservation, readyPayload, null, cancellation));
     }
 
     @Override
@@ -168,13 +239,17 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
             byte[] readyPayload,
             ZLinkCreationOperationTerminal terminal,
             ZLinkStoreCancellation cancellation) {
-        return authority.commit(reservation, readyPayload, terminal, cancellation);
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () -> authority.commit(reservation, readyPayload, terminal, cancellation));
     }
 
     @Override
     public CompletionStage<ZLinkObjectCommitResult> commit(
             ZLinkObjectReservation reservation, byte[] readyPayload, long deadlineUnixMs) {
-        return authority.commit(reservation, readyPayload, deadlineUnixMs);
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () -> authority.commit(reservation, readyPayload, deadlineUnixMs));
     }
 
     @Override
@@ -183,7 +258,9 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
             byte[] readyPayload,
             ZLinkCreationOperationTerminal terminal,
             long deadlineUnixMs) {
-        return authority.commit(reservation, readyPayload, terminal, deadlineUnixMs);
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () -> authority.commit(reservation, readyPayload, terminal, deadlineUnixMs));
     }
 
     @Override
@@ -191,13 +268,17 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
             ZLinkObjectReservation reservation,
             ZLinkCreationOperationTerminal terminal,
             ZLinkStoreCancellation cancellation) {
-        return authority.reject(reservation, terminal, cancellation);
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () -> authority.reject(reservation, terminal, cancellation));
     }
 
     @Override
     public CompletionStage<ZLinkObjectAbortResult> abort(
             ZLinkObjectReservation reservation, ZLinkStoreCancellation cancellation) {
-        return authority.abort(reservation, cancellation);
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () -> authority.abort(reservation, cancellation));
     }
 
     @Override
@@ -205,37 +286,48 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
             ZLinkObjectReservation reservation,
             ZLinkCreationOperationTerminal terminal,
             ZLinkStoreCancellation cancellation) {
-        return authority.abort(reservation, terminal, cancellation);
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () -> authority.abort(reservation, terminal, cancellation));
     }
 
     @Override
     public CompletionStage<ZLinkCreationTerminalReadResult> readCreationTerminal(
             ZLinkCreationOperationIdentity operation, ZLinkStoreCancellation cancellation) {
-        return authority.readCreationTerminal(operation, cancellation);
+        return observeStore(
+                LocationOperation.READ,
+                () -> authority.readCreationTerminal(operation, cancellation));
     }
 
     @Override
     public CompletionStage<ZLinkAggregatePrepareResult> prepareAggregate(
             ZLinkAggregatePrepareRequest request, ZLinkStoreCancellation cancellation) {
-        return authority.prepareAggregate(request, cancellation);
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () -> authority.prepareAggregate(request, cancellation));
     }
 
     @Override
     public CompletionStage<ZLinkAggregateCommitResult> commitAggregate(
             ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
-        return authority.commitAggregate(fence, cancellation);
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () -> authority.commitAggregate(fence, cancellation));
     }
 
     @Override
     public CompletionStage<ZLinkAggregateAbortResult> abortAggregate(
             ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
-        return authority.abortAggregate(fence, cancellation);
+        return observeStore(
+                LocationOperation.COMPARE_EXCHANGE,
+                () -> authority.abortAggregate(fence, cancellation));
     }
 
     @Override
     public CompletionStage<Optional<ZLinkAggregateProgressSnapshot>> readAggregateProgress(
             ZLinkAggregateFence fence, ZLinkStoreCancellation cancellation) {
-        return authority.readAggregateProgress(fence, cancellation);
+        return observeStore(
+                LocationOperation.READ, () -> authority.readAggregateProgress(fence, cancellation));
     }
 
     @Override
@@ -243,12 +335,14 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
             ZLinkAggregateFence fence,
             String expectedStoreVersion,
             ZLinkStoreCancellation cancellation) {
-        return authority.removeAggregateProgress(fence, expectedStoreVersion, cancellation);
+        return observeStore(
+                LocationOperation.RELEASE,
+                () -> authority.removeAggregateProgress(fence, expectedStoreVersion, cancellation));
     }
 
     @Override
     public CompletionStage<Long> removeAllByOwner(ZLinkLocationOwnerToken owner) {
-        return authority.removeAllByOwner(owner);
+        return observeStore(LocationOperation.RELEASE, () -> authority.removeAllByOwner(owner));
     }
 
     @Override
@@ -258,6 +352,35 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
 
     public ZLinkLocationStore provider() {
         return provider.delegate();
+    }
+
+    private static <T> CompletionStage<T> observeStore(
+            LocationOperation operation, java.util.function.Supplier<CompletionStage<T>> call) {
+        CompletionStage<T> result;
+        try {
+            result = call.get();
+        } catch (RuntimeException failure) {
+            recordStoreFailure(operation, failure);
+            throw failure;
+        }
+        return result.whenComplete(
+                (ignored, failure) -> {
+                    if (failure != null) recordStoreFailure(operation, failure);
+                });
+    }
+
+    private static boolean recordStoreFailure(LocationOperation operation, Throwable failure) {
+        while (!(failure instanceof ZLinkLocationStoreFailure)
+                && (failure instanceof CompletionException
+                        || failure instanceof ExecutionException
+                        || failure instanceof ZLinkFrameworkException framework
+                                && framework.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE)
+                && failure.getCause() != null) failure = failure.getCause();
+        if (failure instanceof ZLinkLocationStoreFailure) {
+            operation.failure();
+            return true;
+        }
+        return false;
     }
 
     private ZLinkProviderAuthorityRepository authority() {
@@ -314,7 +437,8 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
                 systems.zlink.framework.locationprovider.ZLinkStoreCancellation cancellation) {
             while ((error instanceof CompletionException || error instanceof ExecutionException)
                     && error.getCause() != null) error = error.getCause();
-            if (error instanceof ZLinkFrameworkException
+            if ((error instanceof ZLinkFrameworkException typed
+                            && typed.kind() != ZLinkFrameworkErrorKind.UNAVAILABLE)
                     || error instanceof IllegalArgumentException
                     || (cancellation != null && cancellation.isCancellationRequested())) {
                 return error instanceof RuntimeException runtime
@@ -322,10 +446,7 @@ public final class ZLinkProviderLocationRepository implements ZLinkLocationRepos
                         : new CompletionException(error);
             }
             if (error instanceof Error fatal) throw fatal;
-            return new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.UNAVAILABLE,
-                    "Location Store provider is unavailable.",
-                    error);
+            return new ZLinkLocationStoreFailureException(error);
         }
     }
 }

@@ -42,6 +42,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkActorJoinStoreAdmissionTest {
+    private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(1);
     private static final String ACTOR_ID = "actor-a";
     private static final RoutingId NODE = RoutingId.from("node-a");
 
@@ -97,32 +98,29 @@ final class ZLinkActorJoinStoreAdmissionTest {
                     }
                     permits.add(claim.join());
                 }
-                Thread.currentThread().interrupt();
-                var interrupted =
-                        assertThrows(
-                                CompletionException.class,
-                                () ->
-                                        activation
-                                                .admitLocalActorJoin(
-                                                        () -> {
-                                                            callbacks.incrementAndGet();
-                                                            return CompletableFuture
-                                                                    .completedFuture(
-                                                                            ZLinkSpotActorJoinResult
-                                                                                    .accept());
-                                                        })
-                                                .toCompletableFuture()
-                                                .join());
-                assertTrue(Thread.currentThread().isInterrupted());
-                assertTrue(interrupted.getCause().getMessage().contains("interrupted"));
+                var cancelled =
+                        activation
+                                .admitActorJoin(
+                                        () -> {
+                                            callbacks.incrementAndGet();
+                                            return CompletableFuture.completedFuture(
+                                                    ZLinkSpotActorJoinResult.accept());
+                                        })
+                                .toCompletableFuture();
+                assertEquals(1, jobs.snapshot().capacityWaiters());
+                assertTrue(cancelled.cancel(false));
+                var cancellation = assertThrows(CompletionException.class, cancelled::join);
+                org.junit.jupiter.api.Assertions.assertInstanceOf(
+                        java.util.concurrent.CancellationException.class, cancellation.getCause());
+                assertEquals(0, jobs.snapshot().capacityWaiters());
                 assertEquals(0, callbacks.get());
             } finally {
-                Thread.interrupted();
                 permits.forEach(
                         systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue
                                         .Permit
                                 ::close);
             }
+            assertEquals(0, jobs.snapshot().permitsInUse());
             try {
                 activation.context.enqueueJoinLifecycle(
                         () -> {
@@ -131,12 +129,18 @@ final class ZLinkActorJoinStoreAdmissionTest {
                         });
                 entered.get(5, TimeUnit.SECONDS);
                 var accepted =
-                        activation.admitLocalActorJoin(
+                        activation.admitActorJoin(
                                 () -> {
                                     callbacks.incrementAndGet();
                                     return CompletableFuture.completedFuture(
                                             ZLinkSpotActorJoinResult.accept());
                                 });
+                activation
+                        .context
+                        .enqueueInfrastructureDispatch(
+                                () -> CompletableFuture.completedFuture(null))
+                        .toCompletableFuture()
+                        .get(5, TimeUnit.SECONDS);
                 host.beginDrain().toCompletableFuture().get(5, TimeUnit.SECONDS);
                 assertEquals(0, callbacks.get());
                 org.junit.jupiter.api.Assertions.assertFalse(
@@ -149,7 +153,7 @@ final class ZLinkActorJoinStoreAdmissionTest {
                                 CompletionException.class,
                                 () ->
                                         activation
-                                                .admitLocalActorJoin(
+                                                .admitActorJoin(
                                                         () -> {
                                                             callbacks.incrementAndGet();
                                                             return CompletableFuture
@@ -237,7 +241,8 @@ final class ZLinkActorJoinStoreAdmissionTest {
             var result =
                     admission(Map.of("canonical-type", Factory.class), admitted::set)
                             .prepareCanonicalRoutedActor(
-                                    ZLinkSpotRuntime.canonicalActorJoinRequest(decoded, NODE),
+                                    ZLinkSpotRuntime.canonicalActorJoinRequest(
+                                            decoded, NODE, REQUEST_TIMEOUT),
                                     null,
                                     NODE,
                                     "spot",
@@ -259,6 +264,7 @@ final class ZLinkActorJoinStoreAdmissionTest {
                             .join();
             assertEquals(true, result.accepted());
             assertEquals(1, callbacks.get());
+            assertEquals(REQUEST_TIMEOUT, admitted.get().timeout());
             assertEquals(
                     "canonical-type",
                     admitted.get().actorType(),
@@ -293,7 +299,7 @@ final class ZLinkActorJoinStoreAdmissionTest {
                                 admission(Map.of("canonical-type", Factory.class))
                                         .prepareCanonicalRoutedActor(
                                                 ZLinkSpotRuntime.canonicalActorJoinRequest(
-                                                        forged, NODE),
+                                                        forged, NODE, REQUEST_TIMEOUT),
                                                 null,
                                                 NODE,
                                                 "spot",
@@ -330,7 +336,7 @@ final class ZLinkActorJoinStoreAdmissionTest {
                                         "routingId".equals(method.getName()) ? NODE : null);
         ZLinkActorRuntime runtime =
                 new ZLinkActorRuntime(
-                        node, factories, Duration.ofSeconds(1), new ZLinkJsonMessageSerializer());
+                        node, factories, REQUEST_TIMEOUT, new ZLinkJsonMessageSerializer());
         runtime.setDirectJoinRelocationStores(store());
         runtime.setActorJoinRelocationPort(
                 new ZLinkActorJoinRelocationPort() {

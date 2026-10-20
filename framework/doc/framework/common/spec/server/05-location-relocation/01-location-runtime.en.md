@@ -194,7 +194,7 @@ restates, in §8–§9, the records and conditions the Location Store records am
    the regular route is installed while dispatch stays closed. Required lifecycle
    callbacks finish before application message processing starts.
 8. The source waits for no completion reply after sending cutover and keeps Message
-   Follow. It retains the payload and relay batch until authority settlement or the source-lease-expiry terminal under [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
+   Follow (except under §10's chained-move exception). It retains the payload and relay batch until authority settlement or the source-lease-expiry terminal under [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
 
 **The handoff payload and the owner change aren't bundled into one distributed transaction
 or 2PC.** The Restore request, each chunk, and the target's owner CAS are bound by the
@@ -475,7 +475,7 @@ which one is authoritative.
 | `entrySpotId` | The Entry Spot ID for an Object Server lifecycle. `null` unless the role is `Server`. |
 | `channelWeights` | Selection weight per ClientServer ChannelName. Key is the ChannelName; value is a `0..10000` integer. |
 | `applicationVersion` | The application deployment sequence number. |
-| `objectCapabilities` | The list of registered object-kind placement capabilities. Each entry has `objectKind` (`actor \| userSpot \| instanceSpot`), `stableType`, `policy` (`unspecified \| disabled \| recreate \| snapshot`), `hasSnapshotAdapter` (boolean), and `limit` (integer, `0` means unlimited). At most 1,024 entries. |
+| `objectCapabilities` | The list of registered object-kind placement capabilities. Each entry has `objectKind` (`actor \| userSpot \| instanceSpot`), `stableType`, `policy` (`unspecified \| disabled \| recreate \| snapshot`), `hasSnapshotAdapter` (boolean), `limit` (integer, `0` means unlimited), and `entryAccepted` (boolean). `entryAccepted` is `true` only when `objectKind` is `actor` and an Entry Spot type registered on that node accepts that Actor stable type; new-Actor candidate selection ([Actor model §6.3](../03-spot-actor/04-actor-model.en.md#63-selecting-mesh-and-placement-target)) uses it. At most 1,024 entries. |
 | `objectRole` | One of `none \| client \| server`. |
 | `placementWeight` | `0..10000`, default 100 (§4). |
 | `capacity` | The "descriptor's count is a copy for operators to check status" projection from §4. `actors` and `spots` are each `{active, reserved, limit}`. `spotTypes` is an array of `{objectKind, stableType, active, reserved, limit}`. Entry Spot isn't included (§4). |
@@ -792,7 +792,14 @@ request started, the Framework re-reads the same key to confirm the result, as i
 and that confirmation also stays within the same renew timeout. A host that has not
 confirmed its lease by the renew timeout finishes startup as a host without a deadline:
 it blocks every target above, keeps claiming at each renew interval, and once it holds
-the lease computes the deadline and publishes descriptors as after a first renewal. The
+the lease computes the deadline and publishes descriptors as after a first renewal. A confirmed
+descriptor publication is required for `Serving`: the host stays
+[`Preparing`](05-host-relocation-flow.en.md#3-host-state-and-completion-results) until it confirms
+the publication, and its move to `Serving` follows the readiness conditions in that section. If,
+after the lease is held, a timeout or provider error leaves the publication result unknown, the
+host confirms it again as in §10; if it still can't confirm it, the host finishes startup as
+`Preparing` and retries the publication at each renew interval. A definite rejection because
+another owner holds the row is a startup error. The
 claim results `Conflict` and `GenerationExhausted` are startup errors. If the caller
 cancels startup, startup ends as cancelled; this rule does not turn it into a success.
 A claim that already started is confirmed by re-reading the same key as in §10; a
@@ -862,18 +869,29 @@ initial activation aren't eligible merely because their allocation is `Active`; 
 own lifecycle or recovery procedures. The node that `Reserve`s is the node that requested
 creation for an Actor or User Spot, and the target that received the activation envelope for an
 Instance Spot. If the type isn't registered on that node, the policy isn't treated as `Disabled`. A
-User Spot is released only when the Location Store holds no Actor membership for that SpotId and
-`ObjectGeneration`. The repository starts a new membership snapshot only after an exact read
-confirms that the owner lease recorded in the old Spot authority is invalid, and reads it to the
-end. Membership-addition commit conditions follow [Spot and Actor membership §1](../03-spot-actor/05-spot-actor-membership.en.md#1-identity-and-authority),
+User Spot is released only when every Actor membership remaining for that SpotId and
+`ObjectGeneration` belongs to an **ended-owner member**; no membership at all satisfies this. An
+ended-owner member is an Actor whose authority is a steady `Ready` record pointing at the same
+SpotId and `ObjectGeneration`, and whose recorded owner lease is absent, has a different
+`LeaseGeneration`, or has expired. If any member has a valid owner lease, carries relocation progress
+or belongs to an aggregate, or hasn't finished its first activation, nothing changes — so that an
+Actor of a live owner never points at a missing Spot and an in-flight move isn't cut. The repository
+starts a new membership snapshot only after an exact read confirms that the owner lease recorded in
+the old Spot authority is invalid, reads it to the end, and reads each member's Actor authority from
+the same snapshot. Membership-addition commit conditions follow [Spot and Actor membership §1](../03-spot-actor/05-spot-actor-membership.en.md#1-identity-and-authority),
 so no membership commits to that incarnation once its lease is invalid. An expired snapshot
 discards prior pages and is read again; Store failure or an incomplete scan isn't treated as empty
-membership, and neither is a process-local list. If any member remains, nothing changes. A record that carries relocation progress
+membership, and neither is a process-local list. A record that carries relocation progress
 or belongs to an aggregate, and an Instance Spot that still has an activation recovery pointer,
 aren't subject to this release and follow their own recovery procedures. The release checks, in
 one batch, the same conditions as the reservation release above (authority `StoreVersion`, owner
 lease state, descriptor state, and capacity record), removes the authority together with that
-incarnation's membership, and returns the active capacity. Only after the release commits is a new
+incarnation's membership, and returns the active capacity. If ended-owner members exist, the same
+batch also conditions on each member Actor authority's `StoreVersion` and invalid owner lease, and
+releases that Actor authority and its capacity the same way. A released member Actor becomes
+`Missing`, and a later creation of the same ActorId starts a new incarnation. If this batch exceeds
+the provider's single-batch bound, nothing is removed partially; nothing changes and `Unavailable`
+is returned. Only after the release commits is a new
 incarnation created from `Missing` — the previous incarnation's state, accepted operations, and
 recovery information aren't carried over. Whether the kind and stable type match is checked before
 the release decision (a different type keeps the existing `TypeMismatch`). If the owner lease is
@@ -963,7 +981,8 @@ sequenceDiagram
 ```
 
 The target must be in `Serving` state, have registered the requested stable type, and
-have a valid owner lease and remaining capacity. The Framework picks one candidate with
+have a valid owner lease and remaining capacity. [Actor model §6.3](../03-spot-actor/04-actor-model.en.md#63-selecting-mesh-and-placement-target)
+owns the Entry Spot condition for creating a new Actor. The Framework picks one candidate with
 weight greater than 0.
 
 The Location Store's `Reserve` records a `Creating` record together with the capacity to
@@ -998,6 +1017,7 @@ in the table below apply only to a record whose owner lease is valid.
 |---|---|---|
 | `Ready` of the same type | `AlreadyExists` | existing ref |
 | `Creating` of the same type | `AlreadyExists` | waits for the in-progress creation result. |
+| `Closing` of the same type | `AlreadyExists` | For User Spots, follows the authority-change wait and subsequent steps in [Spot address messaging §3.2](../03-spot-actor/06-spot-address-messaging.en.md#32-convergence-of-concurrent-requests). |
 | A different Actor type | `TypeMismatch` | `TypeMismatch` |
 | A different Spot kind or type | `TypeMismatch` | `TypeMismatch` |
 
@@ -1466,6 +1486,14 @@ being on the target.
 `OperationId` and `ReplyRouteId` are non-zero and not reused within the same source host
 run. Exhausting all values is an error from which the runtime cannot proceed.
 
+**The `OwnerId` and `LeaseGeneration` of the source request information come from the
+MeshNode descriptor of the admitted peer that sent the request. The rule for choosing that
+descriptor and the result when none is found are the same as for the Session owner identity
+of a bind ([Session·Actor binding §4](../04-session/02-session-actor-binding.en.md#4-what-binding-connects-and-what-it-stores)).**
+The owner that first accepts the request reads these values once at acceptance and records
+them. A request handed over by relay or relocation keeps the recorded values and does not read
+the Store again. Peer admission does not wait to read this descriptor from the Store.
+
 The Framework stores each object's completion result in object order. It doesn't insert
 the same source request information and `OperationId` twice. **It stores the new
 completion result and payload in the Relocation Store first, then changes the Location
@@ -1484,7 +1512,7 @@ result count and the delivery-pending count is 0. Otherwise it's a recovery erro
 Connection closure or reconnection alone isn't judged as having received the completion
 result. The target keeps delivering on the current route. If the `Relocate` deadline
 passes while the source owner lease is still valid, it's `ForceStopped`. In this case
-payload and reply bytes are retained for 24 hours.
+the relocation root, payload, and reply bytes are retained for 24 hours.
 
 ### 9.4 Cancellation Before Relay-Ready Is Accepted
 
@@ -1526,7 +1554,45 @@ The source decides Restore validity (the deadline of the operation that started 
 by the target's `NewOwner` CAS. A confirmed source `Preserve` success proves the target's
 late CAS cannot commit; the source remains owner and resumes its retained work under
 [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover).
-If the target with this `RelocationId` is already owner, the source adopts its route. An indeterminate `Preserve` result repeats under this section's Store-failure policy without a new timer while the source lease is valid. Source lease expiry, or an authority that the source rereads as absent (`Missing`), ends source work under the expired-owner terminal in [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). On `Missing` the source fence no longer holds, so the source does not attempt `Preserve`. The source may resume dispatch only
+If the target with this `RelocationId` is already owner, the source adopts its route.
+
+**When later moves follow.** After the target commits, it may normalize the authority to steady or
+move the same object again, so the authority the source rereads no longer holds this `RelocationId` or
+the first target owner. The source decides that this relocation's target commit is confirmed when the
+reread authority satisfies all three conditions:
+
+- `ObjectGeneration` equals that of the object the source moved.
+- `AuthorityOwnerGeneration` is greater than the value when the source started the relocation.
+- The owner is not the source.
+
+The basis is §6.1's owner-change kinds. Only `NewOwner` and the `SpotWide` whole-unit batch (§8.1)
+keep `ObjectGeneration` and raise `AuthorityOwnerGeneration`; re-creation after owner lease expiry and
+`Reincarnate` create a new `ObjectGeneration`. While the source is owner, the only such change that moves
+ownership away from it is this relocation's target CAS: the source runs one relocation per object at a
+time, including the aggregate relocation the object belongs to, and source `Preserve` excludes an earlier
+relocation's late CAS. So when the three conditions hold, this relocation's target CAS
+committed first, and later owner changes are moves continued from that target. This decision adds no
+separate commit record.
+
+In that case the source releases the retained copy and runs source cleanup once. The Message Follow
+route depends on the reread owner.
+
+- **If the owner is the first target**, the source installs the §7.3 route with the reread authority's
+  current `AuthorityOwnerGeneration`. If the first target only normalized, this equals the first commit
+  value (§6.1's `Preserve` keeps owner and generation); if the object came back to the first target through
+  another node, it is the value the first target holds now. Either way, a message the route forwards is
+  received by the current owner holding that value.
+- **If the owner is neither the first target nor the source** (a further move followed from the first
+  target), the reread authority no longer holds the first target's commit value, and the Store issues
+  generations from a global counter, so the source cannot know it. The source installs no §7.3 route.
+  Under this **chained-move exception**, a message that later reaches the source ends with §7.3's
+  no-route result (`Unavailable`). The source neither creates a route straight to the reread current
+  owner nor guesses the first target's generation. Bound Session routes are moved by each target's command 44
+  and the seal and route switch of later moves
+  ([Session and Actor Binding §8](../04-session/02-session-actor-binding.en.md#8-the-sessions-responsibility-during-actor-relocation)),
+  and don't depend on the source's Message Follow route.
+If `ObjectGeneration` differs, or `AuthorityOwnerGeneration` did not increase and the owner is neither the
+source nor the first target, the source still fails with `DataLost`. An indeterminate `Preserve` result repeats under this section's Store-failure policy without a new timer while the source lease is valid. Source lease expiry, or an authority that the source rereads as absent (`Missing`), ends source work under the expired-owner terminal in [common relocation §4.4](04-relocation-flow.en.md#44-ordered-relay-and-one-way-cutover). On `Missing` the source fence no longer holds, so the source does not attempt `Preserve`. The source may resume dispatch only
 while its owner lease remains valid under §5.
 
 During `StoreFailureGrace`, the last fully-read descriptor list is kept. The connection
@@ -1552,6 +1618,9 @@ If cancellation happens before starting a provider request, the Store may not be
 at all. If cancellation, timeout, or a provider error happens after starting the request,
 whether the Store changed is unknown. In this case the Framework re-reads the same key
 and expected `StoreVersion` to confirm the result, and only retries if needed.
+When a MeshNode descriptor write is sent again and the stored record differs from the sent
+descriptor only in its update time (`updatedAtEpochMs`), the earlier write already took effect, so the
+write ends as `Stored` regardless of its intent (`NewClaim` or `Renew`).
 
 A Relocation Store write must support being read or stored again using the same reference
 the Framework fixed in advance. That recheck has no separate time limit and runs within the deadline of the operation that started the write. Confirming that the same bytes are stored ends it as a success. When the re-read finds nothing, the same bytes are stored again under the same reference. When the put returns `Conflict` or the re-read finds different bytes, it is treated as the same collision and the store starts again with a new reference. This proceeds within that operation's deadline, with no retry cap and no separate time limit. A payload the Location Store already points to that is missing or fails its checksum follows the `DataLost` handling below, not this rule. Payload not pointed to by the Location Store is deleted
@@ -1628,6 +1697,9 @@ store record golden fixture. Each item maps to one test.
   startup succeeds and the four targets above are blocked.
 - A host that finished startup without a lease claims at each renew interval and
   publishes descriptors only after the lease is held.
+- A host that holds the lease but can't confirm its descriptor publication succeeds in
+  startup, stays `Preparing`, and retries the publication at each renew interval. A definite
+  rejection because another owner holds the row is a startup error.
 - The claim results `Conflict` and `GenerationExhausted` are startup errors.
 - Cancelling startup ends it as cancelled; an already committed claim is released and
   no heartbeat starts.
@@ -1650,14 +1722,16 @@ store record golden fixture. Each item maps to one test.
 - Even concurrent requests for the same ID create only one `Creating`, and only one
   target runs the factory.
 - The [§6.1](#61-read-and-cas) ended-owner release applies the same inputs to the provider and in-memory
-  repositories in all four implementations. Released inputs (a Disabled Actor, a User Spot with no
-  members, a new Instance intent for a steady `Ready` Instance Spot) verify a new `ObjectGeneration`,
+  repositories in all four implementations. Released inputs (a Disabled Actor, a User Spot with no members or only
+  ended-owner members, a new Instance intent for a steady `Ready` Instance Spot) verify a new `ObjectGeneration`,
   return of the old allocation's capacity, and one factory execution. Inputs that break one release
-  condition each (a valid lease, a type that isn't `Disabled` or isn't registered, a User Spot with
-  remaining members, a recovery pointer, `Closing`, aggregate or relocation progress, an ordinary
+  condition each (a valid lease, a type that isn't `Disabled` or isn't registered, a User Spot with a
+  member whose owner lease is valid or that is moving, members exceeding the provider's single-batch bound, a recovery pointer, `Closing`, aggregate or relocation progress, an ordinary
   message or `Find`) verify that authority, membership, capacity, and factory execution count don't
   change. Inputs whose registered policies differ between the requesting node and the factory
-  target (for an Instance, the source and the receiving target) verify the policy source.
+  target (for an Instance, the source and the receiving target) verify the policy source. Releasing a User
+  Spot with only ended-owner members verifies that those member Actor authorities and capacity are released in the same
+  batch and that a later creation of the same ActorId starts a new incarnation.
 - A scan with a member after the first page, snapshot expiry, and Store failure aren't treated as
   empty membership. Racing old-Spot lease invalidation with a late Join commit, and racing two
   re-creation requests, verify that an old version doesn't delete new authority and capacity isn't

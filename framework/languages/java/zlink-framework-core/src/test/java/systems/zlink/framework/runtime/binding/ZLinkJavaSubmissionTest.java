@@ -23,6 +23,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationRegistry;
 
 import java.lang.reflect.Proxy;
 import java.time.Duration;
@@ -373,6 +374,305 @@ final class ZLinkJavaSubmissionTest {
         }
     }
 
+    @Test
+    void closingServicePortEndsBackpressuredSendBeforeLateBindingTerminal() throws Exception {
+        try (var binding = new BindingProbe();
+                Message part = Message.from("pending")) {
+            binding.result = SubmitResult.BACKPRESSURED;
+            var caller = binding.send(Adapter.SERVICE, List.of(part)).toCompletableFuture();
+            var terminal = new CompletableFuture<Throwable>();
+            ZLinkOneWayCalls.adaptOneWay(caller)
+                    .whenComplete((ignored, failure) -> terminal.complete(failure));
+            binding.port.close();
+            var failure = terminal.get(5, TimeUnit.SECONDS);
+            var framework = assertInstanceOf(ZLinkFrameworkException.class, failure);
+            assertEquals(ZLinkFrameworkErrorKind.SHUTTING_DOWN, framework.kind());
+            assertTrue(binding.admission.complete(null));
+            assertSame(failure, assertThrows(CompletionException.class, caller::join).getCause());
+            assertEquals(1, binding.submissions);
+        }
+    }
+
+    @Test
+    void cancellingSendWaitDoesNotCancelBindingAdmission() {
+        try (var binding = new BindingProbe();
+                Message part = Message.from("pending")) {
+            binding.result = SubmitResult.BACKPRESSURED;
+            var stage = binding.send(Adapter.SOCKET, List.of(part));
+            assertTrue(stage.toCompletableFuture().cancel(false));
+            assertFalse(binding.admission.isDone());
+            binding.admission.complete(null);
+            assertNull(stage.toCompletableFuture().join());
+        }
+    }
+
+    @Test
+    void pendingSendCallbackLeavesSourceLaneAndCanReenterRuntime() throws Exception {
+        try (var binding = new BindingProbe();
+                Message part = Message.from("pending")) {
+            binding.result = SubmitResult.BACKPRESSURED;
+            var stage = binding.send(Adapter.SERVICE, List.of(part));
+            var callback = new CompletableFuture<Boolean>();
+            stage.whenComplete(
+                    (ignored, failure) -> {
+                        try {
+                            assertFalse(binding.lane.isOnLane());
+                            binding.result = SubmitResult.OK;
+                            assertNull(
+                                    binding.send(Adapter.SERVICE, List.of(Message.from("again")))
+                                            .toCompletableFuture()
+                                            .join());
+                            callback.complete(true);
+                        } catch (Throwable error) {
+                            callback.completeExceptionally(error);
+                        }
+                    });
+            binding.port.inStateLane(() -> binding.admission.complete(null));
+            assertTrue(callback.get(5, TimeUnit.SECONDS));
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(Adapter.class)
+    void onlyBackpressuredSendsRegisterAndRegisterBeforeObservingAdmission(Adapter adapter)
+            throws Exception {
+        try (var binding = new BindingProbe()) {
+            long before = registrations(binding.operations);
+            binding.send(adapter, List.of(Message.from("ok"))).toCompletableFuture().join();
+            assertEquals(before, registrations(binding.operations));
+            binding.sendFailure = new ZlinkSubmitException(SubmitResult.BACKPRESSURED);
+            try {
+                var rejected = binding.send(adapter, List.of(Message.from("rejected")));
+                assertThrows(
+                        CompletionException.class, () -> rejected.toCompletableFuture().join());
+            } catch (ZlinkSubmitException expected) {
+                assertSame(binding.sendFailure, expected);
+            }
+            assertEquals(before, registrations(binding.operations));
+            assertEquals(0, binding.operations.pendingCount());
+            binding.sendFailure = null;
+            binding.result = SubmitResult.BACKPRESSURED;
+            binding.beforeAdmissionRead = () -> assertEquals(1, binding.operations.pendingCount());
+            binding.admission.complete(null);
+            binding.send(adapter, List.of(Message.from("already admitted")))
+                    .toCompletableFuture()
+                    .join();
+            assertEquals(before + 1, registrations(binding.operations));
+            assertEquals(0, binding.operations.pendingCount());
+        }
+    }
+
+    @Test
+    void closeWaitsForSubmitAndRegistrationInTheSocketTurn() throws Exception {
+        try (var binding = new BindingProbe();
+                var workers = java.util.concurrent.Executors.newFixedThreadPool(2)) {
+            binding.result = SubmitResult.BACKPRESSURED;
+            var submitted = new CountDownLatch(1);
+            var releaseSubmit = new CountDownLatch(1);
+            var closeQueued = new CountDownLatch(1);
+            binding.afterSend =
+                    () -> {
+                        submitted.countDown();
+                        await(releaseSubmit);
+                    };
+            var caller =
+                    workers.submit(
+                            () -> binding.send(Adapter.SERVICE, List.of(Message.from("pending"))));
+            assertTrue(submitted.await(5, TimeUnit.SECONDS));
+            var closed =
+                    workers.submit(
+                            () -> {
+                                closeQueued.countDown();
+                                binding.port.close();
+                            });
+            try {
+                assertTrue(closeQueued.await(5, TimeUnit.SECONDS));
+                assertFalse(closed.isDone());
+            } finally {
+                releaseSubmit.countDown();
+            }
+            var result = caller.get(5, TimeUnit.SECONDS).toCompletableFuture();
+            closed.get(5, TimeUnit.SECONDS);
+            assertEquals(
+                    ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                    assertInstanceOf(
+                                    ZLinkFrameworkException.class,
+                                    assertThrows(CompletionException.class, result::join)
+                                            .getCause())
+                            .kind());
+            assertEquals(1, registrations(binding.operations));
+            assertEquals(0, binding.operations.pendingCount());
+            binding.admission.completeExceptionally(new IllegalStateException("late failure"));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                    assertInstanceOf(
+                                    ZLinkFrameworkException.class,
+                                    assertThrows(CompletionException.class, result::join)
+                                            .getCause())
+                            .kind());
+        }
+    }
+
+    enum SocketLifetime {
+        DEALER,
+        ROUTER
+    }
+
+    @Test
+    void standaloneSendOwnersDoNotStartDeadlineMaintenanceOnConstruction() throws Exception {
+        try (var binding = new BindingProbe();
+                var dealer =
+                        new ZLinkJavaDealerSocket(
+                                (systems.zlink.contracts.sockets.DealerSocket)
+                                        Proxy.newProxyInstance(
+                                                systems.zlink.contracts.sockets.DealerSocket.class
+                                                        .getClassLoader(),
+                                                new Class<?>[] {
+                                                    systems.zlink.contracts.sockets.DealerSocket
+                                                            .class
+                                                },
+                                                (proxy, method, args) -> {
+                                                    if (method.getName().equals("close"))
+                                                        return null;
+                                                    throw new AssertionError(method);
+                                                }));
+                var router = new ZLinkJavaRouterSocket(binding.router);
+                var port = new ZLinkJavaRawServicePort(binding.context, binding.lane)) {
+            for (Object owner : List.of(dealer, router, port)) {
+                var registryField = owner.getClass().getDeclaredField("operations");
+                registryField.setAccessible(true);
+                var registry = (ZLinkServiceOperationRegistry) registryField.get(owner);
+                var maintenanceField =
+                        ZLinkServiceOperationRegistry.class.getDeclaredField("maintenance");
+                maintenanceField.setAccessible(true);
+                assertNull(maintenanceField.get(registry), owner.getClass().getSimpleName());
+            }
+        }
+    }
+
+    @ParameterizedTest
+    @EnumSource(SocketLifetime.class)
+    void standaloneSocketCloseOwnsPendingSendAndDoesNotWaitForCallback(SocketLifetime lifetime)
+            throws Exception {
+        try (var binding = new BindingProbe()) {
+            binding.result = SubmitResult.BACKPRESSURED;
+            var dealerNative =
+                    (systems.zlink.contracts.sockets.DealerSocket)
+                            Proxy.newProxyInstance(
+                                    systems.zlink.contracts.sockets.DealerSocket.class
+                                            .getClassLoader(),
+                                    new Class<?>[] {
+                                        systems.zlink.contracts.sockets.DealerSocket.class
+                                    },
+                                    (proxy, method, args) ->
+                                            switch (method.getName()) {
+                                                case "send" -> binding.sendOperation();
+                                                case "close" -> null;
+                                                default -> throw new AssertionError(method);
+                                            });
+            var dealer =
+                    lifetime == SocketLifetime.DEALER
+                            ? new ZLinkJavaDealerSocket(dealerNative)
+                            : null;
+            var router =
+                    lifetime == SocketLifetime.ROUTER
+                            ? new ZLinkJavaRouterSocket(binding.router)
+                            : null;
+            Object owner = dealer != null ? dealer : router;
+            var registryField = owner.getClass().getDeclaredField("operations");
+            registryField.setAccessible(true);
+            var registry = (ZLinkServiceOperationRegistry) registryField.get(owner);
+            var stage =
+                    dealer != null
+                            ? dealer.send(List.of(Message.from("pending")))
+                            : router.send(TARGET, List.of(Message.from("pending")));
+            assertEquals(1, registry.pendingCount());
+            var callbackEntered = new CountDownLatch(1);
+            var releaseCallback = new CountDownLatch(1);
+            var observed =
+                    ZLinkOneWayCalls.adaptOneWay(stage)
+                            .handle(
+                                    (ignored, failure) -> {
+                                        assertFalse(Thread.holdsLock(owner));
+                                        callbackEntered.countDown();
+                                        await(releaseCallback);
+                                        return failure;
+                                    });
+            try {
+                if (dealer != null) dealer.close();
+                else router.close();
+                assertTrue(callbackEntered.await(5, TimeUnit.SECONDS));
+                assertEquals(0, registry.pendingCount());
+                assertTrue(binding.admission.complete(null));
+            } finally {
+                releaseCallback.countDown();
+                if (dealer != null) dealer.close();
+                else router.close();
+            }
+            assertEquals(
+                    ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                    assertInstanceOf(
+                                    ZLinkFrameworkException.class,
+                                    observed.toCompletableFuture().get(5, TimeUnit.SECONDS))
+                            .kind());
+        }
+    }
+
+    @Test
+    void meshAndPortShareExactlyOnePendingSendRegistry() throws Exception {
+        try (var binding = new BindingProbe();
+                var mesh = new ZLinkJavaRawMeshNode(binding.context, "pending-send-mesh")) {
+            binding.result = SubmitResult.BACKPRESSURED;
+            var portField = ZLinkJavaRawMeshNode.class.getDeclaredField("port");
+            portField.setAccessible(true);
+            var meshPort = (ZLinkJavaRawServicePort) portField.get(mesh);
+            var operationsField = ZLinkJavaRawMeshNode.class.getDeclaredField("operations");
+            operationsField.setAccessible(true);
+            var registry = (ZLinkServiceOperationRegistry) operationsField.get(mesh);
+            var portOperations = ZLinkJavaRawServicePort.class.getDeclaredField("operations");
+            portOperations.setAccessible(true);
+            assertSame(registry, portOperations.get(meshPort));
+            var socket = meshPort.openRouter(RoutingId.from("mesh-source"));
+            var send = meshPort.sendMessages(socket, TARGET, List.of(Message.from("pending")));
+            assertEquals(1, registry.pendingCount());
+            assertEquals(1, registrations(registry));
+            mesh.close();
+            var failure =
+                    assertThrows(CompletionException.class, () -> send.toCompletableFuture().join())
+                            .getCause();
+            assertEquals(
+                    ZLinkFrameworkErrorKind.SHUTTING_DOWN,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure).kind());
+            binding.admission.completeExceptionally(new IllegalStateException("late route loss"));
+            assertSame(
+                    failure,
+                    assertThrows(CompletionException.class, () -> send.toCompletableFuture().join())
+                            .getCause());
+            assertEquals(0, registry.pendingCount());
+        }
+    }
+
+    private static long registrations(ZLinkServiceOperationRegistry registry) throws Exception {
+        var slotsField = ZLinkServiceOperationRegistry.class.getDeclaredField("slots");
+        slotsField.setAccessible(true);
+        long count = 0;
+        for (var entry : (Object[]) slotsField.get(registry)) {
+            var generation = entry.getClass().getDeclaredField("generation");
+            generation.setAccessible(true);
+            count += generation.getLong(entry);
+        }
+        return count;
+    }
+
+    private static void await(CountDownLatch latch) {
+        try {
+            assertTrue(latch.await(5, TimeUnit.SECONDS));
+        } catch (InterruptedException failure) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(failure);
+        }
+    }
+
     /** Controls completion delivery at the public binding boundary, without timers. */
     private static final class BindingProbe implements AutoCloseable {
         private final CompletableFuture<Void> admission = new CompletableFuture<>();
@@ -381,13 +681,22 @@ final class ZLinkJavaSubmissionTest {
         private List<byte[]> frames;
         private SubmitResult result = SubmitResult.OK;
         private RuntimeException requestFailure;
+        private RuntimeException sendFailure;
+        private Runnable afterSend = () -> {};
+        private Runnable beforeAdmissionRead = () -> {};
         private boolean ignoreReplyCancellation;
         private int resultReads;
         private int admissionReads;
         private int replyReads;
         private int submissions;
+        private final systems.zlink.framework.runtime.internal.execution.ZLinkStateLane lane =
+                new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane();
+        private final ZLinkServiceOperationRegistry operations =
+                new ZLinkServiceOperationRegistry(
+                        ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
         private final ZLinkJavaRawServicePort port;
         private final RouterSocket router;
+        private final Context context;
 
         BindingProbe() {
             router =
@@ -404,7 +713,7 @@ final class ZLinkJavaSubmissionTest {
                                                 case "request" -> requestOperation();
                                                 default -> throw new AssertionError(method);
                                             });
-            Context context =
+            context =
                     (Context)
                             Proxy.newProxyInstance(
                                     Context.class.getClassLoader(),
@@ -413,14 +722,14 @@ final class ZLinkJavaSubmissionTest {
                                         assertEquals("createRouterSocket", method.getName());
                                         return router;
                                     });
-            port = new ZLinkJavaRawServicePort(context);
+            port = new ZLinkJavaRawServicePort(context, lane, operations);
             assertSame(router, port.openRouter(RoutingId.from("submission-source")));
         }
 
         CompletionStage<Void> send(Adapter adapter, List<Message> messages) {
             return adapter == Adapter.SERVICE
                     ? port.sendMessages(router, TARGET, messages)
-                    : ZLinkJavaSocketSupport.submit(sendOperation(), messages);
+                    : ZLinkJavaSocketSupport.submit(sendOperation(), messages, operations);
         }
 
         CompletionStage<byte[]> request(Adapter adapter, List<Message> messages) {
@@ -457,6 +766,8 @@ final class ZLinkJavaSubmissionTest {
                         @Override
                         public SendSubmission submit() {
                             consume();
+                            if (sendFailure != null) throw sendFailure;
+                            afterSend.run();
                             return new SendSubmission() {
                                 @Override
                                 public SubmitResult result() {
@@ -539,6 +850,7 @@ final class ZLinkJavaSubmissionTest {
         }
 
         private CompletionStage<Void> readAdmission() {
+            beforeAdmissionRead.run();
             admissionReads++;
             assertEquals(
                     SubmitResult.BACKPRESSURED,

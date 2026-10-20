@@ -62,44 +62,11 @@ final class ZLinkSpotRetireControl {
         return target;
     }
 
-    static final class Client implements ZLinkRelocationTransitionClient {
+    static final class Client {
         private final ZLinkInternalMeshNode node;
 
         private Client(ZLinkInternalMeshNode node) {
             this.node = Objects.requireNonNull(node, "node");
-        }
-
-        @Override
-        public CompletionStage<Void> stage(
-                RoutingId targetNodeRid, StageRequest request, Duration timeout) {
-            return invoke(targetNodeRid, request.fence(), encodeStage(request), timeout);
-        }
-
-        @Override
-        public CompletionStage<Void> relay(
-                RoutingId targetNodeRid, Fence fence, byte[] frozenRecord, Duration timeout) {
-            return CompletableFuture.failedFuture(
-                    new UnsupportedOperationException(
-                            "legacy relocation control has no command 31 relay"));
-        }
-
-        @Override
-        public CompletionStage<Void> publish(
-                RoutingId targetNodeRid, Fence fence, Duration timeout) {
-            return invoke(targetNodeRid, fence, encodeFence(PUBLISH, fence), timeout);
-        }
-
-        @Override
-        public CompletionStage<Settlement> settle(
-                RoutingId targetNodeRid, Fence fence, java.time.Instant preserveAt) {
-            return CompletableFuture.failedFuture(
-                    new UnsupportedOperationException(
-                            "legacy relocation control has no authority settlement"));
-        }
-
-        @Override
-        public CompletionStage<Void> abort(RoutingId targetNodeRid, Fence fence, Duration timeout) {
-            return invoke(targetNodeRid, fence, encodeFence(ABORT, fence), timeout);
         }
 
         CompletionStage<ZLinkSpotRelocationReplyRoutes.Ack> relayReply(
@@ -119,19 +86,6 @@ final class ZLinkSpotRetireControl {
                 Duration timeout) {
             return node.requestRelocationReplyRelay(
                     landingNodeRid, expectedSource, command33, payload, timeout);
-        }
-
-        private CompletionStage<Void> invoke(
-                RoutingId targetNodeRid, Fence expectedFence, byte[] command, Duration timeout) {
-            return node.requestRelocationControl(targetNodeRid, command, timeout)
-                    .thenApply(
-                            reply -> {
-                                if (!decodeAck(reply).equals(expectedFence)) {
-                                    throw new IllegalArgumentException(
-                                            "relocation acknowledgment fence differs");
-                                }
-                                return null;
-                            });
         }
     }
 
@@ -326,6 +280,16 @@ final class ZLinkSpotRetireControl {
     }
 
     interface TargetEndpoint {
+        /** Transfers admission lifetime to the accepted canonical target attempt. */
+        default CompletionStage<Void> beginPrepare(
+                UUID relocationId, CompletionStage<Void> terminal, Runnable superseded) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        default CompletionStage<Void> endPrepare(UUID relocationId) {
+            return CompletableFuture.completedFuture(null);
+        }
+
         /** Applies an admitted target-only profile before authority prepare. */
         default TargetProfile applyTargetProfile(
                 StageRequest request, long defaultActorSpotGeneration) {
@@ -531,6 +495,10 @@ final class ZLinkSpotRetireControl {
                 }
                 previous = route.actorId();
             }
+        }
+
+        int relocationPayloadSize() {
+            return relocationPayload.length;
         }
 
         @Override
@@ -920,25 +888,6 @@ final class ZLinkSpotRetireControl {
             throw new IllegalArgumentException("relocation command is truncated", failure);
         } catch (IOException failure) {
             throw new IllegalArgumentException("relocation command is invalid", failure);
-        }
-    }
-
-    private static Fence decodeAck(byte[] encoded) {
-        try {
-            DataInputStream input = new DataInputStream(new ByteArrayInputStream(encoded));
-            if (input.readInt() != MAGIC
-                    || input.readUnsignedByte() != VERSION
-                    || input.readUnsignedByte() != ACK) {
-                throw new IllegalArgumentException("relocation command acknowledgment is invalid");
-            }
-            Fence fence = readFence(input);
-            if (input.available() != 0) {
-                throw new IllegalArgumentException(
-                        "relocation acknowledgment contains trailing bytes");
-            }
-            return fence;
-        } catch (IOException failure) {
-            throw new IllegalArgumentException("relocation acknowledgment is invalid", failure);
         }
     }
 

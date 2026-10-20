@@ -158,37 +158,6 @@ internal sealed class ZLinkTimer : IZLinkTimer
             })
         );
 
-    internal void RestoreFrozen(ZLinkTimerLogicalSnapshot snapshot)
-    {
-        ArgumentNullException.ThrowIfNull(snapshot);
-        AwaitStateLane(
-            _lane.RunAsync(() =>
-            {
-                ObjectDisposedException.ThrowIf(IsDisposedOnLane, this);
-                if (_resume is null)
-                    throw new InvalidOperationException(
-                        "A logical timer can only be restored while frozen."
-                    );
-                if (
-                    !string.Equals(_name, snapshot.Name, StringComparison.Ordinal)
-                    || _period != snapshot.Period
-                    || _callbacks.Options != snapshot.Options
-                )
-                    throw new InvalidDataException(
-                        $"Logical timer '{snapshot.Name}' does not match its target registration."
-                    );
-
-                _startedAt = snapshot.StartedAt;
-                _startedElapsed =
-                    _scheduler.Elapsed - (_scheduler.TimeProvider.GetUtcNow() - snapshot.StartedAt);
-                _deliveryIndex = snapshot.DeliveryIndex;
-                _lastScheduledIndex = snapshot.LastScheduledIndex;
-                _nextScheduledAt = snapshot.NextScheduledAt;
-                _pendingTick = snapshot.PendingTick;
-            })
-        );
-    }
-
     internal async ValueTask NotifyDueAsync(long version)
     {
         var startDispatch = await _lane
@@ -253,7 +222,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
 
     public async ValueTask CancelAsync()
     {
-        var finalization = await GetOrStartFinalizationAsync().ConfigureAwait(false);
+        var finalization = await BeginCancellationAsync().ConfigureAwait(false);
         await finalization.ConfigureAwait(false);
     }
 
@@ -281,7 +250,7 @@ internal sealed class ZLinkTimer : IZLinkTimer
         );
     }
 
-    private async ValueTask<Task> GetOrStartFinalizationAsync()
+    internal async ValueTask<Task> BeginCancellationAsync()
     {
         TaskCompletionSource? completion = null;
         var finalization = await _lane

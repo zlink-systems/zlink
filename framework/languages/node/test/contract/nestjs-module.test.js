@@ -98,11 +98,11 @@ function exposeLegacyTestSpotAsMeshNode(spotNode) {
     configureObjectPlacement() {},
     selectObjectPlacement() { return undefined; },
     start() {},
-    shutdown() {
+    async shutdown() {
       return 0;
     },
-    close() {
-      void dispose?.();
+    async close() {
+      await dispose?.();
     },
     connectPeer(options) {
       if (options.expectedRid !== undefined) {
@@ -1445,7 +1445,7 @@ test('ZLinkModule.forRoot preserves Entry Spot type in the formal MeshNode regis
   const mesh = options.addRouteMesh('game')
     .listen(spotEndpoint)
     .routingId('game-node');
-  mesh.objects().server().addEntrySpot(StageEntrySpot);
+  mesh.objects().server().addEntrySpot(StageEntrySpot, 'stage');
   mesh.channel('game').client();
   const frameworkModule = nestjs.ZLinkModule.forRoot(options.build());
   class HandlerModule {}
@@ -1561,7 +1561,7 @@ test('ZLinkModule.forRoot discovers SPOT actor request handler decorators from N
     .listen(spotEndpoint)
     .routingId('game-node');
   mesh.objects().server()
-    .addEntrySpot(EntrySpot)
+    .addEntrySpot(EntrySpot, 'player')
     .addSpotFactory(RoomSpot.name, RoomSpot, (factory) => factory.disableRelocation());
   mesh.channel('game').client();
   Module({
@@ -1973,8 +1973,8 @@ test('zlinkFramework applies core SPOT registration policy before duplicate stat
 
   const entryNode = nestjs.zlinkFramework().addRouteMesh('entry');
   const entryServer = entryNode.objects().server();
-  entryServer.addEntrySpot(EntrySpot);
-  assert.throws(() => entryServer.addEntrySpot(EntrySpot), /Duplicate Entry Spot registration/);
+  entryServer.addEntrySpot(EntrySpot, 'player');
+  assert.throws(() => entryServer.addEntrySpot(EntrySpot, 'player'), /Duplicate Entry Spot registration/);
 
   const factoryNode = nestjs.zlinkFramework().addRouteMesh('factory');
   const factoryServer = factoryNode.objects().server();
@@ -2038,7 +2038,7 @@ test('framework options builder maps the formal RouteMesh registration flow into
     objectServer
       .addSpotFactory(StageSpot.name, StageSpot, (factory) => factory.disableRelocation())
       .addSpotFactory(LocalStageSpot.name, LocalStageSpot, (factory) => factory.disableRelocation())
-      .addEntrySpot(StageEntrySpot);
+      .addEntrySpot(StageEntrySpot, 'stage');
     objectServer.addActorFactory(
       'stage',
       StageActor,
@@ -2094,8 +2094,8 @@ test('framework options builder maps the formal RouteMesh registration flow into
     () => framework.createFrameworkOptions((builder) => {
       const node = builder.addRouteMesh('game.stage');
       const server = node.objects().server();
-      server.addEntrySpot(StageEntrySpot);
-      server.addEntrySpot(StageEntrySpot);
+      server.addEntrySpot(StageEntrySpot, 'stage');
+      server.addEntrySpot(StageEntrySpot, 'stage');
     }),
     /Duplicate Entry Spot registration/
   );
@@ -2228,7 +2228,7 @@ test('zlinkFramework builder maps stream node registration without raw server co
     .listen('tcp://127.0.0.1:9110')
     .routingId('game-node');
   spotMesh.objects().server()
-    .addEntrySpot(StageEntrySpot)
+    .addEntrySpot(StageEntrySpot, 'player')
     .addActorFactory(
       'player',
       PlayerActorFactory,
@@ -3949,7 +3949,7 @@ test('framework runtime host defers Entry Spot lifecycle until Core materializes
       this.context.handlers.addHandler(GenericHandler);
       this.context.handlers.addPacket(PacketHandler, 'entry.packet');
       this.context.handlers.addSubscribe(SubscribeHandler, 'game', 'entry.topic');
-      this.context.handlers.addSpotHandler(SpotHandler);
+      this.context.handlers.addTimerHandler(SpotHandler);
       registry = this.context.handlers;
     }
     async onInitialize() {

@@ -78,17 +78,18 @@ class ZLinkFrameworkLocationRuntimeTest {
         options.addLocationStore(store);
         options.addRelocationStore(new InMemoryRelocationStore());
 
-        ZLinkFrameworkRuntime runtime =
-                ZLinkFrameworkRuntimeTestAccess.start(options, new MinimalBackend());
-        runtime.closeAsync().toCompletableFuture().get();
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(options, new MinimalBackend())) {
+            runtime.closeAsync().toCompletableFuture().get();
 
-        assertEquals(
-                List.of(),
-                repository(store)
-                        .listMeshNodes("unused", ZLinkPageRequest.firstPage())
-                        .toCompletableFuture()
-                        .get()
-                        .items());
+            assertEquals(
+                    List.of(),
+                    repository(store)
+                            .listMeshNodes("unused", ZLinkPageRequest.firstPage())
+                            .toCompletableFuture()
+                            .get()
+                            .items());
+        }
     }
 
     @Test
@@ -260,6 +261,7 @@ class ZLinkFrameworkLocationRuntimeTest {
         mesh.channelName("durable-actors").server();
         mesh.objects()
                 .server()
+                .addEntrySpot(ActorCreationEntry.class)
                 .addActorFactory(
                         "player",
                         LocationActor.class,
@@ -306,6 +308,7 @@ class ZLinkFrameworkLocationRuntimeTest {
         mesh.channelName("durable-concurrent").server();
         mesh.objects()
                 .server()
+                .addEntrySpot(ActorCreationEntry.class)
                 .addActorFactory(
                         "player",
                         LocationActor.class,
@@ -360,6 +363,7 @@ class ZLinkFrameworkLocationRuntimeTest {
         mesh.channelName("rooms").server();
         mesh.objects()
                 .server()
+                .addEntrySpot(ActorCreationEntry.class)
                 .addActorFactory(
                         "player",
                         LocationActor.class,
@@ -531,4 +535,32 @@ class ZLinkFrameworkLocationRuntimeTest {
     }
 
     public record LocationActor(String actorId, ZLinkActorContext context) implements ZLinkActor {}
+
+    /** An Entry Spot that accepts every Actor type, so the node can create new Actors. */
+    public static final class ActorCreationEntry
+            implements systems.zlink.framework.spots.ZLinkEntrySpot<
+                    systems.zlink.framework.actors.ZLinkActor> {
+        private final systems.zlink.framework.spots.ZLinkEntrySpotContext context;
+
+        public ActorCreationEntry(systems.zlink.framework.spots.ZLinkEntrySpotContext context) {
+            this.context = context;
+        }
+
+        @Override
+        public systems.zlink.framework.spots.ZLinkEntrySpotContext context() {
+            return context;
+        }
+
+        @Override
+        public java.util.concurrent.CompletionStage<Void> onJoinedActor(
+                systems.zlink.framework.actors.ZLinkActor actor) {
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        }
+
+        @Override
+        public java.util.concurrent.CompletionStage<Void> onLeaveActor(
+                systems.zlink.framework.actors.ZLinkActor actor) {
+            return java.util.concurrent.CompletableFuture.completedFuture(null);
+        }
+    }
 }

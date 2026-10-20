@@ -119,7 +119,7 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                 Message body = Message.from("body")) {
             var spots = (ZLinkJavaRawSpotNode) pair.target.spotNode();
             spots.setSpotAdmissionResolver(
-                    (spot, generation, instance, activation) ->
+                    (spot, generation, instance, activation, route) ->
                             CompletableFuture.completedFuture(
                                     ownerRefusal
                                             ? systems.zlink.framework.runtime.messaging
@@ -375,6 +375,7 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                                                     java.util.concurrent.CompletableFuture<Void>
                                                             requestAdmission) {
                                                 assertTrue(received.isRequest());
+                                                requestAdmission.complete(null);
                                                 try (Message reply = Message.from("recovered")) {
                                                     received.reply().accept(List.of(reply));
                                                 }
@@ -605,6 +606,7 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                         .toCompletableFuture()
                         .get(2, TimeUnit.SECONDS);
                 sink.expectDrop("instance_spot", "no_handler");
+                sink.expectActivation("full", "rejected");
             }
             assertTrue(sink.events.isEmpty());
         }
@@ -647,6 +649,13 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
                             case PROTOCOL_ERROR -> "decode_error";
                             case NOT_FOUND, TYPE_MISMATCH -> "stale_target";
                             default -> "no_handler";
+                        });
+                sink.expectActivation(
+                        type,
+                        switch (kind) {
+                            case SHUTTING_DOWN -> "shutdown";
+                            case TYPE_MISMATCH -> "conflict";
+                            default -> "rejected";
                         });
             }
             assertTrue(sink.events.isEmpty());
@@ -764,14 +773,18 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
             assertEquals(List.of(pair.target.routingId()), pair.source.configuredPeerIds());
             assertTrue(pair.source.isPeerTransportConnected(pair.target.routingId()));
             RoutingId discovered = RoutingId.from("discovered-before-connect");
-            pair.source.observePeerAdmissionExpectation(
-                    discovered,
-                    "inproc://discovered",
-                    17,
-                    ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY);
+            pair.source
+                    .observePeerAdmissionExpectation(
+                            discovered,
+                            "inproc://discovered",
+                            17,
+                            ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                            ZLinkMeshNodeObjectRole.NONE)
+                    .toCompletableFuture()
+                    .join();
             assertTrue(pair.source.configuredPeerIds().contains(discovered));
             assertFalse(pair.source.isPeerTransportConnected(discovered));
-            pair.source.forgetPeerAdmissionExpectation(discovered);
+            pair.source.forgetPeerAdmissionExpectation(discovered).toCompletableFuture().join();
             assertFalse(pair.source.configuredPeerIds().contains(discovered));
             pair.target.close();
             await(() -> !pair.source.isPeerTransportConnected(pair.target.routingId()));
@@ -935,10 +948,27 @@ final class ZLinkJavaRawMeshNodeMetricsTest {
 
     private static final class RecordingSink implements ZLinkRuntimeMetrics.Sink {
         final LinkedBlockingQueue<Event> events = new LinkedBlockingQueue<>();
+        final LinkedBlockingQueue<Event> activations = new LinkedBlockingQueue<>();
+
+        void expectActivation(String type, String outcome) throws Exception {
+            assertEquals(
+                    new Event(
+                            "zlink.instance_spot.activations",
+                            Map.of(
+                                    "mesh_name",
+                                    "mesh",
+                                    "instance_spot_type",
+                                    type,
+                                    "outcome",
+                                    outcome)),
+                    activations.poll(2, TimeUnit.SECONDS));
+            assertTrue(activations.isEmpty());
+        }
 
         @Override
         public void increment(String name, Map<String, String> tags) {
-            events.add(new Event(name, tags));
+            (name.equals("zlink.instance_spot.activations") ? activations : events)
+                    .add(new Event(name, tags));
         }
 
         void expectDrop(String surface, String reason) throws Exception {

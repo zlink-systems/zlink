@@ -27,6 +27,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     private readonly Action? _actorConsumerSelected;
     private readonly Action<ZLinkSerialGateOperation>? _executionGateObserved;
     private ZLinkExecutionBarrierState? _relocationBarrier;
+    private ActivationPreparation? _preparation;
     private ZLinkRelocationAdmissionOpeningState? _relocationAdmissionOpening;
     private bool _relocationAdmissionQueueOpened;
     private ulong _nextBarrierGeneration = 1;
@@ -92,13 +93,132 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     private static bool AlwaysDisabled() => false;
 
     private bool IsApplicationStartAllowed(ZLinkSerialWorkItem item) =>
-        Volatile.Read(ref _relocationBarrier)?.Kind != ZLinkExecutionSealKind.Close
-        || item.Lane == ZLinkSerialWorkLane.Application
-            && (
-                !item.ReservationHeld
-                || !item.IsAccepted && (_activation?.HasCommittedClose ?? true)
-                || item.IsAccepted && (_activation?.HasCompletedClose ?? true)
+        (item.Lane != ZLinkSerialWorkLane.Lifecycle || !IsTargetPreparing)
+        && (
+            item.Lane != ZLinkSerialWorkLane.Application
+            || Volatile.Read(ref _preparation) is not { } preparation
+            || !item.ReservationHeld
+            || preparation.Terminal.Task.IsCompletedSuccessfully
+                && preparation.Terminal.Task.Result is not null
+        )
+        && (
+            Volatile.Read(ref _relocationBarrier)?.Kind != ZLinkExecutionSealKind.Close
+            || item.Lane == ZLinkSerialWorkLane.Application
+                && (
+                    !item.ReservationHeld
+                    || !item.IsAccepted && (_activation?.HasCommittedClose ?? true)
+                    || item.IsAccepted && (_activation?.HasCompletedClose ?? true)
+                )
+        );
+
+    internal bool IsPreparing =>
+        _preparation is not null || Volatile.Read(ref _relocationBarrier)?.QueueSeal is not null;
+
+    internal bool IsTargetPreparing => Volatile.Read(ref _relocationBarrier)?.QueueSeal is not null;
+
+    internal ValueTask ExecuteTargetPreparationAsync(
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask> operation,
+        CancellationToken ct
+    )
+    {
+        var barrier =
+            Volatile.Read(ref _relocationBarrier)
+            ?? throw new InvalidOperationException("Target preparation has no staging seal.");
+        return _queue.RunTargetPreparationAsync(
+            barrier.QueueSeal!,
+            token => ExecuteLifecycleOperationAsync(operation, token),
+            ct
+        );
+    }
+
+    internal async ValueTask PrepareActivationAsync(
+        Func<CancellationToken, ValueTask> initialize,
+        CancellationToken cancellationToken
+    )
+    {
+        var preparation = new ActivationPreparation();
+        if (Interlocked.CompareExchange(ref _preparation, preparation, null) is not null)
+            throw new InvalidOperationException(
+                "Activation preparation already has a lifecycle owner."
             );
+        preparation.Execution =
+            PostLifecycleOperation(
+                async (_, ct) =>
+                {
+                    try
+                    {
+                        using var initialization = cancellationToken.CanBeCanceled
+                            ? CancellationTokenSource.CreateLinkedTokenSource(ct, cancellationToken)
+                            : null;
+                        await initialize(initialization?.Token ?? ct).ConfigureAwait(false);
+                        preparation.Prepared.TrySetResult();
+                    }
+                    catch (Exception failure)
+                    {
+                        preparation.Prepared.TrySetException(failure);
+                    }
+                    var turn = ZLinkSerialTurn.Current!;
+                    await turn.YieldFrameworkCallAsync(
+                            async token =>
+                            {
+                                var finish = await preparation.Terminal.Task.ConfigureAwait(false);
+                                if (finish is not null)
+                                    await finish(token).ConfigureAwait(false);
+                            },
+                            CancellationToken.None
+                        )
+                        .ConfigureAwait(false);
+                    return true;
+                },
+                () =>
+                {
+                    Interlocked.CompareExchange(ref _preparation, null, preparation);
+                    SchedulePendingApplications();
+                }
+            ) ?? throw new InvalidOperationException("Activation lifecycle admission is closed.");
+        await preparation.Prepared.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    internal Task FinishActivationPreparation(bool waitForFirstTerminal = false)
+    {
+        if (Volatile.Read(ref _preparation) is not { } preparation)
+            return Task.CompletedTask;
+        if (waitForFirstTerminal)
+        {
+            preparation.Terminal.TrySetResult(preparation.RunFirstTerminalAsync);
+            SchedulePendingApplications();
+            return Task.CompletedTask;
+        }
+        preparation.FirstTerminal.TrySetResult(null);
+        preparation.Terminal.TrySetResult(null);
+        return preparation.Execution;
+    }
+
+    internal Task RecordActivationTerminalAsync(Func<CancellationToken, ValueTask> terminal)
+    {
+        if (Volatile.Read(ref _preparation) is not { } preparation)
+            return Task.CompletedTask;
+        preparation.FirstTerminal.TrySetResult(terminal);
+        return preparation.Execution;
+    }
+
+    private sealed class ActivationPreparation
+    {
+        internal TaskCompletionSource Prepared { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource<Func<CancellationToken, ValueTask>?> Terminal { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource<Func<CancellationToken, ValueTask>?> FirstTerminal { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal Task Execution { get; set; } = Task.CompletedTask;
+
+        internal async ValueTask RunFirstTerminalAsync(CancellationToken ct)
+        {
+            var terminal = await FirstTerminal.Task.ConfigureAwait(false);
+            if (terminal is not null)
+                await terminal(ct).ConfigureAwait(false);
+        }
+    }
 
     public async ValueTask DisposeAsync()
     {
@@ -263,10 +383,19 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                         )
                     )
                     .ConfigureAwait(false);
-        var claim = await AcquireApplicationClaimAsync().ConfigureAwait(false);
+        // A sealed Spot (Close or relocation) does not run the tick. The tick
+        // stays undelivered: Close cleans it with the old incarnation and a
+        // relocation seal carries it as a pending tick (Spot messaging §7,
+        // host relocation §12). It is not an application handler failure.
+        if (await TryAcquireApplicationClaimAsync().ConfigureAwait(false) is not { } claim)
+            return;
         await RunClaimedAsync(
                 lane,
-                ct => ExecuteTimerOperationAsync(operation, state, ct),
+                ct =>
+                    cancellationToken.IsCancellationRequested
+                    || _activation?.IsTimerScheduleFrozen == true
+                        ? ValueTask.CompletedTask
+                        : ExecuteTimerOperationAsync(operation, state, ct),
                 claim,
                 cancellationToken
             )
@@ -287,6 +416,12 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     {
         if (_isDisposed())
             return;
+
+        if (IsTargetPreparing)
+        {
+            await ExecuteTargetPreparationAsync(operation, cancellationToken).ConfigureAwait(false);
+            return;
+        }
 
         cancellationToken.ThrowIfCancellationRequested();
         var callerFlow = ZLinkFlowContext.Current;
@@ -341,8 +476,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         // A lifecycle item may notify application code after the authority
         // transition. Transferred callbacks use the application lane.
         if (
-            ZLinkApplicationExecutionContext.Current is { YieldAllowed: true }
-            && ZLinkSerialTurn.Current is not null
+            (
+                ZLinkApplicationExecutionContext.Current is { YieldAllowed: true }
+                || _preparation is { Prepared.Task.IsCompleted: false }
+            ) && (ZLinkSerialTurn.Current is not null || IsTargetPreparing)
         )
         {
             try
@@ -370,12 +507,14 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     internal async ValueTask<bool> ExecuteQuiescentLifecycleAsync(
         Func<ZLinkSpotActivation, CancellationToken, ValueTask<bool>> operation,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        ZLinkSpotCloseReason? closeReason = null
     )
     {
         var barrier = await TryBeginRelocationBarrierAsync(
                 ZLinkExecutionSealKind.Quiescent,
-                allowActorClaims: false
+                allowActorClaims: false,
+                closeReason
             )
             .ConfigureAwait(false);
         if (barrier is null)
@@ -416,7 +555,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     // first-terminal record) to the lifecycle lane. Only the queue's own
     // admission decides. Null means the lane no longer admits work.
     internal Task<T>? PostLifecycleOperation<T>(
-        Func<ZLinkSpotActivation, CancellationToken, ValueTask<T>> operation
+        Func<ZLinkSpotActivation, CancellationToken, ValueTask<T>> operation,
+        Action? terminalRelease = null
     )
     {
         var outcome = new TaskCompletionSource<T>(
@@ -424,7 +564,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         );
         var admission = _queue.TryPostNextWithAdmission(
             ct =>
-                ExecuteLifecycleOperationAsync(
+            {
+                if (terminalRelease is not null)
+                    ZLinkSerialTurn.Current!.Item.AddTerminalRelease(terminalRelease);
+                return ExecuteLifecycleOperationAsync(
                     async (activation, token) =>
                     {
                         try
@@ -440,14 +583,24 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                         }
                     },
                     ct
-                ),
+                );
+            },
             out var item
         );
         return admission == ZLinkSerialPostAdmission.Accepted ? CompleteAsync() : null;
 
         async Task<T> CompleteAsync()
         {
-            await item.Completion.ConfigureAwait(false);
+            try
+            {
+                await item.Completion.ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (outcome.Task.IsCompletedSuccessfully)
+            {
+                return outcome.Task.Result;
+            }
+            if (_isDisposed())
+                outcome.TrySetResult(default!);
             return await outcome.Task.ConfigureAwait(false);
         }
     }
@@ -528,6 +681,9 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                 lane.SchedulePendingWork();
             foreach (var lane in _timerLanes.Values)
                 lane.SchedulePendingWork();
+            if (_completedChildLanes is { } completed)
+                foreach (var lane in completed)
+                    lane.SchedulePendingWork();
         });
 
     private async ValueTask ExecuteLifecycleOperationAsync(
@@ -958,6 +1114,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     internal async ValueTask<ZLinkSpotExecutionRelocationSeal?> TrySealRelocationAsync()
     {
+        if (Volatile.Read(ref _relocationBarrier) is { QueueSeal: { } target } existing)
+            return new ZLinkSpotExecutionRelocationSeal(existing.Generation, target);
         var barrier = await TryBeginRelocationBarrierAsync(
                 ZLinkExecutionSealKind.Relocation,
                 allowActorClaims: false
@@ -982,6 +1140,25 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         }
 
         return new ZLinkSpotExecutionRelocationSeal(barrier.Generation, queueSeal);
+    }
+
+    internal async ValueTask BeginTargetPreparationAsync()
+    {
+        var seal =
+            await TrySealRelocationAsync().ConfigureAwait(false)
+            ?? throw new InvalidOperationException(
+                "Target activation could not reserve staging admission."
+            );
+        await RunBarrierStateAsync(
+                () =>
+                {
+                    _relocationBarrier!.QueueSeal = seal.QueueSeal;
+                    _queue.BeginTargetPreparationOnGate(seal.QueueSeal);
+                    return true;
+                },
+                gateTurn: true
+            )
+            .ConfigureAwait(false);
     }
 
     internal async ValueTask<ZLinkSpotExecutionRelocationSeal?> TrySealPerActorShellRelocationAsync()
@@ -1029,12 +1206,20 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
     // a state-lane turn here would contend with every message's claim/release.
     internal bool HasPendingApplicationWork => Volatile.Read(ref _activeApplicationClaims) != 0;
 
+    internal int PendingApplicationCount =>
+        RunBarrierState(() =>
+            _queue.ApplicationPendingCount
+            + _actorLanes.Values.Sum(static lane => lane.ApplicationPendingCount)
+            + _timerLanes.Values.Sum(static lane => lane.ApplicationPendingCount)
+        );
+
     internal bool HasRelocationBarrier => RunBarrierState(() => _relocationBarrier is not null);
 
     // A Close or quiescent seal is in place. Catalog lookup reads it; it does
     // not decide admission, which the queue entry decides under the seal.
     internal bool HasClosingSeal =>
-        Volatile.Read(ref _relocationBarrier) is { Kind: not ZLinkExecutionSealKind.Relocation };
+        Volatile.Read(ref _relocationBarrier)
+            is { Kind: ZLinkExecutionSealKind.Close or ZLinkExecutionSealKind.Quiescent };
 
     internal long LastApplicationWorkCompletedAt =>
         Volatile.Read(ref _lastApplicationWorkCompletedAt);
@@ -1085,22 +1270,26 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         }
     }
 
-    internal ValueTask<bool> TryAbortRelocationAsync(ZLinkSpotExecutionRelocationSeal seal)
+    internal async ValueTask<bool> TryAbortRelocationAsync(ZLinkSpotExecutionRelocationSeal seal)
     {
         ArgumentNullException.ThrowIfNull(seal);
-        return RunBarrierStateAsync(
-            () =>
-            {
-                if (_relocationBarrier?.Generation != seal.Generation)
-                    return false;
-                if (!_queue.TryAbortRelocationOnGate(seal.QueueSeal))
-                    return false;
-                _relocationAdmissionQueueOpened = false;
-                _relocationBarrier = null;
-                return true;
-            },
-            gateTurn: true
-        );
+        var aborted = await RunBarrierStateAsync(
+                () =>
+                {
+                    if (_relocationBarrier?.Generation != seal.Generation)
+                        return false;
+                    if (!_queue.TryAbortRelocationOnGate(seal.QueueSeal))
+                        return false;
+                    _relocationAdmissionQueueOpened = false;
+                    _relocationBarrier = null;
+                    return true;
+                },
+                gateTurn: true
+            )
+            .ConfigureAwait(false);
+        if (aborted)
+            SchedulePendingApplications();
+        return aborted;
     }
 
     internal async ValueTask<bool> TryOpenRelocationAfterMessageFollowAsync(
@@ -1171,7 +1360,17 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                 return true;
             })
             .ConfigureAwait(false);
-        await ExecuteLifecycleOperationAsync(operation, cancellationToken).ConfigureAwait(false);
+        if (IsTargetPreparing)
+            await _queue
+                .RunTargetPreparationAsync(
+                    seal.QueueSeal,
+                    ct => ExecuteLifecycleOperationAsync(operation, ct),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+        else
+            await ExecuteLifecycleOperationAsync(operation, cancellationToken)
+                .ConfigureAwait(false);
     }
 
     internal ValueTask<(
@@ -1600,9 +1799,6 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         return TryAcquireApplicationClaim() ?? RejectedApplicationClaim();
     }
 
-    private async ValueTask<ZLinkExecutionClaim> AcquireApplicationClaimAsync() =>
-        await TryAcquireApplicationClaimAsync().ConfigureAwait(false) ?? RejectedApplicationClaim();
-
     private static ZLinkExecutionClaim RejectedApplicationClaim() =>
         throw new ZLinkFrameworkException(
             ZLinkFrameworkErrorKind.Rejected,
@@ -1777,12 +1973,20 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
     private ValueTask<ZLinkExecutionBarrierState?> TryBeginRelocationBarrierAsync(
         ZLinkExecutionSealKind kind,
-        bool allowActorClaims
+        bool allowActorClaims,
+        ZLinkSpotCloseReason? closeReason = null
     )
     {
         return RunBarrierStateAsync<ZLinkExecutionBarrierState?>(() =>
         {
-            if (_relocationBarrier is not null || _nextBarrierGeneration == ulong.MaxValue)
+            // Host shutdown closes every Spot after the relocation units have ended
+            // (host-relocation §14 steps 3-4). A seal left by an uncertain commit has
+            // no live owner, so HostShutdown takes it over; the new generation fences
+            // a late owner without creating a second gate.
+            if (
+                _relocationBarrier is not null && closeReason != ZLinkSpotCloseReason.HostShutdown
+                || _nextBarrierGeneration == ulong.MaxValue
+            )
                 return null;
 
             var created = new ZLinkExecutionBarrierState(
@@ -1882,6 +2086,8 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
 
         // The one field that tells the seals apart: what new ingress gets.
         public ZLinkExecutionSealKind Kind { get; } = kind;
+
+        public ZLinkSerialRelocationSeal? QueueSeal { get; set; }
 
         public bool AllowActorClaims { get; } = allowActorClaims;
 

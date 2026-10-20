@@ -1,3 +1,4 @@
+import { routingIdsEqual } from '../routing-id';
 import type { Message } from '../../contracts/Common/Message';
 import { ZLINK_DEFAULT_PUBLIC_WEIGHT } from '../../contracts/Configuration/RegistrationBuilderPolicy';
 import {
@@ -121,9 +122,9 @@ export class ZLinkClientServerLocationRuntime {
         ownerId: owner.ownerId,
         leaseGeneration: owner.leaseGeneration
       };
-      const result = await this.store.updateClientServer(
-        candidate,
-        ZLinkLocationWriteIntent.Takeover,
+      const result = await this.locationRuntime.writeDescriptor(
+        (writeSignal) =>
+          this.store.updateClientServer(candidate, ZLinkLocationWriteIntent.Takeover, writeSignal),
         signal
       );
       if (result.status !== ZLinkLocationWriteStatus.Stored) {
@@ -152,9 +153,9 @@ export class ZLinkClientServerLocationRuntime {
                 descriptorRevision: current.descriptorRevision + 1n,
                 weight: runtimeWeight
               };
-        const result = await this.store.updateClientServer(
-          candidate,
-          ZLinkLocationWriteIntent.Renew,
+        const result = await this.locationRuntime.writeDescriptor(
+          (writeSignal) =>
+            this.store.updateClientServer(candidate, ZLinkLocationWriteIntent.Renew, writeSignal),
           signal
         );
         if (result.status !== ZLinkLocationWriteStatus.Stored) {
@@ -181,9 +182,9 @@ export class ZLinkClientServerLocationRuntime {
         leaseGeneration: owner.leaseGeneration,
         updatedAt: new Date(0)
       };
-      const result = await this.store.updateClientServer(
-        descriptor,
-        ZLinkLocationWriteIntent.NewClaim,
+      const result = await this.locationRuntime.writeDescriptor(
+        (writeSignal) =>
+          this.store.updateClientServer(descriptor, ZLinkLocationWriteIntent.NewClaim, writeSignal),
         signal
       );
       if (result.status !== ZLinkLocationWriteStatus.Stored) {
@@ -587,7 +588,7 @@ function requireMatchingAdmission(
 ): void {
   if (
     actual.channelName !== expected.channelName ||
-    actual.serverRid !== String(expected.serverRid) ||
+    !routingIdsEqual(actual.serverRid, expected.serverRid) ||
     actual.lifecycleGeneration !== expected.lifecycleGeneration ||
     actual.descriptorRevision !== expected.descriptorRevision ||
     actual.weight !== expected.weight ||

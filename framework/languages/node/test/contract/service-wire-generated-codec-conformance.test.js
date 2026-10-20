@@ -450,3 +450,44 @@ test('generated TypeScript codec consumes every indexed conformance case', () =>
     }
   }
 });
+
+test('command 43 generated codec accepts both seal results and rejects malformed bytes', () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(path.join(protocolRoot, 'golden/session-relocation-barrier-v1.json'), 'utf8')
+  );
+  for (const entry of fixture.canonical.filter((entry) => entry.command === 43)) {
+    const bytes = Buffer.from(entry.hex, 'hex');
+    const value = codec.decodeSessionRelocationSealedCommand([bytes], context);
+    assert.equal(value.sealResult, entry.decoded.sealResult);
+    assert.deepEqual(
+      Buffer.from(codec.encodeSessionRelocationSealedCommand(value, context)[0]),
+      bytes
+    );
+    assert.throws(() =>
+      codec.encodeSessionRelocationSealedCommand({ ...value, sealResult: 'unknown' }, context)
+    );
+  }
+  for (const entry of fixture.malformed) {
+    assert.throws(
+      () => codec.decodeSessionRelocationSealedCommand([Buffer.from(entry.hex, 'hex')], context),
+      Error,
+      entry.name
+    );
+  }
+});
+
+test('boundSessionClose uses shared cross-language bytes', () => {
+  const fixture = JSON.parse(
+    fs.readFileSync(path.join(protocolRoot, 'golden/bound-session-close-v1.json'), 'utf8')
+  );
+  const bytes = Buffer.from(fixture.canonical.hex, 'hex');
+  const decoded = codec.decodeBoundSessionCloseCommand([bytes], context);
+  assert.equal(decoded.actor.actorId, 'player');
+  assert.deepEqual(Buffer.from(codec.encodeBoundSessionCloseCommand(decoded, context)[0]), bytes);
+  for (const malformed of fixture.malformed)
+    assert.throws(
+      () => codec.decodeBoundSessionCloseCommand([Buffer.from(malformed.hex, 'hex')], context),
+      malformed.name
+    );
+  assert.throws(() => codec.decodeBoundSessionCloseCommand([bytes, Buffer.alloc(0)], context));
+});

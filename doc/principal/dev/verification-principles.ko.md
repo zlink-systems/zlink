@@ -38,6 +38,7 @@
 | 역호출이 관리 코드에 닿나 | 핸들러 실행 횟수 | 핸들러가 몇 번 돌았나 — 등록 전이면 당연히 0이다 | #402 |
 | 이 최적화 수준에서 동작하나 | 링크 성공 | 링크되나 — JSDCE가 지운 선언은 **실행 중에** 터진다 | #398 |
 | 이 검사가 나쁜 입력을 잡나 | 좋은 입력에서 통과 | 좋은 입력을 통과시키나 — 아무것도 안 잡는 검사도 통과시킨다 | #397 |
+| Redis live 시험이 돌았나 | 환경 변수를 켠 뒤 Gradle 성공 | 그 task를 다시 실행했나 — 입력이 같으면 UP-TO-DATE로 이전 skip 결과를 재사용한다. `--rerun`으로 강제하고 XML의 skip 수를 본다 | #1881 |
 | C++ 회귀 assertion이 결함을 잡나 | 기존 Release library에 연결한 test 실행 성공 | `NDEBUG`가 assertion을 제거했으면 검사 자체가 실행되지 않는다. Compile 명령의 `-UNDEBUG`와 수정 전 실패를 확인한다 | #1207 |
 | 모든 handler worker가 Store 대기 중인가 | executor 생성 뒤 worker 수를 지정하고 검사 통과 | 이미 생성된 executor의 worker 수는 바뀌지 않는다. 초기화 전에 수를 지정하고, Store 완료를 보류한 상태의 수정 전 실패를 확인한다 | #1380 |
 | 심볼 지역화가 먹혔나 | 내 머신에서 통과 | **내 binutils에서** 먹히나 — 2.42는 되고 릴리스를 만드는 2.38은 안 됐다 | #418 |
@@ -58,6 +59,22 @@
 | 두 Core 빌드의 처리량 차이가 코드 차이인가 | 번갈아 측정에서 한쪽이 7% 낮음 | 같은 머신에서 같은 코드도 회차마다 6~14% 다르게 측정된다. 두 `libzlink.so`의 `.text`를 먼저 대조하고, 같은 빌드 회차 간 차이보다 큰 차이만 회귀 후보로 둔다 | #1421 |
 | gate 스크립트가 실패한 단계를 종료 코드로 알리나 | gate 종료 코드 0 | 실패 집계 뒤에 `touch`가 실행되면 실패가 있어도 0으로 끝난다. 실패한 단계를 넣은 results 파일로 종료 코드가 0이 아닌지 확인하고, 판정은 results 파일로도 대조한다 | 0.30.0 gate |
 | bench 포트가 비어 있나 | LISTEN 목록에 없음 | TIME_WAIT 포트나 다른 loopback 주소의 listener는 LISTEN 조회에서 빠지지만 실제 bind는 실패한다. 실제 bind로 확인하고 TIME_WAIT·LISTEN·빈 포트 세 경우를 모두 시험한다 | #1390 |
+| 엔진 E2E가 server 종료까지 검증하나 | connector client 성공과 CTest 통과 | 하네스가 server 종료를 기다리지 않고 Redis를 제거하면 `ForceStopped/TeardownFailed`도 통과한다. Client 결과와 server 종료 결과를 함께 확인한다 | #1646 |
+| Configure 거부 뒤 source가 복원됐나 | `RelocationFailed` reason만 일치 | Source lease가 만료돼 `Error`가 되어도 같은 reason이다. `Blocked/RelocationFailed`와 source `Serving`을 함께 단언한다 | #1877 |
+| Session route 준비 전 READY가 막혔나 | stage 호출 직후 future 미완료와 READY 부재 | target stage가 아직 실행되지 않았어도 같은 결과다. command 52 처리 완료를 기다린 뒤 route 요청과 READY를 검사하고, 대기 호출을 뺀 구현에서 실패하는지 확인한다 | #1775 |
+| Descriptor 충돌이 startup을 실패시키나 | `app.run`의 0이 아닌 종료 코드 | Handler group 설정 누락도 같은 종료 코드를 반환한다. 주입한 게시 포트의 호출 횟수와 host의 Error 상태를 함께 단언해, 다른 초기화 오류로 통과하지 않도록 한다 | #1962 |
+| 끝난 member의 capacity가 반납됐나 | provider `list_mesh_nodes`의 descriptor capacity가 0 | 게시한 descriptor의 초기값이 0인지에만 답한다. 실제 capacity record의 수정 전 사용량과 수정 후 반환·예약 수를 함께 확인한다 | #1872 |
+| 완료 callback 안의 단언 실패가 시험에 전달되나 | callback 실행 뒤 시험 통과 | dispatcher가 `AssertionError`를 잡으면 내부 단언이 실패해도 통과한다. callback은 관찰값을 기록하고 시험 thread에서 단언하거나, 실패를 시험이 기다리는 future로 전달한다 | #1770 |
+| Framework E2E에서 handler 오류가 없었나 | Kotlin match update의 종료 코드 0과 `Scenarios: 1/1 passed` | 같은 회차의 JoinSpot message-flow에는 `INTERNAL_FAILURE`와 `ConcurrentModificationException`이 기록됐다. Program 결과와 서버의 예기치 않은 handler 오류를 함께 확인한다 | #1882 |
+| 일반 Actor dispatch가 실행 gate를 쓰나 | 소스 전체에서 executor 호출 문자열 검색 | 무관한 disconnect 전용 호출만 있어도 통과한다. 일반 coordinator 호출과 header forwarding을 확인하고, 일반 호출을 지워 옛 전용 호출만 남긴 입력과 forwarding을 지운 입력이 실패하는지 대조한다 | #1883 |
+| 실패한 incarnation 정리가 보류 메시지 완료보다 먼저 끝났나 | source reply 수신 순서 일치 | 전송 지연이 target의 조기 완료를 가릴 수 있다. 실제 destructor를 보류하고 target queue의 retained record와 completion 미완료를 확인한 뒤 release·join한다 | #1961 |
+| Fixture를 기존 dispatch 경로로 바꾼 뒤에도 원래 순서 결함을 잡나 | 같은 단언으로 main에서 통과 | observer의 handler terminal 대기를 빼면 replay 게시와 이동 종료 사이 순서를 고정하지 못한다. 메시지 수락 뒤에 같은 observer를 설치하고 수정 전 반복 실패를 확인한다 | #1786 · #1771 |
+| 모든 template 실행 파일이 최종 package를 link했나 | 전체 link 명령에 최종 archive 경로가 있다 | 한 실행 파일만 최종 archive를 사용해도 통과한다. 실행 파일마다 link 인자를 정확히 비교하고, 하나만 이전 archive를 사용하는 입력도 거부하는지 확인한다 | #1786 · #1771 |
+| GoogleTest 시험이 실제로 실행됐나 | 실행 파일이 exit 0 | GTEST_SKIP도 exit 0이다. skipped summary가 있는 출력과 정상 출력을 함께 넣어 판정을 확인하고, skip을 통과 수에서 제외한다 | #1786 · #1771 |
+| 검증 source hash가 stage된 변경도 포함하나 | `git ls-files --modified`로 만든 hash가 같다 | Stage된 변경은 빠진다. `git diff HEAD`와 untracked 파일을 함께 수집하고, stage된 실제 source의 두 내용을 입력해 hash가 달라지는지 확인한다 | #1786 · #1771 |
+| Host가 정상 정산했나 | GTest 단언 통과와 exit 0 | 종료 로그에 `force_stopping`이 있으면 정상 drain의 증거가 아니다. pending·active callback 정산과 정상 종료 transition을 함께 확인한다 | #1786 · #1771 |
+| WSL 시험이 실패를 종료 코드로 알렸나 | PowerShell에서 띄운 inline `bash -c`의 `$?`·`$code`가 0 | PowerShell이 변수를 먼저 펼쳐 gtest 실패에도 바깥 명령이 0으로 보였다. `.sh` 파일이나 subprocess의 returncode로 판정하고 로그의 실제 시험 수를 함께 확인한다 | #2119 |
+| 생성 codec이 올바른 frame을 받나 | GCC 빌드의 golden 시험 통과 | 함수 인자 평가 순서에 기대는 코드(`batch_end(b, at, batch_r16(b, at))`)는 GCC에서만 통과하고 Clang에서는 정상 frame을 거부했다. 생성 코드는 GCC와 Clang으로 함께 빌드해 시험한다 | #2119 |
 
 ## 4. 무엇이 실제로 답을 줬나
 

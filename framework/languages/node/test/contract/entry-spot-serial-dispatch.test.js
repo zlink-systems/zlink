@@ -39,10 +39,13 @@ class PlayerFactory {
 }
 
 async function createEntryFixture(entrySpotType, packetHandlers = [], options = {}) {
-  const manager = new framework.DefaultZLinkActorManager({
-    actorFactories: new Map([['player', PlayerFactory]]),
-    actorMeshNameProvider: () => 'test.mesh'
-  }, detachedTaskRunner);
+  const manager = new framework.DefaultZLinkActorManager(
+    {
+      actorFactories: new Map([['player', PlayerFactory]]),
+      actorMeshNameProvider: () => 'test.mesh'
+    },
+    detachedTaskRunner
+  );
   const activation = new framework.ZLinkEntrySpotActivation({
     detachedTaskRunner: detachedTaskRunner,
     entrySpotType,
@@ -129,17 +132,20 @@ test('entry spot lifecycle callbacks from mixed setImmediate/queueMicrotask back
   // user code directly.
   const submissions = [];
   const enqueueOrder = [];
-  const fromBackend = (schedule, name, dispatch) => new Promise((resolve) => {
-    schedule(() => {
-      enqueueOrder.push(name);
-      submissions.push(dispatch());
-      resolve();
+  const fromBackend = (schedule, name, dispatch) =>
+    new Promise((resolve) => {
+      schedule(() => {
+        enqueueOrder.push(name);
+        submissions.push(dispatch());
+        resolve();
+      });
     });
-  });
   await fromBackend(queueMicrotask, 'create:alice', () =>
-    fixture.activation.notifyCreateActor(alice, framework.ZLinkMessage.from({})));
+    fixture.activation.notifyCreateActor(alice, framework.ZLinkMessage.from({}))
+  );
   await fromBackend(setImmediate, 'create:bob', () =>
-    fixture.activation.notifyCreateActor(bob, framework.ZLinkMessage.from({})));
+    fixture.activation.notifyCreateActor(bob, framework.ZLinkMessage.from({}))
+  );
   await Promise.all(submissions);
 
   assert.equal(tracker.overlapped, false);
@@ -180,7 +186,12 @@ test('entry spot does not start the next callback before the previous handler pr
 
   releaseFirst();
   await Promise.all([first, second]);
-  assert.deepEqual(events, ['create:alice:start', 'create:alice:settled', 'create:bob:start', 'create:bob:settled']);
+  assert.deepEqual(events, [
+    'create:alice:start',
+    'create:alice:settled',
+    'create:bob:start',
+    'create:bob:settled'
+  ]);
 });
 
 test('entry spot actor packets use actor mailboxes without entry-wide serial dispatch', async () => {
@@ -195,22 +206,27 @@ test('entry spot actor packets use actor mailboxes without entry-wide serial dis
       events.push(`${actor.actorId}:${message}:end`);
     }
   }
-  const fixture = await createEntryFixture(EntrySpot, [{
-    kind: framework.ZLinkActorPacketKind.Send,
-    packetName: 'packet',
-    actorType: PlayerActor,
-    handlerType: SlowPacketHandler
-  }]);
+  const fixture = await createEntryFixture(EntrySpot, [
+    {
+      kind: framework.ZLinkActorPacketKind.Send,
+      packetName: 'packet',
+      actorType: PlayerActor,
+      handlerType: SlowPacketHandler
+    }
+  ]);
   await fixture.manager.getOrCreateActor('actor-a', 'player');
   await fixture.manager.getOrCreateActor('actor-b', 'player');
 
   const firstA = fixture.router.submit('actor-a', (snapshot) =>
-    fixture.dispatcher.dispatchSend(snapshot.actor, 'packet', 'block'));
+    fixture.dispatcher.dispatchSend(snapshot.actor, 'packet', 'block')
+  );
   await delay(5);
   const firstB = fixture.router.submit('actor-b', (snapshot) =>
-    fixture.dispatcher.dispatchSend(snapshot.actor, 'packet', 'fast'));
+    fixture.dispatcher.dispatchSend(snapshot.actor, 'packet', 'fast')
+  );
   const secondA = fixture.router.submit('actor-a', (snapshot) =>
-    fixture.dispatcher.dispatchSend(snapshot.actor, 'packet', 'second'));
+    fixture.dispatcher.dispatchSend(snapshot.actor, 'packet', 'second')
+  );
   await Promise.all([firstA, firstB, secondA]);
 
   assert.equal(events.indexOf('actor-b:fast:start') < events.indexOf('actor-a:block:end'), true);
@@ -223,14 +239,20 @@ test('entry spot actor handler submit surfaces outbound failure immediately', as
   const channelClient = {
     requestToChannel() {
       return {
-        packetName() { return this; },
-        timeout() { return this; },
+        packetName() {
+          return this;
+        },
+        timeout() {
+          return this;
+        },
         submit() {
           throw new Error('yield must fail before starting the outbound request');
         }
       };
     },
-    sendToChannel() { throw new Error('not used'); }
+    sendToChannel() {
+      throw new Error('not used');
+    }
   };
   class EntrySpot {}
   class YieldPacketHandler {
@@ -244,17 +266,24 @@ test('entry spot actor handler submit surfaces outbound failure immediately', as
       throw new Error('yield unexpectedly completed inside an Entry Spot actor handler');
     }
   }
-  const fixture = await createEntryFixture(EntrySpot, [{
-    kind: framework.ZLinkActorPacketKind.Send,
-    packetName: 'yield',
-    actorType: PlayerActor,
-    handlerType: YieldPacketHandler
-  }], { channelClient });
+  const fixture = await createEntryFixture(
+    EntrySpot,
+    [
+      {
+        kind: framework.ZLinkActorPacketKind.Send,
+        packetName: 'yield',
+        actorType: PlayerActor,
+        handlerType: YieldPacketHandler
+      }
+    ],
+    { channelClient }
+  );
   outbound = fixture.activation.context.outbound;
   await fixture.manager.getOrCreateActor('actor-yield', 'player');
 
   await fixture.router.submit('actor-yield', (snapshot) =>
-    fixture.dispatcher.dispatchSend(snapshot.actor, 'yield', 'run'));
+    fixture.dispatcher.dispatchSend(snapshot.actor, 'yield', 'run')
+  );
 
   assert.equal(observed instanceof Error, true);
   assert.match(observed.message, /yield must fail before starting/);
@@ -285,17 +314,26 @@ test('detached request continuation re-enters the entry spot serial line', async
   const channelClient = {
     requestToChannel() {
       return {
-        packetName() { return this; },
-        timeout() { return this; },
+        packetName() {
+          return this;
+        },
+        timeout() {
+          return this;
+        },
         submit() {
           events.push('request:submitted');
-          return Object.assign(new Promise((resolve) => {
-            resolveReply = resolve;
-          }), { admitted: Promise.resolve() });
+          return Object.assign(
+            new Promise((resolve) => {
+              resolveReply = resolve;
+            }),
+            { admitted: Promise.resolve() }
+          );
         }
       };
     },
-    sendToChannel() { throw new Error('not used'); }
+    sendToChannel() {
+      throw new Error('not used');
+    }
   };
   class DetachedEntrySpot {}
   const fixture = await createEntryFixture(DetachedEntrySpot);
@@ -307,9 +345,12 @@ test('detached request continuation re-enters the entry spot serial line', async
   });
 
   // Detached path: the continuation is registered outside the handler turn.
-  const continuation = outbound.requestToChannel('api', 'ping').submit().then((reply) => {
-    events.push(`continuation:${reply}:executing=${serial.isExecuting}`);
-  });
+  const continuation = outbound
+    .requestToChannel('api', 'ping')
+    .submit()
+    .then((reply) => {
+      events.push(`continuation:${reply}:executing=${serial.isExecuting}`);
+    });
   await delay(5);
   assert.deepEqual(events, ['request:submitted']);
 
@@ -344,18 +385,27 @@ test('request submit keeps the entry turn until its reply completes', async () =
   const channelClient = {
     requestToChannel(_channelName, request) {
       return {
-        packetName() { return this; },
-        timeout() { return this; },
+        packetName() {
+          return this;
+        },
+        timeout() {
+          return this;
+        },
         submit() {
           events.push(`request:${request}`);
-          return Object.assign((async () => {
-            await delay(10);
-            return `reply:${request}`;
-          })(), { admitted: Promise.resolve() });
+          return Object.assign(
+            (async () => {
+              await delay(10);
+              return `reply:${request}`;
+            })(),
+            { admitted: Promise.resolve() }
+          );
         }
       };
     },
-    sendToChannel() { throw new Error('not used'); }
+    sendToChannel() {
+      throw new Error('not used');
+    }
   };
   class GatedEntrySpot {}
   const fixture = await createEntryFixture(GatedEntrySpot);
@@ -400,8 +450,9 @@ test('same-Spot Async rejects while Yield resumes on a new FIFO turn', async () 
     meshName: 'test-mesh',
     addressTransport
   });
-  const isInvalidOperation = (error) => error instanceof framework.ZLinkFrameworkException
-    && error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation;
+  const isInvalidOperation = (error) =>
+    error instanceof framework.ZLinkFrameworkException &&
+    error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation;
 
   let initialTurn;
   let resumedTurn;
@@ -413,9 +464,7 @@ test('same-Spot Async rejects while Yield resumes on a new FIFO turn', async () 
       isInvalidOperation
     );
     earlier = serial.post(() => events.push('queued:earlier'));
-    const reply = await outbound
-      .requestToSpot('same-spot', { requestId: 'yield' })
-      .yield();
+    const reply = await outbound.requestToSpot('same-spot', { requestId: 'yield' }).yield();
     resumedTurn = serial.activeTurnId;
     events.push(`resumed:${reply.marker}`);
   });
@@ -424,13 +473,18 @@ test('same-Spot Async rejects while Yield resumes on a new FIFO turn', async () 
   await outbound.sendToSpot('same-spot', { requestId: 'send', marker: 'self-send' }).submit();
   assert.notEqual(resumedTurn, initialTurn);
   assert.deepEqual(events, ['queued:earlier', 'resumed:unexpected-reply']);
-  assert.deepEqual(submissions.map(({ kind }) => kind), ['request', 'send']);
+  assert.deepEqual(
+    submissions.map(({ kind }) => kind),
+    ['request', 'send']
+  );
 });
 
 test('routed local self-send queues behind the current turn while self-request fails before dispatch', async () => {
   const events = [];
   let completeSelf;
-  const selfCompleted = new Promise((resolve) => { completeSelf = resolve; });
+  const selfCompleted = new Promise((resolve) => {
+    completeSelf = resolve;
+  });
   class SelfPacketHandler {
     async handle(_spot, message) {
       events.push(`handler:${message.kind}`);
@@ -445,11 +499,13 @@ test('routed local self-send queues behind the current turn while self-request f
     spot,
     serial,
     handlers: {
-      snapshot: () => [{
-        kind: 'packet',
-        packetName: 'SelfPacket',
-        handlerType: SelfPacketHandler
-      }]
+      snapshot: () => [
+        {
+          kind: 'packet',
+          packetName: 'SelfPacket',
+          handlerType: SelfPacketHandler
+        }
+      ]
     }
   };
   const dispatch = new ZLinkRoutedSpotPacketDispatch({
@@ -459,26 +515,36 @@ test('routed local self-send queues behind the current turn while self-request f
   await serial.execute(async () => {
     events.push('turn:start');
     earlier = serial.post(() => events.push('queued:earlier'));
-    await dispatch.send('same-spot', 'SelfPacket', { kind: 'send' }, {
-      channelName: 'test'
-    });
+    await dispatch.send(
+      'same-spot',
+      'SelfPacket',
+      { kind: 'send' },
+      {
+        channelName: 'test'
+      }
+    );
     events.push('turn:send-admitted');
     await assert.rejects(
-      dispatch.request('same-spot', 'SelfPacket', { kind: 'request' }, {
-        channelName: 'test'
-      }),
-      (error) => error instanceof framework.ZLinkFrameworkException
-        && error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation
+      dispatch.request(
+        'same-spot',
+        'SelfPacket',
+        { kind: 'request' },
+        {
+          channelName: 'test'
+        }
+      ),
+      (error) =>
+        error instanceof framework.ZLinkFrameworkException &&
+        error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation
     );
     events.push('turn:request-rejected');
   });
   await earlier;
   await Promise.race([
     selfCompleted,
-    new Promise((_, reject) => setTimeout(
-      () => reject(new Error('FIFO self-send was not dispatched.')),
-      1_000
-    ))
+    new Promise((_, reject) =>
+      setTimeout(() => reject(new Error('FIFO self-send was not dispatched.')), 1_000)
+    )
   ]);
 
   assert.deepEqual(events, [
@@ -496,12 +562,22 @@ test('routed local one-way carries its shared job permit through the owner seria
   let releaseHandler;
   let handlerStarted;
   let handlerFinished = false;
-  const current = new Promise(( resolve ) => { releaseCurrent = resolve; });
-  const currentDidStart = new Promise(( resolve ) => { currentStarted = resolve; });
-  const handler = new Promise(( resolve ) => { releaseHandler = resolve; });
-  const handlerDidStart = new Promise(( resolve ) => { handlerStarted = resolve; });
+  const current = new Promise((resolve) => {
+    releaseCurrent = resolve;
+  });
+  const currentDidStart = new Promise((resolve) => {
+    currentStarted = resolve;
+  });
+  const handler = new Promise((resolve) => {
+    releaseHandler = resolve;
+  });
+  const handlerDidStart = new Promise((resolve) => {
+    handlerStarted = resolve;
+  });
   let finishHandler;
-  const handlerDidFinish = new Promise(( resolve ) => { finishHandler = resolve; });
+  const handlerDidFinish = new Promise((resolve) => {
+    finishHandler = resolve;
+  });
   class SlowHandler {
     async handle() {
       handlerStarted();
@@ -516,11 +592,13 @@ test('routed local one-way carries its shared job permit through the owner seria
     spot: {},
     serial,
     handlers: {
-      snapshot: () => [{
-        kind: 'packet',
-        packetName: 'SlowPacket',
-        handlerType: SlowHandler
-      }]
+      snapshot: () => [
+        {
+          kind: 'packet',
+          packetName: 'SlowPacket',
+          handlerType: SlowHandler
+        }
+      ]
     }
   };
   const dispatch = new ZLinkRoutedSpotPacketDispatch({
@@ -533,19 +611,24 @@ test('routed local one-way carries its shared job permit through the owner seria
   await currentDidStart;
 
   const queue = new ApplicationJobQueue(
-    resolveApplicationJobQueueConfiguration(
-      { maxQueuedApplicationJobs: 1n },
-      () => 8n
-    )
+    resolveApplicationJobQueueConfiguration({ maxQueuedApplicationJobs: 1n }, () => 8n)
   );
   const permit = await queue.acquire(undefined, 'remote');
   permit.markApplicationQueued();
   let admitted = false;
   const first = runWithApplicationJobPermit(permit, () =>
-    dispatch.send('capacity-target', 'SlowPacket', {}, {
-      channelName: 'test'
-    })).then(() => { admitted = true; });
-  await new Promise(( resolve ) => setImmediate(resolve));
+    dispatch.send(
+      'capacity-target',
+      'SlowPacket',
+      {},
+      {
+        channelName: 'test'
+      }
+    )
+  ).then(() => {
+    admitted = true;
+  });
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(admitted, true);
   assert.equal(handlerFinished, false);
   assert.equal(queue.snapshot().permitsInUse, 1n);
@@ -556,7 +639,7 @@ test('routed local one-way carries its shared job permit through the owner seria
     nextPermitAcquired = true;
     return nextPermit;
   });
-  await new Promise(( resolve ) => setImmediate(resolve));
+  await new Promise((resolve) => setImmediate(resolve));
   assert.equal(nextPermitAcquired, false);
   assert.equal(queue.snapshot().capacityWaiters, 1n);
 
@@ -586,15 +669,21 @@ test('yield request from an entry turn is rejected because Entry forbids Yield',
   const channelClient = {
     requestToChannel(_channelName, request) {
       return {
-        packetName() { return this; },
-        timeout() { return this; },
+        packetName() {
+          return this;
+        },
+        timeout() {
+          return this;
+        },
         submit() {
           events.push(`request:${request}`);
           return Promise.resolve('reply:ping');
         }
       };
     },
-    sendToChannel() { throw new Error('not used'); }
+    sendToChannel() {
+      throw new Error('not used');
+    }
   };
   class YieldEntrySpot {}
   const fixture = await createEntryFixture(YieldEntrySpot);
@@ -610,8 +699,9 @@ test('yield request from an entry turn is rejected because Entry forbids Yield',
       events.push('handler:start');
       await outbound.requestToChannel('api', 'ping').yield();
     }),
-    (error) => error instanceof framework.ZLinkConfigurationException
-      && /yield requires a SpotWide User Spot or Instance Spot application handler/.test(error.message)
+    (error) =>
+      error instanceof framework.ZLinkFrameworkException &&
+      error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation
   );
   assert.deepEqual(events, ['handler:start']);
 });
@@ -626,15 +716,21 @@ test('yield from an injected outbound is still gated by the ambient entry turn',
   const channelClient = {
     requestToChannel(_channelName, request) {
       return {
-        packetName() { return this; },
-        timeout() { return this; },
+        packetName() {
+          return this;
+        },
+        timeout() {
+          return this;
+        },
         submit() {
           events.push(`request:${request}`);
           return Promise.resolve('reply:ping');
         }
       };
     },
-    sendToChannel() { throw new Error('not used'); }
+    sendToChannel() {
+      throw new Error('not used');
+    }
   };
   class YieldEntrySpot {}
   const fixture = await createEntryFixture(YieldEntrySpot);
@@ -650,8 +746,9 @@ test('yield from an injected outbound is still gated by the ambient entry turn',
       events.push('handler:start');
       await injectedOutbound.requestToChannel('api', 'ping').yield();
     }),
-    (error) => error instanceof framework.ZLinkConfigurationException
-      && /yield requires a SpotWide User Spot or Instance Spot application handler/.test(error.message)
+    (error) =>
+      error instanceof framework.ZLinkFrameworkException &&
+      error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation
   );
   assert.deepEqual(events, ['handler:start']);
 });
@@ -674,13 +771,16 @@ test('runIoWorker promise continuation re-enters the owning spot serial executor
 
   const busy = serial.execute(async () => {
     events.push('busy:start');
-    void context.runIoWorker(async () => {
-      events.push('work');
-      return 21 * 2;
-    }).submit().then((result) => {
-      events.push(`completed:${result}:executing=${serial.isExecuting}`);
-      completed();
-    });
+    void context
+      .runIoWorker(async () => {
+        events.push('work');
+        return 21 * 2;
+      })
+      .submit()
+      .then((result) => {
+        events.push(`completed:${result}:executing=${serial.isExecuting}`);
+        completed();
+      });
     await busyGate;
     events.push('busy:end');
   });
@@ -745,14 +845,20 @@ test('runCpuWorker rejects async work and enforces its timeout', async () => {
     /requires a synchronous function/
   );
   await assert.rejects(
-    () => context.runCpuWorker(() => {
-      const deadline = Date.now() + 50;
-      while (Date.now() < deadline) { /* occupy the CPU worker */ }
-      return 'late';
-    }).timeoutMs(5).submit(),
+    () =>
+      context
+        .runCpuWorker(() => {
+          const deadline = Date.now() + 50;
+          while (Date.now() < deadline) {
+            /* occupy the CPU worker */
+          }
+          return 'late';
+        })
+        .timeoutMs(5)
+        .submit(),
     (error) =>
-      error instanceof framework.ZLinkFrameworkException
-      && error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+      error instanceof framework.ZLinkFrameworkException &&
+      error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
   );
 });
 
@@ -765,10 +871,12 @@ test('runIoWorker async keeps the current Spot turn until worker completion', as
 
   const gated = serial.execute(async () => {
     events.push('handler:start');
-    const result = await context.runIoWorker(async () => {
-      await delay(5);
-      return 'done';
-    }).submit();
+    const result = await context
+      .runIoWorker(async () => {
+        await delay(5);
+        return 'done';
+      })
+      .submit();
     events.push(`handler:${result}`);
   });
   const next = serial.execute(() => {
@@ -793,8 +901,9 @@ test('runIoWorker yield from an entry turn is rejected because Entry forbids Yie
       events.push('handler:start');
       await context.runIoWorker(async () => 'done').yield();
     }),
-    (error) => error instanceof framework.ZLinkConfigurationException
-      && /yield requires a SpotWide User Spot or Instance Spot application handler/.test(error.message)
+    (error) =>
+      error instanceof framework.ZLinkFrameworkException &&
+      error.kind === framework.ZLinkFrameworkErrorKind.InvalidOperation
   );
   assert.deepEqual(events, ['handler:start']);
 });
@@ -812,7 +921,9 @@ test('runCpuWorker queues work above the former queue cap while the dispatcher p
   const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const longCall = cpuWorkerCall(worker, serial, () => {
     const deadline = Date.now() + 100;
-    while (Date.now() < deadline) { /* occupy the CPU worker */ }
+    while (Date.now() < deadline) {
+      /* occupy the CPU worker */
+    }
     return 'long';
   });
   const longJob = longCall.submit();
@@ -822,9 +933,8 @@ test('runCpuWorker queues work above the former queue cap while the dispatcher p
 
   // A CPU worker closure runs in a worker thread, so it must not capture a
   // variable from this scope.
-  const queuedAfterFormerCap = Array.from(
-    { length: 4_096 },
-    () => cpuWorkerCall(worker, serial, () => 'queued-bulk').submit()
+  const queuedAfterFormerCap = Array.from({ length: 4_096 }, () =>
+    cpuWorkerCall(worker, serial, () => 'queued-bulk').submit()
   );
 
   // The owning dispatcher keeps processing while the queue is saturated.
@@ -841,7 +951,9 @@ test('runCpuWorker cancellation removes a queued job before it consumes a worker
   const serial = new framework.ZLinkSpotSerialTurnExecutor();
   const longJob = cpuWorkerCall(worker, serial, () => {
     const deadline = Date.now() + 80;
-    while (Date.now() < deadline) { /* occupy the CPU worker */ }
+    while (Date.now() < deadline) {
+      /* occupy the CPU worker */
+    }
     return 'long';
   }).submit();
   await waitFor(() => worker.inFlightCount === 1);
@@ -873,8 +985,8 @@ test('runIoWorker timeout fails the caller and drops the late completion without
   await assert.rejects(
     () => submitCall.submit(),
     (error) =>
-      error instanceof framework.ZLinkFrameworkException
-      && error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+      error instanceof framework.ZLinkFrameworkException &&
+      error.kind === framework.ZLinkFrameworkErrorKind.DeadlineExceeded
   );
   assert.equal(observedSignal.aborted, true);
 
@@ -901,9 +1013,9 @@ test('runIoWorker work failure surfaces as WorkerFailed wrapping the cause', asy
   await assert.rejects(
     () => call.submit(),
     (error) =>
-      error instanceof framework.ZLinkFrameworkException
-      && error.kind === framework.ZLinkFrameworkErrorKind.InternalFailure
-      && error.cause === cause
+      error instanceof framework.ZLinkFrameworkException &&
+      error.kind === framework.ZLinkFrameworkErrorKind.InternalFailure &&
+      error.cause === cause
   );
 });
 
@@ -916,8 +1028,8 @@ test('runIoWorker call accepts only one terminator', async () => {
   assert.throws(
     () => asyncFirst.submit(),
     (error) =>
-      error instanceof framework.ZLinkConfigurationException
-      && /only one terminator/.test(error.message)
+      error instanceof framework.ZLinkConfigurationException &&
+      /only one terminator/.test(error.message)
   );
   assert.equal(await pending, 'done');
 
@@ -935,8 +1047,8 @@ test('runIoWorker call accepts only one terminator', async () => {
   assert.throws(
     () => submitFirst.submit(),
     (error) =>
-      error instanceof framework.ZLinkConfigurationException
-      && /only one terminator/.test(error.message)
+      error instanceof framework.ZLinkConfigurationException &&
+      /only one terminator/.test(error.message)
   );
   await waitFor(() => submitted);
   assert.equal(await submitFirstPending, 'done');
@@ -950,8 +1062,8 @@ test('runIoWorker call accepts only one terminator', async () => {
     assert.throws(
       () => yieldFirst.submit(),
       (error) =>
-        error instanceof framework.ZLinkConfigurationException
-        && /only one terminator/.test(error.message)
+        error instanceof framework.ZLinkConfigurationException &&
+        /only one terminator/.test(error.message)
     );
     return await yielded;
   });
@@ -990,22 +1102,26 @@ test('worker options are accepted on the framework options builder and validated
 test('worker declarations expose split CPU and I/O execution contracts', () => {
   const declarationsRoot = path.resolve(__dirname, '../../packages/framework/dist/contracts');
   const declarations = readTree(declarationsRoot);
-  assert.match(declarations, /runCpuWorker<T>\(work: \(signal: AbortSignal\) => T\): ZLinkWorkerCall<T>/);
-  assert.match(declarations, /runIoWorker<T>\(work: \(signal: AbortSignal\) => Promise<T>\): ZLinkWorkerCall<T>/);
+  assert.match(
+    declarations,
+    /runCpuWorker<T>\(work: \(signal: AbortSignal\) => T\): ZLinkWorkerCall<T>/
+  );
+  assert.match(
+    declarations,
+    /runIoWorker<T>\(work: \(signal: AbortSignal\) => Promise<T>\): ZLinkWorkerCall<T>/
+  );
   assert.doesNotMatch(declarations, /\brunWorker<T>/);
 });
 
 function ioWorkerCall(worker, serial, work) {
-  return new framework.DefaultZLinkWorkerCall(
-    serial,
-    (timeoutMs, signal) => worker.scheduleIo(work, timeoutMs, signal)
+  return new framework.DefaultZLinkWorkerCall(serial, (timeoutMs, signal) =>
+    worker.scheduleIo(work, timeoutMs, signal)
   );
 }
 
 function cpuWorkerCall(worker, serial, work) {
-  return new framework.DefaultZLinkWorkerCall(
-    serial,
-    (timeoutMs, signal) => worker.scheduleCpu(work, timeoutMs, signal)
+  return new framework.DefaultZLinkWorkerCall(serial, (timeoutMs, signal) =>
+    worker.scheduleCpu(work, timeoutMs, signal)
   );
 }
 

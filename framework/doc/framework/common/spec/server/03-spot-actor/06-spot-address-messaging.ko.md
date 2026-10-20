@@ -191,9 +191,9 @@ ObjectGeneration, creation attempt)` 기준으로 한 번 이상 실행될 수 �
 
 `GetOrCreate`는 같은 User Spot type의 Ready object를 owner lease가 유효하면 `Existing`으로 반환하고,
 무효하면 [Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas)의 해제 결과를 따른다. 진행 중인
-Creating attempt를 관찰한 서로 다른 operation은 새 reservation이나 factory를 시작하지 않고
-authority 변경을 기다린다. 앞선 attempt가 Ready로 끝나면 `Existing`과 그 incarnation의
-`SpotRef`를 반환한다. Rejected·failure cleanup으로 Missing이 되면 남은 deadline 안에서 새
+Creating attempt나 Closing authority를 관찰한 서로 다른 operation은 새 reservation이나 factory를 시작하지 않고
+authority 변경을 기다린다. 같은 type의 Ready authority를 관찰하면 `Existing`과 그 incarnation의
+`SpotRef`를 반환한다. Rejected·failure cleanup이나 Close 완료로 Missing이 되면 남은 deadline 안에서 새
 reservation을 경쟁하고, winner가 자신의 creation request로 factory와 callback을 실행한다. 서로
 다른 operation은 앞선 attempt의 `Rejected` state와 application reply를 공유하지 않는다. 동일한
 operation ID가 재전달된 경우에만 retained terminal result를 재전송한다.
@@ -518,6 +518,19 @@ Close 절차는 다음 순서로 진행한다.
    relocation 중이면(seal 전후 모두) `Unavailable`로 끝나며 send는 diagnostics에 남는다. 이미 수락한 message를
    다시 배치하지 않는다([Submit과 완료 §5](../01-execution/01-submit-and-completion.ko.md#5-backpressure와-오류-분류)).
 
+**Ready 전에 요청한 context Close는 Ready 뒤에 시작한다.** Ready 전에는 handler와 timer callback이
+실행되지 않으므로([Spot timer §1](10-spot-timer.ko.md#1-timer-generation과-cancel)) 이런 요청은 `Configure`·`OnCreateAsync`·
+`OnInitializeAsync` 안에서만 생긴다. 이 요청은 1단계의 Close 작업 하나로 lifecycle lane에 들어가 그 Spot이
+Ready가 된 뒤 시작한다. Instance Spot cold activation에서는 Ready만으로 부족하다. 첫 업무 message의 handler가
+끝나고 replay cursor 갱신이 durable해져 activation recovery pointer를 해제한 뒤에야 시작한다([§4.1](#41-절차--resolve부터-activation까지) 12단계) —
+그 전에 authority를 `Closing`으로 바꾸면 `Closing` authority에 recovery pointer가 남게 된다. 시작한 Close는
+이 절의 membership 확인, owner·generation fence와 완료 규칙을 그대로 따른다. 미루었다고 `true`가 보장되지는
+않는다. 예를 들어 relocation target 초기화에서 요청한 Close는 member Actor가 있으면 `false`다. 요청한 callback은
+Close 완료를 기다리지 않는다 — Close는 그 callback이 끝나 Ready가 된 뒤에야 시작하므로 callback 안에서 기다리면
+완료될 수 없다. 새 User Spot 생성이나 Instance Spot cold activation이 Ready 전에 거부·실패해 끝나면 닫을 incarnation이
+없으므로 그 Close는 idempotent `false`로 끝난다. Relocation target 초기화는 authority CAS 뒤에 실행되므로 이 규칙에
+들지 않으며, 그 실패는 [relocation 규칙](../05-location-relocation/04-relocation-flow.ko.md#46-target은-기존-작업부터-점진적으로-queue를-연다)을 따른다.
+
 Close 작업 뒤에 놓인 message 가운데 Instance intent가 없는 message는 [§9](#9-실패와-관측)의 결과로
 끝난다. 같은 incarnation이 이미 없으면 idempotent `false`, 같은 Spot ID의 다른 generation이 있으면
 `InvalidOperation`, 이동 seal 중이면 `Unavailable`로 끝난다. Framework는 current ref를 다시
@@ -583,7 +596,7 @@ Seal 뒤 source ingress hold는 commit된 Message Follow route로 relay한다.
 | Instance intent가 없는 Spot direct send·request의 target authority가 `Missing` 또는 `Creating`이다 | `NotFound`다. |
 | `ActorRef`·`SpotRef`로 지정한 control의 generation이 current generation과 다르다(direct message는 [08-routing §2.6](08-routing.ko.md#26-objectgeneration을-어디에-사용하고-어디에-사용하지-않는가)대로 generation을 비교하지 않는다) | `InvalidOperation`이다. |
 | [owner fence](../00-foundation/02-glossary.ko.md#owner-fence)가 다르다 | `Unavailable`이다. |
-| `Closing` owner에 작업이 도착했거나 resolver가 `Closing` authority를 확인했다 | Instance intent가 있는 작업은 그 owner node로 보내며 §7 3단계에 따라 새 generation에서 실행된다. Instance intent가 없는 작업은 `Missing`과 같은 `NotFound`다. |
+| `Closing` owner에 작업이 도착했거나 resolver가 `Closing` authority를 확인했다 | User Spot `GetOrCreate`는 §3.2를 따른다. Instance intent가 있는 작업은 그 owner node로 보내며 §7 3단계에 따라 새 generation에서 실행된다. 그 밖의 작업은 `Missing`과 같은 `NotFound`다. |
 | `Draining` owner에 신규 admission을 요청했다 | `ShuttingDown`이다. |
 | Relocation seal 이후 source route로 ingress가 도착했다 | 거부하지 않고 relocation hold에 보관한다. |
 | `Relocating`이지만 아직 seal하지 않은 unit에 message가 도착했다 | 기존 owner admission을 유지해 수락한다. |

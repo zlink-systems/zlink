@@ -1,3 +1,5 @@
+import { ZLinkDescriptorPublicationUnconfirmedError } from './descriptor-publication';
+import { isIndeterminateLocationStoreFailure } from './location-store-failure';
 import { listAllMeshNodeDescriptors } from './location-store-pages';
 import { MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
 import { ZLINK_PROVIDER_MAX_PAGE_SIZE } from '../../contracts/Locations/Stores';
@@ -148,7 +150,9 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   private readonly liveRows: ZLinkLiveRowFilter;
   private readonly leaseTracker: ZLinkOwnerLeaseTracker;
   private readonly ownershipLostHandlers = new Set<(event: ZLinkOwnershipLostEvent) => void>();
-  private readonly ownerLeaseRenewedHandlers = new Set<(renewal: ZLinkOwnerLeaseRenewed) => void>();
+  private readonly ownerLeaseRenewedHandlers = new Set<
+    (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
+  >();
   private readonly ownerLeaseRenewalFailedHandlers = new Set<() => void>();
   private heartbeatTimer: unknown;
   private heartbeatRenewal?: Promise<unknown>;
@@ -216,9 +220,22 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     return this.ownerToken;
   }
 
+  /** Location runtime §5: a startup Store request ends within the renew timeout. */
+  async writeDescriptor<T>(
+    action: (signal?: AbortSignal) => Promise<T>,
+    signal?: AbortSignal
+  ): Promise<T> {
+    try {
+      return await withTimeout(action, this.options.ownerLeaseRenewTimeoutMs, signal);
+    } catch (error) {
+      if (!isIndeterminateLocationStoreFailure(error, signal)) throw error;
+      throw new ZLinkDescriptorPublicationUnconfirmedError(error);
+    }
+  }
+
   closeOwnerLeaseAdmission(error: unknown): void {
     this.ownerLeaseDeadlineMs = undefined;
-    this.recordFailure(errorMessage(error), 'owner_lease_recovery');
+    this.recordFailure(errorMessage(error));
   }
 
   async reclaimOwnerAuthorities(signal?: AbortSignal): Promise<void> {
@@ -308,11 +325,15 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     this.ownershipLostHandlers.delete(handler);
   }
 
-  addOwnerLeaseRenewedHandler(handler: (renewal: ZLinkOwnerLeaseRenewed) => void): void {
+  addOwnerLeaseRenewedHandler(
+    handler: (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
+  ): void {
     this.ownerLeaseRenewedHandlers.add(handler);
   }
 
-  removeOwnerLeaseRenewedHandler(handler: (renewal: ZLinkOwnerLeaseRenewed) => void): void {
+  removeOwnerLeaseRenewedHandler(
+    handler: (renewal: ZLinkOwnerLeaseRenewed, wasOwnerLeaseUsable: boolean) => void
+  ): void {
     this.ownerLeaseRenewedHandlers.delete(handler);
   }
 
@@ -414,7 +435,6 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       return await this.claimFreshOwnerLease(signal, shutdownSignal);
     }
 
-    const wasOwnerLeaseUsable = this.ownerLeaseUsable;
     try {
       const renewStartedAtMs = this.monotonicNowMs();
       this.leaseOperationStartedAtMs = renewStartedAtMs;
@@ -444,6 +464,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         // another heartbeat interval.
         return await this.claimFreshOwnerLease(signal, shutdownSignal);
       }
+      const wasOwnerLeaseUsable = this.ownerLeaseUsable;
       this.ownerLeaseHealthy = true;
       this.ownerLeaseRenewedAt = result.storeNow;
       this.setOwnerLeaseDeadline(
@@ -453,14 +474,14 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         result.storeNow
       );
       this.lastError = undefined;
-      if (!wasOwnerLeaseUsable) {
-        for (const handler of this.ownerLeaseRenewedHandlers) handler(result);
+      for (const handler of this.ownerLeaseRenewedHandlers) {
+        handler(result, wasOwnerLeaseUsable);
       }
       return true;
     } catch (error) {
       if (signal?.aborted === true) throw error;
       this.recordOwnerLeaseRenewFailure();
-      this.recordFailure(errorMessage(error), 'lease_renew');
+      this.recordFailure(errorMessage(error));
       for (const handler of this.ownerLeaseRenewalFailedHandlers) handler();
       return false;
     }
@@ -484,13 +505,13 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       if (signal?.aborted === true) throw error;
       if (error instanceof ZLinkOwnerLeaseClaimError) throw error;
       this.recordOwnerLeaseRenewFailure();
-      this.recordFailure(errorMessage(error), 'owner_lease_claim');
+      this.recordFailure(errorMessage(error));
       return false;
     }
     const claimCompletedAtMs = this.monotonicNowMs();
     if (claim.kind !== 'claimed') {
       const error = new ZLinkOwnerLeaseClaimError(claim.kind);
-      this.recordFailure(error.message, 'owner_lease_claim');
+      this.recordFailure(error.message);
       throw error;
     }
     try {
@@ -510,16 +531,19 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       );
       this.lastError = undefined;
       for (const handler of this.ownerLeaseRenewedHandlers) {
-        handler({
-          kind: 'renewed',
-          leaseExpiresAt: claim.leaseExpiresAt,
-          storeNow: claim.storeNow
-        });
+        handler(
+          {
+            kind: 'renewed',
+            leaseExpiresAt: claim.leaseExpiresAt,
+            storeNow: claim.storeNow
+          },
+          false
+        );
       }
       return true;
     } catch (error) {
       if (signal?.aborted === true) throw error;
-      this.recordFailure(errorMessage(error), 'owner_lease_claim');
+      this.recordFailure(errorMessage(error));
       return false;
     }
   }
@@ -563,7 +587,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
             throw new ZLinkOwnerCleanupError(completionError);
           }
           if (!isAbortError(completionError)) {
-            this.recordFailure(errorMessage(completionError), 'owner_lease_claim');
+            this.recordFailure(errorMessage(completionError));
           }
         }
       }
@@ -607,7 +631,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         cleanupSignal
       );
     } catch (confirmationError) {
-      this.recordFailure(errorMessage(confirmationError), 'owner_lease_claim_confirmation');
+      this.recordFailure(errorMessage(confirmationError));
       if (cancelled) throw new ZLinkOwnerCleanupError(confirmationError);
       throw confirmationError;
     }
@@ -625,7 +649,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
           cleanupSignal
         );
       } catch (releaseError) {
-        this.recordFailure(errorMessage(releaseError), 'owner_lease_release');
+        this.recordFailure(errorMessage(releaseError));
         throw new ZLinkOwnerCleanupError(releaseError);
       }
       throw originalError;
@@ -693,7 +717,10 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       updatedAt: new Date()
     };
     let result = await this.guardWrite(() =>
-      this.stores.locationStore.updateMeshNode(stamped, intent, signal)
+      this.writeDescriptor(
+        (writeSignal) => this.stores.locationStore.updateMeshNode(stamped, intent, writeSignal),
+        signal
+      )
     );
     if (
       intent === ZLinkLocationWriteIntent.Renew &&
@@ -705,7 +732,15 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       // NewClaim as a bounded fallback. If another owner has recreated the
       // row, NewClaim remains rejected and the caller keeps the conflict.
       result = await this.guardWrite(() =>
-        this.stores.locationStore.updateMeshNode(stamped, ZLinkLocationWriteIntent.NewClaim, signal)
+        this.writeDescriptor(
+          (writeSignal) =>
+            this.stores.locationStore.updateMeshNode(
+              stamped,
+              ZLinkLocationWriteIntent.NewClaim,
+              writeSignal
+            ),
+          signal
+        )
       );
     }
     this.notifyIfStale(
@@ -912,7 +947,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   }
 
   reportDiscoveryFailure(error: unknown): void {
-    this.recordFailure(errorMessage(error), 'read');
+    this.recordFailure(errorMessage(error));
   }
 
   async listPeerLocations(
@@ -943,6 +978,14 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       signal
     );
     return live.map((row) => ({ ...row, endpoint: normalizeEndpoint(row.endpoint) }));
+  }
+
+  /** Remaining exact owner lease from the same tracker that filters live descriptors. */
+  remainingOwnerTokenLeaseMs(
+    owner: ZLinkLocationOwnerToken,
+    signal?: AbortSignal
+  ): Promise<number> {
+    return this.leaseTracker.remainingOwnerTokenLeaseMs(owner, signal);
   }
 
   async listMeshNodeDescriptors(
@@ -1269,7 +1312,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         this.monotonicNowMs() >= this.ownerLeaseDeadlineMs
       ) {
         this.ownerLeaseHealthy = false;
-        this.recordFailure('Owner lease expired before renewal completed.', 'lease_expired');
+        this.recordFailure('Owner lease expired before renewal completed.');
         for (const handler of this.ownerLeaseRenewalFailedHandlers) handler();
       }
       const renewal = this.renewOwnerLeaseOnce()
@@ -1294,7 +1337,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     try {
       return await write();
     } catch (error) {
-      this.recordFailure(errorMessage(error), 'compare_exchange');
+      this.recordFailure(errorMessage(error));
       throw error;
     }
   }
@@ -1305,7 +1348,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     try {
       return await write();
     } catch (error) {
-      this.recordFailure(errorMessage(error), 'compare_exchange');
+      this.recordFailure(errorMessage(error));
       throw error;
     }
   }
@@ -1315,12 +1358,6 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     kind: ZLinkLocationKind,
     key: string
   ): void {
-    if (
-      result.status === ZLinkLocationWriteStatus.IgnoredStale ||
-      result.status === ZLinkLocationWriteStatus.RejectedConflict
-    ) {
-      this.metrics?.recordLocationStoreError('compare_exchange');
-    }
     if (result.status !== ZLinkLocationWriteStatus.IgnoredStale) {
       return;
     }
@@ -1334,12 +1371,6 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     kind: ZLinkLocationKind,
     key: string
   ): void {
-    if (
-      status === ZLinkLocationWriteStatus.IgnoredStale ||
-      status === ZLinkLocationWriteStatus.RejectedConflict
-    ) {
-      this.metrics?.recordLocationStoreError('compare_exchange');
-    }
     if (status !== ZLinkLocationWriteStatus.IgnoredStale) {
       return;
     }
@@ -1348,8 +1379,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     }
   }
 
-  private recordFailure(message: string, operation = 'read'): void {
-    this.metrics?.recordLocationStoreError(operation);
+  private recordFailure(message: string): void {
     this.ownerLeaseHealthy = false;
     this.lastError = message;
   }

@@ -22,7 +22,23 @@ internal static partial class ZLinkServiceWireCodec
         ulong LeaseGeneration,
         RoutingId NodeRid,
         ulong NodeGeneration
-    );
+    )
+    {
+        /// <summary>
+        /// Session-Actor binding §4: the receiving Session owner compares the identity
+        /// carried by command 42, 51 or 54 with its current values exactly.
+        /// </summary>
+        internal bool IdentifiesSessionOwner(
+            RoutingId nodeRid,
+            ulong nodeGeneration,
+            string ownerId,
+            ulong leaseGeneration
+        ) =>
+            NodeRid == nodeRid
+            && NodeGeneration == nodeGeneration
+            && string.Equals(OwnerId, ownerId, StringComparison.Ordinal)
+            && LeaseGeneration == leaseGeneration;
+    }
 
     internal readonly record struct ReplyRelayRecord(
         MeshOperationId OperationId,

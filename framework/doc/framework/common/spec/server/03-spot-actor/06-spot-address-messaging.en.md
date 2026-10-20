@@ -230,10 +230,10 @@ If the same caller Spot ID's kind or stable type differs, it's
 `GetOrCreate` returns a Ready object of the same User Spot type as
 `Existing` when its owner lease is valid, and otherwise follows the release
 result of [Location runtime §6.1](../05-location-relocation/01-location-runtime.en.md#61-read-and-cas). A different operation observing an in-progress Creating attempt
-doesn't start a new reservation or factory — it waits for the authority
-change. If the earlier attempt ends Ready, it returns `Existing` and that
+or a Closing authority doesn't start a new reservation or factory — it waits for the authority
+change. When it observes a Ready authority of the same type, it returns `Existing` and that
 incarnation's `SpotRef`. If it becomes Missing via rejection/failure
-cleanup, it competes for a new reservation within the remaining deadline,
+cleanup or a completed Close, it competes for a new reservation within the remaining deadline,
 and the winner runs factory and callback with its own creation request. A
 different operation doesn't share an earlier attempt's `Rejected` state or
 application reply. Only a redelivery of the same operation ID resends the
@@ -618,6 +618,21 @@ The close procedure proceeds in the following order.
    diagnostics. An already accepted message is not placed again
    ([Submit and Completion §5](../01-execution/01-submit-and-completion.en.md#5-backpressure-and-error-classification)).
 
+**A context Close requested before Ready starts after Ready.** Handlers and timer callbacks don't run
+before Ready ([Spot timer §1](10-spot-timer.en.md#1-timer-generation-and-cancel)), so such a request only comes from
+`Configure`, `OnCreateAsync` or `OnInitializeAsync`. The request enters the lifecycle lane as the single Close work
+item of step 1 and starts after the Spot becomes Ready. For an Instance Spot cold activation, Ready isn't enough: it
+starts only after the first business message's handler completes and the replay-cursor update is durable, so the
+activation recovery pointer has been released ([§4.1](#41-procedure--from-resolve-to-activation) step 12) — moving authority to
+`Closing` earlier would leave a recovery pointer on `Closing` authority. Once started, the Close follows this section's
+membership check, owner and generation fences and completion rules; deferral doesn't guarantee `true`. For example, a
+Close requested during relocation target initialization ends `false` if the Spot has member Actors. The requesting
+callback doesn't wait for the Close to complete — the Close starts only after that callback returns and the Spot
+becomes Ready, so waiting inside it could never complete. If a new User Spot creation or an Instance Spot cold
+activation is rejected or fails before Ready, there is no incarnation to close and that Close ends with idempotent
+`false`. Relocation target initialization runs after the authority CAS, so it is outside this rule; its failure follows
+the [relocation rules](../05-location-relocation/04-relocation-flow.en.md#46-target-opens-the-queue-progressively-starting-with-existing-work).
+
 A message placed after the Close work item that has no Instance intent ends with the result of
 [§9](#9-failure-and-observability). If that incarnation no longer exists, idempotent `false`; if a
 different generation of the same Spot ID exists, `InvalidOperation`; if sealing for a move,
@@ -700,7 +715,7 @@ After seal, the source ingress hold is relayed via the committed Message Follow 
 | The target authority of a Spot direct send or request without Instance intent is `Missing` or `Creating` | `NotFound`. |
 | The generation of a control addressed by `ActorRef`/`SpotRef` differs from the current generation (a direct message doesn't compare generations, per [08-routing §2.6](08-routing.en.md#26-where-objectgeneration-is-used-and-where-its-not)) | `InvalidOperation`. |
 | The [owner fence](../00-foundation/02-glossary.en.md#owner-fence) differs | `Unavailable`. |
-| Work reached a `Closing` owner, or the resolver observed `Closing` authority | Work with Instance intent is sent to that owner node and runs on the new generation per §7 step 3. Work without Instance intent gets `NotFound`, the same as `Missing`. |
+| Work reached a `Closing` owner, or the resolver observed `Closing` authority | User Spot `GetOrCreate` follows §3.2. Work with Instance intent is sent to that owner node and runs on the new generation per §7 step 3. All other work gets `NotFound`, the same as `Missing`. |
 | New admission requested on a `Draining` owner | `ShuttingDown`. |
 | Ingress arrives on the source route after a relocation seal | Not rejected — retained in the relocation hold. |
 | A message arrives at a `Relocating` unit not yet sealed | Accepted, keeping existing owner admission. |

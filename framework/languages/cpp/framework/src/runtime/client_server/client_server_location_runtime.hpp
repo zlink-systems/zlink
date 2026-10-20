@@ -48,6 +48,8 @@ pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
                        receive_batch_budget_t budget = {},
                        const dispatch_options_t *dispatch_options = nullptr);
 
+struct client_server_location_runtime_test_access_t;
+
 class client_server_location_runtime_t final : public client_server_runtime_t
 {
   public:
@@ -75,7 +77,8 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     void stop ();
     bool empty () const noexcept;
     bool publish_descriptor_state (framework_runtime_state_t state) noexcept;
-    bool republish_after_store_recovery ();
+    bool republish_after_store_recovery (
+      location_write_intent_t intent = location_write_intent_t::new_claim);
 
     client_server_channel_snapshot_t snapshot (std::string channel_name) const override;
     std::unique_ptr<mesh_runtime_observation_t>
@@ -89,6 +92,8 @@ class client_server_location_runtime_t final : public client_server_runtime_t
       client_server_channel_snapshot_t>;
 
   private:
+    friend struct client_server_location_runtime_test_access_t;
+
     struct server_entry_t;
     struct client_connection_t;
     struct client_channel_t;
@@ -108,14 +113,15 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     task_t<void>
     reconcile_channel_task (client_channel_t &channel,
                             const raw_client_server_client_t::transport_turn_t &transport_turn);
-    bool request_publication () noexcept;
+    bool
+    request_publication (location_write_intent_t intent = location_write_intent_t::renew) noexcept;
     task_t<void> request_transport_turn (std::function<void ()> work);
     void run_transport_turns ();
-    task_t<bool> publish_servers_task ();
+    task_t<bool> publish_servers_task (location_write_intent_t intent);
     task_t<void> pump ();
     task_t<worker_lane_snapshot_t> run_worker_turn ();
     task_t<void> publish_snapshot_changes ();
-    client_server_channel_snapshot_t
+    std::optional<client_server_channel_snapshot_t>
     publish_snapshot_locked (client_server_channel_snapshot_t current,
                              const std::shared_ptr<observer_t> &initial_observer = {}) const;
     boost::asio::awaitable<result_t<void>>
@@ -157,6 +163,10 @@ class client_server_location_runtime_t final : public client_server_runtime_t
     task_t<bool> owner_is_live_task (client_server_server_descriptor_t descriptor) const;
     snapshot_source_t snapshot_source_locked (const std::string &channel_name) const;
     task_t<client_server_channel_snapshot_t> snapshot_task (std::string channel_name) const;
+    // A status query in two steps: the projection of the channel, then its publication.
+    task_t<client_server_channel_snapshot_t> query_projection_task (std::string channel_name) const;
+    task_t<client_server_channel_snapshot_t>
+    complete_query_task (client_server_channel_snapshot_t projection) const;
     task_t<client_server_channel_snapshot_t> build_snapshot_task (snapshot_source_t source) const;
     client_server_channel_snapshot_t build_snapshot (snapshot_source_t source) const;
     static bool snapshot_equivalent (const client_server_channel_snapshot_t &left,

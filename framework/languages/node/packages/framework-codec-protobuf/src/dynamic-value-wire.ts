@@ -100,9 +100,9 @@ export function decodeDynamicValue(bytes: Buffer): unknown {
   let boolValue = false;
   let numberValue = 0;
   let stringValue = '';
-  let bytesValue = Buffer.alloc(0);
+  let bytesValue: Buffer | undefined;
   let objectValue: Record<string, unknown> | undefined;
-  const arrayValue: unknown[] = [];
+  let arrayValue: unknown[] | undefined;
 
   for (const field of readFields(bytes)) {
     switch (field.fieldNumber) {
@@ -124,10 +124,12 @@ export function decodeDynamicValue(bytes: Buffer): unknown {
         break;
       }
       case DynamicValueField.Array:
-        arrayValue.push(decodeDynamicValue(readBytesPayload(field)));
+        (arrayValue ??= []).push(decodeDynamicValue(readBytesPayload(field)));
         break;
       case DynamicValueField.Bytes:
-        bytesValue = Buffer.from(readBytesPayload(field));
+        // Copy into an unpooled ArrayBuffer: a pooled Buffer may share the
+        // encoded payload's backing store, which decoded values must not expose.
+        bytesValue = copyToOwnedBuffer(readBytesPayload(field));
         break;
       default:
         break;
@@ -146,9 +148,9 @@ export function decodeDynamicValue(bytes: Buffer): unknown {
     case ValueKind.Object:
       return objectValue !== undefined ? Object.setPrototypeOf(objectValue, Object.prototype) : {};
     case ValueKind.Array:
-      return arrayValue;
+      return arrayValue ?? [];
     case ValueKind.Bytes:
-      return bytesValue;
+      return bytesValue ?? Buffer.alloc(0);
     default:
       throw new Error(`Protobuf serializer cannot decode value kind '${kind}'.`);
   }
@@ -210,7 +212,7 @@ function encodeVarint(value: number | bigint): Buffer {
     if (remaining !== 0n) byte |= 0x80;
     bytes[offset++] = byte;
   } while (remaining !== 0n);
-  return Buffer.from(bytes.subarray(0, offset));
+  return bytes.subarray(0, offset);
 }
 
 type WireField = {
@@ -293,4 +295,10 @@ function readVarint(
     if ((byte & 0x80) === 0) return { value, offset };
     shift += 7n;
   }
+}
+
+function copyToOwnedBuffer(source: Uint8Array): Buffer<ArrayBuffer> {
+  const owned = new ArrayBuffer(source.byteLength);
+  new Uint8Array(owned).set(source);
+  return Buffer.from(owned);
 }

@@ -31,6 +31,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.function.Consumer;
+import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -46,7 +47,12 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
     private final ConcurrentMap<UUID, CanonicalAdmission> canonicalAdmissions =
             new ConcurrentHashMap<>();
     private final ConcurrentMap<String, SourceAttempt> sources = new ConcurrentHashMap<>();
-    private final ZLinkActorJoinPrewarmRegistry prewarm = new ZLinkActorJoinPrewarmRegistry();
+    private final ZLinkActorJoinPrewarmRegistry prewarm =
+            new ZLinkActorJoinPrewarmRegistry(
+                    relocationId -> {
+                        canonicalAdmissions.remove(relocationId);
+                        admissions.remove(relocationId);
+                    });
 
     ZLinkActorJoinCanonicalAdapter(ZLinkActorRuntime actors, ZLinkSpotRuntime spots) {
         this.actors = Objects.requireNonNull(actors, "actors");
@@ -93,8 +99,14 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             Instant restoreDeadline,
             ZLinkStandaloneActorRelocationSourceBuilder.PreparedSource prepared) {
         SourceAttempt attempt = new SourceAttempt(goal, prepared);
-        SourceAttempt previous = sources.putIfAbsent(goal.sourceActor().actorId(), attempt);
-        if (previous != null) {
+        SourceAttempt claimed =
+                sources.compute(
+                        goal.sourceActor().actorId(),
+                        (actorId, current) ->
+                                current == null || current.committed().isDone()
+                                        ? attempt
+                                        : current);
+        if (claimed != attempt) {
             return prepared.abort()
                     .thenCompose(
                             ignored ->
@@ -106,7 +118,8 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         return ZLinkRelocationHandOff.run(
                         lane.client(),
                         prepared.stageRequest(),
-                        () -> prepared.relayCapturedIngress(lane.client(), timeout),
+                        settlement ->
+                                prepared.relayCapturedIngress(lane.client(), timeout, settlement),
                         timeout,
                         restoreDeadline)
                 .handle(
@@ -117,6 +130,14 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                 .thenCompose(outcome -> outcome);
     }
 
+    @Override
+    public CompletionStage<Void> awaitSourceCleanup(String actorId, long objectGeneration) {
+        SourceAttempt source = sources.get(actorId);
+        return source == null || source.goal().sourceActor().generation() != objectGeneration
+                ? CompletableFuture.completedFuture(null)
+                : source.committed().thenApply(ignored -> null);
+    }
+
     /** Applies the settled authority of the Join unit (spec 28 §4.4). */
     private CompletionStage<Submission> settleSource(
             SourceAttempt attempt, ZLinkRelocationTransitionClient.Settlement settlement) {
@@ -125,9 +146,10 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         return switch (settlement) {
             case TARGET_COMMITTED -> {
                 yield prepared.completeSourceQueueCommit()
+                        .thenCompose(ignored -> leaveSourceMembership(attempt))
                         .thenApply(
-                                ignored -> {
-                                    attempt.committed().complete(null);
+                                leave -> {
+                                    attempt.committed().complete(leave);
                                     armAuthorityLossCleanup(attempt);
                                     return new Submission(
                                             new ZLinkBackendActorRef(
@@ -152,7 +174,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                                 ZLinkFrameworkErrorKind.UNAVAILABLE,
                                 "Actor Join source owner lease expired or authority is Missing");
                 attempt.committed().completeExceptionally(expired);
-                yield prepared.discardAfterSourceLeaseExpiry(goal.activeTurnSeal())
+                yield prepared.discardAfterSourceLeaseExpiry()
                         .handle(
                                 (ignored, discardFailure) -> {
                                     if (discardFailure != null) {
@@ -162,6 +184,22 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                                 });
             }
         };
+    }
+
+    /**
+     * The confirmed target commit ends the source membership (spec 30 §7, spec 15 §4.1): the
+     * committed Actor leaves the source registry and inventory here, as host relocation does. Only
+     * the one-way source OnLeaveActor still waits for ActorLeft or the retention cleanup, so it
+     * keeps the Spot surface resolved while the Actor was a member.
+     */
+    private CompletionStage<SourceLeave> leaveSourceMembership(SourceAttempt attempt) {
+        ZLinkStandaloneActorRelocationSourceBuilder.PreparedSource prepared = attempt.prepared();
+        ZLinkActor actor = prepared.actor();
+        SourceLeave leave =
+                new SourceLeave(actor, actor == null ? null : spots.localActorSpotSurface(actor));
+        return ZLinkRelocationHandOff.completeSourceCleanup(
+                        List.of(prepared::cleanupLocal, prepared::discardInitialAfterCommit))
+                .thenApply(ignored -> leave);
     }
 
     /** Restores the source: a failure before relay readiness or a won Preserve fence. */
@@ -184,19 +222,8 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                 Instant.now().plus(spots.relocationForwardRetention()),
                 () -> {
                     sources.remove(attempt.goal().sourceActor().actorId(), attempt);
-                    attempt.prepared()
-                            .committedTargetAuthorityOwnerGeneration()
-                            .thenCompose(
-                                    generation ->
-                                            generation.isPresent()
-                                                            && attempt.leaveClaimed()
-                                                                    .compareAndSet(false, true)
-                                                    ? completeSourceLeave(
-                                                            attempt,
-                                                            actorLeft(
-                                                                    attempt,
-                                                                    generation.orElseThrow()))
-                                                    : CompletableFuture.completedFuture(null))
+                    attempt.committed()
+                            .thenCompose(leave -> notifySourceLeft(attempt, leave))
                             .exceptionally(
                                     failure -> {
                                         LOGGER.log(
@@ -225,30 +252,15 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             //  attempted the same object is evicted first — newest
             //  attempt wins (spec 15 §4.2 "같은 object의 relocation
             //  temporary queue는 하나만 존재한다").
+            actors.resolveActorFactoryType(admission.actorType());
             prewarm.register(
                     admission.relocationId(),
                     admission.actorId(),
                     admission.objectGeneration(),
-                    admission.actorType(),
-                    actors.resolveActorFactoryType(admission.actorType()),
-                    evicted -> {
-                        admissions.remove(evicted.relocationId());
-                        LOGGER.info(
-                                "Actor Join prewarm for "
-                                        + evicted.objectKey().actorId()
-                                        + " evicted by a newer RelocationId: "
-                                        + admission.relocationId());
-                    });
-            //  Same validity-window timer covers both the admission
-            //  record and its prewarm so an accepted-but-never-started
-            //  move (DisableRelocation, capacity, compat failure) cleans
-            //  both up together (spec 15 §4.2).
+                    evicted -> {});
             spots.scheduleRelocationCleanup(
                     Instant.now().plus(admission.timeout()),
-                    () -> {
-                        admissions.remove(admission.relocationId(), admission);
-                        prewarm.release(admission.relocationId());
-                    });
+                    () -> prewarm.expire(admission.relocationId()));
         }
     }
 
@@ -264,23 +276,24 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             }
             return;
         }
+        actors.resolveActorFactoryType(admission.actorType());
         prewarm.register(
                 admission.relocationId(),
                 admission.actorId(),
                 admission.objectGeneration(),
-                admission.actorType(),
-                actors.resolveActorFactoryType(admission.actorType()),
-                evicted -> {
-                    canonicalAdmissions.remove(evicted.relocationId());
-                    admissions.remove(evicted.relocationId());
-                });
+                evicted -> {});
         spots.scheduleRelocationCleanup(
                 Instant.now().plus(admission.timeout()),
-                () -> {
-                    canonicalAdmissions.remove(admission.relocationId(), admission);
-                    admissions.remove(admission.relocationId());
-                    prewarm.release(admission.relocationId());
-                });
+                () -> prewarm.expire(admission.relocationId()));
+    }
+
+    CompletionStage<Void> beginTarget(
+            UUID relocationId, CompletionStage<Void> terminal, Runnable superseded) {
+        return prewarm.begin(relocationId, terminal, superseded);
+    }
+
+    CompletionStage<Void> endTarget(UUID relocationId) {
+        return prewarm.releaseAsync(relocationId);
     }
 
     /**
@@ -304,17 +317,21 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             }
             return false;
         }
-        if (candidate == null) {
-            throw recoveryRejected(
-                    "canonical Actor Join recovery has no matching command-28 admission", null);
-        }
         ZLinkActorJoinRecoveryCodec.Recovery recovery = decoded.orElseThrow();
+        if (candidate == null) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "canonical Actor Join preparation admission is no longer available");
+        }
         var participant = request.participants().getFirst();
         requireRecoveryFence(recovery.relocationId().equals(relocationId), "handoff id");
         requireRecoveryFence(recovery.actorId().equals(candidate.actorId()), "actor id");
         requireRecoveryFence(recovery.actorType().equals(candidate.actorType()), "actor type");
-        requireRecoveryFence(
-                recovery.actorGeneration() == candidate.objectGeneration(), "actor generation");
+        if (recovery.actorGeneration() != candidate.objectGeneration()) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                    "canonical Actor Join recovery actor generation conflicts");
+        }
         requireRecoveryFence(
                 recovery.sourceNodeRid().equals(candidate.sourceNodeRid()),
                 "source node routing id");
@@ -410,10 +427,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         return true;
     }
 
-    /**
-     * Looks up the attempt registered at admission time so PREPARE (Restore) can verify the object
-     * identity (ActorId + ObjectGeneration) before installing the real stage.
-     */
+    /** Returns the reservation still owned by the canonical target attempt. */
     Optional<ZLinkActorJoinPrewarmRegistry.Attempt> findPrewarm(UUID relocationId) {
         return prewarm.find(relocationId);
     }
@@ -427,7 +441,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
     ZLinkActorJoinPrewarmRegistry.IngressRoute routeIngress(
             String actorId,
             long objectGeneration,
-            ZLinkActorJoinPrewarmRegistry.ParkedMessage message) {
+            Supplier<ZLinkActorJoinPrewarmRegistry.ParkedMessage> message) {
         return prewarm.parkOrDeliver(actorId, objectGeneration, message);
     }
 
@@ -447,13 +461,9 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         prewarm.completeMigration(relocationId, deliver, installed, liveAbort);
     }
 
-    /**
-     * Releases the attempt reserved at admission time. Callers use this once it has been consumed
-     * into the real staged Actor (normal PREPARE handling), when PREPARE is aborted, or for any
-     * other cleanup of the admission-time reservation.
-     */
+    /** Ends ingress forwarding when the stage closes; the target terminal releases admission. */
     void releasePrewarm(UUID relocationId) {
-        prewarm.release(relocationId);
+        prewarm.detachIngress(relocationId);
     }
 
     Optional<Admission> findAdmission(ZLinkSpotRetireControl.StageRequest request) {
@@ -462,6 +472,8 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
             return Optional.empty();
         }
         if (!admission.actorId().equals(request.participants().getFirst().objectId())
+                || admission.objectGeneration()
+                        != request.participants().getFirst().objectGeneration()
                 || !admission.targetSpotId().equals(request.spotId())) {
             throw new IllegalStateException(
                     "canonical Actor Join target admission fence conflicts");
@@ -585,12 +597,6 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         return actors.invokeActorLifecycle(actor, () -> actor.onJoinCompleted(completion));
     }
 
-    void completeTarget(Admission admission) {
-        admissions.remove(admission.relocationId(), admission);
-        canonicalAdmissions.remove(admission.relocationId());
-        prewarm.release(admission.relocationId());
-    }
-
     private static boolean sameCanonicalAdmission(
             CanonicalAdmission left, CanonicalAdmission right) {
         return left.relocationId().equals(right.relocationId())
@@ -620,7 +626,9 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
 
     private static void requireRecoveryFence(boolean condition, String field) {
         if (!condition) {
-            throw recoveryRejected("canonical Actor Join recovery " + field + " conflicts", null);
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.UNAVAILABLE,
+                    "canonical Actor Join recovery " + field + " conflicts");
         }
     }
 
@@ -636,44 +644,23 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                         <= attempt.prepared().sourceAuthorityOwnerGeneration()) {
             return CompletableFuture.completedFuture(null);
         }
-        return attempt.committed()
-                .thenCompose(
-                        ignored -> {
-                            if (!attempt.leaveClaimed().compareAndSet(false, true)) {
-                                return CompletableFuture.completedFuture(null);
-                            }
-                            attempt.prepared()
-                                    .acceptTargetAuthorityOwnerGeneration(
-                                            left.currentAuthorityOwnerGeneration());
-                            return completeSourceLeave(attempt, left);
-                        });
+        return attempt.committed().thenCompose(leave -> notifySourceLeft(attempt, leave));
     }
 
-    private CompletionStage<Void> completeSourceLeave(
-            SourceAttempt attempt, ZLinkServiceM6BWireCodec.ActorLeft left) {
-        attempt.leaveClaimed().set(true);
-        ZLinkActor actor = attempt.prepared().actor();
-        return ZLinkHandlerStages.completeAll(
-                        List.of(
-                                () ->
-                                        actor == null
-                                                ? CompletableFuture.completedFuture(null)
-                                                : spots.notifySourceActorLeftForRemoteMove(actor),
-                                () -> attempt.prepared().cleanupLocal(),
-                                () -> attempt.prepared().discardInitialAfterCommit()))
+    /** Delivers the one-way source OnLeaveActor; membership already ended at the commit. */
+    private CompletionStage<Void> notifySourceLeft(SourceAttempt attempt, SourceLeave leave) {
+        if (!attempt.leaveClaimed().compareAndSet(false, true)) {
+            return CompletableFuture.completedFuture(null);
+        }
+        return ZLinkHandlerStages.fromStageSupplier(
+                        () ->
+                                leave.actor() == null
+                                        ? CompletableFuture.completedFuture(null)
+                                        : spots.notifySourceActorLeft(
+                                                leave.spotSurface(), leave.actor()))
                 .whenComplete(
-                        (ignored, failure) -> sources.remove(left.actor().actorId(), attempt));
-    }
-
-    private static ZLinkServiceM6BWireCodec.ActorLeft actorLeft(
-            SourceAttempt attempt, long targetAuthorityOwnerGeneration) {
-        return new ZLinkServiceM6BWireCodec.ActorLeft(
-                new ZLinkServiceM6BWireCodec.ActorIdentity(
-                        attempt.goal().sourceActor().actorId(),
-                        attempt.goal().sourceActor().generation()),
-                attempt.prepared().sourceSpotId(),
-                attempt.prepared().sourceSpotGeneration(),
-                targetAuthorityOwnerGeneration);
+                        (ignored, failure) ->
+                                sources.remove(attempt.goal().sourceActor().actorId(), attempt));
     }
 
     private static ZLinkActorRuntime.PreparedTransferredActor prepared(
@@ -714,10 +701,13 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
         }
     }
 
+    /** The source member that the committed Join left, kept for its one-way OnLeaveActor. */
+    private record SourceLeave(ZLinkActor actor, Object spotSurface) {}
+
     private record SourceAttempt(
             Goal goal,
             ZLinkStandaloneActorRelocationSourceBuilder.PreparedSource prepared,
-            CompletableFuture<Void> committed,
+            CompletableFuture<SourceLeave> committed,
             AtomicBoolean leaveClaimed) {
         private SourceAttempt(
                 Goal goal, ZLinkStandaloneActorRelocationSourceBuilder.PreparedSource prepared) {

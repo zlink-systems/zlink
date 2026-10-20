@@ -9,10 +9,13 @@ import {
 import {
   SERVICE_WIRE_PREFIX_SIZE,
   SERVICE_WIRE_TEXT8_MAX_BYTES,
+  canonicalServiceWireTextLength,
   decodeCanonicalServiceWireText,
   encodeCanonicalServiceWireText
 } from './service-wire-binary-primitives';
 import {
+  SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
+  SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
   SERVICE_WIRE_MAGIC,
   SERVICE_WIRE_MAJOR,
   SERVICE_WIRE_REQUIRED_CAPABILITY,
@@ -33,6 +36,10 @@ export const APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES =
   APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES;
 const MAX_U32 = UINT32_MAX;
 const MAX_U64 = UINT64_MAX;
+// The framework multipart frame always carries these two schema constants;
+// decoding compares their bytes in place instead of decoding text.
+const MULTIPART_PACKET_NAME_BYTES = Buffer.from(SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME);
+const MULTIPART_CONTENT_TYPE_BYTES = Buffer.from(SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE);
 export const M6A_SERVICE_WIRE_MAGIC = SERVICE_WIRE_MAGIC;
 export const M6A_SERVICE_WIRE_MAJOR = SERVICE_WIRE_MAJOR;
 export const M6A_SERVICE_WIRE_REQUIRED_CAPABILITY = SERVICE_WIRE_REQUIRED_CAPABILITY;
@@ -68,7 +75,7 @@ export function encodeNodeSendHeader(): Buffer {
 }
 
 export function encodeNodeRequestHeader(correlation: bigint): Buffer {
-  return withU64(prefix(M6aServiceWireCommand.nodeRequest), correlation, 'correlation');
+  return withU64(M6aServiceWireCommand.nodeRequest, correlation, 0);
 }
 
 export function decodeNodeRequestHeader(frame: Uint8Array, header = decodeHeader(frame)): bigint {
@@ -83,7 +90,10 @@ export function decodeNodeRequestHeader(frame: Uint8Array, header = decodeHeader
 }
 
 export function encodeChannelSendHeader(channelName: string): Buffer {
-  return concat(prefix(M6aServiceWireCommand.channelSend), encodeText8(channelName, 'channelName'));
+  const length = channelNameLength(channelName);
+  const result = frame(M6aServiceWireCommand.channelSend, 1 + length);
+  writeText8(result, PREFIX_SIZE, channelName, length);
+  return result;
 }
 
 export function decodeChannelSendHeader(frame: Uint8Array, header = decodeHeader(frame)): string {
@@ -97,9 +107,18 @@ export function decodeChannelSendHeader(frame: Uint8Array, header = decodeHeader
 }
 
 export function encodeChannelRequestHeader(correlation: bigint, channelName: string): Buffer {
-  return concat(
-    withU64(prefix(M6aServiceWireCommand.channelRequest), correlation, 'correlation'),
-    encodeText8(channelName, 'channelName')
+  const length = channelNameLength(channelName);
+  const result = withU64(M6aServiceWireCommand.channelRequest, correlation, 1 + length);
+  writeText8(result, PREFIX_SIZE + 8, channelName, length);
+  return result;
+}
+
+function channelNameLength(channelName: string): number {
+  return canonicalServiceWireTextLength(
+    channelName,
+    'channelName',
+    SERVICE_WIRE_TEXT8_MAX_BYTES,
+    fail
   );
 }
 
@@ -124,7 +143,7 @@ export function encodeReplyHeader(
   correlation: bigint,
   terminalResult = 0,
   failureCode = 0,
-  tail: Uint8Array = Buffer.alloc(0)
+  tail?: Uint8Array
 ): Buffer {
   validateReplyFields(correlation, terminalResult, failureCode);
   //  service-wire-v1.schema.json: reply(20).tail -> `request-specific-tail`,
@@ -133,12 +152,11 @@ export function encodeReplyHeader(
   //  length on the wire; an empty tail yields exactly 21 bytes. (Contrast
   //  `actor-join-reply-tail`, which does declare `bodyLengthType: u16` and
   //  therefore carries its own inner length prefix.)
-  const result = Buffer.alloc(PREFIX_SIZE + 16 + tail.byteLength);
-  prefix(M6aServiceWireCommand.reply).copy(result);
+  const result = frame(M6aServiceWireCommand.reply, 16 + (tail?.byteLength ?? 0));
   result.writeBigUInt64BE(correlation, PREFIX_SIZE);
   result.writeUInt32BE(terminalResult, PREFIX_SIZE + 8);
   result.writeUInt32BE(failureCode, PREFIX_SIZE + 12);
-  Buffer.from(tail).copy(result, PREFIX_SIZE + 16);
+  if (tail !== undefined) result.set(tail, PREFIX_SIZE + 16);
   return result;
 }
 
@@ -159,7 +177,8 @@ export function decodeReplyHeader(frame: Uint8Array): ServiceReplyHeader {
     correlation: bytes.readBigUInt64BE(PREFIX_SIZE),
     terminalResult: bytes.readUInt32BE(PREFIX_SIZE + 8),
     failureCode: bytes.readUInt32BE(PREFIX_SIZE + 12),
-    tail: Buffer.from(bytes.subarray(PREFIX_SIZE + 16))
+    // A view of the frame: the caller validates the tail before the frame is released.
+    tail: bytes.subarray(PREFIX_SIZE + 16)
   };
   validateReplyFields(result.correlation, result.terminalResult, result.failureCode);
   return result;
@@ -188,7 +207,8 @@ export function encodeMultipartApplicationPayload(
   if (parts.length === 0) fail('Multipart payload must contain at least one part.');
   if (parts.length > MAX_U32) fail('Multipart part count exceeds u32.');
   let multipartLength = 4;
-  for (const part of parts) {
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index]!;
     if (part.byteLength > MAX_U32) fail('Multipart part exceeds u32.');
     multipartLength += 4 + part.byteLength;
     if (multipartLength > MAX_U32) fail('Multipart payload exceeds u32.');
@@ -197,7 +217,8 @@ export function encodeMultipartApplicationPayload(
   let offset = result.byteLength - multipartLength;
   result.writeUInt32BE(parts.length, offset);
   offset += 4;
-  for (const part of parts) {
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index]!;
     result.writeUInt32BE(part.byteLength, offset);
     offset += 4;
     result.set(part, offset);
@@ -211,13 +232,13 @@ function allocateApplicationPayload(
   contentType: string,
   payloadLength: number
 ): Buffer {
-  const packetNameBytes = encodeCanonicalServiceWireText(
+  const packetNameLength = canonicalServiceWireTextLength(
     packetName,
     'packetName',
     SERVICE_WIRE_TEXT8_MAX_BYTES,
     fail
   );
-  const contentTypeBytes = encodeCanonicalServiceWireText(
+  const contentTypeLength = canonicalServiceWireTextLength(
     contentType,
     'contentType',
     SERVICE_WIRE_TEXT8_MAX_BYTES,
@@ -225,23 +246,15 @@ function allocateApplicationPayload(
   );
   if (payloadLength > MAX_U32) fail('Application payload exceeds u32.');
   const frameLength =
-    APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES +
-    packetNameBytes.byteLength +
-    contentTypeBytes.byteLength +
-    payloadLength;
+    APPLICATION_PAYLOAD_MINIMUM_FIELD_BYTES + packetNameLength + contentTypeLength + payloadLength;
   const prefixLength = 1 + APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES;
   const bodyLength = frameLength - prefixLength;
   if (bodyLength > MAX_U32) fail('Application payload body exceeds u32.');
   const result = Buffer.alloc(frameLength);
   result[0] = APPLICATION_PAYLOAD_VERSION;
   result.writeUInt32BE(bodyLength, 1);
-  let offset = prefixLength;
-  result[offset++] = packetNameBytes.byteLength;
-  result.set(packetNameBytes, offset);
-  offset += packetNameBytes.byteLength;
-  result[offset++] = contentTypeBytes.byteLength;
-  result.set(contentTypeBytes, offset);
-  offset += contentTypeBytes.byteLength;
+  let offset = writeText8(result, prefixLength, packetName, packetNameLength);
+  offset = writeText8(result, offset, contentType, contentTypeLength);
   result.writeUInt32BE(payloadLength, offset);
   return result;
 }
@@ -260,18 +273,127 @@ export function decodeApplicationPayload(frame: Uint8Array): ServiceApplicationP
  * they must hand the multipart bytes to another runtime-owned queue.
  */
 export function decodeApplicationPayloadView(frame: Uint8Array): ServiceApplicationPayload {
-  const reader = new Reader(frame);
-  if (reader.u8('version') !== APPLICATION_PAYLOAD_VERSION)
-    fail('Invalid application payload version.');
-  const bodyLength = reader.u32('bodyLength');
-  if (bodyLength !== reader.remaining) fail('Application payload body length mismatch.');
+  const reader = applicationPayloadReader(frame);
   const packetName = reader.text8('packetName');
   const contentType = reader.text8('contentType');
-  const payloadLength = reader.u32('payloadLength');
-  if (payloadLength !== reader.remaining) fail('Application payload length mismatch.');
-  const payload = reader.view(payloadLength, 'payload');
-  reader.end();
-  return { packetName, contentType, payload };
+  return { packetName, contentType, payload: applicationPayloadView(reader) };
+}
+
+/**
+ * Decodes the framework multipart application frame, whose packet name and
+ * content type are the schema's multipart constants, and returns a view of its
+ * multipart payload without decoding either text field.
+ */
+export function decodeMultipartApplicationPayloadView(
+  frame: Uint8Array
+): ServiceApplicationPayload {
+  const bytes = asBuffer(frame);
+  const offset = multipartApplicationPayloadOffset(bytes);
+  return {
+    packetName: SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
+    contentType: SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
+    payload: bytes.subarray(offset)
+  };
+}
+
+/** Materializes final message parts directly over the retained application frame. */
+export function decodeMultipartApplicationParts<T>(
+  frame: Uint8Array,
+  materialize: (part: Buffer) => T,
+  release?: (part: T) => void
+): T[] {
+  const bytes = asBuffer(frame);
+  return decodeMultipartParts(
+    bytes,
+    materialize,
+    release,
+    multipartApplicationPayloadOffset(bytes)
+  );
+}
+
+function multipartApplicationPayloadOffset(bytes: Buffer): number {
+  let offset = applicationPayloadBodyOffset(bytes);
+  offset = expectText8At(bytes, offset, MULTIPART_PACKET_NAME_BYTES, 'packetName');
+  offset = expectText8At(bytes, offset, MULTIPART_CONTENT_TYPE_BYTES, 'contentType');
+  return applicationPayloadDataOffset(bytes, offset);
+}
+
+function expectText8At(bytes: Buffer, offset: number, expected: Buffer, field: string): number {
+  if (bytes.length <= offset) fail(`Truncated ${field}.length.`);
+  const length = bytes[offset++]!;
+  if (bytes.length - offset < length) fail(`Truncated ${field}.`);
+  if (length !== expected.length || expected.compare(bytes, offset, offset + length) !== 0) {
+    fail(`Unexpected ${field}.`);
+  }
+  return offset + length;
+}
+
+function applicationPayloadBodyOffset(bytes: Buffer): number {
+  if (bytes.length === 0) fail('Truncated version.');
+  if (bytes[0] !== APPLICATION_PAYLOAD_VERSION) fail('Invalid application payload version.');
+  const offset = 1 + APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES;
+  if (bytes.length < offset) fail('Truncated bodyLength.');
+  if (bytes.readUInt32BE(1) !== bytes.length - offset)
+    fail('Application payload body length mismatch.');
+  return offset;
+}
+
+function applicationPayloadDataOffset(bytes: Buffer, offset: number): number {
+  if (bytes.length - offset < APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES)
+    fail('Truncated payloadLength.');
+  const length = bytes.readUInt32BE(offset);
+  offset += APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES;
+  if (length !== bytes.length - offset) fail('Application payload length mismatch.');
+  return offset;
+}
+
+function applicationPayloadReader(frame: Uint8Array): Reader {
+  const bytes = asBuffer(frame);
+  return new Reader(bytes, applicationPayloadBodyOffset(bytes));
+}
+
+function applicationPayloadView(reader: Reader): Buffer {
+  return reader.buffer.subarray(applicationPayloadDataOffset(reader.buffer, reader.offset));
+}
+
+export function decodeMultipartParts<T>(
+  payload: Uint8Array,
+  materialize: (part: Buffer) => T,
+  release?: (part: T) => void,
+  offset = 0
+): T[] {
+  const bytes = asBuffer(payload);
+  if (bytes.length - offset < 4) throw new ServiceWireProtocolError('Truncated multipart payload.');
+  const count = bytes.readUInt32BE(offset);
+  if (count === 0 || count > Math.floor((bytes.length - offset - 4) / 4)) {
+    throw new ServiceWireProtocolError('Invalid multipart part count.');
+  }
+  const result = new Array<T>(count);
+  offset += 4;
+  let index = 0;
+  try {
+    for (; index < count; index++) {
+      if (bytes.length - offset < 4) {
+        throw new ServiceWireProtocolError('Truncated multipart part length.');
+      }
+      const length = bytes.readUInt32BE(offset);
+      offset += 4;
+      if (bytes.length - offset < length) {
+        throw new ServiceWireProtocolError('Truncated multipart part.');
+      }
+      result[index] = materialize(bytes.subarray(offset, offset + length));
+      offset += length;
+    }
+    if (offset !== bytes.length) {
+      throw new ServiceWireProtocolError('Multipart payload has trailing bytes.');
+    }
+    return result;
+  } catch (error) {
+    if (release !== undefined) {
+      for (let retained = 0; retained < index; retained++) release(result[retained]!);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -281,11 +403,7 @@ export function decodeApplicationPayloadView(frame: Uint8Array): ServiceApplicat
  * message is admitted to an execution queue.
  */
 export function validateApplicationPayloadFrame(frame: Uint8Array): void {
-  const reader = new Reader(frame);
-  if (reader.u8('version') !== APPLICATION_PAYLOAD_VERSION)
-    fail('Invalid application payload version.');
-  const bodyLength = reader.u32('bodyLength');
-  if (bodyLength !== reader.remaining) fail('Application payload body length mismatch.');
+  const reader = applicationPayloadReader(frame);
   reader.text8('packetName');
   reader.text8('contentType');
   const payloadLength = reader.u32('payloadLength');
@@ -469,19 +587,37 @@ export function decodeHeader(frame: Uint8Array): ServiceWireHeader {
   return { command: frame[3]!, flags: frame[4]! };
 }
 
-function prefix(command: number): Buffer {
-  return Buffer.from([
-    M6A_SERVICE_WIRE_MAGIC[0],
-    M6A_SERVICE_WIRE_MAGIC[1],
-    M6A_SERVICE_WIRE_MAJOR,
-    command,
-    0
-  ]);
+/** Allocates a whole service wire record once and writes its prefix; the caller fills the body. */
+function frame(command: number, bodyLength: number): Buffer {
+  const result = Buffer.allocUnsafe(PREFIX_SIZE + bodyLength);
+  result[0] = M6A_SERVICE_WIRE_MAGIC[0];
+  result[1] = M6A_SERVICE_WIRE_MAGIC[1];
+  result[2] = M6A_SERVICE_WIRE_MAJOR;
+  result[3] = command;
+  result[4] = 0;
+  return result;
 }
 
-function withU64(head: Buffer, value: bigint, field: string): Buffer {
-  if (value <= 0n || value > MAX_U64) fail(`${field} must be a non-zero u64.`);
-  return concat(head, encodeU64(value));
+function prefix(command: number): Buffer {
+  return frame(command, 0);
+}
+
+/** A record whose body starts with the non-zero u64 correlation, followed by `restLength` bytes. */
+function withU64(command: number, correlation: bigint, restLength: number): Buffer {
+  if (correlation <= 0n || correlation > MAX_U64) fail('correlation must be a non-zero u64.');
+  const result = frame(command, 8 + restLength);
+  result.writeBigUInt64BE(correlation, PREFIX_SIZE);
+  return result;
+}
+
+/**
+ * Writes a validated text8 field — the byte length from
+ * canonicalServiceWireTextLength, then the UTF-8 text — and returns the next offset.
+ */
+function writeText8(target: Buffer, offset: number, value: string, length: number): number {
+  target[offset] = length;
+  target.write(value, offset + 1, length, 'utf8');
+  return offset + 1 + length;
 }
 
 function encodeU16(value: number): Buffer {
@@ -530,7 +666,9 @@ function readNonZeroU64(bytes: Buffer, offset: number, field: string): bigint {
 }
 
 function asBuffer(value: Uint8Array): Buffer {
-  return Buffer.from(value.buffer, value.byteOffset, value.byteLength);
+  return Buffer.isBuffer(value)
+    ? value
+    : Buffer.from(value.buffer, value.byteOffset, value.byteLength);
 }
 
 function validateAdmissionCommand(command: number): void {
@@ -652,13 +790,13 @@ class Reader {
   text8(field: string): string {
     const length = this.u8(`${field}.length`);
     if (length === 0) fail(`${field} must be non-empty.`);
-    return decodeText(this.bytes(length, field), field);
+    return decodeText(this.view(length, field), field);
   }
 
   text16(field: string): string {
     const length = this.u16(`${field}.length`);
     if (length === 0 || length > SERVICE_ROUTE_TEXT_MAX_BYTES) fail(`${field} has invalid length.`);
-    return decodeText(this.bytes(length, field), field);
+    return decodeText(this.view(length, field), field);
   }
 
   bytes(length: number, field: string): Buffer {

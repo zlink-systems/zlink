@@ -203,14 +203,7 @@ class request_builder_t
 
     template <typename T> zlink::framework::result_t<http_response_t<T>> submit () const
     {
-        auto raw = submit_raw ();
-        if (!raw) {
-            const auto *error = raw.error ();
-            return zlink::framework::result_t<http_response_t<T>>::failure (
-              error ? error->kind () : zlink::framework::framework_error_kind_t::internal_failure,
-              error ? error->what () : "HTTP request failed without an error");
-        }
-        return decode<T> (raw.value ());
+        return decode_result<T> (submit_raw ());
     }
 
     template <typename T> zlink::framework::task_t<T> fetch () const
@@ -221,9 +214,14 @@ class request_builder_t
 
     template <typename T, typename TCallback> void async (TCallback &&callback) const
     {
-        auto task = async<T> ();
-        zlink::framework::detail::observe_task_completion (task,
-                                                           std::forward<TCallback> (callback));
+        // The raw task already carries the client's resume scheduler, which alone
+        // decides where the callback runs; decoding happens inside the callback.
+        auto task = async_raw ();
+        zlink::framework::detail::observe_task_completion (
+          task, [callback = std::forward<TCallback> (callback)] (
+                  const zlink::framework::result_t<raw_http_response_t> &raw) mutable {
+              callback (decode_result<T> (raw));
+          });
     }
 
   private:
@@ -241,6 +239,19 @@ class request_builder_t
     detail::http_request_t make_request (std::function<void (std::string_view)> sink) const;
     zlink::framework::task_t<raw_http_response_t>
     dispatch_request (detail::http_request_t request) const;
+
+    template <typename T>
+    static zlink::framework::result_t<http_response_t<T>>
+    decode_result (const zlink::framework::result_t<raw_http_response_t> &raw)
+    {
+        if (!raw) {
+            const auto *error = raw.error ();
+            return zlink::framework::result_t<http_response_t<T>>::failure (
+              error ? error->kind () : zlink::framework::framework_error_kind_t::internal_failure,
+              error ? error->what () : "HTTP request failed without an error");
+        }
+        return decode<T> (raw.value ());
+    }
 
     template <typename T>
     static zlink::framework::result_t<http_response_t<T>> decode (const raw_http_response_t &raw)
@@ -382,22 +393,25 @@ class server_request_builder_t : public request_builder_t
     template <typename T>
     zlink::framework::task_t<http_response_t<T>> schedule (bool release_turn) const
     {
-        return turn_await (request_builder_t::async<T> (), release_turn);
+        return turn_await<http_response_t<T>> ([this] { return request_builder_t::async<T> (); },
+                                               release_turn);
     }
 
     zlink::framework::task_t<raw_http_response_t> schedule_raw (bool release_turn) const
     {
-        return turn_await (request_builder_t::async_raw (), release_turn);
+        return turn_await<raw_http_response_t> ([this] { return request_builder_t::async_raw (); },
+                                                release_turn);
     }
 
-    template <typename T>
-    zlink::framework::task_t<T> turn_await (zlink::framework::task_t<T> task,
-                                            bool release_turn) const
+    template <typename T, typename TStart>
+    zlink::framework::task_t<T> turn_await (TStart &&start, bool release_turn) const
     {
-        task = zlink::framework::detail::with_task_resume_scheduler (
-          std::move (task), _execution_turn->prepare (release_turn));
-        return release_turn ? zlink::framework::detail::release_turn_on_suspend (std::move (task))
-                            : std::move (task);
+        const auto submit = [&] {
+            auto task = start ();
+            return zlink::framework::detail::with_task_resume_scheduler (
+              std::move (task), _execution_turn->prepare (release_turn));
+        };
+        return release_turn ? zlink::framework::detail::yield_call<T> (submit) : submit ();
     }
 
     std::shared_ptr<execution_turn_t> _execution_turn;

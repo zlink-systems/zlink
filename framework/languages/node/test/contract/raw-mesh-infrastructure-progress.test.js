@@ -225,7 +225,7 @@ test('pending reverse liveness SEND leaves another record receivable and bounds 
     timedOutNodes: []
   });
   let completed = false;
-  const round = h.runtime.pumpBatch(false).then(() => {
+  const round = Promise.resolve(h.runtime.pumpBatch(false)).then(() => {
     completed = true;
   });
   try {

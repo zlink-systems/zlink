@@ -99,7 +99,7 @@ Memory limit과 Core budget은 양수만 허용한다. Manual job 상한의 범�
 
 | 옵션 | 무엇을 정하나 | 기본값 |
 | --- | --- | --- |
-| 기록 수준 | `off` · `errors` · `Normal` · `Detailed` | `errors` |
+| 기록 수준 | `off` · `errors` · `normal` · `Detailed` | `errors` |
 | `TraceSampleRate` | 정상 흐름을 기록할 비율. 범위는 `0.0..1.0` | 1.0 |
 | `includeMessageSizes` | payload byte 크기를 함께 남길지 | 남기지 않음 |
 

@@ -20,16 +20,14 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendObject;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
 import systems.zlink.framework.runtime.internal.calls.ZLinkRequestStages;
-import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
-import systems.zlink.framework.runtime.internal.streams.ZLinkStreamErrorPayload;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers.ActorRoute;
 import systems.zlink.framework.runtime.messaging.ZLinkMessagePayloads;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
-import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
@@ -170,7 +168,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                                 operationFlow,
                                                 () ->
                                                         submitRequest(
-                                                                rememberAuthority(row, actorId),
+                                                                actorRouteFence(row, actorId),
                                                                 packetName,
                                                                 request,
                                                                 metadata,
@@ -202,22 +200,18 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                 .thenCompose(ignored -> locations.resolveActor(actorId));
     }
 
-    private ZLinkBackendActorRef rememberAuthority(ActorRoute row, String actorId) {
+    private ZLinkServiceM6BWireCodec.ActorRouteFence actorRouteFence(
+            ActorRoute row, String actorId) {
         if (row == null || row.actorRef() == null) {
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.NOT_FOUND,
                     "Actor route '" + actorId + "' was not found.");
         }
-        ZLinkBackendActorRef actor = toBackendActorRef(row);
-        ZLinkInternalSpotNode node = spotNode.get();
-        // A positive route cache can overlap a completed relocation.  The
-        // provider-issued owner generation is monotonic, so an older cached
-        // observation must not replace a newer local publication fence.
-        if (node.actorAuthorityOwnerGeneration(actor) < row.authorityOwnerGeneration()) {
-            node.rememberActorAuthority(
-                    actor, row.authorityOwnerGeneration(), row.ownerLeaseGeneration());
-        }
-        return actor;
+        return new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                toBackendActorRef(row),
+                row.targetNodeGeneration(),
+                row.authorityOwnerGeneration(),
+                row.ownerLeaseGeneration());
     }
 
     private CompletionStage<Void> submitSendResult(
@@ -229,8 +223,8 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                 ZLinkFlowContext.call(
                                         operationFlow,
                                         () -> {
-                                            ZLinkBackendActorRef actor =
-                                                    rememberAuthority(row, actorId);
+                                            ZLinkServiceM6BWireCodec.ActorRouteFence actor =
+                                                    actorRouteFence(row, actorId);
                                             List<Message> parts =
                                                     createPacketParts(
                                                             ZLinkStreamMessageKind.SEND,
@@ -302,7 +296,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
     }
 
     private <TReply> CompletionStage<TReply> submitRequest(
-            ZLinkBackendActorRef actor,
+            ZLinkServiceM6BWireCodec.ActorRouteFence actor,
             String packetName,
             Object request,
             Map<String, String> metadata,
@@ -341,7 +335,7 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
                                 mapBackendException(unwrap(error), "Actor request"));
                     }
                     try {
-                        return decodeReply(replyParts, replyType);
+                        return ZLinkActorReplyDecoder.decode(replyParts, serializer, replyType);
                     } finally {
                         closeAll(replyParts);
                     }
@@ -366,63 +360,6 @@ public final class ZLinkActorClientRuntime implements ZLinkActorClient {
         Message headerPart = Message.from(ZLinkStreamHeaderCodec.encode(header));
         Message payloadPart = ZLinkMessagePayloads.message(ZLinkMessage.of(message), serializer);
         return List.of(headerPart, payloadPart);
-    }
-
-    private <TReply> TReply decodeReply(List<Message> reply, Class<TReply> replyType) {
-        if (reply == null || reply.isEmpty()) {
-            //  Spec 32-framework-error-model:40,83-92 — an unprocessable reply
-            //  contract is a ProtocolError, not a configuration error.
-            throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "Actor request reply is empty.");
-        }
-        if (reply.size() == 1) {
-            byte[] frame = reply.get(0).toByteArray();
-            Optional<ZLinkStreamFrameCodec.DecodedFrame> decoded =
-                    ZLinkStreamFrameCodec.tryDecode(frame);
-            if (decoded.isPresent()) {
-                ZLinkStreamFrameCodec.DecodedFrame decodedFrame = decoded.get();
-                Message payload = Message.from(decodedFrame.body());
-                try {
-                    return decodePayload(
-                            ZLinkStreamHeaderCodec.decodeOrPlain(decodedFrame.header()),
-                            payload,
-                            replyType);
-                } finally {
-                    payload.close();
-                }
-            }
-        }
-        if (reply.size() < 2) {
-            throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                    "Actor request reply payload is missing.");
-        }
-        ZLinkStreamHeader header = ZLinkStreamHeaderCodec.decodeOrPlain(reply.get(0).toByteArray());
-        return decodePayload(header, reply.get(1), replyType);
-    }
-
-    private <TReply> TReply decodePayload(
-            ZLinkStreamHeader header, Message payload, Class<TReply> replyType) {
-        if (header.kind() == ZLinkStreamMessageKind.ERROR) {
-            try {
-                ZLinkStreamErrorPayload.Decoded error =
-                        ZLinkStreamErrorPayload.decode(payload.toByteArray());
-                ZLinkFrameworkErrorKind kind =
-                        error.frameworkKind() == null
-                                ? ZLinkFrameworkErrorKind.INTERNAL_FAILURE
-                                : error.frameworkKind();
-                throw new ZLinkFrameworkException(kind, error.message());
-            } catch (IllegalArgumentException invalidPayload) {
-                throw new ZLinkFrameworkException(
-                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                        "Actor request error reply payload is invalid.",
-                        invalidPayload);
-            }
-        }
-        return ZLinkMessagePayloads.deserialize(
-                ZLinkCodecRegistration.serializerForReceivedStreamCodec(serializer, header.codec()),
-                payload,
-                replyType);
     }
 
     private RuntimeException mapBackendException(Throwable error, String operationName) {

@@ -8,8 +8,16 @@ import java.util.concurrent.CompletionStage;
 
 /** Framework-private relocation transition boundary used by source schedulers. */
 interface ZLinkRelocationTransitionClient {
+    /**
+     * Stages one attempt. {@code deadline} is the absolute deadline of the operation that started
+     * the relocation; command 40 carries it so the target bounds its relay-ready preparation
+     * (relocation §4.3). Every PREPARE of the attempt carries the same value.
+     */
     CompletionStage<Void> stage(
-            RoutingId targetNodeRid, ZLinkSpotRetireControl.StageRequest request, Duration timeout);
+            RoutingId targetNodeRid,
+            ZLinkSpotRetireControl.StageRequest request,
+            Duration timeout,
+            Instant deadline);
 
     CompletionStage<Void> relay(
             RoutingId targetNodeRid,
@@ -28,6 +36,17 @@ interface ZLinkRelocationTransitionClient {
      */
     CompletionStage<Settlement> settle(
             RoutingId targetNodeRid, ZLinkSpotRetireControl.Fence fence, Instant preserveAt);
+
+    /** Carries the exact authority read that confirmed target ownership. */
+    default CompletionStage<AuthoritySettlement> settleAuthority(
+            RoutingId targetNodeRid, ZLinkSpotRetireControl.Fence fence, Instant preserveAt) {
+        return settle(targetNodeRid, fence, preserveAt)
+                .thenApply(outcome -> new AuthoritySettlement(outcome, null));
+    }
+
+    record AuthoritySettlement(
+            Settlement outcome,
+            systems.zlink.framework.runtime.internal.locations.ZLinkAuthoritySnapshot target) {}
 
     CompletionStage<Void> abort(
             RoutingId targetNodeRid, ZLinkSpotRetireControl.Fence fence, Duration timeout);

@@ -33,10 +33,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutionException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.logging.Level;
@@ -80,18 +78,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
     }
 
     private <T> T inStateLane(java.util.function.Supplier<T> work) {
-        try {
-            return stateLane.runAsync(work).toCompletableFuture().join();
-        } catch (CompletionException failure) {
-            Throwable cause = failure.getCause();
-            if (cause instanceof RuntimeException runtimeFailure) {
-                throw runtimeFailure;
-            }
-            if (cause instanceof Error error) {
-                throw error;
-            }
-            throw failure;
-        }
+        return stateLane.awaitTurn(work);
     }
 
     @Override
@@ -654,7 +641,7 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                             header.flowOrigin());
             encodedHeader = Message.from(ZLinkStreamHeaderCodec.encode(requestHeader));
             return rawSpotNode()
-                    .requestToActor(
+                    .requestExactActor(
                             actor,
                             prepend(encodedHeader, parts),
                             SendFlags.DONT_WAIT,
@@ -762,41 +749,10 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
         }
         SessionBinding target =
                 new SessionBinding(targetActor, bindingGeneration, source.actorSlot());
-        CompletionStage<Void> unbound = unbindBinding(sessionRid, source, timeout);
-        CompletionStage<Void> prepared =
-                unbound.thenCompose(
-                        ignored ->
-                                bindExactSessionRoute(
-                                        sessionRid,
-                                        targetActor,
-                                        bindingGeneration,
-                                        source.actorSlot(),
-                                        timeout));
-        return prepared.handle(
-                        (ignored, failure) -> {
-                            if (failure != null) {
-                                return bindExactSessionRoute(
-                                                sessionRid,
-                                                source.actor(),
-                                                bindingGeneration,
-                                                source.actorSlot(),
-                                                timeout)
-                                        .thenRun(() -> publishBoundActor(sessionRid, actorId))
-                                        .handle(
-                                                (restored, restoreFailure) -> {
-                                                    Throwable cause = unwrapFailure(failure);
-                                                    if (restoreFailure != null) {
-                                                        cause.addSuppressed(
-                                                                unwrapFailure(restoreFailure));
-                                                    }
-                                                    return CompletableFuture.<Void>failedFuture(
-                                                            cause);
-                                                })
-                                        .thenCompose(stage -> stage);
-                            }
-                            return CompletableFuture.completedFuture(null);
-                        })
-                .thenCompose(stage -> stage)
+        // Relocation preserves the binding identity (spec 20 section 8.2). The source
+        // may already have retired; only the target route needs preparation.
+        return bindExactSessionRoute(
+                        sessionRid, targetActor, bindingGeneration, source.actorSlot(), timeout)
                 .thenRun(
                         () -> {
                             if (!bindings.replace(key, source, target)) {
@@ -843,14 +799,6 @@ final class ZLinkJavaStreamSocket implements ZLinkBackendStreamSocket, ZLinkJava
                                 sessionRid, binding.actor(), binding.generation(), this, timeout)
                 : boundSessionLifecycle.unbind(
                         sessionRid, binding.actor(), binding.generation(), timeout);
-    }
-
-    private static Throwable unwrapFailure(Throwable failure) {
-        Throwable current = failure;
-        while (current instanceof CompletionException || current instanceof ExecutionException) {
-            current = current.getCause();
-        }
-        return current;
     }
 
     private void requireSessionRuntime() {

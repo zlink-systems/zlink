@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <cassert>
 #include <atomic>
+#include <future>
 #include <chrono>
 #include <cerrno>
 #include <condition_variable>
@@ -120,12 +121,17 @@ class reply_probe_t final
         ++consumed;
         if (_error != 0)
             throw zlink::request_error_t (zlink::request_result_t::timed_out, _error);
-        return {};
+        std::vector<zlink::message_t> parts;
+        parts.push_back (zlink::message_t::from (std::vector<std::uint8_t> (4096, 0x5a)));
+        storage = parts.front ().data ();
+        return parts;
     }
     void detach () noexcept override {}
     void abandon (std::coroutine_handle<>) noexcept override {}
 
     int consumed = 0;
+
+    const void *storage = nullptr;
 
   private:
     int _error;
@@ -156,6 +162,9 @@ void verify_request_submission_stages ()
         if (expected_error == 0) {
             assert (observed.terminal == zlink::request_result_t::ok);
             assert (!observed.failure);
+            assert (observed.parts.size () == 1);
+            assert (static_cast<const void *> (observed.parts.front ().data ())
+                    == reply_probe->storage);
         } else {
             // Submit section 5 also applies when a retained operation's next
             // submit fails without a wait token. A reply timeout stays a deadline.
@@ -665,11 +674,14 @@ void verify_backpressured_send_waits_for_admission ()
     auto request = source_port.request (request_parts (), raw_request_capacity_timeout);
     assert (scheduler.scheduled_count () == before + 1);
     std::atomic_int terminals{0};
+    std::promise<void> terminal_observed;
+    auto observed = terminal_observed.get_future ();
     zlink::framework::detail::observe_task_completion (request, [&] (const auto &result) {
         assert (!result
                 && result.error_kind ()
                      == zlink::framework::framework_error_kind_t::deadline_exceeded);
         terminals.fetch_add (1, std::memory_order_release);
+        terminal_observed.set_value ();
     });
     const auto held_until = std::chrono::steady_clock::now () + 4 * raw_request_capacity_timeout;
     while (std::chrono::steady_clock::now () < held_until) {
@@ -677,6 +689,7 @@ void verify_backpressured_send_waits_for_admission ()
         (void) source_poller.wait (&event, 1, raw_route_fixture_poll_interval);
     }
     assert (request.await_ready ());
+    observed.get ();
     assert (terminals.load (std::memory_order_acquire) == 1);
     assert (!request.result ()
             && request.result ().error_kind ()

@@ -174,7 +174,7 @@ Session binding은 `ActorRef.actorId + objectGeneration`의 지정한 incarnatio
 
 `boundSession`의 push는 현재 binding token이 지정하는 connection에만 보내는 one-way operation이다. 연결이
 교체되거나 binding generation이 바뀌면 이전 operation을 새 connection으로 retarget하거나 hidden retry하지
-않는다. Disconnect는 binding만 해제하며 Actor와 Spot membership은 유지한다.
+않는다. Disconnect의 physical connection close와 binding 정리는 [Session–Actor binding §5·§7](../../../04-session/02-session-actor-binding.ko.md)을 따르며, Actor와 Spot membership은 유지한다.
 
 Public trace category는 `actor-relocation`다. 의미와 검증 기준은
 [Actor model](../../../03-spot-actor/04-actor-model.ko.md), [Spot·Actor membership](../../../03-spot-actor/05-spot-actor-membership.ko.md),

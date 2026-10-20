@@ -78,7 +78,6 @@ test('a same-node Session binding is installed once and carried by the relocatio
       status: () => ({ routingId: localNode, lifecycleGeneration: 2n })
     }),
     async notifyEntrySpotActorLeft() {},
-    async restoreEntrySpotActorJoined() {},
     locationLifecycle: () => undefined,
     actorHandoff: {
       begin() {},
@@ -88,7 +87,6 @@ test('a same-node Session binding is installed once and carried by the relocatio
       },
       failPending() {}
     },
-    actorTransferRegistry: {},
     authorityStore: () => ({
       async readAuthority() {
         return {
@@ -135,7 +133,8 @@ test('a same-node Session binding is installed once and carried by the relocatio
     state,
     undefined,
     false,
-    relocation
+    relocation,
+    { rid: 'target', lifecycleGeneration: 4n }
   );
 
   assert.equal(seals.length, 1);

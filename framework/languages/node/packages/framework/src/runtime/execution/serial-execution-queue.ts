@@ -1,6 +1,7 @@
 import { macrotaskBoundary } from '../abort';
 import {
   diagnosticWorkName,
+  startOutsideStateLane,
   guardStateLaneCompletion,
   isStructuralGuardEnabled,
   trackDiagnosticCompletion
@@ -10,6 +11,8 @@ export type ZLinkSerialWorkLane = 'application' | 'lifecycle';
 
 export interface ZLinkSerialWorkOptions {
   readonly onAdmitted?: () => void;
+  /** Transfers an unstarted durable record out of this FIFO in the owner turn. */
+  readonly onWithdrawable?: (withdraw: () => boolean) => void;
   readonly lane?: ZLinkSerialWorkLane;
   readonly payloadBytes?: number;
   readonly metadataBytes?: number;
@@ -167,10 +170,20 @@ export class ZLinkSerialExecutionQueue {
     return this.admit(operation, { lane: 'lifecycle' }, context, undefined, true);
   }
 
+  get retainsApplicationForLifecycle(): boolean {
+    return this.activeLifecycle?.context !== undefined;
+  }
+
   visitPendingApplication(visitor: (record: ZLinkSerialWorkRecord<unknown>) => void): void {
     for (const record of this.application.records) {
       if (record.mailbox === undefined) visitor(record);
     }
+  }
+
+  get hasPendingDurableApplication(): boolean {
+    // Every application record accepted behind durable work inherits durable
+    // ownership, so the tail answers this without scanning the FIFO.
+    return this.application.records.at(-1)?.preparation !== undefined;
   }
 
   get hasPendingWork(): boolean {
@@ -271,6 +284,18 @@ export class ZLinkSerialExecutionQueue {
       throw error;
     }
     options.onAdmitted?.();
+    options.onWithdrawable?.(() => {
+      const index = target.records.indexOf(record as SerialWorkRecord<unknown>);
+      if (index < 0) return false;
+      target.records.splice(index, 1);
+      record.preparationController?.abort(
+        new Error('Durable record transferred to another handoff.')
+      );
+      record.preparation?.cancel();
+      resolve(undefined as T);
+      release();
+      return true;
+    });
     this.scheduleDrain();
     return result;
   }
@@ -286,10 +311,12 @@ export class ZLinkSerialExecutionQueue {
     const consumer = this.consumer!;
     if (consumer.scheduled || consumer.running) return;
     consumer.scheduled = true;
-    queueMicrotask(() => {
-      consumer.scheduled = false;
-      void this.drain();
-    });
+    startOutsideStateLane(() =>
+      queueMicrotask(() => {
+        consumer.scheduled = false;
+        void this.drain();
+      })
+    );
   }
 
   /** Notifications carry no payload, admission sequence, result Promise, or host permit. */

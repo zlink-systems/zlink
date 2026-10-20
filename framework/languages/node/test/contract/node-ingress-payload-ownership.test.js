@@ -136,9 +136,9 @@ test('generic channel send writes one valid multipart application frame before s
       sentParts = parts;
       return { result: SubmitResult.Ok, admitted: Promise.resolve() };
     },
-    request: async (_target, parts) => [
+    request: (_target, parts, _timeout, onReply, onFailed) => Promise.resolve([
       encodeReplyHeader(decodeNodeRequestHeader(parts[0])), replyFrame
-    ]
+    ]).then(onReply, onFailed)
   };
   const raw = new RawServiceMeshRuntime({
     descriptor: descriptor('source-node', [{ name: 'orders', weight: 100 }]),
@@ -184,5 +184,62 @@ test('generic channel send writes one valid multipart application frame before s
     assert.equal(reply.payload.payload.toString(), 'view');
   } finally {
     raw.close();
+  }
+});
+
+test('raw router receive retains binding payload storage and replies on the delivered route after close', async () => {
+  const { ZLinkNodeRawBindingPort } = require('../../packages/framework/dist/runtime/backend/node/node-raw-binding-port');
+  const context = zlink.createContext();
+  const host = new ZLinkNodeRawBindingPort(context).createHost();
+  const router = host.createRouter();
+  const dealer = host.createDealer();
+  const payload = Buffer.alloc(1024, 5);
+  const originalFrom = Buffer.from;
+  let payloadCopies = 0;
+  try {
+    const endpoint = 'inproc://raw-receive-retention';
+    router.bind(endpoint);
+    dealer.connect(endpoint);
+    const reply = dealer.request([Buffer.from('header'), payload], 5000);
+    let record;
+    for (let attempt = 0; attempt < 200 && record === undefined; attempt++) {
+      Buffer.from = function (...args) {
+        const result = originalFrom.apply(this, args);
+        if (result.length === payload.length) payloadCopies++;
+        return result;
+      };
+      try {
+        record = router.receive(true);
+      } finally {
+        Buffer.from = originalFrom;
+      }
+      if (record === undefined) await new Promise((resolve) => setImmediate(resolve));
+    }
+    assert.ok(record !== undefined, 'router received the request');
+    // The record keeps the binding's own data() storage: no Framework copy.
+    assert.equal(payloadCopies, 0);
+    assert.equal(record.parts[1].length, payload.length);
+    record.close();
+    assert.equal(record.parts[1][0], 5);
+    assert.equal(record.parts[1][1023], 5);
+    // The reply addresses the RoutingId the record was delivered with; it
+    // does not rebuild a binding RoutingId per reply.
+    const originalRoutingIdFrom = zlink.RoutingId.from;
+    let routingIds = 0;
+    zlink.RoutingId.from = function (...args) {
+      routingIds++;
+      return originalRoutingIdFrom.apply(this, args);
+    };
+    try {
+      record.reply([Buffer.from('accepted')]);
+    } finally {
+      zlink.RoutingId.from = originalRoutingIdFrom;
+    }
+    assert.equal(routingIds, 0);
+    void reply.catch(() => undefined);
+  } finally {
+    Buffer.from = originalFrom;
+    host.close();
+    context.close();
   }
 });

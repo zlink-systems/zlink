@@ -3,56 +3,56 @@ import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
 const completedAdmission = Promise.resolve();
 const ignoreAdmissionFailure = (): void => {};
 
+class RequestAdmission<TReply> {
+  private admitted: Promise<void> | undefined;
+  private resolveAdmission: (() => void) | undefined;
+  private rejectAdmission: ((error: unknown) => void) | undefined;
+  confirm(): void;
+  confirm(value: TReply): TReply;
+  confirm(value?: TReply): TReply | undefined {
+    this.admitted ??= completedAdmission;
+    this.resolveAdmission?.();
+    return value;
+  }
+  fail(error: unknown): never {
+    if (this.admitted === undefined) {
+      this.admitted = Promise.reject(error);
+      // Existing callers may observe only the reply Promise. Observing the
+      // rejection here leaves the public admission Promise rejected.
+      void this.admitted.catch(ignoreAdmissionFailure);
+    } else {
+      this.rejectAdmission?.(error);
+    }
+    throw error;
+  }
+  observe(): Promise<void> {
+    if (this.admitted === undefined) {
+      this.admitted = new Promise<void>((resolve, reject) => {
+        this.resolveAdmission = resolve;
+        this.rejectAdmission = reject;
+      });
+      void this.admitted.catch(ignoreAdmissionFailure);
+    }
+    return this.admitted;
+  }
+}
+
 export function createZLinkRequest<TReply>(
   start: (onAdmitted: () => void) => Promise<TReply>,
   deliverReply?: (reply: Promise<TReply>) => Promise<TReply>
 ): ZLinkRequest<TReply> {
-  let admitted: Promise<void> | undefined;
-  let resolveAdmission: (() => void) | undefined;
-  let rejectAdmission: ((error: unknown) => void) | undefined;
-  const confirmAdmission = (): void => {
-    admitted ??= completedAdmission;
-    resolveAdmission?.();
-  };
-  const failAdmission = (error: unknown): void => {
-    if (admitted === undefined) {
-      admitted = Promise.reject(error);
-      // Existing callers may observe only the reply Promise. Observing the
-      // rejection here leaves the public admission Promise rejected.
-      void admitted.catch(ignoreAdmissionFailure);
-    } else {
-      rejectAdmission?.(error);
-    }
-  };
-  const observeAdmission = (): Promise<void> => {
-    if (admitted === undefined) {
-      admitted = new Promise<void>((resolve, reject) => {
-        resolveAdmission = resolve;
-        rejectAdmission = reject;
-      });
-      void admitted.catch(ignoreAdmissionFailure);
-    }
-    return admitted;
-  };
+  const admission = new RequestAdmission<TReply>();
+  // Both the owner's notification and a successful reply prove admission.
+  const confirm = admission.confirm.bind(admission);
   let pending: Promise<TReply>;
   try {
-    pending = start(confirmAdmission);
+    pending = start(confirm);
   } catch (error) {
     pending = Promise.reject(error);
   }
-  const observed = pending.then(
-    (value) => {
-      // A successful reply proves admission even without an observation callback.
-      confirmAdmission();
-      return value;
-    },
-    (error: unknown) => {
-      failAdmission(error);
-      throw error;
-    }
-  );
+  const observed = pending.then(confirm, admission.fail.bind(admission));
   const reply = deliverReply?.(observed) ?? observed;
   return Object.defineProperty(reply, 'admitted', {
-    get: observeAdmission
+    get: () => admission.observe()
   }) as ZLinkRequest<TReply>;
 }

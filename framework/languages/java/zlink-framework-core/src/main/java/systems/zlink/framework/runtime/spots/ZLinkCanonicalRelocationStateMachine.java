@@ -88,6 +88,7 @@ final class ZLinkCanonicalRelocationStateMachine
     private final Map<Fence, TerminalTarget> terminalTargets = new HashMap<>();
     private final AtomicInteger openSourceQuiescenceWindows = new AtomicInteger();
     private Runnable sourceQuiescenceChanged = () -> {};
+    private final java.util.function.BooleanSupplier targetAdmissionSealed;
 
     void onSourceQuiescenceChanged(Runnable listener) {
         sourceQuiescenceChanged = Objects.requireNonNull(listener, "listener");
@@ -119,6 +120,26 @@ final class ZLinkCanonicalRelocationStateMachine
                 accepted.stream()
                         .map(entry -> entry.getValue().terminal())
                         .toArray(CompletableFuture[]::new));
+    }
+
+    ZLinkCanonicalRelocationStateMachine(
+            ZLinkInternalMeshNode node,
+            String meshName,
+            String entrySpotId,
+            ZLinkLocationRepository locations,
+            ZLinkAggregateRelocationCoordinator coordinator,
+            ZLinkSpotRetireControl.TargetEndpoint target,
+            java.util.function.BooleanSupplier targetAdmissionSealed) {
+        this(
+                node,
+                meshName,
+                entrySpotId,
+                locations,
+                coordinator,
+                target,
+                ZLinkCanonicalRelocationStateMachine::scheduleAt,
+                ZLinkRelocationPayloadTransfer.Options.defaults(),
+                targetAdmissionSealed);
     }
 
     ZLinkCanonicalRelocationStateMachine(
@@ -191,6 +212,58 @@ final class ZLinkCanonicalRelocationStateMachine
             ZLinkRelocationPayloadTransfer.Options transferOptions,
             LongSupplier monotonicNanos,
             DelayScheduler delayScheduler) {
+        this(
+                node,
+                meshName,
+                entrySpotId,
+                locations,
+                coordinator,
+                target,
+                retentionScheduler,
+                transferOptions,
+                monotonicNanos,
+                delayScheduler,
+                () -> false);
+    }
+
+    ZLinkCanonicalRelocationStateMachine(
+            ZLinkInternalMeshNode node,
+            String meshName,
+            String entrySpotId,
+            ZLinkLocationRepository locations,
+            ZLinkAggregateRelocationCoordinator coordinator,
+            ZLinkSpotRetireControl.TargetEndpoint target,
+            RetentionScheduler retentionScheduler,
+            ZLinkRelocationPayloadTransfer.Options transferOptions,
+            java.util.function.BooleanSupplier targetAdmissionSealed) {
+        this(
+                node,
+                meshName,
+                entrySpotId,
+                locations,
+                coordinator,
+                target,
+                retentionScheduler,
+                transferOptions,
+                System::nanoTime,
+                ZLinkCanonicalRelocationStateMachine::scheduleAfter,
+                targetAdmissionSealed);
+    }
+
+    private ZLinkCanonicalRelocationStateMachine(
+            ZLinkInternalMeshNode node,
+            String meshName,
+            String entrySpotId,
+            ZLinkLocationRepository locations,
+            ZLinkAggregateRelocationCoordinator coordinator,
+            ZLinkSpotRetireControl.TargetEndpoint target,
+            RetentionScheduler retentionScheduler,
+            ZLinkRelocationPayloadTransfer.Options transferOptions,
+            LongSupplier monotonicNanos,
+            DelayScheduler delayScheduler,
+            java.util.function.BooleanSupplier targetAdmissionSealed) {
+        this.targetAdmissionSealed =
+                Objects.requireNonNull(targetAdmissionSealed, "targetAdmissionSealed");
         this.node = Objects.requireNonNull(node, "node");
         this.meshName = requireText(meshName, "meshName");
         this.entrySpotId = entrySpotId;
@@ -230,14 +303,16 @@ final class ZLinkCanonicalRelocationStateMachine
     public CompletionStage<Void> stage(
             RoutingId targetNodeRid,
             ZLinkSpotRetireControl.StageRequest request,
-            Duration timeout) {
+            Duration timeout,
+            Instant deadline) {
         Objects.requireNonNull(targetNodeRid, "targetNodeRid");
         Objects.requireNonNull(request, "request");
+        Objects.requireNonNull(deadline, "deadline");
         requireTimeout(timeout);
         if (!targetNodeRid.equals(request.targetNodeRid())) {
             return failed(new IllegalArgumentException("canonical relocation target RID differs"));
         }
-        return sourcePrepare(request)
+        return sourcePrepare(request, deadline)
                 .thenCompose(
                         prepare -> {
                             Fence fence =
@@ -321,7 +396,10 @@ final class ZLinkCanonicalRelocationStateMachine
         //  boundary batch stay retained until settle() confirms authority (spec 28 §4.4).
         attempt.cutover(encodedCutover);
         batch.observeSubmission(node.observePeerRoute(targetNodeRid));
-        return send(targetNodeRid, encodedCutover);
+        return send(targetNodeRid, encodedCutover)
+                .whenComplete(
+                        (ignored, failure) ->
+                                attempt.cutoverTerminalNanos().complete(System.nanoTime()));
     }
 
     /**
@@ -335,19 +413,25 @@ final class ZLinkCanonicalRelocationStateMachine
     @Override
     public CompletionStage<Settlement> settle(
             RoutingId targetNodeRid, ZLinkSpotRetireControl.Fence fence, Instant preserveAt) {
+        return settleAuthority(targetNodeRid, fence, preserveAt)
+                .thenApply(AuthoritySettlement::outcome);
+    }
+
+    @Override
+    public CompletionStage<AuthoritySettlement> settleAuthority(
+            RoutingId targetNodeRid, ZLinkSpotRetireControl.Fence fence, Instant preserveAt) {
         Objects.requireNonNull(preserveAt, "preserveAt");
         Fence key = Fence.from(fence);
         SourceAttempt attempt = requireSource(key, targetNodeRid);
-        long settleNanos = System.nanoTime();
         if (openSourceQuiescenceWindows.incrementAndGet() == 1) {
             sourceQuiescenceChanged.run();
         }
-        CompletableFuture<Settlement> result = new CompletableFuture<>();
+        CompletableFuture<AuthoritySettlement> result = new CompletableFuture<>();
         settleSource(attempt, preserveAt, result);
         return result.whenComplete(
                 (settlement, failure) -> {
                     inStateLane(() -> sources.remove(key, attempt));
-                    if (settlement != Settlement.TARGET_COMMITTED) {
+                    if (settlement == null || settlement.outcome() != Settlement.TARGET_COMMITTED) {
                         releaseSourceQuiescenceWindow();
                         return;
                     }
@@ -357,10 +441,20 @@ final class ZLinkCanonicalRelocationStateMachine
                             Instant.now().plus(transferOptions.messageFollowDuration()),
                             () -> {
                                 releaseSourceQuiescenceWindow();
-                                ZLinkRuntimeMetrics.record(
-                                        "zlink.relocation.route_convergence",
-                                        Duration.ofNanos(System.nanoTime() - settleNanos),
-                                        Map.of());
+                                long expiredNanos = System.nanoTime();
+                                attempt.cutoverTerminalNanos()
+                                        .thenAccept(
+                                                submittedNanos ->
+                                                        ZLinkRuntimeMetrics.record(
+                                                                ZLinkRuntimeMetrics.Metric
+                                                                        .RELOCATION_ROUTE_CONVERGENCE
+                                                                        .metricName(),
+                                                                Duration.ofNanos(
+                                                                        Math.max(
+                                                                                0L,
+                                                                                expiredNanos
+                                                                                        - submittedNanos)),
+                                                                unitTags(attempt.prepare())));
                             });
                 });
     }
@@ -372,17 +466,19 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private void settleSource(
-            SourceAttempt attempt, Instant preserveAt, CompletableFuture<Settlement> result) {
+            SourceAttempt attempt,
+            Instant preserveAt,
+            CompletableFuture<AuthoritySettlement> result) {
         var prepare = attempt.prepare();
         String key = primary(attempt.request().participants()).authorityKey();
         String expected = prepare.coordinator().expectedAuthorityStoreVersion();
         boolean fence = !Instant.now().isBefore(preserveAt);
-        CompletionStage<Optional<Settlement>> step =
+        CompletionStage<Optional<AuthoritySettlement>> step =
                 locations
                         .read(key, OPEN)
                         .thenCompose(
                                 read -> {
-                                    Optional<Settlement> observed =
+                                    Optional<AuthoritySettlement> observed =
                                             settlementOf(read, attempt.request(), expected);
                                     if (observed.isPresent()) {
                                         return CompletableFuture.completedFuture(observed);
@@ -395,8 +491,10 @@ final class ZLinkCanonicalRelocationStateMachine
                                                             return CompletableFuture
                                                                     .completedFuture(
                                                                             Optional.of(
-                                                                                    Settlement
-                                                                                            .SOURCE_LEASE_EXPIRED));
+                                                                                    new AuthoritySettlement(
+                                                                                            Settlement
+                                                                                                    .SOURCE_LEASE_EXPIRED,
+                                                                                            null)));
                                                         }
                                                         return fence
                                                                         && read
@@ -408,14 +506,14 @@ final class ZLinkCanonicalRelocationStateMachine
                                                                         current)
                                                                 : CompletableFuture.completedFuture(
                                                                         Optional
-                                                                                .<Settlement>
+                                                                                .<AuthoritySettlement>
                                                                                         empty());
                                                     });
                                 });
         step.whenComplete(
                 (settled, failure) -> {
                     if (failure == null && settled.isPresent()) {
-                        if (settled.get() == Settlement.SOURCE_PRESERVED) {
+                        if (settled.get().outcome() == Settlement.SOURCE_PRESERVED) {
                             //  Release the target's pending aggregate reservation; the fence
                             //  already decided authority, so this cleanup is best effort.
                             coordinator
@@ -457,7 +555,7 @@ final class ZLinkCanonicalRelocationStateMachine
      * the target NewOwner CAS expects, keeping the source owner. The caller checks the live source
      * owner lease before submitting this CAS (spec 28 §4.4).
      */
-    private CompletionStage<Optional<Settlement>> preserveSource(
+    private CompletionStage<Optional<AuthoritySettlement>> preserveSource(
             SourceAttempt attempt, String key, String expected, ZLinkAuthoritySnapshot current) {
         return locations
                 .compareExchange(
@@ -468,13 +566,14 @@ final class ZLinkCanonicalRelocationStateMachine
                 .thenApply(
                         written -> {
                             if (written instanceof ZLinkAuthorityStored) {
-                                return Optional.of(Settlement.SOURCE_PRESERVED);
+                                return Optional.of(
+                                        new AuthoritySettlement(Settlement.SOURCE_PRESERVED, null));
                             }
                             //  A conflict is reconciled from the current
                             //  record; anything else is indeterminate.
                             return written instanceof ZLinkAuthorityConflict conflict
                                     ? settlementOf(conflict.current(), attempt.request(), expected)
-                                    : Optional.<Settlement>empty();
+                                    : Optional.<AuthoritySettlement>empty();
                         });
     }
 
@@ -484,20 +583,20 @@ final class ZLinkCanonicalRelocationStateMachine
      * other StoreVersion means the target commit can no longer succeed, so the source keeps
      * authority.
      */
-    private static Optional<Settlement> settlementOf(
+    private static Optional<AuthoritySettlement> settlementOf(
             ZLinkAuthorityReadResult read,
             ZLinkSpotRetireControl.StageRequest request,
             String expectedStoreVersion) {
         if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
-            return Optional.of(Settlement.SOURCE_LEASE_EXPIRED);
+            return Optional.of(new AuthoritySettlement(Settlement.SOURCE_LEASE_EXPIRED, null));
         }
         if (snapshot.ownerId().equals(request.targetOwnerId())
                 && snapshot.ownerLeaseGeneration() == request.targetOwnerLeaseGeneration()) {
-            return Optional.of(Settlement.TARGET_COMMITTED);
+            return Optional.of(new AuthoritySettlement(Settlement.TARGET_COMMITTED, snapshot));
         }
         return snapshot.storeVersion().equals(expectedStoreVersion)
                 ? Optional.empty()
-                : Optional.of(Settlement.SOURCE_PRESERVED);
+                : Optional.of(new AuthoritySettlement(Settlement.SOURCE_PRESERVED, null));
     }
 
     /** Resends the whole boundary batch and the cutover after a transport reconnect. */
@@ -620,7 +719,8 @@ final class ZLinkCanonicalRelocationStateMachine
                                         existing, null);
                             TargetAttempt created = new TargetAttempt(prepare);
                             MeshNodeState state = node.status().state();
-                            if (state == MeshNodeState.DRAINING
+                            if (targetAdmissionSealed.getAsBoolean()
+                                    || state == MeshNodeState.DRAINING
                                     || state == MeshNodeState.STOPPED
                                     || state == MeshNodeState.ERROR)
                                 return new java.util.AbstractMap.SimpleImmutableEntry<>(
@@ -705,13 +805,25 @@ final class ZLinkCanonicalRelocationStateMachine
                                 }
                             });
         }
-        attempt.assembler()
-                .assembled()
+        target.beginPrepare(
+                        prepare.id(),
+                        attempt.terminal(),
+                        () ->
+                                discardTarget(
+                                        fence,
+                                        attempt,
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                "canonical relocation target was superseded")))
+                .thenCompose(ignored -> attempt.assembler().assembled())
                 .thenCompose(payload -> reconstruct(prepare, payload))
                 .thenCompose(
                         restore -> {
                             return target.stage(restore.request())
                                     .thenRun(() -> attempt.request().complete(restore.request()))
+                                    .thenCompose(
+                                            ignored ->
+                                                    secureSessionRoutes(restore.request(), attempt))
                                     .thenCompose(
                                             ignored ->
                                                     coordinator.prepare(restore.authority(), OPEN))
@@ -753,6 +865,60 @@ final class ZLinkCanonicalRelocationStateMachine
                             return null;
                         });
         return CompletableFuture.completedFuture(null);
+    }
+
+    /**
+     * Relocation §4.3: relay-ready waits until each carried binding's remote Session owner has a
+     * ready route. The wait ends when the routes are ready, when this attempt ends (supersede,
+     * admission seal at shutdown), or at the source operation deadline that command 40 carries. The
+     * last two fail the attempt, so the existing explicit failure reply and staging cleanup follow.
+     * The deadline is the source's value; the target adds no timeout of its own.
+     */
+    private CompletionStage<Void> secureSessionRoutes(
+            ZLinkSpotRetireControl.StageRequest request, TargetAttempt attempt) {
+        CompletableFuture<?>[] routes =
+                request.sessionRoutes().stream()
+                        .filter(route -> !route.sessionOwnerNodeRid().equals(localNodeRid))
+                        .map(
+                                route ->
+                                        node.secureSessionOwnerRoute(
+                                                        route.sessionOwnerNodeRid(),
+                                                        route.sessionOwnerNodeGeneration())
+                                                .toCompletableFuture())
+                        .toArray(CompletableFuture[]::new);
+        CompletableFuture<Void> secured = CompletableFuture.allOf(routes);
+        if (secured.isDone()) {
+            return secured;
+        }
+        secured.whenComplete(
+                (ignored, failure) -> {
+                    for (CompletableFuture<?> route : routes) {
+                        route.cancel(false);
+                    }
+                });
+        attempt.ready()
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) {
+                                secured.completeExceptionally(failure);
+                            }
+                        });
+        long deadlineUnixMs = attempt.prepare().deadlineUnixMs();
+        Instant deadline =
+                Instant.ofEpochSecond(
+                        Long.divideUnsigned(deadlineUnixMs, 1000L),
+                        Long.remainderUnsigned(deadlineUnixMs, 1000L) * 1_000_000L);
+        Duration remaining = Duration.between(Instant.now(), deadline);
+        Runnable expire =
+                () ->
+                        secured.completeExceptionally(
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                        "Session owner route was not ready before the relocation"
+                                                + " deadline"));
+        if (remaining.isNegative() || remaining.isZero()) expire.run();
+        else delayScheduler.schedule(remaining, expire);
+        return secured;
     }
 
     private CompletionStage<Void> publishReady(
@@ -1057,7 +1223,9 @@ final class ZLinkCanonicalRelocationStateMachine
                             "cutover_timeout: relay-ready wait elapsed without a verified"
                                     + " CUTOVER; target CAS and dispatch stay closed: "
                                     + fence.id());
-                    ZLinkRuntimeMetrics.increment("zlink.relocation.cutover_timeout", Map.of());
+                    ZLinkRuntimeMetrics.increment(
+                            ZLinkRuntimeMetrics.Metric.RELOCATION_CUTOVER_TIMEOUT.metricName(),
+                            unitTags(attempt.prepare()));
                     watchUnverifiedTarget(fence, attempt);
                 });
     }
@@ -1122,10 +1290,8 @@ final class ZLinkCanonicalRelocationStateMachine
                                             if (discardFailure == null) {
                                                 retainTerminalTarget(fence, attempt);
                                             } else {
-                                                inStateLane(() -> targets.remove(fence, attempt));
-                                                attempt.terminal()
-                                                        .completeExceptionally(
-                                                                unwrap(discardFailure));
+                                                completeTargetTerminal(
+                                                        fence, attempt, unwrap(discardFailure));
                                             }
                                         });
                     } else {
@@ -1171,9 +1337,10 @@ final class ZLinkCanonicalRelocationStateMachine
                             long committedNanos = attempt.committedNanos();
                             if (committedNanos != 0) {
                                 ZLinkRuntimeMetrics.record(
-                                        "zlink.relocation.target_resume",
+                                        ZLinkRuntimeMetrics.Metric.RELOCATION_TARGET_RESUME
+                                                .metricName(),
                                         Duration.ofNanos(System.nanoTime() - committedNanos),
-                                        Map.of());
+                                        unitTags(attempt.prepare()));
                             }
                             return ignored;
                         })
@@ -1202,7 +1369,6 @@ final class ZLinkCanonicalRelocationStateMachine
                             if (existing == null) {
                                 terminalTargets.put(fence, terminal);
                             }
-                            targets.remove(fence, attempt);
                             return existing;
                         });
         if (current == null) {
@@ -1210,7 +1376,33 @@ final class ZLinkCanonicalRelocationStateMachine
                     Instant.now().plus(transferOptions.messageFollowDuration()),
                     () -> inStateLane(() -> terminalTargets.remove(fence, terminal)));
         }
-        attempt.terminal().complete(null);
+        completeTargetTerminal(fence, attempt, null);
+    }
+
+    private void completeTargetTerminal(Fence fence, TargetAttempt attempt, Throwable failure) {
+        target.endPrepare(fence.id())
+                .handle(
+                        (ignored, cleanupFailure) -> {
+                            Throwable cause = failure != null ? failure : cleanupFailure;
+                            if (failure != null && cleanupFailure != null) {
+                                failure.addSuppressed(unwrap(cleanupFailure));
+                            }
+                            return cause;
+                        })
+                .thenCompose(
+                        cause ->
+                                stateLane.runAsync(
+                                        () -> {
+                                            targets.remove(fence, attempt);
+                                            return cause;
+                                        }))
+                .whenComplete(
+                        (cause, completionFailure) -> {
+                            Throwable terminalFailure =
+                                    completionFailure == null ? cause : completionFailure;
+                            if (terminalFailure == null) attempt.terminal().complete(null);
+                            else attempt.terminal().completeExceptionally(unwrap(terminalFailure));
+                        });
     }
 
     private CompletionStage<ZLinkAggregateRelocationCoordinator.Published> commitUntilSettled(
@@ -1287,14 +1479,14 @@ final class ZLinkCanonicalRelocationStateMachine
                 .read(key, OPEN)
                 .thenCompose(
                         read -> {
-                            Optional<Settlement> settled =
+                            Optional<AuthoritySettlement> settled =
                                     settlementOf(
                                             read,
                                             request,
                                             prepare.coordinator().expectedAuthorityStoreVersion());
                             if (settled.isPresent()) {
                                 return CompletableFuture.completedFuture(
-                                        settled.get() == Settlement.TARGET_COMMITTED
+                                        settled.get().outcome() == Settlement.TARGET_COMMITTED
                                                 ? TargetAuthority.SUBMIT
                                                 : TargetAuthority.SOURCE_PRESERVED);
                             }
@@ -1328,7 +1520,7 @@ final class ZLinkCanonicalRelocationStateMachine
     }
 
     private CompletionStage<ZLinkCanonicalRelocationProtocol.Prepare> sourcePrepare(
-            ZLinkSpotRetireControl.StageRequest request) {
+            ZLinkSpotRetireControl.StageRequest request, Instant deadline) {
         ZLinkSpotRetireControl.ParticipantFence primary = primary(request.participants());
         CompletionStage<ZLinkAuthorityReadResult> authority =
                 locations.read(primary.authorityKey(), OPEN);
@@ -1373,7 +1565,8 @@ final class ZLinkCanonicalRelocationStateMachine
                                     payload,
                                     budget.effectiveChunkBytes(
                                             request.advertisedReceiveChunkLimitBytes())),
-                            envelope.applicationVersion());
+                            envelope.applicationVersion(),
+                            deadline.toEpochMilli());
                 });
     }
 
@@ -1898,9 +2091,8 @@ final class ZLinkCanonicalRelocationStateMachine
                                     });
                             return result;
                         },
-                        () -> node.targetLifecycleEnded(targetNodeRid),
                         () -> node.observePeerRoute(targetNodeRid),
-                        node::onStateChanged,
+                        (changed, ended) -> node.onPeerStateChanged(targetNodeRid, changed, ended),
                         action -> {
                             if (stateLane.isOnLane()) {
                                 action.run();
@@ -2018,6 +2210,10 @@ final class ZLinkCanonicalRelocationStateMachine
         return awaitStateLane(stateLane, work);
     }
 
+    private static Map<String, String> unitTags(ZLinkCanonicalRelocationProtocol.Prepare prepare) {
+        return ZLinkRuntimeMetrics.relocationUnitTags(prepare.object().kind());
+    }
+
     private record PublicationClaim(
             CompletionStage<Void> publication, boolean owner, List<byte[]> verifiedBatch) {
         PublicationClaim(CompletionStage<Void> publication, boolean owner) {
@@ -2037,7 +2233,8 @@ final class ZLinkCanonicalRelocationStateMachine
             CompletableFuture<Void> ready,
             AtomicInteger activeWaiters,
             RelayBatch batch,
-            AtomicReference<byte[]> encodedCutover) {
+            AtomicReference<byte[]> encodedCutover,
+            CompletableFuture<Long> cutoverTerminalNanos) {
         SourceAttempt(
                 ZLinkSpotRetireControl.StageRequest request,
                 ZLinkCanonicalRelocationProtocol.Prepare prepare) {
@@ -2047,7 +2244,8 @@ final class ZLinkCanonicalRelocationStateMachine
                     new CompletableFuture<>(),
                     new AtomicInteger(),
                     new RelayBatch(),
-                    new AtomicReference<>());
+                    new AtomicReference<>(),
+                    new CompletableFuture<>());
         }
 
         RoutingId targetNodeRid() {

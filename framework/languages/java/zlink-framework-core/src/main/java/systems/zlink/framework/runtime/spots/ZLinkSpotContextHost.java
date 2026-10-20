@@ -1,8 +1,10 @@
 package systems.zlink.framework.runtime.spots;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerInstanceOwner;
 
@@ -35,6 +37,26 @@ abstract class ZLinkSpotContextHost {
 
     abstract CompletionStage<Boolean> closeSpot(String spotId, long objectGeneration);
 
+    final CompletionStage<Boolean> closeSpot(DefaultSpotContext context) {
+        CompletableFuture<Boolean> result = new CompletableFuture<>();
+        return context.enqueueClose(
+                        () -> closeSpotOnLifecycle(context).thenAccept(result::complete),
+                        () -> spotCloseCommitted(context))
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) result.completeExceptionally(failure);
+                        })
+                .thenCompose(ignored -> result);
+    }
+
+    CompletionStage<Boolean> closeSpotOnLifecycle(DefaultSpotContext context) {
+        return closeSpot(context.spotId(), context.objectGeneration());
+    }
+
+    boolean spotCloseCommitted(DefaultSpotContext context) {
+        return false;
+    }
+
     abstract CompletionStage<Boolean> closeInstanceSpot(String spotId, long objectGeneration);
 
     abstract CompletionStage<Boolean> completeInstanceSpotClose(
@@ -63,21 +85,13 @@ abstract class ZLinkSpotContextHost {
     }
 
     abstract CompletionStage<Void> enqueueActorDispatch(
-            String actorId, long payloadBytes, Supplier<CompletionStage<Void>> operation);
-
-    abstract CompletionStage<Void> enqueueActorDispatch(
             ZLinkActorDispatchTarget target,
             String actorId,
             long payloadBytes,
             Supplier<CompletionStage<Void>> operation,
-            CompletableFuture<Void> admission);
-
-    abstract CompletionStage<Void> enqueueActorDispatch(
-            String actorId,
-            Supplier<byte[]> acceptedJournalRecord,
-            long acceptedJournalRecordSizeHint,
-            Supplier<CompletionStage<Void>> operation,
-            Runnable relocationRelease);
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload);
 
     abstract CompletionStage<Void> enqueueActorDispatch(
             ZLinkActorDispatchTarget target,
@@ -86,5 +100,7 @@ abstract class ZLinkSpotContextHost {
             long acceptedJournalRecordSizeHint,
             Supplier<CompletionStage<Void>> operation,
             Runnable relocationRelease,
-            CompletableFuture<Void> admission);
+            CompletableFuture<Void> admission,
+            ZLinkBackendActorReceived header,
+            Message payload);
 }

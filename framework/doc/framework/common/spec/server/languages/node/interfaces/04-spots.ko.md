@@ -161,10 +161,12 @@ export interface ZLinkSpotHandlerRegistry extends ZLinkActorHandlerRegistry {
  addHandler<THandler>(handlerType: Type<THandler>, packetName?: string): this;
  addPacket<THandler>(handlerType: Type<THandler>): this;
  addSubscribe<THandler>(handlerType: Type<THandler>, channelName: string, topic: string): this;
+ addTimerHandler<THandler extends ZLinkSpotTimerHandler<ZLinkSpot>>(handlerType: Type<THandler>): this;
 }
 
 export interface ZLinkInstanceSpotHandlerRegistry {
  addPacket<THandler>(handlerType: Type<THandler>): this;
+ addTimerHandler<THandler extends ZLinkSpotTimerHandler<ZLinkInstanceSpot>>(handlerType: Type<THandler>): this;
 }
 
 export interface ZLinkSpotOutbound {
@@ -269,8 +271,8 @@ Entry·User·Instance SpotId는 UTF-8 encoded 크기 1..255 bytes의 global stri
 Create와 GetOrCreate call은 single-use다. 같은 option을 두 번 설정하거나 terminal
 `submit(...)`을 두 번 호출하면 `InvalidOperation`이다. User Spot `create`는 Framework가 새 global Spot ID를 발급한다.
 `getOrCreate`는 같은 User kind·[stable type](../../../00-foundation/02-glossary.ko.md#stable-type)의
-ready Spot을 `existing`으로 반환한다. Creating이면 authority 변경을 기다리고, Ready가
-되면 `existing`, cleanup으로 Missing이 되면 새 reservation을 경쟁한다. Kind나 type이 다르면
+ready Spot을 `existing`으로 반환한다. Creating·Closing authority를 관찰했을 때의 대기와 후속 절차는
+[Spot 주소 메시징 §3.2](../../../03-spot-actor/06-spot-address-messaging.ko.md#32-동시-요청의-수렴)를 따른다. Kind나 type이 다르면
 `TypeMismatch`, [deadline](../../../00-foundation/02-glossary.ko.md#deadline) 안에 terminal state가 되지 않으면 `DeadlineExceeded`다.
 
 `close(spotRef)`는 지정한 incarnation만 닫는다. Generation이 다르면 `InvalidOperation`, 이동 중이면
@@ -317,8 +319,16 @@ const reply = await spotClient
 
 User·Instance Spot relocation에서는 Framework가 `addTimer(...)`로 만든 logical timer registration, 마지막 완료
 tick sequence, 다음 예정 시각과 아직 실행하지 않은 pending tick을 relocation payload에 포함한다. Target은
-logical timer registration을 복원하므로 application이 timer를 다시 등록하지 않는다. 현재 실행 중인 timer handler만 source에서
+logical timer registration을 복원하므로 application이 restore에서 timer를 다시 등록하지 않는다. Target의 `configure`·Ready 전 `onInitialize`가 복원된 key를 등록하면 [Spot timer §1](../../../03-spot-actor/10-spot-timer.ko.md#1-timer-generation과-cancel) 예외대로 복원된 registration에 다시 연결된다. 현재 실행 중인 timer handler만 source에서
 완료하고 target Ready 전에는 복원한 tick을 실행하지 않는다.
+
+Node.js는 payload에 기록된 handler 이름으로 생성자를 찾을 수 없으므로, target은 그 Spot이 `configure()`에서
+알린 생성자 중 `name` 속성이 payload의 handler 이름과 같은 생성자를 복원한 timer의 handler로 쓴다. Spot은
+`configure()` 안의 `addTimer(...)`나 `handlers.addTimerHandler(Handler)`로 생성자를 알린다. 두 방법으로 같은
+생성자 객체를 알리면 후보 하나로 센다. `addTimerHandler`는 endpoint를 등록하지 않는다. `onInitialize()`나
+handler에서만 `addTimer(...)`에 쓰는 handler는 `configure()`에서 `addTimerHandler`로 알려야 한다. 이름이 같은
+생성자가 없거나 이름이 같은 서로 다른 생성자 객체가 둘 이상이면 target 복원이 실패하고, relocation은
+[host relocation 흐름](../../../05-location-relocation/05-host-relocation-flow.ko.md#13-relocate-완료와-실패)의 복원 실패 규칙을 따른다.
 
 Public trace category는 `spot-instance`, `actor-relocation`다. 의미와 검증 기준은
 [Spot address와 messaging](../../../03-spot-actor/06-spot-address-messaging.ko.md)과

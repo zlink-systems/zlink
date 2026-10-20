@@ -1,3 +1,4 @@
+import { routingIdsEqual } from '../routing-id';
 import {
   type RoutingId,
   type SpotId,
@@ -88,6 +89,11 @@ export class DefaultZLinkActorContext implements ZLinkActorContext {
 
   get actorId(): string {
     return this.state.actorId;
+  }
+
+  /** Actor-turn view of the single current Session binding (§7). */
+  get currentSessionBinding() {
+    return this.state.boundSession;
   }
 
   get objectGeneration(): bigint {
@@ -286,7 +292,7 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
             !result.accepted ||
             sourceNodeRid === undefined ||
             result.actor === undefined ||
-            String(sourceNodeRid) === String(result.actor.nodeRid)
+            routingIdsEqual(sourceNodeRid, result.actor.nodeRid)
           ) {
             await notifyJoinCompletion(this.actor, operationId, result, this.messageSerializers);
           } else {
@@ -421,7 +427,7 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
             !result.accepted ||
             sourceNodeRid === undefined ||
             result.actor === undefined ||
-            String(sourceNodeRid) === String(result.actor.nodeRid)
+            routingIdsEqual(sourceNodeRid, result.actor.nodeRid)
           ) {
             await notifyJoinCompletion(this.actor, operationId, result, this.messageSerializers);
           } else {

@@ -6,6 +6,7 @@
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/sha256.hpp"
 #include "runtime/execution/task_result.hpp"
+#include "runtime/messaging/request_failure_mapper.hpp"
 
 #include <algorithm>
 #include <cstring>
@@ -60,12 +61,12 @@ void reply_failure_then_release_claim (mesh::raw_mesh_node_owner_t &transport,
                                        std::uint32_t failure_code,
                                        std::shared_ptr<mesh::service_mailbox_claim_t> claim)
 {
+    mailbox_claim_release_guard_t release (transport, std::move (claim));
     try {
         (void) transport.reply_failure (request, terminal_result, failure_code);
     }
     catch (...) {
     }
-    (void) transport.mailbox ().release (*claim);
 }
 
 bool nonzero (const protocol::wire_operation_id_t &value) noexcept
@@ -315,12 +316,14 @@ stateful_error_t raw_stateful_dispatch_t::commit_accepted_ingress (const object_
     return stateful_error_t::none;
 }
 
-task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
-                                                        turn_record_t turn,
-                                                        std::vector<std::uint8_t> target_routing_id,
-                                                        std::uint64_t target_generation,
-                                                        std::uint64_t target_lease_generation,
-                                                        std::chrono::milliseconds window)
+task_t<bool>
+raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
+                                           turn_record_t turn,
+                                           std::vector<std::uint8_t> target_routing_id,
+                                           std::uint64_t target_generation,
+                                           std::uint64_t target_lease_generation,
+                                           std::chrono::milliseconds window,
+                                           std::optional<std::uint64_t> target_authority_generation)
 {
     const auto application =
       turn.application_record
@@ -330,20 +333,41 @@ task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
     if (!application.application)
         co_return false;
     const auto sequence = turn.sequence;
+    if (!target_authority_generation) {
+        if (!application.reply_route_id) {
+            co_return discard_pending (owner, sequence) == stateful_error_t::none;
+        }
+        const auto failure = messaging::request_failure_mapper_t{}
+                               .target_failure_reply (framework_error_kind_t::unavailable)
+                               .value ();
+        const protocol::reply_relay_t relay{
+          application.operation,
+          *application.reply_route_id,
+          {},
+          0,
+          {},
+          0,
+          sequence,
+          failure.terminal_result,
+          static_cast<protocol::framework_error_code> (failure.failure_code)};
+        co_return co_await complete_relocated_source_async (owner, sequence, relay, std::nullopt);
+    }
+
     auto complete = [this, owner, sequence, operation = application.operation,
                      reply_route = application.reply_route_id] (
-                      foundation::operation_terminal_t terminal, std::vector<std::uint8_t> bytes) {
+                      foundation::operation_terminal_t terminal, zlink::message_t bytes) {
         // A hop with no observed terminal retains the original delivery for
         // authority settlement. An explicit application failure is a reply.
-        if (terminal != foundation::operation_terminal_t::completed && bytes.empty ())
+        if (terminal != foundation::operation_terminal_t::completed && bytes.is_empty ())
             return;
         std::optional<protocol::application_payload_t> reply;
         protocol::reply_relay_t relay{
           operation, *reply_route, {}, 0, {}, 0, sequence, 0, protocol::framework_error_code::none};
         if (terminal == foundation::operation_terminal_t::completed)
-            reply = protocol::decode_application_payload (bytes, capture_flow ());
+            reply = protocol::decode_application_payload (protocol::message_bytes (bytes),
+                                                          capture_flow ());
         else {
-            const auto failed = protocol::decode_reply_header (bytes);
+            const auto failed = protocol::decode_reply_header (protocol::message_bytes (bytes));
             relay.terminal_result = failed.terminal_result;
             relay.failure_code = static_cast<protocol::framework_error_code> (failed.failure_code);
         }
@@ -353,8 +377,8 @@ task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
     };
     bool sent = false;
     if (owner.kind == object_kind_t::actor) {
-        protocol::actor_route_fence_t target{owner.key, owner.object_generation,          {},
-                                             0,         owner.authority_owner_generation, 0};
+        protocol::actor_route_fence_t target{owner.key, owner.object_generation,      {},
+                                             0,         *target_authority_generation, 0};
         target.target_node_routing_id = target_routing_id;
         target.target_node_generation = target_generation;
         target.owner_lease_generation = target_lease_generation;
@@ -372,8 +396,8 @@ task_t<bool> raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
                                                        target, *application.application, session,
                                                        application.operation);
     } else {
-        protocol::spot_route_fence_t target{owner.key, owner.object_generation,          {},
-                                            0,         owner.authority_owner_generation, 0};
+        protocol::spot_route_fence_t target{owner.key, owner.object_generation,      {},
+                                            0,         *target_authority_generation, 0};
         target.target_node_routing_id = target_routing_id;
         target.target_node_generation = target_generation;
         target.owner_lease_generation = target_lease_generation;
@@ -896,13 +920,16 @@ stateful_error_t raw_stateful_dispatch_t::discard_owner_pending (const object_re
     }
     for (auto &item : cleanup) {
         (void) _objects->discard_application (owner, item.sequence);
-        if (item.request && item.claim)
-            reply_failure_then_release_claim (
-              *_transport, std::move (*item.request),
-              static_cast<std::uint32_t> (protocol::request_terminal_result::conflict), 0,
-              item.claim);
-        else if (item.claim)
-            (void) _transport->mailbox ().release (*item.claim);
+        if (item.request) {
+            const auto failure = messaging::request_failure_mapper_t{}
+                                   .target_failure_reply (framework_error_kind_t::unavailable)
+                                   .value ();
+            reply_failure_then_release_claim (*_transport, std::move (*item.request),
+                                              failure.terminal_result, failure.failure_code,
+                                              std::move (item.claim));
+        } else {
+            mailbox_claim_release_guard_t release (*_transport, std::move (item.claim));
+        }
     }
     {
         std::lock_guard lock (_mutex);
@@ -1301,6 +1328,7 @@ bool raw_relocation_replay_coordinator_t::register_terminal_target (
             state.retained_bytes = bytes;
             state.next_retry = clock_t::time_point::min ();
             _terminal_targets.emplace (item_key, std::move (state));
+            _next_due.store (due_now, std::memory_order_release);
             _terminal_retained_bytes += bytes;
             return true;
         })
@@ -1312,6 +1340,14 @@ bool raw_relocation_replay_coordinator_t::register_terminal_target (
 
 task_t<std::size_t>
 raw_relocation_replay_coordinator_t::retry_terminal_relays (clock_t::time_point now)
+{
+    if (!due (now))
+        return task_t<std::size_t> (result_t<std::size_t>::success (0));
+    return retry_due_terminal_relays (now);
+}
+
+task_t<std::size_t>
+raw_relocation_replay_coordinator_t::retry_due_terminal_relays (clock_t::time_point now)
 {
     struct pending_send_t
     {
@@ -1334,6 +1370,7 @@ raw_relocation_replay_coordinator_t::retry_terminal_relays (clock_t::time_point 
                                 state.registration.relay, state.registration.application_reply});
                              state.next_retry = now + _relay_retry_interval;
                          }
+                         publish_next_due_on_lane ();
                          return pending;
                      })
                      .get ();
@@ -1454,6 +1491,7 @@ task_t<raw_relocation_replay_result_t> raw_relocation_replay_coordinator_t::proc
                                      found->second.completed = true;
                                      found->second.digest = digest;
                                      found->second.completed_at = clock_t::now ();
+                                     _next_due.store (due_now, std::memory_order_release);
                                      return raw_relocation_replay_result_t::terminal_received;
                                  })
                                  .get ();
@@ -1539,6 +1577,7 @@ raw_relocation_replay_coordinator_t::process_reply_relay_ack (
                               if (found == _terminal_targets.end ())
                                   return raw_relocation_replay_result_t::not_registered;
                               found->second.acknowledging = false;
+                              _next_due.store (due_now, std::memory_order_release);
                               if (!persisted) {
                                   found->second.registration.persist_ack = std::move (work.persist);
                                   return raw_relocation_replay_result_t::persistence_failed;
@@ -1595,6 +1634,7 @@ bool raw_relocation_replay_coordinator_t::confirm_terminal_source_lease_expired 
                                  if (found == _terminal_targets.end ())
                                      return false;
                                  found->second.acknowledging = false;
+                                 _next_due.store (due_now, std::memory_order_release);
                                  if (!persisted) {
                                      found->second.registration.persist_source_lease_expiry =
                                        std::move (work.persist);
@@ -1611,8 +1651,31 @@ bool raw_relocation_replay_coordinator_t::confirm_terminal_source_lease_expired 
     return confirmed;
 }
 
+bool raw_relocation_replay_coordinator_t::due (clock_t::time_point now) const noexcept
+{
+    return now.time_since_epoch ().count () >= _next_due.load (std::memory_order_acquire);
+}
+
+void raw_relocation_replay_coordinator_t::publish_next_due_on_lane () const
+{
+    auto next = never_due;
+    for (const auto &[key, state] : _terminal_targets) {
+        if (!state.acknowledging)
+            next = std::min (next, state.next_retry.time_since_epoch ().count ());
+    }
+    for (const auto &[key, state] : _terminal_sources) {
+        if (state.completed)
+            next = std::min (
+              next,
+              (state.completed_at + _terminal_tombstone_retention).time_since_epoch ().count ());
+    }
+    _next_due.store (next, std::memory_order_release);
+}
+
 std::size_t raw_relocation_replay_coordinator_t::reap_terminal_tombstones (clock_t::time_point now)
 {
+    if (!due (now))
+        return 0;
     return _lane
       .run ([this, now] {
           std::size_t removed = 0;
@@ -1625,6 +1688,7 @@ std::size_t raw_relocation_replay_coordinator_t::reap_terminal_tombstones (clock
                   ++iterator;
               }
           }
+          publish_next_due_on_lane ();
           return removed;
       })
       .get ();
@@ -1633,24 +1697,14 @@ std::size_t raw_relocation_replay_coordinator_t::reap_terminal_tombstones (clock
 std::optional<raw_relocation_replay_coordinator_t::clock_t::time_point>
 raw_relocation_replay_coordinator_t::next_activity () const
 {
-    return _lane
-      .run ([this] {
-          std::optional<clock_t::time_point> next;
-          const auto include = [&] (clock_t::time_point deadline) {
-              if (!next || deadline < *next)
-                  next = deadline;
-          };
-          for (const auto &[key, state] : _terminal_targets) {
-              if (!state.acknowledging)
-                  include (state.next_retry);
-          }
-          for (const auto &[key, state] : _terminal_sources) {
-              if (state.completed)
-                  include (state.completed_at + _terminal_tombstone_retention);
-          }
-          return next;
-      })
-      .get ();
+    auto next = _next_due.load (std::memory_order_acquire);
+    if (next == due_now) {
+        _lane.run ([this] { publish_next_due_on_lane (); }).get ();
+        next = _next_due.load (std::memory_order_acquire);
+    }
+    if (next == never_due)
+        return std::nullopt;
+    return clock_t::time_point (clock_t::duration (next));
 }
 
 std::size_t raw_relocation_replay_coordinator_t::pending_terminal_relays () const

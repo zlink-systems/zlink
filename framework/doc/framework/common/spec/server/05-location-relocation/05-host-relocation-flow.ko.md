@@ -706,7 +706,7 @@ Operation이 deadline까지 완료 조건을 만족하지 못한 결과를
 | `DisableRelocation` policy가 남아 있다. | `Blocked/RelocationDisabled` |
 | Target 선택 뒤 전달한 state schema/type adapter가 호환되지 않거나 허용한 재시도에서 `Capture`와 `Restore`가 모두 실패한다. | `Blocked/StateIncompatible` |
 | Framework가 relay-ready reply acceptance 전에 deadline 때문에 callback을 취소하거나 작업이 deadline을 넘는다. | `Blocked/DeadlineExceeded` |
-| Target이 relay-ready reply 전에 Restore를 명시적으로 거부해 source queue를 복원할 수 있다. | 아직 cutover를 시도하지 않은 source workload를 복원하고 `Blocked/RelocationFailed` |
+| Target이 relay-ready reply 전에 Restore를 명시적으로 거부해 source queue를 복원할 수 있다. Target의 Shutdown admission seal이 PREPARE를 거부한 경우도 여기에 든다. | 아직 cutover를 시도하지 않은 source workload를 복원하고 `Blocked/RelocationFailed` |
 | Relay-ready 뒤 Restore deadline에 target commit이 확정되지 않는다. | Source가 [Location runtime §6.1·§10](01-location-runtime.ko.md#61-read와-cas)의 `Preserve` fence로 authority를 확정한다. 모든 unit의 source fence가 이기면 `Serving`과 `Blocked/RelocationFailed`, 모든 unit의 target commit이 확인되면 `Relocated/None`, 양쪽에 commit된 unit이 있으면 `Error`와 `Blocked/RelocationFailed`다. Fence 결과가 불확정이면 source lease가 유효한 동안 기존 Store 실패 정책에 따라 보관과 판정을 계속한다. |
 | [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)이 source 작업을 expired-owner terminal로 끝낸다(source owner lease 만료 또는 authority `Missing`). | [공통 relocation §4.4](04-relocation-flow.ko.md#44-ordered-relay와-one-way-cutover)의 expired-owner terminal로 해당 unit을 실패 처리하고 host는 `Error`, 결과는 `Blocked/RelocationFailed`로 끝낸다. 원인은 §10이 확정한 조건이다. Target staging은 [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때)을 따른다. |
 
@@ -768,7 +768,7 @@ queue를 파괴하기 전에 소유한 transport 실행 문맥에서 cancellatio
 호출하면 object를 이전하지 않는다.
 
 `Relocated` 상태의 source는 이전 주소로 도착하는 send와 request를 target으로 전달하기 위해
-Message Follow route와 필요한 descriptor, peer connection과 listener를 유지하고, 각 unit의
+Message Follow route(연속 이동 예외로 설치하지 않은 unit은 제외, [Location runtime §10](01-location-runtime.ko.md#10-store-응답을-받지-못했을-때))와 필요한 descriptor, peer connection과 listener를 유지하고, 각 unit의
 cutover 재전송 사본도 authority 판정과 재전송 사본 정리가 끝날 때까지 유지한다(공통 relocation §4.4). Deployment가 설정한
 `MessageFollowDuration` 전체를 사용하려면 그 기간이 끝난 뒤 `Shutdown`을 호출한다. 먼저
 `Shutdown`을 호출하면 남은 Message Follow route와 재전송 사본도 source transport와 함께

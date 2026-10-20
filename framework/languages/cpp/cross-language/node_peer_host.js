@@ -553,7 +553,7 @@ async function entrySpotRelocate() {
            * PeerConnections.Connect; peers are supposed to find each other
            * through the store alone. */
           const objects = mesh.objects().server();
-          objects.addEntrySpot(RelocationEntrySpot);
+          objects.addEntrySpot(RelocationEntrySpot, actorType);
           objects.addActorFactory(actorType, RelocationActorFactory, (factory) =>
             factory.preserveStateWith(RelocationActorAdapter)
           );
@@ -712,10 +712,12 @@ async function messageFollow() {
     received = true;
   });
   backend.start();
-  backend.connectPeer({
+  // C++ dials this peer. A second dial from here would let Core replace the
+  // selected route while the one-shot command 50 is in flight.
+  backend.expectPeer({
+    nodeRoutingId: peerRid,
     endpoint: require_('peer-endpoint'),
-    expectedRid: peerRid,
-    expectedLifecycleGeneration: 1n
+    lifecycleGeneration: 1n
   });
   writeReady();
 

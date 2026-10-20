@@ -4,6 +4,7 @@
 
 #include "runtime/stateful/maintenance_runtime.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
+#include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include <runtime/locations/location_repository.hpp>
@@ -11,13 +12,14 @@
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/timers/timer_runtime.hpp"
+#include "runtime/timers/async_delay.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
-#include "runtime/diagnostics/dispatch_options_access.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -918,6 +920,9 @@ void test_remote_actor_leave_commits_before_source_callback (test_context_t &tes
       !failed && failed.error_kind () == zlink::framework::framework_error_kind_t::internal_failure
         && failure_retained_source && callbacks.load () == 0,
       "failed remote entry commit must retain source membership and skip leave callback");
+    source->serial_queue->close ();
+    source->serial_queue->drain ();
+    source->serial_executor->drain ();
 }
 
 void test_actor_leave_after_relocation_defer_runs_lifecycle_callbacks (test_context_t &test)
@@ -1209,7 +1214,10 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
                 .source_spot_id = source_id,
                 .source_spot_generation = source->object_generation,
                 .target_spot_id = target_id,
-                .target_fence = target_fence,
+                .target_identity = {target_fence.target_node_routing_id,
+                                    target_fence.target_node_generation,
+                                    {},
+                                    target_fence.owner_lease_generation},
                 .not_before = cleanup_boundary,
                 .leave_deadline = cleanup_boundary + node->message_follow_duration});
             std::optional<runtime::serial_execution_queue_t::async_completion_t> blocker;
@@ -1686,9 +1694,25 @@ class public_memory_authority_store_t final
     : public zlink::framework::runtime::in_memory_location_repository_t
 {
   public:
+    zlink::framework::task_t<zlink::framework::owner_lease_read_result_t>
+    read_owner_lease (std::string owner_id) override
+    {
+        if (fail_owner_lease_read)
+            throw std::runtime_error ("scripted lease read failure");
+        if (owner_lease_read)
+            return completed (*owner_lease_read);
+        return zlink::framework::runtime::in_memory_location_repository_t::read_owner_lease (
+          std::move (owner_id));
+    }
+
     zlink::framework::task_t<zlink::framework::authority_read_result_t>
     read_authority (zlink::framework::authority_key_t key, std::stop_token) override
     {
+        if (!authority_rows.empty ()) {
+            const auto current = authority_rows.find (key.value);
+            if (current != authority_rows.end ())
+                return completed (zlink::framework::authority_read_result_t{current->second});
+        }
         observed_keys.push_back (std::move (key.value));
         if (!snapshot)
             return completed (zlink::framework::authority_read_result_t{
@@ -1714,6 +1738,12 @@ class public_memory_authority_store_t final
                       zlink::framework::authority_missing_t{std::chrono::system_clock::now ()}}}});
         if (remaining_authority_conflicts != 0) {
             --remaining_authority_conflicts;
+            if (conflict_snapshot) {
+                snapshot = conflict_snapshot;
+                return completed (zlink::framework::authority_compare_exchange_result_t{
+                  zlink::framework::authority_conflict_t{
+                    zlink::framework::authority_read_result_t{*snapshot}}});
+            }
             snapshot->store_version = std::to_string (std::stoull (snapshot->store_version) + 1);
             snapshot->store_now = std::chrono::system_clock::now ();
             return completed (zlink::framework::authority_compare_exchange_result_t{
@@ -1745,6 +1775,10 @@ class public_memory_authority_store_t final
           zlink::framework::authority_scan_result_t{zlink::framework::authority_page_t{}});
     }
 
+    std::optional<zlink::framework::owner_lease_read_result_t> owner_lease_read;
+    bool fail_owner_lease_read = false;
+    std::map<std::string, zlink::framework::authority_snapshot_t> authority_rows;
+    std::optional<zlink::framework::authority_snapshot_t> conflict_snapshot;
     std::optional<zlink::framework::authority_snapshot_t> snapshot;
     std::optional<zlink::framework::location_owner_token_t> observed_target_owner;
     std::optional<zlink::framework::object_creation_target_t> observed_target_placement;
@@ -1878,6 +1912,25 @@ class memory_relocation_repository_t final : public relocation_store_port_t
 class memory_authority_store_t final : public authority_relocation_port_t
 {
   public:
+    zlink::framework::runtime::stateful::source_relocation_settlement_t settle_source_relocation (
+      const zlink::framework::runtime::stateful::relocation_authority_fence_t &fence,
+      const std::vector<zlink::framework::runtime::stateful::object_ref_t> &participants,
+      bool preserve) override
+    {
+        namespace sf = zlink::framework::runtime::stateful;
+        (void) preserve;
+        sf::source_relocation_settlement_t settled{observe_relocation (fence), {}};
+        if (settled.outcome == sf::relocation_authority_t::target_committed) {
+            for (const auto &participant : participants) {
+                if (const auto current = read (participant.kind, participant.key))
+                    settled.follow_generations.emplace (
+                      std::pair{participant.kind, participant.key},
+                      current->target.authority_owner_generation);
+            }
+        }
+        return settled;
+    }
+
     authority_publish_result_t publish (const object_ref_t &source,
                                         const object_ref_t &target,
                                         zlink::framework::location_owner_token_t target_owner,
@@ -2035,41 +2088,6 @@ class memory_aggregate_authority_t final : public aggregate_authority_port_t
     int prepare_count = 0;
     int commit_count = 0;
     bool prepared = false;
-};
-
-class target_preflight_t final : public target_preflight_port_t
-{
-  public:
-    target_preflight_result_t preflight (const std::vector<relocation_unit_t> &units) override
-    {
-        std::function<void ()> callback;
-        {
-            std::lock_guard lock (mutex);
-            ++calls;
-            observed_units = units;
-            callback = on_preflight;
-        }
-        if (callback)
-            callback ();
-        if (status != target_preflight_status_t::eligible)
-            return {status, {}};
-        target_preflight_result_t result{target_preflight_status_t::eligible, {}};
-        for (std::size_t index = 0; index != units.size (); ++index) {
-            result.units.push_back (
-              {.unit = units[index],
-               .target_node_id = "node-b",
-               .target_owner = {"owner-b", 1},
-               .encoded_upper_bound = 1024 * 1024,
-               .inventory_digest = digest_with (static_cast<std::uint8_t> (index + 10))});
-        }
-        return result;
-    }
-
-    std::mutex mutex;
-    std::vector<relocation_unit_t> observed_units;
-    std::function<void ()> on_preflight;
-    target_preflight_status_t status = target_preflight_status_t::eligible;
-    int calls = 0;
 };
 
 object_ref_t
@@ -2613,10 +2631,27 @@ void test_spot_restore_stages_before_publication (test_context_t &test)
                     && fail_first_restore_spot_t::factory_count == 2
                     && fail_first_restore_spot_t::restore_count == 2
                     && fail_first_restore_spot_t::create_count == 0
-                    && fail_first_restore_spot_t::initialize_count == 1
+                    && fail_first_restore_spot_t::initialize_count == 0
                     && fail_first_restore_spot_t::restored_payload
                          == std::vector<std::byte>{std::byte{0xca}, std::byte{0xfe}},
-                  "restore retry must use a fresh instance and publish only after success");
+                  "restore retry must retain a fresh uninitialized target before authority commit");
+    test.require (runtime.commit_relocation_materialization ({target})
+                    && fail_first_restore_spot_t::initialize_count == 1,
+                  "confirmed target commit must initialize the restored incarnation once");
+    if (runtime.find_spot (zlink::framework::spot_id_t ("staged-spot"))) {
+        const auto owner = runtime.weak_state ().lock ();
+        const auto context = owner->lane
+                               .run ([owner] {
+                                   return zlink::framework::detail::spot_context_access_t::state (
+                                     owner->spot_contexts_by_id.at ("staged-spot"));
+                               })
+                               .get ();
+        context
+          ->run_serial_task ("after-restored-target-commit",
+                             [] () -> zlink::framework::task_t<void> { co_return; })
+          .result ()
+          .value ();
+    }
     runtime.request_stop ();
     runtime.cancel_pending_dispatch ();
     runtime.cancel_pending_work ();
@@ -2946,103 +2981,6 @@ void test_pending_restore_holds_ingress_before_rollback (test_context_t &test)
                   "callback failure rollback must release the fresh retry");
 }
 
-void test_host_preflight_is_all_or_none (test_context_t &test)
-{
-    stateful_object_runtime_t objects;
-    const auto actor = create_actor (objects, "preflight-actor");
-    auto roots = std::make_shared<memory_relocation_repository_t> ();
-    auto authority = std::make_shared<memory_authority_store_t> ();
-    auto aggregates = std::make_shared<memory_aggregate_authority_t> (authority);
-    auto targets = std::make_shared<target_preflight_t> ();
-    targets->status = target_preflight_status_t::target_unavailable;
-    maintenance_runtime_t relocation (
-      objects, maintenance_provider_set_t{authority, aggregates, roots, targets});
-    stream_session_registry_t sessions (
-      [&] (const std::string &key) { return objects.find (object_kind_t::actor, key); });
-    host_maintenance_runtime_t host (objects, sessions, relocation, targets);
-    host.mark_serving ();
-    const auto result = await_task (host.terminate (termination_intent_t::retire));
-    test.require (result
-                    == termination_result_t{termination_intent_t::retire,
-                                            termination_outcome_t::blocked,
-                                            termination_reason_t::target_unavailable},
-                  "one target blocker must reject the whole host preflight");
-    test.require (roots->roots.empty ()
-                    && objects.enqueue (actor, turn_domain_t::application, {1, {1}})
-                         == stateful_error_t::none,
-                  "failed preflight must not seal an object or write relocation data");
-    const auto after_blocked =
-      objects.begin_create ({.kind = object_kind_t::actor,
-                             .key = "after-blocked",
-                             .stable_type = "actor",
-                             .mesh_name = std::optional<std::string>{"mesh"},
-                             .creation_request = {},
-                             .exclusive = true,
-                             .instance_intent = false});
-    test.require (host.state () == maintenance_admission_state_t::serving
-                    && !host.terminal_result ()
-                    && after_blocked.status == create_status_t::reserved,
-                  "blocked Retire must restore Serving without a host terminal result");
-}
-
-void test_shutdown_wins_during_retire_preflight (test_context_t &test)
-{
-    stateful_object_runtime_t objects;
-    (void) create_actor (objects, "race-actor");
-    auto roots = std::make_shared<memory_relocation_repository_t> ();
-    auto authority = std::make_shared<memory_authority_store_t> ();
-    auto aggregates = std::make_shared<memory_aggregate_authority_t> (authority);
-    auto targets = std::make_shared<target_preflight_t> ();
-    std::mutex gate;
-    std::condition_variable changed;
-    bool entered = false;
-    bool release = false;
-    targets->on_preflight = [&] {
-        std::unique_lock lock (gate);
-        entered = true;
-        changed.notify_all ();
-        changed.wait (lock, [&] { return release; });
-    };
-    maintenance_runtime_t relocation (
-      objects, maintenance_provider_set_t{authority, aggregates, roots, targets});
-    stream_session_registry_t sessions (
-      [&] (const std::string &key) { return objects.find (object_kind_t::actor, key); });
-    int observations = 0;
-    host_maintenance_runtime_t host (objects, sessions, relocation, targets,
-                                     [&] (const termination_result_t &) { ++observations; });
-    host.mark_serving ();
-
-    termination_result_t retire_result;
-    termination_result_t shutdown_result;
-    std::thread retire (
-      [&] { retire_result = await_task (host.terminate (termination_intent_t::retire)); });
-    {
-        std::unique_lock lock (gate);
-        changed.wait (lock, [&] { return entered; });
-    }
-    std::thread shutdown (
-      [&] { shutdown_result = await_task (host.terminate (termination_intent_t::shutdown)); });
-    while (host.intent_snapshot ()
-           != std::optional<termination_intent_t>{termination_intent_t::shutdown}) {
-        std::this_thread::yield ();
-    }
-    {
-        std::lock_guard lock (gate);
-        release = true;
-    }
-    changed.notify_all ();
-    retire.join ();
-    shutdown.join ();
-    const termination_result_t expected{termination_intent_t::shutdown,
-                                        termination_outcome_t::stopped, termination_reason_t::none};
-    test.require (retire_result == expected && shutdown_result == expected,
-                  "Shutdown seal claim during Retire preflight must win for all waiters");
-    test.require (roots->roots.empty () && aggregates->commit_count == 0,
-                  "winning Shutdown must not start continuity relocation");
-    test.require (observations == 1,
-                  "first-intent shared operation must emit one terminal observation");
-}
-
 void test_public_relocation_store_adapter (test_context_t &test)
 {
     auto public_store = std::make_shared<public_memory_relocation_repository_t> ();
@@ -3254,7 +3192,7 @@ void test_public_authority_store_adapter (test_context_t &test)
     test.require (adapter.observe_relocation (captured_fence)
                     == relocation_authority_t::source_lease_expired,
                   "target commit then authority removal must end the source as expired owner");
-    test.require (adapter.preserve_relocation (captured_fence)
+    test.require (adapter.settle_source_relocation (captured_fence, {read->source}, true).outcome
                     == relocation_authority_t::source_lease_expired,
                   "Missing must never attempt source Preserve");
 
@@ -3318,9 +3256,8 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
     target.objects ().configure_relocation_state (
       [] (const auto &, const auto &, std::stop_token) { return std::vector<std::uint8_t>{}; },
       [] (const auto &, const auto &, std::stop_token) { return true; });
-    target.configure_maintenance ({authority,
-                                   std::make_shared<memory_aggregate_authority_t> (authority),
-                                   roots, std::make_shared<target_preflight_t> ()});
+    target.configure_maintenance (
+      {authority, std::make_shared<memory_aggregate_authority_t> (authority), roots});
     target.configure_stateful_dispatch ([] (const accepted_record_authority_query_t &query)
                                           -> std::optional<accepted_record_authority_t> {
         return std::nullopt; // The Store still names the source; the exact attempt owns admission.
@@ -3400,20 +3337,21 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
         const auto payload = maintenance_runtime_t::encode_envelope (
           {frozen_object_state_t{source_actor, "production.actor", {}, {}, {}}}, relocation, 1);
         const auto manifest = plan_relocation_payload (payload, 1024);
-        const protocol::relocation_prepare_t request{relocation,
-                                                     target_descriptor.lifecycle_generation,
-                                                     coordinator,
-                                                     {target_descriptor.node_routing_id,
-                                                      target_descriptor.lifecycle_generation,
-                                                      "target-owner", 9},
-                                                     protocol::relocation_role_t::source,
-                                                     object,
-                                                     source_descriptor.node_routing_id,
-                                                     source_descriptor.lifecycle_generation,
-                                                     manifest.total_length,
-                                                     manifest.chunk_count,
-                                                     manifest.checksum_crc32c,
-                                                     1};
+        const protocol::relocation_prepare_t request{
+          relocation,
+          target_descriptor.lifecycle_generation,
+          coordinator,
+          {target_descriptor.node_routing_id, target_descriptor.lifecycle_generation,
+           "target-owner", 9},
+          protocol::relocation_role_t::source,
+          object,
+          source_descriptor.node_routing_id,
+          source_descriptor.lifecycle_generation,
+          manifest.total_length,
+          manifest.chunk_count,
+          manifest.checksum_crc32c,
+          1,
+          static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())};
         auto ready =
           source.request_relocation_prepare (target_descriptor.node_routing_id, request, 5s);
         for (std::uint32_t ordinal = 0; ordinal != manifest.chunk_count; ++ordinal) {
@@ -3485,7 +3423,7 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
         test.require (pump_until ([&] { return publishes () != 0; }, 3s),
                       "verified cutover must enter CAS before seal");
     }
-    auto shutdown = target.termination ()->terminate (termination_intent_t::shutdown);
+    auto shutdown = target.termination ()->terminate ();
     if (mode == 0) {
         test.require (pump_until ([&] { return shutdown.await_ready (); }, 2s),
                       "seal before cutover must finish shutdown within deadline");
@@ -3631,20 +3569,21 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
         const auto payload = maintenance_runtime_t::encode_envelope (
           {frozen_object_state_t{source_actor, "production.actor", {}, {}, {}}}, relocation, 1);
         const auto manifest = plan_relocation_payload (payload, 1024);
-        const protocol::relocation_prepare_t request{relocation,
-                                                     target_descriptor.lifecycle_generation,
-                                                     coordinator,
-                                                     {target_descriptor.node_routing_id,
-                                                      target_descriptor.lifecycle_generation,
-                                                      "target-owner", 9},
-                                                     protocol::relocation_role_t::source,
-                                                     object,
-                                                     source_descriptor.node_routing_id,
-                                                     source_descriptor.lifecycle_generation,
-                                                     manifest.total_length,
-                                                     manifest.chunk_count,
-                                                     manifest.checksum_crc32c,
-                                                     1};
+        const protocol::relocation_prepare_t request{
+          relocation,
+          target_descriptor.lifecycle_generation,
+          coordinator,
+          {target_descriptor.node_routing_id, target_descriptor.lifecycle_generation,
+           "target-owner", 9},
+          protocol::relocation_role_t::source,
+          object,
+          source_descriptor.node_routing_id,
+          source_descriptor.lifecycle_generation,
+          manifest.total_length,
+          manifest.chunk_count,
+          manifest.checksum_crc32c,
+          1,
+          static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())};
         auto ready =
           source.request_relocation_prepare (target_descriptor.node_routing_id, request, 5s);
         for (std::uint32_t ordinal = 0; ordinal != manifest.chunk_count; ++ordinal) {
@@ -3806,7 +3745,10 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
     const auto actor = create_actor (objects, "live-failure-actor");
     auto roots = std::make_shared<memory_relocation_repository_t> ();
     auto authority = std::make_shared<memory_authority_store_t> ();
+    std::mutex delay_mutex;
+    zlink::framework::detail::delay_owner_t delays (delay_mutex);
     maintenance_runtime_t relocation (objects, authority, roots);
+    relocation.bind_delay_owner (delays);
 
     auto target_terminal =
       std::make_shared<framework::task_completion_source_t<relocation_reason_t>> ();
@@ -3828,8 +3770,15 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
       .send_state_chunk = [&] (const protocol::relocation_state_t &) -> framework::task_t<bool> {
           ++sent_chunks;
           if (sent_chunks == 1) {
-              target_terminal->complete (framework::result_t<relocation_reason_t>::success (
-                relocation_reason_t::checksum_mismatch));
+              // A wire reply completes in the registry's existing completion turn.
+              auto delivered = std::make_shared<framework::task_completion_source_t<void>> ();
+              auto delivery = delivered->task ();
+              framework::detail::dispatch_completion ([target_terminal, delivered] {
+                  target_terminal->complete (framework::result_t<relocation_reason_t>::success (
+                    relocation_reason_t::checksum_mismatch));
+                  delivered->complete (framework::result_t<void>::success ());
+              });
+              co_await delivery;
           }
           co_return true;
       },
@@ -3854,9 +3803,236 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
 }
 
 /* Scripted Location Store reading of one relocation unit (01 §6.1, §10). */
+void test_source_settlement_preserve_and_members (test_context_t &test)
+{
+    namespace framework = zlink::framework;
+    using outcome = relocation_authority_t;
+    const auto now = std::chrono::system_clock::time_point{std::chrono::seconds{100}};
+    const object_ref_t actor{object_kind_t::actor, "settlement-actor", 7, 11, "mesh", "a"};
+    const relocation_authority_fence_t fence{actor.kind,          actor.key,           "1",
+                                             {"source-owner", 1}, {"target-owner", 2}, {0x1878, 2}};
+    public_memory_authority_store_t store;
+    public_authority_store_adapter_t adapter (store);
+    store.snapshot = framework::authority_snapshot_t{"2", {}, 7, 11, {"source-owner", 1}, now};
+    store.owner_lease_read =
+      framework::owner_lease_found_t{{"source-owner", 1}, now + std::chrono::seconds{1}, now};
+    test.require (adapter.settle_source_relocation (fence, {actor}, false).outcome
+                    == outcome::source_preserved,
+                  "changed source StoreVersion requires a live lease before resuming");
+    store.owner_lease_read = framework::owner_lease_missing_t{};
+    test.require (adapter.settle_source_relocation (fence, {actor}, false).outcome
+                    == outcome::source_lease_expired,
+                  "changed source StoreVersion cannot reopen an expired source");
+    store.fail_owner_lease_read = true;
+    test.require (adapter.settle_source_relocation (fence, {actor}, false).outcome
+                    == outcome::unsettled,
+                  "indeterminate source lease must keep dispatch sealed");
+    store.fail_owner_lease_read = false;
+    store.owner_lease_read =
+      framework::owner_lease_found_t{{"source-owner", 1}, now + std::chrono::seconds{1}, now};
+    store.snapshot->store_version = "1";
+    store.remaining_authority_conflicts = 1;
+    store.conflict_snapshot =
+      framework::authority_snapshot_t{"3", {}, 7, 29, {"next-owner", 3}, now};
+    const auto conflict = adapter.settle_source_relocation (fence, {actor}, true);
+    test.require (
+      conflict.outcome == outcome::target_committed && conflict.follow_generations.empty (),
+      "Preserve conflict must confirm a later owner without inventing first-target Follow");
+    const object_ref_t spot{object_kind_t::user_spot, "settlement-spot", 9, 13, "mesh", "a"};
+    const relocation_authority_fence_t whole{
+      spot.kind, spot.key, "1", {"source-owner", 1}, {"target-owner", 2}, {0x1878, 3}};
+    store.authority_rows.emplace (
+      framework::runtime::spot_authority_key (spot.key).value,
+      framework::authority_snapshot_t{"4", {}, 9, 31, {"target-owner", 2}, now});
+    store.authority_rows.emplace (
+      framework::runtime::actor_authority_key (actor.key).value,
+      framework::authority_snapshot_t{"5", {}, 7, 37, {"next-owner", 3}, now});
+    const auto aggregate = adapter.settle_source_relocation (whole, {actor, spot}, false);
+    test.require (aggregate.outcome == outcome::target_committed
+                    && aggregate.follow_generations.size () == 1
+                    && aggregate.follow_generations.at ({spot.kind, spot.key}) == 31,
+                  "whole-unit primary confirms commit while each member retains only its own "
+                  "current first-target Follow");
+}
+
+void test_source_settlement_after_subsequent_moves (test_context_t &test)
+{
+    namespace framework = zlink::framework;
+    namespace protocol = framework::runtime::protocol;
+    for (const std::string_view scenario :
+         {"target", "target-normalized", "chain", "chain-normalized", "return-target",
+          "source-restarted", "target-restarted", "different-object", "same-generation",
+          "lower-generation", "source-owner", "target-same-generation",
+          "target-different-object"}) {
+        const bool target_current =
+          scenario == "target" || scenario == "target-normalized" || scenario == "return-target";
+        const bool invalid = scenario == "different-object" || scenario == "same-generation"
+                             || scenario == "lower-generation" || scenario == "source-owner"
+                             || scenario == "target-same-generation"
+                             || scenario == "target-different-object";
+        stateful_object_runtime_t objects;
+        objects.configure_relocation_state (
+          [] (const object_ref_t &, const std::string &, std::stop_token) {
+              return std::vector<std::uint8_t>{0x41};
+          },
+          [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
+              return true;
+          });
+        const auto actor = create_actor (objects, "chain-actor");
+        public_memory_authority_store_t store;
+        store.snapshot = framework::authority_snapshot_t{"1",
+                                                         {},
+                                                         actor.object_generation,
+                                                         actor.authority_owner_generation,
+                                                         {"source-owner", 1},
+                                                         std::chrono::system_clock::now ()};
+        store.retarget_authority_generation_advance = 9;
+        auto authority = std::make_shared<public_authority_store_adapter_t> (store);
+        auto roots = std::make_shared<memory_relocation_repository_t> ();
+        std::mutex delay_mutex;
+        framework::detail::delay_owner_t delays (delay_mutex);
+        maintenance_runtime_t relocation (objects, authority, roots);
+        relocation.bind_delay_owner (delays);
+        int committed = 0;
+        int unavailable = 0;
+        int cutover_calls = 0;
+        std::vector<std::uint64_t> forwarded_generations;
+        relocation.attach_committed_terminal ([&] (const object_ref_t &) { ++committed; });
+        relocation.attach_unavailable_terminal ([&] (const object_ref_t &) { ++unavailable; });
+        eligible_relocation_unit_t::canonical_wire_context_t wire{
+          .relocation = {0x1878, 1},
+          .target_attempt_generation = 1,
+          .coordinator = {"source-owner", 1, {'s'}, 1, "1"},
+          .target_node_routing_id = {'b'},
+          .target_node_generation = 1,
+          .application_version = 1,
+          .prepare_target = [] (const std::vector<frozen_object_state_t> &,
+                                const relocation_payload_manifest_t &)
+            -> framework::task_t<relocation_reason_t> { co_return relocation_reason_t::none; },
+          .send_state_chunk = [] (const protocol::relocation_state_t &) -> framework::task_t<bool> {
+              co_return true;
+          },
+          .send_relocation_data =
+            [] (const std::vector<protocol::relocation_data_t> &,
+                const relocation_ingress_batch_t &) -> framework::task_t<bool> { co_return true; },
+          .send_application =
+            [&] (const object_ref_t &, const turn_record_t &,
+                 std::optional<std::uint64_t> generation) {
+                if (generation)
+                    forwarded_generations.push_back (*generation);
+            },
+          .send_cutover = [&] (const protocol::relocation_cutover_t &) -> framework::task_t<bool> {
+              ++cutover_calls;
+              // Complete A->B->C before the source's first authority read.
+              // Provider CAS terminals, rather than elapsed time, establish the order.
+              std::vector<framework::location_owner_token_t> owners{{"target-owner", 2}};
+              if (!target_current || scenario == "return-target")
+                  owners.push_back (scenario == "source-restarted"
+                                      ? framework::location_owner_token_t{"source-owner", 4}
+                                    : scenario == "target-restarted"
+                                      ? framework::location_owner_token_t{"target-owner", 4}
+                                      : framework::location_owner_token_t{"next-owner", 3});
+              if (scenario == "return-target")
+                  owners.push_back ({"target-owner", 2});
+              for (const auto &owner : owners) {
+                  const auto exchanged = await_task (store.compare_exchange_authority (
+                    framework::runtime::actor_authority_key (actor.key),
+                    store.snapshot->store_version,
+                    framework::authority_retarget_t{
+                      {}, {"mesh", framework::node_rid_t::from_string (owner.owner_id), 1, owner}},
+                    {}));
+                  test.require (std::holds_alternative<framework::authority_stored_t> (exchanged),
+                                "chain fixture must commit each owner transition");
+              }
+              if (scenario == "target-normalized" || scenario == "chain-normalized") {
+                  const auto normalized = await_task (store.compare_exchange_authority (
+                    framework::runtime::actor_authority_key (actor.key),
+                    store.snapshot->store_version, framework::authority_put_t{{}}, {}));
+                  test.require (std::holds_alternative<framework::authority_stored_t> (normalized),
+                                "chain fixture must normalize authority before source read");
+              }
+              if (scenario == "different-object")
+                  ++store.snapshot->object_generation;
+              if (scenario == "same-generation")
+                  store.snapshot->authority_owner_generation = actor.authority_owner_generation;
+              if (scenario == "lower-generation")
+                  store.snapshot->authority_owner_generation = 0;
+              if (scenario == "source-owner")
+                  store.snapshot->owner = {"source-owner", 1};
+              if (scenario == "target-same-generation" || scenario == "target-different-object") {
+                  store.snapshot->owner = {"target-owner", 2};
+                  if (scenario == "target-same-generation")
+                      store.snapshot->authority_owner_generation = actor.authority_owner_generation;
+                  else
+                      ++store.snapshot->object_generation;
+              }
+              co_return true;
+          },
+          .restore_deadline = std::chrono::steady_clock::time_point::max (),
+          .abort_target_before_cutover = [] { return true; }};
+        const auto result = await_task (relocation.relocate (
+          actor, "target-owner", {"target-owner", 2}, 1024 * 1024, digest_with (0x41), wire));
+        std::cerr << "source-settlement " << scenario
+                  << " terminal=" << static_cast<int> (result.terminal)
+                  << " committed=" << committed << " unavailable=" << unavailable
+                  << " cutovers=" << cutover_calls
+                  << " observed-owner=" << store.snapshot->owner.owner_id << '/'
+                  << store.snapshot->owner.lease_generation
+                  << " object-generation=" << store.snapshot->object_generation
+                  << " source-authority=" << actor.authority_owner_generation
+                  << " observed-authority=" << store.snapshot->authority_owner_generation << '\n';
+        test.require (cutover_calls == 1 && store.snapshot->store_version != "1",
+                      "source settlement fixture must reach the completed target CAS chain");
+        test.require (
+          result.terminal
+            == (invalid ? relocation_terminal_t::data_lost : relocation_terminal_t::completed),
+          "source settlement must confirm a chain and reject an invalid tenure");
+        test.require (committed == (invalid ? 0 : 1) && unavailable == (invalid ? 1 : 0),
+                      "source settlement must apply exactly one committed or failed cleanup");
+        (void) objects.enqueue (actor, turn_domain_t::application, {1, {0x42}});
+        const auto claim = objects.try_claim (actor, turn_domain_t::application);
+        test.require (claim.first != stateful_error_t::none || !claim.second,
+                      "a subsequent owner move must never reopen source dispatch");
+        if (claim.second)
+            (void) objects.complete_claim (actor, turn_domain_t::application);
+        if (!invalid) {
+            test.require (forwarded_generations.size () == (target_current ? 1u : 0u),
+                          "only the first target's current owner tenure may receive Follow");
+            if (target_current && !forwarded_generations.empty ())
+                test.require (forwarded_generations.front ()
+                                == store.snapshot->authority_owner_generation,
+                              "Follow must use the observed current target generation");
+        }
+        delays.stop_and_join ();
+    }
+}
+
 class settlement_authority_t final : public authority_relocation_port_t
 {
   public:
+    source_relocation_settlement_t
+    settle_source_relocation (const relocation_authority_fence_t &fence,
+                              const std::vector<object_ref_t> &participants,
+                              bool preserve) override
+    {
+        std::lock_guard lock (mutex);
+        observed = fence;
+        relocation_authority_t outcome;
+        if (preserve) {
+            ++preserve_calls;
+            outcome = preserved_authority;
+        } else if (settle_after_observes != 0 && ++observe_calls < settle_after_observes)
+            outcome = relocation_authority_t::unsettled;
+        else
+            outcome = observed_authority;
+        source_relocation_settlement_t settled{outcome, {}};
+        if (outcome == relocation_authority_t::target_committed)
+            for (const auto &participant : participants)
+                settled.follow_generations.emplace (std::pair{participant.kind, participant.key},
+                                                    participant.authority_owner_generation);
+        return settled;
+    }
+
     authority_publish_result_t publish (const object_ref_t &,
                                         const object_ref_t &,
                                         zlink::framework::location_owner_token_t,
@@ -3887,12 +4063,6 @@ class settlement_authority_t final : public authority_relocation_port_t
         return observed_authority;
     }
 
-    relocation_authority_t preserve_relocation (const relocation_authority_fence_t &) override
-    {
-        std::lock_guard lock (mutex);
-        ++preserve_calls;
-        return preserved_authority;
-    }
 
     std::mutex mutex;
     std::optional<relocation_authority_fence_t> observed;
@@ -3903,7 +4073,293 @@ class settlement_authority_t final : public authority_relocation_port_t
     int settle_after_observes = 0;
 };
 
-void test_boundary_application_preserves_original_reply (test_context_t &test)
+// Relocation §4.3: one source deadline covers Restore and remote Session readiness.
+enum class ready_boundary_case_t
+{
+    ready,
+    expired_remote,
+    expired_local,
+    shutdown_restore,
+    shutdown_route
+};
+
+void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t mode)
+{
+    using namespace std::chrono_literals;
+    namespace f = zlink::framework;
+    namespace mesh = f::runtime::mesh;
+    namespace host = f::runtime::host;
+    namespace p = f::runtime::protocol;
+    f::runtime::install_host_context_hooks ();
+    const bool expired =
+      mode == ready_boundary_case_t::expired_remote || mode == ready_boundary_case_t::expired_local;
+    const bool remote_session = mode != ready_boundary_case_t::expired_local;
+    const bool stop_restore = mode == ready_boundary_case_t::shutdown_restore;
+    const bool stop_route = mode == ready_boundary_case_t::shutdown_route;
+    const auto bytes = [] (std::string_view s) {
+        return std::vector<std::uint8_t> (s.begin (), s.end ());
+    };
+    const auto descriptor = [&] (std::string_view rid) {
+        return mesh::service_node_descriptor_t{"ready-boundary-mesh",
+                                               bytes (rid),
+                                               1,
+                                               1,
+                                               "tcp://127.0.0.1:0",
+                                               {},
+                                               mesh::service_node_state_t::preparing};
+    };
+    auto authority = std::make_shared<memory_authority_store_t> ();
+    host::host_options_t options;
+    options.mesh.runtime_failures = std::make_shared<f::runtime::runtime_failure_collector_t> ();
+    options.mesh.descriptor = descriptor ("boundary-target");
+    options.object_stable_types = {"production.actor"};
+    auto target = std::make_shared<host::public_host_runtime_t> (options);
+    target->configure_maintenance ({authority,
+                                    std::make_shared<memory_aggregate_authority_t> (authority),
+                                    std::make_shared<memory_relocation_repository_t> ()});
+    target->configure_session_route_owner (
+      [] { return std::optional<f::location_owner_token_t>{{"target-owner", 9}}; });
+    target->configure_stateful_dispatch (
+      [] (const accepted_record_authority_query_t &) -> std::optional<accepted_record_authority_t> {
+          return std::nullopt;
+      });
+    f::task_completion_source_t<void> restoring;
+    f::task_completion_source_t<bool> restore_release;
+    std::atomic<unsigned> aborts{0};
+    std::stop_token restore_cancellation;
+    target->objects ().configure_relocation_materialization (
+      [&] (const auto &, const auto &, const auto &, std::stop_token token) -> f::task_t<bool> {
+          restore_cancellation = token;
+          restoring.complete (f::result_t<void>::success ());
+          if (stop_restore)
+              co_return co_await restore_release.task ();
+          co_return true;
+      },
+      [] (const auto &) { return true; }, [&] (const auto &) { ++aborts; });
+    mesh::raw_mesh_node_owner_t source (f::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("boundary-source")}));
+    mesh::raw_mesh_node_owner_t session (f::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("boundary-session")}));
+    target->start ();
+    source.start ();
+    session.start ();
+    const auto source_node = source.topology ().local_descriptor ();
+    const auto target_node = target->transport ().topology ().local_descriptor ();
+    const auto session_node = session.topology ().local_descriptor ();
+    f::task_completion_source_t<void> reconciled;
+    std::atomic<bool> reconciled_carried_owner{true};
+    std::atomic<unsigned> reconciles{0};
+    target->configure_peer_reconcile ([&] (const auto &rid) {
+        if (rid != session_node.node_routing_id)
+            reconciled_carried_owner.store (false, std::memory_order_release);
+        if (++reconciles == 1)
+            reconciled.complete (f::result_t<void>::success ());
+    });
+    constexpr auto early_control_marker = "pre-ready-control-marker";
+    f::task_completion_source_t<void> early_control_drained;
+    std::atomic<bool> early_control_observed{false};
+    std::atomic<bool> stop{false};
+    std::thread target_dispatch ([&] {
+        while (!stop.load (std::memory_order_acquire)) {
+            bool saw_marker = false;
+            await_task (target->dispatch_ready ([&] (const auto &, const auto &, auto parts) {
+                if (parts.size () == 1 && parts.front ().to_string () == early_control_marker)
+                    saw_marker = true;
+            }));
+            if (saw_marker) {
+                await_task (target->dispatch_ready ([] (const auto &, const auto &, auto) {}));
+                early_control_observed.store (true, std::memory_order_release);
+                early_control_drained.complete (f::result_t<void>::success ());
+            }
+            std::this_thread::yield ();
+        }
+    });
+    const auto pump = [&] (mesh::raw_mesh_node_owner_t &node) {
+        while (!stop.load (std::memory_order_acquire)) {
+            (void) await_task (node.pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
+            std::this_thread::yield ();
+        }
+    };
+    std::thread source_pump ([&] { pump (source); });
+    std::thread session_pump ([&] { pump (session); });
+    const auto await_peer = [] (mesh::service_topology_registry_t::peer_observer_t observer,
+                                std::uint64_t generation) -> f::task_t<void> {
+        for (;;) {
+            auto observed = observer ();
+            if (observed.peer && observed.peer->ready
+                && observed.peer->descriptor.lifecycle_generation == generation)
+                co_return;
+            co_await observed.changed;
+        }
+    };
+    (void) source.connect_peer (target->status ().local_endpoint (), target_node);
+    await_task (await_peer (source.topology ().observe_peer (target_node.node_routing_id),
+                            target_node.lifecycle_generation));
+    await_task (
+      await_peer (target->transport ().topology ().observe_peer (source_node.node_routing_id),
+                  source_node.lifecycle_generation));
+    const object_ref_t actor{object_kind_t::actor,  "boundary-actor", 1, 1,
+                             "ready-boundary-mesh", "boundary-source"};
+    {
+        std::lock_guard lock (authority->mutex);
+        authority->participant_identities = {
+          relocation_participant_identity_t{actor, "production.actor", std::nullopt}};
+    }
+    const p::relocation_id_t relocation{0x1775, static_cast<std::uint64_t> (mode) + 1};
+    const p::relocation_coordinator_fence_t coordinator{
+      "source-owner", 1, source_node.node_routing_id, source_node.lifecycle_generation,
+      "authority-v1"};
+    std::vector<relocation_session_binding_t> bindings;
+    if (remote_session)
+        bindings.push_back ({{actor.key, actor.object_generation},
+                             {0, session_node.node_routing_id, session_node.lifecycle_generation,
+                              "session-owner", 17, bytes ("bound-session"), 1}});
+    const auto payload = maintenance_runtime_t::encode_envelope (
+      {frozen_object_state_t{actor, "production.actor", {}, {}, {}}}, relocation, 1, bindings);
+    const auto manifest = plan_relocation_payload (payload, 1024);
+    const p::relocation_object_t object{p::relocation_object_kind_t::actor, "production.actor",
+                                        actor.key, 1, 1};
+    const p::relocation_prepare_t prepare{
+      relocation,
+      target_node.lifecycle_generation,
+      coordinator,
+      {target_node.node_routing_id, target_node.lifecycle_generation, "target-owner", 9},
+      p::relocation_role_t::source,
+      object,
+      source_node.node_routing_id,
+      source_node.lifecycle_generation,
+      manifest.total_length,
+      manifest.chunk_count,
+      manifest.checksum_crc32c,
+      1,
+      expired ? std::uint64_t{1}
+              : static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())};
+    p::frozen_application_record_t accepted;
+    accepted.kind = p::frozen_record_kind_t::actor_send;
+    accepted.source_kind = p::frozen_source_kind_t::node;
+    accepted.source = {"source-owner", 1, source_node.node_routing_id,
+                       source_node.lifecycle_generation};
+    accepted.operation = {0x1775, 9};
+    accepted.body = p::frozen_actor_application_body_t{
+      {actor.key, actor.object_generation, target_node.node_routing_id,
+       target_node.lifecycle_generation, actor.authority_owner_generation, 9},
+      p::application_payload_t::from_parts (
+        {zlink::message_t::from (std::string ("early-relay"))})};
+    const p::relocation_data_t relay_data{
+      relocation,  target_node.lifecycle_generation,
+      coordinator, p::relocation_role_t::source,
+      object,      p::encode_frozen_application_record (accepted)};
+    const mesh::service_mailbox_record_t relay_record{
+      "boundary-target",
+      mesh::service_mailbox_domain_t::infrastructure,
+      {zlink::message_t::from (p::encode_relocation_control (relay_data))},
+      source_node.node_routing_id,
+      std::nullopt,
+      std::nullopt,
+      source_node.lifecycle_generation};
+    auto ready = source.request_relocation_prepare (target_node.node_routing_id, prepare, 5s);
+    for (std::uint32_t ordinal = 0; ordinal != manifest.chunk_count; ++ordinal)
+        (void) await_task (source.send_relocation_control (
+          target_node.node_routing_id,
+          make_relocation_state_chunk (relocation, target_node.lifecycle_generation, coordinator,
+                                       object, payload, ordinal, 1024)));
+    f::detail::observe_task_completion (ready, [&] (const auto &) {
+        restoring.complete (f::result_t<void>::success ());
+        reconciled.complete (f::result_t<void>::success ());
+        early_control_drained.complete (f::result_t<void>::success ());
+    });
+    await_task (restoring.task ());
+    if (stop_restore) {
+        (void) await_task (
+          source.send_relocation_control (target_node.node_routing_id, relay_data));
+        test.require (await_task (target->relocation_wire ().process (relay_record))
+                        == raw_relocation_replay_result_t::restore_failed,
+                      "pre-ready Data must not enter the pending Restore attempt");
+        (void) await_task (source.send_relocation_control (
+          target_node.node_routing_id,
+          p::relocation_cutover_t{relocation, target_node.lifecycle_generation, coordinator,
+                                  p::relocation_role_t::source, object, 0, 0}));
+        (void) await_task (source.send_to_node_result (
+          target_node.node_routing_id,
+          p::application_payload_t::from_parts (
+            {zlink::message_t::from (std::string (early_control_marker))})));
+        await_task (early_control_drained.task ());
+        test.require (early_control_observed.load (std::memory_order_acquire),
+                      "ordered marker must follow the pre-ready Data and cutover");
+        test.require (!ready.await_ready () && aborts == 0,
+                      "pre-ready control must retain the pending Restore without finalization");
+        std::lock_guard lock (authority->mutex);
+        test.require (authority->publish_count == 0,
+                      "pre-ready cutover must not submit target authority");
+    }
+    std::optional<f::task_t<mesh::relocation_prepare_response_t>> duplicate;
+    if (!expired && !stop_restore) {
+        await_task (reconciled.task ());
+        test.require (reconciles != 0 && reconciled_carried_owner.load (std::memory_order_acquire),
+                      "target must request reconciliation of the carried Session owner");
+        test.require (!ready.await_ready (), "relay-ready must wait for the remote Session route");
+        if (!stop_route) {
+            duplicate.emplace (
+              source.request_relocation_prepare (target_node.node_routing_id, prepare, 5s));
+            auto conflict = prepare;
+            --conflict.deadline_unix_ms;
+            const auto rejected = await_task (
+              source.request_relocation_prepare (target_node.node_routing_id, conflict, 5s));
+            test.require (
+              rejected.failed.has_value (),
+              "a duplicate with a changed deadline must fail without replacing the attempt");
+            test.require (!ready.await_ready () && !duplicate->await_ready (),
+                          "original and duplicate must share the pending ready boundary");
+            // Release the existing peer owner only after both requests are held.
+            (void) target->connect_peer (session.endpoint (),
+                                         zlink::routing_id_t::from (session_node.node_routing_id),
+                                         session_node.lifecycle_generation);
+        }
+    }
+    if (stop_restore || stop_route) {
+        auto sealed = target->seal_relocation_targets ();
+        if (stop_restore) {
+            test.require (restore_cancellation.stop_requested (),
+                          "shutdown must cancel the pending Restore");
+            test.require (!sealed.await_ready (),
+                          "shutdown must retain the running Restore terminal");
+            restore_release.complete (f::result_t<bool>::success (true));
+        }
+        await_task (std::move (sealed));
+    }
+    const auto response = await_task (std::move (ready));
+    if (expired || stop_restore || stop_route) {
+        test.require (response.failed.has_value () && !response.ready,
+                      "deadline or stop must send explicit failure before readiness");
+        if (expired && response.failed)
+            test.require (response.failed->failure_code
+                            == static_cast<std::uint32_t> (p::framework_error_code::workerTimedOut),
+                          "an expired source deadline must preserve DeadlineExceeded");
+        test.require (aborts == 1 && target->objects ().inventory ().empty (),
+                      "failed target readiness must discard staging exactly once");
+    } else {
+        test.require (response.ready.has_value (),
+                      "ready must complete after Session peer admission");
+        if (duplicate)
+            test.require (await_task (std::move (*duplicate)).ready.has_value (),
+                          "the identical duplicate must use the same ready gate");
+        test.require (await_task (target->relocation_wire ().process (relay_record))
+                        == raw_relocation_replay_result_t::applied,
+                      "the same valid Data must be accepted after wire-ready publication");
+    }
+    await_task (target->seal_relocation_targets ());
+    stop.store (true, std::memory_order_release);
+    target_dispatch.join ();
+    source_pump.join ();
+    session_pump.join ();
+    target->close ();
+    source.close ();
+    session.close ();
+}
+
+void test_boundary_application_preserves_original_reply (test_context_t &test,
+                                                         bool no_follow = false,
+                                                         bool source_expired = false)
 {
     using namespace std::chrono_literals;
     namespace framework = zlink::framework;
@@ -3964,6 +4420,7 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
     const auto actor = create_actor (objects, "late-reply", "late-source");
     auto relocated = actor;
     relocated.node_id = "late-target";
+    relocated.authority_owner_generation += 8;
     // Relocation-flow §4.3: the temporary queue is fenced by the captured source.
     const auto resolver = [] (const accepted_record_authority_query_t &query)
       -> std::optional<accepted_record_authority_t> {
@@ -3996,7 +4453,8 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
                               == turn.application_record->operation.low,
                             "accepted ingress must retain its original reply route");
           submissions.push_back (ingress.forward_accepted (owner, turn, dst.node_routing_id,
-                                                           dst.lifecycle_generation, 1, 5s));
+                                                           dst.lifecycle_generation, 1, 5s,
+                                                           relocated.authority_owner_generation));
       });
     test.require (boundary.first == stateful_error_t::none, "late ingress boundary must open");
     std::atomic<int> completed{0};
@@ -4019,8 +4477,23 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
             {actor.key, actor.object_generation, src.node_routing_id, src.lifecycle_generation,
              actor.authority_owner_generation, 1},
             {"ActorPacket", "application/json", {static_cast<std::uint8_t> (id)}}, 5s,
-            [&, id] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t> bytes) {
-                if (id == 91) {
+            [&, id] (foundation::operation_terminal_t terminal, zlink::message_t native_bytes) {
+                auto bytes = native_bytes.to_bytes ();
+                if (id == 92 || (source_expired && id == 77)) {
+                    if (terminal != foundation::operation_terminal_t::transport_failed
+                        || bytes.empty ())
+                        reply_matches = false;
+                    else {
+                        const auto reply = protocol::decode_reply_header (bytes);
+                        reply_matches =
+                          reply_matches
+                          && framework::runtime::messaging::request_failure_mapper_t{}
+                                 .reply_header_exception (reply.terminal_result, reply.failure_code,
+                                                          "source relocation")
+                                 .kind ()
+                               == framework::framework_error_kind_t::unavailable;
+                    }
+                } else if (id == 91) {
                     reply_matches =
                       reply_matches
                       && terminal == foundation::operation_terminal_t::transport_failed
@@ -4043,6 +4516,8 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
             return false;
         test.require (await_task (std::move (submissions.back ())),
                       "accepted ingress must use the application transport");
+        if (id == 92)
+            return true;
         const auto delivered = pump_ingress (destination, relocated);
         test.require (delivered, "forwarded application must retain the target fence");
         return delivered;
@@ -4083,11 +4558,48 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
     test.require (restored.try_claim (relocated, turn_domain_t::application).first
                     == stateful_error_t::moving,
                   "late ingress before owner commit must remain gated");
-    test.require (restored.commit_relocation_restore (relocated, identity) == stateful_error_t::none
-                    && objects.finalize_relocation_cutover (sealed.seal.token)
-                         == stateful_error_t::none,
-                  "owner commit must release the target queue and source retained copy");
+    test.require (
+      restored.commit_relocation_restore (relocated, identity) == stateful_error_t::none
+        && objects.finalize_relocation_cutover (
+             sealed.seal.token,
+             [&, no_follow] (const object_ref_t &owner, const turn_record_t &turn) {
+                 submissions.push_back (ingress.forward_accepted (
+                   owner, turn, dst.node_routing_id, dst.lifecycle_generation, 1, 5s,
+                   no_follow ? std::nullopt
+                             : std::optional<std::uint64_t>{relocated.authority_owner_generation}));
+             })
+             == stateful_error_t::none,
+      "owner commit must release the target queue and source retained copy");
     ingress.release_relocated_payloads (actor);
+    if (source_expired) {
+        test.require (completed.load () == 0,
+                      "source expiry must precede the original request terminal");
+        test.require (ingress.fail_pending_unavailable (actor) == stateful_error_t::none,
+                      "expired source must terminate its accepted requests without mailbox claims");
+        test.require (pump_until ([&] { return completed.load () == 1; }),
+                      "expired source must reply on the original request route");
+        test.require (reply_matches && completed == 1
+                        && objects.pending (actor, turn_domain_t::application) == 0,
+                      "expired source must complete the original request with Unavailable once");
+        (void) source.unregister_local_operation (occupied);
+        source.close ();
+        target.close ();
+        return;
+    }
+    if (no_follow) {
+        test.require (request (92) && pump_until ([&] { return completed.load () == 1; }),
+                      "late noFollow request must receive Unavailable before the earlier target "
+                      "request completes");
+        test.require (await_task (target.send_to_actor (
+                        src.node_routing_id, std::nullopt,
+                        {actor.key, actor.object_generation, src.node_routing_id,
+                         src.lifecycle_generation, actor.authority_owner_generation, 1},
+                        {"ActorPacket", "application/json", {93}}, std::nullopt,
+                        protocol::wire_operation_id_t{0x1087, 93}))
+                        && pump_ingress (ingress, actor)
+                        && await_task (std::move (submissions.back ())),
+                      "late noFollow send must discard only its own accepted record");
+    }
     for (std::uint64_t id : {1u, 2u}) {
         const auto [error, delivery] = destination.try_claim (relocated);
         test.require (error == stateful_error_t::none && delivery
@@ -4097,6 +4609,8 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
             (void) await_task (destination.complete_async (*delivery));
     }
     for (std::uint64_t id : {77u, 80u, 90u, 91u}) {
+        if (no_follow && id >= 90)
+            break;
         if ((id == 90 || id == 91) && !request (id))
             return;
         const auto [error, delivery] = destination.try_claim (relocated);
@@ -4118,13 +4632,13 @@ void test_boundary_application_preserves_original_reply (test_context_t &test)
               "target reply must complete");
         test.require (pump_until ([&] {
                           return completed.load ()
-                                 == static_cast<int> ((id == 77 || id == 80) ? 1
+                                 == static_cast<int> ((id == 77 || id == 80) ? (no_follow ? 2 : 1)
                                                       : id == 90             ? 2
                                                                              : 3);
                       }),
                       "forwarded reply must complete the original requester once");
     }
-    test.require (reply_matches && completed == 3
+    test.require (reply_matches && completed == (no_follow ? 2 : 3)
                     && objects.pending (actor, turn_domain_t::application) == 0,
                   "original reply payloads must survive forwarding without retained source work");
     (void) source.unregister_local_operation (occupied);
@@ -4220,7 +4734,10 @@ void test_cutover_replays_over_selected_network_route (test_context_t &test)
     auto roots = std::make_shared<memory_relocation_repository_t> ();
     auto authority = std::make_shared<settlement_authority_t> ();
     authority->preserved_authority = relocation_authority_t::source_preserved;
+    std::mutex delay_mutex;
+    zlink::framework::detail::delay_owner_t delays (delay_mutex);
     maintenance_runtime_t relocation (objects, authority, roots);
+    relocation.bind_delay_owner (delays);
     int data_sends = 0;
     int cutover_sends = 0;
     std::atomic<bool> stop{false};
@@ -4265,7 +4782,7 @@ void test_cutover_replays_over_selected_network_route (test_context_t &test)
           co_return true;
       },
       .send_application =
-        [] (const object_ref_t &, const turn_record_t &) {
+        [] (const object_ref_t &, const turn_record_t &, std::optional<std::uint64_t>) {
             assert (false && "network fixture submits no post-boundary application record");
         },
       .send_cutover =
@@ -4345,7 +4862,11 @@ void test_cutover_replays_over_selected_network_route (test_context_t &test)
     target.close ();
 }
 
-void test_source_relocation_settles_by_authority (test_context_t &test)
+void test_source_relocation_settles_by_authority (test_context_t &test,
+                                                  bool cancel_management_delay = false,
+                                                  bool cancel_cutover_submit = false,
+                                                  bool cancel_pending_wait = false,
+                                                  bool expired_teardown = false)
 {
     using namespace std::chrono_literals;
     namespace framework = zlink::framework;
@@ -4354,6 +4875,7 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
     struct outcome_t
     {
         relocation_result_t result;
+        std::optional<zlink::framework::framework_error_kind_t> operation_error;
         int data_sends = 0;
         int cutover_sends = 0;
         bool late_accepted = false;
@@ -4362,13 +4884,16 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
         std::vector<object_ref_t> unavailable;
         std::optional<relocation_authority_fence_t> observed;
         int preserve_calls = 0;
+        bool registered_wait = false;
     };
     /* One unit whose cutover submit first misses the connection; `settle`
      * scripts the Store after that submit terminal. */
-    const auto run = [] (std::chrono::milliseconds restore_after,
-                         const std::function<void (settlement_authority_t &)> &settle,
-                         bool stop_source = false, bool inject_late = false,
-                         bool submitted_ok = false, bool change_route = false) {
+    const auto run = [cancel_management_delay, cancel_cutover_submit, cancel_pending_wait,
+                      expired_teardown] (
+                       std::chrono::milliseconds restore_after,
+                       const std::function<void (settlement_authority_t &)> &settle,
+                       bool expire_source_lease = false, bool inject_late = false,
+                       bool submitted_ok = false, bool change_route = false) {
         stateful_object_runtime_t objects;
         objects.configure_relocation_state (
           [] (const object_ref_t &, const std::string &, std::stop_token) {
@@ -4381,13 +4906,23 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
         auto roots = std::make_shared<memory_relocation_repository_t> ();
         auto authority = std::make_shared<settlement_authority_t> ();
         settle (*authority);
-        if (stop_source)
+        if (expire_source_lease) {
+            authority->observed_authority = relocation_authority_t::source_lease_expired;
             authority->settle_after_observes = 3;
+        }
+        const auto requested_authority = authority->observed_authority;
+        if (cancel_pending_wait) {
+            authority->observed_authority = relocation_authority_t::unsettled;
+            authority->settle_after_observes = 0;
+        }
+        std::mutex delay_mutex;
+        zlink::framework::detail::delay_owner_t delays (delay_mutex);
         maintenance_runtime_t relocation (objects, authority, roots);
+        relocation.bind_delay_owner (delays);
         outcome_t outcome;
         relocation.attach_unavailable_terminal (
           [&outcome] (const object_ref_t &owner) { outcome.unavailable.push_back (owner); });
-        std::atomic<bool> source_stopped{false};
+        const auto teardown_deadline = std::chrono::steady_clock::now () + restore_after;
         eligible_relocation_unit_t::canonical_wire_context_t wire{
           .relocation = {0x61, 0x62},
           .target_attempt_generation = 7,
@@ -4408,7 +4943,8 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
               co_return true;
           },
           .send_application =
-            [&outcome] (const object_ref_t &, const turn_record_t &record) {
+            [&outcome] (const object_ref_t &, const turn_record_t &record,
+                        std::optional<std::uint64_t>) {
                 if (record.application_record
                     && record.application_record->operation
                          == protocol::wire_operation_id_t{0x1087, 0x44}
@@ -4437,14 +4973,18 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
                                                                {1, {}, 1, std::move (late)})
                                               == stateful_error_t::none;
                   }
-                  if (stop_source)
-                      source_stopped.store (true, std::memory_order_release);
+                  if (cancel_management_delay && !cancel_pending_wait)
+                      delays.request_stop (expired_teardown ? std::chrono::steady_clock::now ()
+                                                            : teardown_deadline);
+                  if (cancel_cutover_submit)
+                      throw framework::framework_exception_t (
+                        framework::framework_error_kind_t::shutting_down,
+                        "source cutover submission cancelled during host shutdown");
                   co_return submitted_ok;
               }
               co_return true;
           },
           .restore_deadline = std::chrono::steady_clock::now () + restore_after,
-          .source_stopped = [&] { return source_stopped.load (std::memory_order_acquire); },
           .target_route =
             [&] {
                 const auto changed =
@@ -4453,8 +4993,26 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
                 return std::pair{std::uint64_t{changed ? 2u : 1u}, true};
             },
           .abort_target_before_cutover = [] { return true; }};
-        outcome.result = await_task (relocation.relocate (actor, "target-node", {"target-owner", 9},
-                                                          1024 * 1024, digest_with (0x41), wire));
+        auto moving = relocation.relocate (actor, "target-node", {"target-owner", 9}, 1024 * 1024,
+                                           digest_with (0x41), wire);
+        if (cancel_pending_wait) {
+            {
+                std::lock_guard lock (authority->mutex);
+                outcome.registered_wait = authority->observed.has_value ()
+                                          && delays.worker_count () >= 1 && !moving.await_ready ();
+            }
+            delays.request_stop (teardown_deadline);
+            std::lock_guard lock (authority->mutex);
+            authority->observed_authority = requested_authority;
+        }
+        const auto result = moving.result ();
+        if (!result && (cancel_management_delay || cancel_cutover_submit)) {
+            outcome.operation_error = result.error_kind ();
+            std::cerr << "cancelled source relocation operation_error="
+                      << static_cast<int> (result.error_kind ())
+                      << " message=" << (result.error () ? result.error ()->what () : "") << '\n';
+        } else
+            outcome.result = result.value ();
         {
             std::lock_guard lock (authority->mutex);
             outcome.observed = authority->observed;
@@ -4465,6 +5023,52 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
         outcome.dispatch_reopened = claim_error == stateful_error_t::none && claimed.has_value ();
         return outcome;
     };
+
+    if (expired_teardown) {
+        const auto unknown = run (10s, [] (settlement_authority_t &) {}, false, false, true);
+        test.require (!unknown.operation_error
+                        && unknown.result.settlement.outcome == relocation_authority_t::unsettled
+                        && unknown.result.terminal == relocation_terminal_t::recovery_required
+                        && !unknown.dispatch_reopened && unknown.unavailable.size () == 1,
+                      "UNKNOWN at the existing host teardown deadline must remain unavailable "
+                      "and apply the source terminal exactly once");
+        return;
+    }
+    if (cancel_management_delay || cancel_cutover_submit) {
+        // Cancelling the host delay owner in the cutover callback makes its
+        // first management wait fail synchronously. The scripted second read
+        // must still decide the source terminal, without a timer or sleep.
+        for (const auto terminal :
+             {relocation_authority_t::target_committed, relocation_authority_t::source_preserved,
+              relocation_authority_t::source_lease_expired}) {
+            const auto cancelled = run (
+              10s,
+              [terminal] (settlement_authority_t &authority) {
+                  authority.observed_authority = terminal;
+                  authority.settle_after_observes = 2;
+              },
+              false, false, true);
+            if (cancel_pending_wait)
+                test.require (cancelled.registered_wait,
+                              "pending cancellation must own an actual suspended management wait");
+            test.require (!cancelled.operation_error,
+                          "management cancellation must reach the authority-owned source terminal");
+            test.require (cancelled.result.settlement.outcome == terminal,
+                          "management cancellation must preserve the authority settlement outcome");
+            test.require (
+              cancelled.result.terminal
+                == (terminal == relocation_authority_t::target_committed
+                      ? relocation_terminal_t::completed
+                    : terminal == relocation_authority_t::source_preserved
+                      ? relocation_terminal_t::blocked
+                      : relocation_terminal_t::recovery_required),
+              "management cancellation must use the normal relocation terminal classification");
+            test.require (
+              cancelled.dispatch_reopened == (terminal == relocation_authority_t::source_preserved),
+              "only confirmed source Preserve may reopen dispatch after management cancellation");
+        }
+        return;
+    }
 
     // Target commit confirmed by the Store is the only evidence of Relocated.
     const auto committed = run (
@@ -4527,19 +5131,119 @@ void test_source_relocation_settles_by_authority (test_context_t &test)
                   "with Unavailable");
 
     const auto stopped = run (10s, [] (settlement_authority_t &) {}, true);
-    test.require (stopped.result.terminal == relocation_terminal_t::recovery_required
-                    && stopped.unavailable.size () == 1 && !stopped.dispatch_reopened,
-                  "host shutdown ends source settlement and fails retained requests");
+    test.require (
+      stopped.result.terminal == relocation_terminal_t::recovery_required
+        && stopped.unavailable.size () == 1 && !stopped.dispatch_reopened,
+      "a Store-confirmed expired source lease ends settlement and fails retained requests");
 }
 
 
+void test_delay_owner_final_join_closes_accepted_registration (test_context_t &test)
+{
+    namespace framework = zlink::framework;
+    std::mutex owner_mutex;
+    framework::detail::delay_owner_t delays (owner_mutex);
+    const auto duration = framework::runtime::dispatch_limits::management_retry_interval;
+    delays.request_stop (std::chrono::steady_clock::time_point::max ());
+    auto pending = delays.start (duration, true);
+    delays.stop_and_join ();
+    const auto completed = pending.result ();
+    const auto rejected = delays.start (duration, true).result ();
+    test.require (
+      (completed || completed.error_kind () == framework::framework_error_kind_t::shutting_down)
+        && !rejected && rejected.error_kind () == framework::framework_error_kind_t::shutting_down
+        && delays.worker_count () == 0,
+      "final teardown must complete existing accepted waits and reject accepted "
+      "registration after its final fence");
+}
+
+
+void test_source_completion_wait_scope (test_context_t &test)
+{
+    namespace detail = zlink::framework::detail;
+    std::promise<bool> terminal;
+    auto delivered = terminal.get_future ();
+    detail::actor_transfer_coordinator_t coordinator;
+    const std::string key = "player:source-completion";
+    test.require (coordinator.try_begin_source_remote (key, "source-completion"),
+                  "source completion fixture must begin its source move");
+    auto waiting = coordinator.wait_for_source_completion (key);
+    const bool suspended = !waiting.await_ready ();
+    detail::observe_task_terminal (waiting, [&] (const auto &) {
+        terminal.set_value (zlink::framework::runtime::state_lane_t::current () == nullptr);
+    });
+    coordinator.cancel_move (key);
+    const bool outside_lane = delivered.get ();
+    waiting.result ().value ();
+    test.require (suspended && outside_lane,
+                  "source cancellation must release its async waiter outside the state lane");
+
+    coordinator.mark_reconcile (key, std::chrono::seconds (30));
+    auto target_recovery = coordinator.wait_for_source_completion (key);
+    const bool no_source_wait = target_recovery.await_ready ();
+    coordinator.cancel_move (key);
+    target_recovery.result ().value ();
+    test.require (no_source_wait,
+                  "target reconciliation must not wait for its own materialization to finish");
+}
+
+void test_pending_actor_turn_survives_queue_removal (test_context_t &test,
+                                                     bool cancel_pending = false)
+{
+    namespace runtime = zlink::framework::runtime;
+    runtime::offload_executor_t executor (1);
+    std::atomic_int retired{0};
+    std::promise<void> retirement;
+    auto retirement_ready = retirement.get_future ();
+    auto *raw = new runtime::serial_execution_queue_t (executor);
+    // Observe premature retirement without blocking the state lane in drain.
+    // The test deletes the queue after releasing and joining its accepted work.
+    auto queue = std::shared_ptr<runtime::serial_execution_queue_t> (raw, [&] (auto *) {
+        retired.fetch_add (1);
+        retirement.set_value ();
+    });
+    std::weak_ptr<runtime::serial_execution_queue_t> weak = queue;
+    std::promise<runtime::serial_execution_queue_t::async_completion_t> started;
+    auto ready = started.get_future ();
+    queue->post_async ("actor-join-awaiting-source-lane",
+                       [&] (auto complete) { started.set_value (std::move (complete)); });
+    auto finish = ready.get ();
+    std::atomic_int cancelled_work_ran{0};
+    if (cancel_pending) {
+        queue->post_async ("cancelled-actor-work", [&] (auto complete) {
+            ++cancelled_work_ran;
+            complete ([] {});
+        });
+        queue->cancel_pending ();
+    }
+    queue.reset ();
+    const bool retained = !weak.expired ();
+    finish ([] {});
+    std::promise<void> completed;
+    auto completion_ready = completed.get_future ();
+    executor.submit ([&] { completed.set_value (); });
+    completion_ready.get ();
+    const bool released_on_completion = weak.expired ();
+    finish = {};
+    retirement_ready.get ();
+    executor.drain ();
+    const auto retirements = retired.load ();
+    delete raw;
+    test.require (retained && released_on_completion && retirements == 1 && cancelled_work_ran == 0,
+                  "an accepted Actor turn must retain its queue until completion after removal");
+}
+
 void test_application_relocation_remote_production_path (test_context_t &test,
-                                                         bool resolver_failure = false)
+                                                         bool resolver_failure = false,
+                                                         bool post_seal_lookup_failure = false,
+                                                         bool missing_target_session_peer = false,
+                                                         bool command44_order = false)
 {
     using namespace std::chrono_literals;
     namespace detail = zlink::framework::detail;
     namespace framework = zlink::framework;
     namespace protocol = zlink::framework::runtime::protocol;
+    namespace host = zlink::framework::runtime::host;
 
     const auto core_context = std::make_shared<zlink::context_t> ();
     std::vector<framework::message_flow_event_t> resolver_failures;
@@ -4561,21 +5265,43 @@ void test_application_relocation_remote_production_path (test_context_t &test,
           if (event.surface == framework::dispatch_error_surface_t::actor_relocation)
               resolver_failures.push_back (event);
       });
+    std::mutex delay_mutex;
+    detail::delay_owner_t delays (delay_mutex);
     detail::mesh_node_runtime_t source (source_state);
     detail::mesh_node_runtime_t target (make_state ("production-target"));
     detail::mesh_node_runtime_t session_owner (make_state ("production-session-owner"));
+    detail::actor_gateway_runtime_t target_gateway (
+      std::make_shared<detail::actor_gateway_state_t> ());
+    target.configure_bound_session_operations (host::bound_session_operations_t{
+      .bind = [] (const protocol::bound_session_bind_t &, const zlink::routing_id_t &,
+                  std::uint64_t, const framework::location_owner_token_t &,
+                  std::function<bool ()>) { return host::bound_session_bind_operation_result_t{}; },
+      .send = [] (const protocol::bound_session_send_t &,
+                  std::vector<zlink::message_t>) { return stateful_error_t::conflict; },
+      .replaced = [] (const protocol::bound_session_replaced_t &) {},
+      .commit_relocation_route = [] (const protocol::session_relocation_route_t &,
+                                     const stream_binding_t &,
+                                     const stream_binding_t &) { return false; },
+      .prepare_relocation_target_route =
+        [target_gateway] (const protocol::session_relocation_route_t &route,
+                          std::uint64_t owner_lease_generation) mutable {
+            return target_gateway.prepare_session_relocation_target_route (route,
+                                                                           owner_lease_generation);
+        }});
+    source.bind_delay_owner (delays);
+    target.bind_delay_owner (delays);
+    session_owner.bind_delay_owner (delays);
     source.configure_relocation_runtime (authority, roots);
     target.configure_relocation_runtime (authority, roots);
     std::optional<detail::bound_session_relocation_route_t> bound_session_route;
-    std::atomic<std::uint64_t> observed_session_sequence{0};
     framework::task_completion_source_t<std::optional<detail::bound_session_relocation_route_t>>
       first_route_resolution;
     std::promise<void> first_route_started;
     auto route_started = first_route_started.get_future ();
     bool resolve_first_route = true;
     source.configure_bound_session_relocation_resolver (
-      [&bound_session_route, &observed_session_sequence, &first_route_resolution,
-       &first_route_started, &resolve_first_route, resolver_failure] (const object_ref_t &candidate)
+      [&bound_session_route, &first_route_resolution, &first_route_started, &resolve_first_route,
+       resolver_failure, post_seal_lookup_failure] (const object_ref_t &candidate)
         -> framework::task_t<std::optional<detail::bound_session_relocation_route_t>> {
           using route_t = std::optional<detail::bound_session_relocation_route_t>;
           if (!bound_session_route || candidate.key != "production-remote-actor"
@@ -4588,10 +5314,10 @@ void test_application_relocation_remote_production_path (test_context_t &test,
               first_route_started.set_value ();
               return first_route_resolution.task ();
           }
-          auto resolved = *bound_session_route;
-          resolved.observed_sequence = observed_session_sequence.load (std::memory_order_acquire);
+          if (post_seal_lookup_failure)
+              throw std::runtime_error ("source Session route observation is unavailable");
           return framework::task_t<route_t> (
-            framework::result_t<route_t>::success (std::move (resolved)));
+            framework::result_t<route_t>::success (*bound_session_route));
       });
     source.configure_stateful_dispatch ([] (const accepted_record_authority_query_t &query)
                                           -> std::optional<accepted_record_authority_t> {
@@ -4608,21 +5334,105 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     target.configure_session_route_owner (
       [] { return std::optional<framework::location_owner_token_t>{{"target-owner", 9}}; });
     std::atomic<bool> route_owner_observed_target_ready{false};
-    session_owner.configure_session_route_owner ([&target, &route_owner_observed_target_ready] {
-        if (target.native_node ().objects ().find (object_kind_t::actor,
-                                                   "production-remote-actor")) {
-            route_owner_observed_target_ready.store (true, std::memory_order_release);
+    std::atomic<unsigned> route_commits_before_lifecycle{0};
+    std::atomic<bool> command44_observed_open_dispatch{true};
+    std::atomic<bool> lifecycle_callback_entered{false};
+    std::atomic<bool> relocation_completed{false};
+    framework::task_completion_source_t<void> target_reconcile;
+    std::atomic<unsigned> target_reconcile_requests{0};
+    std::atomic<unsigned> seal_reconcile_requests{0};
+    std::atomic<bool> first_push_received{false};
+    std::atomic<unsigned> bound_session_callback_errors{0};
+    std::promise<void> lifecycle_release;
+    auto release = lifecycle_release.get_future ();
+    std::promise<void> order_marker_received;
+    auto marker_received = order_marker_received.get_future ();
+    session_owner.configure_session_route_owner ([&] {
+        const auto inventory = target.native_node ().objects ().inventory ();
+        const auto active =
+          std::find_if (inventory.begin (), inventory.end (), [] (const auto &item) {
+              return item.owner.key == "production-remote-actor";
+          });
+        if (active != inventory.end ()) {
+            route_owner_observed_target_ready.store (active->state == object_state_t::ready,
+                                                     std::memory_order_release);
+            if (command44_order) {
+                ++route_commits_before_lifecycle;
+                if (active->state != object_state_t::ready)
+                    command44_observed_open_dispatch.store (false, std::memory_order_release);
+            }
         }
         return std::optional<framework::location_owner_token_t>{{"session-owner", 17}};
     });
+    if (missing_target_session_peer) {
+        session_owner.configure_bound_session_operations (
+          {.bind =
+             [&] (const auto &, const auto &, auto, const auto &, auto) {
+                 ++bound_session_callback_errors;
+                 return framework::runtime::host::bound_session_bind_operation_result_t{
+                   stateful_error_t::conflict, std::nullopt};
+             },
+           .send =
+             [&] (const auto &record, auto parts) {
+                 first_push_received.store (
+                   record.actor.actor_id == "production-remote-actor" && parts.size () == 1
+                     && parts.front ().to_string () == "first-push-payload",
+                   std::memory_order_release);
+                 return stateful_error_t::none;
+             },
+           .replaced = [&] (const auto &) { ++bound_session_callback_errors; },
+           .commit_relocation_route =
+             [&] (const auto &route, const auto &previous, const auto &committed) {
+                 const bool projected =
+                   previous.actor.node_id == source.status ().routing_id ().to_string ()
+                   && committed.actor.node_id == target.status ().routing_id ().to_string ()
+                   && committed.actor.key == "production-remote-actor"
+                   && committed.actor.authority_owner_generation
+                        == route.route.target_authority_owner_generation
+                   && previous.connection == committed.connection
+                   && previous.binding_generation == committed.binding_generation
+                   && committed.binding_generation == route.binding_generation;
+                 if (!projected)
+                     ++bound_session_callback_errors;
+                 return projected;
+             },
+           .prepare_relocation_target_route =
+             [&] (const auto &, auto) {
+                 ++bound_session_callback_errors;
+                 return false;
+             }});
+    }
     source.start ();
     target.start ();
     session_owner.start ();
+    if (missing_target_session_peer) {
+        session_owner.native_node ().configure_peer_reconcile ([&] (const auto &rid) {
+            if (rid == target.status ().routing_id ().to_bytes ())
+                ++seal_reconcile_requests;
+        });
+        target.native_node ().configure_peer_reconcile ([&] (const auto &rid) {
+            if (rid == session_owner.status ().routing_id ().to_bytes ())
+                ++target_reconcile_requests;
+            target_reconcile.complete (framework::result_t<void>::success ());
+        });
+    }
+    if (command44_order) {
+        target.native_node ().objects ().configure_relocation_materialization (
+          [] (const auto &, const auto &, const auto &,
+              std::stop_token) -> framework::task_t<bool> { co_return true; },
+          [&] (const auto &) {
+              lifecycle_callback_entered.store (true, std::memory_order_release);
+              release.get ();
+              return true;
+          },
+          [] (const auto &) {});
+    }
     source.connect_peer (target.status ().routing_id (), target.status ().local_endpoint ());
     source.connect_peer (session_owner.status ().routing_id (),
                          session_owner.status ().local_endpoint ());
-    target.connect_peer (session_owner.status ().routing_id (),
-                         session_owner.status ().local_endpoint ());
+    if (!missing_target_session_peer)
+        target.connect_peer (session_owner.status ().routing_id (),
+                             session_owner.status ().local_endpoint ());
     const auto admission_deadline = std::chrono::steady_clock::now () + 5s;
     while ((!source.has_admitted_peer (target.status ().routing_id (),
                                        target.status ().lifecycle_generation ())
@@ -4632,23 +5442,26 @@ void test_application_relocation_remote_production_path (test_context_t &test,
                                           session_owner.status ().lifecycle_generation ())
             || !session_owner.has_admitted_peer (source.status ().routing_id (),
                                                  source.status ().lifecycle_generation ())
-            || !target.has_admitted_peer (session_owner.status ().routing_id (),
-                                          session_owner.status ().lifecycle_generation ())
-            || !session_owner.has_admitted_peer (target.status ().routing_id (),
-                                                 target.status ().lifecycle_generation ()))
+            || (!missing_target_session_peer
+                && (!target.has_admitted_peer (session_owner.status ().routing_id (),
+                                               session_owner.status ().lifecycle_generation ())
+                    || !session_owner.has_admitted_peer (
+                      target.status ().routing_id (), target.status ().lifecycle_generation ()))))
            && std::chrono::steady_clock::now () < admission_deadline) {
-        (void) source.dispatch_ready ([] (const auto &, const auto &, auto) {});
-        (void) target.dispatch_ready ([] (const auto &, const auto &, auto) {});
-        (void) session_owner.dispatch_ready ([] (const auto &, const auto &, auto) {});
-        std::this_thread::sleep_for (1ms);
+        (void) await_task (source.dispatch_ready ([] (const auto &, const auto &, auto) {}));
+        (void) await_task (target.dispatch_ready ([] (const auto &, const auto &, auto) {}));
+        (void) await_task (session_owner.dispatch_ready ([] (const auto &, const auto &, auto) {}));
+        std::this_thread::yield ();
     }
-    test.require (source.has_admitted_peer (target.status ().routing_id (),
-                                            target.status ().lifecycle_generation ())
-                    && source.has_admitted_peer (session_owner.status ().routing_id (),
-                                                 session_owner.status ().lifecycle_generation ())
-                    && target.has_admitted_peer (session_owner.status ().routing_id (),
-                                                 session_owner.status ().lifecycle_generation ()),
-                  "production relocation source must admit the target and Session owner");
+    test.require (
+      source.has_admitted_peer (target.status ().routing_id (),
+                                target.status ().lifecycle_generation ())
+        && source.has_admitted_peer (session_owner.status ().routing_id (),
+                                     session_owner.status ().lifecycle_generation ())
+        && (missing_target_session_peer
+            || target.has_admitted_peer (session_owner.status ().routing_id (),
+                                         session_owner.status ().lifecycle_generation ())),
+      "production relocation source must admit the target and Session owner");
 
     const auto created = source.create_application_actor (
       "production.actor", "production-remote-actor", std::nullopt, 1s);
@@ -4705,28 +5518,37 @@ void test_application_relocation_remote_production_path (test_context_t &test,
       session_bind_error == stateful_error_t::none
         && initial_inbound_error == stateful_error_t::none && initial_inbound
         && initial_inbound->inbound_sequence == 1,
-      "production Session checkpoint must retain pre-seal active ingress at its exact high-water");
+      "production Session must retain active ingress until its owner seals the binding");
     bound_session_route = detail::bound_session_relocation_route_t{
       session_owner.status ().routing_id (),
       session_owner.status ().lifecycle_generation (),
       {"session-owner", 17},
       zlink::routing_id_t::from ("production-bound-session"),
-      session_binding.binding_generation,
-      0};
+      session_binding.binding_generation};
 
     const auto initial_inbound_completed =
       initial_inbound
       && session_owner.native_node ().sessions ().complete_inbound (*initial_inbound)
            == stateful_error_t::none;
     test.require (initial_inbound_completed,
-                  "the active Session ingress must complete before exact sealing");
-    observed_session_sequence.store (1, std::memory_order_release);
+                  "the active Session ingress must complete before sealing");
 
     std::atomic<bool> stop_dispatch{false};
     const auto dispatch = [&] (detail::mesh_node_runtime_t &node) {
         while (!stop_dispatch.load (std::memory_order_acquire)) {
-            (void) node.dispatch_ready ([] (const auto &, const auto &, auto) {});
-            std::this_thread::sleep_for (1ms);
+            bool saw_marker = false;
+            (void) await_task (node.dispatch_ready ([&] (const auto &, const auto &, auto parts) {
+                if ((command44_order || missing_target_session_peer) && &node == &session_owner
+                    && !parts.empty () && parts.front ().to_string () == "command44-order-marker")
+                    saw_marker = true;
+            }));
+            if (saw_marker) {
+                // The preceding turn can pump command 44 before the marker
+                // while leaving its infrastructure dispatch to this turn.
+                (void) await_task (node.dispatch_ready ([] (const auto &, const auto &, auto) {}));
+                order_marker_received.set_value ();
+            }
+            std::this_thread::yield ();
         }
     };
     {
@@ -4740,33 +5562,73 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     const std::string flow_id = "01930000-0000-7000-8000-000000000001";
     std::promise<bool> relocation_submitted;
     auto submitted = relocation_submitted.get_future ();
+    const auto operation_deadline = std::chrono::steady_clock::now () + 5s;
     std::thread relocation_thread ([&] {
         framework::runtime::install_host_context_hooks ();
         framework::runtime::flow_context_t::scope_t flow (
           framework::runtime::flow_value_t{flow_id, framework::flow_origin_t::application,
                                            framework::message_flow_log_mode_t::errors});
         auto relocation = source.relocate_application_actor (actor, target_descriptor, snapshot,
-                                                             std::chrono::steady_clock::now ()
-                                                               + std::chrono::seconds (5));
+                                                             operation_deadline);
         relocation_submitted.set_value (!relocation.await_ready ());
         result = await_task (std::move (relocation));
+        relocation_completed.store (true, std::memory_order_release);
+        target_reconcile.complete (framework::result_t<void>::success ());
     });
     const bool relocation_suspended = submitted.get ();
     if (!resolver_failure) {
         test.require (
           relocation_suspended,
           "production relocation must suspend while Session route resolution is pending");
-        route_started.get ();
-        auto resolved_route = *bound_session_route;
-        resolved_route.observed_sequence =
-          observed_session_sequence.load (std::memory_order_acquire);
+        while (route_started.wait_for (0s) != std::future_status::ready
+               && !relocation_completed.load (std::memory_order_acquire)
+               && std::chrono::steady_clock::now () < operation_deadline)
+            std::this_thread::yield ();
+        test.require (route_started.wait_for (0s) == std::future_status::ready,
+                      "production relocation must reach Session route resolution");
         first_route_resolution.complete (
           framework::result_t<std::optional<detail::bound_session_relocation_route_t>>::success (
-            std::move (resolved_route)));
+            *bound_session_route));
     }
     std::thread source_dispatch ([&] { dispatch (source); });
     std::thread target_dispatch ([&] { dispatch (target); });
     std::thread session_owner_dispatch ([&] { dispatch (session_owner); });
+    if (missing_target_session_peer) {
+        await_task (target_reconcile.task ());
+        test.require (seal_reconcile_requests != 0 && target_reconcile_requests == 1
+                        && !relocation_completed.load (std::memory_order_acquire),
+                      "the target must request reconciliation and hold relay-ready until release");
+        target.connect_peer (session_owner.status ().routing_id (),
+                             session_owner.status ().local_endpoint ());
+    }
+    if (command44_order) {
+        while (!lifecycle_callback_entered.load (std::memory_order_acquire)
+               && !(relocation_completed.load (std::memory_order_acquire)
+                    && result.terminal != relocation_terminal_t::completed)
+               && std::chrono::steady_clock::now () < operation_deadline)
+            std::this_thread::yield ();
+        const auto callback_entered = lifecycle_callback_entered.load (std::memory_order_acquire);
+        test.require (callback_entered, "command 44 fixture must reach target lifecycle commit");
+        if (callback_entered) {
+            protocol::application_payload_t::multipart_t marker;
+            marker.push_back (zlink::message_t::from (std::string ("command44-order-marker")));
+            const auto sent = await_task (target.native_node ().transport ().send_to_node_result (
+              session_owner.status ().routing_id ().to_bytes (),
+              protocol::application_payload_t::from_parts (std::move (marker))));
+            test.require (sent == zlink::submit_result_t::ok,
+                          "command 44 order marker must submit");
+            if (sent == zlink::submit_result_t::ok) {
+                while (marker_received.wait_for (0s) != std::future_status::ready
+                       && std::chrono::steady_clock::now () < operation_deadline)
+                    std::this_thread::yield ();
+                test.require (marker_received.wait_for (0s) == std::future_status::ready,
+                              "command 44 order marker must reach the Session owner");
+            }
+            test.require (route_commits_before_lifecycle == 0,
+                          "command 44 must follow lifecycle completion and dispatch opening");
+        }
+        lifecycle_release.set_value ();
+    }
     relocation_thread.join ();
     if (resolver_failure) {
         stop_dispatch.store (true, std::memory_order_release);
@@ -4811,15 +5673,58 @@ void test_application_relocation_remote_production_path (test_context_t &test,
         session_owner.stop ();
         return;
     }
+    if (missing_target_session_peer) {
+        auto published =
+          target.native_node ().objects ().find (object_kind_t::actor, "production-remote-actor");
+        while (!published && std::chrono::steady_clock::now () < operation_deadline) {
+            std::this_thread::yield ();
+            published = target.native_node ().objects ().find (object_kind_t::actor,
+                                                               "production-remote-actor");
+        }
+        test.require (published.has_value (),
+                      "first push must follow target lifecycle completion and publication");
+        const auto push = await_task (target.native_node ().send_bound_session (
+          actor, session_owner.status ().routing_id (), session_binding.binding_generation, 2, 9,
+          {zlink::message_t::from (std::string ("first-push-payload"))}));
+        test.require (push == zlink::submit_result_t::ok,
+                      "first bound Actor push after relocation must succeed without a prior "
+                      "target-to-Session peer (#1775)");
+        if (push == zlink::submit_result_t::ok) {
+            const auto marker = await_task (target.native_node ().transport ().send_to_node_result (
+              session_owner.status ().routing_id ().to_bytes (),
+              protocol::application_payload_t::from_parts (
+                {zlink::message_t::from (std::string ("command44-order-marker"))})));
+            test.require (marker == zlink::submit_result_t::ok, "first push marker must submit");
+            if (marker == zlink::submit_result_t::ok) {
+                while (marker_received.wait_for (0s) != std::future_status::ready
+                       && std::chrono::steady_clock::now () < operation_deadline)
+                    std::this_thread::yield ();
+                test.require (marker_received.wait_for (0s) == std::future_status::ready,
+                              "first push marker must reach the Session owner");
+            }
+            test.require (
+              first_push_received.load (std::memory_order_acquire),
+              "the Session owner must deliver the first push before the following marker");
+        }
+    }
     const auto source_relocation_gate = source.native_node ().maintenance ()->gate_snapshot ();
-    const auto route_deadline = std::chrono::steady_clock::now () + 5s;
-    while (std::chrono::steady_clock::now () < route_deadline) {
+    const auto route_deadline = operation_deadline;
+    while (result.terminal == relocation_terminal_t::completed
+           && std::chrono::steady_clock::now () < route_deadline) {
         const auto current =
           session_owner.native_node ().sessions ().current_binding ("production-remote-actor");
         if (current && current->actor.node_id == target.status ().routing_id ().to_string ())
             break;
-        std::this_thread::sleep_for (1ms);
+        std::this_thread::yield ();
     }
+
+    // Command 44 is one-way (Session Actor binding §8.2). Observing the new
+    // binding is not an acknowledgement that its receive turn has returned.
+    // Join the fixture's dispatchers before inspecting the final Session state.
+    stop_dispatch.store (true, std::memory_order_release);
+    source_dispatch.join ();
+    target_dispatch.join ();
+    session_owner_dispatch.join ();
 
     const auto committed_binding =
       session_owner.native_node ().sessions ().current_binding ("production-remote-actor");
@@ -4831,10 +5736,14 @@ void test_application_relocation_remote_production_path (test_context_t &test,
       continued_inbound
       && session_owner.native_node ().sessions ().complete_inbound (*continued_inbound)
            == stateful_error_t::none;
-    stop_dispatch.store (true, std::memory_order_release);
-    source_dispatch.join ();
-    target_dispatch.join ();
-    session_owner_dispatch.join ();
+    if (missing_target_session_peer)
+        test.require (
+          bound_session_callback_errors.load () == 0,
+          "Session callbacks must observe only the registry's committed target binding");
+
+    if (command44_order)
+        test.require (command44_observed_open_dispatch.load (std::memory_order_acquire),
+                      "command 44 must observe restored target dispatch open");
 
     object_ref_t expected_target{
       object_kind_t::actor,         std::string (actor.actor_id ().value ()),
@@ -4842,22 +5751,42 @@ void test_application_relocation_remote_production_path (test_context_t &test,
       "production-relocation-mesh", target.status ().routing_id ().to_string ()};
     const auto restored_target = target.native_node ().objects ().find (
       object_kind_t::actor, std::string (actor.actor_id ().value ()));
+    const auto target_actor = detail::actor_ref_access_t::make (
+      framework::node_rid_t::from_string (target.status ().routing_id ().to_string ()),
+      "production.actor", std::string (actor.actor_id ().value ()), actor.object_generation ());
+    const auto target_relay = target_gateway.admit_session_relay (
+      target_actor, session_owner.status ().routing_id (), bound_session_route->session,
+      session_binding.binding_generation,
+      continued_inbound ? continued_inbound->inbound_sequence : 0);
+    test.require (static_cast<bool> (target_relay),
+                  "generic relocation must restore the target gateway binding before Session "
+                  "ingress resumes");
+    if (result.terminal != relocation_terminal_t::completed)
+        std::cerr << "Session seal relocation terminal=" << static_cast<int> (result.terminal)
+                  << " reason=" << static_cast<int> (result.reason)
+                  << " post_seal_lookup_failure=" << post_seal_lookup_failure << '\n';
     test.require (
       result.terminal == relocation_terminal_t::completed && !result.authority
         && result.target_handoff
         && result.target_handoff->sources == std::vector<object_ref_t>{*bound_source_object}
-        && result.target_handoff->target_node_id == target.status ().routing_id ().to_string ()
-        && restored_target == std::optional<object_ref_t>{expected_target}
-        && roots->roots.size () == 1
-        && route_owner_observed_target_ready.load (std::memory_order_acquire) && committed_binding
-        && committed_binding->actor == expected_target
+        && result.target_handoff->target_node_id == target.status ().routing_id ().to_string (),
+      "production relocation must complete the source handoff without committing source authority");
+    test.require (restored_target == std::optional<object_ref_t>{expected_target}
+                    && roots->roots.size () == 1,
+                  "production relocation must restore the target and retain one handoff root");
+    // Relocation flow §4.6 requires target dispatch to open before command 44;
+    // source completion alone does not order independent completion turns (§11).
+    test.require (route_owner_observed_target_ready.load (std::memory_order_acquire),
+                  "production relocation must restore the target before the one-way Session route");
+    test.require (
+      committed_binding && committed_binding->actor == expected_target
         && committed_binding->binding_generation == session_binding.binding_generation
         && committed_binding->target_node_generation == target.status ().lifecycle_generation ()
-        && committed_binding->owner_lease_generation == target_descriptor.lease_generation
-        && continued_inbound_error == stateful_error_t::none && continued_inbound_completed
-        && continued_inbound->inbound_sequence == 2,
-      "production relocation must commit authority only at the target, restore before the one-way "
-      "Session route, and continue ingress");
+        && committed_binding->owner_lease_generation == target_descriptor.lease_generation,
+      "production relocation must commit the exact target Session route");
+    test.require (continued_inbound_error == stateful_error_t::none && continued_inbound_completed
+                    && continued_inbound->inbound_sequence == 2,
+                  "production relocation must continue Session ingress after the route commit");
     test.require (
       source_relocation_gate == relocation_gate_snapshot_t{},
       "cutover submit terminal must release relocation execution permits while post-cutover "
@@ -5063,6 +5992,7 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
     namespace detail = zlink::framework::detail;
     namespace framework = zlink::framework;
 
+    framework::serializer_registry_t source_serializers;
     const auto core_context = std::make_shared<zlink::context_t> ();
     const auto make_state = [core_context] (const std::string &rid) {
         auto state = zlink::framework::test::runtime_failure_fixture<
@@ -5109,8 +6039,12 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
     auto aggregates = std::make_shared<memory_aggregate_authority_t> (authority);
     const auto source_state = make_state ("production-aggregate-source");
     const auto target_state = make_state ("production-aggregate-target");
+    std::mutex delay_mutex;
+    detail::delay_owner_t delays (delay_mutex);
     detail::mesh_node_runtime_t source (source_state);
     detail::mesh_node_runtime_t target (target_state);
+    source.bind_delay_owner (delays);
+    target.bind_delay_owner (delays);
     source.configure_relocation_runtime (authority, roots, aggregates);
     target.configure_relocation_runtime (authority, roots, aggregates);
     source.configure_session_route_owner (
@@ -5177,23 +6111,17 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
     detail::spot_node_runtime_t source_spots (source_state->spot_state);
     const auto source_native_node = source_state->spot_state->native_node.lock ();
     source_state->spot_state->native_node.reset ();
-    const frozen_object_state_t source_application_spot{
-      .owner = {.kind = object_kind_t::user_spot,
-                .key = "production-aggregate-spot",
-                .object_generation = 1,
-                .authority_owner_generation = 1,
-                .mesh_name = "production-aggregate-mesh",
-                .node_id = source.status ().routing_id ().to_string ()},
-      .stable_type = "production.aggregate.spot",
-      .application_state = {19},
-      .pending_application = {},
-      .timers = {}};
-    const auto application_spot = source_spots.restore_spot_relocation_state (
-      source_application_spot, source_application_spot.owner);
+    // The source is already Ready; target restore remains staged until commit.
+    source_state->spot_state->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<detail::channel_runtime_state_t> ();
+    source_state->spot_state->channel_runtime->serializers = &source_serializers;
+    const auto application_spot = source_spots.get_or_create_spot (
+      "production.aggregate.spot", framework::spot_id_t ("production-aggregate-spot"), {}, 1,
+      "production-aggregate-mesh", 1);
     source_state->spot_state->native_node = source_native_node;
-    test.require (application_spot,
+    test.require (application_spot.state == framework::spot_create_state_t::created,
                   "production aggregate source Spot application must be materialized");
-    if (!application_spot) {
+    if (application_spot.state != framework::spot_create_state_t::created) {
         source.stop ();
         target.stop ();
         return;
@@ -5779,8 +6707,8 @@ void test_entry_spot_actor_relocation_restore_resolves_local_entry_spot (test_co
  * the local instance is the departed source remnant; a newer Store-confirmed
  * target authority may replace it, while the old leave is sealed so it cannot
  * run against the newly materialized Actor. */
-void test_return_actor_relocation_replaces_departed_spot_instance (test_context_t &test,
-                                                                   bool source_leave_fails = false)
+void test_return_actor_relocation_replaces_departed_spot_instance (
+  test_context_t &test, bool source_leave_fails = false, bool delayed_source_completion = false)
 {
     std::atomic_int failed_leave_diagnostics{0};
     entry_relocation_test_actor_t::create_count = 0;
@@ -5861,28 +6789,34 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
       "returning-entry-actor", 1, zlink::routing_id_t::from ("node-b").to_bytes (), 1, 3, 5};
     const auto entry_id = state->spot_ids_by_name.at ("entry");
     state->actor_authority_fences.erase (key);
-    zlink::framework::detail::record_actor_route_unlocked (
-      *state, key,
-      zlink::framework::spot_route_t{zlink::framework::node_rid_t::from_string ("node-b"),
-                                     zlink::framework::spot_id_t ("spot-b"), "entry"},
-      1);
-    state->actor_transfer_coordinator.activate_message_follow (
-      key, source_fence, returned_source,
-      zlink::framework::spot_route_t{zlink::framework::node_rid_t::from_string ("node-b"),
-                                     zlink::framework::spot_id_t ("spot-b"), "entry"},
-      target_fence, std::chrono::steady_clock::now () + std::chrono::seconds (30), "return-a-b");
-    state->pending_remote_source_cleanups.push_back (
-      zlink::framework::detail::spot_node_builder_state_t::pending_remote_source_cleanup_t{
-        .source_actor = source_actor,
-        .source_fence = source_fence,
-        .transfer_id = "return-a-b",
-        .source_spot_id = entry_id,
-        .source_spot_generation = 1,
-        .target_spot_id = zlink::framework::spot_id_t ("spot-b"),
-        .not_before = std::chrono::steady_clock::now () + std::chrono::seconds (30),
-        .leave_submitted = false,
-        .leave_completed = false,
-        .leave_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (30)});
+    if (delayed_source_completion) {
+        test.require (state->actor_transfer_coordinator.try_begin_source_remote (key, "return-a-b"),
+                      "fixture must retain the previous source Join until publication");
+    } else {
+        zlink::framework::detail::record_actor_route_unlocked (
+          *state, key,
+          zlink::framework::spot_route_t{zlink::framework::node_rid_t::from_string ("node-b"),
+                                         zlink::framework::spot_id_t ("spot-b"), "entry"},
+          1);
+        state->actor_transfer_coordinator.activate_message_follow (
+          key, source_fence, returned_source,
+          zlink::framework::spot_route_t{zlink::framework::node_rid_t::from_string ("node-b"),
+                                         zlink::framework::spot_id_t ("spot-b"), "entry"},
+          target_fence, std::chrono::steady_clock::now () + std::chrono::seconds (30),
+          "return-a-b");
+        state->pending_remote_source_cleanups.push_back (
+          zlink::framework::detail::spot_node_builder_state_t::pending_remote_source_cleanup_t{
+            .source_actor = source_actor,
+            .source_fence = source_fence,
+            .transfer_id = "return-a-b",
+            .source_spot_id = entry_id,
+            .source_spot_generation = 1,
+            .target_spot_id = zlink::framework::spot_id_t ("spot-b"),
+            .not_before = std::chrono::steady_clock::now () + std::chrono::seconds (30),
+            .leave_submitted = false,
+            .leave_completed = false,
+            .leave_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (30)});
+    }
 
     const object_ref_t returning_source{.kind = object_kind_t::actor,
                                         .key = "returning-entry-actor",
@@ -5897,10 +6831,36 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
                                                  .timers = {}};
     auto returning_target = first_target;
     returning_target.authority_owner_generation = 4;
-    const auto returned =
-      runtime.materialize_relocation_state (returning_frozen, returning_target, std::nullopt, {})
-        .result ()
-        .value ();
+    auto returning =
+      runtime.materialize_relocation_state (returning_frozen, returning_target, std::nullopt, {});
+    if (delayed_source_completion) {
+        test.require (
+          !returning.await_ready () && state->actor_instances.at (key) == old_instance,
+          "return must await the previous source Join terminal before replacing its instance");
+        auto source_completion = runtime.complete_remote_actor_transfer (
+          source_actor, returned_source,
+          zlink::framework::spot_route_t{zlink::framework::node_rid_t::from_string ("node-b"),
+                                         zlink::framework::spot_id_t ("spot-b"), "entry"},
+          source_fence,
+          {target_fence.target_node_routing_id,
+           target_fence.target_node_generation,
+           {},
+           target_fence.owner_lease_generation},
+          target_fence.authority_owner_generation, "return-a-b");
+        source_completion.result ().value ();
+    }
+    const auto returned = returning.result ().value ();
+    if (delayed_source_completion) {
+        (void) runtime.submit_remote_actor_leave ("return-a-b", source_actor, entry_id, 1,
+                                                  zlink::framework::spot_id_t ("spot-b"),
+                                                  target_fence);
+        zlink::framework::detail::spot_context_access_t::state (entry_created.context)
+          ->run_serial_task ("after-late-source-leave",
+                             [] () -> zlink::framework::task_t<void> { co_return; })
+          .result ()
+          .value ();
+    }
+
 
     const auto cleanup = std::find_if (
       state->pending_remote_source_cleanups.begin (), state->pending_remote_source_cleanups.end (),
@@ -5923,7 +6883,9 @@ void test_return_actor_relocation_replaces_departed_spot_instance (test_context_
     runtime.cleanup_expired_actor_admissions_at (cleanup->not_before);
     test.require (entry_relocation_test_entry_spot_t::leave_count == 1
                     && failed_leave_diagnostics == (source_leave_fails ? 1 : 0)
-                    && state->actor_instances.contains (key),
+                    && state->actor_instances.contains (key)
+                    && state->actor_instances.at (key) != old_instance
+                    && state->actor_routes.at (key).node_rid.value () == "node-a",
                   "retired source cleanup must not rerun leave or erase newer local authority");
 
     // The ordinary source cleanup may have already erased the instance and
@@ -6965,6 +7927,86 @@ int main (int argc, char **argv)
         }
     } executor_shutdown;
     test_context_t test;
+    if (argc == 2 && std::string_view (argv[1]) == "--spot-restore-staging") {
+        test_spot_restore_stages_before_publication (test);
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--aggregate-source") {
+        test_application_user_spot_aggregate_remote_production_path (test);
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--route-command44-order") {
+        test_application_relocation_remote_production_path (test, false, false, false, true);
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--route-first-push") {
+        test_application_relocation_remote_production_path (test, false, false, true);
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--ready-expired") {
+        test_relocation_ready_boundary (test, ready_boundary_case_t::expired_remote);
+        test_relocation_ready_boundary (test, ready_boundary_case_t::expired_local);
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--ready-boundary") {
+        for (const auto mode :
+             {ready_boundary_case_t::ready, ready_boundary_case_t::expired_remote,
+              ready_boundary_case_t::expired_local, ready_boundary_case_t::shutdown_restore,
+              ready_boundary_case_t::shutdown_route})
+            test_relocation_ready_boundary (test, mode);
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--boundary-reply") {
+        std::cerr << "Boundary reply follow=enabled\n";
+        test_boundary_application_preserves_original_reply (test);
+        std::cerr << "Boundary reply follow=none\n";
+        test_boundary_application_preserves_original_reply (test, true);
+        std::cerr << "Boundary reply source=expired\n";
+        test_boundary_application_preserves_original_reply (test, false, true);
+        std::cerr << "Boundary reply cases=3 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--source-cutover-cancel") {
+        test_source_relocation_settles_by_authority (test, false, true);
+        std::cerr << "Source cutover cancellation cases=3 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--source-terminal-lifecycle") {
+        test_source_relocation_settles_by_authority (test, true, false, true);
+        test_source_relocation_settles_by_authority (test, true, false, false, true);
+        test_delay_owner_final_join_closes_accepted_registration (test);
+        std::cerr << "Source terminal lifecycle cases=5 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--source-management-cancel") {
+        test_source_relocation_settles_by_authority (test, true);
+        std::cerr << "Source management cancellation cases=3 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--source-settlement-chain") {
+        test_source_settlement_after_subsequent_moves (test);
+        test_source_settlement_preserve_and_members (test);
+        std::cerr << "Source settlement chain cases=18 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--queue-lifetime") {
+        test_pending_actor_turn_survives_queue_removal (test);
+        test_pending_actor_turn_survives_queue_removal (test, true);
+        std::cerr << "Queue lifetime cases=2 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--source-return") {
+        test_return_actor_relocation_replaces_departed_spot_instance (test, false, true);
+        std::cerr << "Source return cases=1 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--session-seal") {
+        test_application_relocation_remote_production_path (test);
+        test_application_relocation_remote_production_path (test, false, true);
+        test_application_relocation_remote_production_path (test, true);
+        std::cerr << "Session seal cases=3 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (argc == 3 && std::string_view (argv[1]) == "--route-network") {
         const int repetitions = std::stoi (argv[2]);
         if (repetitions <= 0)
@@ -6983,6 +8025,10 @@ int main (int argc, char **argv)
             return EXIT_FAILURE;
         for (int i = 0; i < repetitions; ++i) {
             test_source_relocation_settles_by_authority (test);
+            test_source_relocation_settles_by_authority (test, true);
+            test_source_relocation_settles_by_authority (test, true, false, true);
+            test_source_relocation_settles_by_authority (test, true, false, false, true);
+            test_delay_owner_final_join_closes_accepted_registration (test);
             if (test.failures != 0)
                 return EXIT_FAILURE;
             std::cerr << "settlement " << i + 1 << '/' << repetitions << " passed\n";
@@ -7019,17 +8065,35 @@ int main (int argc, char **argv)
     test_restore_validates_generation_before_spot_publication (test);
     test_return_relocation_replaces_departed_remnant (test);
     test_pending_restore_holds_ingress_before_rollback (test);
-    test_host_preflight_is_all_or_none (test);
-    test_shutdown_wins_during_retire_preflight (test);
     test_public_relocation_store_adapter (test);
     test_public_authority_store_adapter (test);
     test_source_relocation_failure_stops_state_chunks_and_unseals (test);
     test_boundary_application_preserves_original_reply (test);
+    test_boundary_application_preserves_original_reply (test, true);
+    test_boundary_application_preserves_original_reply (test, false, true);
     test_boundary_preserve_restores_acceptance_order (test);
     test_cutover_replays_over_selected_network_route (test);
     test_source_relocation_settles_by_authority (test);
+    test_source_relocation_settles_by_authority (test, true);
+    test_source_relocation_settles_by_authority (test, true, false, true);
+    test_source_relocation_settles_by_authority (test, true, false, false, true);
+    test_delay_owner_final_join_closes_accepted_registration (test);
+    test_source_relocation_settles_by_authority (test, false, true);
+    test_source_settlement_after_subsequent_moves (test);
+    test_source_settlement_preserve_and_members (test);
     test_relocation_target_cutover_and_authority_settlement (test);
+    test_source_completion_wait_scope (test);
+    test_pending_actor_turn_survives_queue_removal (test);
+    test_pending_actor_turn_survives_queue_removal (test, true);
+    for (const auto mode :
+         {ready_boundary_case_t::ready, ready_boundary_case_t::expired_remote,
+          ready_boundary_case_t::expired_local, ready_boundary_case_t::shutdown_restore,
+          ready_boundary_case_t::shutdown_route})
+        test_relocation_ready_boundary (test, mode);
+    test_application_relocation_remote_production_path (test, false, false, true);
+    test_application_relocation_remote_production_path (test, false, false, false, true);
     test_application_relocation_remote_production_path (test);
+    test_application_relocation_remote_production_path (test, false, true);
     test_application_relocation_remote_production_path (test, true);
     test_application_user_spot_aggregate_remote_production_path (test);
     test_aggregate_seal_failure_preserves_earlier_application_work (test);
@@ -7037,6 +8101,7 @@ int main (int argc, char **argv)
     test_entry_spot_actor_relocation_restore_resolves_local_entry_spot (test);
     test_return_actor_relocation_replaces_departed_spot_instance (test);
     test_return_actor_relocation_replaces_departed_spot_instance (test, true);
+    test_return_actor_relocation_replaces_departed_spot_instance (test, false, true);
     test_entry_spot_actor_relocation_restore_fails_without_local_entry_spot (test);
     test_relocation_hold_restores_without_dedicated_limits (test);
     test_stateful_application_queue_accepts_active_backlog (test);

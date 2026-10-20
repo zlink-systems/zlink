@@ -10,6 +10,8 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class StandaloneActorRelocationPrecommitTests
 {
+    private static readonly TimeSpan ReadBarrierTimeout = TimeSpan.FromSeconds(5);
+
     [Fact]
     public async Task Precommit_commits_through_owner_lease_heartbeat()
     {
@@ -178,7 +180,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             target,
             envelope,
             ZLinkRelocationTransferPayload.Create(envelope, 1024),
-            applicationVersion: 1
+            applicationVersion: 1,
+            DateTimeOffset.UtcNow.AddMinutes(1)
         );
 
         var targetAuthority = Authority(actorId, target, targetOwner);
@@ -312,7 +315,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             target,
             envelope,
             ZLinkRelocationTransferPayload.Create(envelope, 1024),
-            applicationVersion: 1
+            applicationVersion: 1,
+            DateTimeOffset.UtcNow.AddMinutes(1)
         );
 
         Assert.Equal(
@@ -397,7 +401,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             target,
             envelope,
             ZLinkRelocationTransferPayload.Create(envelope, 1024),
-            applicationVersion: 1
+            applicationVersion: 1,
+            DateTimeOffset.UtcNow.AddMinutes(1)
         );
 
         var committed = await new ZLinkStandaloneActorRelocationPrecommitCoordinator(
@@ -623,10 +628,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             store,
             source.Key,
             source.Steady,
-            new ZLinkRelocationStored(string.Empty, 0, default, default),
             source.RelocationId,
             source.Target,
-            source.Prepare.TargetAttemptGeneration,
             Stopwatch.GetElapsedTime(0) + TimeSpan.FromMilliseconds(200),
             static () => true,
             _ =>
@@ -679,10 +682,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             store,
             source.Key,
             source.Steady,
-            new ZLinkRelocationStored(string.Empty, 0, default, default),
             source.RelocationId,
             source.Target,
-            source.Prepare.TargetAttemptGeneration,
             Stopwatch.GetElapsedTime(0) + TimeSpan.FromMilliseconds(200),
             static () => true,
             _ =>
@@ -724,10 +725,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             store,
             source.Key,
             source.Steady,
-            new ZLinkRelocationStored(string.Empty, 0, default, default),
             source.RelocationId,
             source.Target,
-            source.Prepare.TargetAttemptGeneration,
             Stopwatch.GetElapsedTime(0) + TimeSpan.FromSeconds(30),
             static () => true,
             static _ => throw new InvalidOperationException("Missing must not resubmit."),
@@ -751,10 +750,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             store,
             source.Key,
             source.Steady,
-            new ZLinkRelocationStored(string.Empty, 0, default, default),
             source.RelocationId,
             source.Target,
-            source.Prepare.TargetAttemptGeneration,
             Stopwatch.GetElapsedTime(0),
             static () => false,
             static _ => ValueTask.CompletedTask,
@@ -796,10 +793,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             store,
             source.Key,
             source.Steady,
-            new ZLinkRelocationStored(string.Empty, 0, default, default),
             source.RelocationId,
             source.Target,
-            source.Prepare.TargetAttemptGeneration,
             Stopwatch.GetElapsedTime(0),
             static () => true,
             static _ => ValueTask.CompletedTask,
@@ -809,6 +804,346 @@ public sealed class StandaloneActorRelocationPrecommitTests
         );
 
         Assert.Equal(ZLinkSourceSettlement.TargetCommitted, settlement.Outcome);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Source_settlement_survives_a_second_committed_move_before_its_read(
+        bool normalizeSecond
+    )
+    {
+        var inner = new ZLinkInMemoryLocationStore();
+        var source = await PrepareCapturedSourceAsync(inner);
+        var store = new SettlementReadBarrierStore(inner);
+        using var cancellation = new CancellationTokenSource();
+        var settlement = ZLinkStandaloneActorRelocationRuntime
+            .SettleSourceAsync(
+                store,
+                source.Key,
+                source.Steady,
+                source.RelocationId,
+                source.Target,
+                TimeSpan.MaxValue,
+                static () => true,
+                _ =>
+                {
+                    store.Arm();
+                    return ValueTask.CompletedTask;
+                },
+                TimeSpan.Zero,
+                cancellation.Token,
+                ReadyRoute
+            )
+            .AsTask();
+        await store.ReadStarted.Task;
+        try
+        {
+            var coordinator = new ZLinkStandaloneActorRelocationPrecommitCoordinator(inner);
+            var committed = await coordinator.CommitTargetAsync(
+                source.Captured,
+                source.Envelope,
+                source.Prepare,
+                source.TargetAuthority,
+                CancellationToken.None
+            );
+            // Finish the first target's activation before it accepts the next move.
+            var steady = Assert
+                .IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+                    await inner.CompareExchangeAuthorityAsync(
+                        source.Key,
+                        committed.StoreVersion,
+                        new ZLinkAuthorityMutation.Put(
+                            ZLinkActorAuthorityPayloadCodec.Encode(source.TargetAuthority),
+                            ZLinkAuthorityGenerationTransition.Preserve,
+                            null,
+                            null
+                        )
+                    )
+                )
+                .Snapshot;
+            var thirdOwner = Assert
+                .IsType<ZLinkOwnerLeaseClaimResult.Claimed>(
+                    await inner.ClaimOwnerLeaseAsync("third-owner", TimeSpan.FromMinutes(1))
+                )
+                .Token;
+            var third = Descriptor(RoutingId.From("third-node"), thirdOwner) with
+            {
+                LifecycleGeneration = 2,
+            };
+            await inner.UpdateMeshNodeAsync(third, ZLinkLocationWriteIntent.NewClaim);
+            var nextId = Guid.NewGuid();
+            var preparing = await coordinator.BeginPreparingAsync(
+                steady,
+                source.TargetAuthority,
+                nextId,
+                1,
+                CancellationToken.None
+            );
+            var root = ZLinkCanonicalActorRelocationWriter.CreateInitial(
+                ZLinkStandaloneActorRelocationRuntime.CreateImmutableRoot(
+                    preparing,
+                    source.TargetAuthority,
+                    third,
+                    nextId,
+                    ReadOnlyMemory<byte>.Empty,
+                    [],
+                    default
+                ),
+                1
+            );
+            var captured = await coordinator.CaptureAsync(preparing, root, CancellationToken.None);
+            var prepare = ZLinkStandaloneActorRelocationRuntime.CreatePrepare(
+                steady,
+                source.TargetAuthority,
+                third,
+                root,
+                ZLinkRelocationTransferPayload.Create(root, 1024),
+                1,
+                DateTimeOffset.UtcNow.AddMinutes(1)
+            );
+            var actorId = source.TargetAuthority.ActorId;
+            var thirdAuthority = Authority(actorId, third, thirdOwner);
+            var second = await coordinator.CommitTargetAsync(
+                captured,
+                root,
+                prepare,
+                thirdAuthority,
+                CancellationToken.None
+            );
+            if (normalizeSecond)
+                second = Assert
+                    .IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+                        await inner.CompareExchangeAuthorityAsync(
+                            source.Key,
+                            second.StoreVersion,
+                            new ZLinkAuthorityMutation.Put(
+                                ZLinkActorAuthorityPayloadCodec.Encode(thirdAuthority),
+                                ZLinkAuthorityGenerationTransition.Preserve,
+                                null,
+                                null
+                            )
+                        )
+                    )
+                    .Snapshot;
+            Assert.Equal(source.Steady.ObjectGeneration, second.ObjectGeneration);
+            Assert.True(second.AuthorityOwnerGeneration > committed.AuthorityOwnerGeneration);
+            Assert.NotEqual(source.Target.OwnerId, second.OwnerId);
+            Assert.NotEqual(source.Target.Rid, second.Allocation.Descriptor.Rid);
+            Assert.NotEqual(
+                source.Target.LifecycleGeneration,
+                second.Allocation.DescriptorLifecycleGeneration
+            );
+            Assert.False(
+                ZLinkStandaloneActorRelocationPrecommitCoordinator.IsSourcePrecommit(
+                    second,
+                    source.RelocationId
+                )
+            );
+        }
+        catch
+        {
+            cancellation.Cancel();
+            throw;
+        }
+        finally
+        {
+            store.ReleaseRead.TrySetResult();
+            await Record.ExceptionAsync(async () => await settlement);
+        }
+        Assert.Equal(ZLinkSourceSettlement.TargetCommitted, (await settlement).Outcome);
+        Assert.Null((await settlement).Snapshot);
+    }
+
+    [Fact]
+    public async Task Source_settlement_keeps_the_first_target_follow_fence_after_normalization()
+    {
+        var store = new ZLinkInMemoryLocationStore();
+        var source = await PrepareCapturedSourceAsync(store);
+        var committed = await new ZLinkStandaloneActorRelocationPrecommitCoordinator(
+            store
+        ).CommitTargetAsync(
+            source.Captured,
+            source.Envelope,
+            source.Prepare,
+            source.TargetAuthority,
+            CancellationToken.None
+        );
+        var steady = Assert
+            .IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+                await store.CompareExchangeAuthorityAsync(
+                    source.Key,
+                    committed.StoreVersion,
+                    new ZLinkAuthorityMutation.Put(
+                        ZLinkActorAuthorityPayloadCodec.Encode(source.TargetAuthority),
+                        ZLinkAuthorityGenerationTransition.Preserve,
+                        null,
+                        null
+                    )
+                )
+            )
+            .Snapshot;
+        var settlement = await ZLinkStandaloneActorRelocationRuntime.SettleSourceAsync(
+            store,
+            source.Key,
+            source.Steady,
+            source.RelocationId,
+            source.Target,
+            TimeSpan.MaxValue,
+            static () => true,
+            static _ => throw new InvalidOperationException("The target is already committed."),
+            TimeSpan.Zero,
+            CancellationToken.None,
+            ReadyRoute
+        );
+
+        Assert.Equal(ZLinkSourceSettlement.TargetCommitted, settlement.Outcome);
+        Assert.Equal(steady.StoreVersion, settlement.Snapshot!.StoreVersion);
+        Assert.Equal(source.Target.OwnerId, settlement.Snapshot.OwnerId);
+        Assert.Equal(
+            committed.AuthorityOwnerGeneration,
+            settlement.Snapshot!.AuthorityOwnerGeneration
+        );
+    }
+
+    [Theory]
+    [InlineData(true, 1, false)]
+    [InlineData(false, 0, false)]
+    [InlineData(false, -1, false)]
+    [InlineData(false, 1, true)]
+    public async Task Source_settlement_rejects_an_unrelated_owner_without_the_commit_fence(
+        bool differentObjectGeneration,
+        int ownerGenerationChange,
+        bool sourceOwner
+    )
+    {
+        var inner = new ZLinkInMemoryLocationStore();
+        var source = await PrepareCapturedSourceAsync(inner);
+        var unrelated = source.Steady with
+        {
+            ObjectGeneration =
+                source.Steady.ObjectGeneration + (differentObjectGeneration ? 1UL : 0UL),
+            AuthorityOwnerGeneration = checked(
+                (ulong)((long)source.Steady.AuthorityOwnerGeneration + ownerGenerationChange)
+            ),
+            OwnerId = sourceOwner ? source.Steady.OwnerId : "unrelated-owner",
+        };
+        var store = new SettlementSnapshotStore(unrelated);
+
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+            await ZLinkStandaloneActorRelocationRuntime.SettleSourceAsync(
+                store,
+                source.Key,
+                source.Steady,
+                source.RelocationId,
+                source.Target,
+                TimeSpan.MaxValue,
+                static () => true,
+                static _ =>
+                    throw new InvalidOperationException(
+                        "An unrelated authority must settle before submission."
+                    ),
+                TimeSpan.Zero,
+                CancellationToken.None,
+                ReadyRoute
+            )
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.DataLost, error.Kind);
+    }
+
+    private sealed class SettlementSnapshotStore(ZLinkAuthoritySnapshot snapshot)
+        : ZLinkLocationStoreTestDouble
+    {
+        public override ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
+            ZLinkAuthorityKey key,
+            CancellationToken cancellationToken = default
+        ) =>
+            ValueTask.FromResult<ZLinkAuthorityReadResult>(
+                new ZLinkAuthorityReadResult.Found(snapshot)
+            );
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Source_settlement_preserves_when_deadline_cancels_an_authority_read(
+        bool cancelInsideRead
+    )
+    {
+        var inner = new ZLinkInMemoryLocationStore();
+        var source = await PrepareCapturedSourceAsync(inner);
+        var store = new SettlementReadBarrierStore(inner);
+        using var deadline = new CancellationTokenSource();
+        if (cancelInsideRead)
+            store.Arm();
+        else
+            deadline.Cancel();
+        var settlement = ZLinkStandaloneActorRelocationRuntime
+            .SettleSourceAsync(
+                store,
+                source.Key,
+                source.Steady,
+                source.RelocationId,
+                source.Target,
+                TimeSpan.MaxValue,
+                static () => true,
+                static _ => ValueTask.CompletedTask,
+                TimeSpan.Zero,
+                deadline.Token,
+                ReadyRoute
+            )
+            .AsTask();
+        try
+        {
+            if (cancelInsideRead)
+                await store.ReadStarted.Task.WaitAsync(ReadBarrierTimeout);
+        }
+        finally
+        {
+            deadline.Cancel();
+            store.ReleaseRead.TrySetResult();
+        }
+
+        Assert.Equal(ZLinkSourceSettlement.SourcePreserved, (await settlement).Outcome);
+    }
+
+    private sealed class SettlementReadBarrierStore(IZLinkLocationRepository inner)
+        : ZLinkLocationStoreTestDouble
+    {
+        private bool _armed;
+        internal TaskCompletionSource ReadStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReleaseRead { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal void Arm() => _armed = true;
+
+        public override async ValueTask<ZLinkAuthorityReadResult> ReadAuthorityAsync(
+            ZLinkAuthorityKey key,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (_armed)
+            {
+                _armed = false;
+                ReadStarted.TrySetResult();
+                await ReleaseRead.Task;
+            }
+            return await inner.ReadAuthorityAsync(key, cancellationToken);
+        }
+
+        public override ValueTask<ZLinkAuthorityCompareExchangeResult> CompareExchangeAuthorityAsync(
+            ZLinkAuthorityKey key,
+            string expectedStoreVersion,
+            ZLinkAuthorityMutation mutation,
+            CancellationToken cancellationToken = default
+        ) =>
+            inner.CompareExchangeAuthorityAsync(
+                key,
+                expectedStoreVersion,
+                mutation,
+                cancellationToken
+            );
     }
 
     [Theory]
@@ -830,10 +1165,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
                 store,
                 source.Key,
                 source.Steady,
-                new ZLinkRelocationStored(string.Empty, 0, default, default),
                 source.RelocationId,
                 source.Target,
-                source.Prepare.TargetAttemptGeneration,
                 Stopwatch.GetElapsedTime(0),
                 static () => true,
                 static _ => ValueTask.CompletedTask,
@@ -1009,7 +1342,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             target,
             envelope,
             ZLinkRelocationTransferPayload.Create(envelope, 1024),
-            applicationVersion: 1
+            applicationVersion: 1,
+            DateTimeOffset.UtcNow.AddMinutes(1)
         );
         return new CapturedSource(
             key,
@@ -1107,7 +1441,8 @@ public sealed class StandaloneActorRelocationPrecommitTests
             target,
             envelope,
             ZLinkRelocationTransferPayload.Create(envelope, 1024),
-            applicationVersion: 1
+            applicationVersion: 1,
+            DateTimeOffset.UtcNow.AddMinutes(1)
         );
         return new ForeignCutover(
             actorId,

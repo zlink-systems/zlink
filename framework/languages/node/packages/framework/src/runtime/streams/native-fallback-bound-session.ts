@@ -1,3 +1,4 @@
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import {
   createInternalFrameworkException,
   ZLinkFrameworkInternalErrorKind
@@ -11,26 +12,13 @@ import {
   type ZLinkSubmitResult
 } from '../messaging/submission-result';
 import {
-  ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-  ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET,
   ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET,
   type ZLinkActorRoutedJoinTransport,
   type ZLinkRemoteActorPacketTarget,
   type ZLinkRemoteBoundSessionTarget
 } from '../actors';
-import {
-  encodeRemoteActorPacketRelayPayload,
-  encodeRemoteActorPacketTarget
-} from '../actors/actor-packet-relay-wire';
+import { encodeRemoteActorPacketTarget } from '../actors/actor-packet-relay-wire';
 import { encodeRemoteBoundSessionSendPayload } from '../actors/bound-session-wire';
-import { tryRequestRoutedJson } from '../actors/actor-routed-json-request';
-import {
-  ZLinkStreamCodec,
-  ZLinkStreamHeaderFlags,
-  ZLinkStreamMessageKind,
-  encodeStreamHeader,
-  type ZLinkStreamFrameHeader
-} from './protocol';
 import type { ZLinkNativeFallbackBoundSessionPort } from './stream-binding-runtime-ports';
 import type { ZLinkBackendActorSessionNode } from '../backend';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
@@ -59,37 +47,6 @@ export class ZLinkNativeFallbackBoundSession implements ZLinkBoundSession {
   }
 
   async disconnect(signal?: AbortSignal): Promise<void> {
-    const remoteTarget = this.options.remoteBoundSessionTargetProvider();
-    if (remoteTarget !== undefined) {
-      const spotKind: ZLinkSpotKind | undefined =
-        'spotKind' in remoteTarget
-          ? (remoteTarget.spotKind as ZLinkSpotKind | undefined)
-          : undefined;
-      const payload = encodeRemoteActorPacketRelayPayload({
-        actorId: this.options.actorId,
-        routerChannelId: remoteTarget.routerChannelId,
-        header: encodeStreamHeader(disconnectedFrameHeader()),
-        payload: Buffer.alloc(0)
-      });
-      const target = {
-        routerChannelId: remoteTarget.routerChannelId,
-        targetNodeRid: remoteTarget.targetNodeRid,
-        spotId: remoteTarget.spotId,
-        spotKind: spotKind ?? ZLinkSpotKind.Entry
-      };
-      if (
-        await tryRequestRoutedJson(this.options.routedTransport, target, payload, {
-          timeoutMs: this.options.requestTimeoutMs,
-          signal
-        })
-      ) {
-        return;
-      }
-      await this.options.routedTransport.sendToSpot(target, payload, {
-        packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
-      });
-      return;
-    }
     const actorRef = this.options.actorRefProvider();
     const node = this.options.nativeActorNodeProvider();
     if (
@@ -97,7 +54,12 @@ export class ZLinkNativeFallbackBoundSession implements ZLinkBoundSession {
       node !== undefined &&
       currentBindingGeneration(actorRef) !== undefined
     ) {
-      await this.options.runtime.disconnectNativeBoundSession(node, actorRef, signal);
+      await this.options.runtime.disconnectNativeBoundSession(
+        node,
+        actorRef,
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        signal
+      );
       return;
     }
     await this.options.runtime.disconnectBoundSession(this.options.actorId, signal);
@@ -154,42 +116,16 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
   private async executeScoped(packetName: string): Promise<ZLinkSubmitResult> {
     const localActor = this.options.localActorProvider?.() === true;
     const remoteTarget = this.options.remoteBoundSessionTargetProvider();
-    let nativeAttempted = false;
-    if (localActor) {
-      const result = await this.options.runtime.submitLocalBoundSession(
+    if (localActor || remoteTarget === undefined) {
+      const localResult = await this.options.runtime.submitLocalBoundSession(
         this.options.actorId,
         this.message,
         packetName,
         this.selectedMetadata
       );
-      if (result.status !== ZLinkSubmitStatus.TargetNotFound) {
-        this.traceSubmitted(result, packetName);
-        return result;
-      }
-
-      // A local Actor with a concrete native owner has a direct binding path.
-      // Use that path before a routed transfer target. The transfer target is
-      // retained for actors whose current owner is remote or whose native
-      // binding is no longer available.
-      const actorRef = this.options.actorRefProvider();
-      const node = this.options.nativeActorNodeProvider();
-      const bindingGeneration = currentBindingGeneration(actorRef);
-      if (actorRef !== undefined && node !== undefined && bindingGeneration !== undefined) {
-        nativeAttempted = true;
-        const result = await this.options.runtime.sendNativeBoundSession(
-          node,
-          actorRef,
-          this.message,
-          packetName,
-          this.selectedMetadata
-        );
-        if (result.status !== ZLinkSubmitStatus.TargetNotFound) {
-          this.traceSubmitted(result, packetName);
-          return result;
-        }
-        if (remoteTarget === undefined) {
-          return result;
-        }
+      if (localResult.status !== ZLinkSubmitStatus.TargetNotFound) {
+        this.traceSubmitted(localResult, packetName);
+        return localResult;
       }
     }
     if (remoteTarget !== undefined) {
@@ -238,25 +174,10 @@ class ZLinkNativeFallbackBoundSessionSendCall implements ZLinkBoundSessionSendCa
       this.traceSubmitted(result, packetName);
       return result;
     }
-    const localResult = await this.options.runtime.submitLocalBoundSession(
-      this.options.actorId,
-      this.message,
-      packetName,
-      this.selectedMetadata
-    );
-    if (localResult.status !== ZLinkSubmitStatus.TargetNotFound) {
-      this.traceSubmitted(localResult, packetName);
-      return localResult;
-    }
     const actorRef = this.options.actorRefProvider();
     const node = this.options.nativeActorNodeProvider();
     const bindingGeneration = currentBindingGeneration(actorRef);
-    if (
-      !nativeAttempted &&
-      actorRef !== undefined &&
-      node !== undefined &&
-      bindingGeneration !== undefined
-    ) {
+    if (actorRef !== undefined && node !== undefined && bindingGeneration !== undefined) {
       const result = await this.options.runtime.sendNativeBoundSession(
         node,
         actorRef,
@@ -299,14 +220,4 @@ function currentBindingGeneration(actorRef: ActorRef | undefined): bigint | unde
 
 function positiveBindingGeneration(generation: bigint | undefined): bigint | undefined {
   return generation !== undefined && generation > 0n ? generation : undefined;
-}
-
-function disconnectedFrameHeader(): ZLinkStreamFrameHeader {
-  return {
-    kind: ZLinkStreamMessageKind.Send,
-    codec: ZLinkStreamCodec.Raw,
-    flags: ZLinkStreamHeaderFlags.None,
-    name: ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET,
-    metadata: new Map()
-  };
 }

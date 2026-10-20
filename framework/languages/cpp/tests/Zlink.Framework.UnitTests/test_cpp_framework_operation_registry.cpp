@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
+#include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/operations/exactly_once_table.hpp"
 
@@ -7,7 +8,10 @@
 
 #include <cassert>
 #include <atomic>
+#include <array>
+#include <vector>
 #include <barrier>
+#include <latch>
 #include <chrono>
 #include <fstream>
 #include <stdexcept>
@@ -37,6 +41,17 @@ foundation::call_id_t id (std::uint8_t value)
     return foundation::call_id_t{0, value};
 }
 
+foundation::operation_registry_t::clock_t::time_point injected_now{};
+foundation::operation_registry_t::clock_t::duration injected_step{};
+
+// Each read advances the injected clock by the configured step.
+foundation::operation_registry_t::clock_t::time_point read_injected_clock ()
+{
+    const auto now = injected_now;
+    injected_now += injected_step;
+    return now;
+}
+
 template <typename Predicate> bool wait_until (Predicate predicate)
 {
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
@@ -48,8 +63,148 @@ template <typename Predicate> bool wait_until (Predicate predicate)
     return true;
 }
 
+void verify_independent_completion_turns (std::size_t producer_count)
+{
+    constexpr std::size_t count = 256;
+    constexpr std::uint64_t operation_group = 21;
+    foundation::operation_registry_t registry;
+    std::array<std::atomic_size_t, count> delivered{};
+    std::atomic_size_t completed{0};
+    std::latch consumer_entered (1), consume (1);
+    for (std::size_t index = 0; index < count; ++index) {
+        assert (registry.register_operation (
+          foundation::call_id_t{operation_group, index + 1},
+          foundation::operation_registry_t::clock_t::time_point::max (),
+          [&, index] (foundation::operation_terminal_t terminal, auto) {
+              assert (terminal == foundation::operation_terminal_t::completed);
+              if (index == 0) {
+                  consumer_entered.count_down ();
+                  consume.wait ();
+              }
+              delivered[index].fetch_add (1, std::memory_order_release);
+              completed.fetch_add (1, std::memory_order_release);
+          }));
+    }
+    assert (registry.complete (foundation::call_id_t{operation_group, 1}, {}));
+    consumer_entered.wait ();
+    std::barrier begin (static_cast<std::ptrdiff_t> (producer_count + 1));
+    std::vector<std::thread> producers;
+    for (std::size_t producer = 0; producer < producer_count; ++producer) {
+        producers.emplace_back ([&, producer] {
+            begin.arrive_and_wait ();
+            for (std::size_t index = producer + 1; index < count; index += producer_count)
+                assert (registry.complete (foundation::call_id_t{operation_group, index + 1}, {}));
+        });
+    }
+    begin.arrive_and_wait ();
+    for (auto &producer : producers)
+        producer.join ();
+    // Messaging hot path §4.4: unrelated callbacks progress independently of
+    // the first callback's return. Submit and completion §11 requires new turns,
+    // not registry-wide FIFO or per-producer callback order.
+    const bool independent =
+      wait_until ([&] { return completed.load (std::memory_order_acquire) == count - 1; });
+    assert (delivered.front ().load (std::memory_order_acquire) == 0);
+    for (std::size_t index = 0; index < count; ++index)
+        assert (!registry.complete (foundation::call_id_t{operation_group, index + 1}, {}));
+    // Release and drain before asserting so a serial-drain probe can finish.
+    consume.count_down ();
+    assert (registry.shutdown () == 0);
+    assert (independent);
+    // Submit and completion §10: atomic terminal take delivers exactly once.
+    assert (completed.load (std::memory_order_acquire) == count);
+    for (const auto &calls : delivered)
+        assert (calls.load (std::memory_order_acquire) == 1);
+}
+
+void verify_shutdown_during_completion_publication ()
+{
+    foundation::operation_registry_t registry;
+    const auto deadline = foundation::operation_registry_t::clock_t::time_point::max ();
+    std::latch publication_entered (1), publish (1), finish_callback (1);
+    std::atomic_bool closed{false}, callback_entered{false}, shutdown_returned{false};
+    std::atomic_size_t delivered{0};
+    assert (registry.register_operation (
+      id (1), deadline, [&] (foundation::operation_terminal_t terminal, auto) {
+          assert (terminal == foundation::operation_terminal_t::completed);
+          callback_entered.store (true, std::memory_order_release);
+          finish_callback.wait ();
+          delivered.fetch_add (1, std::memory_order_release);
+      }));
+    assert (registry.register_operation (
+      id (2), deadline, [&] (foundation::operation_terminal_t terminal, auto) {
+          assert (terminal == foundation::operation_terminal_t::shutdown);
+          closed.store (true, std::memory_order_release);
+      }));
+    std::thread producer ([&] {
+        assert (registry.complete (id (1), {}, [&] {
+            publication_entered.count_down ();
+            publish.wait ();
+        }));
+    });
+    publication_entered.wait ();
+    std::thread shutdown ([&] {
+        assert (registry.shutdown () == 1);
+        assert (delivered.load (std::memory_order_acquire) == 1);
+        shutdown_returned.store (true, std::memory_order_release);
+    });
+    // Submit and completion §10–11: the reservation survives atomic take and
+    // publication after close; shutdown drains it through callback destruction.
+    assert (wait_until ([&] { return closed.load (std::memory_order_acquire); }));
+    assert (!shutdown_returned.load (std::memory_order_acquire));
+    publish.count_down ();
+    producer.join ();
+    assert (wait_until ([&] { return callback_entered.load (std::memory_order_acquire); }));
+    assert (!shutdown_returned.load (std::memory_order_acquire));
+    finish_callback.count_down ();
+    const bool drained =
+      wait_until ([&] { return shutdown_returned.load (std::memory_order_acquire); });
+    assert (drained);
+    shutdown.join ();
+    assert (delivered.load (std::memory_order_acquire) == 1);
+    assert (registry.shutdown () == 0);
+}
+
+void verify_completion_payload_storage ()
+{
+    // Payload ownership and codec §2: move the native payload into its completion turn;
+    // a heap-backed message (as in the raw route port contract) retains storage.
+    constexpr std::size_t payload_size = 4096;
+    constexpr std::uint8_t payload_value = 0x5a;
+    for (const auto terminal : {foundation::operation_terminal_t::completed,
+                                foundation::operation_terminal_t::transport_failed}) {
+        foundation::operation_registry_t registry;
+        auto payload =
+          zlink::message_t::from (std::vector<std::uint8_t> (payload_size, payload_value));
+        const void *storage = payload.data ();
+        std::atomic_size_t delivered{0};
+        assert (registry.register_operation (
+          id (1), foundation::operation_registry_t::clock_t::time_point::max (),
+          [&, storage] (foundation::operation_terminal_t observed, zlink::message_t received) {
+              assert (observed == terminal);
+              assert (received.data () == storage);
+              assert (received.size () == payload_size);
+              const auto *bytes = received.data ();
+              for (std::size_t index = 0; index < payload_size; ++index)
+                  assert (bytes[index] == std::byte{payload_value});
+              delivered.fetch_add (1, std::memory_order_release);
+          }));
+        if (terminal == foundation::operation_terminal_t::completed)
+            assert (registry.complete (id (1), std::move (payload)));
+        else
+            assert (registry.fail (id (1), terminal, std::move (payload)));
+        payload.close ();
+        assert (registry.shutdown () == 0);
+        assert (delivered.load (std::memory_order_acquire) == 1);
+    }
+}
+
 int main ()
 {
+    verify_independent_completion_turns (1);
+    verify_independent_completion_turns (4);
+    verify_shutdown_during_completion_publication ();
+    verify_completion_payload_storage ();
     const auto &fixture = completion_terminal_fixture ();
     assert (fixture.at ("fixture") == "zlink.framework.completion-terminal");
     assert (fixture.at ("version") == 1);
@@ -83,6 +238,113 @@ int main ()
 
     foundation::operation_registry_t registry;
     const auto now = foundation::operation_registry_t::clock_t::now ();
+    {
+        foundation::operation_registry_t ordered;
+        std::array<bool, 128> active{};
+        active.fill (true);
+        for (std::size_t index = 0; index < active.size (); ++index)
+            assert (ordered.register_operation (id (static_cast<std::uint8_t> (index + 1)),
+                                                now + std::chrono::microseconds (index ^ 63),
+                                                [] (auto, auto) {}));
+        const auto first_tick = *ordered.next_deadline ();
+        assert (first_tick >= now && first_tick <= now + std::chrono::milliseconds (1));
+        // Hot-path E3: next_deadline is the bitmap-selected occupied 1ms wheel tick.
+        for (std::size_t step = 0; step < active.size (); ++step) {
+            std::optional<foundation::operation_registry_t::clock_t::time_point> expected;
+            for (std::size_t index = 0; index < active.size (); ++index) {
+                const auto deadline = now + std::chrono::microseconds (index ^ 63);
+                if (active[index] && (!expected || deadline < *expected))
+                    expected = deadline;
+            }
+            if (expected)
+                expected = first_tick
+                           + std::chrono::ceil<std::chrono::milliseconds> (*expected - first_tick);
+            assert (ordered.next_deadline () == expected);
+            const auto removed = step * 37 % active.size ();
+            assert (ordered.unregister (id (static_cast<std::uint8_t> (removed + 1))));
+            active[removed] = false;
+        }
+        assert (!ordered.next_deadline ());
+    }
+    {
+        foundation::operation_registry_t wheel;
+        const auto deadline =
+          foundation::operation_registry_t::clock_t::now () + std::chrono::milliseconds (513);
+        assert (wheel.register_operation (id (1), deadline, [] (auto, auto) {}));
+        const auto first_tick = *wheel.next_deadline ();
+        // Hot-path E3: remaining rounds prevent early expiry; the deadline rounds up by at most 1ms.
+        assert (wheel.expire (first_tick) == 0);
+        assert (*wheel.next_deadline () == first_tick + std::chrono::milliseconds (256));
+        assert (wheel.expire (first_tick + std::chrono::milliseconds (256)) == 0);
+        const auto expiry_tick = first_tick + std::chrono::milliseconds (512);
+        assert (expiry_tick >= deadline && expiry_tick <= deadline + std::chrono::milliseconds (1));
+        assert (wheel.expire (deadline - std::chrono::nanoseconds (1)) == 0);
+        assert (wheel.expire (expiry_tick) == 1);
+        assert (!wheel.next_deadline ());
+    }
+    {
+        injected_now = {};
+        injected_step = {};
+        foundation::operation_registry_t yielding (&read_injected_clock);
+        const auto origin = injected_now;
+        for (std::size_t index = 0; index < 8; ++index)
+            assert (yielding.register_operation (foundation::call_id_t{3, index + 1},
+                                                 origin + std::chrono::milliseconds (257),
+                                                 [] (auto, auto) {}));
+        assert (yielding.register_operation (
+          foundation::call_id_t{3, 9}, origin + std::chrono::milliseconds (1),
+          [] (auto terminal, auto) {
+              assert (terminal == foundation::operation_terminal_t::timed_out);
+          }));
+        // §4.2: every slot visit, a rounds-only one included, reads the management budget
+        // counted from entry; four reads exhaust it.
+        injected_step =
+          std::chrono::duration_cast<foundation::operation_registry_t::clock_t::duration> (
+            runtime::dispatch_limits::receive_batch_time)
+          / 4;
+        const auto tick = origin + std::chrono::milliseconds (1);
+        assert (yielding.expire (tick) == 0);
+        assert (yielding.contains (foundation::call_id_t{3, 9}));
+        std::size_t turns = 1;
+        while (yielding.expire (tick) == 0)
+            assert (++turns < 9);
+        assert (!yielding.contains (foundation::call_id_t{3, 9}));
+        assert (yielding.size () == 8);
+        injected_step = {};
+        assert (yielding.expire (origin + std::chrono::milliseconds (257)) == 8);
+        assert (yielding.size () == 0);
+    }
+    {
+        injected_now = {};
+        injected_step = {};
+        foundation::operation_registry_t budgeted (&read_injected_clock);
+        constexpr std::size_t pending_count = 10;
+        const auto deadline = injected_now + std::chrono::milliseconds (1);
+        for (std::size_t index = 0; index < pending_count; ++index)
+            assert (budgeted.register_operation (
+              foundation::call_id_t{1, index + 1}, deadline, [] (auto terminal, auto) {
+                  assert (terminal == foundation::operation_terminal_t::timed_out);
+              }));
+        const auto tick = *budgeted.next_deadline ();
+        // Hot-path E3 / §4.2: four budget reads on the injected clock end the turn after three
+        // expiries; the rest of the slot resumes on the next turn.
+        injected_step =
+          std::chrono::duration_cast<foundation::operation_registry_t::clock_t::duration> (
+            runtime::dispatch_limits::receive_batch_time)
+          / 4;
+        auto expired = budgeted.expire (tick);
+        assert (expired == 3);
+        assert (budgeted.unregister (foundation::call_id_t{1, expired + 1}));
+        assert (
+          budgeted.register_operation (foundation::call_id_t{2, 1}, deadline, [] (auto, auto) {}));
+        while (budgeted.size () != 0) {
+            const auto resumed = budgeted.expire (tick);
+            assert (resumed > 0);
+            expired += resumed;
+        }
+        assert (expired == pending_count);
+        assert (!budgeted.next_deadline ());
+    }
     bool zero_rejected = false;
     try {
         (void) registry.register_operation (foundation::call_id_t{}, now, [] (auto, auto) {});
@@ -95,21 +357,23 @@ int main ()
     std::atomic_int second_terminal{0};
     assert (registry.register_operation (
       id (1), now + std::chrono::seconds (1),
-      [&] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t> payload) {
+      [&] (foundation::operation_terminal_t terminal, zlink::message_t native_payload) {
+          auto payload = native_payload.to_bytes ();
           assert (terminal == foundation::operation_terminal_t::completed);
           assert (payload == std::vector<std::uint8_t> ({7}));
           first_terminal.fetch_add (1, std::memory_order_release);
       }));
     assert (registry.register_operation (
-      id (2), now, [&] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t>) {
+      id (2), now, [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
           assert (terminal == foundation::operation_terminal_t::timed_out);
           second_terminal.fetch_add (1, std::memory_order_release);
       }));
     assert (registry.register_operation (id (3), now, [] (auto, auto) {}));
     assert (registry.unregister (id (3)));
-    assert (registry.complete (id (1), {7}));
-    assert (!registry.complete (id (1), {8}));
-    assert (registry.expire (now) == 1);
+    assert (registry.complete (id (1), zlink::message_t::from (std::vector<std::uint8_t>{7})));
+    assert (!registry.complete (id (1), zlink::message_t::from (std::vector<std::uint8_t>{8})));
+    // Hot-path E3: the first occupied wheel tick is no later than deadline+1ms.
+    assert (registry.expire (now + std::chrono::milliseconds (1)) == 1);
     assert (wait_until ([&] {
         return first_terminal.load (std::memory_order_acquire) == 1
                && second_terminal.load (std::memory_order_acquire) == 1;
@@ -123,13 +387,14 @@ int main ()
     std::vector<std::uint8_t> failure_payload;
     assert (failed_registry.register_operation (
       id (4), now + std::chrono::seconds (1),
-      [&] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t> payload) {
+      [&] (foundation::operation_terminal_t terminal, zlink::message_t native_payload) {
+          auto payload = native_payload.to_bytes ();
           assert (terminal == foundation::operation_terminal_t::transport_failed);
           failure_payload = std::move (payload);
           failed_terminals.fetch_add (1, std::memory_order_release);
       }));
-    assert (
-      failed_registry.fail (id (4), foundation::operation_terminal_t::transport_failed, {1, 2, 3}));
+    assert (failed_registry.fail (id (4), foundation::operation_terminal_t::transport_failed,
+                                  zlink::message_t::from (std::vector<std::uint8_t>{1, 2, 3})));
     assert (wait_until ([&] { return failed_terminals.load (std::memory_order_acquire) == 1; }));
     assert (failure_payload == std::vector<std::uint8_t> ({1, 2, 3}));
     assert (!failed_registry.fail (id (4), foundation::operation_terminal_t::transport_failed));
@@ -160,13 +425,13 @@ int main ()
     {
         foundation::operation_registry_t scoped_registry;
         assert (scoped_registry.register_operation (
-          id (5), now, [&] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t>) {
+          id (5), now, [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
               assert (terminal == foundation::operation_terminal_t::shutdown);
               shutdown_terminals.fetch_add (1, std::memory_order_release);
               throw std::runtime_error ("consumer failure");
           }));
         assert (scoped_registry.register_operation (
-          id (6), now, [&] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t>) {
+          id (6), now, [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
               assert (terminal == foundation::operation_terminal_t::shutdown);
               shutdown_terminals.fetch_add (1, std::memory_order_release);
           }));
@@ -178,18 +443,19 @@ int main ()
     foundation::operation_registry_t race_registry;
     assert (race_registry.register_operation (
       foundation::call_id_t{9, 1}, now,
-      [&] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t>) {
+      [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
           winning_terminal.store (static_cast<int> (terminal), std::memory_order_release);
           race_terminals.fetch_add (1, std::memory_order_acq_rel);
       }));
     std::barrier race_start (3);
     std::thread reply ([&] {
         race_start.arrive_and_wait ();
-        (void) race_registry.complete (foundation::call_id_t{9, 1}, {1});
+        (void) race_registry.complete (foundation::call_id_t{9, 1},
+                                       zlink::message_t::from (std::vector<std::uint8_t>{1}));
     });
     std::thread timeout ([&] {
         race_start.arrive_and_wait ();
-        (void) race_registry.expire (now);
+        (void) race_registry.expire (now + std::chrono::milliseconds (1));
     });
     race_start.arrive_and_wait ();
     reply.join ();
@@ -206,7 +472,7 @@ int main ()
     foundation::operation_registry_t cancel_close_registry;
     assert (cancel_close_registry.register_operation (
       foundation::call_id_t{9, 2}, now,
-      [&] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t>) {
+      [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
           assert (terminal == foundation::operation_terminal_t::cancelled
                   || terminal == foundation::operation_terminal_t::shutdown);
           cancel_close_terminals.fetch_add (1, std::memory_order_acq_rel);
@@ -229,20 +495,19 @@ int main ()
 
     foundation::operation_registry_t reentrant_registry;
     std::atomic_bool reentered{false};
-    std::atomic_bool outer_callback_active{false};
+    static thread_local bool outer_callback_active = false;
     assert (reentrant_registry.register_operation (
-      foundation::call_id_t{9, 3}, now,
-      [&] (foundation::operation_terminal_t, std::vector<std::uint8_t>) {
-          outer_callback_active.store (true, std::memory_order_release);
+      foundation::call_id_t{9, 3}, now, [&] (foundation::operation_terminal_t, zlink::message_t) {
+          outer_callback_active = true;
           assert (reentrant_registry.register_operation (
             foundation::call_id_t{9, 4}, now,
-            [&] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t>) {
+            [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
                 assert (terminal == foundation::operation_terminal_t::cancelled);
-                assert (!outer_callback_active.load (std::memory_order_acquire));
+                assert (!outer_callback_active);
                 reentered.store (true, std::memory_order_release);
             }));
           assert (reentrant_registry.cancel (foundation::call_id_t{9, 4}));
-          outer_callback_active.store (false, std::memory_order_release);
+          outer_callback_active = false;
       }));
     assert (reentrant_registry.complete (foundation::call_id_t{9, 3}, {}));
     assert (wait_until ([&] { return reentered.load (std::memory_order_acquire); }));
@@ -253,7 +518,7 @@ int main ()
     std::atomic_bool used_new_turn{false};
     assert (turn_registry.register_operation (
       foundation::call_id_t{10, 1}, now,
-      [&] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t>) {
+      [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
           assert (terminal == foundation::operation_terminal_t::completed);
           used_new_turn.store (std::this_thread::get_id () != caller_thread,
                                std::memory_order_release);
@@ -269,7 +534,7 @@ int main ()
     for (std::size_t index = 1; index <= operation_count; ++index) {
         assert (dispatcher_registry.register_operation (
           foundation::call_id_t{11, index}, now,
-          [&, index] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t>) {
+          [&, index] (foundation::operation_terminal_t terminal, zlink::message_t) {
               assert (terminal
                       == (index == 1 ? foundation::operation_terminal_t::completed
                                      : foundation::operation_terminal_t::shutdown));
@@ -293,7 +558,7 @@ int main ()
     foundation::operation_registry_t backlog_probe_registry;
     assert (backlog_probe_registry.register_operation (
       foundation::call_id_t{12, 1}, now,
-      [&] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t>) {
+      [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
           assert (terminal == foundation::operation_terminal_t::shutdown);
           dispatched.fetch_add (1, std::memory_order_release);
       }));
@@ -312,12 +577,16 @@ int main ()
     for (std::size_t index = 1; index <= operation_count; ++index) {
         assert (expiry_batch_registry.register_operation (
           foundation::call_id_t{13, index}, now,
-          [&] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t>) {
+          [&] (foundation::operation_terminal_t terminal, zlink::message_t) {
               assert (terminal == foundation::operation_terminal_t::timed_out);
               expired_batch_callbacks.fetch_add (1, std::memory_order_release);
           }));
     }
-    assert (expiry_batch_registry.expire (now) == operation_count);
+    // Hot-path E3: a budgeted slot resumes on subsequent management turns.
+    std::size_t expired_count = expiry_batch_registry.expire (now + std::chrono::milliseconds (1));
+    while (expired_count < operation_count)
+        expired_count += expiry_batch_registry.expire (now + std::chrono::milliseconds (1));
+    assert (expired_count == operation_count);
     assert (expiry_batch_registry.size () == 0);
     assert (wait_until (
       [&] { return expired_batch_callbacks.load (std::memory_order_acquire) == operation_count; }));

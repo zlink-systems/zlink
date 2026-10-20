@@ -132,10 +132,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
         activeRouteReceives.add(received);
     }
 
-    final void transferRouteReceived(ZLinkBackendReceived received) {
-        activeRouteReceives.remove(received);
-    }
-
     /**
      * Spec 27 §3: malformed flow information on a SPOT route envelope completes the request as
      * ProtocolError and drops a one-way message.
@@ -158,10 +154,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
         closeRouteReceived(received);
     }
 
-    final boolean hasActiveRouteReceives() {
-        return !activeRouteReceives.isEmpty();
-    }
-
     CompletionStage<Void> dispatchResolvedActorPacket(
             ZLinkActor actor,
             ActorPacketFrames.Header packetHeader,
@@ -169,7 +161,6 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
             CompletableFuture<Void> requestAdmission) {
         return host.dispatchLocalActorPacket(
                 context,
-                spotSurface,
                 actor,
                 packetHeader,
                 read.headerPart(),
@@ -249,8 +240,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                     headerPart.actor().actorId(),
                                     new ZLinkConfigurationException(
                                             "SPOT actor is not registered locally: "
-                                                    + headerPart.actor().actorId()),
-                                    "actor missing error reply failed");
+                                                    + headerPart.actor().actorId()));
                         } else {
                             host.closePendingActorHeader(headerPart, pendingHeader);
                         }
@@ -259,7 +249,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                     ZLinkActor actor = localActor.get();
                     var control =
                             host.dispatchActorControlPacket(
-                                    packetHeader, headerPart, actor, pendingHeader);
+                                    packetHeader, headerPart, bodyPart, actor, pendingHeader);
                     if (control != null) {
                         dispatches.add(control);
                         continue;
@@ -402,9 +392,7 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                                         packet.packetName(),
                                                         received.requestSeq(),
                                                         context.spotId());
-                                                systems.zlink.framework.runtime.internal.dispatch
-                                                        .ZLinkApplicationJobContext
-                                                        .beforeFirstApplicationInstruction();
+                                                startSpotHandler();
                                                 return ZLinkFlowContext.propagate(
                                                         host.runWithOutbound(
                                                                         context.dispatchOutbound(),
@@ -479,36 +467,30 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                                 packetName,
                                                 Optional.empty(),
                                                 context.spotId());
-                                        return startSpotHandler(
-                                                () ->
-                                                        host.runWithOutbound(
-                                                                context.dispatchOutbound(),
-                                                                () -> {
-                                                                    try {
-                                                                        return handlerInvoker
-                                                                                .invokePacket(
-                                                                                        handler,
-                                                                                        spotSurface,
-                                                                                        payloadCopy,
-                                                                                        contentType,
-                                                                                        metadata,
-                                                                                        context
-                                                                                                        .handlerInstances()
-                                                                                                ::instance);
-                                                                    } catch (
-                                                                            RuntimeException
-                                                                                    decodeFailure) {
-                                                                        // invokePacket returns
-                                                                        // handler failures as a
-                                                                        // stage;
-                                                                        // synchronous failure here
-                                                                        // is payload decoding.
-                                                                        host.recordSpotDrop(
-                                                                                context.spotId(),
-                                                                                "decode_error");
-                                                                        throw decodeFailure;
-                                                                    }
-                                                                }));
+                                        startSpotHandler();
+                                        return host.runWithOutbound(
+                                                context.dispatchOutbound(),
+                                                () -> {
+                                                    try {
+                                                        return handlerInvoker.invokePacket(
+                                                                handler,
+                                                                spotSurface,
+                                                                payloadCopy,
+                                                                contentType,
+                                                                metadata,
+                                                                context.handlerInstances()
+                                                                        ::instance);
+                                                    } catch (RuntimeException decodeFailure) {
+                                                        // invokePacket returns
+                                                        // handler failures as a
+                                                        // stage;
+                                                        // synchronous failure here
+                                                        // is payload decoding.
+                                                        host.recordSpotDrop(
+                                                                context.spotId(), "decode_error");
+                                                        throw decodeFailure;
+                                                    }
+                                                });
                                     },
                                     admission);
                         })
@@ -704,7 +686,10 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
             }
             CompletionStage<Void> tail = CompletableFuture.completedFuture(null);
             List<SpotSubscriptionHandlerRegistration> matchingHandlers =
-                    context.handlerCatalog().subscriptionHandlers(received.topic()).stream()
+                    context
+                            .handlerCatalog()
+                            .subscriptionHandlers(received.channelName(), received.topic())
+                            .stream()
                             .filter(handler -> handler.packetName().equals(packet.packetName()))
                             .toList();
             if (!matchingHandlers.isEmpty()) {
@@ -725,31 +710,29 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
                                     appendSpotHandler(
                                             prior,
                                             packet.payload().size(),
-                                            () ->
-                                                    startSpotHandler(
-                                                            () ->
-                                                                    host.runWithOutbound(
-                                                                            context
-                                                                                    .dispatchOutbound(),
-                                                                            () ->
-                                                                                    handlerInvoker
-                                                                                            .invokeSubscriptionDecoded(
-                                                                                                    handler,
-                                                                                                    spotSurface,
-                                                                                                    received
-                                                                                                            .channelName(),
-                                                                                                    received
-                                                                                                            .topic(),
-                                                                                                    received.routingId()
-                                                                                                            .map(
-                                                                                                                    Object
-                                                                                                                            ::toString),
-                                                                                                    decoded,
-                                                                                                    contentType,
-                                                                                                    metadata,
-                                                                                                    context
-                                                                                                                    .handlerInstances()
-                                                                                                            ::instance))));
+                                            () -> {
+                                                startSpotHandler();
+                                                return host.runWithOutbound(
+                                                        context.dispatchOutbound(),
+                                                        () ->
+                                                                handlerInvoker
+                                                                        .invokeSubscriptionDecoded(
+                                                                                handler,
+                                                                                spotSurface,
+                                                                                received
+                                                                                        .channelName(),
+                                                                                received.topic(),
+                                                                                received.routingId()
+                                                                                        .map(
+                                                                                                Object
+                                                                                                        ::toString),
+                                                                                decoded,
+                                                                                contentType,
+                                                                                metadata,
+                                                                                context
+                                                                                                .handlerInstances()
+                                                                                        ::instance));
+                                            });
                     tail =
                             reuseIngressPermit && index == 0
                                     ? job.get()
@@ -813,9 +796,8 @@ abstract class SpotActivationBase<C extends SpotDispatchLine> {
         }
     }
 
-    private CompletionStage<Void> startSpotHandler(Supplier<CompletionStage<Void>> operation) {
+    final void startSpotHandler() {
         systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext
                 .beforeFirstApplicationInstruction();
-        return operation.get();
     }
 }

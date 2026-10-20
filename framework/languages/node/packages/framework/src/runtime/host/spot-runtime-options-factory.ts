@@ -1,3 +1,4 @@
+import { routingIdsEqual } from '../routing-id';
 import type { ZLinkRuntimeEventPublisher } from '../diagnostics';
 import { ZLinkSpotRelocationCoordinationMode, ZLinkUserSpotExecutionMode } from '../../contracts';
 import {
@@ -136,6 +137,15 @@ export class ZLinkSpotRuntimeOptionsFactory {
           );
         }
         await runtime.dispatchEntryActorJoin(meshName, actor, handoffBacklog);
+      },
+      admitEntryActorPacketPrefix: (meshName, actorId, records) => {
+        const runtime = this.options.spotNodeRuntime();
+        if (runtime === undefined) {
+          throw new ZLinkConfigurationException(
+            'Entry Actor replay requires the MeshNode runtime.'
+          );
+        }
+        return runtime.admitEntryActorPacketPrefix(meshName, actorId, records);
       },
       executeEntryActor: (meshName, actorId, operation) => {
         const runtime = this.options.spotNodeRuntime();
@@ -278,8 +288,9 @@ export class ZLinkSpotRuntimeOptionsFactory {
         this.options.spotNodeRuntime()?.meshNode(meshName) as never,
       spotRouteResolver: this.options.createLocationSpotRouteResolver(),
       actorResolver: (actorId) => {
-        const state = this.options.actorManager()?.getState(actorId);
-        return state?.isMoving === true ? undefined : state?.actor;
+        const manager = this.options.actorManager();
+        const state = manager?.getState(actorId);
+        return state?.isMoving === true ? undefined : manager?.resolveLocalActor(actorId);
       },
       canonicalActorJoinResolver: (fence) =>
         this.options.boundSessionRelay.actorJoins.prepareCanonicalActorJoin({
@@ -297,14 +308,14 @@ export class ZLinkSpotRuntimeOptionsFactory {
           state?.nativeActorRef === undefined
             ? undefined
             : toFrameworkActorRef(state.nativeActorRef, state.meshName ?? '');
-        const localNodeRid = this.primaryNodeRoutingId();
+        const localNodeRid =
+          state?.meshName === undefined ? undefined : this.meshNodeRoutingId(state.meshName);
         if (
           state?.actor === undefined ||
-          state.spot === undefined ||
           state.remoteActorPacketTarget !== undefined ||
           actorRef === undefined ||
           localNodeRid === undefined ||
-          String(actorRef.nodeRid) !== localNodeRid
+          !routingIdsEqual(actorRef.nodeRid, localNodeRid)
         ) {
           return {};
         }
@@ -351,11 +362,11 @@ export class ZLinkSpotRuntimeOptionsFactory {
 
   private primaryNodeRoutingId(): string | undefined {
     const node = this.primaryNode();
-    return node === undefined ? undefined : String(node.status().routingId);
+    return node === undefined ? undefined : node.status().routingId;
   }
 
   private meshNodeRoutingId(meshName: string): string | undefined {
     const node = this.options.spotNodeRuntime()?.meshNode(meshName);
-    return node === undefined ? undefined : String(node.status().routingId);
+    return node === undefined ? undefined : node.status().routingId;
   }
 }

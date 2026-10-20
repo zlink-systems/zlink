@@ -1,3 +1,4 @@
+import { currentApplicationJobOrigin } from '../application-jobs/application-job-queue-scope';
 import type {
   ActorRef,
   RoutingId,
@@ -50,7 +51,7 @@ import {
   DefaultZLinkSpotHandlerRegistry
 } from './spot-handler-registry';
 import { DefaultZLinkSpotOutbound, type ZLinkSpotRoutedTransport } from './spot-outbound';
-import { createProviderInstance } from './spot-provider';
+import { createFreshProviderInstance } from './spot-provider';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
 import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
 import { invokeSpotClosing } from './spot-closing';
@@ -72,6 +73,7 @@ import type {
 import { ZLinkSpotLifecycleMetrics } from './spot-lifecycle-metrics';
 
 interface ZLinkEntrySpotActivationOptions {
+  readonly admission?: import('../admission').ZLinkRuntimeAdmissionGate;
   readonly entrySpotType: Type<ZLinkEntrySpot>;
   readonly timerHandlers?: readonly ZLinkEntrySpotTimerHandlerRegistration[];
   readonly packetHandlers?: readonly ZLinkEntrySpotPacketHandlerRegistration[];
@@ -191,6 +193,7 @@ export class ZLinkEntrySpotActivation {
       dispatchErrors: options.dispatchErrors
     });
     this.actorPacketDispatch = new ZLinkSpotActorPacketDispatch({
+      admission: this.options.admission,
       spot: () => this.entrySpot as unknown as ZLinkSpot,
       spotId: () => String(this.options.nativeSpot.routingId),
       registry: this.actorHandlers,
@@ -269,7 +272,7 @@ export class ZLinkEntrySpotActivation {
   }
 
   async create(): Promise<void> {
-    const entrySpot = await createProviderInstance(
+    const entrySpot = await createFreshProviderInstance(
       this.options.entrySpotType,
       this.options.providerResolver,
       this.context
@@ -479,27 +482,31 @@ export class ZLinkEntrySpotActivation {
       remoteBoundSessionTarget,
       fallbackActorRef,
       undefined,
-      messageFollowOrigin,
-      (
-        replayedParts,
-        replayReturnResponse,
-        replayRemoteBoundSessionTarget,
-        replayFallbackActorRef
-      ) =>
-        this.spotSerialExecutor.executeActor(actorId, () =>
-          this.dispatchActorPacketInsideMailbox({
-            origin: delivery.origin,
-            actorId,
-            parts: replayedParts,
-            returnResponse: replayReturnResponse,
-            remoteBoundSessionTarget: replayRemoteBoundSessionTarget,
-            fallbackActorRef: replayFallbackActorRef
-          })
-        )
+      messageFollowOrigin
     );
     if (handoff !== undefined) return await handoff;
     return this.spotSerialExecutor.executeActor(actorId, () =>
       this.dispatchActorPacketInsideMailbox(delivery)
+    );
+  }
+
+  /** Restores source packets through the Entry Actor's existing executor. */
+  admitActorPacketPrefix(
+    actorId: string,
+    records: readonly import('../actors/actor-handoff').ZLinkActorHandoffPrefixRecord[]
+  ): import('../actors/actor-handoff').ZLinkActorHandoffPrefixAdmission {
+    return this.spotSerialExecutor.admitActorPacketPrefix(
+      actorId,
+      records,
+      (_serial, parts, returnResponse, remoteBoundSessionTarget, fallbackActorRef) =>
+        this.dispatchActorPacketInsideMailbox({
+          origin: currentApplicationJobOrigin(),
+          actorId,
+          parts,
+          returnResponse,
+          remoteBoundSessionTarget,
+          fallbackActorRef
+        })
     );
   }
 

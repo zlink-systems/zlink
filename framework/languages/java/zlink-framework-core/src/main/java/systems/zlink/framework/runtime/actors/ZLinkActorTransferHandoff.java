@@ -23,6 +23,7 @@ import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
@@ -45,10 +46,11 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
     private final Map<String, Backlog> backlogs = new HashMap<>();
     private long arrivalIndex;
-    // Exact source-route keyed tenures share this owner with the pre-commit
-    // backlog.  Keeping each tenure by token prevents A->B->A and an older
-    // retirement callback from deleting a later route for the same Actor id.
-    private final Map<Long, MessageFollowSource> messageFollowSources = new HashMap<>();
+    // The authoritative tenure registry is partitioned by Actor id. Only existence is read
+    // outside the lane; each token map and the coupled handoff state remain lane-owned.
+    // Tokens preserve A->B->A tenures and fence older retirement callbacks.
+    private final Map<String, Map<Long, MessageFollowSource>> messageFollowSources =
+            new ConcurrentHashMap<>();
     private final Set<Retention> retirements = new HashSet<>();
     private long messageFollowToken;
     private final ZLinkMessageFollowSuppressionRegistry messageFollowSuppression =
@@ -146,40 +148,6 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                 });
     }
 
-    /**
-     * Removes the transfer hold while retaining the packets for a source-side serial replay.
-     * Packets captured concurrently with this operation either join the returned snapshot or
-     * observe the removed hold and wait for the move completion fence.
-     */
-    List<ZLinkActorHandoffPacket> takeForRestore(
-            String actorId, List<ZLinkActorHandoffPacket> committed) {
-        return inStateLane(
-                () -> {
-                    Backlog backlog = backlogs.get(actorId);
-                    if (backlog == null) {
-                        return committed == null || committed.isEmpty()
-                                ? List.of()
-                                : List.copyOf(committed);
-                    }
-                    List<ZLinkActorHandoffPacket> restored =
-                            new ArrayList<>(
-                                    (committed == null ? 0 : committed.size())
-                                            + backlog.packets.size());
-                    if (committed != null) {
-                        restored.addAll(committed);
-                    }
-                    restored.addAll(backlog.packets);
-                    if (!backlogs.remove(actorId, backlog)) {
-                        throw new IllegalStateException(
-                                "Actor transfer hold changed during source restore: " + actorId);
-                    }
-                    backlog.packets.clear();
-                    backlog.bytes = 0;
-                    restored.sort(Comparator.comparingLong(ZLinkActorHandoffPacket::arrivalIndex));
-                    return List.copyOf(restored);
-                });
-    }
-
     void fail(String actorId, Throwable error) {
         List<ZLinkActorHandoffPacket> packets =
                 inStateLane(
@@ -257,9 +225,9 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                                             ? newestSource(actorId, false)
                                             : exactSource(sourceRoute);
                             if (replaced != null) {
-                                messageFollowSources.remove(replaced.token(), replaced);
+                                removeSource(replaced);
                             }
-                            messageFollowSources.put(source.token(), source);
+                            putSource(source);
                             Retention retained = new Retention(actorId, source, removal);
                             retirements.add(retained);
                             return new RetainState(source, replaced, retained);
@@ -286,8 +254,16 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         }
     }
 
+    boolean hasMessageFollowSource(String actorId) {
+        return messageFollowSources.containsKey(actorId);
+    }
+
     Optional<MessageFollowSource> messageFollowSource(String actorId) {
-        return inStateLane(() -> Optional.ofNullable(newestSource(actorId, true)));
+        return messageFollowSource(actorId, true);
+    }
+
+    Optional<MessageFollowSource> messageFollowSource(String actorId, boolean committedOnly) {
+        return inStateLane(() -> Optional.ofNullable(newestSource(actorId, committedOnly)));
     }
 
     Optional<MessageFollowSource> messageFollowSource(
@@ -301,24 +277,23 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                             .ActorRouteFence
                     rawTargetRoute) {
-        inStateLane(() -> stageRelocationRouteOnLane(sourceRoute, targetRoute, rawTargetRoute));
+        inStateLane(
+                        () ->
+                                stageRelocationRouteOnLane(
+                                        sourceRoute,
+                                        actorRef(targetRoute),
+                                        targetRoute,
+                                        CompletableFuture.completedFuture(rawTargetRoute)))
+                .releasePrevious();
     }
 
-    CompletionStage<Void> stageRelocationRouteAsync(
+    private StageRouteState stageRelocationRouteOnLane(
             ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute,
+            ZLinkBackendActorRef targetActor,
             ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute,
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .ActorRouteFence
-                    rawTargetRoute) {
-        return stateLane.runNowOrQueue(
-                () -> stageRelocationRouteOnLane(sourceRoute, targetRoute, rawTargetRoute));
-    }
-
-    private Void stageRelocationRouteOnLane(
-            ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute,
-            ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute,
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .ActorRouteFence
+            CompletableFuture<
+                            systems.zlink.framework.runtime.internal.service
+                                    .ZLinkServiceM6BWireCodec.ActorRouteFence>
                     rawTargetRoute) {
         requireOpen();
         MessageFollowSource previous = exactSource(sourceRoute);
@@ -327,12 +302,12 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                 throw new IllegalStateException(
                         "committed Message Follow source route cannot be staged again");
             }
-            messageFollowSources.remove(previous.token(), previous);
+            removeSource(previous);
         }
         MessageFollowSource staged =
                 new MessageFollowSource(
                         actorRef(sourceRoute),
-                        actorRef(targetRoute),
+                        targetActor,
                         null,
                         sourceRoute,
                         targetRoute,
@@ -340,8 +315,37 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                         ++messageFollowToken,
                         false,
                         messageFollowSuppression);
-        messageFollowSources.put(staged.token(), staged);
-        return null;
+        putSource(staged);
+        return new StageRouteState(staged, previous);
+    }
+
+    CompletionStage<Void> stageRelocationRouteAsync(
+            ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute,
+            ZLinkBackendActorRef targetActor,
+            CompletionStage<
+                            systems.zlink.framework.runtime.internal.service
+                                    .ZLinkServiceM6BWireCodec.ActorRouteFence>
+                    targetFence) {
+        return stateLane
+                .runNowOrQueue(
+                        () ->
+                                stageRelocationRouteOnLane(
+                                        sourceRoute, targetActor, null, new CompletableFuture<>()))
+                .thenApply(StageRouteState::releasePrevious)
+                .thenAccept(
+                        staged ->
+                                targetFence.whenComplete(
+                                        (target, failure) -> {
+                                            if (failure != null)
+                                                staged.targetReady()
+                                                        .toCompletableFuture()
+                                                        .completeExceptionally(failure);
+                                            else
+                                                staged.refreshTarget(
+                                                        ZLinkActorRuntime.messageFollowRoute(
+                                                                target),
+                                                        target);
+                                        }));
     }
 
     void commitRelocationRoute(
@@ -365,7 +369,18 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute, Duration duration) {
         requireMessageFollowDuration(duration);
         return stateLane
-                .runNowOrQueue(() -> commitRelocationRouteOnLane(sourceRoute, duration))
+                .runNowOrQueue(() -> exactSource(sourceRoute))
+                .thenCompose(
+                        source ->
+                                source == null
+                                        ? CompletableFuture.<Void>failedFuture(
+                                                new IllegalStateException(
+                                                        "Message Follow source is unavailable"))
+                                        : source.targetReady().thenApply(ignored -> (Void) null))
+                .thenCompose(
+                        ignored ->
+                                stateLane.runNowOrQueue(
+                                        () -> commitRelocationRouteOnLane(sourceRoute, duration)))
                 .thenCompose(
                         state -> {
                             if (state == null) {
@@ -404,7 +419,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         }
         source.commit();
         if (duration.isZero()) {
-            messageFollowSources.remove(source.token(), source);
+            removeSource(source);
             source.expireMessageFollowNotices();
             return null;
         }
@@ -464,7 +479,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         if (source == null || source.committed()) {
             return null;
         }
-        messageFollowSources.remove(source.token(), source);
+        removeSource(source);
         return source;
     }
 
@@ -476,7 +491,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                             if (source == null) {
                                 return null;
                             }
-                            messageFollowSources.remove(source.token(), source);
+                            removeSource(source);
                             Retention retained =
                                     retirements.stream()
                                             .filter(
@@ -503,7 +518,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
     }
 
     int messageFollowSourceCount() {
-        return inStateLane(messageFollowSources::size);
+        return inStateLane(() -> messageFollowSources.values().stream().mapToInt(Map::size).sum());
     }
 
     int messageFollowSuppressionCount() {
@@ -539,7 +554,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             long objectGeneration,
             long payloadBytes,
             Supplier<CompletionStage<T>> submission) {
-        boolean current = inStateLane(() -> messageFollowSources.get(source.token()) == source);
+        boolean current = inStateLane(() -> containsSource(source));
         if (!current) {
             return CompletableFuture.failedFuture(
                     new ZLinkFrameworkException(
@@ -587,14 +602,21 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                             retirements.clear();
                             List<Backlog> heldBacklogs = List.copyOf(backlogs.values());
                             backlogs.clear();
+                            List<MessageFollowSource> sources =
+                                    messageFollowSources.values().stream()
+                                            .flatMap(values -> values.values().stream())
+                                            .toList();
                             messageFollowSources.clear();
-                            return new CloseState(retained, heldBacklogs);
+                            return new CloseState(retained, heldBacklogs, sources);
                         });
         if (state == null) {
             return;
         }
         List<Supplier<? extends CompletionStage<Void>>> cleanup = new ArrayList<>();
         cleanup.add(() -> ZLinkHandlerStages.fromRunnable(retirementsExecutor::shutdownNow));
+        for (MessageFollowSource source : state.sources()) {
+            cleanup.add(() -> ZLinkHandlerStages.fromRunnable(source::expireMessageFollowNotices));
+        }
         for (Retention retained : state.retained()) {
             cleanup.add(
                     () ->
@@ -603,10 +625,6 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                                         ScheduledFuture<?> future = retained.future();
                                         if (future != null) future.cancel(false);
                                     }));
-            cleanup.add(
-                    () ->
-                            ZLinkHandlerStages.fromRunnable(
-                                    retained.source()::expireMessageFollowNotices));
             cleanup.add(
                     () ->
                             ZLinkHandlerStages.fromRunnable(
@@ -620,7 +638,8 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                                         () -> {
                                             if (packet.fail(
                                                     new IllegalStateException(
-                                                            "Actor runtime closed during transfer."))) {
+                                                            "Actor runtime closed during"
+                                                                    + " transfer."))) {
                                                 packet.close();
                                             }
                                         }));
@@ -642,8 +661,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                             if (!retirements.remove(retained)) {
                                 return null;
                             }
-                            messageFollowSources.remove(
-                                    retained.source().token(), retained.source());
+                            removeSource(retained.source());
                             return new RetireState(retained.source(), retained.removal());
                         });
         if (state == null) {
@@ -659,19 +677,40 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         }
     }
 
+    private void putSource(MessageFollowSource source) {
+        messageFollowSources
+                .computeIfAbsent(source.sourceActorRef().actorId(), ignored -> new HashMap<>())
+                .put(source.token(), source);
+    }
+
+    private void removeSource(MessageFollowSource source) {
+        String actorId = source.sourceActorRef().actorId();
+        Map<Long, MessageFollowSource> sources = messageFollowSources.get(actorId);
+        if (sources == null) return;
+        sources.remove(source.token(), source);
+        if (sources.isEmpty()) messageFollowSources.remove(actorId, sources);
+    }
+
+    private boolean containsSource(MessageFollowSource source) {
+        Map<Long, MessageFollowSource> sources =
+                messageFollowSources.get(source.sourceActorRef().actorId());
+        return sources != null && sources.get(source.token()) == source;
+    }
+
     private MessageFollowSource exactSource(ZLinkServiceMessageFollowWireCodec.ActorRoute route) {
-        return messageFollowSources.values().stream()
+        Map<Long, MessageFollowSource> sources = messageFollowSources.get(route.actorId());
+        if (sources == null) return null;
+        return sources.values().stream()
                 .filter(source -> route.equals(source.sourceRoute()))
                 .max(Comparator.comparingLong(MessageFollowSource::token))
                 .orElse(null);
     }
 
     private MessageFollowSource newestSource(String actorId, boolean committedOnly) {
-        return messageFollowSources.values().stream()
-                .filter(
-                        source ->
-                                source.sourceActorRef().actorId().equals(actorId)
-                                        && (!committedOnly || source.committed()))
+        Map<Long, MessageFollowSource> sources = messageFollowSources.get(actorId);
+        if (sources == null) return null;
+        return sources.values().stream()
+                .filter(source -> !committedOnly || source.committed())
                 .max(Comparator.comparingLong(MessageFollowSource::token))
                 .orElse(null);
     }
@@ -724,6 +763,13 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
     private record CaptureResult(
             ZLinkActorHandoffPacket captured, ZLinkActorHandoffPacket discarded) {}
 
+    private record StageRouteState(MessageFollowSource source, MessageFollowSource previous) {
+        MessageFollowSource releasePrevious() {
+            if (previous != null) previous.expireMessageFollowNotices();
+            return source;
+        }
+    }
+
     private record RetainState(
             MessageFollowSource source, MessageFollowSource replaced, Retention retained) {}
 
@@ -733,7 +779,8 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
 
     private record RetireState(MessageFollowSource source, Consumer<MessageFollowSource> removal) {}
 
-    private record CloseState(List<Retention> retained, List<Backlog> backlogs) {}
+    private record CloseState(
+            List<Retention> retained, List<Backlog> backlogs, List<MessageFollowSource> sources) {}
 
     static final class MessageFollowSource {
         private final ZLinkBackendActorRef sourceActorRef;
@@ -741,8 +788,9 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         private final SpotTransportAddress targetAddress;
         private final ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute;
         private ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute;
-        private systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                        .ActorRouteFence
+        private CompletableFuture<
+                        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                                .ActorRouteFence>
                 rawTargetRoute;
         private final long token;
         private boolean committed;
@@ -760,8 +808,9 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                 SpotTransportAddress targetAddress,
                 ZLinkServiceMessageFollowWireCodec.ActorRoute sourceRoute,
                 ZLinkServiceMessageFollowWireCodec.ActorRoute targetRoute,
-                systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                                .ActorRouteFence
+                CompletableFuture<
+                                systems.zlink.framework.runtime.internal.service
+                                        .ZLinkServiceM6BWireCodec.ActorRouteFence>
                         rawTargetRoute,
                 long token,
                 boolean committed,
@@ -799,7 +848,7 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
 
         systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec.ActorRouteFence
                 rawTargetRoute() {
-            return inStateLane(() -> rawTargetRoute);
+            return inStateLane(() -> rawTargetRoute == null ? null : rawTargetRoute.getNow(null));
         }
 
         long token() {
@@ -814,10 +863,17 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
             inStateLane(
                     () -> {
                         Objects.requireNonNull(targetRoute, "targetRoute");
-                        Objects.requireNonNull(rawTargetRoute, "rawTargetRoute");
+                        Objects.requireNonNull(rawTargetRoute.getNow(null), "rawTargetRoute");
                         committed = true;
                         return null;
                     });
+        }
+
+        CompletionStage<
+                        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                                .ActorRouteFence>
+                targetReady() {
+            return inStateLane(() -> rawTargetRoute);
         }
 
         void refreshTarget(
@@ -825,12 +881,17 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
                 systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
                                 .ActorRouteFence
                         rawTarget) {
-            inStateLane(
-                    () -> {
-                        targetRoute = Objects.requireNonNull(target, "target");
-                        rawTargetRoute = Objects.requireNonNull(rawTarget, "rawTarget");
-                        return null;
-                    });
+            var pending =
+                    inStateLane(
+                            () -> {
+                                targetRoute = Objects.requireNonNull(target, "target");
+                                var previous = rawTargetRoute;
+                                rawTargetRoute =
+                                        CompletableFuture.completedFuture(
+                                                Objects.requireNonNull(rawTarget, "rawTarget"));
+                                return previous;
+                            });
+            pending.complete(rawTarget);
         }
 
         private <T> T inStateLane(Supplier<T> work) {
@@ -889,6 +950,12 @@ final class ZLinkActorTransferHandoff implements AutoCloseable {
         }
 
         void expireMessageFollowNotices() {
+            var pending = targetReady();
+            if (pending != null && !pending.toCompletableFuture().isDone()) {
+                pending.toCompletableFuture()
+                        .completeExceptionally(
+                                new IllegalStateException("Message Follow tenure expired"));
+            }
             List<ZLinkMessageFollowSuppressionRegistry.Key> keys =
                     inStateLane(
                             () -> {

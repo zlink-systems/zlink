@@ -17,6 +17,257 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class ActorHandoffTests
 {
     [Fact]
+    public async Task A_new_relocation_captures_the_unstarted_prefix_at_its_lifecycle_barrier()
+    {
+        var state = new ZLinkActorRuntimeState("actor-1");
+        Assert.True(
+            state.Handoff.Import(
+                CommitRequest("before-next-move", new[] { HandoffFrame(1, 0), HandoffFrame(2, 1) }),
+                out _
+            )
+        );
+        _ = state.Handoff.PrepareImportedReplay([]);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var order = new List<ulong>();
+        var start = state.Handoff.TargetActivation;
+        var terminal = state.Handoff.AdmitDurablePrefix(
+            "before-next-move",
+            frame =>
+                state.AdmitDurablePrefix(
+                    new[]
+                    {
+                        new ZLinkActorDurableRecord(
+                            async _ =>
+                            {
+                                state.Handoff.ClaimDurableFrame(frame);
+                                order.Add(frame.RequestId);
+                                if (frame.RequestId == 1)
+                                {
+                                    entered.SetResult();
+                                    await finish.Task;
+                                }
+                            },
+                            ct => new ValueTask(start.WaitAsync(ct)),
+                            OnWithdrawable: take => frame.Withdraw = take
+                        ),
+                    }
+                )[0]
+        );
+        state.Handoff.Complete("before-next-move");
+        await entered.Task;
+        var capture = state.BeginHandoffCaptureAsync(default).AsTask();
+        finish.SetResult();
+        Assert.Equal(0, await capture);
+        await terminal;
+        Assert.Equal(new ulong[] { 1 }, order);
+        Assert.Equal(
+            new ulong[] { 2 },
+            state.Handoff.SnapshotFrames().Select(static frame => frame.RequestId)
+        );
+        _ = state.Handoff.AbortCapture();
+    }
+
+    [Fact]
+    public async Task Deferred_join_in_completion_takes_the_whole_unstarted_prefix()
+    {
+        var state = new ZLinkActorRuntimeState("actor-1");
+        state.BindNativeActorRef(ActorRef("node-b", 7));
+        state.BindActorInstance(new TestActor("actor-1"));
+        Assert.True(
+            state.Handoff.Import(
+                CommitRequest(
+                    "previous-completion",
+                    new[] { HandoffFrame(1, 0), HandoffFrame(2, 1) }
+                ),
+                out _
+            )
+        );
+        _ = state.Handoff.PrepareImportedReplay([]);
+        var start = state.Handoff.TargetActivation;
+        var order = new List<string>();
+        var terminal = state.Handoff.AdmitDurablePrefix(
+            "previous-completion",
+            frame =>
+                state.AdmitDurablePrefix(
+                    new[]
+                    {
+                        new ZLinkActorDurableRecord(
+                            _ =>
+                            {
+                                state.Handoff.ClaimDurableFrame(frame);
+                                order.Add("handler");
+                                return ValueTask.CompletedTask;
+                            },
+                            ct => new ValueTask(start.WaitAsync(ct)),
+                            OnWithdrawable: take => frame.Withdraw = take,
+                            Ready: () => state.Handoff.DurablePrefixCanRun
+                        ),
+                    }
+                )[0]
+        );
+        Task? previousMove = null;
+        await state.ExecuteRelocationCompletionAsync(
+            7,
+            _ =>
+            {
+                order.Add("OnJoinCompleted");
+                Assert.Null(state.ReserveDeferredJoinBarrier(out previousMove));
+                return ValueTask.CompletedTask;
+            },
+            default
+        );
+        Assert.NotNull(previousMove);
+        state.Handoff.Complete("previous-completion");
+        await previousMove;
+        var barrier = state.ReserveDeferredJoinBarrierAfterTarget();
+        using (await barrier.ClaimAsync())
+        {
+            order.Add("next-barrier");
+            await state.Handoff.WithdrawDeferredSuffixAsync();
+            state.Handoff.BeginCapture();
+            Assert.Equal(
+                new ulong[] { 1, 2 },
+                state.Handoff.SnapshotFrames().Select(static frame => frame.RequestId)
+            );
+        }
+        await terminal;
+        Assert.Equal(new[] { "OnJoinCompleted", "next-barrier" }, order);
+        _ = state.Handoff.AbortCapture();
+    }
+
+    [Fact]
+    public async Task Discarded_deferred_join_restores_the_same_prefix_and_appends_captured_ingress_once()
+    {
+        var state = new ZLinkActorRuntimeState("actor-1");
+        Assert.True(
+            state.Handoff.Import(
+                CommitRequest("discard-prefix", new[] { HandoffFrame(1, 0), HandoffFrame(2, 1) }),
+                out _
+            )
+        );
+        _ = state.Handoff.PrepareImportedReplay([]);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finish = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var tailFinished = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var order = new List<long>();
+        var start = state.Handoff.TargetActivation;
+        var terminal = state.Handoff.AdmitDurablePrefix(
+            "discard-prefix",
+            frame =>
+                state.AdmitDurablePrefix(
+                    new[]
+                    {
+                        new ZLinkActorDurableRecord(
+                            async _ =>
+                            {
+                                state.Handoff.ClaimDurableFrame(frame);
+                                order.Add(frame.ArrivalIndex);
+                                if (frame.ArrivalIndex == 0)
+                                {
+                                    entered.SetResult();
+                                    await finish.Task;
+                                }
+                                if (frame.ArrivalIndex == 2)
+                                    tailFinished.SetResult();
+                            },
+                            ct => new ValueTask(start.WaitAsync(ct)),
+                            OnWithdrawable: take => frame.Withdraw = take,
+                            Ready: () => state.Handoff.DurablePrefixCanRun
+                        ),
+                    }
+                )[0]
+        );
+        state.Handoff.Complete("discard-prefix");
+        await entered.Task;
+        var barrier = state.ReserveDeferredJoinBarrier(out var previous);
+        Assert.Null(previous);
+        using var body = Message.From("discarded-join-Q");
+        using var q = Frame(body, ActorRef("node-b", 1), "session-Q");
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, state.Handoff.TryCapture(q));
+        Assert.Empty(state.Handoff.EndDeferredJoinCapture());
+        state.ReleaseDeferredJoinBarrier();
+        barrier!.Discard();
+        finish.SetResult();
+        await terminal;
+        await tailFinished.Task;
+        Assert.Equal(new long[] { 0, 1, 2 }, order);
+    }
+
+    [Fact]
+    public async Task Next_deferred_barrier_takes_the_unstarted_prefix_and_later_ingress()
+    {
+        var state = new ZLinkActorRuntimeState("actor-1");
+        var initial = new[] { HandoffFrame(1, 0), HandoffFrame(2, 1) };
+        Assert.True(state.Handoff.Import(CommitRequest("previous-move", initial), out _));
+        _ = state.Handoff.PrepareImportedReplay([]);
+        var firstStarted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var finishFirst = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var nextBarrier = new TaskCompletionSource<ZLinkActorSerialExecutor.BarrierReservation>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var order = new System.Collections.Concurrent.ConcurrentQueue<ulong>();
+        var start = state.Handoff.TargetActivation;
+        var terminal = state.Handoff.AdmitDurablePrefix(
+            "previous-move",
+            frame =>
+                state.AdmitDurablePrefix(
+                    new[]
+                    {
+                        new ZLinkActorDurableRecord(
+                            async _ =>
+                            {
+                                state.Handoff.ClaimDurableFrame(frame);
+                                order.Enqueue(frame.RequestId);
+                                if (frame.RequestId == 1)
+                                {
+                                    firstStarted.SetResult();
+                                    await finishFirst.Task;
+                                    var barrier = state.ReserveDeferredJoinBarrier(
+                                        out var previous
+                                    );
+                                    Assert.Null(previous);
+                                    nextBarrier.SetResult(barrier!);
+                                }
+                            },
+                            ct => new ValueTask(start.WaitAsync(ct)),
+                            OnWithdrawable: take => frame.Withdraw = take
+                        ),
+                    }
+                )[0]
+        );
+        state.Handoff.Complete("previous-move");
+        await firstStarted.Task;
+        using var body = Message.From("later-Q");
+        using var q = Frame(body, ActorRef("node-b", 1), "session-Q");
+        Assert.Equal(ZLinkActorHandoffCaptureResult.Captured, state.Handoff.TryCapture(q));
+        finishFirst.SetResult();
+        var reserved = await nextBarrier.Task;
+        using (await reserved.ClaimAsync())
+        {
+            await state.Handoff.WithdrawDeferredSuffixAsync();
+            state.Handoff.BeginCapture();
+            Assert.Equal(
+                new ulong[] { 2, q.RequestId },
+                state.Handoff.SnapshotFrames().Select(static frame => frame.RequestId)
+            );
+            Assert.Equal(
+                new long[] { 1, 2 },
+                state.Handoff.SnapshotFrames().Select(static frame => frame.ArrivalIndex)
+            );
+            Assert.Equal(new ulong[] { 1 }, order);
+        }
+        await terminal;
+        _ = state.Handoff.AbortCapture();
+    }
+
+    [Fact]
     public void MessageFollowCutover_PublishedRouteIsImmediatelyUsable()
     {
         var state = new ZLinkActorRuntimeState("actor-1", new ManualTimeProvider());
@@ -953,7 +1204,7 @@ public sealed class ActorHandoffTests
     }
 
     [Fact]
-    public void TransferredActivation_ClearsRetiredSourceFollow_ButKeepsImportedTarget()
+    public async Task TransferredActivation_ClearsRetiredSourceFollow_ButKeepsImportedTarget()
     {
         var state = new ZLinkActorRuntimeState("actor-1");
         var previousSource = ActorRef("node-a", 1);
@@ -966,7 +1217,7 @@ public sealed class ActorHandoffTests
         var imported = HandoffFrame(3, arrivalIndex: 0);
         Assert.True(state.Handoff.Import(CommitRequest("handoff-return", [imported]), out _));
 
-        state.PrepareForTransferredActivation();
+        await state.PrepareForTransferredActivationAsync(CancellationToken.None);
 
         Assert.Equal(
             ZLinkActorFrameRoute.Current,
@@ -1062,7 +1313,7 @@ public sealed class ActorHandoffTests
     }
 
     [Fact]
-    public void NewActivationAfterMigration_ReopensTheClosedActorActivation()
+    public async Task NewActivationAfterMigration_ReopensTheClosedActorActivation()
     {
         using var services = new ServiceCollection().BuildServiceProvider();
         var state = new ZLinkActorRuntimeState("actor-1", services: services);
@@ -1076,7 +1327,7 @@ public sealed class ActorHandoffTests
 
         Assert.Throws<InvalidOperationException>(() => state.HandlerInstances);
 
-        state.PrepareForTransferredActivation();
+        await state.PrepareForTransferredActivationAsync(CancellationToken.None);
 
         Assert.False(state.ContextInvalidated);
         Assert.NotNull(state.HandlerInstances);
@@ -1339,7 +1590,7 @@ public sealed class ActorHandoffTests
 
         using var disconnect = Message.From(
             ZLinkActorBoundSessionRelay.EncodeSessionDisconnected(
-                "binding-1",
+                sessionNode,
                 bindingGeneration: 4,
                 sessionOwnerNodeGeneration: 3
             )
@@ -1348,10 +1599,9 @@ public sealed class ActorHandoffTests
         Assert.True(
             ZLinkActorBoundSessionRelay.TryValidateDisconnectedBinding(
                 state,
-                sessionNode,
-                sessionRid,
                 disconnect,
-                out var bindingToken
+                out var bindingToken,
+                out _
             )
         );
         Assert.Equal("binding-1", bindingToken);

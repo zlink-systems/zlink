@@ -288,7 +288,7 @@ maintenance_runtime_t::maintenance_runtime_t (stateful_object_runtime_t &objects
                            std::move (observer),
                            std::move (providers.aggregate_authority))
 {
-    if (!_aggregate_authority || !providers.targets)
+    if (!_aggregate_authority)
         throw std::invalid_argument ("maintenance provider set is incomplete");
 }
 
@@ -487,6 +487,22 @@ task_t<bool> maintenance_runtime_t::send_boundary_records (
     }
 }
 
+task_t<void> maintenance_runtime_t::submit_cutover (
+  const eligible_relocation_unit_t::canonical_wire_context_t &context,
+  const protocol::relocation_cutover_t &cutover)
+{
+    try {
+        (void) co_await context.send_cutover (cutover);
+        co_return;
+    }
+    catch (const framework_exception_t &error) {
+        if (error.kind () != framework_error_kind_t::shutting_down)
+            throw;
+        // Relocation flow §4.4: a cancelled submit does not decide authority.
+        co_return;
+    }
+}
+
 bool maintenance_runtime_t::abort_target_before_cutover (
   const eligible_relocation_unit_t::canonical_wire_context_t &context) noexcept
 {
@@ -533,38 +549,37 @@ void maintenance_runtime_t::retain_message_follow (
      * and boundary copies and keeps only the Message Follow route. S4, the
      * route becoming removable (18 §2.4), is MessageFollowDuration after the
      * cutover submit terminal; route_convergence and the SafeToShutdown
-     * pending-unit token both end there. The coroutine is detached and
-     * captures the shutdown tracking by value, not `this`. */
+     * pending-unit token both end there. */
     state->payload.clear ();
     state->payload.shrink_to_fit ();
     state->records.reset ();
     state->cutover_record.reset ();
     auto tracking = _shutdown_tracking;
-    auto retention =
-      std::make_shared<task_t<void>> ([] (std::shared_ptr<relocation_terminal_state_t> retained,
-                                          std::chrono::milliseconds follow) -> task_t<void> {
-          const auto deadline = retained->cutover_terminal_at + follow;
-          const auto now = std::chrono::steady_clock::now ();
-          if (deadline > now) {
-              co_await ::zlink::framework::detail::delay (
-                std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now));
-          }
-      }(state, _limits.message_follow_duration));
-    detail::observe_task_completion (
-      *retention, [retention, tracking, state] (const result_t<void> &) {
+    const auto cutover_terminal_at = state->cutover_terminal_at;
+    auto token = std::move (state->pending_unit_token);
+    const auto deadline = cutover_terminal_at + _limits.message_follow_duration;
+    const auto now = std::chrono::steady_clock::now ();
+    auto retention = std::make_shared<task_t<void>> (
+      deadline > now
+        ? ::zlink::framework::detail::delay (
+            _delay_owner, std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now))
+        : task_t<void> (result_t<void>::success ()));
+    detail::observe_task_terminal (
+      *retention, [retention, tracking, cutover_terminal_at,
+                   token = std::move (token)] (const result_t<void> &result) mutable {
           {
               std::lock_guard lock (tracking->metric_mutex);
-              if (tracking->route_convergence_metric) {
+              if (result && tracking->route_convergence_metric) {
                   const auto elapsed = std::chrono::duration<double> (
-                    std::chrono::steady_clock::now () - state->cutover_terminal_at);
+                    std::chrono::steady_clock::now () - cutover_terminal_at);
                   tracking->route_convergence_metric (elapsed.count ());
               }
           }
-          state->pending_unit_token.reset ();
+          token.reset ();
       });
 }
 
-task_t<relocation_authority_t>
+task_t<source_relocation_settlement_t>
 maintenance_runtime_t::settle_relocation (std::shared_ptr<relocation_terminal_state_t> state,
                                           std::vector<object_ref_t> participants)
 {
@@ -584,13 +599,13 @@ maintenance_runtime_t::settle_relocation (std::shared_ptr<relocation_terminal_st
       state->target_owner,
       state->context.relocation};
     for (;;) {
-        if (state->context.source_stopped && state->context.source_stopped ())
-            co_return relocation_authority_t::source_lease_expired;
         const auto preserve = std::chrono::steady_clock::now () >= state->context.restore_deadline;
-        const auto settled = preserve ? _authority->preserve_relocation (fence)
-                                      : _authority->observe_relocation (fence);
-        if (settled != relocation_authority_t::unsettled)
+        const auto settled = _authority->settle_source_relocation (fence, participants, preserve);
+        if (settled.outcome != relocation_authority_t::unsettled)
             co_return settled;
+        const auto stop_at = _delay_owner ? _delay_owner->stop_deadline () : std::nullopt;
+        if (stop_at && std::chrono::steady_clock::now () >= *stop_at)
+            co_return source_relocation_settlement_t{};
         // Relocation flow §4.4: only a different selected route can
         // require another complete boundary batch. Wait for its admission.
         const auto route = state->context.target_route ? state->context.target_route ()
@@ -598,9 +613,18 @@ maintenance_runtime_t::settle_relocation (std::shared_ptr<relocation_terminal_st
         if (!preserve && route.second && route.first != state->submitted_route_generation) {
             state->submitted_route_generation = route.first;
             if (co_await send_boundary_records (state->context, *state->records, state->batch))
-                (void) co_await state->context.send_cutover (*state->cutover_record);
+                co_await submit_cutover (state->context, *state->cutover_record);
         }
-        co_await ::zlink::framework::detail::delay (dispatch_limits::management_retry_interval);
+        try {
+            co_await ::zlink::framework::detail::delay (
+              _delay_owner, dispatch_limits::management_retry_interval, stop_at.has_value ());
+        }
+        catch (const framework_exception_t &error) {
+            if (error.kind () != framework_error_kind_t::shutting_down)
+                throw;
+            // A cancelled management delay does not decide authority. Read it
+            // again before the existing host teardown deadline can end the unit.
+        }
     }
 }
 
@@ -608,12 +632,24 @@ std::pair<relocation_terminal_t, relocation_reason_t>
 maintenance_runtime_t::apply_relocation_settlement (
   const std::shared_ptr<relocation_terminal_state_t> &state,
   const std::vector<object_ref_t> &participants,
-  relocation_authority_t settled)
+  const source_relocation_settlement_t &settled)
 {
     const auto token = state->seal_attempt.seal.token;
-    switch (settled) {
+    const auto deliver = [forward = state->context.send_application,
+                          follows = std::make_shared<const decltype (settled.follow_generations)> (
+                            settled.follow_generations)] (const object_ref_t &owner,
+                                                          const turn_record_t &record) {
+        if (!forward)
+            return;
+        // Heterogeneous lookup avoids allocating a key on each message.
+        const auto found = follows->find (std::pair{owner.kind, std::string_view{owner.key}});
+        forward (owner, record,
+                 found == follows->end () ? std::nullopt
+                                          : std::optional<std::uint64_t>{found->second});
+    };
+    switch (settled.outcome) {
         case relocation_authority_t::target_committed:
-            (void) _objects.finalize_relocation_cutover (token);
+            (void) _objects.finalize_relocation_cutover (token, deliver);
             if (_committed_terminal)
                 for (const auto &participant : participants)
                     _committed_terminal (participant);
@@ -627,7 +663,7 @@ maintenance_runtime_t::apply_relocation_settlement (
         default:
             /* Expired-owner terminal: dispatch and Store changes stop for
              * good; each pending request gets Unavailable once. */
-            (void) _objects.finalize_relocation_cutover (token);
+            (void) _objects.finalize_relocation_cutover (token, deliver);
             if (_unavailable_terminal) {
                 for (const auto &participant : participants) {
                     try {
@@ -637,8 +673,11 @@ maintenance_runtime_t::apply_relocation_settlement (
                     }
                 }
             }
-            return {relocation_terminal_t::recovery_required,
-                    relocation_reason_t::owner_lease_expired};
+            return settled.outcome == relocation_authority_t::data_lost
+                     ? std::pair{relocation_terminal_t::data_lost,
+                                 relocation_reason_t::authority_conflict}
+                     : std::pair{relocation_terminal_t::recovery_required,
+                                 relocation_reason_t::owner_lease_expired};
     }
 }
 
@@ -845,8 +884,12 @@ maintenance_runtime_t::relocate_prepare_target (std::shared_ptr<relocation_termi
 task_t<bool> maintenance_runtime_t::relocate_boundary_and_send (
   std::shared_ptr<relocation_terminal_state_t> state)
 {
-    const auto boundary = _objects.begin_relocation_boundary (state->seal_attempt.seal.token,
-                                                              state->context.send_application);
+    const auto boundary = _objects.begin_relocation_boundary (
+      state->seal_attempt.seal.token, [forward = state->context.send_application] (
+                                        const object_ref_t &owner, const turn_record_t &record) {
+          if (forward)
+              forward (owner, record, owner.authority_owner_generation);
+      });
     const auto boundary_error = boundary.first;
     state->batch = boundary.second;
     if (boundary_error != stateful_error_t::none) {
@@ -889,7 +932,7 @@ maintenance_runtime_t::relocate_cutover (std::shared_ptr<relocation_terminal_sta
       state->context.coordinator, protocol::relocation_role_t::source, object};
     cutover.boundary_record_count = state->records->size ();
     cutover.boundary_checksum_crc32c = boundary_batch_checksum (*state->records);
-    (void) co_await state->context.send_cutover (cutover);
+    co_await submit_cutover (state->context, cutover);
     const auto terminal_now = std::chrono::steady_clock::now ();
     state->cutover_terminal_at = terminal_now;
     const auto stall = state->sealed_at != std::chrono::steady_clock::time_point{}
@@ -904,7 +947,7 @@ maintenance_runtime_t::relocate_cutover (std::shared_ptr<relocation_terminal_sta
     const auto terminal = applied.first;
     const auto reason = applied.second;
     state->result.emplace (
-      finish ({terminal, reason, std::nullopt, *state->records, state->handoff, stall}));
+      finish ({terminal, reason, std::nullopt, *state->records, state->handoff, stall, settled}));
     if (terminal == relocation_terminal_t::completed)
         retain_message_follow (state);
     co_return terminal == relocation_terminal_t::completed;
@@ -1090,8 +1133,12 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     }
     const target_only_cas_t handoff{sources, target_node_id, target_owner, inventory_digest,
                                     state->manifest};
-    const auto [boundary_error, batch] =
-      _objects.begin_relocation_boundary (seal.token, canonical_wire->send_application);
+    const auto [boundary_error, batch] = _objects.begin_relocation_boundary (
+      seal.token, [forward = canonical_wire->send_application] (const object_ref_t &owner,
+                                                                const turn_record_t &record) {
+          if (forward)
+              forward (owner, record, owner.authority_owner_generation);
+      });
     auto failure = relocation_reason_t::restore_failed;
     const auto records =
       boundary_error == stateful_error_t::none
@@ -1145,7 +1192,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
        root.owner.object_generation, root.owner.authority_owner_generation}};
     cutover.boundary_record_count = records->size ();
     cutover.boundary_checksum_crc32c = boundary_batch_checksum (*records);
-    (void) co_await canonical_wire->send_cutover (cutover);
+    co_await submit_cutover (*canonical_wire, cutover);
     state->cutover_terminal_at = std::chrono::steady_clock::now ();
     state->target_owner = target_owner;
     state->batch = batch;
@@ -1157,7 +1204,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     const auto reason = applied.second;
     if (terminal == relocation_terminal_t::completed)
         retain_message_follow (state);
-    co_return aggregate_relocation_result_t{terminal, reason, {}, *records, handoff};
+    co_return aggregate_relocation_result_t{terminal, reason, {}, *records, handoff, settled};
 }
 
 relocation_gate_snapshot_t maintenance_runtime_t::gate_snapshot () const
@@ -1626,99 +1673,31 @@ relocation_result_t maintenance_runtime_t::finish (relocation_result_t result)
 host_maintenance_runtime_t::host_maintenance_runtime_t (
   stateful_object_runtime_t &objects,
   stream_session_registry_t &sessions,
-  maintenance_runtime_t &relocation,
-  std::shared_ptr<target_preflight_port_t> targets,
-  observer_t observer,
   std::function<task_t<void> ()> seal_targets) :
     _objects (objects),
     _sessions (sessions),
-    _relocation (relocation),
-    _targets (std::move (targets)),
-    _observer (std::move (observer)),
     _seal_targets (std::move (seal_targets)),
     _lane_executor (),
     _lane (_lane_executor)
 {
-    if (!_targets)
-        throw std::invalid_argument ("target preflight provider is missing");
 }
 
-void host_maintenance_runtime_t::mark_serving ()
-{
-    _lane
-      .run ([this] {
-          if (_state != maintenance_admission_state_t::preparing)
-              throw std::logic_error ("host can become serving only from preparing");
-          _state = maintenance_admission_state_t::serving;
-      })
-      .get ();
-}
-
-void host_maintenance_runtime_t::mark_error ()
-{
-    _lane
-      .run ([this] {
-          if (_state != maintenance_admission_state_t::stopped)
-              _state = maintenance_admission_state_t::error;
-      })
-      .get ();
-}
-
-maintenance_admission_state_t host_maintenance_runtime_t::state () const
-{
-    return _lane.run ([this] { return _state; }).get ();
-}
-
-std::optional<termination_result_t> host_maintenance_runtime_t::terminal_result () const
-{
-    return _lane.run ([this] { return _terminal; }).get ();
-}
-
-std::optional<termination_intent_t> host_maintenance_runtime_t::intent_snapshot () const
-{
-    return _lane
-      .run ([this] () -> std::optional<termination_intent_t> {
-          if (_shutdown_claimed)
-              return termination_intent_t::shutdown;
-          return _effective_intent;
-      })
-      .get ();
-}
-
-task_t<termination_result_t> host_maintenance_runtime_t::terminate (termination_intent_t intent)
+task_t<termination_result_t> host_maintenance_runtime_t::terminate ()
 {
     struct start_t
     {
-        std::uint64_t attempt = 0;
         std::shared_ptr<task_completion_source_t<termination_result_t>> completion;
         std::optional<termination_result_t> immediate;
         bool started = false;
     };
     auto start = _lane
-                   .run ([this, intent] {
+                   .run ([this] {
                        start_t start;
                        if (_terminal)
                            start.immediate = *_terminal;
-                       else if (_state == maintenance_admission_state_t::stopped) {
-                           start.immediate = {intent, termination_outcome_t::stopped,
-                                              termination_reason_t::none};
-                       } else if (_active) {
-                           start.attempt = _active_attempt;
-                           if (intent == termination_intent_t::shutdown && !_effective_intent)
-                               _shutdown_claimed = true;
+                       else if (_active_completion)
                            start.completion = _active_completion;
-                       } else if (intent == termination_intent_t::retire
-                                  && _state != maintenance_admission_state_t::serving) {
-                           start.immediate = {intent, termination_outcome_t::blocked,
-                                              termination_reason_t::runtime_not_ready};
-                       } else {
-                           _active = true;
-                           _shutdown_claimed = false;
-                           _effective_intent.reset ();
-                           start.attempt = _next_attempt++;
-                           _active_attempt = start.attempt;
-                           if (intent == termination_intent_t::shutdown)
-                               _effective_intent = termination_intent_t::shutdown;
+                       else {
                            start.completion =
                              std::make_shared<task_completion_source_t<termination_result_t>> ();
                            _active_completion = start.completion;
@@ -1734,8 +1713,7 @@ task_t<termination_result_t> host_maintenance_runtime_t::terminate (termination_
     auto output = start.completion->task ();
     if (!start.started)
         return output;
-    auto running = std::make_shared<task_t<termination_result_t>> (
-      run_termination_attempt (intent, start.attempt));
+    auto running = std::make_shared<task_t<termination_result_t>> (run_termination ());
     detail::observe_task_completion (*running, [completion = start.completion, running] (
                                                  const result_t<termination_result_t> &settled) {
         completion->complete (settled);
@@ -1743,297 +1721,38 @@ task_t<termination_result_t> host_maintenance_runtime_t::terminate (termination_
     return output;
 }
 
-task_t<termination_result_t>
-host_maintenance_runtime_t::run_termination_attempt (termination_intent_t intent,
-                                                     std::uint64_t attempt)
+task_t<termination_result_t> host_maintenance_runtime_t::run_termination ()
 {
-    if (intent == termination_intent_t::retire) {
-        const auto result = co_await run_retire ();
-        complete_attempt (attempt, result);
-        co_return result;
-    }
-    const auto result = co_await run_shutdown (termination_intent_t::shutdown);
-    complete_attempt (attempt, result);
+    const auto result = co_await run_shutdown ();
+    complete_termination (result);
     co_return result;
 }
 
-std::vector<relocation_unit_t>
-host_maintenance_runtime_t::inventory_units (std::vector<object_inventory_t> inventory)
+task_t<termination_result_t> host_maintenance_runtime_t::run_shutdown ()
 {
-    std::sort (inventory.begin (), inventory.end (),
-               [] (const object_inventory_t &left, const object_inventory_t &right) {
-                   if (left.owner.kind != right.owner.kind)
-                       return left.owner.kind < right.owner.kind;
-                   return left.owner.key < right.owner.key;
-               });
-    std::vector<relocation_unit_t> units;
-    std::map<std::string, std::size_t> user_spots;
-    for (const auto &object : inventory) {
-        if (object.owner.kind != object_kind_t::user_spot)
-            continue;
-        user_spots.emplace (object.owner.key, units.size ());
-        units.push_back ({{object.owner}});
-    }
-    for (const auto &object : inventory) {
-        if (object.owner.kind == object_kind_t::actor) {
-            const auto spot = user_spots.find (object.membership);
-            if (spot != user_spots.end ())
-                units[spot->second].participants.push_back (object.owner);
-            else
-                units.push_back ({{object.owner}});
-        } else if (object.owner.kind == object_kind_t::instance_spot) {
-            units.push_back ({{object.owner}});
-        }
-    }
-    for (auto &unit : units) {
-        std::sort (unit.participants.begin (), unit.participants.end (),
-                   [] (const object_ref_t &left, const object_ref_t &right) {
-                       if (left.kind != right.kind)
-                           return left.kind < right.kind;
-                       return left.key < right.key;
-                   });
-    }
-    return units;
-}
-
-task_t<termination_result_t> host_maintenance_runtime_t::run_retire ()
-{
-    auto inventory = _objects.try_begin_maintenance_inventory ();
-    if (!inventory) {
-        co_return termination_result_t{termination_intent_t::retire, termination_outcome_t::blocked,
-                                       termination_reason_t::runtime_not_ready};
-    }
-    _lane.run ([this] { _inventory_sealed = true; }).get ();
-    for (const auto &object : *inventory) {
-        if (object.state != object_state_t::ready) {
-            _objects.end_maintenance_inventory ();
-            _lane.run ([this] { _inventory_sealed = false; }).get ();
-            co_return termination_result_t{termination_intent_t::retire,
-                                           termination_outcome_t::blocked,
-                                           termination_reason_t::state_incompatible};
-        }
-    }
-    const auto units = inventory_units (std::move (*inventory));
-    target_preflight_result_t preflight;
-    try {
-        preflight = _targets->preflight (units);
-    }
-    catch (...) {
-        preflight.status = target_preflight_status_t::store_unavailable;
-    }
-
-    bool exact_preflight = preflight.units.size () == units.size ();
-    if (exact_preflight) {
-        for (std::size_t index = 0; index != units.size (); ++index) {
-            if (preflight.units[index].unit != units[index]) {
-                exact_preflight = false;
-                break;
-            }
-        }
-    }
-    struct preflight_state_t
-    {
-        bool shutdown = false;
-        std::optional<termination_reason_t> blocked_reason;
-    };
-    const auto preflight_state =
-      _lane
-        .run ([this, &preflight, exact_preflight] {
-            preflight_state_t state;
-            if (_shutdown_claimed) {
-                _effective_intent = termination_intent_t::shutdown;
-                _state = maintenance_admission_state_t::draining;
-                state.shutdown = true;
-            } else if (preflight.status == target_preflight_status_t::eligible && exact_preflight) {
-                _effective_intent = termination_intent_t::retire;
-                _state = maintenance_admission_state_t::retiring;
-            } else {
-                termination_reason_t reason = termination_reason_t::target_unavailable;
-                switch (preflight.status) {
-                    case target_preflight_status_t::store_unavailable:
-                        reason = termination_reason_t::store_unavailable;
-                        break;
-                    case target_preflight_status_t::relocation_disabled:
-                        reason = termination_reason_t::relocation_disabled;
-                        break;
-                    case target_preflight_status_t::state_incompatible:
-                        reason = termination_reason_t::state_incompatible;
-                        break;
-                    case target_preflight_status_t::eligible:
-                        reason = termination_reason_t::state_incompatible;
-                        break;
-                    default:
-                        break;
-                }
-                _inventory_sealed = false;
-                state.blocked_reason = reason;
-            }
-            return state;
-        })
-        .get ();
-    if (preflight_state.blocked_reason) {
-        _objects.end_maintenance_inventory ();
-        co_return termination_result_t{termination_intent_t::retire, termination_outcome_t::blocked,
-                                       *preflight_state.blocked_reason};
-    }
-    if (preflight_state.shutdown)
-        co_return co_await run_shutdown (termination_intent_t::shutdown);
-
-    std::size_t committed_units = 0;
-    const auto fail_relocation = [&] (termination_reason_t blocked_reason,
-                                      bool irreversible = false) {
-        if (committed_units == 0 && !irreversible) {
-            return termination_result_t{termination_intent_t::retire,
-                                        termination_outcome_t::blocked, blocked_reason};
-        }
-        _lane.run ([this] { _state = maintenance_admission_state_t::draining; }).get ();
-        _sessions.force_close_all ();
-        _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
-        return termination_result_t{termination_intent_t::retire,
-                                    termination_outcome_t::force_stopped,
-                                    termination_reason_t::relocation_failed};
-    };
-    for (const auto &eligible : preflight.units) {
-        if (eligible.unit.participants.empty () || eligible.target_node_id.empty ()
-            || eligible.encoded_upper_bound == 0) {
-            co_return fail_relocation (termination_reason_t::state_incompatible);
-        }
-
-        std::vector<stream_barrier_t> barriers;
-        bool barrier_ready = true;
-        for (const auto &participant : eligible.unit.participants) {
-            if (participant.kind != object_kind_t::actor)
-                continue;
-            auto [error, barrier] = _sessions.try_seal_actor (participant);
-            if (error != stateful_error_t::none) {
-                barrier_ready = false;
-                break;
-            }
-            barriers.push_back (barrier);
-        }
-        if (!barrier_ready) {
-            for (const auto &barrier : barriers)
-                (void) _sessions.abort_barrier (barrier);
-            co_return fail_relocation (termination_reason_t::state_incompatible);
-        }
-
-        std::vector<authority_relocation_reference_t> current;
-        relocation_terminal_t terminal = relocation_terminal_t::blocked;
-        if (eligible.unit.participants.size () == 1) {
-            const auto result = co_await _relocation.relocate (
-              eligible.unit.participants.front (), eligible.target_node_id, eligible.target_owner,
-              eligible.encoded_upper_bound, eligible.inventory_digest, eligible.canonical_wire);
-            terminal = result.terminal;
-            if (result.authority)
-                current.push_back (*result.authority);
-        } else {
-            const auto result = co_await _relocation.relocate_aggregate (
-              eligible.unit.participants, eligible.target_node_id, eligible.target_owner,
-              eligible.encoded_upper_bound, eligible.inventory_digest, eligible.canonical_wire);
-            terminal = result.terminal;
-            current = result.authority;
-        }
-        if (terminal != relocation_terminal_t::completed) {
-            for (const auto &barrier : barriers)
-                (void) _sessions.abort_barrier (barrier);
-            co_return fail_relocation (termination_reason_t::store_unavailable,
-                                       terminal == relocation_terminal_t::recovery_required
-                                         || terminal == relocation_terminal_t::data_lost);
-        }
-        for (const auto &barrier : barriers) {
-            const auto target =
-              std::find_if (current.begin (), current.end (),
-                            [&] (const authority_relocation_reference_t &reference) {
-                                return reference.source == barrier.actor;
-                            });
-            if (target == current.end ()
-                || _sessions.commit_barrier (barrier, target->target) != stateful_error_t::none) {
-                co_return fail_relocation (termination_reason_t::relocation_failed, true);
-            }
-        }
-        ++committed_units;
-    }
-    _lane.run ([this] { _state = maintenance_admission_state_t::draining; }).get ();
-    if (!_sessions.try_seal_all ()) {
-        _sessions.force_close_all ();
-        _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
-        co_return termination_result_t{termination_intent_t::retire,
-                                       termination_outcome_t::force_stopped,
-                                       termination_reason_t::relocation_failed};
-    }
-    _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
-    co_return termination_result_t{termination_intent_t::retire, termination_outcome_t::stopped,
-                                   termination_reason_t::none};
-}
-
-task_t<termination_result_t>
-host_maintenance_runtime_t::run_shutdown (termination_intent_t effective_intent)
-{
-    const auto acquire_inventory = _lane
-                                     .run ([this, effective_intent] {
-                                         _effective_intent = effective_intent;
-                                         _state = maintenance_admission_state_t::draining;
-                                         return !_inventory_sealed;
-                                     })
-                                     .get ();
     if (_seal_targets)
         co_await _seal_targets ();
-    if (acquire_inventory) {
-        const auto inventory = _objects.try_begin_maintenance_inventory ();
-        if (!inventory) {
-            _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
-            co_return termination_result_t{effective_intent, termination_outcome_t::force_stopped,
-                                           termination_reason_t::teardown_failed};
-        }
-        _lane.run ([this] { _inventory_sealed = true; }).get ();
+    const auto inventory = co_await _objects.try_begin_maintenance_inventory ();
+    if (!inventory) {
+        co_return termination_result_t{termination_outcome_t::force_stopped,
+                                       termination_reason_t::teardown_failed};
     }
     const auto sealed = _sessions.try_seal_all ();
     if (!sealed)
         _sessions.force_close_all ();
-    _lane.run ([this] { _state = maintenance_admission_state_t::stopped; }).get ();
     co_return termination_result_t{
-      effective_intent,
       sealed ? termination_outcome_t::stopped : termination_outcome_t::force_stopped,
       sealed ? termination_reason_t::none : termination_reason_t::teardown_failed};
 }
 
-void host_maintenance_runtime_t::complete_attempt (std::uint64_t attempt,
-                                                   const termination_result_t &result)
+void host_maintenance_runtime_t::complete_termination (const termination_result_t &result)
 {
-    const auto completion = _lane
-                              .run ([this, attempt, &result] {
-                                  struct completion_t
-                                  {
-                                      bool release_inventory = false;
-                                      observer_t observer;
-                                  } completion;
-                                  _attempt_results[attempt] = result;
-                                  _active = false;
-                                  _active_attempt = 0;
-                                  _active_completion.reset ();
-                                  _shutdown_claimed = false;
-                                  _effective_intent.reset ();
-                                  if (result.outcome != termination_outcome_t::blocked)
-                                      _terminal = result;
-                                  else {
-                                      completion.release_inventory = _inventory_sealed;
-                                      _inventory_sealed = false;
-                                      if (_state == maintenance_admission_state_t::retiring)
-                                          _state = maintenance_admission_state_t::serving;
-                                  }
-                                  completion.observer = _observer;
-                                  return completion;
-                              })
-                              .get ();
-    if (completion.release_inventory)
-        _objects.end_maintenance_inventory ();
-    if (completion.observer) {
-        try {
-            completion.observer (result);
-        }
-        catch (...) {
-        }
-    }
+    _lane
+      .run ([this, &result] {
+          _terminal = result;
+          _active_completion.reset ();
+      })
+      .get ();
 }
 
 } // namespace zlink::framework::runtime::stateful
@@ -2061,6 +1780,8 @@ void public_host_runtime_t::configure_relocation (
     auto maintenance = std::make_unique<stateful::maintenance_runtime_t> (
       _objects, std::move (authority), std::move (relocations), limits,
       std::move (relocation_observer), std::move (aggregate_authority));
+    if (_delay_owner)
+        maintenance->bind_delay_owner (*_delay_owner);
     maintenance->attach_relocation_wire (*_relocation_wire);
     maintenance->attach_committed_terminal ([this] (const stateful::object_ref_t &owner) {
         if (_stateful_dispatch)
@@ -2095,20 +1816,20 @@ void public_host_runtime_t::configure_relocation_source_metrics (
 void public_host_runtime_t::configure_maintenance (
   stateful::maintenance_provider_set_t providers,
   stateful::relocation_limits_t limits,
-  stateful::maintenance_runtime_t::observer_t relocation_observer,
-  stateful::host_maintenance_runtime_t::observer_t termination_observer)
+  stateful::maintenance_runtime_t::observer_t relocation_observer)
 {
     std::lock_guard lock (_mutex);
     if (_started || _maintenance || _termination) {
         throw std::logic_error ("maintenance providers must be configured once before host start");
     }
-    auto targets = providers.targets;
     _relocation_authority = providers.authority;
     _aggregate_relocation_authority = providers.aggregate_authority;
     _session_relocations = providers.relocations;
     _relocation_cutover_wait = limits.cutover_wait_timeout;
     auto maintenance = std::make_unique<stateful::maintenance_runtime_t> (
       _objects, std::move (providers), limits, std::move (relocation_observer));
+    if (_delay_owner)
+        maintenance->bind_delay_owner (*_delay_owner);
     maintenance->attach_relocation_wire (*_relocation_wire);
     maintenance->attach_committed_terminal ([this] (const stateful::object_ref_t &owner) {
         if (_stateful_dispatch)
@@ -2119,14 +1840,10 @@ void public_host_runtime_t::configure_maintenance (
             (void) _stateful_dispatch->fail_pending_unavailable (owner);
     });
     auto termination = std::make_unique<stateful::host_maintenance_runtime_t> (
-      _objects, _sessions, *maintenance, std::move (targets), std::move (termination_observer),
-      [this] { return seal_relocation_targets (); });
+      _objects, _sessions, [this] { return seal_relocation_targets (); });
     _maintenance = std::move (maintenance);
     _termination = std::move (termination);
-    _maintenance_started = [this] { _termination->mark_serving (); };
-    _maintenance_closing = [this] {
-        _termination->terminate (stateful::termination_intent_t::shutdown).result ().value ();
-    };
+    _maintenance_closing = [this] { _termination->terminate ().result ().value (); };
 }
 
 stateful::maintenance_runtime_t *public_host_runtime_t::maintenance () noexcept

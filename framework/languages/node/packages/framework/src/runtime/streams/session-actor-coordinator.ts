@@ -14,7 +14,10 @@ import {
 import { ZLinkActorSessionLifecycleCoordinator } from './actor-session-lifecycle-coordinator';
 import { ZLinkManagedStream } from './managed-stream';
 import { DefaultZLinkSessionActor, DefaultZLinkSessionContext } from './session-context';
-import type { ZLinkSessionBindingConfirmationOptions } from './stream-binding-runtime-ports';
+import type {
+  ZLinkActorRouteCommitOptions,
+  ZLinkSessionBindingConfirmationOptions
+} from './stream-binding-runtime-ports';
 
 export interface ZLinkSessionActorCoordinatorOptions {
   readonly actorBindTimeoutMs?: number;
@@ -70,25 +73,7 @@ export class ZLinkSessionActorCoordinator {
   private async replaceBinding(
     context: DefaultZLinkSessionContext,
     actorRef: ActorRef,
-    signal?: AbortSignal,
-    confirmRemoteSessionBinding: boolean | 'send' = true,
-    releaseSeal?: { readonly sealId: string }
-  ): Promise<DefaultZLinkSessionActor> {
-    return await this.replaceBindingCore(
-      context,
-      actorRef,
-      signal,
-      confirmRemoteSessionBinding,
-      releaseSeal
-    );
-  }
-
-  private async replaceBindingCore(
-    context: DefaultZLinkSessionContext,
-    actorRef: ActorRef,
-    signal?: AbortSignal,
-    confirmRemoteSessionBinding: boolean | 'send' = true,
-    releaseSeal?: { readonly sealId: string }
+    signal?: AbortSignal
   ): Promise<DefaultZLinkSessionActor> {
     throwIfAborted(signal);
     if (actorRef.actorId.trim().length === 0) {
@@ -134,30 +119,12 @@ export class ZLinkSessionActorCoordinator {
     const sessionActor =
       reuseActor ??
       new DefaultZLinkSessionActor(this.sessionActorRuntime, boundActorRef, bindingToken);
-    const sessionIdentity = String(this.actorBindingRoutingId(context));
+    const sessionIdentity = this.actorBindingRoutingId(context);
     if (previous === undefined) {
-      if (releaseSeal !== undefined) {
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.ActorSessionNotBound,
-          `Actor '${actorRef.actorId}' route switch has no Session binding to release.`,
-          true
-        );
-      }
       await this.routes.bind(
         context,
         sessionActor,
         bindingToken,
-        authorityFence,
-        sessionIdentity,
-        () => sessionActor.updateRef(boundActorRef)
-      );
-    } else if (releaseSeal !== undefined) {
-      await this.routes.replaceAndReleaseSeal(
-        previous,
-        context,
-        sessionActor,
-        bindingToken,
-        releaseSeal.sealId,
         authorityFence,
         sessionIdentity,
         () => sessionActor.updateRef(boundActorRef)
@@ -173,12 +140,8 @@ export class ZLinkSessionActorCoordinator {
         () => sessionActor.updateRef(boundActorRef)
       );
     }
-    if (
-      confirmRemoteSessionBinding !== false &&
-      this.options.confirmRemoteActorSessionBinding !== undefined
-    ) {
-      const waitForAcknowledgement =
-        previous === undefined && confirmRemoteSessionBinding !== 'send';
+    if (this.options.confirmRemoteActorSessionBinding !== undefined) {
+      const waitForAcknowledgement = previous === undefined;
       const confirmation = this.options.confirmRemoteActorSessionBinding(
         boundActorRef,
         this.actorBindingRoutingId(context),
@@ -334,12 +297,7 @@ export class ZLinkSessionActorCoordinator {
   async commitActorRoute(
     actorRef: ActorRef,
     signal?: AbortSignal,
-    options: {
-      readonly confirmRemoteSessionBinding?: boolean | 'send';
-      readonly releaseSeal?: {
-        readonly sealId: string;
-      };
-    } = {}
+    options: ZLinkActorRouteCommitOptions = {}
   ): Promise<void> {
     const normalizedActorRef = normalizeActorRef(
       actorRef as ActorRef & { readonly generation?: bigint | number },
@@ -350,45 +308,38 @@ export class ZLinkSessionActorCoordinator {
       const route = await this.routes.route(normalizedActorRef.actorId);
       if (route === undefined) return;
       requireSameIncarnation(route.actor.ref, normalizedActorRef);
-      if (routingIdsEqual(route.actor.ref.nodeRid, normalizedActorRef.nodeRid)) {
-        const authorityFence = await this.resolveAuthorityFence(normalizedActorRef, signal);
-        if (
-          options.releaseSeal !== undefined &&
-          !(await this.routes.validateSeal(normalizedActorRef.actorId, options.releaseSeal.sealId))
-        ) {
-          throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-            `Actor '${normalizedActorRef.actorId}' route switch did not match its relocation seal.`,
-            true
-          );
-        }
-        // A location refresh never changes the route's Session binding
-        // generation; the native bind owns it.
-        route.actor.updateRef(
-          withBindingGeneration(normalizedActorRef, bindingGenerationOf(route.actor.ref), undefined)
-        );
-        if (authorityFence !== undefined) {
-          await this.routes.updateAuthorityFence(normalizedActorRef.actorId, authorityFence);
-        }
-        if (
-          options.releaseSeal !== undefined &&
-          !(await this.routes.abortSeal(normalizedActorRef.actorId, options.releaseSeal.sealId))
-        ) {
-          throw createInternalFrameworkException(
-            ZLinkFrameworkInternalErrorKind.ActorLocationStale,
-            `Actor '${normalizedActorRef.actorId}' route switch lost its relocation seal.`,
-            true
-          );
-        }
-        return;
-      }
-      await this.replaceBinding(
-        route.context,
+      const authorityFence = await this.resolveAuthorityFence(normalizedActorRef, signal);
+      // Relocation changes only the Actor route of this physical binding.
+      // Publish the ref and authority together in the binding registry's turn;
+      // a native bind would issue a different binding generation.
+      const boundActorRef = withBindingGeneration(
         normalizedActorRef,
-        signal,
-        options.confirmRemoteSessionBinding,
-        options.releaseSeal
+        bindingGenerationOf(route.actor.ref),
+        undefined
       );
+      const commitActor = () => route.actor.updateRef(boundActorRef);
+      if (options.releaseSeal !== undefined) {
+        await this.routes.replaceAndReleaseSeal(
+          route,
+          route.context,
+          route.actor,
+          route.bindingToken,
+          options.releaseSeal.sealId,
+          authorityFence,
+          route.sessionIdentity,
+          commitActor
+        );
+      } else {
+        await this.routes.replace(
+          route,
+          route.context,
+          route.actor,
+          route.bindingToken,
+          authorityFence,
+          route.sessionIdentity,
+          commitActor
+        );
+      }
     });
   }
 

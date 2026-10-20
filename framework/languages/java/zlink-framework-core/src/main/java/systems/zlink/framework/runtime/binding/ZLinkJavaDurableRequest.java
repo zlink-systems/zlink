@@ -8,6 +8,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode.PeerRouteObservation;
+import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.time.Duration;
 import java.util.List;
@@ -16,7 +17,7 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
-import java.util.function.BooleanSupplier;
+import java.util.function.BiFunction;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Supplier;
@@ -35,9 +36,9 @@ public final class ZLinkJavaDurableRequest {
     }
 
     private final Submit submit;
-    private final BooleanSupplier targetLifecycleEnded;
     private final Supplier<PeerRouteObservation> route;
     private final CompletableFuture<List<byte[]>> completion = new CompletableFuture<>();
+    private final CompletableFuture<List<byte[]>> caller = new CompletableFuture<>();
     private final LongSupplier nanoTime;
     private final long started;
     private final long timeoutNanos;
@@ -51,7 +52,6 @@ public final class ZLinkJavaDurableRequest {
     private ZLinkJavaDurableRequest(
             Supplier<List<byte[]>> prepare,
             Submit submit,
-            BooleanSupplier targetLifecycleEnded,
             Supplier<PeerRouteObservation> route,
             Duration timeout,
             Function<Runnable, CompletionStage<Void>> owner,
@@ -60,7 +60,6 @@ public final class ZLinkJavaDurableRequest {
         this.started = nanoTime.getAsLong();
         this.prepare = prepare;
         this.submit = submit;
-        this.targetLifecycleEnded = targetLifecycleEnded;
         this.route = route;
         this.timeoutNanos = timeout.toNanos();
         this.owner = owner;
@@ -69,37 +68,28 @@ public final class ZLinkJavaDurableRequest {
     public static CompletionStage<List<byte[]>> request(
             Supplier<List<byte[]>> prepare,
             Submit submit,
-            BooleanSupplier targetLifecycleEnded,
             Supplier<PeerRouteObservation> route,
-            Function<Runnable, AutoCloseable> observe,
+            BiFunction<Runnable, Runnable, AutoCloseable> observe,
             Function<Runnable, CompletionStage<Void>> owner,
             Duration timeout) {
-        return request(
-                prepare,
-                submit,
-                targetLifecycleEnded,
-                route,
-                observe,
-                owner,
-                timeout,
-                System::nanoTime);
+        return request(prepare, submit, route, observe, owner, timeout, System::nanoTime);
     }
 
     public static CompletionStage<List<byte[]>> request(
             Supplier<List<byte[]>> prepare,
             Submit submit,
-            BooleanSupplier targetLifecycleEnded,
             Supplier<PeerRouteObservation> route,
-            Function<Runnable, AutoCloseable> observe,
+            BiFunction<Runnable, Runnable, AutoCloseable> observe,
             Function<Runnable, CompletionStage<Void>> owner,
             Duration timeout,
             LongSupplier nanoTime) {
-        var request =
-                new ZLinkJavaDurableRequest(
-                        prepare, submit, targetLifecycleEnded, route, timeout, owner, nanoTime);
+        var request = new ZLinkJavaDurableRequest(prepare, submit, route, timeout, owner, nanoTime);
         AutoCloseable registration;
         try {
-            registration = observe.apply(() -> request.post(request::sourceChanged));
+            registration =
+                    observe.apply(
+                            () -> request.post(request::sourceChanged),
+                            () -> request.post(request::endTarget));
         } catch (RuntimeException failure) {
             return CompletableFuture.failedFuture(failure);
         }
@@ -109,12 +99,7 @@ public final class ZLinkJavaDurableRequest {
                                 () -> {
                                     request.post(
                                             () -> {
-                                                if (request.pending != null
-                                                        && request.pending
-                                                                .toCompletableFuture()
-                                                                .isDone()) {
-                                                    request.sourceChanged();
-                                                }
+                                                request.settleReceived();
                                                 if (!request.completion.isDone()) request.exhaust();
                                             });
                                 },
@@ -122,14 +107,23 @@ public final class ZLinkJavaDurableRequest {
                                 TimeUnit.NANOSECONDS);
         request.completion.whenComplete(
                 (reply, failure) -> {
-                    deadline.cancel(false);
                     try {
-                        registration.close();
-                    } catch (Exception cleanupFailure) {
-                        LOGGER.log(
-                                Level.WARNING,
-                                "durable request observer cleanup failed",
-                                cleanupFailure);
+                        deadline.cancel(false);
+                        try {
+                            registration.close();
+                        } catch (Exception cleanupFailure) {
+                            LOGGER.log(
+                                    Level.WARNING,
+                                    "durable request observer cleanup failed",
+                                    cleanupFailure);
+                        }
+                    } finally {
+                        ZLinkStateLane.publishOutsideLane(
+                                request.completion,
+                                (value, terminalFailure) -> {
+                                    if (terminalFailure == null) request.caller.complete(value);
+                                    else request.caller.completeExceptionally(terminalFailure);
+                                });
                     }
                 });
         ZLinkCompletionBridge.forwardCancellation(
@@ -140,7 +134,8 @@ public final class ZLinkJavaDurableRequest {
                                     if (request.pending != null)
                                         request.pending.toCompletableFuture().cancel(false);
                                 }));
-        return request.completion;
+        ZLinkCompletionBridge.forwardCancellation(request.caller, request.completion);
+        return request.caller;
     }
 
     private void post(Runnable action) {
@@ -164,20 +159,19 @@ public final class ZLinkJavaDurableRequest {
         return timeoutNanos - (nanoTime.getAsLong() - started);
     }
 
+    private boolean settleReceived() {
+        if (pending == null || !pending.toCompletableFuture().isDone()) return false;
+        var received = pending;
+        // A received terminal wins before a later route, removal, or deadline turn.
+        received.whenComplete((reply, failure) -> settle(received, reply, failure));
+        return true;
+    }
+
     private void sourceChanged() {
         if (completion.isDone()) return;
-        if (targetLifecycleEnded.getAsBoolean()) {
-            endTarget();
-            return;
-        }
         if (pending != null) {
             var previous = pending;
-            // A terminal already received wins even if its owner callback is queued
-            // behind the route observation (Actor model §8.1).
-            if (previous.toCompletableFuture().isDone()) {
-                previous.whenComplete((reply, failure) -> settle(previous, reply, failure));
-                return;
-            }
+            if (settleReceived()) return;
             if (route.get().selectedGeneration() == submittedRoute) return;
             pending = null;
             previous.toCompletableFuture().cancel(false);
@@ -187,10 +181,6 @@ public final class ZLinkJavaDurableRequest {
 
     private void attempt() {
         if (completion.isDone()) return;
-        if (targetLifecycleEnded.getAsBoolean()) {
-            endTarget();
-            return;
-        }
         if (pending != null) return;
         if (remaining() <= 0) {
             exhaust();
@@ -233,10 +223,6 @@ public final class ZLinkJavaDurableRequest {
         while ((cause instanceof CompletionException || cause instanceof ExecutionException)
                 && cause.getCause() != null) cause = cause.getCause();
         lastFailure = cause;
-        if (targetLifecycleEnded.getAsBoolean()) {
-            endTarget();
-            return;
-        }
         if (cause instanceof ZlinkRequestException request) {
             admission.complete(null);
             if (request.getResult() == RequestResult.NOT_CONNECTED) {
@@ -271,6 +257,8 @@ public final class ZLinkJavaDurableRequest {
     }
 
     private void endTarget() {
+        settleReceived();
+        if (completion.isDone()) return;
         completion.completeExceptionally(
                 new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.UNAVAILABLE,

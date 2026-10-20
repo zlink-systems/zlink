@@ -111,45 +111,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
                 .Append(
                     ToRouteDescriptor(
                         ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
-                            typeof(ZLinkRemoteSessionBindRouteHandler),
-                            typeof(IZLinkRouteRequestHandler<
-                                ZLinkRemoteSessionBindRequest,
-                                ZLinkRemoteSessionBindResponse
-                            >),
-                            ZLinkMessageKind.Request,
-                            ZLinkRemoteSessionBindingProtocol.PacketName
-                        )
-                    )
-                )
-                .Append(
-                    ToRouteDescriptor(
-                        ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
-                            typeof(ZLinkRemoteSessionUnbindRouteHandler),
-                            typeof(IZLinkRouteRequestHandler<
-                                ZLinkRemoteSessionUnbindRequest,
-                                ZLinkRemoteSessionUnbindResponse
-                            >),
-                            ZLinkMessageKind.Request,
-                            ZLinkRemoteSessionBindingProtocol.UnbindPacketName
-                        )
-                    )
-                )
-                .Append(
-                    ToRouteDescriptor(
-                        ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
-                            typeof(ZLinkRemoteSessionOwnerTombstoneRouteHandler),
-                            typeof(IZLinkRouteRequestHandler<
-                                ZLinkRemoteSessionOwnerTombstoneRequest,
-                                ZLinkRemoteSessionOwnerTombstoneResponse
-                            >),
-                            ZLinkMessageKind.Request,
-                            ZLinkRemoteSessionBindingProtocol.SessionOwnerTombstonePacketName
-                        )
-                    )
-                )
-                .Append(
-                    ToRouteDescriptor(
-                        ZLinkHandlerScanner.CreateExplicitRouteInterfaceDescriptor(
                             typeof(ZLinkRemoteSessionPushRelayHandler),
                             typeof(IZLinkRouteSendHandler<ZLinkRemoteSessionPushRelay>),
                             ZLinkMessageKind.Command,

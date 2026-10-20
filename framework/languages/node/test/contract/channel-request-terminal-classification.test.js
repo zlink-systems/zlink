@@ -255,7 +255,7 @@ test('raw router and dealer requests preserve the binding failure phase', async 
     context.close();
   });
   for (const request of [
-    () => router.request('target', [Buffer.from('request')], 1000),
+    () => new Promise((resolve, reject) => router.request('target', [Buffer.from('request')], 1000, resolve, reject)),
     () => dealer.request([Buffer.from('request')], 1000)
   ]) {
     for (const [nextPhase, expected] of [
@@ -308,7 +308,7 @@ test('raw router and dealer requests consume the binding admission stage once', 
   const context = zlink.createContext();
   const host = new ZLinkNodeRawBindingPort(context).createHost();
   const ports = [
-    () => host.createRouter().request('target', [Buffer.from('request')], 1000),
+    () => new Promise((resolve, reject) => host.createRouter().request('target', [Buffer.from('request')], 1000, resolve, reject)),
     () => host.createDealer().request([Buffer.from('request')], 1000)
   ];
   t.after(() => { host.close(); context.close(); });

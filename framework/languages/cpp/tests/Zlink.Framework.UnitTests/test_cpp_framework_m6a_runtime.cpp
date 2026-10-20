@@ -4,6 +4,7 @@
 #include "metric_test_reader.hpp"
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include <limits>
 #include <zlink/framework/contracts/dispatch/request_task.hpp>
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
@@ -202,6 +203,69 @@ void complete_bound_session_bind (
     assert (reply.terminal_result == 0 && reply.failure_code == 0);
 }
 
+void verify_bound_session_close_reply_grammar ()
+{
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("close-reply-source"),
+      .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
+    mesh::raw_mesh_node_owner_t target (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("close-reply-target"),
+      .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
+    source.start ();
+    target.start ();
+    const auto owner = target.topology ().local_descriptor ();
+    admit_pair (source, target, owner);
+    enum class reply_case_t
+    {
+        canonical,
+        payload,
+        correlation_mismatch
+    };
+    for (const auto reply_case :
+         {reply_case_t::canonical, reply_case_t::payload, reply_case_t::correlation_mismatch}) {
+        auto close = source.request_bound_session_close (
+          {0,
+           "close-actor",
+           1,
+           {owner.node_routing_id, owner.lifecycle_generation, "owner", 1, bytes ("session"), 1}},
+          2s);
+        std::optional<mesh::service_mailbox_claim_t> claim;
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        while (!claim && std::chrono::steady_clock::now () < deadline) {
+            (void) await_task (
+              target.pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
+            claim =
+              target.mailbox ().try_claim (mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+        }
+        assert (claim && claim->records.size () == 1);
+        auto &request = claim->records.front ();
+        const auto decoded =
+          protocol::decode_bound_session_close (protocol::message_bytes (request.parts.front ()));
+        assert (decoded.actor_id == "close-actor");
+        if (reply_case == reply_case_t::correlation_mismatch)
+            request.correlation = *request.correlation + 1;
+        if (reply_case == reply_case_t::payload)
+            assert (target.reply (request, {"forbidden", "application/json", bytes ("{}")}));
+        else
+            assert (target.reply_bound_session_bind (request, 0, 0));
+        assert (target.mailbox ().release (*claim));
+        while (!close.await_ready () && std::chrono::steady_clock::now () < deadline)
+            (void) await_task (
+              source.pump_one (mesh::service_liveness_registry_t::clock_t::now ()));
+        assert (close.await_ready ());
+        const auto terminal = close.result ();
+        if (reply_case == reply_case_t::canonical)
+            assert (terminal);
+        else {
+            assert (!terminal);
+            assert (terminal.error ()->kind ()
+                    == zlink::framework::framework_error_kind_t::protocol_error);
+        }
+    }
+    source.close ();
+    target.close ();
+}
+
 void verify_bound_session_bind_retries_until_route_is_admitted ()
 {
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
@@ -222,7 +286,8 @@ void verify_bound_session_bind_retries_until_route_is_admitted ()
       target_descriptor.node_routing_id,
       bound_session_bind_request (target_descriptor, "delayed-bind-actor"), 2s,
       [&completion_promise] (foundation::operation_terminal_t terminal,
-                             std::vector<std::uint8_t> payload) mutable {
+                             zlink::message_t native_payload) mutable {
+          auto payload = native_payload.to_bytes ();
           completion_promise.set_value ({terminal, std::move (payload)});
       })));
     assert (completion.wait_for (0ms) == std::future_status::timeout);
@@ -254,7 +319,8 @@ void verify_bound_session_bind_exposes_only_accepted_attempt ()
     assert (await_task (source.request_bound_session_bind (
       remote.node_routing_id, bound_session_bind_request (remote, "stage-bind-actor"), 2s,
       [&completion_promise] (foundation::operation_terminal_t terminal,
-                             std::vector<std::uint8_t> payload) {
+                             zlink::message_t native_payload) {
+          auto payload = native_payload.to_bytes ();
           completion_promise.set_value ({terminal, std::move (payload)});
       },
       accepted)));
@@ -287,7 +353,8 @@ bound_session_request (mesh::raw_mesh_node_owner_t &source,
     request_task_t<bound_session_completion_t> result (reply->task (), admitted);
     assert (await_task (source.request_bound_session_bind (
       target.node_routing_id, bound_session_bind_request (target, "durable-bind-actor"), timeout,
-      [reply] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t> payload) {
+      [reply] (foundation::operation_terminal_t terminal, zlink::message_t native_payload) {
+          auto payload = native_payload.to_bytes ();
           if (terminal == foundation::operation_terminal_t::completed) {
               reply->complete (
                 result_t<bound_session_completion_t>::success ({terminal, std::move (payload)}));
@@ -426,8 +493,12 @@ void verify_bound_session_bind_replay_preserves_first_admission ()
     auto request = bound_session_request (source, remote, 200ms);
     auto admitted = request.admitted ();
     std::atomic<int> admission_completions = 0;
-    zlink::framework::detail::observe_task_completion (
-      admitted, [&] (const auto &) { ++admission_completions; });
+    std::promise<void> admission_observed;
+    auto observed = admission_observed.get_future ();
+    zlink::framework::detail::observe_task_completion (admitted, [&] (const auto &) {
+        ++admission_completions;
+        admission_observed.set_value ();
+    });
     const auto pump = [&] {
         const auto now = mesh::service_liveness_registry_t::clock_t::now ();
         (void) source.observe_routes ();
@@ -450,6 +521,7 @@ void verify_bound_session_bind_replay_preserves_first_admission ()
       protocol::message_bytes (first.records.front ().parts.front ()));
     assert (admitted.await_ready () && admitted.result ());
     const auto *first_admission = &admitted.result ();
+    observed.get ();
     assert (admission_completions == 1 && !request.await_ready ());
     assert (target.mailbox ().release (first));
     assert (target.connect_peer (source.endpoint (), local));
@@ -509,7 +581,8 @@ void verify_bound_session_bind_permanent_absence_is_bounded ()
       target_descriptor.node_routing_id,
       bound_session_bind_request (target_descriptor, "missing-bind-actor"), 50ms,
       [&completion_promise] (foundation::operation_terminal_t terminal,
-                             std::vector<std::uint8_t> payload) mutable {
+                             zlink::message_t native_payload) mutable {
+          auto payload = native_payload.to_bytes ();
           completion_promise.set_value ({terminal, std::move (payload)});
       })));
     assert (completion.wait_for (500ms) == std::future_status::ready);
@@ -540,7 +613,8 @@ void verify_bound_session_bind_reply_completes_registered_operation ()
       target_descriptor.node_routing_id,
       bound_session_bind_request (target_descriptor, "reply-bind-actor"), 2s,
       [&completion_promise] (foundation::operation_terminal_t terminal,
-                             std::vector<std::uint8_t> payload) mutable {
+                             zlink::message_t native_payload) mutable {
+          auto payload = native_payload.to_bytes ();
           completion_promise.set_value ({terminal, std::move (payload)});
       })));
     complete_bound_session_bind (source, target, completion, "reply-bind-actor");
@@ -569,7 +643,8 @@ void verify_actor_create_retries_until_route_is_admitted ()
     auto submitted = source.request_actor_create (
       target_descriptor.node_routing_id, std::move (request), 2s,
       [&completion_promise] (foundation::operation_terminal_t terminal,
-                             std::vector<std::uint8_t> payload) mutable {
+                             zlink::message_t native_payload) mutable {
+          auto payload = native_payload.to_bytes ();
           completion_promise.set_value ({terminal, std::move (payload)});
       });
     assert (await_task (std::move (submitted)));
@@ -700,7 +775,8 @@ void verify_actor_create_retry_timeout_is_unavailable ()
     auto submitted = source.request_actor_create (
       target_descriptor.node_routing_id, std::move (request), 50ms,
       [&completion_promise] (foundation::operation_terminal_t terminal,
-                             std::vector<std::uint8_t> payload) mutable {
+                             zlink::message_t native_payload) mutable {
+          auto payload = native_payload.to_bytes ();
           completion_promise.set_value ({terminal, std::move (payload)});
       });
     assert (std::chrono::steady_clock::now () - submitted_at < 20ms);
@@ -735,7 +811,7 @@ void verify_actor_create_from_dispatch_thread_does_not_block ()
     auto submitted = source.request_actor_create (
       target_descriptor.node_routing_id, std::move (request), 500ms,
       [&callback_called, &callback_terminal] (foundation::operation_terminal_t terminal,
-                                              std::vector<std::uint8_t>) {
+                                              zlink::message_t) {
           callback_terminal.store (terminal, std::memory_order_release);
           callback_called.store (true, std::memory_order_release);
       });
@@ -2373,10 +2449,27 @@ void verify_raw_owner_node_send_and_liveness (
     // A missing host-wide Application Job Queue permit fences the ordinary
     // ROUTER before Core receive.  Poll readiness alone must not consume or
     // retain the application record in the Framework owner.
-    // Observe queued DATA with receive readiness enabled, then verify that
-    // a claim without a permit still leaves it at Core. Completion-only idle
-    // waiting is covered by the raw route port contract test.
-    assert (second.wait_for_activity (1s, true));
+    // The fence is meaningful only once the record is at the ROUTER: wait on
+    // the ingress poller until it reports POLLIN without receiving. A
+    // management deadline can end a wait first, so the wait repeats within
+    // the test deadline.
+    const auto wait_for_router_input = [&deadline] (mesh::raw_mesh_node_owner_t &node) {
+        const auto router_input_ready = [&node] {
+            const auto readiness = node.begin_receive_turn ();
+            return readiness
+                   && (static_cast<short> (*readiness)
+                       & static_cast<short> (zlink::poll_event_flag_t::pollin))
+                        != 0;
+        };
+        while (!router_input_ready ()
+               && mesh::service_liveness_registry_t::clock_t::now () < deadline)
+            (void) node.wait_for_activity (
+              std::max (0ms, std::chrono::ceil<std::chrono::milliseconds> (
+                               deadline - mesh::service_liveness_registry_t::clock_t::now ())),
+              true);
+        assert (router_input_ready ());
+    };
+    wait_for_router_input (second);
     const auto without_shared_permit =
       await_task (second.pump_one (mesh::service_liveness_registry_t::clock_t::now (), false));
     assert (without_shared_permit == mesh::raw_mesh_pump_result_t::no_data);
@@ -2393,6 +2486,7 @@ void verify_raw_owner_node_send_and_liveness (
         }
     }
     assert (pumped == mesh::raw_mesh_pump_result_t::application);
+    assert (second.mailbox ().pending_messages (mesh::service_mailbox_domain_t::application) == 1);
 
     bool retained_submitted = false;
     protocol::application_payload_t retained_payload{
@@ -2468,7 +2562,7 @@ void verify_raw_owner_node_send_and_liveness (
     const auto paused_liveness_base = mesh::service_liveness_registry_t::clock_t::now ();
     const auto paused_probe = await_task (first.tick_liveness (paused_liveness_base + 5s));
     assert (paused_probe.probes.size () == 1);
-    assert (second.wait_for_activity (1s, true));
+    wait_for_router_input (second);
     const auto paused_without_shared_permit =
       await_task (second.pump_one (mesh::service_liveness_registry_t::clock_t::now (), false));
     assert (paused_without_shared_permit == mesh::raw_mesh_pump_result_t::no_data);
@@ -2555,7 +2649,8 @@ void verify_raw_owner_node_send_and_liveness (
       first.request_to_node (second_descriptor.node_routing_id,
                              {"RequestProbe", "application/json", bytes ("request")}, 2s,
                              [&request_promise] (foundation::operation_terminal_t terminal,
-                                                 std::vector<std::uint8_t> payload) mutable {
+                                                 zlink::message_t native_payload) mutable {
+                                 auto payload = native_payload.to_bytes ();
                                  request_promise.set_value ({terminal, std::move (payload)});
                              })));
     mesh::raw_mesh_pump_result_t request_pump = mesh::raw_mesh_pump_result_t::no_data;
@@ -2614,7 +2709,8 @@ void verify_raw_owner_node_send_and_liveness (
     assert (await_task (first.request_actor_create (
       second_descriptor.node_routing_id, actor_create, 2s,
       [&actor_create_promise] (foundation::operation_terminal_t terminal,
-                               std::vector<std::uint8_t> payload) mutable {
+                               zlink::message_t native_payload) mutable {
+          auto payload = native_payload.to_bytes ();
           actor_create_promise.set_value ({terminal, std::move (payload)});
       })));
     mesh::raw_mesh_pump_result_t actor_create_pump = mesh::raw_mesh_pump_result_t::no_data;
@@ -2663,7 +2759,8 @@ void verify_raw_owner_node_send_and_liveness (
         assert (await_task (
           first.request_actor_create (second_descriptor.node_routing_id, burst_request, 2s,
                                       [promise] (foundation::operation_terminal_t terminal,
-                                                 std::vector<std::uint8_t> payload) mutable {
+                                                 zlink::message_t native_payload) mutable {
+                                          auto payload = native_payload.to_bytes ();
                                           promise->set_value ({terminal, std::move (payload)});
                                       })));
     }
@@ -2848,7 +2945,8 @@ void verify_raw_owner_node_send_and_liveness (
         requests.push_back (
           std::make_shared<zlink::framework::task_t<bool>> (first.request_to_node (
             second_descriptor.node_routing_id, request_payload, 30s,
-            [&] (foundation::operation_terminal_t terminal, std::vector<std::uint8_t> payload) {
+            [&] (foundation::operation_terminal_t terminal, zlink::message_t native_payload) {
+                auto payload = native_payload.to_bytes ();
                 assert (terminal == foundation::operation_terminal_t::completed);
                 assert (protocol::decode_application_payload (payload)
                         == expected_concurrent_reply);
@@ -2911,7 +3009,8 @@ relocation_prepare_request (const mesh::service_node_descriptor_t &source_descri
       1024,
       1,
       0xdeadbeefu,
-      1};
+      1,
+      static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())};
 }
 
 // Spec 15/28 + node's own cross-language audit: an explicit, identity-
@@ -3750,7 +3849,7 @@ void verify_durable_attempt_waits_for_admit (protocol::command kind)
     std::promise<completion_t> promise;
     auto completed = promise.get_future ();
     std::optional<zlink::framework::task_t<mesh::actor_join_wire_outcome_t>> join;
-    const auto callback = [&promise] (completion_t terminal, std::vector<std::uint8_t>) {
+    const auto callback = [&promise] (completion_t terminal, zlink::message_t) {
         promise.set_value (terminal);
     };
     if (kind == protocol::command::boundSessionBind)
@@ -3790,8 +3889,8 @@ void verify_durable_attempt_waits_for_admit (protocol::command kind)
     auto ready_completion = ready_promise.get_future ();
     assert (await_task (source.request_bound_session_bind (
       remote.node_routing_id, bound_session_bind_request (remote, "after-admit"), 2s,
-      [&ready_promise] (completion_t terminal, std::vector<std::uint8_t> payload) {
-          ready_promise.set_value ({terminal, std::move (payload)});
+      [&ready_promise] (completion_t terminal, zlink::message_t payload) {
+          ready_promise.set_value ({terminal, payload.to_bytes ()});
       })));
     admit_pair (source, target, remote);
     complete_bound_session_bind (source, target, ready_completion, "after-admit");
@@ -3888,6 +3987,11 @@ void verify_unadmitted_route (bool repeat_hello)
     mesh::raw_mesh_node_owner_t target (zlink::framework::test::runtime_failure_options (
       mesh::raw_mesh_node_options_t{descriptor ("unadmitted-target")}));
     target.start ();
+    // Publish never-due with no admitted peers before the selected route appears.
+    // HELLO retry must retain a management deadline without admitted peers.
+    const auto now = mesh::service_liveness_registry_t::clock_t::time_point{} + 1s;
+    (void) target.liveness ().tick (now);
+    assert (!target.liveness ().due (now));
     zlink::context_t context;
     zlink::router_socket_t source (context);
     source.set_routing_id (zlink::routing_id_t::from ("unadmitted-source"));
@@ -3915,8 +4019,35 @@ void verify_unadmitted_route (bool repeat_hello)
             return false;
         };
         assert (receive_hello ());
-        (void) await_task (target.tick_liveness (std::chrono::steady_clock::now ()));
-        assert (receive_hello ());
+        assert (target.liveness ().size () == 0);
+        const auto started = std::chrono::steady_clock::now ();
+        const auto next_activity = target.liveness ().next_activity ();
+        constexpr auto probe_interval = 5s;
+        constexpr int periods = 4;
+        constexpr int rotations_per_period = 10;
+        constexpr auto rotation_interval =
+          std::chrono::duration_cast<std::chrono::milliseconds> (probe_interval)
+          / rotations_per_period;
+        int hello_count = 0;
+        bool deadlines_follow_probe_interval = true;
+        // Ten management rotations per probe period, with no ADMIT from the peer.
+        // Consume every due HELLO so the count observes submissions, not socket timing.
+        for (int rotation = 0; rotation <= periods * rotations_per_period; ++rotation) {
+            const auto virtual_now = started + rotation * rotation_interval;
+            const bool due = target.liveness ().due (virtual_now);
+            (void) await_task (target.tick_liveness (virtual_now));
+            if (due) {
+                assert (receive_hello ());
+                ++hello_count;
+                deadlines_follow_probe_interval &=
+                  target.liveness ().next_activity () == virtual_now + probe_interval
+                  && !target.liveness ().due (virtual_now);
+            }
+        }
+        assert (hello_count == periods);
+        assert (deadlines_follow_probe_interval);
+        assert (next_activity && *next_activity > started);
+        assert (*next_activity <= started + probe_interval);
         const auto remote = descriptor ("unadmitted-source");
         assert (await_task (
           port.send (bytes ("unadmitted-target"),
@@ -3944,6 +4075,8 @@ void verify_unadmitted_route (bool repeat_hello)
                && std::chrono::steady_clock::now () < deadline)
             (void) await_task (target.pump_one (std::chrono::steady_clock::now ()));
         assert (target.topology ().peer (remote.node_routing_id)->ready);
+        // ADMIT retires the HELLO bound in its owner turn, before another tick.
+        assert (target.liveness ().next_activity ().value () > now);
         (void) await_task (target.tick_liveness (std::chrono::steady_clock::now ()));
         assert (await_task (target.send_to_node (
           remote.node_routing_id, {"AfterAdmit", "application/json", bytes ("{}")})));
@@ -4002,6 +4135,8 @@ int main (int argc, char **argv)
                 verify_durable_attempt_waits_for_admit (protocol::command::actorJoin);
             else if (name == "retries")
                 verify_bound_session_bind_retries_until_route_is_admitted ();
+            else if (name == "close-reply")
+                verify_bound_session_close_reply_grammar ();
             else if (name == "silent")
                 verify_unadmitted_route (false);
             else if (name == "prepare")
@@ -4082,6 +4217,7 @@ int main (int argc, char **argv)
     verify_durable_attempt_waits_for_admit (protocol::command::actorCreate);
     verify_durable_attempt_waits_for_admit (protocol::command::actorJoin);
     verify_actor_create_command_49_roundtrip ();
+    verify_bound_session_close_reply_grammar ();
     verify_bound_session_bind_retries_until_route_is_admitted ();
     verify_bound_session_bind_exposes_only_accepted_attempt ();
     verify_bound_session_bind_unadmitted_deadline_fails_both_stages ();

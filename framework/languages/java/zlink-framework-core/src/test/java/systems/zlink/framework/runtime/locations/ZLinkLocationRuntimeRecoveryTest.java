@@ -101,6 +101,9 @@ final class ZLinkLocationRuntimeRecoveryTest {
                                                 }
                                             }
                                         })) {
+            runtime.metricScopes(
+                    java.util.List.of(
+                            java.util.Map.of("scope_kind", "mesh", "scope_name", "test-mesh")));
             runtime.start(RoutingId.from("node-a")).toCompletableFuture().join();
             assertTrue(submitted.await(3, TimeUnit.SECONDS));
             assertTrue(restarted.get());
@@ -215,7 +218,7 @@ final class ZLinkLocationRuntimeRecoveryTest {
                         Duration.ofSeconds(5),
                         Duration.ofSeconds(1))) {
             runtime.setOwnerLeaseRecoveryListener(
-                    () -> {
+                    admissionWasOpen -> {
                         republishStarted.countDown();
                         return republish;
                     });
@@ -416,7 +419,7 @@ final class ZLinkLocationRuntimeRecoveryTest {
                         Duration.ofMillis(10),
                         Duration.ofMillis(100))) {
             runtime.setOwnerLeaseRecoveryListener(
-                    () -> {
+                    admissionWasOpen -> {
                         republished.countDown();
                         return CompletableFuture.completedFuture(null);
                     });
@@ -448,7 +451,7 @@ final class ZLinkLocationRuntimeRecoveryTest {
                         Duration.ofMillis(10),
                         Duration.ofMillis(100))) {
             runtime.setOwnerLeaseRecoveryListener(
-                    () -> {
+                    admissionWasOpen -> {
                         republished.countDown();
                         return CompletableFuture.completedFuture(null);
                     });
@@ -898,7 +901,7 @@ final class ZLinkLocationRuntimeRecoveryTest {
                 new ZLinkLocationRuntime(
                         store, "owner-a", Duration.ofSeconds(30), Duration.ofSeconds(5))) {
             runtime.setOwnerLeaseRecoveryListener(
-                    () -> {
+                    admissionWasOpen -> {
                         republishRequested.set(true);
                         return CompletableFuture.completedFuture(null);
                     });

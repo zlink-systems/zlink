@@ -31,7 +31,8 @@ template <typename T> class task_completion_source_t;
 namespace detail
 {
 
-using task_scheduler_t = std::function<void (std::function<void ()>)>;
+// A scheduler can reject without consuming work, allowing its caller to fall back.
+using task_scheduler_t = std::function<void (std::function<void ()> &&)>;
 
 inline constexpr char registered_execution_context_shutting_down_message[] =
   "registered execution context is shutting down";
@@ -41,6 +42,24 @@ inline constexpr char registered_execution_context_shutting_down_message[] =
 // are serialized with host shutdown.
 task_scheduler_t capture_runtime_native_continuation_scheduler ();
 task_scheduler_t capture_runtime_scope_exit_scheduler ();
+// Identifies the completion delivery scope and its drain owner; reuse is
+// checked separately.
+const void *current_completion_owner () noexcept;
+bool can_reuse_completion_turn (bool known_runtime_worker = false,
+                                const void *caller_job = nullptr,
+                                bool caller_owned_turn = false) noexcept;
+void dispatch_completion (std::function<void ()> work,
+                          bool inline_allowed = false,
+                          const void *owner = nullptr);
+inline bool dispatch_shutdown_fallback (std::function<void ()> &work,
+                                        const std::stop_token &wait_owner,
+                                        bool inline_allowed)
+{
+    if (wait_owner.stop_possible ())
+        return false;
+    dispatch_completion (std::move (work), inline_allowed);
+    return true;
+}
 void ensure_blocking_submit_allowed ();
 std::stop_token current_wait_owner ();
 std::stop_token exchange_wait_owner (std::stop_token token);
@@ -101,6 +120,8 @@ class serial_turn_t
     // turn for lifecycle fences such as relocation readiness.
     virtual bool is_after_active_phase () const noexcept = 0;
     virtual bool allows_yield () const noexcept = 0;
+    // Execution gate §3: admission belongs to this turn, before submission.
+    virtual bool claim_yield () = 0;
     virtual result_t<void> defer (std::function<void ()> work,
                                   std::function<void ()> cancel = {}) = 0;
     virtual void cancel_deferred () noexcept = 0;
@@ -180,7 +201,6 @@ inline result_t<void> defer_current_serial_turn (std::function<void ()> work,
     return turn->defer (std::move (work), std::move (cancel));
 }
 
-template <typename T> task_t<T> unsupported_yield_task ();
 
 /* 코루틴 일시 중단 중 실행 문맥 전달(flow-correlation MFLOW-EXT-014).
  * Framework 라이브러리가 hook 쌍을 원자적으로 등록한다. 재개 범위가 끝나면
@@ -264,25 +284,20 @@ inline ambient_context_scope_t enter_ambient_context (const ambient_context_snap
 inline task_scheduler_t capture_native_continuation_scheduler ()
 {
     auto held_turn = current_held_serial_turn ();
+    const bool inline_allowed = held_turn != nullptr || current_infrastructure_wait ();
     task_scheduler_t turn_scheduler =
       held_turn ? held_serial_turn_scheduler (std::move (held_turn)) : task_scheduler_t{};
     task_scheduler_t runtime_scheduler = capture_runtime_native_continuation_scheduler ();
     auto ambient = capture_ambient_context ();
-    if (!turn_scheduler && !runtime_scheduler && !ambient.state && !ambient.application_job
-        && !ambient.wait_owner.stop_possible () && !ambient.infrastructure_wait)
-        return [] (std::function<void ()> work) {
-            if (work)
-                work ();
-        };
     return [turn_scheduler = std::move (turn_scheduler),
-            runtime_scheduler = std::move (runtime_scheduler),
-            ambient = std::move (ambient)] (std::function<void ()> work) mutable {
+            runtime_scheduler = std::move (runtime_scheduler), ambient = std::move (ambient),
+            inline_allowed] (std::function<void ()> work) mutable {
         auto resume = [ambient, work = std::move (work)] () mutable {
             const auto ambient_guard = enter_ambient_context (ambient);
             if (work)
                 work ();
         };
-        auto dispatch = [turn_scheduler, resume = std::move (resume)] () mutable {
+        std::function<void ()> dispatch = [turn_scheduler, resume = std::move (resume)] () mutable {
             if (turn_scheduler) {
                 turn_scheduler (std::move (resume));
             } else {
@@ -290,10 +305,18 @@ inline task_scheduler_t capture_native_continuation_scheduler ()
             }
         };
         if (runtime_scheduler) {
-            runtime_scheduler (std::move (dispatch));
-        } else {
-            dispatch ();
+            try {
+                runtime_scheduler (std::move (dispatch));
+                return;
+            }
+            catch (const framework_exception_t &error) {
+                if (error.kind () != framework_error_kind_t::shutting_down
+                    || !dispatch_shutdown_fallback (dispatch, ambient.wait_owner, inline_allowed))
+                    throw;
+                return;
+            }
         }
+        dispatch_completion (std::move (dispatch), inline_allowed);
     };
 }
 
@@ -355,14 +378,16 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
         if (_started.load (std::memory_order_acquire))
             return true;
         auto self = shared_from_this ();
+        std::function<void ()> resume = [self, lifetime = std::move (lifetime)] {
+            (void) lifetime; // Retain the terminal result until delivery finishes.
+            self->resume (false);
+        };
+        const bool inline_allowed = _ambient.infrastructure_wait || _turn != nullptr;
         try {
             if (_scheduler)
-                _scheduler ([self, lifetime = std::move (lifetime)] {
-                    (void) lifetime; // Retain the terminal result until delivery finishes.
-                    self->resume (false);
-                });
+                _scheduler (std::move (resume));
             else
-                self->resume (false);
+                dispatch_completion (std::move (resume), inline_allowed);
         }
         catch (const framework_exception_t &error) {
             if (error.kind () != framework_error_kind_t::shutting_down)
@@ -373,12 +398,9 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
             /* Cancellation §5.1: the owner ends this wait, even when its stop
              * is already requested and its callback has not run yet. The
              * registration stays owned until that callback settles it. */
-            if (_ambient.wait_owner.stop_possible ())
+            if (!dispatch_shutdown_fallback (resume, _ambient.wait_owner, inline_allowed))
                 return false;
-            /* No owner can cancel this wait and the context that captured the
-             * scheduler has stopped, so the completing thread delivers the
-             * result. */
-            return resume (false);
+            return true;
         }
         return true;
     }
@@ -668,9 +690,9 @@ std::optional<result_t<T>> observe_task_result_for (const task_t<T> &task,
 
 template <typename T>
 task_t<T> with_task_resume_scheduler (task_t<T> task, task_scheduler_t scheduler);
-// Yield: the awaiting handler keeps the current turn until it suspends on
-// this task. A result that is ready before then continues in that turn.
-template <typename T> task_t<T> release_turn_on_suspend (task_t<T> task);
+// Claim the calling turn before starting work. Suspension retains the existing
+// handoff to a new turn; an already-ready result stays in the current turn.
+template <typename T, typename TStart> task_t<T> yield_call (TStart &&start);
 
 inline task_scheduler_t task_suspend_scheduler (const std::unique_ptr<task_scheduler_t> &resume,
                                                 bool release_turn)
@@ -784,7 +806,7 @@ template <typename T> class task_t
 
     template <typename U>
     friend task_t<U> detail::with_task_resume_scheduler (task_t<U>, detail::task_scheduler_t);
-    template <typename U> friend task_t<U> detail::release_turn_on_suspend (task_t<U>);
+    template <typename U, typename TStart> friend task_t<U> detail::yield_call (TStart &&);
     friend class task_completion_source_t<T>;
     template <typename U> friend class request_task_t;
     template <typename U>
@@ -852,7 +874,7 @@ template <> class task_t<void>
 
     template <typename U>
     friend task_t<U> detail::with_task_resume_scheduler (task_t<U>, detail::task_scheduler_t);
-    template <typename U> friend task_t<U> detail::release_turn_on_suspend (task_t<U>);
+    template <typename U, typename TStart> friend task_t<U> detail::yield_call (TStart &&);
     friend class task_completion_source_t<void>;
     template <typename U> friend class request_task_t;
     template <typename U>
@@ -903,17 +925,18 @@ task_t<T> with_task_resume_scheduler (task_t<T> task, task_scheduler_t scheduler
     return task;
 }
 
-template <typename T> task_t<T> release_turn_on_suspend (task_t<T> task)
+template <typename T, typename TStart> task_t<T> yield_call (TStart &&start)
 {
+    const auto turn = capture_current_serial_turn ();
+    if (!turn || !turn->claim_yield ()) {
+        return task_t<T> (
+          result_t<T>::failure (framework_error_kind_t::invalid_operation,
+                                "yield requires an open SpotWide User Spot or Instance Spot turn "
+                                "without a previous Yield call"));
+    }
+    task_t<T> task = std::forward<TStart> (start) ();
     task._release_turn_on_suspend = true;
     return task;
-}
-
-template <typename T> task_t<T> unsupported_yield_task ()
-{
-    return task_t<T> (result_t<T>::failure (
-      framework_error_kind_t::not_configured,
-      "yield is available only in a SpotWide User Spot or Instance Spot callback"));
 }
 
 

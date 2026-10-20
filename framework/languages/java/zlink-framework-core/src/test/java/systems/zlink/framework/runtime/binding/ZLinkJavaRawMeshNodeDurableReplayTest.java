@@ -10,6 +10,7 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
@@ -26,7 +27,7 @@ final class ZLinkJavaRawMeshNodeDurableReplayTest {
     }
 
     @Test
-    void unadmittedTargetRemainsTransientUntilLocationRemovesItsExpectation() {
+    void unadmittedTargetRemainsTransientUntilLocationRemovesItsExpectation() throws Exception {
         RoutingId target = RoutingId.from("durable-target");
         String endpoint = "inproc://durable-target-" + System.nanoTime();
         try (var context = Zlink.createContext();
@@ -34,13 +35,31 @@ final class ZLinkJavaRawMeshNodeDurableReplayTest {
             source.setRoutingId(RoutingId.from("durable-source"));
             source.setBind(endpoint + "-source");
             source.start();
-            source.observePeerAdmissionExpectation(target, endpoint, 8, "security");
+            source.observePeerAdmissionExpectation(
+                            target, endpoint, 8, "security", ZLinkMeshNodeObjectRole.NONE)
+                    .toCompletableFuture()
+                    .join();
             long intent = source.connectPeer(endpoint, target, 8, "security");
-            assertFalse(source.targetLifecycleEnded(target), "peer absence is transient");
-            source.forgetPeerAdmissionExpectation(target);
-            assertFalse(source.targetLifecycleEnded(target), "connection intent still exists");
-            source.removePeerConnection(intent);
-            assertTrue(source.targetLifecycleEnded(target));
+            var initial = new java.util.concurrent.CompletableFuture<Void>();
+            var changed = new java.util.concurrent.CompletableFuture<Void>();
+            var ended = new java.util.concurrent.CompletableFuture<Void>();
+            var observations = new java.util.concurrent.atomic.AtomicInteger();
+            try (var registration =
+                    source.onPeerStateChanged(
+                            target,
+                            () -> {
+                                if (observations.incrementAndGet() == 1) initial.complete(null);
+                                else changed.complete(null);
+                            },
+                            () -> ended.complete(null))) {
+                initial.get(3, java.util.concurrent.TimeUnit.SECONDS);
+                assertFalse(ended.isDone(), "peer absence is transient");
+                source.forgetPeerAdmissionExpectation(target).toCompletableFuture().join();
+                changed.get(3, java.util.concurrent.TimeUnit.SECONDS);
+                assertFalse(ended.isDone(), "connection intent still exists");
+                source.removePeerConnection(intent);
+                ended.get(3, java.util.concurrent.TimeUnit.SECONDS);
+            }
         }
     }
 
@@ -56,7 +75,13 @@ final class ZLinkJavaRawMeshNodeDurableReplayTest {
             source.setBind("inproc://durable-no-route-" + System.nanoTime());
             source.start();
             source.observePeerAdmissionExpectation(
-                    targetRid, "inproc://durable-awaiting-admission", 8, "security");
+                            targetRid,
+                            "inproc://durable-awaiting-admission",
+                            8,
+                            "security",
+                            ZLinkMeshNodeObjectRole.NONE)
+                    .toCompletableFuture()
+                    .join();
             var actor = new ZLinkBackendActorRef(targetRid, "actor", 3);
             var spots = (ZLinkJavaRawSpotNode) source.spotNode();
             spots.rememberActorAuthority(actor, 9, 10);

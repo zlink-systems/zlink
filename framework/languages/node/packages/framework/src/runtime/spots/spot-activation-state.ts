@@ -16,7 +16,7 @@ import type { ZLinkBackendSpot } from '../backend/contracts';
 import type { ZLinkSpotActorHandlerRegistryRuntime } from '../actors';
 import type { DefaultZLinkSpotHandlerRegistry } from './spot-handler-registry';
 import { ZLinkSpotSerialTurnExecutor } from './spot-serial-turn-executor';
-import { ZLinkSpotSerialExecutor } from './spot-serial-executor';
+import { ZLinkSpotSerialExecutor, type ZLinkActorPacketTurnDispatch } from './spot-serial-executor';
 import type { ZLinkSpotTimerRegistry } from './spot-timer';
 import type { ZLinkSpotActorJoinDispatch } from './spot-actor-join-dispatch';
 import { ZLinkExecutionBarrier, type ZLinkExecutionBarrierSeal } from '../execution';
@@ -233,33 +233,26 @@ export class ZLinkSpotActivation {
   }
 
   async notifyRelocatedBoundary(): Promise<void> {
-    await this.serial.post(() =>
+    await this.serial.postBarrierTurn(() =>
       this.notifyRelocationReadyCompleted(ZLinkSpotRelocationReadyOutcome.Relocated)
     );
   }
 
   executeActor<T>(
     actorId: string,
-    operation: (serial: ZLinkSpotSerialTurnExecutor) => Promise<T> | T
+    operation: (serial: ZLinkSpotSerialTurnExecutor) => Promise<T> | T,
+    workOptions?: import('../execution/serial-execution-queue').ZLinkSerialWorkOptions
   ): Promise<T> {
-    return this.serialExecutor.executeActor(actorId, operation);
+    return this.serialExecutor.executeActor(actorId, operation, workOptions);
   }
 
   /** @internal Restores a non-executing durable prefix into one Actor FIFO. */
-  admitActorDurablePrefix(
+  admitActorPacketPrefix(
     actorId: string,
-    records: readonly {
-      readonly operation: (
-        executeChild: <TChild>(
-          child: (
-            serial: import('./spot-serial-turn-executor').ZLinkSpotSerialTurnExecutor
-          ) => Promise<TChild> | TChild
-        ) => Promise<TChild>
-      ) => Promise<void>;
-      readonly workOptions?: import('../execution/serial-execution-queue').ZLinkSerialWorkOptions;
-    }[]
-  ): readonly Promise<void>[] {
-    return this.serialExecutor.admitActorDurablePrefix(actorId, records);
+    records: readonly import('../actors/actor-handoff').ZLinkActorHandoffPrefixRecord[],
+    dispatch: ZLinkActorPacketTurnDispatch
+  ): import('../actors/actor-handoff').ZLinkActorHandoffPrefixAdmission {
+    return this.serialExecutor.admitActorPacketPrefix(actorId, records, dispatch);
   }
 
   sealExecution(kind: ZLinkExecutionBarrierSeal['kind'] = 'relocation'): ZLinkExecutionBarrierSeal {
@@ -294,7 +287,7 @@ export class ZLinkSpotActivation {
 
   abortRelocation(capture: ZLinkSpotRelocationCapture): boolean {
     if (!this.executionBarrier.isCurrent(capture.seal)) return false;
-    this.timers.abortRelocation(capture.timers);
+    this.timers.abortRelocation();
     return this.abortExecutionSeal(capture.seal);
   }
 

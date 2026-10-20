@@ -96,7 +96,7 @@ internal static class ZLinkClientServerControlProtocol
     {
         if (parts.Count == 0)
             return false;
-        var span = parts[0].AsReadOnlyMemory().Span;
+        var span = parts[0].AsReadOnlySpan();
         return span.Length >= 3
             && span[0] == ServiceWireConstants.Magic0
             && span[1] == ServiceWireConstants.Magic1
@@ -232,7 +232,7 @@ internal static class ZLinkClientServerControlProtocol
         probeId = 0;
         if (parts.Count != 1)
             return false;
-        var span = parts[0].AsReadOnlyMemory().Span;
+        var span = parts[0].AsReadOnlySpan();
         if (span.Length != 13 || !HasPrefix(span, command))
             return false;
         probeId = BinaryPrimitives.ReadUInt64BigEndian(span[5..]);
@@ -244,7 +244,7 @@ internal static class ZLinkClientServerControlProtocol
         reason = 0;
         if (parts.Count != 1)
             return false;
-        var span = parts[0].AsReadOnlyMemory().Span;
+        var span = parts[0].AsReadOnlySpan();
         if (
             span.Length != 9
             || !HasPrefix(span, (byte)ServiceWireConstants.Command.Reject)
@@ -293,7 +293,7 @@ internal static class ZLinkClientServerControlProtocol
         reader = default;
         if (parts.Count != 1)
             return false;
-        var span = parts[0].AsReadOnlyMemory().Span;
+        var span = parts[0].AsReadOnlySpan();
         if (
             span.Length is < 13 or > MaximumControlBytes
             || !HasPrefix(span, command)

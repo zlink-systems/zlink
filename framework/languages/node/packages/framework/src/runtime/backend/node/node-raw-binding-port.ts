@@ -26,6 +26,7 @@ import {
   submitBindingSend
 } from './node-backend-adapter-support';
 import { isEndpointCloseIgnorableError } from './node-socket-backend-adapter';
+import { SubmitResult } from '../runtime-values';
 import { ZLinkNodeEventLoopPoller } from './node-event-loop-poller';
 import { ZLinkBufferMessage } from '../runtime-message';
 import type {
@@ -235,17 +236,13 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     return current;
   };
   private readonly replyParts = (
-    targetRid: string | Uint8Array,
-    replyToken: unknown,
+    targetRid: BindingRoutingId,
+    replyToken: ReplyToken,
     parts: readonly Uint8Array[]
   ) => {
-    appendReplyParts(
-      this.socket.reply(
-        this.preparedRoutingId(targetRid),
-        replyToken as Parameters<RouterSocket['reply']>[1]
-      ),
-      parts
-    ).submit();
+    // The receive record keeps the binding RoutingId it was delivered with,
+    // so the reply addresses that route without rebuilding the identity.
+    appendReplyParts(this.socket.reply(targetRid, replyToken), parts).submit();
   };
 
   private preparedRoutingId(routingId: string | Uint8Array): BindingRoutingId {
@@ -318,29 +315,26 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
     return submitBindingSend(this.socket.send(this.preparedRoutingId(targetRid)), parts);
   }
 
-  async request(
+  request<T>(
     targetRid: string,
     parts: readonly Uint8Array[],
     timeoutMs: number,
+    onReply: (parts: readonly Buffer[]) => T,
+    onFailed: (error: unknown) => T,
     recordReceived?: () => void,
     onAdmitted?: () => void
-  ): Promise<readonly Buffer[]> {
-    this.requireOpen();
-    const deadlineMs = performance.now() + timeoutMs;
+  ): Promise<T> {
     let submission: ReturnType<RequestSubmitOperation['submit']>;
+    const deadlineMs = performance.now() + timeoutMs;
     try {
+      this.requireOpen();
       submission = appendRequestParts(this.socket.request(this.preparedRoutingId(targetRid)), parts)
         .timeout(timeoutMs)
         .submit();
     } catch (error) {
       throw translateBindingResultError(error, 'submit');
     }
-    try {
-      const replies = await bindingRequestReply(submission, deadlineMs, recordReceived, onAdmitted);
-      return retainAndClose(replies);
-    } catch (error) {
-      throw translateBindingResultError(error, 'completion');
-    }
+    return requestReply(submission, deadlineMs, onReply, onFailed, recordReceived, onAdmitted);
   }
 
   routesSnapshot(): readonly ZLinkRawRouterRoute[] {
@@ -373,24 +367,26 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
     return submitBindingAsyncSend(this.socket.send(), parts);
   }
 
-  async request(
+  request(
     parts: readonly Uint8Array[],
     timeoutMs: number,
     onAdmitted?: () => void
   ): Promise<readonly Buffer[]> {
-    this.requireOpen();
-    const deadlineMs = performance.now() + timeoutMs;
     let submission: ReturnType<RequestSubmitOperation['submit']>;
+    const deadlineMs = performance.now() + timeoutMs;
     try {
+      this.requireOpen();
       submission = appendRequestParts(this.socket.request(), parts).timeout(timeoutMs).submit();
+      return requestReply(
+        submission,
+        deadlineMs,
+        (parts) => parts,
+        rethrowCompletion,
+        undefined,
+        onAdmitted
+      );
     } catch (error) {
-      throw translateBindingResultError(error, 'submit');
-    }
-    try {
-      const replies = await bindingRequestReply(submission, deadlineMs, undefined, onAdmitted);
-      return retainAndClose(replies);
-    } catch (error) {
-      throw translateBindingResultError(error, 'completion');
+      return Promise.reject(translateBindingResultError(error, 'submit'));
     }
   }
 
@@ -463,10 +459,60 @@ function requireParts(parts: readonly Uint8Array[]): [Uint8Array, ...Uint8Array[
 }
 
 type RawReceivedReply = (
-  targetRid: Uint8Array,
+  targetRid: BindingRoutingId,
   replyToken: ReplyToken,
   parts: readonly Uint8Array[]
 ) => void;
+
+const EMPTY_SOURCE_ROUTE = Buffer.alloc(0);
+
+/**
+ * One received binding record. The payload Buffers are the binding's own
+ * `data()` storage, retained under the runtime payload policy instead of a
+ * second Framework copy; closing the record releases the binding handles.
+ */
+class NodeRawReceivedRecord implements ZLinkRawReceivedRecord {
+  readonly sourceRid: string;
+  readonly sourceRoute: Uint8Array;
+  readonly routeGeneration: bigint;
+  readonly requestSeq?: bigint;
+  readonly reply?: (parts: readonly Uint8Array[]) => void;
+  readonly parts: readonly Buffer[];
+  private closed = false;
+
+  constructor(
+    private readonly received: Received,
+    nextRequestSequence: (() => bigint) | undefined,
+    reply: RawReceivedReply | undefined
+  ) {
+    const routingId = received.routingId;
+    this.sourceRid = routingId?.toString() ?? '';
+    this.sourceRoute = routingId?.toBytes() ?? EMPTY_SOURCE_ROUTE;
+    this.routeGeneration = received.routeGeneration;
+    const replyToken = received.replyToken;
+    if (replyToken !== null) {
+      this.requestSeq = nextRequestSequence?.();
+      if (reply === undefined) {
+        const operation = received.reply();
+        this.reply = (parts) => appendReplyParts(operation, parts).submit();
+      } else {
+        const target = routingId ?? bindingRoutingId(EMPTY_SOURCE_ROUTE);
+        this.reply = (parts) => reply(target, replyToken, parts);
+      }
+    }
+    const parts = received.parts;
+    const retained = new Array<Buffer>(parts.length);
+    for (let index = 0; index < parts.length; index++)
+      retained[index] = ZLinkBufferMessage.retainPayload(parts[index]!);
+    this.parts = retained;
+  }
+
+  close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.received.close();
+  }
+}
 
 function receiveRecord(
   socket: Pick<RouterSocket | DealerSocket, 'recv'>,
@@ -479,49 +525,71 @@ function receiveRecord(
     received.close();
     return undefined;
   }
-  let closed = false;
   try {
-    const sourceRid = received.routingId?.toString() ?? '';
-    const sourceRoute = received.routingId?.toBytes() ?? Buffer.alloc(0);
-    const requestSeq = received.replyToken === null ? undefined : nextRequestSequence?.();
-    const replyToken = received.replyToken;
-    const receivedReply =
-      replyToken === null
-        ? undefined
-        : reply === undefined
-          ? received.reply()
-          : (parts: readonly Uint8Array[]) => reply(sourceRoute, replyToken, parts);
-    return {
-      sourceRid,
-      sourceRoute,
-      routeGeneration: received.routeGeneration,
-      ...(requestSeq === undefined ? {} : { requestSeq }),
-      ...(receivedReply === undefined
-        ? {}
-        : {
-            reply: (parts: readonly Uint8Array[]) => {
-              if (typeof receivedReply === 'function') {
-                receivedReply(parts);
-                return;
-              }
-              appendReplyParts(receivedReply, parts).submit();
-            }
-          }),
-      parts: received.parts.map((part) => part.toBytes()),
-      close: () => {
-        if (closed) return;
-        closed = true;
-        received.close();
-      }
-    };
+    return new NodeRawReceivedRecord(received, nextRequestSequence, reply);
   } catch (error) {
     received.close();
     throw error;
   }
 }
 
-function retainAndClose(messages: readonly Message[]): readonly Buffer[] {
+/**
+ * Continues once on the binding reply. Admission that completed at submit is
+ * confirmed in this turn; a backpressured submission keeps the admission
+ * wait that bounds it by the request deadline.
+ */
+function requestReply<T>(
+  submission: ReturnType<RequestSubmitOperation['submit']>,
+  deadlineMs: number,
+  onReply: (parts: readonly Buffer[]) => T,
+  onFailed: (error: unknown) => T,
+  recordReceived: (() => void) | undefined,
+  onAdmitted: (() => void) | undefined
+): Promise<T> {
+  if (submission.result === SubmitResult.Backpressured) {
+    return observeRequestReply(
+      bindingRequestReply(submission, deadlineMs, recordReceived, onAdmitted),
+      onReply,
+      onFailed
+    );
+  }
   try {
+    onAdmitted?.();
+  } catch (error) {
+    throw translateBindingResultError(error, 'completion');
+  }
+  return observeRequestReply(submission.reply, onReply, onFailed, recordReceived);
+}
+
+/** Consumes the binding reply and notifies its terminal in this continuation. */
+function observeRequestReply<T>(
+  reply: Promise<readonly Message[]>,
+  onReply: (parts: readonly Buffer[]) => T,
+  onFailed: (error: unknown) => T,
+  recordReceived?: () => void
+): Promise<T> {
+  return reply.then(
+    (replies) => {
+      try {
+        return onReply(retainAndClose(replies, recordReceived));
+      } catch (error) {
+        return onFailed(translateBindingResultError(error, 'completion'));
+      }
+    },
+    (error) => onFailed(translateBindingResultError(error, 'completion'))
+  );
+}
+
+function rethrowCompletion(error: unknown): never {
+  throw error;
+}
+
+function retainAndClose(
+  messages: readonly Message[],
+  recordReceived?: () => void
+): readonly Buffer[] {
+  try {
+    recordReceived?.();
     return messages.map((message) => ZLinkBufferMessage.retainPayload(message));
   } finally {
     for (const message of messages) message.close();

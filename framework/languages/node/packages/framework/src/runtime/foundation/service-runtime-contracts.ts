@@ -243,12 +243,16 @@ export interface ReceiveRequirements {
 }
 
 export interface ZLinkMessageFollowOrigin {
+  readonly requestSource?: import('../locations/request-source-resolver').ZLinkRequestSourceFence;
   readonly sourceNodeRid: RoutingId;
   readonly originalOperation: MeshOperationId;
   readonly originalReplyRouteId: bigint;
+  /** The canonical target accepted with the original native Actor frame. */
+  readonly target?: import('./service-stateful-wire-codec').ServiceActorRouteFence;
 }
 
 export interface ReceiveRecord {
+  readonly requestSource?: import('../locations/request-source-resolver').ZLinkRequestSourceFence;
   readonly kind: number;
   readonly domain: number;
   readonly sourceNodeRid: RoutingId | null;
@@ -377,7 +381,8 @@ export interface StreamSessionService {
       retiredSession: ServiceRetiredBoundSessionRouteFence,
       actor: ServiceActorRef
     ) => void,
-    actorAuthority?: StreamSessionActorAuthorityFence
+    actorAuthority?: StreamSessionActorAuthorityFence,
+    close?: () => Promise<void>
   ): MeshOperationId;
   unbindActor(
     sessionRid: RoutingId,

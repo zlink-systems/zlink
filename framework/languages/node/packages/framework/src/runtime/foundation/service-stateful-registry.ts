@@ -1,4 +1,9 @@
-import { ZLINK_MAX_IDENTITY_TEXT_BYTES } from '../../contracts/Common/CoreTypes';
+import {
+  ZLINK_MAX_IDENTITY_TEXT_BYTES,
+  ZLINK_MAX_ROUTING_ID_BYTES
+} from '../../contracts/Common/CoreTypes';
+import { routingIdsEqual } from '../routing-id';
+import { encodeServiceWireRoutingId } from './service-wire-binary-primitives';
 import { OperationRegistry, type PendingOperation } from './operation-registry';
 
 export type ServiceSpotKind = 'entry' | 'user' | 'instance';
@@ -401,7 +406,9 @@ export class ServiceStatefulRegistry {
     sessionOwnerLeaseGeneration?: bigint
   ): ServiceSessionBinding {
     const current = this.requireActorCore(actor);
-    requireText(sessionRid, 'sessionRid');
+    encodeServiceWireRoutingId(sessionRid, 'sessionRid', ZLINK_MAX_ROUTING_ID_BYTES, (message) => {
+      throw new RangeError(message);
+    });
     requireText(sessionOwnerNodeRid, 'sessionOwnerNodeRid');
     const binding: ServiceSessionBinding = Object.freeze({
       actor: Object.freeze({ ...current.ref }),
@@ -455,7 +462,8 @@ export class ServiceStatefulRegistry {
     if (binding === undefined) return false;
     if (
       binding.bindingGeneration !== expectedBindingGeneration ||
-      (expectedSessionRid !== undefined && binding.sessionRid !== expectedSessionRid) ||
+      (expectedSessionRid !== undefined &&
+        !routingIdsEqual(binding.sessionRid, expectedSessionRid)) ||
       (expectedSessionOwnerNodeRid !== undefined &&
         binding.sessionOwnerNodeRid !== expectedSessionOwnerNodeRid)
     ) {
@@ -621,6 +629,8 @@ function createSpotState(
   }
 }
 
+export const RELOCATION_REPLY_RETENTION_MS = 24 * 60 * 60 * 1_000;
+
 export class ServiceTerminalOperationRegistry<T, Context = unknown> {
   private readonly operations: OperationRegistry<T, Context>;
 
@@ -636,8 +646,8 @@ export class ServiceTerminalOperationRegistry<T, Context = unknown> {
     return this.operations.register(timeoutMs, timeoutOwner, context);
   }
 
-  reply(id: bigint, value: T): boolean {
-    return this.operations.complete(id, value);
+  reply(id: bigint, value: T, terminalContextRetentionMs = 0): boolean {
+    return this.operations.complete(id, value, terminalContextRetentionMs);
   }
 
   fail(id: bigint, error: unknown): boolean {
@@ -660,12 +670,20 @@ export class ServiceTerminalOperationRegistry<T, Context = unknown> {
     return this.operations.size;
   }
 
+  nextDeadlineMs(): number {
+    return this.operations.nextDeadlineMs();
+  }
+
   expire(nowMs: number, turnDeadlineMs: number): number {
     return this.operations.expire(nowMs, turnDeadlineMs);
   }
 
   close(): void {
     this.operations.close('Stateful runtime closed.');
+  }
+
+  failAll(reason: unknown): void {
+    this.operations.failAll(reason);
   }
 }
 

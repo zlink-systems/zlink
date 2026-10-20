@@ -42,11 +42,7 @@ import { ZLinkTransferredActorRollbackCoordinator } from './transferred-actor-ro
 const ACTOR_CREATION_RETRY_INTERVAL_MS = 5;
 const LOCAL_DIAGNOSTIC_NODE_RID = 'local';
 
-export {
-  DefaultZLinkActorClient,
-  forwardEncodedActorPacket,
-  type ZLinkActorClientOptions
-} from './actor-client';
+export { DefaultZLinkActorClient, type ZLinkActorClientOptions } from './actor-client';
 export { DefaultZLinkActorContext, ZLINK_ACTOR_JOIN_ENTRY_SPOT_RUNTIME } from './actor-context';
 export { ZLinkActorSerialExecutor } from './actor-mailbox';
 export {
@@ -400,6 +396,11 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
 
   async findActor(actorId: string, signal?: AbortSignal): Promise<ZLinkActor | undefined> {
     throwIfAborted(signal);
+    return this.resolveLocalActor(actorId);
+  }
+
+  /** @internal Uses the relocation owner's publication boundary for local dispatch. */
+  resolveLocalActor(actorId: string): ZLinkActor | undefined {
     if (this.relocationStaged.has(actorId)) return undefined;
     return this.states.get(actorId)?.actor;
   }
@@ -474,7 +475,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
       if (nativeRef !== undefined) node.discardRelocatedActor?.(nativeRef);
       this.relocationStaged.delete(actorId);
       const failedState = this.states.get(actorId);
-      await this.finalizeActorState(actorId, failedState);
+      await this.finalizeActorState(failedState);
       throw error;
     }
   }
@@ -497,6 +498,13 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     await this.releaseLocalActor(actorId, sourceActorRef);
   }
 
+  /** Commit removes current ownership; a Join profile may still own its leave callback. */
+  detachRelocationSource(state: ZLinkActorRuntimeState): void {
+    if (this.detachActorStateRegistration(state)) {
+      this.discardNativeRelocationSource(state.nativeActorRef);
+    }
+  }
+
   async releaseSpotActorMembers(meshName: string, spotId?: RoutingId): Promise<void> {
     const results = await Promise.allSettled(
       [...this.states.values()]
@@ -515,18 +523,15 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     exactNativeActorRef?: ZLinkBackendActorRef
   ): Promise<void> {
     const state = this.states.get(actorId);
-    const node = this.options.nativeActorNodeProvider?.() ?? this.options.nativeActorNode;
-    const nativeActorRef = exactNativeActorRef ?? state?.nativeActorRef;
+    if (state === undefined) return;
     const failures: unknown[] = [];
     try {
-      if (nativeActorRef !== undefined) {
-        node?.discardRelocatedActor?.(nativeActorRef);
-      }
+      this.discardNativeRelocationSource(exactNativeActorRef ?? state.nativeActorRef);
     } catch (error) {
       failures.push(error);
     }
     try {
-      await this.completeCoreRelocationSource(actorId);
+      await this.completeCoreRelocationSource(actorId, state);
     } catch (error) {
       failures.push(error);
     }
@@ -537,27 +542,36 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     }
   }
 
-  async completeCoreRelocationSource(actorId: string): Promise<void> {
-    const state = this.states.get(actorId);
-    await this.finalizeActorState(actorId, state);
+  async completeCoreRelocationSource(
+    actorId: string,
+    state = this.states.get(actorId)
+  ): Promise<void> {
+    await this.finalizeActorState(state);
   }
 
-  private async finalizeActorState(
-    actorId: string,
-    state: ZLinkActorRuntimeState | undefined
-  ): Promise<void> {
-    if (state === undefined || this.states.get(actorId) !== state) return;
+  private discardNativeRelocationSource(nativeActorRef: ZLinkBackendActorRef | undefined): void {
+    if (nativeActorRef === undefined) return;
+    const node = this.options.nativeActorNodeProvider?.() ?? this.options.nativeActorNode;
+    node?.discardRelocatedActor?.(nativeActorRef);
+  }
+
+  private async finalizeActorState(state: ZLinkActorRuntimeState | undefined): Promise<void> {
+    if (state === undefined) return;
     try {
       if (state.actor !== undefined)
         await disposeLifecycleHandlers(state.actor, this.detachedTaskRunner);
     } finally {
       state.clearAfterDestroy();
-      if (this.states.get(actorId) === state) {
-        this.states.delete(actorId);
-        this.actorMeshNames.delete(actorId);
-        this.relocationStaged.delete(actorId);
-      }
+      this.detachActorStateRegistration(state);
     }
+  }
+
+  private detachActorStateRegistration(state: ZLinkActorRuntimeState): boolean {
+    if (this.states.get(state.actorId) !== state) return false;
+    this.states.delete(state.actorId);
+    this.actorMeshNames.delete(state.actorId);
+    this.relocationStaged.delete(state.actorId);
+    return true;
   }
 
   private async finalizeDestroyedActor(
@@ -568,7 +582,7 @@ export class DefaultZLinkActorManager implements ZLinkActorManager {
     try {
       this.options.actorDestroyedCleanup?.(actorId);
     } finally {
-      await this.finalizeActorState(actorId, state);
+      await this.finalizeActorState(state);
       this.options.metrics?.change(METRIC_NAMES.ActorCount, -1);
     }
   }
@@ -944,7 +958,7 @@ class ZLinkActorCreateCallRuntime implements ZLinkActorCreateCall {
   yield(signal?: AbortSignal): Promise<ZLinkActorCreateResult> {
     const turn = requireZLinkYieldTurn(this.turn);
     const pending = this.executeOnce(signal);
-    return turn.yieldPromise(pending);
+    return turn.yieldFrameworkPromise(pending);
   }
 
   private executeOnce(signal?: AbortSignal): Promise<ZLinkActorCreateResult> {

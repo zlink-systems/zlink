@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/mesh/service_topology_registry.hpp"
+#include "runtime/mesh/service_channel_membership.hpp"
 #include "runtime/client_server/weighted_selector.hpp"
 #include <opentelemetry/metrics/provider.h>
 #include "runtime/mesh/route_mesh_connection_policy.hpp"
@@ -159,12 +160,8 @@ bool service_topology_registry_t::selectable (const service_node_descriptor_t &d
     if (descriptor.state != service_node_state_t::serving) {
         return false;
     }
-    const auto found =
-      std::lower_bound (descriptor.channels.begin (), descriptor.channels.end (), channel_name,
-                        [] (const service_channel_descriptor_t &channel, const std::string &name) {
-                            return channel.name < name;
-                        });
-    return found != descriptor.channels.end () && found->name == channel_name && found->weight != 0;
+    const auto *found = find_service_channel (descriptor, channel_name);
+    return found != nullptr && found->weight != 0;
 }
 
 std::function<void ()>
@@ -479,14 +476,14 @@ service_topology_registry_t::not_required_peers_on_lane () const
     return result;
 }
 
-std::optional<admitted_peer_t>
+std::shared_ptr<const admitted_peer_t>
 service_topology_registry_t::peer (const std::vector<std::uint8_t> &node_routing_id) const
 {
-    const auto topology = std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
+    auto topology = std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
     const auto found = topology->peers.find (node_routing_id);
     if (found == topology->peers.end ())
-        return std::nullopt;
-    return found->second;
+        return nullptr;
+    return std::shared_ptr<const admitted_peer_t> (std::move (topology), &found->second);
 }
 
 void service_topology_registry_t::materialize_selection_state (selection_state_t &state)
@@ -587,12 +584,8 @@ void service_topology_registry_t::rebuild_channel_selections ()
         state.total_weight = 0;
         bool all_draining = true;
         for (const auto &[node_id, peer] : topology->peers) {
-            const auto channel = std::lower_bound (
-              peer.descriptor.channels.begin (), peer.descriptor.channels.end (), channel_name,
-              [] (const service_channel_descriptor_t &entry, const std::string &name) {
-                  return entry.name < name;
-              });
-            if (channel == peer.descriptor.channels.end () || channel->name != channel_name)
+            const auto *channel = find_service_channel (peer.descriptor, channel_name);
+            if (channel == nullptr)
                 continue;
             all_draining &= peer.descriptor.state == service_node_state_t::draining;
             if (!peer.ready || !selectable (peer.descriptor, channel_name))
@@ -674,19 +667,16 @@ service_topology_registry_t::select (const std::string &channel_name,
           }
           if (selected == nullptr) {
               record_selection_failure (channel_name);
-              const bool has_ready_target = std::any_of (
-                topology->peers.begin (), topology->peers.end (),
-                [&channel_name] (const auto &entry) {
-                    const auto &descriptor = entry.second.descriptor;
-                    if (descriptor.state != service_node_state_t::serving
-                        && descriptor.state != service_node_state_t::draining
-                        && descriptor.state != service_node_state_t::retiring)
-                        return false;
-                    return std::any_of (descriptor.channels.begin (), descriptor.channels.end (),
-                                        [&channel_name] (const auto &channel) {
-                                            return channel.name == channel_name;
-                                        });
-                });
+              const bool has_ready_target =
+                std::any_of (topology->peers.begin (), topology->peers.end (),
+                             [&channel_name] (const auto &entry) {
+                                 const auto &descriptor = entry.second.descriptor;
+                                 if (descriptor.state != service_node_state_t::serving
+                                     && descriptor.state != service_node_state_t::draining
+                                     && descriptor.state != service_node_state_t::retiring)
+                                     return false;
+                                 return find_service_channel (descriptor, channel_name) != nullptr;
+                             });
               return result_t<std::vector<std::uint8_t>>::failure (
                 has_ready_target ? framework_error_kind_t::unavailable
                                  : framework_error_kind_t::not_found,

@@ -3,8 +3,10 @@ package systems.zlink.framework.runtime.spots;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -20,13 +22,13 @@ import systems.zlink.framework.actors.ZLinkActorFactory;
 import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
 import systems.zlink.framework.actors.ZLinkActorRelocationAdapter;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
+import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
-import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
+import systems.zlink.framework.runtime.binding.ZLinkActorIngressProbe;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
@@ -36,6 +38,7 @@ import systems.zlink.framework.spots.ZLinkEntrySpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
+import systems.zlink.framework.spots.ZLinkSpotActorRequestHandler;
 import systems.zlink.framework.spots.ZLinkSpotActorSendHandler;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 
@@ -47,6 +50,10 @@ import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.logging.Handler;
+import java.util.logging.Level;
+import java.util.logging.LogRecord;
+import java.util.logging.Logger;
 
 /**
  * Source-local admission of an Actor send ends when the owning Actor queue accepts the message
@@ -63,6 +70,10 @@ final class ZLinkJoinedActorSendAdmissionTest {
     private static CompletableFuture<Void> pingHandled;
     private static CompletableFuture<Void> completionRelease;
     private static CompletableFuture<Void> initialization;
+    private static CompletableFuture<Boolean> leaveEntered;
+    private static CompletableFuture<Void> leaveRelease;
+    private static CompletableFuture<Void> joinedRelease;
+    private static ZLinkActorIngressProbe probe;
 
     @BeforeEach
     void reset() {
@@ -72,6 +83,75 @@ final class ZLinkJoinedActorSendAdmissionTest {
         pingHandled = new CompletableFuture<>();
         completionRelease = new CompletableFuture<>();
         initialization = CompletableFuture.completedFuture(null);
+        leaveEntered = new CompletableFuture<>();
+        leaveRelease = CompletableFuture.completedFuture(null);
+        joinedRelease = CompletableFuture.completedFuture(null);
+        probe = new ZLinkActorIngressProbe(PLAYER);
+    }
+
+    @Test
+    void remoteSourceLeaveEntersItsSpotGate() throws Exception {
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        try (var source = start(options("leave-source", locations, relocations, null, true));
+                var target =
+                        start(
+                                options(
+                                        "leave-target",
+                                        locations,
+                                        relocations,
+                                        source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game")
+                                                .endpoint(),
+                                        true))) {
+            source.spotManager()
+                    .getOrCreate("table-2", "table")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            target.spotManager()
+                    .getOrCreate("table-1", "table")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            // Establish membership locally; the regression then exercises one remote source leave.
+            target.actorManager()
+                    .create(PLAYER, "player")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            TABLE_CLIENT.set(target.actorClient());
+            completionRelease.complete(null);
+            target.actorClient()
+                    .requestToActor(PLAYER, new JoinRequest("table-1"))
+                    .timeout(Duration.ofSeconds(WAIT_SECONDS))
+                    .submit(String.class)
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertInstanceOf(
+                    ZLinkActorJoinCompletion.Accepted.class,
+                    joinCompleted.get(WAIT_SECONDS, TimeUnit.SECONDS));
+            pingHandled.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            joinCompleted = new CompletableFuture<>();
+            leaveRelease = new CompletableFuture<>();
+            TABLE_CLIENT.set(source.actorClient());
+            try {
+                target.actorClient()
+                        .requestToActor(PLAYER, new JoinRequest("table-2"))
+                        .timeout(Duration.ofSeconds(WAIT_SECONDS))
+                        .submit(String.class)
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
+                assertTrue(
+                        leaveEntered.get(WAIT_SECONDS, TimeUnit.SECONDS),
+                        "remote source OnLeaveActor must enter its Spot gate");
+            } finally {
+                leaveRelease.complete(null);
+                completionRelease.complete(null);
+            }
+            assertInstanceOf(
+                    ZLinkActorJoinCompletion.Accepted.class,
+                    joinCompleted.get(WAIT_SECONDS, TimeUnit.SECONDS));
+        }
     }
 
     @Test
@@ -94,9 +174,17 @@ final class ZLinkJoinedActorSendAdmissionTest {
     }
 
     @ParameterizedTest
-    @CsvSource({"false, PER_ACTOR", "true, PER_ACTOR", "false, SPOT_WIDE", "true, SPOT_WIDE"})
+    @CsvSource({
+        "false, PER_ACTOR, false", "true, PER_ACTOR, false",
+        "false, SPOT_WIDE, false", "true, SPOT_WIDE, false",
+        "false, PER_ACTOR, true", "true, PER_ACTOR, true",
+        "false, SPOT_WIDE, true", "true, SPOT_WIDE, true"
+    })
     void joinedCallbackSendToJoiningActorIsAdmittedBeforeTheJoinCompletes(
-            boolean crossNode, ZLinkUserSpotExecutionMode executionMode) throws Exception {
+            boolean crossNode, ZLinkUserSpotExecutionMode executionMode, boolean sendFromSource)
+            throws Exception {
+        boolean observe = crossNode && sendFromSource;
+        if (observe) joinedRelease = new CompletableFuture<>();
         var locations = new ZLinkInMemoryLocationStore();
         var relocations = new InMemoryRelocationStore();
         try (var source =
@@ -122,7 +210,7 @@ final class ZLinkJoinedActorSendAdmissionTest {
                                             executionMode))
                             : source;
             try {
-                TABLE_CLIENT.set(target.actorClient());
+                TABLE_CLIENT.set(sendFromSource ? source.actorClient() : target.actorClient());
                 target.spotManager()
                         .getOrCreate("table-1", "table")
                         .submit()
@@ -143,6 +231,20 @@ final class ZLinkJoinedActorSendAdmissionTest {
                                 .toCompletableFuture()
                                 .get(WAIT_SECONDS, TimeUnit.SECONDS));
 
+                if (observe) {
+                    var seen = probe.ingress.get(WAIT_SECONDS, TimeUnit.SECONDS);
+                    assertFalse(
+                            joinCompleted.isDone(), "observation must occur inside OnJoinedActor");
+                    assertEquals(seen.forwarded(), seen.received());
+                    assertTrue(
+                            seen.relocationOwnerAccepted()
+                                    || seen.received().authorityOwnerGeneration()
+                                                    == seen.currentAuthority()
+                                            && seen.received().ownerLeaseGeneration()
+                                                    == seen.currentLease(),
+                            "callback ingress was rejected: " + seen);
+                    joinedRelease.complete(null);
+                }
                 var completion = joinCompleted.get(WAIT_SECONDS, TimeUnit.SECONDS);
                 assertInstanceOf(
                         ZLinkActorJoinCompletion.Accepted.class,
@@ -154,33 +256,156 @@ final class ZLinkJoinedActorSendAdmissionTest {
                 pingHandled.get(WAIT_SECONDS, TimeUnit.SECONDS);
                 assertEquals(List.of("joined", "send admitted", "completed", "ping"), EVENTS);
             } finally {
+                joinedRelease.complete(null);
                 completionRelease.complete(null);
                 if (crossNode) target.close();
             }
         }
     }
 
+    @ParameterizedTest
+    @CsvSource({"PER_ACTOR", "SPOT_WIDE"})
+    void stagedForwardArrivingAfterJoinedCallbackUsesCommittedFence(
+            ZLinkUserSpotExecutionMode executionMode) throws Exception {
+        probe.forwardRelease = new CompletableFuture<>();
+        var locations = new ZLinkInMemoryLocationStore();
+        var relocations = new InMemoryRelocationStore();
+        try (var source =
+                        start(
+                                options(
+                                        "late-source",
+                                        locations,
+                                        relocations,
+                                        null,
+                                        false,
+                                        executionMode));
+                var target =
+                        start(
+                                options(
+                                        "late-target",
+                                        locations,
+                                        relocations,
+                                        source.listenerStatus(ZLinkListenerKind.ROUTE_MESH, "game")
+                                                .endpoint(),
+                                        true,
+                                        executionMode))) {
+            TABLE_CLIENT.set(source.actorClient());
+            target.spotManager()
+                    .getOrCreate("table-1", "table")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            source.actorManager()
+                    .create(PLAYER, "player")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertEquals(
+                    "scheduled",
+                    source.actorClient()
+                            .requestToActor(PLAYER, new JoinRequest("table-1"))
+                            .timeout(Duration.ofSeconds(WAIT_SECONDS))
+                            .submit(String.class)
+                            .toCompletableFuture()
+                            .get(WAIT_SECONDS, TimeUnit.SECONDS));
+            probe.forwarding.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertInstanceOf(
+                    ZLinkActorJoinCompletion.Accepted.class,
+                    joinCompleted.get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertFalse(pingHandled.isDone());
+            completionRelease.complete(null);
+            probe.published.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            probe.forwardRelease.complete(null);
+            var seen = probe.ingress.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertFalse(seen.relocationOwnerAccepted(), "temporary stage must already be released");
+            assertEquals(
+                    seen.currentAuthority(),
+                    seen.received().authorityOwnerGeneration(),
+                    "late forwarding must carry the committed target generation: " + seen);
+            assertEquals(seen.currentLease(), seen.received().ownerLeaseGeneration());
+            pingHandled.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertEquals(List.of("joined", "send admitted", "completed", "ping"), EVENTS);
+        } finally {
+            probe.forwardRelease.complete(null);
+            completionRelease.complete(null);
+        }
+    }
+
     @Test
-    void sendWithoutHandlerFailsAdmissionAsNotFound() throws Exception {
-        try (var runtime = start(options("send-missing-handler", null, null, null, true))) {
+    void sendWithoutHandlerIsAdmittedAndReportedWithoutPoisoningActor() throws Exception {
+        var options = options("send-missing-handler", null, null, null, true);
+        options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+        var dropped = new CompletableFuture<String>();
+        var logger =
+                Logger.getLogger(
+                        "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer");
+        var previousLevel = logger.getLevel();
+        Handler observer =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        String line = record.getMessage();
+                        if (line != null
+                                && line.contains(" event_id=zlink.dispatch_error ")
+                                && line.contains(" packet=Unhandled ")
+                                && line.contains(" actor=" + PLAYER + " ")) {
+                            dropped.complete(line);
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        observer.setLevel(Level.ALL);
+        logger.addHandler(observer);
+        logger.setLevel(Level.ALL);
+        try (var runtime = start(options)) {
+            TABLE_CLIENT.set(runtime.actorClient());
+            completionRelease.complete(null);
+            runtime.spotManager()
+                    .getOrCreate("table-1", "table")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(WAIT_SECONDS, TimeUnit.SECONDS);
             runtime.actorManager()
                     .create(PLAYER, "player")
                     .submit()
                     .toCompletableFuture()
                     .get(WAIT_SECONDS, TimeUnit.SECONDS);
 
-            var failure =
-                    assertThrows(
-                            ExecutionException.class,
-                            () ->
-                                    runtime.actorClient()
-                                            .sendToActor(PLAYER, new Unhandled())
-                                            .submit()
-                                            .toCompletableFuture()
-                                            .get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertNull(
+                    runtime.actorClient()
+                            .sendToActor(PLAYER, new Unhandled())
+                            .submit()
+                            .toCompletableFuture()
+                            .get(WAIT_SECONDS, TimeUnit.SECONDS));
+            String diagnostic = dropped.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            assertTrue(diagnostic.contains(" surface=actor "), diagnostic);
+            assertTrue(diagnostic.contains(" kind=send "), diagnostic);
+            assertTrue(diagnostic.contains(" outcome=failed "), diagnostic);
+            assertTrue(diagnostic.contains(" reason=no_handler "), diagnostic);
+            assertTrue(diagnostic.contains(" action=drop"), diagnostic);
+
             assertEquals(
-                    ZLinkFrameworkErrorKind.NOT_FOUND,
-                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+                    "scheduled",
+                    runtime.actorClient()
+                            .requestToActor(PLAYER, new JoinRequest("table-1"))
+                            .timeout(Duration.ofSeconds(WAIT_SECONDS))
+                            .submit(String.class)
+                            .toCompletableFuture()
+                            .get(WAIT_SECONDS, TimeUnit.SECONDS));
+            assertInstanceOf(
+                    ZLinkActorJoinCompletion.Accepted.class,
+                    joinCompleted.get(WAIT_SECONDS, TimeUnit.SECONDS));
+            pingHandled.get(WAIT_SECONDS, TimeUnit.SECONDS);
+        } finally {
+            completionRelease.complete(null);
+            logger.removeHandler(observer);
+            logger.setLevel(previousLevel);
+            observer.close();
         }
     }
 
@@ -214,7 +439,7 @@ final class ZLinkJoinedActorSendAdmissionTest {
     }
 
     private static ZLinkFrameworkRuntime start(DefaultZLinkFrameworkOptions options) {
-        return ZLinkFrameworkRuntimeTestAccess.start(options, new ZLinkJavaBackendAdapterFactory());
+        return ZLinkFrameworkRuntimeTestAccess.start(options, probe.provider());
     }
 
     private static DefaultZLinkFrameworkOptions options(
@@ -240,6 +465,8 @@ final class ZLinkJoinedActorSendAdmissionTest {
             boolean hostsTable,
             ZLinkUserSpotExecutionMode executionMode) {
         var options = new DefaultZLinkFrameworkOptions();
+        options.configureDispatch()
+                .messageFlow(systems.zlink.framework.configuration.ZLinkMessageFlowLogMode.NORMAL);
         options.addLocationStore(locations == null ? new ZLinkInMemoryLocationStore() : locations);
         options.addRelocationStore(
                 relocations == null ? new InMemoryRelocationStore() : relocations);
@@ -360,6 +587,7 @@ final class ZLinkJoinedActorSendAdmissionTest {
         @Override
         public void configure() {
             context.handlers().addHandler(PingHandler.class);
+            context.handlers().addHandler(TableJoinHandler.class);
         }
 
         @Override
@@ -376,12 +604,25 @@ final class ZLinkJoinedActorSendAdmissionTest {
                     .get()
                     .sendToActor(actor.context().actorId(), new Ping())
                     .submit()
-                    .thenRun(() -> EVENTS.add("send admitted"));
+                    .thenRun(() -> EVENTS.add("send admitted"))
+                    .thenCompose(ignored -> joinedRelease);
         }
 
         @Override
         public CompletionStage<Void> onLeaveActor(Player actor) {
-            return CompletableFuture.completedFuture(null);
+            leaveEntered.complete(
+                    context instanceof DefaultSpotContext owner && owner.isCurrentSpotTurn());
+            return leaveRelease;
+        }
+    }
+
+    public static final class TableJoinHandler
+            implements ZLinkSpotActorRequestHandler<Table, Player, JoinRequest, String> {
+        @Override
+        public CompletionStage<String> handle(
+                Table spot, Player actor, ZLinkMessageContext context, JoinRequest request) {
+            actor.context().joinSpot(request.spotId()).defer();
+            return CompletableFuture.completedFuture("scheduled");
         }
     }
 

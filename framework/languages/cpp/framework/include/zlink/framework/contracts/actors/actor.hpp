@@ -295,8 +295,8 @@ class actor_request_call_t
 
     template <typename TReply> task_t<TReply> yield ()
     {
-        return detail::release_turn_on_suspend<TReply> (
-          decode_reply<TReply> (start (true), &serializers ()));
+        return detail::yield_call<TReply> (
+          [this] { return decode_reply<TReply> (start (true), &serializers ()); });
     }
 
     request_task_t<message_t> async_message ();
@@ -858,9 +858,11 @@ class session_actor_t
     friend class detail::actor_gateway_runtime_t;
     friend class detail::session_actor_manager_access_t;
 
-    explicit session_actor_t (std::shared_ptr<detail::actor_gateway_state_t> state,
-                              actor_ref_t ref,
-                              std::uint64_t binding_token = 0);
+    explicit session_actor_t (
+      std::shared_ptr<detail::actor_gateway_state_t> state,
+      actor_ref_t ref,
+      std::uint64_t binding_token = 0,
+      std::shared_ptr<detail::session_actor_binding_context_t> binding_context = {});
     result_t<std::uint64_t> reserve_relay_sequence ();
     task_t<void> relay_internal (detail::stream_header_t header,
                                  std::uint64_t relay_sequence,
@@ -873,6 +875,7 @@ class session_actor_t
     std::shared_ptr<detail::actor_gateway_state_t> _state;
     actor_ref_t _ref;
     std::uint64_t _binding_token = 0;
+    std::shared_ptr<detail::session_actor_binding_context_t> _binding_context;
 };
 
 class session_actor_manager_t

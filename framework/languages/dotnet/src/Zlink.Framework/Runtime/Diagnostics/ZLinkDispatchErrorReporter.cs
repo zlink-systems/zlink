@@ -15,7 +15,7 @@ internal sealed class ZLinkDispatchErrorReporter(
     public ZLinkMessageFlowTracer Flow { get; } =
         new(options, logger, runtime, runtime is null ? null : runtime.ErrorSink);
 
-    public bool Enabled => Flow.CaptureEnabled;
+    public bool Enabled => Flow.DispatchErrorsEnabled;
 
     private static readonly object BoundaryKey = new();
 
@@ -43,6 +43,18 @@ internal sealed class ZLinkDispatchErrorReporter(
                 or ServiceWireConstants.FrameworkErrorCode.SpotMoving
         )
             return ZLinkDispatchErrorReason.StaleTarget;
+        if (error is ZLinkFrameworkException { InnerException: ZlinkSubmitException submit })
+        {
+            // The transport has projected the binding terminal. Preserve that
+            // typed cause instead of attributing it to the application handler.
+            switch (submit.Result)
+            {
+                case ZlinkSubmitException.ErrorCode.NotConnected:
+                    return ZLinkDispatchErrorReason.StaleTarget;
+                case ZlinkSubmitException.ErrorCode.Backpressured:
+                    return ZLinkDispatchErrorReason.Backpressure;
+            }
+        }
         return error is ZLinkFrameworkException framework
             ? framework.Kind switch
             {

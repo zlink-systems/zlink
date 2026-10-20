@@ -1373,7 +1373,7 @@ test('ClientServer reserved hello is consumed before application dispatch and re
     normalizedEffectiveMaxMessageBytes: 1024
   }));
   let reply;
-  let pushed;
+  const pushedFrames = [];
   let received = {
     parts: [hello],
     replyToken: {},
@@ -1391,7 +1391,7 @@ test('ClientServer reserved hello is consumed before application dispatch and re
       reply = Buffer.from(message.data());
     },
     async send(_routingId, message) {
-      pushed = Buffer.from(message.data());
+      pushedFrames.push(Buffer.from(message.data()));
     },
     async dispose() {}
   };
@@ -1426,8 +1426,12 @@ test('ClientServer reserved hello is consumed before application dispatch and re
     descriptorRevision: 2n
   }, 'orders');
   await new Promise(( resolve ) => setImmediate(resolve));
-  const update = clientServerWire.decodeClientServerControl(pushed);
-  assert.equal(update.kind, 'update');
+  //  The real-time liveness timer may push a probe before or after the update; select the update by kind.
+  const updates = pushedFrames
+    .map(( frame ) => clientServerWire.decodeClientServerControl(frame))
+    .filter(( control ) => control.kind === 'update');
+  assert.equal(updates.length, 1);
+  const update = updates[0];
   assert.equal(update.admission.normalizedEffectiveMaxMessageBytes, 1024);
   await sockets.dispose();
 });
@@ -2314,4 +2318,49 @@ test('ClientServer admission and disconnect publish after their facts change', a
   projection.stopObservers();
   await raw.dispose();
   await sockets.dispose();
+});
+
+
+test('automatic ClientServer admission preserves opaque server RID byte identity', async () => {
+  const store = new internal.ZLinkInMemoryLocationStore();
+  const localRuntime = new internal.ZLinkLocationRuntime({
+    stores: stores(store),
+    ownerId: 'client-owner'
+  });
+  await localRuntime.start('client-host');
+  let discovery;
+  try {
+    const remoteOwner = await store.claimOwnerLease('remote-owner', 30_000);
+    assert.equal(remoteOwner.kind, 'claimed');
+    const expected = descriptor(remoteOwner, {
+      serverRid: routingIds.decodeRoutingId('server-display', 'ff000001')
+    });
+    await store.updateClientServer(expected, internal.ZLinkLocationWriteIntent.NewClaim);
+    const registration = internal.createFrameworkRegistration({
+      channels: { orders: { client: { manualConnections: [] } } },
+      locations: { useInMemoryStores: true }
+    });
+    const sockets = automaticClientServerSockets();
+    discovery = new internal.ZLinkClientServerLocationRuntime(
+      registration,
+      sockets,
+      localRuntime,
+      stores(store),
+      { pollingIntervalMs: 60_000 }
+    );
+    await discovery.start();
+    await sockets.admit(expected);
+    assert.equal(
+      discovery.activeTargets('orders').length,
+      1,
+      'matching opaque RID bytes admit the server'
+    );
+    assert.equal(
+      routingIds.encodeRoutingIdStorageHex(discovery.activeTargets('orders')[0].serverRid),
+      'ff000001'
+    );
+  } finally {
+    await discovery?.stop();
+    await localRuntime.stop();
+  }
 });
