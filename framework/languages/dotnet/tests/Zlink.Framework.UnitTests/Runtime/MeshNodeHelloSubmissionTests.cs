@@ -16,13 +16,20 @@ public sealed class MeshNodeHelloSubmissionTests
     {
         var time = new ControllableTimeProvider();
         await using var context = Systems.Zlink.Zlink.CreateContext();
-        await using var node = new ZLinkManagedMeshNode(context, MeshName, deadlineTimeProvider: time);
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: time
+        );
         var lane = Field<ZLinkStateLane>(node, "_inboundOperationLane");
         await lane.RunAsync(() =>
         {
             if (pending)
                 typeof(ZLinkManagedMeshNode)
-                    .GetField("_admissionActivityTicks", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetField(
+                        "_admissionActivityTicks",
+                        BindingFlags.Instance | BindingFlags.NonPublic
+                    )!
                     .SetValue(node, time.GetTimestamp());
             time.AdvanceMonotonic(ZLinkServiceLiveness.ProbeInterval - TimeSpan.FromTicks(1));
             // Re-entering this lane throws. Every completed rotation therefore
@@ -469,7 +476,11 @@ public sealed class MeshNodeHelloSubmissionTests
         var time = new ControllableTimeProvider();
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var peer = context.CreateRouterSocket();
-        await using var node = new ZLinkManagedMeshNode(context, MeshName, deadlineTimeProvider: time);
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: time
+        );
         using var poller = Systems.Zlink.Zlink.CreatePoller();
         using var releaseOwner = new ManualResetEventSlim();
         var suffix = Guid.NewGuid().ToString("N");
@@ -493,7 +504,9 @@ public sealed class MeshNodeHelloSubmissionTests
         await CompleteSubmissions(node);
         AssertNoHello(peer);
 
-        var ownerHeld = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var ownerHeld = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         var held = 0;
         node.SetPeerAdmissionSealGate(() =>
         {
@@ -518,7 +531,10 @@ public sealed class MeshNodeHelloSubmissionTests
             Assert.Equal(ServiceWireConstants.Command.Hello, beforeObservation.Command);
             Assert.Equal(first.Bytes, beforeObservation.Bytes);
             Assert.Equal(observed, node.ObservePeerRoute(peerRid).SelectedGeneration);
-            Assert.NotEqual(route.RouteGeneration, Assert.Single(peer.RoutesSnapshot()).RouteGeneration);
+            Assert.NotEqual(
+                route.RouteGeneration,
+                Assert.Single(peer.RoutesSnapshot()).RouteGeneration
+            );
             node.PublishDraining();
         }
         finally
