@@ -1,14 +1,13 @@
 package systems.zlink.framework.runtime.spots;
 
-import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason;
-import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
-
 import java.time.Duration;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason;
+import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 
 /** Owns the source-side execution order for a User Spot relocation. */
 final class ZLinkUserSpotRetireScheduler {
@@ -50,6 +49,10 @@ final class ZLinkUserSpotRetireScheduler {
             }
             case SOURCE_PRESERVED ->
                     source.abortPrecommit()
+                            .whenComplete(
+                                    (ignored, failure) ->
+                                            source.metrics.complete(
+                                                    failure == null ? settlement : null, false))
                             .thenCompose(
                                     ignored ->
                                             CompletableFuture.failedFuture(

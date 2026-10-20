@@ -1400,6 +1400,9 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
         },
       .abort_target_before_cutover = [] { return true; }};
 
+    configure_relocation_metric_context (
+      wire, source->kind,
+      std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor)));
     std::vector<std::byte> inventory_bytes;
     inventory_bytes.reserve (source->key.size () + sizeof (source->object_generation)
                              + sizeof (source->authority_owner_generation));
@@ -1647,6 +1650,8 @@ mesh_node_runtime_t::relocate_application_unit (
         },
       .abort_target_before_cutover = [] { return true; }};
 
+    configure_relocation_metric_context (wire, input[principal_index].source.kind,
+                                         input[principal_index].stable_type);
     std::vector<std::byte> inventory;
     for (const auto &source : sources) {
         for (const auto value : source.key)
@@ -3327,6 +3332,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
                                                    s->target.node_generation);
         },
       .abort_target_before_cutover = [] { return true; }};
+    configure_relocation_metric_context (wire, s->source_actor.kind, recovery.actor_type);
     const auto inventory_digest =
       runtime::stateful::maintenance_runtime_t::compute_inventory_digest ({s->source_actor});
     auto preparation = co_await maintenance->relocate_to_ready (
@@ -4416,6 +4422,27 @@ mesh_node_runtime_t::monitoring_configuration_async () const
 task_t<std::pair<std::size_t, std::size_t>> mesh_node_runtime_t::monitoring_counts_async () const
 {
     return spot_node_runtime_t (_state->spot_state).monitoring_counts_async ();
+}
+
+void mesh_node_runtime_t::configure_relocation_metric_context (
+  runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t &wire,
+  runtime::stateful::object_kind_t kind,
+  const std::string &stable_type) const
+{
+    // Startup registrations are immutable while relocation runs. Observe that catalog;
+    // metrics never participate in the authority or dispatch decision.
+    const auto &catalog = *_state->spot_state;
+    wire.monitoring = catalog.monitoring;
+    wire.mesh_name = _state->mesh_name;
+    if (kind == runtime::stateful::object_kind_t::actor) {
+        const auto factory = catalog.actor_factories.find (stable_type);
+        if (factory != catalog.actor_factories.end ())
+            wire.policy = factory->second.relocation.kind;
+    } else {
+        const auto factory = catalog.spot_factory_relocations.find (stable_type);
+        if (factory != catalog.spot_factory_relocations.end ())
+            wire.policy = factory->second.kind;
+    }
 }
 
 std::string mesh_node_runtime_t::mesh_name () const
