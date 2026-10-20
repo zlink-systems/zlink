@@ -164,6 +164,19 @@ test('warmed serializer lookup does not allocate preparation closure contexts', 
   assert.equal(allocations.get('serializerSelectionPlanOf')?.objects ?? 0, 0);
 });
 
+// A canonical header has a fixed final shape. Adding fields after parsing
+// otherwise grows V8 property storage twice on every received header.
+test('canonical header validation does not allocate property growth storage', async () => {
+  const { codec } = countedCodec('channels/channel-envelope');
+  const bytes = Buffer.from('{"formatMarker":242,"kind":1,"channelName":"codec","messageName":"Packet","contentType":"application/json","correlationId":"request","deadline":null,"topic":null,"metadata":{}}');
+  const parts = [ZLinkBufferMessage.fromOwned(bytes)];
+  const decode = () => codec.decodeChannelHeader(parts, false);
+  for (let index = 0; index < 1000; index++) decode();
+  const allocations = await trackedCodecAllocations('/runtime/channels/channel-envelope.js', decode);
+  assert.equal(allocations.get('validateChannelHeader')?.objects ?? 0, 0);
+  assert.deepEqual(decode().metadata, {});
+});
+
 test('correlation IDs use the fixed zero prefix without constructing padStart intermediates', t => {
   const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
   const padStart = t.mock.method(String.prototype, 'padStart');

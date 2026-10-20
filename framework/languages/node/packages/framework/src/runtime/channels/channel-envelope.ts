@@ -941,7 +941,13 @@ function tryParseCanonicalChannelHeader(
     contentType,
     correlationId: correlationId === NULL_JSON_STRING ? null : correlationId,
     deadline: deadline === NULL_JSON_STRING ? null : deadline,
-    topic: topic === NULL_JSON_STRING ? null : topic
+    topic: topic === NULL_JSON_STRING ? null : topic,
+    errorCode: null,
+    errorMessage: null,
+    source: undefined,
+    metadata: undefined,
+    flowId: undefined,
+    flowOrigin: undefined
   };
   if (!reader.readOptionalNullableString(CANONICAL_ERROR_CODE, 'errorCode', header))
     return undefined;
