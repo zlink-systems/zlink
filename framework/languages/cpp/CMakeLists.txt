@@ -2098,6 +2098,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 120
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_heavy_runtime)
+  find_program(ZLINK_FRAMEWORK_CPP_VALGRIND_EXECUTABLE NAMES valgrind)
+  if(ZLINK_FRAMEWORK_CPP_VALGRIND_EXECUTABLE)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_local_handoff_lifetime_memcheck
+      COMMAND "${ZLINK_FRAMEWORK_CPP_VALGRIND_EXECUTABLE}"
+        --tool=memcheck --leak-check=no --error-exitcode=99
+        $<TARGET_FILE:test_cpp_framework_spot_close_conformance>
+        --gtest_filter=ActorMaintenanceJoin.LocalHandoffCancellationRetainsQueuedLaneInputs
+      LABELS "framework-regression;spot"
+      TIER unit
+      TIMEOUT 30
+      PROPERTIES
+        RESOURCE_LOCK zlink_cpp_heavy_runtime)
+  endif()
   add_zlink_framework_test(
     test_cpp_framework_handler_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_handler_registry.cpp
