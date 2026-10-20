@@ -505,3 +505,91 @@ for (const remaining of [0, 1])
       /The selected serial work record changed before owner claim\./
     );
   });
+
+test('channel flow dispatch binds only the existing invoker inside the enabled branch', () => {
+  const {
+    ZLinkChannelDispatchPipeline
+  } = require('../../packages/framework/dist/runtime/channels/channel-dispatch-pipeline');
+  for (const enabled of [false, true]) {
+    const pipeline = Object.create(ZLinkChannelDispatchPipeline.prototype);
+    pipeline.options = { dispatchErrors: { flow: { flowCreationEnabled: () => enabled } } };
+    const dispatch = { fields: {} };
+    const handler = {};
+    let bindings = 0;
+    pipeline.invoke = function (record, selectedHandler) {
+      assert.equal(this, pipeline);
+      assert.equal(record, dispatch);
+      assert.equal(selectedHandler, handler);
+      return 42;
+    };
+    pipeline.invoke.bind = function (...args) {
+      bindings += 1;
+      return Function.prototype.bind.apply(pipeline.invoke, args);
+    };
+    assert.equal(pipeline.invokeInFlow(dispatch, handler), 42);
+    assert.equal(bindings, enabled ? 1 : 0);
+  }
+});
+
+test('channel invoker preserves record getter and handler flow scopes', async () => {
+  const {
+    ZLinkChannelDispatchPipeline
+  } = require('../../packages/framework/dist/runtime/channels/channel-dispatch-pipeline');
+  const {
+    currentFlowContext
+  } = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
+  for (const enabled of [false, true]) {
+    const pipeline = Object.create(ZLinkChannelDispatchPipeline.prototype);
+    pipeline.options = { dispatchErrors: { flow: { flowCreationEnabled: () => enabled } } };
+    pipeline.filters = [];
+    pipeline.trace = () => {};
+    const scope = () =>
+      assert.equal(currentFlowContext()?.flowId, enabled ? 'channel-flow' : undefined);
+    const payload = Buffer.from('payload');
+    const context = {};
+    const record = { fields: { flowId: 'channel-flow', flowOrigin: 'Inbound' } };
+    for (const [key, value] of Object.entries({
+      envelope: { header: { contentType: 'application/octet-stream' }, payload },
+      codecs: undefined,
+      context,
+      signal: undefined
+    })) {
+      Object.defineProperty(record, key, {
+        get() {
+          scope();
+          return value;
+        }
+      });
+    }
+    const handler = {
+      handle(value, activeContext) {
+        scope();
+        assert.equal(this, handler);
+        assert.equal(value, payload);
+        assert.equal(activeContext, context);
+        return Promise.resolve().then(() => {
+          scope();
+          return 42;
+        });
+      }
+    };
+    assert.equal(await pipeline.invokeInFlow(record, handler), 42);
+    assert.equal(currentFlowContext(), undefined);
+    const failure = new Error('handler failed');
+    handler.handle = () => {
+      scope();
+      throw failure;
+    };
+    assert.throws(
+      () => pipeline.invokeInFlow(record, handler),
+      (error) => error === failure
+    );
+    handler.handle = () => ({
+      then(resolve) {
+        resolve(17);
+      }
+    });
+    assert.equal(await pipeline.invokeInFlow(record, handler), 17);
+    assert.equal(currentFlowContext(), undefined);
+  }
+});
