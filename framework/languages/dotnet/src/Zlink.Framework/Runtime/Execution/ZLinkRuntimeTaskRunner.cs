@@ -2,12 +2,15 @@ namespace Zlink.Framework.Runtime.Execution;
 
 internal sealed class ZLinkRuntimeTaskRunner
 {
-    internal static T WithoutExecutionContextFlow<T>(Func<T> start)
+    internal static T WithoutExecutionContextFlow<T>(Func<T> start) =>
+        WithoutExecutionContextFlow(static callback => callback(), start);
+
+    internal static T WithoutExecutionContextFlow<TState, T>(Func<TState, T> start, TState state)
     {
         if (ExecutionContext.IsFlowSuppressed())
-            return start();
+            return start(state);
         using (ExecutionContext.SuppressFlow())
-            return start();
+            return start(state);
     }
 
     internal static Task RunDisposal(ref Task? task, Func<Task> close)

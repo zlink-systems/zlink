@@ -155,7 +155,6 @@ public sealed class SerialExecutorTests
         Func<bool> callback = static () => false;
         void Baseline()
         {
-            GC.KeepAlive(new Func<bool>(callback));
             baseline
                 .RunAsync(
                     static callback => ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(callback),
