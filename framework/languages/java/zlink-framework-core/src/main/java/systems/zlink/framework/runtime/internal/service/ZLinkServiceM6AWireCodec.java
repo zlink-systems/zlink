@@ -488,10 +488,10 @@ public final class ZLinkServiceM6AWireCodec {
         if (count == 0 || count > reader.remaining() / (long) Integer.BYTES) {
             throw protocol("framework multipart part count is invalid");
         }
-        List<ByteBuffer> parts = new ArrayList<>((int) count);
+        Object[] parts = new Object[(int) count];
         for (long index = 0; index < count; index++) {
             int size = Reader.intU32(reader, "frameworkMultipartPartLength");
-            parts.add(Reader.buffer(reader, size, "frameworkMultipartPart"));
+            parts[(int) index] = Reader.buffer(reader, size, "frameworkMultipartPart");
         }
         Reader.end(reader);
         return new ZLinkFrameworkMultipartView(parts);
