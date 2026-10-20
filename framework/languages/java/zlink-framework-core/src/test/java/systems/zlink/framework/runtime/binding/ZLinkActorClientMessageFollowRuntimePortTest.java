@@ -106,10 +106,7 @@ final class ZLinkActorClientMessageFollowRuntimePortTest {
             // MeshNode §7.1: admission belongs to the selected route. Await its owner's
             // completion; two peers() snapshots can straddle a Core route replacement.
             CompletableFuture.allOf(
-                            preparePeer(source, clientNode),
-                            preparePeer(target, clientNode),
-                            preparePeer(clientNode, source),
-                            preparePeer(clientNode, target))
+                            preparePeer(clientNode, source), preparePeer(clientNode, target))
                     .get(PEER_ADMISSION_TIMEOUT.toNanos(), TimeUnit.NANOSECONDS);
 
             ZLinkBackendActorRef sourceActor;
