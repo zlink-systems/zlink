@@ -1768,16 +1768,19 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             return null;
 
         var applicationAvailable = _sharedOwner is null || _readyItem is null || _active is null;
-        // Preserve the active claim guard before readiness can start preparation.
-        // A later publication cannot let ordinary work pass a rejected head.
-        var headReady = (applicationAvailable || !head.ReservationHeld) && head.IsReady;
+        // Read the head only when a candidate needs it, preserving short-circuit guards.
+        // Reuse that value so a later publication cannot pass a rejected head.
+        bool? headReady = null;
         foreach (var candidate in _applicationQueue)
         {
             var isHead = ReferenceEquals(candidate, head);
             if (
                 (applicationAvailable || !candidate.ReservationHeld)
-                && ((!candidate.ReservationHeld && candidate.Mailbox is null) || headReady)
-                && (isHead ? headReady : candidate.IsReady)
+                && (
+                    (!candidate.ReservationHeld && candidate.Mailbox is null)
+                    || (headReady ??= head.IsReady)
+                )
+                && (isHead ? (headReady ??= head.IsReady) : candidate.IsReady)
                 && (
                     _activeLifecycle is not { } owner
                     || _applicationStartAllowed?.Invoke(owner) != false

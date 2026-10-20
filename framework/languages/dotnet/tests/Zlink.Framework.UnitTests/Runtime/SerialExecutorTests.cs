@@ -74,6 +74,70 @@ public sealed class SerialExecutorTests
         }
     }
 
+    [Fact]
+    public async Task SerialExecutionQueue_BusyClaimAllowsMailboxBehindReadyReservedHead()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var owner = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: true
+        );
+        await using var claimed = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedOwner: owner
+        );
+        // Arrange this selector input directly: a retained claim, a ready held
+        // head, and a non-reserved mailbox. No consumer runs on the fixture.
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var type = typeof(ZLinkSerialExecutionQueue);
+        var active = type.GetField("_active", flags)!;
+        var pending = (ZLinkSerialWorkQueue)
+            type.GetField("_applicationQueue", flags)!.GetValue(claimed)!;
+        var headReads = 0;
+        var head = new ZLinkSerialWorkItem(
+            static _ => ValueTask.CompletedTask,
+            ready: () =>
+            {
+                headReads++;
+                return true;
+            }
+        );
+        var mailbox = new ZLinkSerialWorkItem(owner);
+        active.SetValue(claimed, new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask));
+        pending.Enqueue(head);
+        pending.Enqueue(mailbox);
+        try
+        {
+            Assert.True(head.ReservationHeld);
+            Assert.False(mailbox.ReservationHeld);
+            Assert.NotNull(mailbox.Mailbox);
+            Assert.True(
+                (bool)
+                    type.GetMethod("HasRunnableApplicationUnderLock", flags)!.Invoke(claimed, null)!
+            );
+            Assert.True(headReads > 0);
+            var arguments = new object?[] { null };
+            Assert.True(
+                (bool)type.GetMethod("TryDequeueNextUnderLock", flags)!.Invoke(claimed, arguments)!
+            );
+            Assert.Same(mailbox, arguments[0]);
+            Assert.Same(head, pending.Head);
+        }
+        finally
+        {
+            pending.Clear();
+            active.SetValue(claimed, null);
+        }
+    }
+
     [Theory]
     [InlineData(1)]
     [InlineData(2)]
