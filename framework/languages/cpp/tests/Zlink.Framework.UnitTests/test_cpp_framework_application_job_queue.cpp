@@ -8,6 +8,7 @@
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "../support/scope_exit.hpp"
 
 #include <gtest/gtest.h>
 
@@ -31,6 +32,8 @@ namespace
 {
 
 using queue_t = zlink::framework::runtime::application_job_queue_t;
+
+using zlink::framework::test::scope_exit_t;
 
 
 // wait_for_supply forwards to wait_for_supply_batch on the packed-ledger implementation.
@@ -973,6 +976,14 @@ TEST (ZLinkFrameworkApplicationJobQueue, RegistrationRetrySkipsDuplicateSameStat
             registration_error = std::current_exception ();
         }
     });
+    scope_exit_t join_register ([&] {
+        {
+            std::lock_guard lock (mutex);
+            release_initial_running = true;
+        }
+        changed.notify_all ();
+        register_thread.join ();
+    });
 
     {
         std::unique_lock lock (mutex);
@@ -984,12 +995,7 @@ TEST (ZLinkFrameworkApplicationJobQueue, RegistrationRetrySkipsDuplicateSameStat
     EXPECT_EQ (zlink::framework::application_job_queue_pressure_state_t::running,
                queue.snapshot ().pressure_state);
 
-    {
-        std::lock_guard lock (mutex);
-        release_initial_running = true;
-    }
-    changed.notify_all ();
-    register_thread.join ();
+    join_register.run ();
 
     if (registration_error)
         std::rethrow_exception (registration_error);

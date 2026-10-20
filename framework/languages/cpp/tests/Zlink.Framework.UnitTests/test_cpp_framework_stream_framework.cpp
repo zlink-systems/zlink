@@ -27,8 +27,10 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <exception>
+#include <functional>
 #include <future>
 #include <iostream>
 #include <limits>
@@ -1450,18 +1452,40 @@ int main (int argc, char **argv)
 
     zlink::framework::zlink_builder_t zlink = zlink::framework::test::runtime_failure_builder ();
     zlink.stream ("client-stream").bind ("tcp://0.0.0.0:9200").register_session ("client");
-    std::atomic_bool saw_stream_session_flow{false};
-    std::vector<zlink::framework::message_flow_event_t> stream_flow_events;
+    // The stream dispatch executor can emit after this scope ends, so the observer owns the state.
+    struct flow_state_t
+    {
+        std::atomic_bool saw_stream_session_flow{false};
+        std::mutex mutex;
+        std::vector<zlink::framework::message_flow_event_t> events;
+
+        std::vector<zlink::framework::message_flow_event_t> snapshot ()
+        {
+            const std::lock_guard lock (mutex);
+            return events;
+        }
+
+        bool none_of (
+          const std::function<bool (const zlink::framework::message_flow_event_t &)> &predicate)
+        {
+            const std::lock_guard lock (mutex);
+            return std::none_of (events.begin (), events.end (), predicate);
+        }
+    };
+    const auto flow_state = std::make_shared<flow_state_t> ();
     zlink::framework::dispatch_options_t flow_options;
     flow_options.message_flow (zlink::framework::message_flow_log_mode_t::normal);
     zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
-      flow_options, [&] (const zlink::framework::message_flow_event_t &event) {
-          stream_flow_events.push_back (event);
+      flow_options, [flow_state] (const zlink::framework::message_flow_event_t &event) {
+          {
+              const std::lock_guard lock (flow_state->mutex);
+              flow_state->events.push_back (event);
+          }
           if (event.surface == zlink::framework::dispatch_error_surface_t::stream_session
               && event.outcome == zlink::framework::message_flow_outcome_t::received
               && event.stream_session_id
               && *event.stream_session_id == zlink::routing_id_t::from ("stream-rid").to_hex ())
-              saw_stream_session_flow.store (true, std::memory_order_release);
+              flow_state->saw_stream_session_flow.store (true, std::memory_order_release);
       });
     zlink::framework::detail::apply_dispatch_options (zlink, flow_options);
     zlink::framework::serializer_registry_t serializers;
@@ -1759,12 +1783,13 @@ int main (int argc, char **argv)
                                   zlink::message_t::from (std::string ("payload")))) {
         return 8;
     }
-    if (!saw_stream_session_flow.load (std::memory_order_acquire))
+    if (!flow_state->saw_stream_session_flow.load (std::memory_order_acquire))
         return 229;
     // Spec 26 §2.1: the typed handler start of a STREAM packet records `dispatched` once, after `received`.
     {
         std::vector<zlink::framework::message_flow_outcome_t> move_phases;
-        for (const auto &event : stream_flow_events) {
+        const auto flow_events = flow_state->snapshot ();
+        for (const auto &event : flow_events) {
             if (event.surface == zlink::framework::dispatch_error_surface_t::stream_session
                 && event.packet_name == std::optional<std::string> ("move"))
                 move_phases.push_back (event.outcome);
@@ -1878,13 +1903,11 @@ int main (int argc, char **argv)
     stale_send_header.with_actor_slot (2);
     if (!runtime.dispatch_packet (actor_session, actor_stream, stale_send_header,
                                   zlink::message_t::from (std::string ("stale-send")))
-        || actor_session.events.size () != 1
-        || std::none_of (
-          stream_flow_events.begin (), stream_flow_events.end (), [] (const auto &event) {
-              return event.outcome == zlink::framework::message_flow_outcome_t::dropped
-                     && event.message_kind == zlink::framework::dispatch_message_kind_t::send
-                     && event.reason == zlink::framework::message_flow_reason_t::stale_target;
-          })) {
+        || actor_session.events.size () != 1 || flow_state->none_of ([] (const auto &event) {
+               return event.outcome == zlink::framework::message_flow_outcome_t::dropped
+                      && event.message_kind == zlink::framework::dispatch_message_kind_t::send
+                      && event.reason == zlink::framework::message_flow_reason_t::stale_target;
+           })) {
         return 324;
     }
     bool hidden_until_bound = false;
@@ -3255,7 +3278,10 @@ int main (int argc, char **argv)
     if (!error_close_stop_finished) {
         error_close_stop_thread.detach ();
         error_close_mesh->stop ();
-        return 320;
+        // The detached thread still uses error_close_host and the stop promise on this
+        // stack. Leave without unwinding so nothing it touches is destroyed.
+        std::cout.flush ();
+        std::_Exit (320);
     }
     error_close_stop_thread.join ();
     error_close_mesh->stop ();
