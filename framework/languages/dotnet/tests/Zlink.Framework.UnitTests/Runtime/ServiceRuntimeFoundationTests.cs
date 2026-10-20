@@ -2915,8 +2915,11 @@ public sealed class ServiceRuntimeFoundationTests
             applicationJobQueue.GetStatus().PressureState
             == ZLinkApplicationJobQueuePressureState.Paused
         );
+        // Spec 04 §6 hysteresis: Paused holds until permits fall to the resume
+        // count, so a returned unused reservation may leave fewer than the pause count.
         var paused = applicationJobQueue.GetStatus();
-        Assert.InRange(paused.PermitsInUse, paused.PausePermitCount, (ulong)capacity);
+        Assert.Equal(ZLinkApplicationJobQueuePressureState.Paused, paused.PressureState);
+        Assert.InRange(paused.PermitsInUse, paused.ResumePermitCount + 1, (ulong)capacity);
         pump.EnsureStarted();
 
         await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
