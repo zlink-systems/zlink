@@ -33,6 +33,12 @@ on:
 #      - "scripts/local-package/sync-version.py"
 #      - "scripts/ci/framework-java-test-results.ps1"
   workflow_dispatch:
+  # Mergify merge-queue batches and backports run CI on their own branches only;
+  # ordinary PRs and main pushes still start CI by hand.
+  push:
+    branches:
+      - "mergify/merge-queue/**"
+      - "mergify/bp/**"
 
 permissions:
   contents: read
