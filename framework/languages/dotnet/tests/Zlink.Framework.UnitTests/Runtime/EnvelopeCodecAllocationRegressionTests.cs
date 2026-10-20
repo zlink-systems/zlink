@@ -12,6 +12,69 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
     private const int Iterations = 128;
 
     [Fact]
+    public void TypedActorReplyCopiesOnlyTheHeaderOverOneThousandDecodes()
+    {
+        const int decodeCount = 1000;
+        const int allocationLimit = 1024 * 1024;
+        // JSON whitespace enlarges the native frame without enlarging the decoded value.
+        using var reply = ActorReply(
+            Encoding.UTF8.GetBytes("{\"text\":\"reply\"}" + new string(' ', 65536))
+        );
+        Message[] parts = [reply];
+        for (var i = 0; i < Iterations; i++)
+            _ = ZLinkActorReplyDecoder.Decode<Probe>(parts);
+
+        Probe? decoded = null;
+        var start = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < decodeCount; i++)
+            decoded = ZLinkActorReplyDecoder.Decode<Probe>(parts);
+        var bytes = GC.GetAllocatedBytesForCurrentThread() - start;
+
+        Assert.Equal("reply", decoded!.Text);
+        output.WriteLine($"typed Actor reply: {bytes} B/{decodeCount} decodes");
+        // Budget covers decoded headers and values; a full frame copy costs over 65 MB.
+        Assert.True(bytes <= allocationLimit, $"Actor reply decode allocated {bytes} bytes.");
+    }
+
+    [Fact]
+    public void MetadataEncodePreservesUtf8WireBytes()
+    {
+        var metadata = new ZLinkMessageMetadata(
+            new Dictionary<string, string> { ["키"] = "한글", ["empty"] = "" }
+        );
+        byte[] expected =
+        [
+            1,
+            2,
+            3,
+            0xED,
+            0x82,
+            0xA4,
+            0,
+            6,
+            0xED,
+            0x95,
+            0x9C,
+            0xEA,
+            0xB8,
+            0x80,
+            5,
+            (byte)'e',
+            (byte)'m',
+            (byte)'p',
+            (byte)'t',
+            (byte)'y',
+            0,
+            0,
+        ];
+        var encoded = ZLinkMeshMetadataCodec.Encode(metadata);
+        Assert.Equal(expected, encoded.ToArray());
+        Assert.True(ZLinkMeshMetadataCodec.TryDecode(encoded.Span, out var decoded));
+        Assert.Equal("한글", decoded.Find("키"));
+        Assert.Equal("", decoded.Find("empty"));
+    }
+
+    [Fact]
     public void TerminalActorReplyDoesNotCopyThePayload()
     {
         using var small = ActorReply(1024);
@@ -153,7 +216,9 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
         return (GC.GetAllocatedBytesForCurrentThread() - start) / Iterations;
     }
 
-    private static Message ActorReply(int size)
+    private static Message ActorReply(int size) => ActorReply(new byte[size]);
+
+    private static Message ActorReply(byte[] payload)
     {
         var header = new ZlinkStreamHeader(
             ZlinkStreamMessageKind.Response,
@@ -166,7 +231,7 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
         return Message.From(
             ZLinkStreamFrameCodec.Encode(
                 ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
-                new byte[size]
+                payload
             )
         );
     }
