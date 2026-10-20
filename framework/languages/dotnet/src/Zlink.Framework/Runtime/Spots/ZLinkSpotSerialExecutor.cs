@@ -1499,7 +1499,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         await operation(_activation, cancellationToken).ConfigureAwait(false);
     }
 
-    private async ValueTask ExecuteActorOperationAsync<TState>(
+    internal async ValueTask ExecuteActorOperationAsync<TState>(
         string actorId,
         Func<ZLinkSpotActivation, TState, CancellationToken, ValueTask> operation,
         TState state,

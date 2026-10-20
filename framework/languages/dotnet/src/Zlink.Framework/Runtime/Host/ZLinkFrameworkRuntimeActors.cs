@@ -3732,10 +3732,15 @@ internal sealed partial class ZLinkFrameworkRuntime
 
     internal ValueTask NotifyActorDisconnectedByIdAsync(
         string actorId,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        bool callerOwnsDispatchTurn = false
     )
     {
-        return _actorSessionManager.NotifyDisconnectedByIdAsync(actorId, cancellationToken);
+        return _actorSessionManager.NotifyDisconnectedByIdAsync(
+            actorId,
+            cancellationToken,
+            callerOwnsDispatchTurn
+        );
     }
 
     internal async ValueTask NotifyActorDisconnectedAsync(
