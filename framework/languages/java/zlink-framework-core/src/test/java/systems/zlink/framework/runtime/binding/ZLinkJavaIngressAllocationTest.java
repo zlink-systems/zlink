@@ -118,6 +118,7 @@ public final class ZLinkJavaIngressAllocationTest {
             // A native record needs one Framework owner; each claim needs one lane invocation.
             // Object sizes, alignment, binding allocations and JDK container layouts are excluded.
             assertEquals(attempts + records, portObjects, "no separate header-list owner per record");
+            assertEquals(0, resumeCallbacks, "immediate permits need no resumption closure");
         } finally {
             Files.deleteIfExists(recordingPath);
         }

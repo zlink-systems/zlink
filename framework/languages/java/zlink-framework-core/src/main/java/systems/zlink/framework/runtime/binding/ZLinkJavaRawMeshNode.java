@@ -4866,7 +4866,9 @@ final class ZLinkJavaRawMeshNode
                     grant =
                             queue.acquireOrResume(
                                     pump,
-                                    permit -> drainIngressBatch(pumpSocket, permit),
+                                    this,
+                                    (node, permit) ->
+                                            node.drainIngressBatch(node.requireStarted(), permit),
                                     pendingReceiveAcquire,
                                     ZLinkApplicationJobQueue.Origin.REMOTE);
                     if (closed.get()) {
