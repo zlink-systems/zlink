@@ -121,6 +121,7 @@ struct route_mesh_runtime_service_t::state_t
     location_runtime_query_t *location_runtime = nullptr;
     location_repository_t *location_store = nullptr;
     std::shared_ptr<detail::monitoring_runtime_state_t> monitoring;
+    std::function<framework_runtime_state_t ()> host_state;
     mutable std::mutex drain_mutex;
     std::optional<std::chrono::system_clock::time_point> drain_deadline;
     bool work_sealed = false;
@@ -314,12 +315,14 @@ route_mesh_runtime_service_t::route_mesh_runtime_service_t (
   std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> nodes,
   location_runtime_query_t *location_runtime,
   location_repository_t *location_store,
-  std::shared_ptr<detail::monitoring_runtime_state_t> monitoring) :
+  std::shared_ptr<detail::monitoring_runtime_state_t> monitoring,
+  std::function<framework_runtime_state_t ()> host_state) :
     _state (std::make_shared<state_t> ())
 {
     _state->location_runtime = location_runtime;
     _state->location_store = location_store;
     _state->monitoring = std::move (monitoring);
+    _state->host_state = std::move (host_state);
     for (auto &node : nodes)
         _state->hubs.emplace (node->mesh_name (), std::make_shared<state_t::hub_t> (node));
 }
@@ -502,9 +505,8 @@ project_snapshot (const std::shared_ptr<route_mesh_runtime_service_t::state_t> &
                     });
     const auto mapped_state =
       hub->stopped.load (std::memory_order_acquire) ? topology_state_t::stopped
-      : local_location != location_descriptors.end ()
-        ? detail::topology_state_for_host (local_location->state, transport_state)
-        : transport_state;
+      : state->host_state ? detail::topology_state_for_host (state->host_state (), transport_state)
+                          : transport_state;
     const auto local_role =
       descriptor.object_role == mesh::service_object_role_t::client   ? object_role_t::client
       : descriptor.object_role == mesh::service_object_role_t::server ? object_role_t::server
