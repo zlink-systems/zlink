@@ -662,6 +662,19 @@ struct reply_header_t
     std::uint32_t failure_code;
 };
 
+struct stream_bind_reply_tail_t
+{
+    std::uint64_t binding_generation;
+    std::uint64_t authority_owner_generation;
+    friend bool operator== (const stream_bind_reply_tail_t &,
+                            const stream_bind_reply_tail_t &) = default;
+};
+struct stream_bind_reply_t
+{
+    reply_header_t header;
+    std::optional<stream_bind_reply_tail_t> binding;
+};
+
 struct user_spot_reservation_fence_t
 {
     std::string reservation_id;
@@ -1025,6 +1038,12 @@ std::vector<std::uint8_t> encode_reply_header (std::uint64_t correlation,
                                                std::uint32_t terminal_result,
                                                std::uint32_t failure_code);
 reply_header_t decode_reply_header (std::span<const std::uint8_t> bytes);
+std::vector<std::uint8_t>
+encode_stream_bind_reply (std::uint64_t correlation,
+                          std::uint32_t terminal_result,
+                          std::uint32_t failure_code,
+                          std::optional<stream_bind_reply_tail_t> binding);
+stream_bind_reply_t decode_stream_bind_reply (std::span<const std::uint8_t> bytes);
 std::vector<std::uint8_t> encode_user_spot_create_reply (std::uint64_t correlation,
                                                          std::uint32_t terminal_result,
                                                          std::uint32_t failure_code,

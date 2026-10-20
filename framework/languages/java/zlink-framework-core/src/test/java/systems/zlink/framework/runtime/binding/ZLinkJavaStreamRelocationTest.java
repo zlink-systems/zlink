@@ -10,6 +10,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpotDispatchEvent;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 
 import java.time.Duration;
 import java.util.List;
@@ -34,7 +35,8 @@ final class ZLinkJavaStreamRelocationTest {
                                     fixture.source,
                                     fixture.generation(),
                                     1,
-                                    fixture.stream));
+                                    fixture.stream,
+                                    spots.actorAuthorityOwnerGeneration(fixture.source)));
         }
     }
 
@@ -50,7 +52,8 @@ final class ZLinkJavaStreamRelocationTest {
                                     fixture.source,
                                     fixture.generation(),
                                     2,
-                                    fixture.stream));
+                                    fixture.stream,
+                                    spots.actorAuthorityOwnerGeneration(fixture.source)));
         }
     }
 
@@ -69,7 +72,8 @@ final class ZLinkJavaStreamRelocationTest {
                                     fixture.source,
                                     fixture.generation(),
                                     1,
-                                    other));
+                                    other,
+                                    spots.actorAuthorityOwnerGeneration(fixture.source)));
         }
     }
 
@@ -88,7 +92,8 @@ final class ZLinkJavaStreamRelocationTest {
                                     other,
                                     fixture.generation(),
                                     1,
-                                    fixture.stream));
+                                    fixture.stream,
+                                    spots.actorAuthorityOwnerGeneration(fixture.source)));
         }
     }
 
@@ -103,7 +108,8 @@ final class ZLinkJavaStreamRelocationTest {
                                     fixture.target,
                                     fixture.generation(),
                                     1,
-                                    fixture.stream));
+                                    fixture.stream,
+                                    spots.actorAuthorityOwnerGeneration(fixture.source)));
         }
     }
 
@@ -198,7 +204,8 @@ final class ZLinkJavaStreamRelocationTest {
                                     fixture.target,
                                     oldGeneration,
                                     1,
-                                    fixture.stream));
+                                    fixture.stream,
+                                    spots.actorAuthorityOwnerGeneration(fixture.source)));
         }
     }
 
@@ -232,20 +239,27 @@ final class ZLinkJavaStreamRelocationTest {
                             null,
                             new ZLinkJavaStreamSocket.BoundSessionLifecycle() {
                                 @Override
-                                public CompletionStage<Void> bind(
-                                        RoutingId rid,
-                                        ZLinkBackendActorRef actor,
-                                        long generation,
-                                        Duration timeout) {
+                                public CompletionStage<
+                                                ZLinkServiceM6BWireCodec.BoundSessionBindReply>
+                                        bind(
+                                                RoutingId rid,
+                                                ZLinkBackendActorRef actor,
+                                                long generation,
+                                                Duration timeout) {
                                     binds.incrementAndGet();
                                     if (nativeTarget && actor.equals(target)) {
                                         return ((ZLinkJavaRawSpotNode) node.spotNode())
                                                 .bindStreamSession(
                                                         rid, actor, generation, 1, stream, timeout);
                                     }
-                                    return actor.equals(source)
-                                            ? CompletableFuture.completedFuture(null)
-                                            : preparation;
+                                    return (actor.equals(source)
+                                                    ? CompletableFuture.<Void>completedFuture(null)
+                                                    : preparation)
+                                            .thenApply(
+                                                    ignored ->
+                                                            new ZLinkServiceM6BWireCodec
+                                                                    .BoundSessionBindReply(
+                                                                    1, 0, 0, generation, 1));
                                 }
 
                                 @Override

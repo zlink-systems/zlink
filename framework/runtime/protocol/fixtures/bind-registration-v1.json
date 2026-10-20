@@ -1,0 +1,15 @@
+{
+  "contract": "Session-Actor binding sections 4, 5, 6 and 12",
+  "current": { "node": "session-owner", "lifecycle": "7", "session": "session-a", "generation": "9", "ownerId": "owner-a", "lease": "1" },
+  "authority": "41",
+  "cases": [
+    { "name": "same identity", "node": "session-owner", "lifecycle": "7", "session": "session-a", "generation": "9", "ownerId": "owner-a", "lease": "1", "success": true },
+    { "name": "late same Session", "node": "session-owner", "lifecycle": "7", "session": "session-a", "generation": "8", "ownerId": "owner-a", "lease": "1", "success": false },
+    { "name": "equal counter different Session", "node": "session-owner", "lifecycle": "7", "session": "session-b", "generation": "9", "ownerId": "owner-a", "lease": "1", "success": false },
+    { "name": "larger counter", "node": "session-owner", "lifecycle": "7", "session": "session-b", "generation": "10", "ownerId": "owner-a", "lease": "1", "success": true },
+    { "name": "new node smaller counter", "node": "other-owner", "lifecycle": "7", "session": "session-b", "generation": "1", "ownerId": "owner-b", "lease": "1", "success": true },
+    { "name": "new lifecycle smaller counter", "node": "session-owner", "lifecycle": "8", "session": "session-b", "generation": "1", "ownerId": "owner-a", "lease": "1", "success": true },
+    { "name": "same identity renewed lease", "node": "session-owner", "lifecycle": "7", "session": "session-a", "generation": "9", "ownerId": "owner-b", "lease": "2", "success": true },
+    { "name": "renewed lease late counter", "node": "session-owner", "lifecycle": "7", "session": "session-b", "generation": "8", "ownerId": "owner-b", "lease": "2", "success": false }
+  ]
+}

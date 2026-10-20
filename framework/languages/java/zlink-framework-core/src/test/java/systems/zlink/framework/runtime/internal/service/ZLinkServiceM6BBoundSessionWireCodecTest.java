@@ -18,6 +18,25 @@ final class ZLinkServiceM6BBoundSessionWireCodecTest {
     private final ZLinkServiceM6BWireCodec codec = new ZLinkServiceM6BWireCodec();
 
     @Test
+    void bindReplyRequiresAcceptedBindingTailAndRejectsMissingTail() {
+        var accepted = new ZLinkServiceM6BWireCodec.BoundSessionBindReply(7, 0, 0, 9, 41);
+        assertEquals(
+                accepted,
+                codec.decodeBoundSessionBindReply(
+                        codec.encodeBoundSessionBindReply(accepted, true), true));
+        assertThrows(
+                ZLinkServiceWireException.class,
+                () ->
+                        codec.decodeBoundSessionBindReply(
+                                new ZLinkServiceM6AWireCodec().encodeReplyHeader(7, 0, 0), true));
+        var stale = new ZLinkServiceM6BWireCodec.BoundSessionBindReply(7, 105, 13, 0, 0);
+        assertEquals(
+                stale,
+                codec.decodeBoundSessionBindReply(
+                        codec.encodeBoundSessionBindReply(stale, true), true));
+    }
+
+    @Test
     void requestHeadersAddOnlyCorrelationToSendHeaders() {
         var spotRoute =
                 new ZLinkServiceM6BWireCodec.SpotRouteFence(
