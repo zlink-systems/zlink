@@ -30,6 +30,7 @@ public sealed partial class EntrySpotActorDispatchTests
             node,
             includeActorFactory: false,
             includeInstanceSpotRoute: true,
+            instanceSpotType: typeof(RecoveryColdSpot),
             relocationStore: new InMemoryRelocationStore(),
             locationTimeProvider: time
         );
@@ -45,7 +46,7 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             time.Advance(TimeSpan.FromSeconds(2));
 
-            await SendInstanceIntentAsync(runtime, "cold-expired-owner");
+            await RequestInstanceReadyAsync(runtime, "cold-expired-owner");
 
             var authority = await ReadAuthorityAsync(
                 store,
@@ -78,6 +79,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 : Zlink.Framework.Contracts.Dispatch.ZLinkDiagnosticsLevel.Normal,
             includeActorFactory: false,
             includeInstanceSpotRoute: true,
+            instanceSpotType: typeof(RecoveryColdSpot),
             locationStoreWrapper: asynchronousStore
                 ? inner => new AsynchronousLocationStore(inner)
                 : null,
@@ -88,7 +90,7 @@ public sealed partial class EntrySpotActorDispatchTests
         {
             var store = RequireLocationStore(runtime);
 
-            await SendInstanceIntentAsync(runtime, "cold-live-owner");
+            await RequestInstanceReadyAsync(runtime, "cold-live-owner");
 
             var authority = await ReadAuthorityAsync(
                 store,
@@ -775,31 +777,27 @@ public sealed partial class EntrySpotActorDispatchTests
         Assert.Equal(1UL, operation.Low);
     }
 
-    private static async Task SendInstanceIntentAsync(ZLinkFrameworkRuntime runtime, string spotId)
-    {
-        await new ZLinkInstanceSpotSendCall<ProbeRouteMessage>(
+    private static Task SendInstanceIntentAsync(ZLinkFrameworkRuntime runtime, string spotId) =>
+        new ZLinkInstanceSpotSendCall<ProbeRouteMessage>(
             runtime,
             new InstanceSpotIntentAddress("entry", "Tests.InstanceSpot", spotId),
             new ProbeRouteMessage("activate")
-        ).Async();
-        // Send completion confirms admission; owner selection is observed at the target separately.
-        var store = RequireLocationStore(runtime);
-        var key = ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId);
-        using var observation = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-        while (true)
-        {
-            var authority = await store.ReadAuthorityAsync(key, observation.Token);
-            if (
-                authority is ZLinkAuthorityReadResult.Found found
-                && ZLinkInstanceSpotAuthorityPayloadCodec.TryDecode(
-                    found.Snapshot.Payload.Span,
-                    out var payload
-                )
-                && payload.State == ZLinkInstanceSpotAuthorityState.Ready
-            )
-                return;
-            await Task.Delay(5, observation.Token);
-        }
+        )
+            .Async()
+            .AsTask();
+
+    private static async Task RequestInstanceReadyAsync(
+        ZLinkFrameworkRuntime runtime,
+        string spotId
+    )
+    {
+        // The first handler reply confirms Ready before owner selection is asserted.
+        var reply = await new ZLinkInstanceSpotRequestCall<ProbeRouteMessage>(
+            runtime,
+            new InstanceSpotIntentAddress("entry", "Tests.InstanceSpot", spotId),
+            new ProbeRouteMessage("activate")
+        ).Async<ProbeReply>();
+        Assert.Equal("activate-reply", reply.Value);
     }
 
     private static ZLinkUserSpotActivation AttachActorToUserSpot(
