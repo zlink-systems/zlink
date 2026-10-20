@@ -38,6 +38,29 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
+    public void ChannelReplyGateAllocatesOnlyItsStateLaneTurns()
+    {
+        var gate = new ZLinkChannelReplyGate();
+        var baseline = new ZLinkStateLane();
+        Action reply = static () => { };
+        gate.TryInvoke(reply);
+        void Baseline()
+        {
+            baseline.RunAsync(static value => value, true).GetAwaiter().GetResult();
+            baseline.RunAsync(static value => value, true).GetAwaiter().GetResult();
+        }
+        Baseline();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+            Baseline();
+        var laneStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+            gate.TryInvoke(reply);
+        Assert.Equal(laneStorage, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
     public async Task BusyQueueAdmissionAllocatesOnlyWorkItemStorage()
     {
         using var errors = new ZLinkRuntimeErrorSink();
