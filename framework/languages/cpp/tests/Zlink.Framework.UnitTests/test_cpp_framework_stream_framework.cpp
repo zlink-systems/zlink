@@ -1377,6 +1377,34 @@ int transport_bound_close (bool tls, bool remote = false)
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--connection-registry-lifetime") {
+        /* #2295: the last reference to a connection state is released after
+         * MeshNode has released the host that owns the session registry. The
+         * state's destructor must not use the registry. */
+        using namespace zlink::framework;
+        auto builder = test::runtime_failure_builder ();
+        builder.stream ("lifetime-stream").bind ("tcp://127.0.0.1:0").register_session ("session");
+        auto runtime = detail::stream_runtime_t::from (builder);
+        auto stream = runtime.open_session ("lifetime-stream");
+        service_collection_t services;
+        auto provider = services.build_provider ();
+        auto options = test::runtime_failure_options (runtime::mesh::raw_mesh_node_options_t{
+          .descriptor = {"lifetime-mesh",
+                         {'l', 'i', 'f', 'e'},
+                         1,
+                         1,
+                         "tcp://127.0.0.1:0",
+                         {},
+                         runtime::mesh::service_node_state_t::preparing}});
+        auto node = std::make_shared<runtime::host::public_host_runtime_t> (
+          runtime::host::host_options_t{std::move (options)});
+        std::weak_ptr<runtime::host::public_host_runtime_t> owner = node;
+        auto retained =
+          runtime::stream_host_service_test_access_t::retain_connection (provider, stream, *node);
+        node.reset ();
+        retained.reset ();
+        return owner.expired () ? 0 : 1;
+    }
 #ifdef ZLINK_FRAMEWORK_STREAM_TEST_WITH_OPENSSL
     if (argc == 2 && std::string_view (argv[1]) == "--tls-bound-close")
         return transport_bound_close (true);

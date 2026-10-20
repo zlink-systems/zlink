@@ -904,7 +904,10 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
 
     /* Async packet dispatch may outlive the socket reader. Keep the service
      * scope, session object and Actor manager together until the serial
-     * dispatch queue has completed its last callback. */
+     * dispatch queue has completed its last callback.
+     * The last reference can be released on any thread after MeshNode has
+     * stopped, so the destructor does not use the session registry. The
+     * reader closes the registry entry through retire_connection. */
     struct stream_connection_state_t
     {
         stream_connection_state_t (
@@ -912,13 +915,11 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
           packet_stream_session_t *session,
           stream_t stream,
           session_actor_manager_t *actors,
-          runtime::stateful::stream_session_registry_t *registry,
           std::optional<runtime::stateful::stream_connection_t> transport_connection) :
             scope (std::move (scope)),
             session (session),
             stream (std::move (stream)),
             actors (actors),
-            registry (registry),
             transport_connection (std::move (transport_connection))
         {
         }
@@ -931,9 +932,6 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             if (actors != nullptr) {
                 detail::session_actor_manager_access_t::disconnect (*actors);
             }
-            if (registry != nullptr && transport_connection) {
-                (void) registry->close (*transport_connection);
-            }
             scope.close ();
         }
 
@@ -944,10 +942,24 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         packet_stream_session_t *session = nullptr;
         stream_t stream;
         session_actor_manager_t *actors = nullptr;
-        runtime::stateful::stream_session_registry_t *registry = nullptr;
         std::optional<runtime::stateful::stream_connection_t> transport_connection;
         std::shared_ptr<replacement_session_state_t> replacement;
     };
+
+    /* The only place that closes the registry entry of a TCP, TLS or
+     * WebSocket connection. The reader calls it on every exit path before
+     * its thread ends, and stop () joins that thread before MeshNode stops.
+     * The retirement closes the entry before its first suspension. */
+    void retire_connection (const std::shared_ptr<stream_connection_state_t> &state)
+    {
+        if (!state->transport_connection)
+            return;
+        const auto session_rid = state->stream.routing_id ().value_or (
+          zlink::routing_id_t::from (state->stream.session_id ()));
+        retire_actor_session_bindings_async (*state->transport_connection, session_rid,
+                                             *state->actors,
+                                             [self = shared_from_this (), state] { (void) state; });
+    }
 
     /* zlink.stream.connections.* (runtime-metrics §4.1): session accept and
      * close on the server edge; reconnect attempts belong to the connector. */
@@ -3220,10 +3232,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         auto &session_actors = scope.provider ().get_required<session_actor_manager_t> ();
         detail::session_actor_manager_access_t::attach (session_actors, stream_instance);
         std::optional<runtime::stateful::stream_connection_t> transport_connection;
-        runtime::stateful::stream_session_registry_t *session_registry = nullptr;
         if (_mesh_node) {
-            session_registry = &_mesh_node->native_node ().sessions ();
-            transport_connection = session_registry->open (
+            transport_connection = _mesh_node->native_node ().sessions ().open (
               runtime::stateful::stream_session_registry_t::connection_key (session_rid),
               [this, connection] { request_close (*connection); }, _mesh_node->routing_id (),
               _mesh_node->native_node ().status ().lifecycle_generation (),
@@ -3231,7 +3241,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         }
         auto connection_state = std::make_shared<stream_connection_state_t> (
           std::move (scope), &session, std::move (stream_instance), &session_actors,
-          session_registry, std::move (transport_connection));
+          std::move (transport_connection));
         auto &stream = connection_state->stream;
         if (_mesh_node) {
             auto replacement = register_replacement_session (
@@ -3282,6 +3292,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                 !connected) {
                 owner->request_close ();
                 asio::post (_io, [connection] { close_stream (*connection); });
+                retire_connection (connection_state);
                 return;
             }
             connected_session = true;
@@ -3484,14 +3495,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                 auto completed = [self = shared_from_this (),
                                   connection_state] (const result_t<void> &) {
                     trace_stream_host ("dispatch-disconnected-end", self->_stream);
-                    if (!connection_state->transport_connection)
-                        return;
-                    const auto session_rid = connection_state->stream.routing_id ().value_or (
-                      zlink::routing_id_t::from (connection_state->stream.session_id ()));
-                    self->retire_actor_session_bindings_async (
-                      *connection_state->transport_connection, session_rid,
-                      *connection_state->actors,
-                      [self, connection_state] { (void) connection_state; });
+                    self->retire_connection (connection_state);
                 };
                 auto submitted = _runtime.dispatch_disconnected_async (session, stream, completed);
                 if (!submitted) {
@@ -3516,6 +3520,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             // active entry is gone. Release their final IO posts on this owner.
             owner->io.restart ();
             owner->io.run ();
+        } else {
+            retire_connection (connection_state);
         }
     }
 
@@ -3637,6 +3643,19 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     bool _start_failed = false;
     std::string _start_error;
 };
+
+std::shared_ptr<void> stream_host_service_test_access_t::retain_connection (
+  service_provider_t &services, stream_t stream, host::public_host_runtime_t &node)
+{
+    auto connection = node.sessions ().open (stream.session_id ());
+    auto state = std::make_shared<stream_host_service_t::listener_t::stream_connection_state_t> (
+      detail::service_scope_t::create (services, detail::service_scope_kind_t::stream_session),
+      nullptr, std::move (stream), nullptr, connection);
+    // Retirement has already closed the registry entry. A dispatch callback
+    // can still hold the state when MeshNode releases its host.
+    (void) node.sessions ().close (connection);
+    return state;
+}
 
 stream_host_service_t::stream_host_service_t (
   std::shared_ptr<runtime_failure_collector_t> failures,

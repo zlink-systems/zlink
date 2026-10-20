@@ -1284,6 +1284,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     COMMAND test_cpp_framework_m6b_runtime
     LABELS "framework-unit;framework-m6-runtime;stateful;spot;actor;stream-session"
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_dispatch_callback_lifetime
+    COMMAND test_cpp_framework_m6b_runtime --dispatch-callback-lifetime
+    LABELS "framework-unit;framework-m6-runtime;stateful"
+    TIMEOUT 30)
 
   add_executable(test_cpp_framework_reply_submit_claim
     tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp)
@@ -2226,6 +2231,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-integration;framework-regression;framework-zlink;framework-zlink-stream;stream")
   target_link_libraries(test_cpp_framework_stream_framework PRIVATE
     zlink::stream_connector)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_stream_connection_registry_lifetime
+    COMMAND test_cpp_framework_stream_framework --connection-registry-lifetime
+    LABELS "framework-unit;stream;stream-session"
+    TIMEOUT 30)
   zlink_framework_cpp_add_boost_headers(
     test_cpp_framework_stream_framework)
   target_include_directories(test_cpp_framework_stream_framework PRIVATE
