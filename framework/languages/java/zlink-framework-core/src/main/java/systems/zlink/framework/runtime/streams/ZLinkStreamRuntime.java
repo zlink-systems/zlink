@@ -21,6 +21,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvi
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
@@ -506,9 +507,13 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         try {
             command = codec.decodeSessionRelocationSeal(command42);
         } catch (RuntimeException failure) {
-            if (traceEnabled) {
-                traceSessionRelocationSealDrop(transportSource, null, failure);
-            }
+            flow.reportFailure(
+                    ZLinkDispatchErrorSurface.STREAM_SESSION,
+                    ZLinkDispatchMessageKind.CONTROL,
+                    ZLinkDispatchErrorReason.INVALID_FRAME,
+                    ZLinkDispatchErrorAction.DROP,
+                    null,
+                    failure);
             throw failure;
         }
         var received = receiveSessionRelocationSeal(transportSource, command, codec);

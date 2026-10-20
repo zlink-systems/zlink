@@ -5782,8 +5782,30 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                 if (wire.kind == protocol::command::sessionRelocationSeal) {
                     if (mailbox_record.parts.size () != 1)
                         continue;
-                    const auto seal = protocol::decode_session_relocation_seal (
-                      protocol::message_bytes (mailbox_record.parts.front ()));
+                    const auto seal = [&] {
+                        try {
+                            return protocol::decode_session_relocation_seal (
+                              protocol::message_bytes (mailbox_record.parts.front ()));
+                        }
+                        catch (const protocol::service_wire_error_t &) {
+                            detail::dispatch_error_reporter_t (_options.mesh.dispatch)
+                              .report_lazy ([&] {
+                                  message_dispatch_error_event_t event{};
+                                  event.surface = dispatch_error_surface_t::stream_session;
+                                  event.message_kind = dispatch_message_kind_t::control;
+                                  event.reason = detail::dispatch_reason_from_error (
+                                    framework_error_kind_t::protocol_error);
+                                  event.action = dispatch_error_action_t::drop;
+                                  event.packet_name = "sessionRelocationSeal";
+                                  event.source_rid =
+                                    zlink::routing_id_t::from (mailbox_record.source_routing_id)
+                                      .to_hex ();
+                                  event.exception = std::current_exception ();
+                                  return event;
+                              });
+                            throw;
+                        }
+                    }();
                     const auto owner =
                       session_route_owner_resolver ? session_route_owner_resolver () : std::nullopt;
                     if (!owner) {

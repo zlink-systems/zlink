@@ -6589,12 +6589,32 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             ZLinkServiceWireCodec.TryDecodeSessionRelocationSeal(
                 head,
                 out var sessionRelocationSeal,
-                out _
+                out var sessionRelocationSealDecodeError
             )
         )
         {
             ProcessSessionRelocationSeal(sourceRid, sessionRelocationSeal);
             return true;
+        }
+        if (
+            head.Length > 3
+            && head[3] == (byte)ServiceWireConstants.Command.SessionRelocationSeal
+            && sessionRelocationSealDecodeError
+                is not ZLinkServiceWireCodec.DecodeError.None
+                    and not ZLinkServiceWireCodec.DecodeError.UnknownCommand
+            && _flow is { DispatchErrorsEnabled: true } flow
+        )
+        {
+            flow.TraceDispatchError(
+                new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.StreamSession,
+                    ZLinkDispatchMessageKind.Control,
+                    ZLinkDispatchErrorReason.InvalidFrame,
+                    ZLinkDispatchErrorAction.Drop,
+                    "sessionRelocationSeal",
+                    SourceRid: sourceRid.ToHex()
+                )
+            );
         }
         if (
             ZLinkServiceWireCodec.TryDecodeSessionRelocationSealed(

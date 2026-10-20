@@ -1932,11 +1932,14 @@ final class ZLinkStreamRuntimeIngressTest {
                                     line ->
                                             line.contains("phase=dropped")
                                                     && line.contains("outcome=dropped")));
-            var decodeDrops =
-                    lines.stream().filter(line -> line.contains("reason=stale_target")).toList();
-            assertEquals(1, decodeDrops.size());
-            assertTrue(decodeDrops.get(0).contains("phase=dropped"));
-            assertTrue(decodeDrops.get(0).contains("outcome=dropped"));
+            var decodeErrors =
+                    lines.stream()
+                            .filter(line -> line.contains("event_id=zlink.dispatch_error"))
+                            .toList();
+            assertEquals(1, decodeErrors.size());
+            assertTrue(decodeErrors.get(0).contains("outcome=failed"));
+            assertTrue(decodeErrors.get(0).contains("reason=invalid_frame"));
+            assertTrue(decodeErrors.get(0).contains("action=drop"));
         } finally {
             logger.removeHandler(handler);
         }

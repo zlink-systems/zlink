@@ -9,6 +9,57 @@ namespace Zlink.Framework.UnitTests;
 public sealed class ServiceWireSessionRelocationCodecTests
 {
     [Fact]
+    public async Task Malformed_command_42_records_invalid_frame_dispatch_error()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "malformed-seal");
+        var options = new ZLinkDispatchOptionsModel();
+        options.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+        var activities =
+            new System.Collections.Concurrent.ConcurrentQueue<System.Diagnostics.Activity>();
+        using var listener = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
+            Sample = (
+                ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _
+            ) => System.Diagnostics.ActivitySamplingResult.AllDataAndRecorded,
+            ActivityStopped = activities.Enqueue,
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(listener);
+        node.SetFlowTracer(new ZLinkMessageFlowTracer(options));
+
+        var sourceRid = RoutingId.From("malformed-command-42-source");
+        var malformed = new byte[] { 0x5a, 0x4d, 0x01, 42, 0x00 };
+        var receive = typeof(ZLinkManagedMeshNode).GetMethod(
+            "ProcessInfrastructureControl",
+            BindingFlags.NonPublic | BindingFlags.Instance
+        )!;
+        var handled = receive.Invoke(
+            node,
+            [
+                sourceRid,
+                1UL,
+                null,
+                new[] { Systems.Zlink.Message.From(malformed) },
+                malformed,
+                null,
+                null,
+            ]
+        );
+
+        Assert.Equal(false, handled);
+        var error = Assert.Single(
+            activities.Where(item => Equals(item.GetTagItem("event_id"), "zlink.dispatch_error"))
+        );
+        Assert.Equal("failed", error.GetTagItem("outcome"));
+        Assert.Equal("stream", error.GetTagItem("surface"));
+        Assert.Equal("control", error.GetTagItem("message_kind"));
+        Assert.Equal("invalid_frame", error.GetTagItem("reason"));
+        Assert.Equal("drop", error.GetTagItem("action"));
+        Assert.Equal(sourceRid.ToHex(), error.GetTagItem("source_rid"));
+    }
+
+    [Fact]
     public async Task Seal_without_descriptor_records_location_unavailable_drop()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();

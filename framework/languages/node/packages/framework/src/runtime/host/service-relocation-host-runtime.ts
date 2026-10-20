@@ -30,6 +30,12 @@ import {
   ZLinkSpotRelocationReadyOutcome,
   ZLinkUserSpotExecutionMode
 } from '../../contracts';
+import {
+  ZLinkDispatchErrorSurface,
+  ZLinkDispatchMessageKind,
+  ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
+} from '../../contracts/Dispatch/ZLinkDispatchOptions';
 
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import { zlinkRuntimeDefaultLocationOptions } from '../../contracts/Locations/Options';
@@ -68,8 +74,10 @@ import {
 import { METRIC_NAMES, MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
 import {
   traceSessionBindingControlDrop,
+  flowIfEnabled,
   type ZLinkMessageFlowTracer
 } from '../diagnostics/message-flow';
+import { dispatchErrorDetails } from '../diagnostics/dispatch-error-details';
 import { isStructuralGuardEnabled, trackDiagnosticCompletion } from '../execution/state-lane';
 import {
   RECREATE_RELOCATION_CONTENT_TYPE,
@@ -935,7 +943,23 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       return true;
     }
     if (command === M6bServiceWireCommand.sessionRelocationSeal) {
-      const request = decodeSessionRelocationSeal(payload);
+      let request: ServiceSessionRelocationSeal;
+      try {
+        request = decodeSessionRelocationSeal(payload);
+      } catch (error) {
+        const outcome = ZLinkMessageFlowOutcome.Error;
+        flowIfEnabled(this.options.messageFlow?.(), outcome)?.trace({
+          outcome,
+          surface: ZLinkDispatchErrorSurface.StreamSession,
+          messageKind: ZLinkDispatchMessageKind.Control,
+          packetName: 'sessionRelocationSeal',
+          sourceRid: record.sourceNodeRid ?? undefined,
+          errorReason: 'invalid_frame',
+          errorAction: ZLinkDispatchErrorAction.Drop,
+          ...dispatchErrorDetails(error)
+        });
+        throw error;
+      }
       let response: ServiceSessionRelocationSealed | undefined;
       try {
         response = await this.handleSessionRelocationSeal(
