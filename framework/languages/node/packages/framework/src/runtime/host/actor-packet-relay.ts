@@ -1,3 +1,4 @@
+import { mapZLinkRequestReply } from '../messaging/request-result';
 import {
   ZLinkFrameworkInternalErrorKind,
   createInternalFrameworkException,
@@ -767,29 +768,33 @@ export class ZLinkActorPacketRelay {
       ...frame
     });
     if ((spotKind ?? ZLinkSpotKind.Entry) === ZLinkSpotKind.Entry) {
-      await this.options.routeTransport.request(
-        remoteTarget.routerChannelId,
-        String(remoteTarget.targetNodeRid),
-        ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-        payload,
-        this.options.requestTimeoutMs,
-        signal
+      await mapZLinkRequestReply(
+        this.options.routeTransport.request(
+          remoteTarget.routerChannelId,
+          String(remoteTarget.targetNodeRid),
+          ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
+          payload,
+          this.options.requestTimeoutMs,
+          signal
+        )
       );
       return;
     }
-    await this.options.routeTransport.requestToSpot(
-      {
-        routerChannelId: remoteTarget.routerChannelId,
-        targetNodeRid: remoteTarget.targetNodeRid,
-        spotId: remoteTarget.spotId,
-        spotKind: spotKind ?? ZLinkSpotKind.Entry
-      },
-      payload,
-      {
-        packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-        timeoutMs: this.options.requestTimeoutMs,
-        signal
-      }
+    await mapZLinkRequestReply(
+      this.options.routeTransport.requestToSpot(
+        {
+          routerChannelId: remoteTarget.routerChannelId,
+          targetNodeRid: remoteTarget.targetNodeRid,
+          spotId: remoteTarget.spotId,
+          spotKind: spotKind ?? ZLinkSpotKind.Entry
+        },
+        payload,
+        {
+          packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
+          timeoutMs: this.options.requestTimeoutMs,
+          signal
+        }
+      )
     );
   }
 
@@ -856,13 +861,15 @@ export class ZLinkActorPacketRelay {
   ): Promise<TReply> {
     if (target.spotKind === ZLinkSpotKind.Entry) {
       try {
-        return await this.options.routeTransport.request<TReply>(
-          target.routerChannelId,
-          String(target.targetNodeRid),
-          ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-          request,
-          this.options.requestTimeoutMs,
-          signal
+        return await mapZLinkRequestReply(
+          this.options.routeTransport.request<TReply>(
+            target.routerChannelId,
+            String(target.targetNodeRid),
+            ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
+            request,
+            this.options.requestTimeoutMs,
+            signal
+          )
         );
       } catch (error) {
         if (!(error instanceof ZLinkConfigurationException)) {

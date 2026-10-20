@@ -1760,7 +1760,12 @@ void app_t::_apply_zlink_framework ()
         auto location_store = provider.get<location_repository_t> ();
         auto mesh_runtime = std::make_shared<runtime::route_mesh_runtime_service_t> (
           mesh_nodes, location_runtime ? &location_runtime->get () : nullptr,
-          location_store ? &location_store->get () : nullptr, _state->monitoring);
+          location_store ? &location_store->get () : nullptr, _state->monitoring,
+          [access = _state->status_access] {
+              std::shared_lock lock (access->mutex);
+              return access->state ? access->state->runtime_state.load (std::memory_order_acquire)
+                                   : framework_runtime_state_t::stopped;
+          });
         _state->services.add_factory<route_mesh_runtime_t> (
           [mesh_runtime] (service_provider_t &) {
               return std::static_pointer_cast<route_mesh_runtime_t> (mesh_runtime);

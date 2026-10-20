@@ -1,4 +1,10 @@
-import { createZLinkRequest } from '../messaging/request-result';
+import {
+  createZLinkRequest,
+  mapZLinkRequestReply,
+  prepareZLinkRequestReply,
+  identityRequestReply,
+  type ZLinkRequestResult
+} from '../messaging/request-result';
 import {
   type RoutingId,
   type ZLinkChannelClient,
@@ -218,13 +224,13 @@ export interface ZLinkSpotRoutedTransport {
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: unknown,
     options: ZLinkSpotRoutedRequestOptions
-  ): Promise<TReply>;
+  ): ZLinkRequestResult<TReply>;
   requestFromSpotToSpot?<TReply = unknown>(
     sourceSpot: ZLinkBackendSpot,
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: unknown,
     options: ZLinkSpotRoutedRequestOptions
-  ): Promise<TReply>;
+  ): ZLinkRequestResult<TReply>;
 }
 
 export interface ZLinkSpotRoutedSendOptions {
@@ -361,7 +367,8 @@ function createAddressedSpotRequestCall(
       markSubmitted(options);
       rejectSameSpotAsyncRequest(serial, spotId, 'async');
       return createZLinkRequest(
-        (onAdmitted) => begin<TReply>(signal, onAdmitted),
+        (onAdmitted) =>
+          prepareZLinkRequestReply(begin<TReply>(signal, onAdmitted), identityRequestReply),
         (pending) => (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending))
       );
     },
@@ -501,7 +508,8 @@ function wrapRequestCall(
     },
     submit<TReply>(signal?: AbortSignal) {
       return createZLinkRequest(
-        (onAdmitted) => begin<TReply>(signal, onAdmitted),
+        (onAdmitted) =>
+          prepareZLinkRequestReply(begin<TReply>(signal, onAdmitted), identityRequestReply),
         (pending) => (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending))
       );
     },
@@ -618,7 +626,8 @@ function wrapRoutedSpotRequestCall(
     submit<TReply>(signal?: AbortSignal) {
       rejectSameSpotAsyncRequest(serial, spot.spotId, 'async');
       return createZLinkRequest(
-        (onAdmitted) => begin<TReply>(signal, onAdmitted),
+        (onAdmitted) =>
+          prepareZLinkRequestReply(begin<TReply>(signal, onAdmitted), identityRequestReply),
         (pending) => (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending))
       );
     },
@@ -685,7 +694,7 @@ export async function requestToSpotHandle<TReply = unknown>(
   options: ZLinkSpotHandleCallOptions = {}
 ): Promise<TReply> {
   const packetName = resolveFrameworkPacketName(request, undefined, 'SPOT');
-  const requestResolved = async (resolved: ResolvedSpotHandle): Promise<TReply> => {
+  const requestResolved = (resolved: ResolvedSpotHandle): ZLinkRequestResult<TReply> => {
     const target = spotRefToSpotRouteTarget(resolved, options.spotRouterChannelIdForMesh);
     const transportOptions = {
       packetName,
@@ -705,7 +714,7 @@ export async function requestToSpotHandle<TReply = unknown>(
     return transport.requestToSpot<TReply>(target, request, transportOptions);
   };
 
-  return requestResolved(await requireSpotRef(spot, options.signal));
+  return mapZLinkRequestReply(requestResolved(await requireSpotRef(spot, options.signal)));
 }
 
 async function requireSpotRef(
