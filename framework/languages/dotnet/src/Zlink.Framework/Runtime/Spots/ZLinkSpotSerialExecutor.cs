@@ -1801,28 +1801,25 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
             ZLinkSerialWorkItem item;
             try
             {
-                // PostAsync completes admission synchronously and returns the admitted item.
-                item = lane.PostAsync(
-                        async ct =>
+                item = lane.Post(
+                    async ct =>
+                    {
+                        try
                         {
-                            try
-                            {
-                                if (!TrySkipClosingApplication(null))
-                                    await operation(ct).ConfigureAwait(false);
-                            }
-                            finally
-                            {
-                                await claim.ReleaseAsync().ConfigureAwait(false);
-                            }
-                        },
-                        payloadBytes,
-                        metadataBytes,
-                        transferred,
-                        cancellationToken,
-                        ready
-                    )
-                    .GetAwaiter()
-                    .GetResult();
+                            if (!TrySkipClosingApplication(null))
+                                await operation(ct).ConfigureAwait(false);
+                        }
+                        finally
+                        {
+                            await claim.ReleaseAsync().ConfigureAwait(false);
+                        }
+                    },
+                    payloadBytes,
+                    metadataBytes,
+                    transferred,
+                    cancellationToken,
+                    ready
+                );
             }
             catch
             {

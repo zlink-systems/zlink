@@ -358,6 +358,19 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         bool transferred,
         CancellationToken cancellationToken,
         Func<bool>? ready = null
+    ) =>
+        ValueTask.FromResult(
+            Post(callback, payloadBytes, metadataBytes, transferred, cancellationToken, ready)
+        );
+
+    // Admission is synchronous: the item is accepted, or this throws the admission failure.
+    internal ZLinkSerialWorkItem Post(
+        Func<CancellationToken, ValueTask> callback,
+        long payloadBytes,
+        long metadataBytes,
+        bool transferred,
+        CancellationToken cancellationToken,
+        Func<bool>? ready = null
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -372,7 +385,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         );
         if (admission != ZLinkSerialPostAdmission.Accepted)
             throw CreateAdmissionException(AdmissionOperationName, admission);
-        return ValueTask.FromResult(item);
+        return item;
     }
 
     public bool TryPost(
