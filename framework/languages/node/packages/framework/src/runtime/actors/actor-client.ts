@@ -2,7 +2,7 @@ import { routingIdsEqual } from '../routing-id';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import {
   createZLinkRequest,
-  mapZLinkRequestReply,
+  prepareZLinkRequestReply,
   identityRequestReply
 } from '../messaging/request-result';
 import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
@@ -725,11 +725,10 @@ class DefaultZLinkActorRequestCall implements ZLinkActorRequestCall {
 
   submit<TReply>(signal?: AbortSignal): ZLinkRequest<TReply> {
     this.rejectSelfActorRequest();
-    return createZLinkRequest((onAdmitted, observer) =>
-      mapZLinkRequestReply(
+    return createZLinkRequest((onAdmitted) =>
+      prepareZLinkRequestReply(
         this.execute<TReply>('async', signal, onAdmitted),
-        identityRequestReply,
-        observer
+        identityRequestReply
       )
     );
   }

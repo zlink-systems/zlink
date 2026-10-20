@@ -1,3 +1,4 @@
+const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
@@ -703,11 +704,11 @@ test('actor client deadline ends its pending request while a Message Follow rela
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: {
       async sendToSpot() {},
-      async requestToSpot() {
+      requestToSpot() { return prepareZLinkRequestReply((async () => {
         const reply = new Promise(resolve => { completeRelay = resolve; });
         entered();
         return await reply;
-      }
+      })(), identityRequestReply); }
     },
     requestSource: () => ({
       meshName: route.meshName, objectGeneration: route.actorRef.objectGeneration,

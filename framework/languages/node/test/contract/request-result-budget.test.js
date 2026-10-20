@@ -3,14 +3,14 @@ const test = require('node:test');
 const { createHook } = require('node:async_hooks');
 const {
   createZLinkRequest: createMappedRequest,
-  mapZLinkRequestReply,
+  prepareZLinkRequestReply,
   identityRequestReply
 } = require('../../packages/framework/dist/runtime/messaging/request-result');
 
 // The source owns its result mapping; the public helper owns admission state.
 function createZLinkRequest(start, deliverReply) {
-  return createMappedRequest((admitted, observer) =>
-    mapZLinkRequestReply(start(admitted), identityRequestReply, observer), deliverReply);
+  return createMappedRequest((admitted) =>
+    prepareZLinkRequestReply(start(admitted), identityRequestReply), deliverReply);
 }
 
 function deferred() {
@@ -98,20 +98,18 @@ test('one request admission failure does not alter a completed or waiting siblin
 
 test('admission notification and reply mapping use the same admission owner', async () => {
   const pending = deferred();
+  const failure = new Error('late decode failure');
   let markAdmitted;
-  let replyOwner;
-  const request = createMappedRequest((admitted, observer) => {
+  const request = createMappedRequest((admitted) => {
     markAdmitted = admitted;
-    replyOwner = observer;
-    return mapZLinkRequestReply(pending.promise, identityRequestReply, observer);
+    return prepareZLinkRequestReply(pending.promise, () => { throw failure; });
   });
   const admitted = request.admitted;
   markAdmitted();
   await admitted;
   pending.resolve('reply');
-  assert.equal(await request, 'reply');
+  await assert.rejects(request, (error) => error === failure);
   assert.equal(request.admitted, admitted);
-  replyOwner.fail(new Error('late failure'));
   await admitted;
 });
 

@@ -1,4 +1,4 @@
-const { mapZLinkRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { prepareZLinkRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate } = require('node:timers/promises');
@@ -59,12 +59,12 @@ for (const path of [
     };
     const transport = {
       async sendToSpot() {},
-      request: (_mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted, observer) =>
-        mapZLinkRequestReply(start(onAdmitted), () => 'reply', observer),
-      requestToChannel: (_mesh, _channel, _packet, _request, _timeout, _signal, _metadata, onAdmitted, observer) =>
-        mapZLinkRequestReply(start(onAdmitted), () => 'reply', observer),
+      request: (_mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
+        prepareZLinkRequestReply(start(onAdmitted), () => 'reply'),
+      requestToChannel: (_mesh, _channel, _packet, _request, _timeout, _signal, _metadata, onAdmitted) =>
+        prepareZLinkRequestReply(start(onAdmitted), () => 'reply'),
       requestToSpot: (_target, _request, options) =>
-        mapZLinkRequestReply(start(options.onAdmitted), () => 'reply', options.replyObserver),
+        prepareZLinkRequestReply(start(options.onAdmitted), () => 'reply'),
       requestRawToSpot: (_target, _request, options) => start(options.onAdmitted)
     };
     const registration = framework.createFrameworkRegistration({
@@ -263,7 +263,7 @@ test('public routed local Spot request observes serial queue acceptance before h
   const client = new framework.DefaultZLinkRouteClient(
     framework.createFrameworkRegistration({ spotNodes: { mesh: { router: { bind: 'inproc://local-stage' } } } }),
     { async sendToSpot() {}, requestToSpot(_target, request, options) {
-      return mapZLinkRequestReply(dispatcher.request('room', 'Query', request, { channelName: 'mesh', onAdmitted: options.onAdmitted }), (reply) => reply, options.replyObserver);
+      return prepareZLinkRequestReply(dispatcher.request('room', 'Query', request, { channelName: 'mesh', onAdmitted: options.onAdmitted }), (reply) => reply);
     } }
   );
   const handle = framework.createSpotHandle('room', async () => ({

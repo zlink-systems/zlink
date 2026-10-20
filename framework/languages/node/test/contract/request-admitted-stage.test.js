@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { setImmediate } = require('node:timers/promises');
 const framework = require('../../packages/framework/dist/internal');
-const { mapZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 
 function deferred() {
   let resolve;
@@ -18,14 +18,14 @@ function fixture(shared) {
     spotNodes: { mesh: { router: { bind: 'tcp://127.0.0.1:0' } } }
   });
   const client = new framework.DefaultZLinkRouteClient(registration, {
-    request(_mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted, observer) {
-      if (shared !== undefined) return mapZLinkRequestReply(shared, identityRequestReply, observer);
+    request(_mesh, _rid, _packet, _request, _timeout, _signal, _metadata, onAdmitted) {
+      if (shared !== undefined) return prepareZLinkRequestReply(shared, identityRequestReply);
       const admission = deferred();
       const reply = deferred();
       admissions.push(admission);
       replies.push(reply);
       void admission.promise.then(onAdmitted, () => undefined);
-      return mapZLinkRequestReply(reply.promise, identityRequestReply, observer);
+      return prepareZLinkRequestReply(reply.promise, identityRequestReply);
     }
   });
   return {
@@ -123,7 +123,7 @@ for (const wrapped of [false, true]) {
     } = require('../../packages/framework/dist/runtime/messaging/request-result');
     const reply = deferred();
     const pending = createZLinkRequest(
-      (_admitted, observer) => mapZLinkRequestReply(reply.promise, identityRequestReply, observer),
+      (_admitted) => prepareZLinkRequestReply(reply.promise, identityRequestReply),
       wrapped ? (value) => value.then((result) => result) : undefined
     );
     let admitted = false;

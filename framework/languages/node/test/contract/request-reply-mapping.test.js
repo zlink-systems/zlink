@@ -3,7 +3,7 @@ const test = require('node:test');
 const { createHook } = require('node:async_hooks');
 const framework = require('../../packages/framework/dist/internal');
 const {
-  createZLinkRequest, mapZLinkRequestReply, identityRequestReply
+  createZLinkRequest, prepareZLinkRequestReply, identityRequestReply
 } = require('../../packages/framework/dist/runtime/messaging/request-result');
 
 function deferred() {
@@ -76,10 +76,7 @@ for (const throws of [false, true]) {
   test(`failure mapping preserves admission when mapper throws=${throws}`, async () => {
     const source = deferred();
     const error = new Error('mapped failure');
-    const request = createZLinkRequest((_admitted, observer) => mapZLinkRequestReply(
-      source.promise, identityRequestReply, observer,
-      () => { if (throws) throw error; return error; }
-    ));
+    const request = createZLinkRequest((_admitted) => prepareZLinkRequestReply(source.promise, identityRequestReply, () => { if (throws) throw error; return error; }));
     const observed = Promise.allSettled([request, request.admitted]);
     source.reject(new Error('source failure'));
     const outcomes = await observed;
@@ -113,15 +110,16 @@ for (const kind of ['client-server', 'source-spot']) {
       transport = new framework.ZLinkRuntimeRouteTransport(() => { throw error; });
     }
     let pending;
-    const request = createZLinkRequest((admitted, observer) => {
+    const request = createZLinkRequest((admitted) => {
       assert.doesNotThrow(() => {
         pending = kind === 'client-server'
-          ? transport.request('channel', undefined, {}, 1000, undefined, undefined, admitted, observer)
-          : transport.requestFromSpotToSpot({}, {}, {}, { onAdmitted: admitted, replyObserver: observer });
+          ? transport.request('channel', undefined, {}, 1000, undefined, undefined, admitted)
+          : transport.requestFromSpotToSpot({}, {}, {}, { onAdmitted: admitted });
       });
       return pending;
     });
-    assert.ok(pending instanceof Promise);
+    assert.ok(pending.pending instanceof Promise);
+    assert.ok(request instanceof Promise);
     const outcomes = await Promise.allSettled([request, request.admitted]);
     assert.equal(outcomes[0].reason, error);
     assert.equal(outcomes[1].reason, error);
@@ -143,8 +141,8 @@ test('channel synchronous completion submission failure records the original met
     () => false
   );
   transport.encodeMessage = () => [];
-  const request = createZLinkRequest((admitted, observer) =>
-    transport.requestToChannel('mesh', 'channel', undefined, {}, 1000, undefined, undefined, admitted, observer));
+  const request = createZLinkRequest((admitted) =>
+    transport.requestToChannel('mesh', 'channel', undefined, {}, 1000, undefined, undefined, admitted));
   const outcomes = await Promise.allSettled([request, request.admitted]);
   assert.equal(outcomes[0].reason, error);
   assert.equal(outcomes[1].reason, error);

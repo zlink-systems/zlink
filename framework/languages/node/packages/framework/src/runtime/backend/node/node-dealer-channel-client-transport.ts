@@ -1,8 +1,7 @@
 import {
-  mapZLinkRequestReply,
+  prepareZLinkRequestReply,
   identityRequestReply,
-  passthroughRequestReplyObserver,
-  type ZLinkRequestReplyObserver
+  type ZLinkRequestResult
 } from '../../messaging/request-result';
 import { bindingRequestReply } from './node-backend-adapter-support';
 import type { DealerSocket, Message, PubSocket } from '@zlink-systems/zlink';
@@ -64,9 +63,8 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     metadata: ReadonlyMap<string, string> = EMPTY_METADATA,
-    onAdmitted?: () => void,
-    replyObserver: ZLinkRequestReplyObserver = passthroughRequestReplyObserver
-  ): Promise<TReply> {
+    onAdmitted?: () => void
+  ): ZLinkRequestResult<TReply> {
     try {
       throwIfAborted(signal);
       const operation = runWithOutboundFlow(true, () =>
@@ -99,19 +97,15 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
         },
         'channel request'
       );
-      return mapZLinkRequestReply(
-        pending,
-        (reply) => {
-          try {
-            return decodeChannelReply<TReply>(reply);
-          } finally {
-            for (const part of reply) part.close();
-          }
-        },
-        replyObserver
-      );
+      return prepareZLinkRequestReply(pending, (reply) => {
+        try {
+          return decodeChannelReply<TReply>(reply);
+        } finally {
+          for (const part of reply) part.close();
+        }
+      });
     } catch (error) {
-      return mapZLinkRequestReply(Promise.reject(error), identityRequestReply, replyObserver);
+      return prepareZLinkRequestReply(Promise.reject(error), identityRequestReply);
     }
   }
 

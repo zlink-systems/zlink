@@ -1,8 +1,7 @@
 import {
-  mapZLinkRequestReply,
+  prepareZLinkRequestReply,
   identityRequestReply,
-  passthroughRequestReplyObserver,
-  type ZLinkRequestReplyObserver
+  type ZLinkRequestResult
 } from '../messaging/request-result';
 import type { ZLinkListenerRecords } from '../foundation/listener-records';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
@@ -255,9 +254,8 @@ export class ZLinkChannelRuntimeManager {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>,
-    onAdmitted?: () => void,
-    replyObserver: ZLinkRequestReplyObserver = passthroughRequestReplyObserver
-  ): Promise<TReply> {
+    onAdmitted?: () => void
+  ): ZLinkRequestResult<TReply> {
     let pending: Promise<TReply>;
     try {
       pending = this.outbound.request<TReply>(
@@ -272,7 +270,7 @@ export class ZLinkChannelRuntimeManager {
     } catch (error) {
       pending = Promise.reject(error);
     }
-    return mapZLinkRequestReply(pending, identityRequestReply, replyObserver);
+    return prepareZLinkRequestReply(pending, identityRequestReply);
   }
 
   tryPublish(
