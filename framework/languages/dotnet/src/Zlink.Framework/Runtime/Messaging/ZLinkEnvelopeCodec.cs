@@ -134,7 +134,6 @@ internal static class ZLinkEnvelopeCodec
 {
     private const int MaximumCorrelationIdBytes = 64;
     private const string JsonContentType = "application/json";
-    private static readonly UTF8Encoding StrictMetadataUtf8 = new(false, true);
     private const int MaximumSimpleHeaderCacheEntries = 4096;
     private static readonly ZLinkStateLane CacheLane = new();
     private static ImmutableDictionary<SimpleHeaderKey, HeaderPlan> SimpleHeaderCache =
@@ -918,8 +917,8 @@ internal static class ZLinkEnvelopeCodec
             {
                 foreach (var (key, value) in metadata)
                 {
-                    _ = StrictMetadataUtf8.GetByteCount(key);
-                    _ = StrictMetadataUtf8.GetByteCount(value);
+                    _ = ZLinkMeshMetadataCodec.StrictUtf8.GetByteCount(key);
+                    _ = ZLinkMeshMetadataCodec.StrictUtf8.GetByteCount(value);
                 }
             }
             catch (EncoderFallbackException)
