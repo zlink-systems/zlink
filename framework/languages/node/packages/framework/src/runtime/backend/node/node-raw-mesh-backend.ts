@@ -2398,13 +2398,8 @@ function decodeMultipartRecord(
         const values = Array.isArray(parts) ? parts : [parts];
         if (values.length === 0) return SubmitResult.InvalidState;
         runtime.replyService(
-          {
-            sourceRoutingId: record.sourceRoutingId!,
-            ...(record.sourceRoute === undefined ? {} : { sourceRoute: record.sourceRoute }),
-            requestSequence: record.requestSequence!,
-            ...(record.reply === undefined ? {} : { reply: record.reply })
-          },
-          values.map((value) => Buffer.from(messageBytesView(value)))
+          record as Parameters<RawServiceMeshRuntime['replyService']>[0],
+          values.map(messageBytesView)
         );
         return SubmitResult.Ok;
       },

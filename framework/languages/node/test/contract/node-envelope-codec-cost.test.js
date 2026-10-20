@@ -113,6 +113,47 @@ test('correlation validation accepts the full ASCII contract without per-call Re
   assert.equal(counts.get('isValidChannelCorrelationId:regexp') ?? 0, 0);
 });
 
+test('raw service reply transfers owned bytes directly to the binding reply capability', async () => {
+  const { fixture } = require('./fixtures/raw-mesh-close');
+  const { ReadyDomain } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
+  const f = fixture();
+  let captured;
+  let replySource;
+  const replyService = f.runtime.replyService.bind(f.runtime);
+  f.runtime.replyService = (record, parts) => {
+    replySource = record;
+    replyService(record, parts);
+  };
+  const payload = Buffer.alloc(1024, 7);
+  try {
+    const input = {
+      owner: 'local', domain: 'application', sourceRoutingId: 'source',
+      requestSequence: 1n, parts: [Buffer.from('service request')],
+      reply(parts) { captured = parts; }
+    };
+    f.runtime.mailbox.tryEnqueue(input);
+    const ready = f.backend.createReadyBatch(1);
+    f.backend.drainReady(ReadyDomain.Application, ready);
+    const claim = ready.takeClaim(0);
+    const result = claim.recvBatch(f.backend.createReceiveBatch(1, 1));
+    try {
+      result.records[0].reply([ZLinkBufferMessage.fromOwned(payload)]);
+      assert.equal(captured[0], payload, 'Framework must not snapshot before the synchronous binding reply.');
+      assert.equal(captured[0].length, 1024);
+      assert.equal(replySource, input, 'Reply routing uses the owning record without a snapshot.');
+    } finally {
+      for (const record of result.records) {
+        for (const part of record.parts) part.close();
+        record.releaseRetainedIngress?.();
+      }
+      claim.release();
+      ready.close();
+    }
+  } finally {
+    await f.backend.close();
+  }
+});
+
 test('reply decode borrows its body once for JSON, registered codecs and raw bytes', () => {
   const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
   for (const contentType of ['application/json', 'application/x-test', 'application/octet-stream']) {
