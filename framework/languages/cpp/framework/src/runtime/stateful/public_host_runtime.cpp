@@ -3224,6 +3224,26 @@ void public_host_runtime_t::flush_pending_session_relocation_seals ()
     std::vector<session_relocation_key_t> pending;
     std::vector<session_relocation_key_t> expired;
     const auto now = std::chrono::steady_clock::now ();
+    const auto consumed =
+      _relocation_session_terminal_lane
+        .run ([&] {
+            std::map<session_relocation_key_t, protocol::session_relocation_seal_t> records;
+            for (const auto &[key, record] : _session_seal_terminals)
+                if (record.consumed
+                    && record.sealed.seal_result
+                         == protocol::session_relocation_seal_result_t::sealed)
+                    records.emplace (key, record.seal);
+            return records;
+        })
+        .get ();
+    // Read each registry fact outside the terminal turn. Only the captured
+    // records may be pruned with it; a successor record needs its own observation.
+    std::map<std::string, std::optional<stateful::stream_binding_t>> current_bindings;
+    for (const auto &[key, seal] : consumed) {
+        const auto [current, inserted] = current_bindings.try_emplace (seal.actor.actor_id);
+        if (inserted)
+            current->second = _sessions.current_binding (seal.actor.actor_id);
+    }
     _relocation_session_terminal_lane
       .run ([&] {
           for (auto it = _session_seal_terminals.begin (); it != _session_seal_terminals.end ();) {
@@ -3235,13 +3255,16 @@ void public_host_runtime_t::flush_pending_session_relocation_seals ()
                       continue;
                   }
               } else if (record.consumed) {
-                  const auto current = _sessions.current_binding (record.seal.actor.actor_id);
-                  if (!current || current->binding_generation != record.seal.binding_generation
-                      || current->connection.connection_id
-                           != stateful::stream_session_registry_t::connection_key (
-                             zlink::routing_id_t::from (record.seal.session_routing_id))) {
-                      it = _session_seal_terminals.erase (it);
-                      continue;
+                  const auto captured = consumed.find (key);
+                  if (captured != consumed.end () && captured->second == record.seal) {
+                      const auto &current = current_bindings.at (record.seal.actor.actor_id);
+                      if (!current || current->binding_generation != record.seal.binding_generation
+                          || current->connection.connection_id
+                               != stateful::stream_session_registry_t::connection_key (
+                                 zlink::routing_id_t::from (record.seal.session_routing_id))) {
+                          it = _session_seal_terminals.erase (it);
+                          continue;
+                      }
                   }
               } else if (record.expires_at <= now)
                   expired.push_back (key);

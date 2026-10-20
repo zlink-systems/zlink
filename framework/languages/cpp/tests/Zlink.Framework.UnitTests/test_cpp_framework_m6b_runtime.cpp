@@ -4772,6 +4772,13 @@ void verify_absent_session_seal ()
     const auto current = local->sessions ().current_binding (object.key);
     assert (current
             && local->sessions ().unbind (*current).first == stateful::stateful_error_t::none);
+    const auto [replacement_error, replacement] = local->sessions ().bind_remote (
+      connection, current->actor, current->target_node_generation, current->owner_lease_generation);
+    assert (replacement_error == stateful::stateful_error_t::none);
+    assert (replacement.binding_generation != current->binding_generation);
+    assert (!host::public_host_runtime_test_access_t::admit_seal (*local, next_seal).first);
+    assert (local->sessions ().is_current (replacement));
+    assert (local->sessions ().unbind (replacement).first == stateful::stateful_error_t::none);
     const auto removed = host::public_host_runtime_test_access_t::admit_seal (*local, next_seal);
     assert (removed.first && removed.second);
     assert (protocol::decode_session_relocation_sealed_43 (
