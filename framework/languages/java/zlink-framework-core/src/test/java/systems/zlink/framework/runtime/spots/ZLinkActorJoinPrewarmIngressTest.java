@@ -10,9 +10,11 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorJoinOperationId;
+import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.locations.*;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.runtime.InMemoryRelocationStore;
+import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget.QueuedTurn;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
@@ -63,6 +65,47 @@ final class ZLinkActorJoinPrewarmIngressTest {
     private static final long SOURCE_NODE_GENERATION = 11;
 
     @Test
+    void missingPrewarmDoesNotCaptureTheAcceptedJournal() throws Exception {
+        try (Harness harness = Harness.start(request -> CompletableFuture.completedFuture(null));
+                Message payload = Message.from("missing")) {
+            var captures = new java.util.concurrent.atomic.AtomicInteger();
+            assertFalse(
+                    harness.endpoint.handleActor(
+                            harness.sourceFence(),
+                            new ZLinkServiceM6BWireCodec.ActorMessage(
+                                    false,
+                                    0,
+                                    null,
+                                    0,
+                                    0,
+                                    1,
+                                    null,
+                                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                            new ZLinkBackendActorRef(
+                                                    TARGET_RID,
+                                                    harness.actorId,
+                                                    harness.objectGeneration),
+                                            TARGET_NODE_GENERATION,
+                                            harness.sourceAuthorityOwnerGeneration + 1,
+                                            23)),
+                            () -> {
+                                captures.incrementAndGet();
+                                return actorRecord(harness.actorId, "missing");
+                            },
+                            List.of(payload),
+                            null,
+                            ignored -> {
+                                throw new AssertionError("missing prewarm must not reply");
+                            },
+                            ignored -> {
+                                throw new AssertionError(
+                                        "missing prewarm must not consume ingress");
+                            }));
+            assertEquals(0, captures.get());
+        }
+    }
+
+    @Test
     void arrivalBetweenAcceptedAndPrepareIsDeliveredAfterRelocationCompletes() throws Exception {
         try (Harness harness = Harness.start(request -> CompletableFuture.completedFuture(null))) {
             harness.admit();
@@ -108,6 +151,12 @@ final class ZLinkActorJoinPrewarmIngressTest {
             //  between Accepted and PREPARE (migrated atomically when the
             //  real stage installed) ahead of the one that landed
             //  straight in the real stage after install.
+            harness.recordingBackend
+                    .actors
+                    .actorRelocationLaneAsync(harness.actorId)
+                    .thenCompose(ZLinkSerialExecutionQueue::awaitQuiescence)
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
             assertEquals(List.of("EARLY", "AFTER_INSTALL"), harness.recordingBackend.replayed);
         }
     }
@@ -252,7 +301,8 @@ final class ZLinkActorJoinPrewarmIngressTest {
                             null,
                             authorityStore,
                             actorStaging,
-                            targetJoin);
+                            targetJoin,
+                            (ignored, generations) -> CompletableFuture.completedFuture(null));
 
             var participants =
                     List.of(
@@ -440,6 +490,27 @@ final class ZLinkActorJoinPrewarmIngressTest {
     private static ZLinkUserSpotAggregateStagingOwner unusedSpotStaging() {
         return new ZLinkUserSpotAggregateStagingOwner(
                 new ZLinkUserSpotAggregateStagingOwner.StagingBackend() {
+                    @Override
+                    public CompletionStage<QueuedTurn> prepareIngress(Object actor) {
+                        return CompletableFuture.failedFuture(
+                                new AssertionError("unused aggregate Actor dispatch"));
+                    }
+
+                    @Override
+                    public CompletionStage<Void> enqueueIngress(
+                            Object spot,
+                            List<QueuedTurn> dispatches,
+                            String lane,
+                            byte[] record,
+                            java.util.function.Supplier<CompletionStage<Void>> turn,
+                            CompletableFuture<Void> admission) {
+                        var failure =
+                                new AssertionError(
+                                        "Actor-only fixture must not dispatch aggregate backlog");
+                        admission.completeExceptionally(failure);
+                        return CompletableFuture.failedFuture(failure);
+                    }
+
                     private <T> CompletionStage<T> unused() {
                         return CompletableFuture.failedFuture(
                                 new AssertionError("Spot aggregate path is unused"));
@@ -474,7 +545,11 @@ final class ZLinkActorJoinPrewarmIngressTest {
                     }
 
                     @Override
-                    public void publishActor(Object actor) {
+                    public void publishActor(
+                            Object preparedSpot,
+                            Object actor,
+                            String targetSpotId,
+                            Long targetOwnerGeneration) {
                         throw new AssertionError("unused");
                     }
 
@@ -515,6 +590,24 @@ final class ZLinkActorJoinPrewarmIngressTest {
      */
     private static final class RecordingActorBackend
             implements ZLinkStandaloneActorRelocationStagingOwner.Backend {
+        @Override
+        public CompletionStage<List<CompletableFuture<Void>>> admitBacklogPrefix(
+                Object actor,
+                ZLinkStandaloneActorRelocationStagingOwner.Request request,
+                List<ZLinkSerialExecutionQueue.QueuedRecord> records,
+                java.util.function.BiFunction<
+                                ZLinkSerialExecutionQueue.QueuedRecord,
+                                CompletableFuture<Void>,
+                                java.util.function.Supplier<CompletionStage<Void>>>
+                        replay) {
+            return spots.admitActorRelocationPrefix(
+                    actors,
+                    (ZLinkActorRuntime.PreparedTransferredActor) actor,
+                    request.targetSpotId(),
+                    records,
+                    replay);
+        }
+
         private final systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode
                 targetNode;
         private final ZLinkActorSessionCoordinator actors;
@@ -531,19 +624,6 @@ final class ZLinkActorJoinPrewarmIngressTest {
             this.actors = actors;
             this.adapters = adapters;
             this.spots = spots;
-        }
-
-        @Override
-        public CompletionStage<Void> enqueueIngress(
-                ZLinkStandaloneActorRelocationStagingOwner.Request request,
-                byte[] acceptedJournalRecord,
-                java.util.function.Supplier<CompletionStage<Void>> turn) {
-            return spots.enqueueActorDispatch(
-                    request.actorId(),
-                    () -> acceptedJournalRecord,
-                    acceptedJournalRecord.length,
-                    turn,
-                    () -> {});
         }
 
         @Override

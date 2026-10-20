@@ -15,6 +15,7 @@ import { MeshPeerRuntimeState } from '../foundation/service-runtime-contracts';
 import {
   ZLinkLocationRuntime,
   ZLinkOwnerLeaseTracker,
+  ZLinkRequestSourceResolver,
   type IZLinkAutoConnectExecutor,
   type ZLinkAutoConnectLocal,
   type ZLinkAutoConnectTarget,
@@ -28,6 +29,7 @@ export interface ZLinkSpotNodeLocationAutoConnectContext {
   readonly options: ZLinkLocationOptionOverrides;
   readonly leaseTracker: ZLinkOwnerLeaseTracker;
   readonly resolver: ZLinkPeerLocationResolver;
+  readonly requestSources: ZLinkRequestSourceResolver;
   readonly events?: ZLinkLocationEventSink;
   readonly changeStampStore?: Pick<ZLinkLocationStore, 'getMeshNodeChangeStamp'>;
 }
@@ -48,12 +50,17 @@ export function createSpotNodeLocationAutoConnectContext(
     store: stores.ownerLeaseStore,
     options
   });
+  const requestSources = new ZLinkRequestSourceResolver({
+    listLiveMeshNodes: (meshName, signal) => runtime.listLiveMeshNodes(meshName, signal),
+    remainingOwnerTokenLeaseMs: (owner, signal) => runtime.remainingOwnerTokenLeaseMs(owner, signal)
+  });
   return {
     runtime,
     stores,
     options,
     leaseTracker,
-    resolver: meshDescriptorPeerResolver(runtime),
+    resolver: meshDescriptorPeerResolver(runtime, requestSources),
+    requestSources,
     events,
     // The opaque provider has no cross-process change notification primitive.
     // A process-local inherited stamp would hide descriptors written by peers,
@@ -92,7 +99,10 @@ export function spotNodeAutoConnectCapability(
   };
 }
 
-function meshDescriptorPeerResolver(runtime: ZLinkLocationRuntime): ZLinkPeerLocationResolver {
+function meshDescriptorPeerResolver(
+  runtime: ZLinkLocationRuntime,
+  requestSources: ZLinkRequestSourceResolver
+): ZLinkPeerLocationResolver {
   return {
     async listLivePeers(
       filter: ZLinkPeerLocationFilter,
@@ -107,6 +117,8 @@ function meshDescriptorPeerResolver(runtime: ZLinkLocationRuntime): ZLinkPeerLoc
         return [];
       }
       const descriptors = await runtime.listLiveMeshNodes(filter.meshName, signal);
+      // The auto-connect poll owns the live descriptors; request acceptance reads them.
+      await requestSources.observeLiveDescriptors(filter.meshName, descriptors, signal);
       return descriptors
         .map((descriptor): ZLinkPeerLocation => ({
           autoConnectType: ZLinkLocationAutoConnectType.RouteMesh,

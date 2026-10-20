@@ -743,9 +743,9 @@ internal static class ServiceWireCodec
 
     internal sealed record InstanceSpot39(byte Flags,InstanceRouteV1 Route,NonzeroU64 SourceNodeGeneration,Rid SourceNodeRid,OptionalText8 SourceSpotId,InstanceOperationKind OperationKind,OperationIdOrZero Operation,InstanceReplyRoute ReplyRoute,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
-    internal sealed record RelocationPrepare40(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationRole InitiatorRole,RelocationObjectIdentity Object,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,RelocationLogicalLength PayloadTotalLength,RelocationChunkCount PayloadChunkCount,U32 PayloadChecksumCrc32c,ApplicationVersion ApplicationVersion);
+    internal sealed record RelocationPrepare40(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationRole InitiatorRole,RelocationObjectIdentity Object,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,RelocationLogicalLength PayloadTotalLength,RelocationChunkCount PayloadChunkCount,U32 PayloadChecksumCrc32c,ApplicationVersion ApplicationVersion,NonzeroU64 DeadlineUnixMs);
 
-    internal sealed record SessionRelocationSeal42(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration);
+    internal sealed record SessionRelocationSeal42(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,Rid TargetNodeRid,NonzeroU64 TargetNodeGeneration);
 
     internal sealed record SessionRelocationSealed43(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,SessionSealResult SealResult);
 
@@ -766,6 +766,8 @@ internal static class ServiceWireCodec
     internal sealed record RelocationState52(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,RelocationObjectIdentity Object,U32 ChunkOrdinal,DurableBlob ChunkData);
 
     internal sealed record RelocationFailed53(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationObjectIdentity Object,RelocationRole SenderRole,FrameworkErrorCode FailureCode);
+
+    internal sealed record BoundSessionClose54(byte Flags,NonzeroU64 Correlation,ActorRef Actor,RetiredBoundSessionRouteFence Session);
     private sealed class Reader{private readonly byte[]b;private readonly int limit;private int p;internal Reader(byte[] bytes){b=bytes;limit=bytes.Length;}internal int Remaining=>limit-p;private void N(int n){if(n<0||Remaining<n)throw new EndOfStreamException("truncated");}internal byte U8()=>Bytes(1)[0];internal ushort U16()=>BinaryPrimitives.ReadUInt16BigEndian(Bytes(2));internal uint U32()=>BinaryPrimitives.ReadUInt32BigEndian(Bytes(4));internal ulong U64()=>BinaryPrimitives.ReadUInt64BigEndian(Bytes(8));internal long I64()=>BinaryPrimitives.ReadInt64BigEndian(Bytes(8));internal byte[] Bytes(int n){N(n);var value=b.AsSpan(p,n).ToArray();p+=n;return value;}internal Reader Slice(int n)=>new(Bytes(n));internal void End(string n){if(Remaining!=0)throw Error(n+": trailing");}} private sealed class Writer{private readonly List<byte[]>chunks=[];private long length;internal long Length=>length;private void Add(byte[]v){chunks.Add(v);length=checked(length+v.LongLength);}internal void U8(byte v)=>Add([v]);internal void U16(ushort v){var x=new byte[2];BinaryPrimitives.WriteUInt16BigEndian(x,v);Add(x);}internal void U32(uint v){var x=new byte[4];BinaryPrimitives.WriteUInt32BigEndian(x,v);Add(x);}internal void U64(ulong v){var x=new byte[8];BinaryPrimitives.WriteUInt64BigEndian(x,v);Add(x);}internal void I64(long v){var x=new byte[8];BinaryPrimitives.WriteInt64BigEndian(x,v);Add(x);}internal void Bytes(byte[]v)=>Add(v);internal byte[]ToArray(){if(length>int.MaxValue)throw Capacity("writer capacity");var result=GC.AllocateUninitializedArray<byte>((int)length);var offset=0;foreach(var chunk in chunks){chunk.CopyTo(result,offset);offset+=chunk.Length;}return result;}} private sealed class CapacityException(string message):Exception(message);private static CapacityException Capacity(string m)=>new(m);private static readonly UTF8Encoding Utf8=new(false,true);private static string StrictText(byte[] bytes,string name){try{return Utf8.GetString(bytes);}catch(DecoderFallbackException failure){throw new InvalidDataException(name+": UTF-8",failure);}}private static InvalidDataException Error(string m)=>new(m);private static int CompareBytes(byte[]a,byte[]b){var n=Math.Min(a.Length,b.Length);for(var i=0;i<n;i++){var c=a[i].CompareTo(b[i]);if(c!=0)return c;}return a.Length.CompareTo(b.Length);}private static string AuthorityComponent(string value){var bytes=Utf8.GetBytes(value);var result=new StringBuilder().Append(bytes.Length).Append(':');foreach(var b in bytes){if((b>=(byte)'A'&&b<=(byte)'Z')||(b>=(byte)'a'&&b<=(byte)'z')||(b>=(byte)'0'&&b<=(byte)'9')||b is (byte)'-' or (byte)'.' or (byte)'_' or (byte)'~')result.Append((char)b);else result.Append('%').Append(b.ToString("X2"));}return result.ToString();}private static uint Crc32C(ReadOnlySpan<byte>b){var c=uint.MaxValue;foreach(var v in b){c^=v;for(var i=0;i<8;i++)c=(c>>1)^(0x82f63b78u&(uint)-(int)(c&1));}return~c;}
     internal static void ValidateTerminalFailure(RequestTerminalResult result, FrameworkErrorCode failure){if(!ServiceWireConstants.ValidTerminalFailure((uint)result,(uint)failure))throw Error("terminal failure integrity");}
     internal static U8 DecodeU8(byte[] bytes, DecodeContext context) { var reader = new Reader(bytes); var value = ReadU8(reader, context); reader.End("u8"); return value; }
@@ -6860,10 +6862,11 @@ internal static class ServiceWireCodec
         var PayloadChunkCount = ReadRelocationChunkCount(body, context);
         var PayloadChecksumCrc32c = ReadU32(body, context);
         var ApplicationVersion = ReadApplicationVersion(body, context);
+        var DeadlineUnixMs = ReadNonzeroU64(body, context);
         body.End("body");
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new RelocationPrepare40(flags,Relocation,TargetAttemptGeneration,Coordinator,Target,InitiatorRole,Object,SourceNodeRid,SourceNodeGeneration,PayloadTotalLength,PayloadChunkCount,PayloadChecksumCrc32c,ApplicationVersion);
+        var value=new RelocationPrepare40(flags,Relocation,TargetAttemptGeneration,Coordinator,Target,InitiatorRole,Object,SourceNodeRid,SourceNodeGeneration,PayloadTotalLength,PayloadChunkCount,PayloadChecksumCrc32c,ApplicationVersion,DeadlineUnixMs);
         return value;
     }
     internal static RelocationPrepare40 DecodeRelocationPrepare40(byte[] frame,DecodeContext context)=>DecodeRelocationPrepare40(new[]{frame},context);
@@ -6886,6 +6889,7 @@ internal static class ServiceWireCodec
         WriteRelocationChunkCount(body, value.PayloadChunkCount, context);
         WriteU32(body, value.PayloadChecksumCrc32c, context);
         WriteApplicationVersion(body, value.ApplicationVersion, context);
+        WriteNonzeroU64(body, value.DeadlineUnixMs, context);
         var frames=new List<byte[]>{body.ToArray()};
         return frames.ToArray();
     }
@@ -6908,10 +6912,12 @@ internal static class ServiceWireCodec
         var SessionOwnerLeaseGeneration = ReadNonzeroU64(body, context);
         var SessionRid = ReadRid(body, context);
         var BindingGeneration = ReadNonzeroU64(body, context);
+        var TargetNodeRid = ReadRid(body, context);
+        var TargetNodeGeneration = ReadNonzeroU64(body, context);
         body.End("body");
         var index=1;
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new SessionRelocationSeal42(flags,Relocation,Coordinator,SenderRole,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration);
+        var value=new SessionRelocationSeal42(flags,Relocation,Coordinator,SenderRole,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration,TargetNodeRid,TargetNodeGeneration);
         return value;
     }
     internal static SessionRelocationSeal42 DecodeSessionRelocationSeal42(byte[] frame,DecodeContext context)=>DecodeSessionRelocationSeal42(new[]{frame},context);
@@ -6932,6 +6938,8 @@ internal static class ServiceWireCodec
         WriteNonzeroU64(body, value.SessionOwnerLeaseGeneration, context);
         WriteRid(body, value.SessionRid, context);
         WriteNonzeroU64(body, value.BindingGeneration, context);
+        WriteRid(body, value.TargetNodeRid, context);
+        WriteNonzeroU64(body, value.TargetNodeGeneration, context);
         var frames=new List<byte[]>{body.ToArray()};
         return frames.ToArray();
     }
@@ -7324,6 +7332,38 @@ internal static class ServiceWireCodec
         WriteRelocationObjectIdentity(body, value.Object, context);
         WriteRelocationRole(body, value.SenderRole, context);
         WriteFrameworkErrorCode(body, value.FailureCode, context);
+        var frames=new List<byte[]>{body.ToArray()};
+        return frames.ToArray();
+    }
+    internal static BoundSessionClose54 DecodeBoundSessionClose54(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var body=new Reader(frames[0]);
+        if(body.U8()!=90)throw Error("magic");
+        if(body.U8()!=77)throw Error("magic");
+        if(body.U8()!=1||body.U8()!=54)throw Error("header");
+        var flags=body.U8();
+        if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
+        var Correlation = ReadNonzeroU64(body, context);
+        var Actor = ReadActorRef(body, context);
+        var Session = ReadRetiredBoundSessionRouteFence(body, context);
+        body.End("body");
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new BoundSessionClose54(flags,Correlation,Actor,Session);
+        return value;
+    }
+    internal static BoundSessionClose54 DecodeBoundSessionClose54(byte[] frame,DecodeContext context)=>DecodeBoundSessionClose54(new[]{frame},context);
+    internal static byte[][] EncodeBoundSessionClose54(BoundSessionClose54 value,DecodeContext context)
+    {
+        if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
+        var body=new Writer();
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(54);body.U8(value.Flags);
+        WriteNonzeroU64(body, value.Correlation, context);
+        WriteActorRef(body, value.Actor, context);
+        WriteRetiredBoundSessionRouteFence(body, value.Session, context);
         var frames=new List<byte[]>{body.ToArray()};
         return frames.ToArray();
     }    internal static AuthorityPayloadV1 DecodeDurableAuthorityPayloadV1(byte[] bytes,DecodeContext context){if(bytes.LongLength>1048576L)throw Error("limit");var r=new Reader(bytes);if(r.U8()!=90)throw Error("magic");if(r.U8()!=76)throw Error("magic");if(r.U8()!=65)throw Error("magic");if(r.U8()!=85)throw Error("magic");if(r.U8()!=1)throw Error("version");if(ReadU16(r,context).Value!=0)throw Error("flags");var x=r.Slice(checked((int)ReadU32(r,context).Value));var sum=r.U32();r.End("durable");if(Crc32C(bytes.AsSpan(0,bytes.Length-4))!=sum)throw Error("checksum");var v=ReadAuthorityPayloadV1(x,context);x.End("body");return v;}

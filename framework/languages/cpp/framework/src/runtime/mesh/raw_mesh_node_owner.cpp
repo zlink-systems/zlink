@@ -8,6 +8,7 @@
 #include "runtime/messaging/submit_result_mapper.hpp"
 
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/mesh/service_channel_membership.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 
 #include <array>
@@ -19,6 +20,7 @@
 #include "runtime/protocol/service_wire_codec.hpp"
 
 #include <service_wire_pilot_codec.hpp>
+#include <service_wire_codec.hpp>
 
 #include <zlink/Contracts/Core/byte_count.hpp>
 #include <zlink/Contracts/Core/context.hpp>
@@ -424,8 +426,7 @@ task_t<bool> submit_registered_infrastructure_request (
                 operation, detail::backend::materialize_binding_part (std::move (payload)));
           }
           catch (const protocol::service_wire_error_t &) {
-              (void) operations->fail (operation,
-                                       foundation::operation_terminal_t::transport_failed);
+              (void) operations->fail (operation, foundation::operation_terminal_t::protocol_error);
           }
       });
     co_return co_await await_request_admission (accepted->task ());
@@ -915,6 +916,28 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_to_node_result (
 {
     co_return co_await send_with_header_result (
       target_routing_id, protocol::encode_node_send_header (), application_payload);
+}
+
+task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_logical_multicast (
+  const std::vector<std::uint8_t> &target_routing_id,
+  const std::string &channel_name,
+  const std::string &topic,
+  const std::string &source_spot_id,
+  const protocol::application_payload_t &application_payload,
+  const std::vector<std::uint8_t> &metadata)
+{
+    namespace wire = protocol::generated::detail;
+    wire::logicalMulticast_23_t command;
+    command.flags = metadata.empty () ? 0 : static_cast<std::uint8_t> (protocol::flag::metadata);
+    command.channelName.value = channel_name;
+    command.topic.value = topic;
+    command.sourceSpotId.value = source_spot_id;
+    wire::writer_t header;
+    if (wire::encode_head_logicalMulticast_23 (header, command) != wire::error_code::ok)
+        throw protocol::service_wire_error_t ("invalid logical multicast header");
+    co_return co_await send_with_header_result (
+      target_routing_id, std::move (header.data), application_payload, {}, true,
+      metadata.empty () ? std::nullopt : std::make_optional (metadata));
 }
 
 task_t<bool>
@@ -1536,23 +1559,24 @@ task_t<relocation_prepare_response_t> raw_mesh_node_owner_t::request_relocation_
     co_return response;
 }
 
-bool raw_mesh_node_owner_t::reply_relocation_ready (const service_mailbox_record_t &request,
-                                                    const protocol::relocation_ready_t &ready)
+task_t<std::function<bool ()>>
+raw_mesh_node_owner_t::prepare_relocation_ready_reply (const service_mailbox_record_t &request,
+                                                       const protocol::relocation_ready_t &ready)
 {
     if (request.source_routing_id.empty () || !request.reply_token)
-        return false;
-    const auto port = _lane
-                        .run ([this] {
-                            std::lock_guard lifecycle_lock (_lifecycle_mutex);
-                            return _port;
-                        })
-                        .get ();
+        co_return std::function<bool ()>{};
+    auto port = co_await _lane.run_task ([this] {
+        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+        return _port;
+    });
     if (!port)
-        return false;
-    detail::backend::raw_message_t parts{protocol::encode_relocation_control (ready)};
-    return port->reply (
-      detail::backend::raw_received_t{request.source_routing_id, request.reply_token, {}},
-      std::move (parts));
+        co_return std::function<bool ()>{};
+    co_return std::function<bool ()>{[port = std::move (port), source = request.source_routing_id,
+                                      token = request.reply_token,
+                                      parts = detail::backend::raw_message_t{
+                                        protocol::encode_relocation_control (ready)}] () mutable {
+        return port->reply (detail::backend::raw_received_t{source, token, {}}, std::move (parts));
+    }};
 }
 
 bool raw_mesh_node_owner_t::reply_relocation_failed (const service_mailbox_record_t &request,
@@ -1970,6 +1994,54 @@ task_t<bool> raw_mesh_node_owner_t::send_bound_session_replaced (
     }
     co_return co_await send_header_only (retired_session_owner_routing_id,
                                          protocol::encode_bound_session_replaced (record));
+}
+
+task_t<void>
+raw_mesh_node_owner_t::request_bound_session_close (protocol::bound_session_close_t record,
+                                                    std::chrono::milliseconds timeout)
+{
+    const auto target = record.session.session_owner_node_routing_id;
+    auto completion = std::make_shared<task_completion_source_t<void>> ();
+    const auto submitted = co_await request_infrastructure (
+      target,
+      [record = std::move (record)] (std::uint64_t correlation) mutable {
+          record.correlation = correlation;
+          return protocol::encode_bound_session_close (record);
+      },
+      [] (const detail::backend::raw_message_t &parts) {
+          if (parts.size () != 1
+              || parts.front ().size () != protocol::reply_header_t::encoded_size)
+              throw protocol::service_wire_error_t ("Session close reply must have one frame");
+          (void) protocol::decode_reply_header (parts.front ());
+          return protocol::pack_infrastructure_reply (parts);
+      },
+      timeout,
+      [completion] (foundation::operation_terminal_t terminal, zlink::message_t packed) {
+          try {
+              protocol::reply_header_t reply{};
+              if (terminal == foundation::operation_terminal_t::completed) {
+                  const auto parts =
+                    protocol::unpack_infrastructure_reply (protocol::message_bytes (packed));
+                  reply = protocol::decode_reply_header (parts.front ());
+                  if (reply.terminal_result
+                      == static_cast<std::uint32_t> (protocol::request_terminal_result::ok)) {
+                      completion->complete (result_t<void>::success ());
+                      return;
+                  }
+              }
+              completion->complete (result_t<void>::failure (
+                user_spot_terminal::map_user_spot_operation_failure (terminal, reply, false),
+                "Bound Session close failed"));
+          }
+          catch (const protocol::service_wire_error_t &error) {
+              completion->complete (
+                result_t<void>::failure (framework_error_kind_t::protocol_error, error.what ()));
+          }
+      });
+    if (!submitted)
+        completion->complete (result_t<void>::failure (framework_error_kind_t::unavailable,
+                                                       "Session close was not admitted"));
+    co_await completion->task ();
 }
 
 bool raw_mesh_node_owner_t::reply_bound_session_bind (const service_mailbox_record_t &request,
@@ -3005,6 +3077,20 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
                 received->reply_token, bind.correlation, admitted->descriptor.lifecycle_generation},
               raw_mesh_pump_result_t::infrastructure);
         }
+        if (header.kind == protocol::command::boundSessionClose) {
+            if (header.flags != 0 || received->parts.size () != 1 || !received->reply_token)
+                return raw_mesh_pump_result_t::protocol_error;
+            const auto close = protocol::decode_bound_session_close (
+              protocol::message_bytes (received->parts.front ()));
+            const auto local = _topology.local_descriptor ();
+            return enqueue_received (
+              service_mailbox_record_t{
+                owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
+                std::move (received->parts), std::move (received->source_routing_id),
+                received->reply_token, close.correlation,
+                admitted->descriptor.lifecycle_generation},
+              raw_mesh_pump_result_t::infrastructure);
+        }
         if (header.kind == protocol::command::boundSessionReplaced) {
             if (header.flags != 0 || received->parts.size () != 1 || received->reply_token) {
                 return raw_mesh_pump_result_t::protocol_error;
@@ -3317,6 +3403,35 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
                 return raw_mesh_pump_result_t::infrastructure;
             }
         }
+        if (header.kind == protocol::command::logicalMulticast) {
+            namespace wire = protocol::generated::detail;
+            wire::logicalMulticast_23_t multicast;
+            wire::reader_t reader (protocol::message_bytes (received->parts.front ()));
+            if (wire::decode_head_logicalMulticast_23 (reader, multicast) != wire::error_code::ok
+                || received->parts.size ()
+                     != ((multicast.flags & static_cast<std::uint8_t> (protocol::flag::metadata))
+                             == 0
+                           ? 2u
+                           : 3u))
+                return raw_mesh_pump_result_t::protocol_error;
+            if ((multicast.flags & static_cast<std::uint8_t> (protocol::flag::metadata)) != 0) {
+                wire::metadata_frame_t metadata;
+                wire::reader_t metadata_reader (protocol::message_bytes (received->parts[1]));
+                if (wire::decode_value_metadata_frame (metadata_reader, metadata)
+                      != wire::error_code::ok
+                    || !metadata_reader.empty ())
+                    return raw_mesh_pump_result_t::protocol_error;
+            }
+            (void) protocol::decode_application_payload (
+              protocol::message_bytes (received->parts.back ()), false);
+            return enqueue_received (
+              service_mailbox_record_t{
+                service_mailbox_t::application_owner (host::owner_kind_t::node),
+                service_mailbox_domain_t::application, std::move (received->parts),
+                std::move (received->source_routing_id), received->reply_token, std::nullopt,
+                admitted->descriptor.lifecycle_generation},
+              raw_mesh_pump_result_t::application);
+        }
         if ((header.kind != protocol::command::nodeSend
              && header.kind != protocol::command::nodeRequest
              && header.kind != protocol::command::channelSend
@@ -3365,11 +3480,7 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
                 channel_name = std::move (channel_request.channel_name);
             }
             const auto local = _topology.local_descriptor ();
-            const auto channel =
-              std::lower_bound (local.channels.begin (), local.channels.end (), channel_name,
-                                [] (const service_channel_descriptor_t &entry,
-                                    const std::string &name) { return entry.name < name; });
-            if (channel == local.channels.end () || channel->name != channel_name) {
+            if (!find_service_channel (local, channel_name)) {
                 return raw_mesh_pump_result_t::protocol_error;
             }
             mailbox_owner =

@@ -39,15 +39,8 @@ export interface ZLinkStreamActorLifecyclePort {
 
 export interface ZLinkActorRouteCommitOptions {
   /**
-   * Relocation already carries the binding identity to the target actor. The
-   * follow-up confirmation can use a one-way route submission because a
-   * request/ACK would create a nested route request while the Session
-   * ownership command is being dispatched.
-   */
-  readonly confirmRemoteSessionBinding?: boolean | 'send';
-  /**
-   * Command 44 keeps ingress sealed while the native route is prepared, then
-   * publishes the new route and releases this exact seal in one owner turn.
+   * Command 44 publishes the Actor route of the existing binding and releases
+   * this exact seal in one owner turn.
    */
   readonly releaseSeal?: {
     readonly sealId: string;
@@ -143,6 +136,7 @@ export interface ZLinkNativeFallbackBoundSessionPort {
   disconnectNativeBoundSession(
     node: ZLinkBackendActorSessionNode,
     actorRef: ActorRef,
+    timeoutMs: number,
     signal?: AbortSignal
   ): Promise<void>;
   disconnectBoundSession(actorId: string, signal?: AbortSignal): Promise<void>;

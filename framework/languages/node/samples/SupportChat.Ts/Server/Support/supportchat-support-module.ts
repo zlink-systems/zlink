@@ -44,7 +44,7 @@ function createSupportChatSupportModule() {
             .listen(config.supportSpotEndpoint)
             .setRoutingIdPrefix('support-owner');
           const objectServer = mesh.objects().server();
-          objectServer.addEntrySpot(SupportEntrySpot);
+          objectServer.addEntrySpot(SupportEntrySpot, SampleNames.supportActorType);
           objectServer.addSpotFactory(
             SampleNames.conversationSpotType,
             ConversationSpot,

@@ -71,7 +71,7 @@ function createTicTacToePlayModule() {
             .listen(config.playSpotEndpoint)
             .setRoutingIdPrefix(`tictactoe-play-${config.instanceName}`);
           const objectServer = mesh.objects().server();
-          objectServer.addEntrySpot(PlayEntrySpot);
+          objectServer.addEntrySpot(PlayEntrySpot, SampleNames.playerActorType);
           objectServer.addSpotFactory(SampleNames.gameSpotType, TicTacToeGameSpot, (factory) =>
             factory.disableRelocation()
           );

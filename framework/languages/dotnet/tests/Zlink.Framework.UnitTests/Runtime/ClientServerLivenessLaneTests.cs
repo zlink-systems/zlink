@@ -7,6 +7,173 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ClientServerLivenessLaneTests
 {
+    [Fact]
+    public async Task Server_probe_admission_does_not_hold_the_receive_turn()
+    {
+        const int maximumFillerRecords = 32;
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        context.Options.AutoHwmEnabled = false;
+        using var router = context.CreateRouterSocket();
+        using var dealer = context.CreateDealerSocket();
+        router.Options.SendHighWaterMark = 1;
+        dealer.Options.ReceiveHighWaterMark = 1;
+        router.Options.Linger = TimeSpan.Zero;
+        dealer.Options.Linger = TimeSpan.Zero;
+        dealer.Options.ReceiveTimeout = TimeSpan.FromSeconds(5);
+        var rid = RoutingId.From("blocked-probe-client");
+        dealer.SetRoutingId(rid);
+        var endpoint = $"inproc://blocked-server-probe-{Guid.NewGuid():N}";
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+        using (var ready = Message.From("ready"))
+            dealer.Send().Message(ready).Submit();
+        using (var received = Received.Create())
+            Assert.True(router.Recv(received));
+        using var completions = new TestCompletionPollerDriver(router);
+        using var cancellation = new CancellationTokenSource();
+        var accepted = 0;
+        SendSubmission pending = default;
+        for (; accepted < maximumFillerRecords; accepted++)
+        {
+            using var filler = Message.From(new byte[] { 1 });
+            var submitted = router.Send(rid).Message(filler).Async(cancellation.Token);
+            if (submitted.Result == SubmitResult.Backpressured)
+            {
+                pending = submitted;
+                break;
+            }
+            Assert.Equal(SubmitResult.Ok, submitted.Result);
+        }
+        Assert.Equal(SubmitResult.Backpressured, pending.Result);
+        Assert.False(pending.Admitted.IsCompleted);
+        var failures = new AuditRuntimeFailureReporter();
+        var identity = new ZLinkClientServerServerIdentity(
+            "work",
+            RoutingId.From("probe-server"),
+            1,
+            "plaintext",
+            1,
+            4096,
+            endpoint,
+            failures
+        );
+        await identity.AdmitPeerAsync(rid, 4096, 1);
+        var tick = identity.TickLivenessAsync(router, cancellation.Token);
+        try
+        {
+            // No peer read can release HWM until the receive-turn assertion finishes.
+            Assert.True(tick.IsCompletedSuccessfully);
+            Assert.Equal(0, identity.LivenessProbeCount);
+        }
+        finally
+        {
+            for (var index = 0; index < accepted + 2; index++)
+            {
+                using var received = Received.Create();
+                Assert.True(dealer.Recv(received));
+                if (index == accepted + 1)
+                    Assert.True(
+                        ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(
+                            received.Parts,
+                            out _
+                        )
+                    );
+            }
+            await tick;
+            await pending.Admitted;
+            using var completionGuard = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            while (identity.LivenessProbeCount == 0)
+            {
+                completionGuard.Token.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
+            await cancellation.CancelAsync();
+        }
+        Assert.Equal(1, identity.LivenessProbeCount);
+        Assert.Empty(failures.Failures);
+    }
+
+    [Fact]
+    public async Task Server_probe_failure_reaches_the_existing_runtime_failure_reporter()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var router = context.CreateRouterSocket();
+        var endpoint = $"inproc://failed-server-probe-{Guid.NewGuid():N}";
+        router.Bind(endpoint);
+        var failures = new AuditRuntimeFailureReporter();
+        var identity = new ZLinkClientServerServerIdentity(
+            "work",
+            RoutingId.From("probe-server"),
+            1,
+            "plaintext",
+            1,
+            4096,
+            endpoint,
+            failures
+        );
+        await identity.AdmitPeerAsync(RoutingId.From("missing-probe-client"), 4096, 1);
+
+        await identity.TickLivenessAsync(router, CancellationToken.None);
+
+        Assert.IsType<ZlinkSubmitException>(Assert.Single(failures.Failures));
+        Assert.Equal(0, identity.LivenessProbeCount);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Server_ack_without_a_reply_token_preserves_delivery_and_failure_reporting(
+        bool disconnectBeforeAck
+    )
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var router = context.CreateRouterSocket();
+        using var dealer = context.CreateDealerSocket();
+        dealer.Options.ReceiveTimeout = TimeSpan.FromSeconds(5);
+        var rid = RoutingId.From("ack-client");
+        dealer.SetRoutingId(rid);
+        var endpoint = $"inproc://server-ack-{Guid.NewGuid():N}";
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+        const ulong probeId = 17;
+        using (var probe = ZLinkClientServerControlProtocol.EncodeLivenessProbe(probeId))
+            dealer.Send().Message(probe).Submit();
+        using var received = Received.Create();
+        Assert.True(router.Recv(received));
+        Assert.Null(received.ReplyToken);
+        if (disconnectBeforeAck)
+            router.DisconnectRid(rid);
+        var failures = new AuditRuntimeFailureReporter();
+        var identity = new ZLinkClientServerServerIdentity(
+            "work",
+            RoutingId.From("ack-server"),
+            1,
+            "plaintext",
+            1,
+            4096,
+            endpoint,
+            failures
+        );
+
+        typeof(ZLinkChannelReceiveLoop)
+            .GetMethod("ReplyClientServerControl", BindingFlags.Static | BindingFlags.NonPublic)!
+            .Invoke(null, [router, received, identity, failures, CancellationToken.None]);
+
+        Assert.Equal(1, identity.ReceivedLivenessProbeCount);
+        if (disconnectBeforeAck)
+            Assert.IsType<ZlinkSubmitException>(Assert.Single(failures.Failures));
+        else
+        {
+            using var ack = Received.Create();
+            Assert.True(dealer.Recv(ack));
+            Assert.True(
+                ZLinkClientServerControlProtocol.TryDecodeLivenessAck(ack.Parts, out var actual)
+            );
+            Assert.Equal(probeId, actual);
+            Assert.Empty(failures.Failures);
+        }
+    }
+
     // State ownership §6 type ②: native completion before the first await is a valid
     // schedule. Exercise the Connection's actual admission and timer probe entry points.
     [Theory]

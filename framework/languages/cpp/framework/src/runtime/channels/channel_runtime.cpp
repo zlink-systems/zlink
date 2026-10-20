@@ -44,7 +44,6 @@ namespace
 bool is_internal_spot_route_packet (std::string_view packet_name)
 {
     return packet_name == spot_actor_packet_route_request_t::packet_name
-           || packet_name == spot_actor_disconnect_route_request_t::packet_name
            || packet_name == actor_bound_session_route_request_t::packet_name;
 }
 
@@ -52,14 +51,12 @@ std::optional<channel_runtime_state_t::spot_mesh_send_t>
 spot_mesh_sender (const std::shared_ptr<channel_runtime_state_t> &state,
                   const std::string &mesh_name)
 {
-    return state->lane
-      .run_checked ([&] {
-          const auto found = state->spot_mesh_senders.find (mesh_name);
-          return found == state->spot_mesh_senders.end ()
-                   ? std::nullopt
-                   : std::optional<channel_runtime_state_t::spot_mesh_send_t> (found->second);
-      })
-      .get ();
+    const auto index =
+      std::atomic_load_explicit (&state->node_transports, std::memory_order_acquire);
+    const auto found = index->spot_mesh_senders.find (mesh_name);
+    return found == index->spot_mesh_senders.end ()
+             ? std::nullopt
+             : std::optional<channel_runtime_state_t::spot_mesh_send_t> (found->second);
 }
 
 using node_transport_t = std::variant<std::monostate,
@@ -130,10 +127,9 @@ spot_mesh_requester (const std::shared_ptr<channel_runtime_state_t> &state,
 bool has_route_channel (const std::shared_ptr<channel_runtime_state_t> &state,
                         const std::string &channel_name)
 {
-    return state->lane
-      .run_checked (
-        [&] { return state->route_channels.find (channel_name) != state->route_channels.end (); })
-      .get ();
+    const auto index =
+      std::atomic_load_explicit (&state->node_transports, std::memory_order_acquire);
+    return index->route_channels.contains (channel_name);
 }
 
 using route_reply_result_t = result_t<runtime::messaging::message_parts_t>;
@@ -721,9 +717,11 @@ void channel_runtime_t::bind_spot_mesh_transport (
 {
     _state->lane
       .run_checked ([&] {
-          _state->spot_mesh_senders.insert_or_assign (mesh_name, std::move (send));
-          _state->spot_mesh_requesters.insert_or_assign (std::move (mesh_name),
-                                                         std::move (request));
+          _state->spot_mesh_requesters.insert_or_assign (mesh_name, std::move (request));
+          _state->publish_node_transports ([&] (auto &index) {
+              // Publish after requester preparation; a CAS retry copies the same sender.
+              index.spot_mesh_senders.insert_or_assign (mesh_name, send);
+          });
       })
       .get ();
 }

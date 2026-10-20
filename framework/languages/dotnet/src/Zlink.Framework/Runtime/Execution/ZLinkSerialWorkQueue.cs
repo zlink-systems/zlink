@@ -82,6 +82,15 @@ internal sealed class ZLinkSerialWorkQueue : IEnumerable<ZLinkSerialWorkItem>
     public int Count { get; private set; }
     internal ZLinkSerialWorkItem? Head => _head;
 
+    internal ZLinkSerialWorkItem? PendingTail =>
+        _publicationTail is { } published
+        && (
+            !ReferenceEquals(published, Volatile.Read(ref _publicationCursor))
+            || Volatile.Read(ref published.Next) is not null
+        )
+            ? published
+            : Volatile.Read(ref _tail);
+
     public void Enqueue(ZLinkSerialWorkItem item)
     {
         ArgumentNullException.ThrowIfNull(item);
@@ -122,19 +131,7 @@ internal sealed class ZLinkSerialWorkQueue : IEnumerable<ZLinkSerialWorkItem>
         }
 
         item = _head;
-        var link =
-            item.Next
-            ?? throw new InvalidOperationException("ZLink serial work queue link is corrupt.");
-        var next = ReferenceEquals(link, item) ? null : link;
-        item.Next = null;
-        _head = next;
-        Count--;
-        if (next is null)
-            _tail = null;
-        unchecked
-        {
-            _version++;
-        }
+        Remove(item, previous: null);
         return true;
     }
 
@@ -157,18 +154,7 @@ internal sealed class ZLinkSerialWorkQueue : IEnumerable<ZLinkSerialWorkItem>
             var next = ReferenceEquals(current.Next, current) ? null : current.Next;
             if (predicate(current))
             {
-                if (previous is null)
-                    _head = next;
-                else
-                    previous.Next = next ?? previous;
-                if (ReferenceEquals(_tail, current))
-                    _tail = previous;
-                current.Next = null;
-                Count--;
-                unchecked
-                {
-                    _version++;
-                }
+                Remove(current, previous);
                 item = current;
                 return true;
             }
@@ -177,6 +163,28 @@ internal sealed class ZLinkSerialWorkQueue : IEnumerable<ZLinkSerialWorkItem>
         }
         item = null!;
         return false;
+    }
+
+    // The selector supplies the predecessor from the same serialized traversal.
+    internal void Remove(ZLinkSerialWorkItem item, ZLinkSerialWorkItem? previous)
+    {
+        EnsureConsistentState();
+        var link =
+            item.Next
+            ?? throw new InvalidOperationException("ZLink serial work queue link is corrupt.");
+        var next = ReferenceEquals(link, item) ? null : link;
+        if (previous is null)
+            _head = next;
+        else
+            previous.Next = next ?? previous;
+        if (ReferenceEquals(_tail, item))
+            _tail = previous;
+        item.Next = null;
+        Count--;
+        unchecked
+        {
+            _version++;
+        }
     }
 
     public void Clear()

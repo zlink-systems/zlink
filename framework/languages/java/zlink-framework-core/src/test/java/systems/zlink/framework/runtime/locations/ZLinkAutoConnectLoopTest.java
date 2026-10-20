@@ -23,6 +23,52 @@ import java.util.concurrent.TimeUnit;
 
 final class ZLinkAutoConnectLoopTest {
     @Test
+    void immediateReconcileRefreshesAfterInFlightReadWithoutWaitingForPollingPeriod()
+            throws Exception {
+        var first = new CompletableFuture<List<ZLinkAutoConnectPeer>>();
+        var second = new CompletableFuture<List<ZLinkAutoConnectPeer>>();
+        var secondRequested = new CompletableFuture<Void>();
+        var reads = new java.util.concurrent.atomic.AtomicInteger();
+        ZLinkAutoConnectPeerResolver resolver =
+                (type, mesh, role) -> {
+                    if (reads.incrementAndGet() == 1) return first;
+                    secondRequested.complete(null);
+                    return second;
+                };
+        var options = new ZLinkLocationOptions();
+        options.setPollingInterval(java.time.Duration.ofSeconds(30));
+        var reconciler =
+                new ZLinkAutoConnectReconciler(
+                        new ZLinkAutoConnectPlanner.Local(
+                                ZLinkAutoConnectType.CLIENT_SERVER,
+                                "orders",
+                                ZLinkLocationRole.DEALER,
+                                RoutingId.from("client"),
+                                "inproc://client"),
+                        resolver,
+                        new RecordingExecutor(),
+                        options,
+                        System::nanoTime,
+                        failure -> {
+                            throw failure;
+                        });
+        var loop = new ZLinkAutoConnectLoop(reconciler, options);
+        try {
+            loop.start();
+            loop.reconcileNow();
+            assertFalse(
+                    secondRequested.isDone(), "an in-flight resolver read remains the sole owner");
+            first.complete(List.of());
+            secondRequested.get(2, TimeUnit.SECONDS);
+            assertEquals(2, reads.get());
+        } finally {
+            first.complete(List.of());
+            second.complete(List.of());
+            loop.stop().toCompletableFuture().get(2, TimeUnit.SECONDS);
+        }
+    }
+
+    @Test
     void startupUsesConfiguredPollingInterval() throws Exception {
         PendingResolver resolver = new PendingResolver();
         ZLinkLocationOptions options = new ZLinkLocationOptions();

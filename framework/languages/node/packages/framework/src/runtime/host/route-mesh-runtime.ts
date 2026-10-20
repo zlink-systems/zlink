@@ -42,7 +42,7 @@ const DEFAULT_ROUTE_MESH_DRAIN_TIMEOUT_MS = 30_000;
 const MAX_ROUTE_MESH_OBSERVATION_WAIT_MS = 1000;
 const PLACEMENT_OBSERVATION_INTERVAL_MS = 100;
 
-type ZLinkDrainForceReason =
+export type ZLinkDrainForceReason =
   'deadline_exceeded' | 'drain_state_publish_failed' | 'owner_cleanup_failed' | 'teardown_failed';
 
 type ZLinkMeshDrainResult =
@@ -74,7 +74,11 @@ export interface ZLinkRouteMeshRuntimeCoordinatorOptions {
   ) => Promise<void>;
   readonly shutdownResources?: (meshName: string, signal: AbortSignal) => Promise<void>;
   readonly cleanupHostResources: (signal: AbortSignal) => Promise<void>;
-  readonly forceStopResources: (meshName: string) => Promise<void>;
+  readonly forceStopResources: (
+    meshName: string,
+    reason: ZLinkDrainForceReason,
+    signal: AbortSignal
+  ) => Promise<void>;
 }
 
 export interface ZLinkLocalPlacementCounts {
@@ -465,7 +469,9 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
           : deadline.signal.aborted
             ? 'deadline_exceeded'
             : classified;
-      await this.options.forceStopResources(meshName).catch(() => undefined);
+      await this.options
+        .forceStopResources(meshName, reason, deadline.signal)
+        .catch(() => undefined);
       result = { kind: 'forceStopped', reason };
       this.transition(meshName, state, ZLinkTopologyState.Failed);
     } finally {
@@ -526,7 +532,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
             : classified;
       await Promise.all(
         entries.map(([meshName]) =>
-          this.options.forceStopResources(meshName).catch(() => undefined)
+          this.options.forceStopResources(meshName, reason, deadline.signal).catch(() => undefined)
         )
       );
       result = { kind: 'forceStopped', reason };
@@ -585,7 +591,7 @@ export class ZLinkRouteMeshRuntimeCoordinator implements ZLinkRouteMeshRuntime {
             : classified;
       await Promise.all(
         entries.map(([meshName]) =>
-          this.options.forceStopResources(meshName).catch(() => undefined)
+          this.options.forceStopResources(meshName, reason, signal).catch(() => undefined)
         )
       );
       result = { kind: 'forceStopped', reason, error };

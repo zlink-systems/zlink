@@ -1,6 +1,8 @@
 package systems.zlink.framework.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -70,9 +72,14 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 import java.util.logging.FileHandler;
 import java.util.logging.Handler;
 import java.util.logging.LogRecord;
@@ -80,6 +87,8 @@ import java.util.logging.Logger;
 import java.util.logging.SimpleFormatter;
 
 final class ChannelMessagingTest {
+    private static final long ASYNC_TIMEOUT_SECONDS = 2;
+    private static final Duration RAW_REPLY_TIMEOUT = Duration.ofSeconds(2);
     private static final AtomicReference<CountDownLatch> FANOUT_LATCH = new AtomicReference<>();
     private static final AtomicReference<String> FANOUT_MESSAGE = new AtomicReference<>();
     private static final AtomicReference<String> FANOUT_TOPIC = new AtomicReference<>();
@@ -148,7 +157,7 @@ final class ChannelMessagingTest {
     }
 
     @Test
-    void manualClientServer_replyCompletesWithoutWaitingForTheLivenessTick() {
+    void manualClientServer_replyCompletesWithoutWaitingForTheLivenessTick() throws Exception {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         var channel = options.addClientServerChannel("profile").server().listen();
         options.addClientServerChannel("profile").client();
@@ -162,21 +171,42 @@ final class ChannelMessagingTest {
                     client.requestToChannel("profile", new EchoRequest("warmup"))
                             .submit(String.class)
                             .toCompletableFuture()
-                            .join());
-            int requests = 20;
-            long started = System.nanoTime();
-            for (int index = 0; index < requests; index++) {
-                assertEquals(
-                        "r" + index,
-                        client.requestToChannel("profile", new EchoRequest("r" + index))
-                                .submit(String.class)
-                                .toCompletableFuture()
-                                .join());
+                            .get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+            var channelsField = ZLinkFrameworkRuntime.class.getDeclaredField("channels");
+            channelsField.setAccessible(true);
+            Object channels = channelsField.get(runtime);
+            var timerField = channels.getClass().getDeclaredField("timeoutExecutor");
+            timerField.setAccessible(true);
+            var timer = (ScheduledExecutorService) timerField.get(channels);
+            var timerHeld = new CompletableFuture<Void>();
+            var releaseTimer = new CompletableFuture<Void>();
+            Future<?> held =
+                    timer.submit(
+                            () -> {
+                                timerHeld.complete(null);
+                                releaseTimer.join();
+                            });
+            Future<?> afterHold = null;
+            try {
+                timerHeld.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                afterHold = timer.submit(() -> {});
+                assertFalse(afterHold.isDone(), "the liveness scheduler must be held");
+                int requests = 20;
+                for (int index = 0; index < requests; index++) {
+                    assertEquals(
+                            "r" + index,
+                            client.requestToChannel("profile", new EchoRequest("r" + index))
+                                    .submit(String.class)
+                                    .toCompletableFuture()
+                                    .get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS));
+                }
+                assertFalse(
+                        afterHold.isDone(), "replies must progress while timer work is pending");
+            } finally {
+                releaseTimer.complete(null);
+                held.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                if (afterHold != null) afterHold.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             }
-            long meanMillis = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started) / requests;
-            // The ClientServer liveness tick runs every 100 ms. A reply whose completion
-            // waits for that tick costs about 100 ms per request.
-            assertTrue(meanMillis < 20, "mean ClientServer round trip " + meanMillis + " ms");
         }
     }
 
@@ -357,15 +387,24 @@ final class ChannelMessagingTest {
             "DERR-001 manual client-server missing request handler replies error and records"
                     + " diagnostics")
     void manualClientServer_missingRequestHandlerRepliesErrorAndRecordsDiagnostics()
-            throws InterruptedException {
-        String endpoint = "inproc://zlink-java-dispatch-error-" + UUID.randomUUID();
+            throws Exception {
         CopyOnWriteArrayList<String> logMessages = new CopyOnWriteArrayList<>();
+        CompletableFuture<Void> missingRequestLogged = new CompletableFuture<>();
+        Predicate<String> missingRequestDiagnostic =
+                message ->
+                        message.contains("reason=no_handler")
+                                && message.contains("action=reply_error")
+                                && message.contains("packet=MissingReq")
+                                && message.contains("channel=profile");
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
         Handler logHandler =
                 new Handler() {
                     @Override
                     public void publish(LogRecord record) {
-                        logMessages.add(record.getMessage());
+                        String message = record.getMessage();
+                        logMessages.add(message);
+                        if (missingRequestDiagnostic.test(message))
+                            missingRequestLogged.complete(null);
                     }
 
                     @Override
@@ -425,14 +464,9 @@ final class ChannelMessagingTest {
                             .getMessage()
                             .contains("HANDLER_MISSING for packet 'MissingReq'"));
 
+            missingRequestLogged.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             assertTrue(
-                    logMessages.stream()
-                            .anyMatch(
-                                    message ->
-                                            message.contains("reason=no_handler")
-                                                    && message.contains("action=reply_error")
-                                                    && message.contains("packet=MissingReq")
-                                                    && message.contains("channel=profile")),
+                    logMessages.stream().anyMatch(missingRequestDiagnostic),
                     "dispatch error log marker was not written");
 
             String after =
@@ -453,7 +487,6 @@ final class ChannelMessagingTest {
                     + " request path alive")
     void manualClientServer_missingSendHandlerRecordsDiagnosticsAndKeepsRequestPathAlive()
             throws Exception {
-        String endpoint = "inproc://zlink-java-dispatch-send-error-" + UUID.randomUUID();
         CopyOnWriteArrayList<String> logMessages = new CopyOnWriteArrayList<>();
         CompletableFuture<Void> missingSendLogged = new CompletableFuture<>();
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
@@ -499,7 +532,7 @@ final class ChannelMessagingTest {
 
             runtime.client().sendToChannel("profile", new MissingCommand("missing-send")).submit();
 
-            missingSendLogged.get(2, TimeUnit.SECONDS);
+            missingSendLogged.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
             assertTrue(
                     logMessages.stream()
                             .anyMatch(
@@ -829,6 +862,78 @@ final class ChannelMessagingTest {
     }
 
     @Test
+    void rawReplyWaitConsumesDataBeforeReply() throws Exception {
+        var adapter =
+                new ZLinkJavaBackendAdapterFactory()
+                        .createChannelAdapter(new ZLinkBackendAdapterOptions(RAW_REPLY_TIMEOUT));
+        try (var context = adapter.createContext();
+                var router = adapter.createRouterSocket(context);
+                var dealer = adapter.createDealerSocket(context);
+                var worker = Executors.newSingleThreadExecutor();
+                Message request = Message.from(new byte[] {1})) {
+            String endpoint = "inproc://raw-data-before-reply-" + UUID.randomUUID();
+            router.bind(endpoint);
+            dealer.connect(endpoint);
+            CompletableFuture<Void> server =
+                    CompletableFuture.runAsync(
+                            () -> {
+                                ZLinkBackendReceived incoming;
+                                do {
+                                    router.waitForReadable(RAW_REPLY_TIMEOUT);
+                                    incoming = router.recv(ZLinkBackendRecvMode.DONT_WAIT);
+                                } while (incoming == null);
+                                try (var received = incoming;
+                                        Message control = Message.from("control");
+                                        Message reply = Message.from("reply")) {
+                                    var admitted =
+                                            router.send(
+                                                            received.routingId().orElseThrow(),
+                                                            List.of(control))
+                                                    .toCompletableFuture();
+                                    while (!admitted.isDone()) {
+                                        router.waitForReadable(RAW_REPLY_TIMEOUT);
+                                    }
+                                    admitted.join();
+                                    received.reply(List.of(reply));
+                                }
+                            },
+                            worker);
+            try {
+                try (var reply = awaitRawReply(dealer, List.of(request))) {
+                    assertEquals("reply", reply.parts().getFirst().toUtf8String());
+                }
+                server.join();
+            } finally {
+                context.shutdown();
+            }
+        }
+    }
+
+    @Test
+    void rawReplyWaitPreservesBindingTimeout() throws Exception {
+        var adapter =
+                new ZLinkJavaBackendAdapterFactory()
+                        .createChannelAdapter(new ZLinkBackendAdapterOptions(RAW_REPLY_TIMEOUT));
+        try (var context = adapter.createContext();
+                var router = adapter.createRouterSocket(context);
+                var dealer = adapter.createDealerSocket(context);
+                Message request = Message.from(new byte[] {1})) {
+            String endpoint = "inproc://raw-reply-timeout-" + UUID.randomUUID();
+            router.bind(endpoint);
+            dealer.connect(endpoint);
+
+            // The peer never replies. The binding owns the request terminal.
+            ExecutionException failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () -> awaitRawReply(dealer, List.of(request)));
+            assertEquals(
+                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause()).kind());
+        }
+    }
+
+    @Test
     @DisplayName("CDC-001 JSON codec round-trips nested arrays and nullable fields")
     void jsonCodec_roundTripsNestedArraysAndNullableFields() {
         String endpoint = "inproc://zlink-java-codec-" + UUID.randomUUID();
@@ -1005,7 +1110,7 @@ final class ChannelMessagingTest {
 
                 publishManualRegistrationUntilObserved(publisher, missingPublishLogged);
 
-                missingSendLogged.get(2, TimeUnit.SECONDS);
+                missingSendLogged.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
                 assertTrue(
                         hasDispatchError(
                                 observedErrors,
@@ -1906,13 +2011,17 @@ final class ChannelMessagingTest {
     private static ZLinkBackendReceived awaitRawReply(
             ZLinkBackendDealerSocket dealer, List<Message> parts) throws Exception {
         CompletableFuture<ZLinkBackendReceived> pending =
-                dealer.request(parts, Duration.ofSeconds(2), dealer.receiveAdmission(), null)
+                dealer.request(parts, RAW_REPLY_TIMEOUT, dealer.receiveAdmission(), null)
                         .toCompletableFuture();
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
-        while (!pending.isDone() && System.nanoTime() < deadline) {
-            dealer.waitForReadable(Duration.ofNanos(Math.max(1, deadline - System.nanoTime())));
+        while (!pending.isDone()) {
+            if (dealer.waitForReadable(RAW_REPLY_TIMEOUT)) {
+                // Core's DEALER FIFO keeps replies behind unread control DATA.
+                try (var control = dealer.recv(ZLinkBackendRecvMode.DONT_WAIT)) {
+                    // This raw fixture has no application DATA consumer.
+                }
+            }
         }
-        return pending.get(0, TimeUnit.SECONDS);
+        return pending.get();
     }
 
     private static List<Message> malformedDecodeRequest() {

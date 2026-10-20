@@ -394,14 +394,21 @@ bool stateful_object_runtime_t::finalized_relocation_source (object_kind_t kind,
     return _lane
       .run ([&] {
           const auto object = _objects.find (object_key_t{kind, key});
-          if (object == _objects.end () || object->second.state != object_state_t::moving
-              || object->second.reference.object_generation != object_generation)
-              return false;
-          const auto seal = _relocation_seals.find (object->second.barrier_generation);
-          return seal != _relocation_seals.end ()
-                 && seal->second.ingress_phase == relocation_ingress_phase_t::follow_only;
+          return object != _objects.end ()
+                 && object->second.reference.object_generation == object_generation
+                 && finalized_relocation_source_on_lane (object->second);
       })
       .get ();
+}
+
+bool stateful_object_runtime_t::finalized_relocation_source_on_lane (
+  const object_record_t &object) const
+{
+    if (object.state != object_state_t::moving)
+        return false;
+    const auto seal = _relocation_seals.find (object.barrier_generation);
+    return seal != _relocation_seals.end ()
+           && seal->second.ingress_phase == relocation_ingress_phase_t::follow_only;
 }
 
 stateful_error_t stateful_object_runtime_t::abort_create (std::uint64_t attempt)
@@ -471,6 +478,77 @@ std::optional<object_ref_t> stateful_object_runtime_t::find (object_kind_t kind,
           return record->second.reference;
       })
       .get ();
+}
+
+std::optional<object_ref_t> stateful_object_runtime_t::resolve_spot (const std::string &key) const
+{
+    return _lane
+      .run ([&, this] () -> std::optional<object_ref_t> {
+          for (const auto kind : {object_kind_t::user_spot, object_kind_t::instance_spot}) {
+              const auto record = _objects.find ({kind, key});
+              if (record != _objects.end ())
+                  return record->second.reference;
+          }
+          return std::nullopt;
+      })
+      .get ();
+}
+
+stateful_error_t stateful_object_runtime_t::set_subscription (const object_ref_t &spot,
+                                                              const std::string &channel_name,
+                                                              const std::string &topic)
+{
+    return _lane
+      .run ([&, this] {
+          if (spot.kind == object_kind_t::actor)
+              return stateful_error_t::invalid;
+          stateful_error_t error = stateful_error_t::none;
+          auto *record = find_record_locked (spot, error);
+          if (!record)
+              return error;
+          record->subscriptions.emplace (channel_name, topic);
+          return stateful_error_t::none;
+      })
+      .get ();
+}
+
+void stateful_object_runtime_t::unset_subscription (const object_ref_t &spot,
+                                                    const std::string &channel_name,
+                                                    const std::string &topic)
+{
+    _lane
+      .run ([&, this] {
+          stateful_error_t error = stateful_error_t::none;
+          if (auto *record = find_record_locked (spot, error))
+              record->subscriptions.erase ({channel_name, topic});
+      })
+      .get ();
+}
+
+task_t<std::vector<object_ref_t>>
+stateful_object_runtime_t::multicast_local_targets (std::string channel_name,
+                                                    std::string topic) const
+{
+    return _lane.run_task (
+      [this, subscription = std::make_pair (std::move (channel_name), std::move (topic))] {
+          std::vector<object_ref_t> targets;
+          for (const auto kind : {object_kind_t::user_spot, object_kind_t::instance_spot}) {
+              for (auto record = _objects.lower_bound ({kind, {}});
+                   record != _objects.end () && record->first.kind == kind; ++record) {
+                  if (record->second.subscriptions.contains (subscription))
+                      targets.push_back (record->second.reference);
+              }
+          }
+          return targets;
+      });
+}
+
+task_t<bool> stateful_object_runtime_t::contains_async (object_ref_t reference) const
+{
+    return _lane.run_task ([this, reference = std::move (reference)] {
+        stateful_error_t error = stateful_error_t::none;
+        return find_record_locked (reference, error) != nullptr;
+    });
 }
 
 std::pair<stateful_error_t, membership_token_t>
@@ -1129,30 +1207,46 @@ std::vector<object_inventory_t> stateful_object_runtime_t::inventory () const
       .get ();
 }
 
-std::optional<std::vector<object_inventory_t>>
-stateful_object_runtime_t::try_begin_maintenance_inventory ()
+task_t<std::vector<object_inventory_t>> stateful_object_runtime_t::actor_inventory () const
 {
-    return _lane
-      .run ([&, this] () -> std::optional<std::vector<object_inventory_t>> {
-          if (_maintenance_inventory_active)
-              return std::nullopt;
-          _maintenance_inventory_active = true;
-          std::vector<object_inventory_t> result;
-          result.reserve (_objects.size ());
-          for (const auto &[_, object] : _objects) {
-              result.push_back ({.owner = object.reference,
-                                 .stable_type = object.stable_type,
-                                 .state = object.state,
-                                 .membership = object.membership});
-          }
-          return result;
-      })
-      .get ();
+    return _lane.run_task ([this] {
+        std::vector<object_inventory_t> result;
+        result.reserve (_objects.size ());
+        for (const auto &[_, object] : _objects) {
+            if (object.reference.kind != object_kind_t::actor
+                || finalized_relocation_source_on_lane (object))
+                continue;
+            result.push_back ({.owner = object.reference,
+                               .stable_type = object.stable_type,
+                               .state = object.state,
+                               .membership = object.membership});
+        }
+        return result;
+    });
 }
 
-void stateful_object_runtime_t::end_maintenance_inventory () noexcept
+task_t<std::optional<std::vector<object_inventory_t>>>
+stateful_object_runtime_t::try_begin_maintenance_inventory ()
 {
-    return _lane.run ([&, this] () -> void { _maintenance_inventory_active = false; }).get ();
+    return _lane.run_task ([this] () -> std::optional<std::vector<object_inventory_t>> {
+        if (_maintenance_inventory_active)
+            return std::nullopt;
+        _maintenance_inventory_active = true;
+        std::vector<object_inventory_t> result;
+        result.reserve (_objects.size ());
+        for (const auto &[_, object] : _objects) {
+            result.push_back ({.owner = object.reference,
+                               .stable_type = object.stable_type,
+                               .state = object.state,
+                               .membership = object.membership});
+        }
+        return result;
+    });
+}
+
+task_t<void> stateful_object_runtime_t::end_maintenance_inventory ()
+{
+    return _lane.run_task ([this] { _maintenance_inventory_active = false; });
 }
 
 task_t<aggregate_relocation_seal_attempt_t>
@@ -2225,24 +2319,8 @@ stateful_object_runtime_t::object_record_t *
 stateful_object_runtime_t::find_record_locked (const object_ref_t &reference,
                                                stateful_error_t &error)
 {
-    const auto entry = _objects.find (key_for (reference));
-    if (entry == _objects.end ()) {
-        error = stateful_error_t::not_found;
-        return nullptr;
-    }
-    if (entry->second.reference.object_generation != reference.object_generation) {
-        error = stateful_error_t::generation_stale;
-        return nullptr;
-    }
-    if (!same_exact_ref (entry->second.reference, reference)) {
-        error =
-          entry->second.reference.authority_owner_generation != reference.authority_owner_generation
-            ? stateful_error_t::generation_stale
-            : stateful_error_t::conflict;
-        return nullptr;
-    }
-    error = stateful_error_t::none;
-    return &entry->second;
+    return const_cast<object_record_t *> (
+      std::as_const (*this).find_record_locked (reference, error));
 }
 
 const stateful_object_runtime_t::object_record_t *

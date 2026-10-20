@@ -36,6 +36,7 @@ import java.util.function.Supplier;
 
 final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotContext> {
     private final ZLinkEntrySpot<?> entrySpot;
+    String metricMeshName;
 
     EntrySpotActivation(
             ZLinkSpotRuntime host,
@@ -345,7 +346,6 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
             ActorPacketFrames.Header packetHeader,
             ActorMessageRead read,
             CompletableFuture<Void> requestAdmission) {
-        Object actorSpotSurface = host.localActorSpotSurface(actor);
         ZLinkActorSessionCoordinator.ActorRoute route =
                 host.actorSessions()
                         .routeFor(
@@ -355,7 +355,6 @@ final class EntrySpotActivation extends SpotActivationBase<DefaultEntrySpotConte
         if (!route.remoteJoinedSpot()) {
             return host.dispatchLocalActorPacket(
                     context,
-                    actorSpotSurface,
                     actor,
                     packetHeader,
                     read.headerPart(),

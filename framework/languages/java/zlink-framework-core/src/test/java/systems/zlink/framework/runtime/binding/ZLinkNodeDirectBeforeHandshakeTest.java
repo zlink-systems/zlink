@@ -49,11 +49,13 @@ final class ZLinkNodeDirectBeforeHandshakeTest {
             source.start();
             if (descriptorKnown) {
                 source.observePeerAdmissionExpectation(
-                        targetRid,
-                        endpoint,
-                        1,
-                        ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
-                        role);
+                                targetRid,
+                                endpoint,
+                                1,
+                                ZLinkServiceNodeDescriptor.PLAINTEXT_SECURITY_IDENTITY,
+                                role)
+                        .toCompletableFuture()
+                        .join();
             }
             source.connectPeer(endpoint, targetRid);
             assertEquals(MeshPeerState.CONNECTING, source.peers().getFirst().state());
@@ -72,7 +74,7 @@ final class ZLinkNodeDirectBeforeHandshakeTest {
             }
             if (descriptorKnown && role == ZLinkMeshNodeObjectRole.CLIENT) {
                 assertEquals(Optional.of(ZLinkOneWayCalls.TARGET_NOT_FOUND), classification);
-                source.forgetPeerAdmissionExpectation(targetRid);
+                source.forgetPeerAdmissionExpectation(targetRid).toCompletableFuture().join();
                 assertTrue(source.spotNode().classifyNodeSendTarget(targetRid).isEmpty());
             } else {
                 assertTrue(classification.isEmpty());

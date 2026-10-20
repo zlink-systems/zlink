@@ -1,7 +1,6 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
-const { forwardEncodedActorPacket } = require('../../packages/framework/dist/runtime/actors/actor-client');
 const {
   ZLinkSubmitStatus
 } = require('../../packages/framework/dist/runtime/messaging/submission-result');
@@ -148,6 +147,36 @@ function completionTable(terminalResult, parts = []) {
     }
   };
 }
+
+test('local Actor sends and requests preserve the resolved canonical authority fence', async () => {
+  const route = actorLocation();
+  const submitted = [];
+  const node = {
+    status: () => ({ routingId: route.actorRef.nodeRid }),
+    sendToActor(_actor, _parts, options) {
+      submitted.push(options.routeFence);
+      return SubmitResult.Ok;
+    },
+    requestToActor(_actor, _parts, options) {
+      submitted.push(options.routeFence);
+      return operationId;
+    }
+  };
+  const client = createActorClient({
+    nodeProvider: () => node,
+    completionTableProvider: () => completionTable(RequestResult.Ok, createReplyParts('pong')),
+    locationResolver: () => createResolver(() => route)
+  });
+  await client.sendToActor('actor-1', new ActorNotify('ping')).submit();
+  assert.equal(await client.requestToActor('actor-1', new ActorAsk('ping')).submit(), 'pong');
+  const expected = {
+    actor: { actorId: route.actorRef.actorId, nodeRid: route.actorRef.nodeRid, generation: route.actorRef.objectGeneration },
+    targetNodeGeneration: route.ownerNodeGeneration,
+    authorityOwnerGeneration: route.authorityOwnerGeneration,
+    ownerLeaseGeneration: route.ownerLeaseGeneration
+  };
+  assert.deepEqual(submitted, [expected, expected]);
+});
 
 test('actor client submit completes without exposing an admission result', async () => {
   const sends = [];
@@ -407,7 +436,7 @@ test('actor client request decodes a single framed handler reply through stream 
   assert.deepEqual(reply, { value: 'framed-pong' });
 });
 
-test('actor handoff reply uses the original packet JSON reply contract', async () => {
+test('actor request uses the original packet JSON reply contract', async () => {
   class HandoffRequest {}
   framework.ZLinkPacket('HandoffRequest', {
     payload: { type: 'object', required: [], properties: {} },
@@ -417,23 +446,13 @@ test('actor handoff reply uses the original packet JSON reply contract', async (
       properties: { generation: { type: 'uint64' } }
     }
   })(HandoffRequest);
-  const header = Buffer.from(framework.encodeStreamHeader({
-    kind: framework.ZLinkStreamMessageKind.Request,
-    codec: framework.ZLinkStreamCodec.Json,
-    flags: framework.ZLinkStreamHeaderFlags.None,
-    name: 'HandoffRequest',
-    metadata: new Map()
-  }));
   const replyParts = createReplyParts({ generation: '18446744073709551615' });
-  const reply = await forwardEncodedActorPacket(
-    { requestToActor: () => operationId },
-    completionTable(RequestResult.Ok, replyParts),
-    actorRef(),
-    header,
-    Buffer.from('{}'),
-    true,
-    100
-  );
+  const client = createActorClient({
+    nodeProvider: () => ({ requestToActor: () => operationId }),
+    completionTableProvider: () => completionTable(RequestResult.Ok, replyParts),
+    locationResolver: () => createResolver()
+  });
+  const reply = await client.requestToActor('actor-1', new HandoffRequest()).submit();
 
   assert.equal(reply.generation, 18446744073709551615n);
 });

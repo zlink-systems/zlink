@@ -67,6 +67,7 @@ export class ServiceLivenessRegistry {
    * extends a peer's deadline, so this stays a lower bound between ticks.
    */
   private nextDueMs = Number.POSITIVE_INFINITY;
+  private admissionActivityMs?: number;
 
   constructor(
     private readonly probeIntervalMs = DEFAULT_SERVICE_PROBE_INTERVAL_MS,
@@ -105,7 +106,25 @@ export class ServiceLivenessRegistry {
 
   /** When the next tick has probe or timeout work (spec 08 §4.2 management deadline). */
   nextDeadlineMs(): number {
-    return this.nextDueMs;
+    return Math.min(this.nextDueMs, this.nextAdmissionDeadlineMs());
+  }
+
+  /** Pending admission shares the existing liveness management cadence (MeshNode §7.1). */
+  setAdmissionPending(pending: boolean, nowMs: number): void {
+    if (pending) this.admissionActivityMs ??= nowMs;
+    else this.admissionActivityMs = undefined;
+  }
+
+  private nextAdmissionDeadlineMs(): number {
+    return this.admissionActivityMs === undefined
+      ? Number.POSITIVE_INFINITY
+      : this.admissionActivityMs + this.probeIntervalMs;
+  }
+
+  tickAdmission(nowMs: number): boolean {
+    if (nowMs < this.nextAdmissionDeadlineMs()) return false;
+    this.admissionActivityMs = nowMs;
+    return true;
   }
 
   recordReceived(connection: ServiceLivenessConnection, nowMs: number): void {
@@ -143,7 +162,7 @@ export class ServiceLivenessRegistry {
   }
 
   tick(nowMs: number): ServiceLivenessTick {
-    if (nowMs < this.nextDueMs) return NO_LIVENESS_WORK;
+    if (nowMs < this.nextDeadlineMs()) return NO_LIVENESS_WORK;
     const probes: ServiceProbe[] = [];
     const timedOutNodes: string[] = [];
     let nextDueMs = Number.POSITIVE_INFINITY;

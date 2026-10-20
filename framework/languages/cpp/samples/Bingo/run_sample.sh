@@ -184,7 +184,7 @@ cleanup_done=false
 BINGO_REDIS_KEY_PREFIX="bingo:cpp:${RANDOM}:$$:"
 
 cleanup() {
-  local code=$?
+  local code=${1:-$?}
   set +e
   if [[ "$cleanup_done" == true ]]; then
     return

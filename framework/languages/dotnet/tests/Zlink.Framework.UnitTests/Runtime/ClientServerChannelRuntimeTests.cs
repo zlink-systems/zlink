@@ -14,7 +14,131 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutputHelper output)
 {
-    private const string AdmissionTestServerHost = "127.0.0.2";
+    private const string AdmissionTestServerHost = "127.0.0.1";
+
+    [Fact]
+    public Task Unawaited_ClientServer_Update_Failure_Is_Reported_Once_Without_Unobserved_Task() =>
+        AssertNoUnobservedSubmitFailuresAsync(SubmitUpdateToMissingClientAsync);
+
+    [Fact]
+    public Task ClientServer_Requests_Then_Immediate_Client_Stop_Leave_No_Unobserved_Submit_Failures() =>
+        AssertNoUnobservedSubmitFailuresAsync(RequestAndStopClientsAsync);
+
+    private static async Task AssertNoUnobservedSubmitFailuresAsync(Func<Task> run)
+    {
+        var unobserved = new ConcurrentQueue<Exception>();
+        void OnUnobserved(object? sender, UnobservedTaskExceptionEventArgs args)
+        {
+            foreach (var error in args.Exception.Flatten().InnerExceptions)
+                if (error is ZlinkSubmitException)
+                    unobserved.Enqueue(error);
+        }
+
+        TaskScheduler.UnobservedTaskException += OnUnobserved;
+        try
+        {
+            await run();
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            Assert.Empty(unobserved);
+        }
+        finally
+        {
+            TaskScheduler.UnobservedTaskException -= OnUnobserved;
+        }
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.NoInlining
+    )]
+    private static async Task RequestAndStopClientsAsync()
+    {
+        var store = new ZLinkInMemoryProviderLocationStore();
+        await using var server = CreateAutomaticServer(store, string.Empty);
+        var serverHost = server
+            .GetServices<IHostedService>()
+            .OfType<ZLinkFrameworkHostedService>()
+            .Single();
+        await serverHost.StartAsync(CancellationToken.None);
+        try
+        {
+            for (var cycle = 0; cycle < 5; cycle++)
+                await Task.WhenAll(
+                    Enumerable
+                        .Range(0, 10)
+                        .Select(async _ =>
+                        {
+                            await using var client = CreateAutomaticClient(store);
+                            var clientHost = client
+                                .GetServices<IHostedService>()
+                                .OfType<ZLinkFrameworkHostedService>()
+                                .Single();
+                            await clientHost.StartAsync(CancellationToken.None);
+                            try
+                            {
+                                var reply = await client
+                                    .GetRequiredService<IZLinkRouteClient>()
+                                    .RequestToChannel("work", new EchoRequest("ok"))
+                                    .Async<EchoReply>();
+                                Assert.Equal("ok", reply.Value);
+                            }
+                            finally
+                            {
+                                await clientHost.StopAsync(CancellationToken.None);
+                            }
+                        })
+                );
+        }
+        finally
+        {
+            await serverHost.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [System.Runtime.CompilerServices.MethodImpl(
+        System.Runtime.CompilerServices.MethodImplOptions.NoInlining
+    )]
+    private static async Task SubmitUpdateToMissingClientAsync()
+    {
+        await using var server = CreateServer(0);
+        var runtime = server.GetRequiredService<ZLinkFrameworkRuntime>();
+        await runtime.StartAsync(CancellationToken.None);
+        using var errorSink = new ZLinkRuntimeErrorSink();
+        var failures = new ConcurrentQueue<Exception>();
+        var reported = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        errorSink.UnhandledCallbackException += error =>
+        {
+            failures.Enqueue(error);
+            reported.TrySetResult();
+        };
+        try
+        {
+            var state = await runtime.EnsureStartedStateAsync(CancellationToken.None);
+            var bundle = GetServerBundle(state, "work");
+            var identity = new ZLinkClientServerServerIdentity(
+                "work",
+                RoutingId.From("test-server"),
+                1,
+                "plaintext",
+                100,
+                1024,
+                "tcp://127.0.0.1:1",
+                errorSink
+            );
+            await identity.AttachRouterAsync((IRouterSocket)bundle.Socket);
+            // Preserve an admitted peer after its physical route has gone away.
+            // A mandatory send fails synchronously before returning SendSubmission.
+            await identity.AdmitPeerAsync(RoutingId.From("departed-client"), 1024, 1);
+            await identity.SetWeightAsync(50);
+            await reported.Task;
+            Assert.IsType<ZlinkSubmitException>(Assert.Single(failures));
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
 
     [Fact]
     public async Task CurrentSpotChannelPublicRequest_AdmitsBeforeReply()
@@ -2181,6 +2305,84 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             foreach (var provider in providers.Reverse())
                 await provider.GetRequiredService<ZLinkLocationRuntime>().StopAsync();
         }
+    }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(1, true)]
+    [InlineData(2, true)]
+    [InlineData(3, true)]
+    [InlineData(3, false)]
+    [InlineData(1024, false)]
+    [InlineData(4096, false)]
+    [InlineData(1024, true)]
+    [InlineData(4096, true)]
+    public void ClientServerControlClassification_DoesNotCopyTheHeader(int length, bool prefix)
+    {
+        var bytes = new byte[length];
+        if (prefix)
+            Convert.FromHexString("5A4D01").AsSpan(0, Math.Min(length, 3)).CopyTo(bytes);
+        using var message = Message.From(bytes);
+        IReadOnlyList<Message> parts = new[] { message };
+        for (var index = 0; index < 128; index++)
+            _ = ZLinkClientServerControlProtocol.IsControl(parts);
+
+        const int iterations = 1000;
+        var matches = 0;
+        var start = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+            if (ZLinkClientServerControlProtocol.IsControl(parts))
+                matches++;
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - start;
+
+        output.WriteLine($"IsControl length={length} prefix={prefix}: {allocated} B/{iterations}");
+        Assert.Equal(prefix && length >= 3 ? iterations : 0, matches);
+        Assert.True(message.AsReadOnlySpan().SequenceEqual(bytes));
+        Assert.Equal(0, allocated);
+        Assert.False(ZLinkClientServerControlProtocol.IsControl(Array.Empty<Message>()));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ClientServerControlReaders_DoNotCopyFrames(bool valid)
+    {
+        using var probe = ZLinkClientServerControlProtocol.EncodeLivenessProbe(11);
+        using var ack = ZLinkClientServerControlProtocol.EncodeLivenessAck(11);
+        using var reject = ZLinkClientServerControlProtocol.EncodeReject(1);
+        if (!valid)
+        {
+            probe.AsSpan()[^1] = 0;
+            ack.AsSpan()[^1] = 0;
+            reject.AsSpan()[^1] = 0;
+        }
+        IReadOnlyList<Message> probes = new[] { probe };
+        IReadOnlyList<Message> acks = new[] { ack };
+        IReadOnlyList<Message> rejects = new[] { reject };
+        for (var index = 0; index < 128; index++)
+        {
+            _ = ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probes, out _);
+            _ = ZLinkClientServerControlProtocol.TryDecodeLivenessAck(acks, out _);
+            _ = ZLinkClientServerControlProtocol.TryDecodeReject(rejects, out _);
+        }
+
+        const int iterations = 1000;
+        var matches = 0;
+        var start = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+        {
+            if (ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probes, out var probeId))
+                matches += probeId == 11 ? 1 : 0;
+            if (ZLinkClientServerControlProtocol.TryDecodeLivenessAck(acks, out var ackId))
+                matches += ackId == 11 ? 1 : 0;
+            if (ZLinkClientServerControlProtocol.TryDecodeReject(rejects, out var reason))
+                matches += reason == 1 ? 1 : 0;
+        }
+        var allocated = GC.GetAllocatedBytesForCurrentThread() - start;
+
+        output.WriteLine($"Control readers valid={valid}: {allocated} B/{iterations}");
+        Assert.Equal(valid ? iterations * 3 : 0, matches);
+        Assert.Equal(0, allocated);
     }
 
     [Fact]

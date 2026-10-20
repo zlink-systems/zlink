@@ -320,7 +320,10 @@ export interface ZLinkNestMeshObjectRoleBuilder extends ZLinkNestFrameworkOption
 export interface ZLinkNestMeshObjectClientBuilder extends ZLinkNestFrameworkOptionsBuilder {}
 
 export interface ZLinkNestMeshObjectServerBuilder extends ZLinkNestFrameworkOptionsBuilder {
-  addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(entrySpotType: Type<TEntrySpot>): this;
+  addEntrySpot<TEntrySpot extends ZLinkEntrySpot>(
+    entrySpotType: Type<TEntrySpot>,
+    actorType: string
+  ): this;
   addSpotFactory<TSpot extends ZLinkSpot>(
     spotType: string,
     implementation: Type<TSpot>,

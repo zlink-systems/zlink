@@ -390,7 +390,7 @@ public final class ZLinkChannelEnvelope {
 
     /** Two or more parts whose first frame starts with a JSON object byte. */
     public static boolean looksLikeEnvelope(List<Message> parts) {
-        if (parts == null || parts.size() < 2 || parts.get(0).size() == 0) {
+        if (parts == null || parts.size() < 2) {
             return false;
         }
         Message first = parts.get(0);
@@ -804,8 +804,6 @@ public final class ZLinkChannelEnvelope {
         private SerializedString messageNameToken;
         private String contentType;
         private SerializedString contentTypeToken;
-        private int kind;
-        private SerializedString kindToken;
 
         HeaderWriter() throws IOException {
             json = JSON.getFactory().createGenerator(bytes);
@@ -826,7 +824,7 @@ public final class ZLinkChannelEnvelope {
                 json.writeNumber(flowOriginWireValue(header.flowOrigin()));
             }
             json.writeFieldName(KIND_FIELD);
-            json.writeRawValue(kindToken);
+            json.writeNumber(header.kind());
             json.writeFieldName(CHANNEL_NAME_FIELD);
             json.writeRawValue(channelNameToken);
             json.writeFieldName(MESSAGE_NAME_FIELD);
@@ -847,10 +845,6 @@ public final class ZLinkChannelEnvelope {
         }
 
         private void cacheStableValues(Header header) throws IOException {
-            if (kindToken == null || kind != header.kind()) {
-                kind = header.kind();
-                kindToken = new SerializedString(Integer.toString(kind));
-            }
             if (!Objects.equals(channelName, header.channelName())) {
                 channelName = header.channelName();
                 channelNameToken = quotedScalar(channelName);

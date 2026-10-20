@@ -1,6 +1,9 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
+#include "runtime/execution/task_result.hpp"
+#include <zlink/framework/detail/deadline_scheduler.hpp>
+
 #include "runtime/diagnostics/runtime_metrics.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/execution/infrastructure_wait_guard.hpp"
@@ -21,6 +24,8 @@
 #include <random>
 #include <stop_token>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace zlink::framework::runtime
 {
@@ -75,6 +80,7 @@ class location_runtime_t
         std::atomic_bool stop = false;
         std::mutex gate;
         std::condition_variable wake;
+        bool pending_peer_reconcile = false;
         std::shared_ptr<heartbeat_attempt_t> current;
     };
 
@@ -100,6 +106,49 @@ class location_runtime_t
         std::stop_token cancellation;
         std::function<void ()> expire;
         std::optional<task_t<lease_renew_outcome_t>> task;
+    };
+
+    struct descriptor_publication_t
+    {
+        explicit descriptor_publication_t (
+          std::chrono::milliseconds timeout,
+          std::function<std::chrono::steady_clock::time_point ()> clock) :
+            now (std::move (clock)), deadline_at (now () + timeout)
+        {
+        }
+
+        std::function<std::chrono::steady_clock::time_point ()> now;
+        const std::chrono::steady_clock::time_point deadline_at;
+        task_completion_source_t<location_write_result_t> observation;
+        task_completion_source_t<void> drained;
+        std::shared_ptr<detail::deadline_state_t> deadline =
+          std::make_shared<detail::deadline_state_t> ();
+        std::optional<task_t<location_write_result_t>> pending;
+
+        // The deadline wins even when provider completion reaches us before
+        // the scheduler delivers an already-due timer. No second expiry state.
+        bool
+        observe (std::optional<result_t<location_write_result_t>> result = std::nullopt,
+                 std::optional<std::chrono::steady_clock::time_point> observed_at = std::nullopt)
+        {
+            const bool native_failure = result && !*result && result->error () == nullptr;
+            if (!native_failure && (observed_at ? *observed_at : now ()) >= deadline_at)
+                result = result_t<location_write_result_t>::failure (
+                  framework_error_kind_t::deadline_exceeded,
+                  "Location descriptor publication timed out");
+            if (result) {
+                deadline->cancelled.store (true, std::memory_order_release);
+                detail::deadline_scheduler_t::instance ().wake ();
+                observation.complete (*result);
+            }
+            return !observation.task ().await_ready ();
+        }
+
+        void finish (std::optional<result_t<location_write_result_t>> result = std::nullopt)
+        {
+            observe (std::move (result));
+            drained.complete (result_t<void>::success ());
+        }
     };
 
   public:
@@ -218,8 +267,9 @@ class location_runtime_t
             _started.store (false, std::memory_order_release);
             throw;
         }
-        _heartbeat_state = std::make_shared<heartbeat_owner_t> ();
-        _heartbeat = std::thread ([this, heartbeat = _heartbeat_state, operation_started_at] {
+        auto heartbeat = std::make_shared<heartbeat_owner_t> ();
+        std::atomic_store_explicit (&_heartbeat_state, heartbeat, std::memory_order_release);
+        _heartbeat = std::thread ([this, heartbeat = std::move (heartbeat), operation_started_at] {
 #ifndef NDEBUG
             runtime::infrastructure_wait_guard::infrastructure_scope_t scope (this);
 #endif
@@ -229,10 +279,12 @@ class location_runtime_t
 
     void stop () noexcept
     {
-        if (!_started.exchange (false))
-            return;
-        stop_heartbeat ();
-        static_cast<void> (cleanup_owner ());
+        const bool started = _started.exchange (false);
+        if (started)
+            stop_heartbeat ();
+        infrastructure_result ([this] { return drain_descriptor_publications (); }).value ();
+        if (started)
+            static_cast<void> (cleanup_owner ());
     }
 
     /* Drain owner cleanup (graceful-drain-handoff §4-5): stops the lease
@@ -300,6 +352,118 @@ class location_runtime_t
     void record_runtime_failure (std::string message) const
     {
         record_failure (std::move (message));
+    }
+
+    // Location runtime §5: provider failures leave publication unknown. Only a
+    // confirmed conflicting claim is a startup error. The repository owns §10 reads.
+    template <typename Start>
+    task_t<bool>
+    descriptor_write_confirmed (Start start,
+                                std::function<std::chrono::steady_clock::time_point ()> now =
+                                  std::chrono::steady_clock::now) const
+    {
+        auto operation = std::make_shared<descriptor_publication_t> (
+          _options.owner_lease_renew_timeout, std::move (now));
+        try {
+            co_await _lane.run_task ([this, operation] {
+                std::erase_if (_descriptor_publications, [] (const auto &pending) {
+                    return pending->drained.task ().await_ready ();
+                });
+                _descriptor_publications.push_back (operation);
+            });
+        }
+        catch (...) {
+            operation->finish (detail::current_exception_result<location_write_result_t> ());
+        }
+        detail::deadline_scheduler_t::instance ().schedule (
+          operation->deadline_at, operation->deadline, [weak = std::weak_ptr{operation}] {
+              if (auto active = weak.lock ())
+                  active->observe (std::nullopt, active->deadline_at);
+          });
+        if (operation->observe ()) {
+            try {
+                operation->pending.emplace (start ());
+            }
+            catch (...) {
+                operation->pending.emplace (
+                  detail::current_exception_result<location_write_result_t> ());
+            }
+            detail::observe_task_terminal (
+              *operation->pending, [operation] (const result_t<location_write_result_t> &result) {
+                  operation->finish (result);
+              });
+        } else {
+            operation->finish ();
+        }
+        const auto result = co_await await_result (operation->observation.task ());
+        if (!result) {
+            if (result.error () == nullptr)
+                co_return detail::propagate_failure<bool> (
+                  result, "Location descriptor publication failed");
+            record_store_error ();
+            co_await _lane.run_task (
+              [this, message = std::string (result.error ()->what ())] () mutable {
+                  record_failure_on_lane (std::move (message));
+              });
+            co_return false;
+        }
+        if (result.value ().status == location_write_status_t::rejected_conflict)
+            throw framework_exception_t (framework_error_kind_t::not_configured,
+                                         "Location descriptor is held by another claim");
+        co_return result.value ().status == location_write_status_t::stored;
+    }
+
+    // This is the existing lease admission deadline, used as the renewal observation.
+    // Observers do not create a retry clock or a second lease state.
+    auto owner_lease_observation () const
+    {
+        return std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire)
+          ->admission_deadline;
+    }
+
+    auto peer_reconcile_requester () const
+    {
+        return
+          [owner = std::weak_ptr{std::atomic_load_explicit (
+             &_heartbeat_state, std::memory_order_acquire)}] (const std::vector<std::uint8_t> &) {
+              if (auto heartbeat = owner.lock ()) {
+                  std::lock_guard lock (heartbeat->gate);
+                  heartbeat->pending_peer_reconcile = true;
+                  heartbeat->wake.notify_all ();
+              }
+          };
+    }
+
+    void wake_owner_lease_observers () const
+    {
+        if (auto heartbeat =
+              std::atomic_load_explicit (&_heartbeat_state, std::memory_order_acquire)) {
+            std::lock_guard lock (heartbeat->gate);
+            heartbeat->wake.notify_all ();
+        }
+    }
+
+    void wait_for_owner_lease_change (std::optional<std::chrono::steady_clock::time_point> observed,
+                                      const task_t<void> &stopped,
+                                      std::chrono::milliseconds polling_interval) const
+    {
+        if (auto heartbeat =
+              std::atomic_load_explicit (&_heartbeat_state, std::memory_order_acquire);
+            heartbeat && !heartbeat->stop.load (std::memory_order_acquire)) {
+            std::unique_lock lock (heartbeat->gate);
+            runtime::infrastructure_wait_guard::condition_wait_for (
+              heartbeat->wake, lock, polling_interval,
+              [&] {
+                  return stopped.await_ready () || heartbeat->stop.load (std::memory_order_acquire)
+                         || owner_lease_observation () != observed
+                         || heartbeat->pending_peer_reconcile;
+              },
+              "location/discovery-input",
+              runtime::infrastructure_wait_guard::wait_relation_t::own_input);
+            heartbeat->pending_peer_reconcile = false;
+        } else {
+            (void) detail::observe_task_result_for (stopped, polling_interval, std::stop_token{});
+        }
     }
 
     /* Discovered peer total observed on the auto-connect polling tick
@@ -452,6 +616,7 @@ class location_runtime_t
             runtime->_last_error.reset ();
             return true;
         });
+        runtime->wake_owner_lease_observers ();
     }
 
     static task_t<void> heartbeat_failure (std::shared_ptr<heartbeat_attempt_t> attempt,
@@ -724,11 +889,14 @@ class location_runtime_t
 
     void stop_heartbeat () noexcept
     {
-        auto heartbeat = _heartbeat_state;
+        auto heartbeat = std::atomic_load_explicit (&_heartbeat_state, std::memory_order_acquire);
         if (!heartbeat)
             return;
-        heartbeat->stop.store (true, std::memory_order_release);
-        heartbeat->wake.notify_all ();
+        {
+            std::lock_guard lock (heartbeat->gate);
+            heartbeat->stop.store (true, std::memory_order_release);
+            heartbeat->wake.notify_all ();
+        }
         if (_heartbeat.joinable ())
             runtime::infrastructure_wait_guard::join (_heartbeat, "location/heartbeat");
         std::shared_ptr<heartbeat_attempt_t> attempt;
@@ -745,7 +913,8 @@ class location_runtime_t
             if (attempt->task)
                 static_cast<void> (attempt->task->result ());
         }
-        _heartbeat_state.reset ();
+        std::atomic_store_explicit (&_heartbeat_state, std::shared_ptr<heartbeat_owner_t>{},
+                                    std::memory_order_release);
     }
 
     void heartbeat_loop (std::shared_ptr<heartbeat_owner_t> heartbeat,
@@ -829,6 +998,19 @@ class location_runtime_t
         }
     }
 
+    task_t<void> drain_descriptor_publications () const
+    {
+        auto operations =
+          co_await _lane.run_task ([this] { return std::exchange (_descriptor_publications, {}); });
+        for (const auto &operation : operations)
+            operation->observe (detail::result_access_t::failure<location_write_result_t> (
+              detail::make_cancellation_exception ("Location descriptor publication stopped")));
+        // The caller's deadline cannot end opaque I/O. Preserve every repository
+        // coroutine and its input until its actual terminal, before provider teardown.
+        for (const auto &operation : operations)
+            co_await operation->drained.task ();
+    }
+
     void record_failure (std::string message) const
     {
         _lane.run_checked ([&] { record_failure_on_lane (std::move (message)); }).get ();
@@ -852,6 +1034,7 @@ class location_runtime_t
     mutable std::shared_ptr<const owner_lease_snapshot_t> _owner_lease{
       std::make_shared<const owner_lease_snapshot_t> ()};
     mutable std::optional<std::string> _last_error;
+    mutable std::vector<std::shared_ptr<descriptor_publication_t>> _descriptor_publications;
     offload_executor_t _lane_executor;
     mutable state_lane_t _lane{_lane_executor};
 };

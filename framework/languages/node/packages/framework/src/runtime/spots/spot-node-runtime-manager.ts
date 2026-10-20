@@ -34,7 +34,7 @@ import {
 import { ZLinkLocationWriteIntent, ZLinkLocationWriteStatus } from '../../contracts/Locations';
 import type { ZLinkLocationOptionOverrides } from '../../contracts/Locations/Options';
 import type { ZLinkLocationOwnerToken } from '../../contracts/Locations/Writes';
-import { createAbortError } from '../abort';
+import { awaitWithAbort, createAbortError } from '../abort';
 import type { ZLinkActivationConcurrency } from '../activation-admission';
 import type { ZLinkRemoteBoundSessionTarget } from '../actors';
 import type { ZLinkActorHandoffPacket } from '../actors/actor-handoff';
@@ -117,6 +117,7 @@ const ZLINK_SEND_DONT_WAIT = 1;
 const EMPTY_SPOT_METADATA: ReadonlyMap<string, string> = new Map();
 
 export interface ZLinkSpotNodeRuntimeManagerOptions {
+  readonly admission?: import('../admission').ZLinkRuntimeAdmissionGate;
   readonly errorSink: import('../diagnostics/dispatch-error-port').ZLinkDispatchErrorSink;
   readonly listenerRecords?: ZLinkListenerRecords;
   readonly registration: ZLinkFrameworkRegistration;
@@ -205,6 +206,12 @@ export class ZLinkSpotNodeRuntimeManager {
     );
   }
 
+  async requestPeerReconcile(meshName: string, peerRid: string): Promise<void> {
+    await Promise.all(
+      this.autoConnectLoops.map((loop) => loop.requestPeerReconcile(meshName, peerRid))
+    );
+  }
+
   async startLocationAutoConnect(signal?: AbortSignal): Promise<void> {
     const location = this.locationAutoConnect;
     if (location === undefined || this.autoConnectLoops.length > 0) {
@@ -218,6 +225,9 @@ export class ZLinkSpotNodeRuntimeManager {
         }
         const capability = spotNodeAutoConnectCapability(spotNodeName, spotNode, node);
         if (capability === undefined) continue;
+        node.setRequestSourceAcceptance?.((nodeRid, nodeGeneration) =>
+          location.requestSources.accept(capability.local.meshName, nodeRid, nodeGeneration)
+        );
         const reconciler = new ZLinkAutoConnectReconciler({
           local: capability.local,
           localRow: capability.localRow,
@@ -292,6 +302,24 @@ export class ZLinkSpotNodeRuntimeManager {
       if (this.options.dispatchErrors !== undefined) {
         node.setDispatchErrorReporter?.(this.options.dispatchErrors, spotNodeName);
       }
+      // Session-Actor binding §4: the Session owner identity comes from the
+      // host's own descriptor or from a peer descriptor that passed the
+      // Location runtime §4.1 owner lease check.
+      node.setSessionOwnerDescriptors?.({
+        local: () => this.locationAutoConnect?.runtime.currentOwnerToken,
+        peer: async (peerRid, peerGeneration) => {
+          const location = this.locationAutoConnect;
+          if (location === undefined) return undefined;
+          const descriptor = (await location.runtime.listLiveMeshNodes(spotNodeName)).find(
+            (candidate) =>
+              routingIdsEqual(candidate.rid, peerRid) &&
+              candidate.lifecycleGeneration === peerGeneration
+          );
+          return descriptor === undefined
+            ? undefined
+            : { ownerId: descriptor.ownerId, leaseGeneration: descriptor.leaseGeneration };
+        }
+      });
       node.setMailboxRecordDroppedHandler?.((record) =>
         this.options.dispatchErrors?.report({
           surface: ZLinkDispatchErrorSurface.RouteMeshChannel,
@@ -447,9 +475,8 @@ export class ZLinkSpotNodeRuntimeManager {
     const ownerChanged =
       this.publishedOwnerToken !== undefined && !sameOwnerToken(this.publishedOwnerToken, owner);
     if (ownerChanged) {
-      // A new owner token can refer to an empty or replaced Store. The cached
-      // descriptor was written under the previous lease and must not force a
-      // Renew against a row that no longer exists.
+      // A descriptor confirmed under the previous lease must not supply
+      // cached population data for a new owner token.
       this.publishedMeshNodeDescriptors.clear();
     }
     for (const [meshName, registration] of this.options.registration.spotNodes) {
@@ -467,7 +494,14 @@ export class ZLinkSpotNodeRuntimeManager {
         ...instanceSpots.map(([stableType, factory]) =>
           objectCapability('instance_spot', stableType, factory)
         ),
-        ...actors.map(([stableType, factory]) => objectCapability('actor', stableType, factory))
+        ...actors.map(([stableType, factory]) =>
+          objectCapability(
+            'actor',
+            stableType,
+            factory,
+            registrationAcceptsNewActor(registration, stableType)
+          )
+        )
       ].sort((left, right) => {
         const kindOrder = left.objectKind.localeCompare(right.objectKind);
         return kindOrder !== 0 ? kindOrder : left.stableType.localeCompare(right.stableType);
@@ -540,13 +574,14 @@ export class ZLinkSpotNodeRuntimeManager {
         state,
         securityIdentity: 'default'
       };
+      // Revision is issued before submission: an unconfirmed Store write may
+      // already have applied, so the next publication must not reuse it.
+      this.descriptorRevisionByMesh.set(meshName, descriptor.descriptorRevision);
       const result = await location.runtime.writeMeshNode(
         descriptor,
-        ownerChanged
-          ? ZLinkLocationWriteIntent.Renew
-          : current === undefined
-            ? ZLinkLocationWriteIntent.NewClaim
-            : ZLinkLocationWriteIntent.Renew,
+        previousRevision === 0n
+          ? ZLinkLocationWriteIntent.NewClaim
+          : ZLinkLocationWriteIntent.Renew,
         signal
       );
       if (result.status !== ZLinkLocationWriteStatus.Stored) {
@@ -560,7 +595,6 @@ export class ZLinkSpotNodeRuntimeManager {
         leaseGeneration: location.runtime.currentOwnerToken!.leaseGeneration,
         updatedAt: result.updatedAt
       });
-      this.descriptorRevisionByMesh.set(meshName, descriptor.descriptorRevision);
     }
     this.publishedOwnerToken = owner;
   }
@@ -848,8 +882,12 @@ export class ZLinkSpotNodeRuntimeManager {
     };
     await settle(publishers.map(async (publisher) => publisher.close()));
     await settle(autoConnectLoops.map((loop) => loop.prepareTransportShutdown()));
-    await settle(entryActivations.reverse().map((activation) => activation.dispose(deadline)));
-    await settle(meshPumps.reverse().map((pump) => pump.dispose()));
+    await settle(
+      entryActivations
+        .reverse()
+        .map((activation) => awaitWithAbort(activation.dispose(deadline), signal))
+    );
+    await settle(meshPumps.reverse().map((pump) => pump.dispose(signal)));
     await settle(
       meshNodes.reverse().map(async (node) => {
         await node.shutdown(DEFAULT_SPOT_NODE_SHUTDOWN_TIMEOUT_MS);
@@ -1015,6 +1053,7 @@ export class ZLinkSpotNodeRuntimeManager {
       return;
     }
     const activation = new ZLinkEntrySpotActivation({
+      admission: this.options.admission,
       entrySpotType: spotNode.entrySpotType,
       nativeSpot: node.entrySpot() as never,
       nativeNode: node as unknown as ZLinkBackendSpotNode,
@@ -1380,7 +1419,8 @@ function effectiveObjectRole(registration: ZLinkSpotNodeOptions): ZLinkObjectRol
 function objectCapability(
   objectKind: 'actor' | 'user_spot' | 'instance_spot',
   stableType: string,
-  factory: DescriptorFactoryRegistration
+  factory: DescriptorFactoryRegistration,
+  entryAccepted = false
 ) {
   const policy = factory.relocation?.kind ?? 'disabled';
   return {
@@ -1388,8 +1428,25 @@ function objectCapability(
     stableType,
     policy,
     hasSnapshotAdapter: policy === 'snapshot',
-    limit: objectKind === 'actor' ? 0 : (factory.options?.stableTypeLimit ?? 0)
+    limit: objectKind === 'actor' ? 0 : (factory.options?.stableTypeLimit ?? 0),
+    entryAccepted
   };
+}
+
+/**
+ * The one decision for creating a new Actor on this node (Actor model §6.3): the node registered
+ * an Entry Spot type that accepts the Actor type and an Actor factory for it. Publication and the
+ * target refusal both read it.
+ */
+export function registrationAcceptsNewActor(
+  registration: ZLinkSpotNodeOptions,
+  stableType: string
+): boolean {
+  return (
+    registration.entrySpotType !== undefined &&
+    registration.entrySpotActorType === stableType &&
+    effectiveActorRegistrations(registration).some(([type]) => type === stableType)
+  );
 }
 
 function aggregatePlacementCapacity(actorLimit: number, spotLimit: number): number {

@@ -26,7 +26,7 @@ function loadNative(): NativeBinding {
     }
   }
   throw new Error([
-    'zlink native addon not found. Build with node-gyp.',
+    'Unable to load the zlink native addon:',
     ...failures.map((failure) => `- ${describeLoadFailure(failure)}`)
   ].join('\n'));
 }

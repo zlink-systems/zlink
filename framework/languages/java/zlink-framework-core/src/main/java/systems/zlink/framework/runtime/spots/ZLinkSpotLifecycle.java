@@ -28,8 +28,6 @@ import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 
 final class ZLinkSpotLifecycle {
-    private static final String ENTRY_SPOT_METRIC_KIND = "entry";
-    private static final String USER_SPOT_METRIC_KIND = "user";
 
     @FunctionalInterface
     interface ActorOccupancy {
@@ -71,29 +69,41 @@ final class ZLinkSpotLifecycle {
         this.actorOccupancy = actorOccupancy;
     }
 
-    private static void recordSpotCount(String kind, long delta) {
-        ZLinkRuntimeMetrics.add(
-                ZLinkRuntimeMetrics.SPOT_COUNT_NAME,
-                delta,
-                Map.of(ZLinkRuntimeMetrics.Tag.KIND.wire(), kind));
+    private final Map<
+                    Map<String, String>,
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkPopulationMetrics>
+            populationMetrics = new ConcurrentHashMap<>();
+
+    void recordSpotCount(String meshName, ZLinkRuntimeMetrics.SpotKind kind, long delta) {
+        var tags =
+                Map.of(
+                        ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
+                        meshName,
+                        ZLinkRuntimeMetrics.Tag.SPOT_KIND.wire(),
+                        kind.wire());
+        populationMetrics
+                .computeIfAbsent(
+                        tags,
+                        values ->
+                                new systems.zlink.framework.runtime.internal.metrics
+                                        .ZLinkPopulationMetrics(
+                                        ZLinkRuntimeMetrics.Metric.SPOT_COUNT, values))
+                .add(delta);
     }
 
-    private static void recordSpotCreated(String kind) {
-        ZLinkRuntimeMetrics.increment(
-                ZLinkRuntimeMetrics.SPOT_CREATED_NAME,
-                Map.of(ZLinkRuntimeMetrics.Tag.KIND.wire(), kind));
+    void closePopulationMetrics() {
+        populationMetrics
+                .values()
+                .forEach(
+                        systems.zlink.framework.runtime.internal.metrics.ZLinkPopulationMetrics
+                                ::close);
+        populationMetrics.clear();
     }
 
-    private static void recordSpotClosed(String kind) {
-        ZLinkRuntimeMetrics.increment(
-                ZLinkRuntimeMetrics.SPOT_CLOSED_NAME,
-                Map.of(ZLinkRuntimeMetrics.Tag.KIND.wire(), kind));
-    }
-
-    void addEntrySpot(EntrySpotActivation activation) {
+    void addEntrySpot(String meshName, EntrySpotActivation activation) {
+        activation.metricMeshName = meshName;
         entrySpots.add(activation);
-        recordSpotCount(ENTRY_SPOT_METRIC_KIND, 1);
-        recordSpotCreated(ENTRY_SPOT_METRIC_KIND);
+        recordSpotCount(meshName, ZLinkRuntimeMetrics.SpotKind.ENTRY, 1);
     }
 
     List<String> userSpotIds() {
@@ -109,16 +119,12 @@ final class ZLinkSpotLifecycle {
         if (removed == null) {
             return CompletableFuture.completedFuture(false);
         }
+        recordSpotCount(removed.meshName(), ZLinkRuntimeMetrics.SpotKind.USER, -1);
         countChanged.run();
         return removed.closeAsync()
                 .thenCompose(
                         ignored ->
                                 locations.releaseUserSpotAsync(removed.context.nodeRid(), spotId))
-                .whenComplete(
-                        (ignored, error) -> {
-                            recordSpotCount(USER_SPOT_METRIC_KIND, -1);
-                            recordSpotClosed(USER_SPOT_METRIC_KIND);
-                        })
                 .thenApply(ignored -> true);
     }
 
@@ -215,17 +221,24 @@ final class ZLinkSpotLifecycle {
         if (current != null && current != activation) {
             return SpotActivationBase.finishCleanup(
                     new IllegalStateException("User Spot Ready publication lost local admission"),
-                    activation.closeAsync());
+                    activation.context.closeResourcesAsync());
         }
-        if (current == null) countChanged.run();
-        recordSpotCount(USER_SPOT_METRIC_KIND, 1);
-        recordSpotCreated(USER_SPOT_METRIC_KIND);
-        return CompletableFuture.completedFuture(null);
+        if (current == null) {
+            recordSpotCount(activation.meshName(), ZLinkRuntimeMetrics.SpotKind.USER, 1);
+            countChanged.run();
+        }
+
+        return activation.context.finishActivationPreparation();
     }
 
     CompletionStage<Void> discardReserved(PreparedUserSpot prepared) {
         if (!prepared.existing() && prepared.created().activation() != null) {
-            return prepared.created().activation().closeAsync();
+            SpotActivation activation = prepared.created().activation();
+            return activation
+                    .context
+                    .discardActivationPreparation()
+                    .thenCompose(ignored -> activation.context.releaseRelocationPreparation())
+                    .thenCompose(ignored -> activation.closeAsync());
         }
         return CompletableFuture.completedFuture(null);
     }
@@ -237,17 +250,7 @@ final class ZLinkSpotLifecycle {
 
     CompletionStage<Void> completeRelocationReady(PreparedUserSpot prepared) {
         requireNewPrepared(prepared);
-        return activationFactory
-                .initializeRelocation(prepared.created().activation())
-                .thenCompose(
-                        ignored ->
-                                prepared.created()
-                                        .activation()
-                                        .context
-                                        .runRelocationReadyCompletion(
-                                                systems.zlink.framework.spots
-                                                        .ZLinkSpotRelocationReadyOutcome
-                                                        .RELOCATED));
+        return activationFactory.initializeRelocation(prepared.created().activation());
     }
 
     CompletionStage<Object> beginReservedIngressHold(PreparedUserSpot prepared) {
@@ -255,13 +258,8 @@ final class ZLinkSpotLifecycle {
         return prepared.created()
                 .activation()
                 .context
-                .trySealRelocation()
-                .thenApply(
-                        seal ->
-                                seal.orElseThrow(
-                                        () ->
-                                                new IllegalStateException(
-                                                        "reserved relocation target ingress could not be sealed")));
+                .relocationPreparationSeal()
+                .thenApply(seal -> seal);
     }
 
     CompletionStage<Void> resumeReservedIngress(PreparedUserSpot prepared, Object ingressHold) {
@@ -317,9 +315,8 @@ final class ZLinkSpotLifecycle {
         if (!spots.remove(spotId, current)) {
             throw new IllegalStateException("User Spot changed during Close cleanup");
         }
+        recordSpotCount(current.meshName(), ZLinkRuntimeMetrics.SpotKind.USER, -1);
         countChanged.run();
-        recordSpotCount(USER_SPOT_METRIC_KIND, -1);
-        recordSpotClosed(USER_SPOT_METRIC_KIND);
     }
 
     CompletionStage<Void> completeRelocationSource(
@@ -344,13 +341,9 @@ final class ZLinkSpotLifecycle {
                     new IllegalStateException(
                             "User Spot relocation source changed during cleanup"));
         }
+        recordSpotCount(current.meshName(), ZLinkRuntimeMetrics.SpotKind.USER, -1);
         countChanged.run();
-        return current.closeAsync(ZLinkSpotCloseReason.RELOCATION_OUT, deadline)
-                .thenRun(
-                        () -> {
-                            recordSpotCount(USER_SPOT_METRIC_KIND, -1);
-                            recordSpotClosed(USER_SPOT_METRIC_KIND);
-                        });
+        return current.closeAsync(ZLinkSpotCloseReason.RELOCATION_OUT, deadline);
     }
 
     CloseReadiness closeReadiness(String spotId, long objectGeneration) {
@@ -510,11 +503,13 @@ final class ZLinkSpotLifecycle {
                             .toCompletableFuture());
         }
         if (!entrySpots.isEmpty()) {
-            recordSpotCount(ENTRY_SPOT_METRIC_KIND, -entrySpots.size());
+            for (var entry : entrySpots)
+                recordSpotCount(entry.metricMeshName, ZLinkRuntimeMetrics.SpotKind.ENTRY, -1);
         }
         entrySpots.clear();
         if (!spots.isEmpty()) {
-            recordSpotCount(USER_SPOT_METRIC_KIND, -spots.size());
+            for (var activation : spots.values())
+                recordSpotCount(activation.meshName(), ZLinkRuntimeMetrics.SpotKind.USER, -1);
         }
         spots.clear();
         if (!closingSpots.isEmpty()) countChanged.run();
@@ -604,6 +599,7 @@ final class ZLinkSpotLifecycle {
         for (String spotId : spotIds) {
             SpotActivation activation = spots.remove(spotId);
             if (activation != null) {
+                recordSpotCount(activation.meshName(), ZLinkRuntimeMetrics.SpotKind.USER, -1);
                 released.add(activation);
                 countChanged.run();
             }
@@ -627,8 +623,7 @@ final class ZLinkSpotLifecycle {
                             .handle(
                                     (ignored, error) -> {
                                         recordCloseFailure(firstFailure, error);
-                                        recordSpotCount(USER_SPOT_METRIC_KIND, -1);
-                                        recordSpotClosed(USER_SPOT_METRIC_KIND);
+
                                         return (Void) null;
                                     })
                             .toCompletableFuture());

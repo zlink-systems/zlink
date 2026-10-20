@@ -33,6 +33,7 @@ internal abstract partial class ZLinkSpotActivation
     private readonly ZLinkScopedHandlerInstanceOwner _handlerInstances;
     private readonly AsyncServiceScope _scope;
     internal readonly ZLinkSpotSerialExecutor _serial;
+    internal bool IsTimerScheduleFrozen => _timers.IsFrozen;
     private readonly CancellationTokenSource _stopSource = new();
     private readonly ZLinkSpotSubscriptionRegistry _subscriptions = new();
     private readonly ZLinkSpotTimerRegistry _timers;

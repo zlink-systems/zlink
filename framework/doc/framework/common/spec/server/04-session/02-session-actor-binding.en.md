@@ -146,9 +146,22 @@ The session owner keeps the following information as one binding per Actor.
 | `ActorId`, `ObjectGeneration` | Used to avoid sending to a different Actor re-created under the same ID. |
 | `MeshName`, owner `NodeRid` | Used as the address to send relay and disconnect notifications to after bind. |
 | `NodeGeneration`, `AuthorityOwnerGeneration`, `OwnerLeaseGeneration` | Verified to avoid sending to a node before restart or a previous owner. |
-| Session owner RID and lifecycle generation, binding generation and token | Rejects late messages from a previous connection or a replaced binding. |
+| Session owner identity (defined below), binding generation and token | Rejects late messages from a previous connection or a replaced binding. |
 | [Session sequence](../00-foundation/02-glossary.en.md#session-sequence) | Preserves the order of messages accepted on the same session. |
 | Actor slot | A non-zero `u16` address that points at one binding within this STREAM session. Only a new binding is given the next value not yet issued, and a value is never reused within the same session. Binding the current binding of the same physical session again, or obtaining it with `BindOrGet`, keeps its existing slot. When a session that has issued up to `65535` needs a new binding, the bind ends as `InvalidOperation` without changing the existing bindings. |
+
+**The Session owner identity is four values: Node RID, lifecycle generation, owner ID and owner lease generation.**
+The owner ID and owner lease generation are the Session owner host's `(OwnerId, LeaseGeneration)`
+([Location runtime §3.1](../05-location-relocation/01-location-runtime.en.md#31-distinguishing-whether-the-host-process-restarted)),
+the values that node publishes in its MeshNode descriptor. The Actor owner takes them from a descriptor when it accepts the
+bind and stores them in the current binding. When the Session owner is another node, it uses the descriptor whose RID and
+lifecycle generation match that peer's [peer admission](../00-foundation/02-glossary.en.md#peer-admission) and that passed
+the owner-lease check of [Location runtime §4.1](../05-location-relocation/01-location-runtime.en.md#41-validating-a-target-descriptors-owner-lease);
+when it is the same node, it uses its own descriptor. Without such a descriptor, the
+operation is rejected with `Unavailable`. Commands 42, 51 and 54, which carry this identity, send the stored
+values unchanged, and the receiving Session owner compares them exactly with its own current values. The binding identity
+below uses only the Node RID and lifecycle generation of these; the owner ID and owner lease generation are fence values
+for commands 42, 51 and 54.
 
 Binding identity uses the session owner Node RID, that node's lifecycle
 generation, and an owner-local binding generation together. Comparing
@@ -219,6 +232,23 @@ Actor owner's current lease. The lease belongs to route-fence
 verification ([routing](../03-spot-actor/08-routing.en.md)); using it in bind
 admission would turn a derived-copy mismatch into grounds for a stale verdict,
 conflicting with the judging-authority principle of §8.1.
+
+**The Actor owner compares an admitted request with the current binding once
+and decides the result.** It compares binding generations only within the same
+Session owner lifecycle, as [§4](#4-what-binding-connects-and-what-it-stores)
+requires.
+
+| Request compared with the current binding | Result |
+|---|---|
+| Both the binding identity (§4) and SessionRid are the same. | The current binding stays and the bind succeeds. |
+| The first row does not apply, the Session owner Node RID and lifecycle generation are the same, and the requested binding generation is less than or equal to the current one. | The current binding stays and the bind ends with the binding fence stale result of [§12](#12-failure-and-errors) (`Unavailable`). |
+| Any other case (no current binding, a larger generation in the same Session owner lifecycle, a different Session owner lifecycle) | The requested identity is registered as current ([§6](#6-rebind-and-replacing-the-previous-connection)). |
+
+The tail of a successful `boundSessionBind(38)` reply carries the binding
+generation and `AuthorityOwnerGeneration` of the binding accepted by this
+comparison. A bind succeeds only in the first row or when the requested
+identity is registered, so both values equal the requested values.
+The Session owner commits the binding with these two values.
 
 Payload going from session to Actor is delivered to the Actor owner as an
 `actorSend(24)` record including the registered binding generation and
@@ -366,6 +396,20 @@ requests a connection close. It doesn't provide a global proxy that
 specifies an arbitrary session. Disconnect releases the binding but doesn't
 destroy the Actor or change Spot membership.
 
+**The Session owner performs the connection close.** When an Actor requests a close of its current binding, the Actor
+owner preserves the Session owner identity, SessionRid, binding generation, ActorId
+and ObjectGeneration that the current binding names, and sends them in `boundSessionClose(54)` to the Session owner.
+The same decision applies when the Session owner is in the same process. The Session owner's binding aggregate runs the
+§2 binding check once and starts the physical connection close of that session only when the request's whole identity
+matches the current binding. A mismatch ends with `Unavailable` and never retargets another binding or connection. The
+existing transport and authority boundaries verify the Actor route's sender authority; the Session owner does not look
+up Actor authority again. Relocation seal and route application do not delay the close of a valid current binding.
+
+The close reply carries the transport close terminal and does not wait for the §7 disconnect callback, tombstone or
+local cleanup that this close triggers. Binding cleanup and the Actor notification come once from §7; the close request
+path does not release the binding separately. Command 54's request/reply follows the existing correlation, deadline,
+cancellation and error terminal contract.
+
 The control commands this section and §8.2 use are as follows.
 
 | Command | Name | Direction and use | How it completes |
@@ -374,6 +418,7 @@ The control commands this section and §8.2 use are as follows.
 | 24 | `actorSend` | Session owner → Actor owner: session→Actor payload (includes bound-session tail) | send or request relay — the existing correlation/deadline contract as-is |
 | 36 | `boundSessionSend` | Actor owner → Session owner: Actor→session push | send |
 | 51 | `boundSessionReplaced` | Actor owner → previous Session owner: binding-replacement notification | one-way, at most once |
+| 54 | `boundSessionClose` | Actor owner → Session owner: physical connection close request for the current binding | request/reply, one terminal |
 | 42 | `sessionRelocationSeal` | Relocation coordinator → Session owner: request to install a seal on the relocation-target binding | request |
 | 43 | `sessionRelocationSealed` | Session owner → Relocation coordinator: seal-installation result or exact-binding absence (`sealResult`, §8.3) | reply |
 | 44 | `sessionRelocationRoute` | Target runtime or relocation coordinator → Session owner: route apply or abort | one-way (send), no response |
@@ -418,9 +463,8 @@ sequenceDiagram
 
 The framework applies a `boundSessionReplaced(51)` one-way record at most
 once to the replaced previous binding. The record carries an Actor-authority
-source fence together with the previous session owner's Node RID, lifecycle
-generation, owner ID, owner lease generation, session RID, and retired
-binding generation. The sending node must match the record's Actor-authority
+source fence together with the previous session owner's Session owner
+identity (§4), session RID, and retired binding generation. The sending node must match the record's Actor-authority
 target. The receiving node runs the session's duplicate-Actor-connection
 callback only when every previous session-owner value matches the current
 replacement target exactly. The Actor-authority source fence isn't used by
@@ -672,6 +716,10 @@ Commands 42 and 43 carry the Session seal's install request and reply.
 Command 43 carries only the seal-installation result (`sealResult`), with no
 Session message sequence or high-water. `sealResult` is `sealed` (1) or
 `bindingAbsent` (2); §8.3 owns how `bindingAbsent` is decided and handled.
+**When the Session owner rejects command 42, it sends no command 43.** A rejection is a missing
+descriptor under §4 or a mismatch or protocol error under §8.3. The Session owner records the
+rejection in the [message flow](../06-observability/03-message-flow-tracing.en.md), and the
+coordinator settles that participant's failure through the seal wait deadline under "Failure" below.
 
 Command 44 is a one-way control that carries the target runtime's commit,
 or the relocation coordinator's abort before relay-ready becomes accepted.
@@ -731,7 +779,7 @@ that Session owner owns.
 |---|---|
 | Seal installed | Installs the seal per §8.1 and returns command 43 with `sealResult = sealed`. |
 | Exact binding absent | Creates no seal, held messages, or seal timeout, and returns command 43 with `sealResult = bindingAbsent`. |
-| Mismatch | Rejects as before. It is never turned into an absence result. |
+| Mismatch | Rejects (§8.2, no command 43). It is never turned into an absence result. |
 
 `bindingAbsent` doesn't mean a seal was installed; it means there is no current binding to
 seal. The result describes only the Session binding and seal, and says nothing about the
@@ -793,8 +841,8 @@ target as saved work; if it arrives after capture, Message Follow forwards it to
 Actor owner judges the notification by §7's identity comparison. The coordinator never
 creates or resubmits a disconnect notification.
 
-**Failure.** If command 42 is rejected as a mismatch or the seal wait reaches its deadline, the
-relocation fails. What is restored is every participant capture already started and the seals of
+**Failure.** If no command 43 arrives by the seal wait deadline, the relocation fails. A
+rejection by the Session owner (§8.2) is this case. What is restored is every participant capture already started and the seals of
 participants already confirmed `sealed`. The restore order follows §8.1's abort order: durable
 abort and source queue restoration are confirmed first, and then the matching command 44 abort is
 sent ([Relocation §9](../05-location-relocation/04-relocation-flow.en.md#9-timeout-failure-and-cancellation)).

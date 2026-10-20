@@ -37,8 +37,12 @@ test('close joins the active pump before releasing its runtime, including repeat
   assert.deepEqual(f.events, ['host.close']);
 });
 
-test('route observation completes before close releases the native host', async () => {
-  const events = await closeDuringHello();
+test('route observation completes before close releases the native host', async (t) => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const events = await closeDuringHello((target) => {
+    if (target === 'peer-b') now = 5000;
+  });
   assert.deepEqual(events, [
     'submit:peer-a',
     'close:start',

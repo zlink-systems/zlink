@@ -1,0 +1,56 @@
+{
+  "description": "Source request OwnerId and LeaseGeneration read once when the first owner accepts an Actor or Spot request.",
+  "spec": [
+    "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#93-source가-바뀐-뒤-끝난-request를-처리한다",
+    "framework/doc/framework/common/spec/server/04-session/02-session-actor-binding.ko.md#4-binding이-잇는-값과-보관하는-정보",
+    "framework/doc/framework/common/spec/server/05-location-relocation/01-location-runtime.ko.md#41-대상-descriptor의-owner-lease-검증"
+  ],
+  "meshName": "source-request-owner-mesh",
+  "peer": {
+    "nodeRid": "source-request-owner-peer",
+    "nodeGeneration": 7
+  },
+  "descriptor": {
+    "ownerId": "source-request-owner",
+    "leaseGeneration": 3
+  },
+  "unavailable": {
+    "errorKind": "Unavailable",
+    "terminalResult": "internalError",
+    "failureCode": "routeNotConnected"
+  },
+  "cases": [
+    {
+      "name": "polledDescriptor",
+      "polled": true,
+      "stored": true,
+      "leaseLive": true,
+      "storeDescriptorReads": 0,
+      "result": "accepted"
+    },
+    {
+      "name": "storeOnlyDescriptor",
+      "polled": false,
+      "stored": true,
+      "leaseLive": true,
+      "storeDescriptorReads": 1,
+      "result": "accepted"
+    },
+    {
+      "name": "noDescriptor",
+      "polled": false,
+      "stored": false,
+      "leaseLive": true,
+      "storeDescriptorReads": 1,
+      "result": "unavailable"
+    },
+    {
+      "name": "expiredLease",
+      "polled": true,
+      "stored": true,
+      "leaseLive": false,
+      "storeDescriptorReads": 0,
+      "result": "unavailable"
+    }
+  ]
+}

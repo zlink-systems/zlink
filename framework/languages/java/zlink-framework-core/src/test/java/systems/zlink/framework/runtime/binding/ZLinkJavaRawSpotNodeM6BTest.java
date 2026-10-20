@@ -81,7 +81,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
             var spots = (ZLinkJavaRawSpotNode) node.spotNode();
             spots.setSpotAdmissionResolver(
-                    (spotId, generation, instanceIntent, activationPresent) -> {
+                    (spotId, generation, instanceIntent, activationPresent, route) -> {
                         assertFalse(instanceIntent);
                         assertFalse(activationPresent);
                         return CompletableFuture.completedFuture(
@@ -394,6 +394,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
             RoutingId nodeRid = RoutingId.from("jvm-m6b-actor-content-type-node");
             node.setRoutingId(nodeRid);
+            node.setBind("inproc://" + nodeRid);
+            node.start();
+            installLocalActorAuthority(node);
             CompletableFuture<String> receivedContentType = new CompletableFuture<>();
             ZLinkBackendSpot entry = node.spotNode().entrySpot();
             entry.onDispatchEvent(
@@ -423,7 +426,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 assertTrue(
                         node.spotNode()
                                 .sendToActor(
-                                        actor,
+                                        actorRoute(node, actor),
                                         List.of(packet, payload, contentType),
                                         SendFlags.DONT_WAIT));
                 assertEquals("application/example", receivedContentType.get(1, TimeUnit.SECONDS));
@@ -485,6 +488,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             RoutingId sourceRid = RoutingId.from("jvm-m6b-owner-source");
             String spotId = "jvm-m6b-owner-spot";
             node.setRoutingId(nodeRid);
+            node.setBind("inproc://" + nodeRid);
+            node.start();
             ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) node.spotNode();
             ZLinkBackendSpot spot = spots.createSpot(spotId);
             spot.rememberSpotAuthority(nodeRid, spotId, spot.lifecycleGeneration(), 31, 1);
@@ -495,7 +500,12 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             null,
                             sourceRid.toString(),
                             new ZLinkServiceM6BWireCodec.SpotRouteFence(
-                                    spotId, spot.lifecycleGeneration(), nodeRid, 1, 32, 1));
+                                    spotId,
+                                    spot.lifecycleGeneration(),
+                                    nodeRid,
+                                    node.lifecycleGeneration(),
+                                    32,
+                                    1));
             assertFalse(
                     spots.enqueueRemoteSpot(
                             sourceRid, staleSpot, new byte[0], List.of(), ignored -> {}));
@@ -511,7 +521,8 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             0,
                             null,
                             null,
-                            new ZLinkServiceM6BWireCodec.ActorRouteFence(actor, 1, 42, 1));
+                            new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                    actor, node.lifecycleGeneration(), 42, 1));
             assertFalse(spots.enqueueRemoteActor(sourceRid, staleActor, List.of(), ignored -> {}));
         }
     }
@@ -657,7 +668,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 Message.from("suffix-" + index));
                 try {
                     caller.spotNode()
-                            .sendToActorAsync(sourceRoute.actor(), parts)
+                            .sendToActorAsync(sourceRoute, parts)
                             .toCompletableFuture()
                             .get(1, TimeUnit.SECONDS);
                 } finally {
@@ -678,7 +689,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             pendingReply =
                     caller.spotNode()
                             .requestToActor(
-                                    sourceRoute.actor(),
+                                    sourceRoute,
                                     requestParts,
                                     SendFlags.DONT_WAIT,
                                     Duration.ofSeconds(3),
@@ -1035,6 +1046,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             node.setRoutingId(nodeRid);
             node.setBind("inproc://jvm-actor-dispatch-failure-" + System.nanoTime());
             node.start();
+            installLocalActorAuthority(node);
 
             ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) node.spotNode();
             ZLinkBackendActorRef actor;
@@ -1101,7 +1113,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             AtomicInteger localTerminals = new AtomicInteger();
             CompletionStage<Void> local;
             try (Message payload = Message.from("local-send")) {
-                local = spots.sendToActorAsync(actor, List.of(payload));
+                local = spots.sendToActorAsync(actorRoute(node, actor), List.of(payload));
             }
             ExecutionException localFailure =
                     assertThrows(
@@ -1119,7 +1131,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             try (Message payload = Message.from("local-request")) {
                 localRequest =
                         spots.requestToActor(
-                                actor,
+                                actorRoute(node, actor),
                                 List.of(payload),
                                 SendFlags.DONT_WAIT,
                                 Duration.ofSeconds(1),
@@ -1467,10 +1479,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             awaitOutstandingApplicationLease(context, 0L);
 
             CompletableFuture<ZLinkBackendReceived> reply;
-            var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
             try (var caller =
                     new systems.zlink.framework.runtime.internal.service
-                            .ZLinkServiceOperationRegistry(scheduler)) {
+                            .ZLinkServiceOperationRegistry()) {
                 UUID operationId =
                         systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds
                                 .next();
@@ -1523,8 +1534,6 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     assertEquals("remote-reply", received.parts().getFirst().toUtf8String());
                 }
                 assertEquals(0, caller.pendingCount());
-            } finally {
-                scheduler.shutdownNow();
             }
             assertEquals(2, handlerCalls.get());
 
@@ -1572,7 +1581,10 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 .toCompletableFuture();
             }
             try (ZLinkBackendReceived received = stale.get(2, TimeUnit.SECONDS)) {
-                assertEquals(ZLinkBackendRequestResult.CONFLICT, received.result());
+                // Session·Actor binding §4: a sender without a live descriptor ends Unavailable.
+                assertEquals(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        received.result().toFrameworkErrorKind(received.failureCode()));
             }
             assertEquals(3, handlerCalls.get());
         }
@@ -1686,6 +1698,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
             RoutingId nodeRid = RoutingId.from("jvm-m6b-actor-node");
             node.setRoutingId(nodeRid);
+            node.setBind("inproc://" + nodeRid);
+            node.start();
+            installLocalActorAuthority(node);
             ZLinkBackendSpot entry = node.spotNode().entrySpot();
             entry.onDispatchEvent(
                     info -> {
@@ -1720,7 +1735,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 reply =
                         node.spotNode()
                                 .requestToActor(
-                                        actor,
+                                        actorRoute(node, actor),
                                         List.of(request),
                                         SendFlags.DONT_WAIT,
                                         Duration.ofSeconds(1),
@@ -1737,9 +1752,12 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 assertTrue(
                         node.spotNode()
                                 .sendToActor(
-                                        new systems.zlink.framework.runtime.internal.backend
-                                                .ZLinkBackendActorRef(
-                                                nodeRid, actor.actorId(), actor.generation() + 1),
+                                        actorRoute(
+                                                node,
+                                                new ZLinkBackendActorRef(
+                                                        nodeRid,
+                                                        actor.actorId(),
+                                                        actor.generation() + 1)),
                                         List.of(staleAddress),
                                         SendFlags.DONT_WAIT));
             }
@@ -1752,6 +1770,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
             RoutingId nodeRid = RoutingId.from("jvm-m6b-actor-reply-after-move");
             node.setRoutingId(nodeRid);
+            node.setBind("inproc://" + nodeRid);
+            node.start();
+            installLocalActorAuthority(node);
             CompletableFuture<
                             systems.zlink.framework.runtime.internal.backend
                                     .ZLinkBackendActorReceived>
@@ -1774,7 +1795,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 request =
                         node.spotNode()
                                 .requestToActor(
-                                        actor,
+                                        actorRoute(node, actor),
                                         List.of(payload),
                                         SendFlags.DONT_WAIT,
                                         Duration.ofSeconds(2),
@@ -1881,7 +1902,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 firstRequest =
                         right.spotNode()
                                 .requestToActor(
-                                        actor,
+                                        actorRoute(left, actor),
                                         List.of(request),
                                         SendFlags.DONT_WAIT,
                                         Duration.ofSeconds(2),
@@ -1921,7 +1942,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                 reply =
                         right.spotNode()
                                 .requestToActor(
-                                        staleAddress,
+                                        actorRoute(left, staleAddress),
                                         List.of(request),
                                         SendFlags.DONT_WAIT,
                                         Duration.ofSeconds(2),
@@ -2229,6 +2250,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             RoutingId nodeRid = RoutingId.from("jvm-m6b-stream-node");
             RoutingId sessionRid = RoutingId.from("jvm-m6b-session");
             node.setRoutingId(nodeRid);
+            node.setBind("inproc://jvm-m6b-stream-node-" + System.nanoTime());
+            node.start();
+            ZLinkTestSessionOwners.install(node);
             ZLinkBackendSpot entry = node.spotNode().entrySpot();
             CompletableFuture<RoutingId> delivered = new CompletableFuture<>();
             entry.onDispatchEvent(
@@ -2585,6 +2609,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             node.setRoutingId(RoutingId.from("jvm-m6b-two-owners-actor-node"));
             node.setBind("inproc://jvm-m6b-two-owners-" + System.nanoTime());
             node.start();
+            ZLinkTestSessionOwners.install(node);
             ZLinkJavaRawSpotNode target = (ZLinkJavaRawSpotNode) node.spotNode();
             ZLinkBackendActorRef actor;
             try (Message create = Message.from("create")) {
@@ -2710,7 +2735,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
         AtomicInteger unbindAttempts = new AtomicInteger();
         var ended =
                 new systems.zlink.framework.errors.ZLinkFrameworkException(
-                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
                         "durable request target lifecycle ended");
         try (var context = Zlink.createContext();
                 var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
@@ -3215,8 +3240,12 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             String spotId = "jvm-m6b-instance";
             spots.registerInstanceSpotType("alpha");
 
-            var first = spots.activateInstanceSpot(spotId, null).toCompletableFuture();
-            var joined = spots.activateInstanceSpot(spotId, "alpha").toCompletableFuture();
+            var first =
+                    spots.activateInstanceSpot(instanceRoute(node, spotId, 1), null)
+                            .toCompletableFuture();
+            var joined =
+                    spots.activateInstanceSpot(instanceRoute(node, spotId, 1), "alpha")
+                            .toCompletableFuture();
             assertTrue(
                     first.get(1, TimeUnit.SECONDS).spot()
                             == joined.get(1, TimeUnit.SECONDS).spot());
@@ -3224,14 +3253,17 @@ final class ZLinkJavaRawSpotNodeM6BTest {
 
             spots.registerInstanceSpotType("beta");
             assertThrows(
-                    IllegalStateException.class, () -> spots.activateInstanceSpot(spotId, "beta"));
+                    IllegalStateException.class,
+                    () -> spots.activateInstanceSpot(instanceRoute(node, spotId, 1), "beta"));
             assertThrows(
                     IllegalStateException.class,
-                    () -> spots.activateInstanceSpot("jvm-m6b-instance-ambiguous", null));
+                    () ->
+                            spots.activateInstanceSpot(
+                                    instanceRoute(node, "jvm-m6b-instance-ambiguous", 1), null));
 
             assertTrue(spots.closeInstanceSpot(spotId, firstGeneration));
             var reactivated =
-                    spots.activateInstanceSpot(spotId, null)
+                    spots.activateInstanceSpot(instanceRoute(node, spotId, 2), null)
                             .toCompletableFuture()
                             .get(1, TimeUnit.SECONDS);
             assertEquals("alpha", reactivated.stableType());
@@ -3248,10 +3280,12 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             String spotId = "jvm-m6b-instance-join";
             spots.registerInstanceSpotType("alpha");
 
-            var first = spots.activateInstanceSpot(spotId, null).toCompletableFuture();
+            var first =
+                    spots.activateInstanceSpot(instanceRoute(node, spotId, 1), null)
+                            .toCompletableFuture();
             // The join's completion continuation observes the registry the moment it runs.
             var closedOnJoin =
-                    spots.activateInstanceSpot(spotId, "alpha")
+                    spots.activateInstanceSpot(instanceRoute(node, spotId, 1), "alpha")
                             .thenApply(
                                     joined ->
                                             spots.closeInstanceSpot(
@@ -3394,7 +3428,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                             "store-3");
             spots.registerInstanceSpotAuthority("orders", route);
             ZLinkBackendSpot spot =
-                    spots.activateInstanceSpot(spotId, "orders")
+                    spots.activateInstanceSpot(route, "orders")
                             .toCompletableFuture()
                             .get(2, TimeUnit.SECONDS)
                             .spot();
@@ -3740,5 +3774,34 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                         ignored -> {})
                 .toCompletableFuture()
                 .join();
+    }
+
+    private static void installLocalActorAuthority(ZLinkJavaRawMeshNode node) {
+        node.setPeerAuthorityResolver(
+                (mesh, rid, generation) ->
+                        CompletableFuture.completedFuture(
+                                Optional.of(
+                                        new ZLinkInternalMeshNode.PeerAuthorityFence(
+                                                rid,
+                                                generation,
+                                                "test-owner",
+                                                node.localAuthorityLeaseGeneration()))));
+        node.refreshLocalAuthorityFence().toCompletableFuture().join();
+    }
+
+    private static ZLinkServiceM6BWireCodec.ActorRouteFence actorRoute(
+            ZLinkJavaRawMeshNode node, ZLinkBackendActorRef selectedActor) {
+        var resident = node.spotNode().actorLookup(selectedActor.actorId());
+        return new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                selectedActor,
+                node.lifecycleGeneration(),
+                node.spotNode().actorAuthorityOwnerGeneration(resident),
+                node.spotNode().actorAuthorityOwnerLeaseGeneration(resident));
+    }
+
+    private static ZLinkServiceM6BWireCodec.InstanceRouteFence instanceRoute(
+            ZLinkJavaRawMeshNode node, String spotId, long generation) {
+        return new ZLinkServiceM6BWireCodec.InstanceRouteFence(
+                node.routingId(), 1, spotId, generation, "owner", 1, 1, "version");
     }
 }

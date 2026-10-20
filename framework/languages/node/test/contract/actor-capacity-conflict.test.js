@@ -31,7 +31,7 @@ test('64 concurrent Actors rebuild shared capacity without repeating factory or 
     .listen('tcp://127.0.0.1:0')
     .routingId('1304-capacity-node')
     .objects().server()
-    .addEntrySpot(EntrySpot)
+    .addEntrySpot(EntrySpot, 'player')
     .addActorFactory('player', ActorFactory, (factory) => factory.disableRelocation());
   class AppModule {}
   Module({ imports: [nestjs.ZLinkModule.forRoot(builder.build())] })(AppModule);

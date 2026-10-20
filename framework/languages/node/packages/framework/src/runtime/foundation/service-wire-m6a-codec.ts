@@ -207,7 +207,8 @@ export function encodeMultipartApplicationPayload(
   if (parts.length === 0) fail('Multipart payload must contain at least one part.');
   if (parts.length > MAX_U32) fail('Multipart part count exceeds u32.');
   let multipartLength = 4;
-  for (const part of parts) {
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index]!;
     if (part.byteLength > MAX_U32) fail('Multipart part exceeds u32.');
     multipartLength += 4 + part.byteLength;
     if (multipartLength > MAX_U32) fail('Multipart payload exceeds u32.');
@@ -216,7 +217,8 @@ export function encodeMultipartApplicationPayload(
   let offset = result.byteLength - multipartLength;
   result.writeUInt32BE(parts.length, offset);
   offset += 4;
-  for (const part of parts) {
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index]!;
     result.writeUInt32BE(part.byteLength, offset);
     offset += 4;
     result.set(part, offset);
@@ -285,31 +287,113 @@ export function decodeApplicationPayloadView(frame: Uint8Array): ServiceApplicat
 export function decodeMultipartApplicationPayloadView(
   frame: Uint8Array
 ): ServiceApplicationPayload {
-  const reader = applicationPayloadReader(frame);
-  reader.expectText8(MULTIPART_PACKET_NAME_BYTES, 'packetName');
-  reader.expectText8(MULTIPART_CONTENT_TYPE_BYTES, 'contentType');
+  const bytes = asBuffer(frame);
+  const offset = multipartApplicationPayloadOffset(bytes);
   return {
     packetName: SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
     contentType: SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE,
-    payload: applicationPayloadView(reader)
+    payload: bytes.subarray(offset)
   };
 }
 
+/** Materializes final message parts directly over the retained application frame. */
+export function decodeMultipartApplicationParts<T>(
+  frame: Uint8Array,
+  materialize: (part: Buffer) => T,
+  release?: (part: T) => void
+): T[] {
+  const bytes = asBuffer(frame);
+  return decodeMultipartParts(
+    bytes,
+    materialize,
+    release,
+    multipartApplicationPayloadOffset(bytes)
+  );
+}
+
+function multipartApplicationPayloadOffset(bytes: Buffer): number {
+  let offset = applicationPayloadBodyOffset(bytes);
+  offset = expectText8At(bytes, offset, MULTIPART_PACKET_NAME_BYTES, 'packetName');
+  offset = expectText8At(bytes, offset, MULTIPART_CONTENT_TYPE_BYTES, 'contentType');
+  return applicationPayloadDataOffset(bytes, offset);
+}
+
+function expectText8At(bytes: Buffer, offset: number, expected: Buffer, field: string): number {
+  if (bytes.length <= offset) fail(`Truncated ${field}.length.`);
+  const length = bytes[offset++]!;
+  if (bytes.length - offset < length) fail(`Truncated ${field}.`);
+  if (length !== expected.length || expected.compare(bytes, offset, offset + length) !== 0) {
+    fail(`Unexpected ${field}.`);
+  }
+  return offset + length;
+}
+
+function applicationPayloadBodyOffset(bytes: Buffer): number {
+  if (bytes.length === 0) fail('Truncated version.');
+  if (bytes[0] !== APPLICATION_PAYLOAD_VERSION) fail('Invalid application payload version.');
+  const offset = 1 + APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES;
+  if (bytes.length < offset) fail('Truncated bodyLength.');
+  if (bytes.readUInt32BE(1) !== bytes.length - offset)
+    fail('Application payload body length mismatch.');
+  return offset;
+}
+
+function applicationPayloadDataOffset(bytes: Buffer, offset: number): number {
+  if (bytes.length - offset < APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES)
+    fail('Truncated payloadLength.');
+  const length = bytes.readUInt32BE(offset);
+  offset += APPLICATION_PAYLOAD_LENGTH_FIELD_BYTES;
+  if (length !== bytes.length - offset) fail('Application payload length mismatch.');
+  return offset;
+}
+
 function applicationPayloadReader(frame: Uint8Array): Reader {
-  const reader = new Reader(frame);
-  if (reader.u8('version') !== APPLICATION_PAYLOAD_VERSION)
-    fail('Invalid application payload version.');
-  const bodyLength = reader.u32('bodyLength');
-  if (bodyLength !== reader.remaining) fail('Application payload body length mismatch.');
-  return reader;
+  const bytes = asBuffer(frame);
+  return new Reader(bytes, applicationPayloadBodyOffset(bytes));
 }
 
 function applicationPayloadView(reader: Reader): Buffer {
-  const payloadLength = reader.u32('payloadLength');
-  if (payloadLength !== reader.remaining) fail('Application payload length mismatch.');
-  const payload = reader.view(payloadLength, 'payload');
-  reader.end();
-  return payload;
+  return reader.buffer.subarray(applicationPayloadDataOffset(reader.buffer, reader.offset));
+}
+
+export function decodeMultipartParts<T>(
+  payload: Uint8Array,
+  materialize: (part: Buffer) => T,
+  release?: (part: T) => void,
+  offset = 0
+): T[] {
+  const bytes = asBuffer(payload);
+  if (bytes.length - offset < 4) throw new ServiceWireProtocolError('Truncated multipart payload.');
+  const count = bytes.readUInt32BE(offset);
+  if (count === 0 || count > Math.floor((bytes.length - offset - 4) / 4)) {
+    throw new ServiceWireProtocolError('Invalid multipart part count.');
+  }
+  const result = new Array<T>(count);
+  offset += 4;
+  let index = 0;
+  try {
+    for (; index < count; index++) {
+      if (bytes.length - offset < 4) {
+        throw new ServiceWireProtocolError('Truncated multipart part length.');
+      }
+      const length = bytes.readUInt32BE(offset);
+      offset += 4;
+      if (bytes.length - offset < length) {
+        throw new ServiceWireProtocolError('Truncated multipart part.');
+      }
+      result[index] = materialize(bytes.subarray(offset, offset + length));
+      offset += length;
+    }
+    if (offset !== bytes.length) {
+      throw new ServiceWireProtocolError('Multipart payload has trailing bytes.');
+    }
+    return result;
+  } catch (error) {
+    if (release !== undefined) {
+      for (let retained = 0; retained < index; retained++) release(result[retained]!);
+    }
+    throw error;
+  }
 }
 
 /**
@@ -707,19 +791,6 @@ class Reader {
     const length = this.u8(`${field}.length`);
     if (length === 0) fail(`${field} must be non-empty.`);
     return decodeText(this.view(length, field), field);
-  }
-
-  /** Reads a text8 field that must hold exactly `expected`, without decoding it. */
-  expectText8(expected: Buffer, field: string): void {
-    const length = this.u8(`${field}.length`);
-    this.require(length, field);
-    if (
-      length !== expected.byteLength ||
-      expected.compare(this.buffer, this.offset, this.offset + length) !== 0
-    ) {
-      fail(`Unexpected ${field}.`);
-    }
-    this.offset += length;
   }
 
   text16(field: string): string {

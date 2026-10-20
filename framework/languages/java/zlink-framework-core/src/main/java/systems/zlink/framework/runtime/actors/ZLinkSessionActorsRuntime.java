@@ -53,6 +53,14 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
     static final Duration RELAY_SUBMIT_TIMEOUT = Duration.ofSeconds(30);
     private final ZLinkSessionRelayHeaders relayHeaders = new ZLinkSessionRelayHeaders();
     private final ZLinkBackendStreamSocket stream;
+
+    private ZLinkSessionDisconnected disconnectIdentity(long generation) {
+        return new ZLinkSessionDisconnected(
+                spotNode == null ? null : spotNode.routingId(),
+                spotNode == null ? 0 : spotNode.localNodeGeneration(),
+                generation);
+    }
+
     private final ZLinkInternalSpotNode spotNode;
     private final RoutingId sessionRid;
     private final ZLinkActorRuntime actors;
@@ -473,7 +481,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                                                 actors,
                                                                                 serializer,
                                                                                 0,
-                                                                                bindingGeneration,
+                                                                                disconnectIdentity(
+                                                                                        bindingGeneration),
                                                                                 allocatedActorSlot,
                                                                                 null,
                                                                                 true,
@@ -572,11 +581,12 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                         boundSession,
                                                         sourceNodeRid,
                                                         sourceSessionRid,
-                                                        bindingGeneration)
+                                                        bindingGeneration,
+                                                        spotNode == null
+                                                                ? 0
+                                                                : spotNode.localNodeGeneration())
                                                 .thenApply(
                                                         bindingToken -> {
-                                                            boundSession.setBindingToken(
-                                                                    bindingToken);
                                                             boundSession.setActorSlot(actorSlot);
                                                             AtomicReference<ZLinkBoundActor>
                                                                     binding =
@@ -591,7 +601,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                                             actors,
                                                                             serializer,
                                                                             bindingToken,
-                                                                            bindingGeneration,
+                                                                            disconnectIdentity(
+                                                                                    bindingGeneration),
                                                                             actorSlot,
                                                                             localActorDispatcher,
                                                                             nativeSessionRelayAttached,
@@ -609,10 +620,6 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                                                             operation),
                                                                             metadataPolicy);
                                                             binding.set(boundActor);
-                                                            boundSession.setUnbindListener(
-                                                                    () ->
-                                                                            removeBinding(
-                                                                                    boundActor));
                                                             boundActor.setUnbindListener(
                                                                     () ->
                                                                             removeBinding(
@@ -1162,6 +1169,29 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
         return inStateLane(() -> isCurrentPushBindingLocked(command));
     }
 
+    public CompletionStage<Void> closeCurrentBinding(
+            ZLinkServiceM6BWireCodec.BoundSessionClose request,
+            java.util.function.BooleanSupplier matchesPhysicalSession,
+            java.util.function.Supplier<CompletionStage<Void>> close) {
+        return stateLane
+                .<CompletionStage<Void>>runAsync(
+                        () -> {
+                            var route = bindingRoutes.get(request.actorId());
+                            if (!matchesPhysicalSession.getAsBoolean()
+                                    || !sessionRid.equals(request.session().sessionRid())
+                                    || route == null
+                                    || route.objectGeneration() != request.objectGeneration()
+                                    || route.bindingGeneration()
+                                            != request.session().retiredBindingGeneration())
+                                throw new systems.zlink.framework.errors.ZLinkFrameworkException(
+                                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                                                .UNAVAILABLE,
+                                        "The requested session binding is no longer current");
+                            return close.get();
+                        })
+                .thenCompose(terminal -> terminal);
+    }
+
     /**
      * Admits command 36 by current binding identity and submits it to the physical STREAM owner.
      * Session-Actor binding §8.1 seals ingress only; outbound pushes never wait for command 44.
@@ -1551,8 +1581,8 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                         || !flight.command().relocation().equals(gate.seal)) {
                                     failure =
                                             new ZLinkConfigurationException(
-                                                    "Session route or authority changed during native"
-                                                            + " preparation: "
+                                                    "Session route or authority changed during"
+                                                            + " native preparation: "
                                                             + flight.command().actor().actorId());
                                 } else {
                                     flight.actor()

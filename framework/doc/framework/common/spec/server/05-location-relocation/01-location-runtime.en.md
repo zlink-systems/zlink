@@ -1017,6 +1017,7 @@ in the table below apply only to a record whose owner lease is valid.
 |---|---|---|
 | `Ready` of the same type | `AlreadyExists` | existing ref |
 | `Creating` of the same type | `AlreadyExists` | waits for the in-progress creation result. |
+| `Closing` of the same type | `AlreadyExists` | For User Spots, follows the authority-change wait and subsequent steps in [Spot address messaging §3.2](../03-spot-actor/06-spot-address-messaging.en.md#32-convergence-of-concurrent-requests). |
 | A different Actor type | `TypeMismatch` | `TypeMismatch` |
 | A different Spot kind or type | `TypeMismatch` | `TypeMismatch` |
 
@@ -1485,6 +1486,14 @@ being on the target.
 `OperationId` and `ReplyRouteId` are non-zero and not reused within the same source host
 run. Exhausting all values is an error from which the runtime cannot proceed.
 
+**The `OwnerId` and `LeaseGeneration` of the source request information come from the
+MeshNode descriptor of the admitted peer that sent the request. The rule for choosing that
+descriptor and the result when none is found are the same as for the Session owner identity
+of a bind ([Session·Actor binding §4](../04-session/02-session-actor-binding.en.md#4-what-binding-connects-and-what-it-stores)).**
+The owner that first accepts the request reads these values once at acceptance and records
+them. A request handed over by relay or relocation keeps the recorded values and does not read
+the Store again. Peer admission does not wait to read this descriptor from the Store.
+
 The Framework stores each object's completion result in object order. It doesn't insert
 the same source request information and `OperationId` twice. **It stores the new
 completion result and payload in the Relocation Store first, then changes the Location
@@ -1503,7 +1512,7 @@ result count and the delivery-pending count is 0. Otherwise it's a recovery erro
 Connection closure or reconnection alone isn't judged as having received the completion
 result. The target keeps delivering on the current route. If the `Relocate` deadline
 passes while the source owner lease is still valid, it's `ForceStopped`. In this case
-payload and reply bytes are retained for 24 hours.
+the relocation root, payload, and reply bytes are retained for 24 hours.
 
 ### 9.4 Cancellation Before Relay-Ready Is Accepted
 

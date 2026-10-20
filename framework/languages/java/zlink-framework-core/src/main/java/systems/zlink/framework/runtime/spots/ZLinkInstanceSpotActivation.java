@@ -130,6 +130,19 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                 == authorityOwnerGeneration));
     }
 
+    boolean authorityFenceMatches(
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence
+                    route) {
+        return context.nodeRid().equals(route.targetNodeRid())
+                && context.spotId().equals(route.targetSpotId())
+                && context.objectGeneration() == route.objectGeneration()
+                && authorityFenceMatches(
+                        route.ownerId(), route.leaseGeneration(), route.authorityOwnerGeneration())
+                && hasExpectedNodeGeneration()
+                && expectedNodeGeneration() == route.targetNodeGeneration();
+    }
+
     void markSealedStoreVersion(String storeVersion) {
         inStateLane(
                 () -> {
@@ -302,29 +315,6 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
         return admitRoute(received, null);
     }
 
-    CompletionStage<Void> admitExisting(
-            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                            .InstanceSpotMessage
-                    message,
-            ZLinkBackendReceived received) {
-        var route =
-                (systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
-                                .InstanceRouteFence)
-                        message.route();
-        if (!context.nodeRid().equals(route.targetNodeRid())
-                || !authorityFenceMatches(
-                        route.ownerId(), route.leaseGeneration(), route.authorityOwnerGeneration())
-                || (hasExpectedNodeGeneration()
-                        && expectedNodeGeneration() != route.targetNodeGeneration())) {
-            received.close();
-            return CompletableFuture.failedFuture(
-                    systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin.framework(
-                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
-                            "Instance Spot owner fence changed"));
-        }
-        return admitRoute(received);
-    }
-
     CompletionStage<Void> admitRoute(
             ZLinkBackendReceived received, CompletableFuture<Void> admission) {
         var hostRejection = host.spotHostAdmissionFailure(context.spotId());
@@ -360,24 +350,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
             admitted =
                     context.enqueueMessage(
                             received,
-                            () -> {
-                                // Pending frames belong to the accepted queue record. Only the
-                                // executing handler is registered for terminal dispatch cleanup.
-                                trackRouteReceived(received);
-                                ParsedPacket packet;
-                                try {
-                                    packet = ZLinkSpotRuntime.parsePacket(received.parts());
-                                } catch (
-                                        systems.zlink.framework.errors.ZLinkFrameworkException
-                                                invalidEnvelope) {
-                                    failRouteInvalidFlow(received, invalidEnvelope);
-                                    return CompletableFuture.completedFuture(null);
-                                } catch (RuntimeException failure) {
-                                    closeRouteReceived(received);
-                                    return CompletableFuture.failedFuture(failure);
-                                }
-                                return dispatchSpotRouteHandler(received, packet);
-                            },
+                            () -> host.dispatchQueuedInstanceMessage(this, received),
                             accepted);
             if (observed != null) {
                 try (var ignored =
@@ -457,7 +430,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
         return context.enqueueClose(
                         () -> closeOnLifecycle(reason).thenAccept(result::complete),
                         message ->
-                                host.replayClosedInstanceMessage(
+                                host.dispatchQueuedInstanceMessage(
                                         this, (ZLinkBackendReceived) message),
                         () ->
                                 existingCloseCoordinator() != null
@@ -470,6 +443,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     }
 
     private CompletionStage<Boolean> closeOnLifecycle(ZLinkSpotCloseReason reason) {
+        if (!hasExpectedNodeGeneration()) return CompletableFuture.completedFuture(false);
         ZLinkSpotCloseCoordinator existing = existingCloseCoordinator();
         if (existing != null) {
             return existing.close();
@@ -580,7 +554,7 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
                                                                                     return null;
                                                                                 }))),
                                         failure ->
-                                                host.reportSpotClosingFailure(
+                                                host.reportSpotLifecycleFailure(
                                                         context.spotId(), failure)));
         coordinatorOwner.set(coordinator);
         host.retainClosingCoordinator(
@@ -615,11 +589,20 @@ final class ZLinkInstanceSpotActivation extends SpotActivationBase<DefaultInstan
     }
 
     CompletionStage<Void> replayMessage(ZLinkBackendReceived received) {
+        // Pending frames belong to the accepted queue record. Only the executing handler
+        // is registered for terminal dispatch cleanup, on the current incarnation.
         trackRouteReceived(received);
-        return context.runLifecycleExecution(
-                () ->
-                        dispatchSpotRouteHandler(
-                                received, ZLinkSpotRuntime.parsePacket(received.parts())));
+        ParsedPacket packet;
+        try {
+            packet = ZLinkSpotRuntime.parsePacket(received.parts());
+        } catch (systems.zlink.framework.errors.ZLinkFrameworkException invalidEnvelope) {
+            failRouteInvalidFlow(received, invalidEnvelope);
+            return CompletableFuture.completedFuture(null);
+        } catch (RuntimeException failure) {
+            closeRouteReceived(received);
+            return CompletableFuture.failedFuture(failure);
+        }
+        return context.runLifecycleExecution(() -> dispatchSpotRouteHandler(received, packet));
     }
 
     CompletionStage<Void> closeResourcesAsync() {

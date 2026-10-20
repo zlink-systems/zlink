@@ -1,4 +1,7 @@
 import { actorMessageFollowContext } from '../actors/actor-message-follow-context';
+import { DefaultZLinkActorContext } from '../actors/actor-context';
+import { decodeSessionDisconnected } from '../actors/session-disconnected-wire';
+import { routingIdsEqual } from '../routing-id';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -13,7 +16,13 @@ import type {
   ZLinkSpot
 } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
-import { ZLinkFrameworkException, zlinkMessageMetadata } from '../../contracts';
+import {
+  ZLinkFrameworkException,
+  ZLinkFrameworkErrorKind,
+  ZLinkMessage,
+  ZLinkEncodedPayload,
+  zlinkMessageMetadata
+} from '../../contracts';
 import {
   ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome,
   ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
@@ -45,6 +54,10 @@ import type { ZLinkSerialWorkOptions } from '../execution/serial-execution-queue
 import { zlinkMetadataByteLength, zlinkSerialWorkOptions } from '../execution/serial-work-size';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
 import { releaseApplicationJobPermitBeforeHandler } from '../application-jobs/application-job-queue-scope';
+
+const emptyDisconnectedReply = ZLinkMessage.fromEncoded(
+  ZLinkEncodedPayload.fromOwned(Buffer.alloc(0))
+);
 
 export interface ZLinkActorResponseOptions {
   readonly metadata: ReadonlyMap<string, string>;
@@ -95,6 +108,7 @@ export type ZLinkRouteToActorJoinPrewarm = (
 ) => 'parked' | 'not-found';
 
 interface ZLinkSpotActorPacketDispatchOptions {
+  readonly admission?: import('../admission').ZLinkRuntimeAdmissionGate;
   readonly spot: ZLinkSpot | (() => ZLinkSpot);
   readonly spotId: () => string;
   readonly registry: ZLinkSpotActorHandlerRegistryRuntime;
@@ -205,11 +219,13 @@ export class ZLinkSpotActorPacketDispatch {
             ? ZLinkDispatchErrorAction.ReplyError
             : ZLinkDispatchErrorAction.Drop;
         this.trace(ZLinkMessageFlowOutcome.Received, actorId, header, messageKind);
-        if (
-          this.options.actorLeft?.(actorId) === true &&
-          header.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET
-        ) {
-          return undefined;
+        const disconnected = header.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET;
+        const disconnectedReply =
+          disconnected && header.kind === ZLinkStreamMessageKind.Request
+            ? emptyDisconnectedReply
+            : undefined;
+        if (this.options.actorLeft?.(actorId) === true && disconnected) {
+          return disconnectedReply;
         }
         const routed = await this.options.routeBeforeLocal?.(delivery);
         if (routed?.handled === true) {
@@ -230,9 +246,34 @@ export class ZLinkSpotActorPacketDispatch {
             requestTerminal
           );
         }
-        if (header.name === ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET) {
+        if (disconnected) {
+          const identity = decodeSessionDisconnected(messageToBytes(parts[1]));
+          if (identity === undefined) {
+            if (this.options.dispatchErrors?.captureEnabled() === true)
+              this.reportInvalidFrame(
+                actorId,
+                messageKind,
+                new ZLinkFrameworkException(
+                  ZLinkFrameworkErrorKind.ProtocolError,
+                  'ProtocolError: malformed Session disconnect identity.'
+                ),
+                'warning'
+              );
+            return disconnectedReply;
+          }
+          const current =
+            actor.context instanceof DefaultZLinkActorContext
+              ? actor.context.currentSessionBinding
+              : undefined;
+          if (
+            current !== undefined &&
+            (!routingIdsEqual(current.sessionNodeRid, identity.sessionOwnerNodeRid) ||
+              current.sessionOwnerNodeGeneration !== identity.sessionOwnerNodeGeneration ||
+              current.bindingGeneration !== identity.bindingGeneration)
+          )
+            return disconnectedReply;
           await this.options.onDisconnectActor(actor);
-          return undefined;
+          return disconnectedReply;
         }
         const decodePayload = this.createPayloadDecoder(parts[1], header);
         return this.dispatchActorPacket(
@@ -438,6 +479,12 @@ export class ZLinkSpotActorPacketDispatch {
       messageSerializers: this.options.messageSerializers,
       onAdmitted: () => this.trace(ZLinkMessageFlowOutcome.Admitted, actorId, header, messageKind),
       onHandlerStart: () => {
+        if (this.options.admission?.ownerAdmissionOpen() === false) {
+          throw createInternalFrameworkException(
+            ZLinkFrameworkInternalErrorKind.RequestRejected,
+            'Actor handler was rejected because Location owner admission is closed.'
+          );
+        }
         // A transferred backlog is returned to the Actor queue as one FIFO
         // prefix. Check the request deadline when its owner turn actually
         // starts, not when that prefix is admitted.
@@ -606,7 +653,8 @@ export class ZLinkSpotActorPacketDispatch {
   private reportInvalidFrame(
     actorId: string,
     messageKind: ZLinkDispatchMessageKind,
-    error?: unknown
+    error?: unknown,
+    severity?: 'warning'
   ): void {
     this.options.dispatchErrors?.report({
       surface: ZLinkDispatchErrorSurface.SpotActor,
@@ -615,7 +663,8 @@ export class ZLinkSpotActorPacketDispatch {
       action: ZLinkDispatchErrorAction.Drop,
       spotId: this.options.spotId(),
       actorId,
-      error
+      error,
+      severity
     });
   }
 

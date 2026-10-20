@@ -1,3 +1,4 @@
+import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import {
   createInternalFrameworkException,
   ZLinkFrameworkInternalErrorKind
@@ -11,26 +12,13 @@ import {
   type ZLinkSubmitResult
 } from '../messaging/submission-result';
 import {
-  ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-  ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET,
   ZLINK_REMOTE_BOUND_SESSION_SEND_PACKET,
   type ZLinkActorRoutedJoinTransport,
   type ZLinkRemoteActorPacketTarget,
   type ZLinkRemoteBoundSessionTarget
 } from '../actors';
-import {
-  encodeRemoteActorPacketRelayPayload,
-  encodeRemoteActorPacketTarget
-} from '../actors/actor-packet-relay-wire';
+import { encodeRemoteActorPacketTarget } from '../actors/actor-packet-relay-wire';
 import { encodeRemoteBoundSessionSendPayload } from '../actors/bound-session-wire';
-import { tryRequestRoutedJson } from '../actors/actor-routed-json-request';
-import {
-  ZLinkStreamCodec,
-  ZLinkStreamHeaderFlags,
-  ZLinkStreamMessageKind,
-  encodeStreamHeader,
-  type ZLinkStreamFrameHeader
-} from './protocol';
 import type { ZLinkNativeFallbackBoundSessionPort } from './stream-binding-runtime-ports';
 import type { ZLinkBackendActorSessionNode } from '../backend';
 import { resolveFrameworkPacketName } from '../messaging/packet-name';
@@ -59,37 +47,6 @@ export class ZLinkNativeFallbackBoundSession implements ZLinkBoundSession {
   }
 
   async disconnect(signal?: AbortSignal): Promise<void> {
-    const remoteTarget = this.options.remoteBoundSessionTargetProvider();
-    if (remoteTarget !== undefined) {
-      const spotKind: ZLinkSpotKind | undefined =
-        'spotKind' in remoteTarget
-          ? (remoteTarget.spotKind as ZLinkSpotKind | undefined)
-          : undefined;
-      const payload = encodeRemoteActorPacketRelayPayload({
-        actorId: this.options.actorId,
-        routerChannelId: remoteTarget.routerChannelId,
-        header: encodeStreamHeader(disconnectedFrameHeader()),
-        payload: Buffer.alloc(0)
-      });
-      const target = {
-        routerChannelId: remoteTarget.routerChannelId,
-        targetNodeRid: remoteTarget.targetNodeRid,
-        spotId: remoteTarget.spotId,
-        spotKind: spotKind ?? ZLinkSpotKind.Entry
-      };
-      if (
-        await tryRequestRoutedJson(this.options.routedTransport, target, payload, {
-          timeoutMs: this.options.requestTimeoutMs,
-          signal
-        })
-      ) {
-        return;
-      }
-      await this.options.routedTransport.sendToSpot(target, payload, {
-        packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET
-      });
-      return;
-    }
     const actorRef = this.options.actorRefProvider();
     const node = this.options.nativeActorNodeProvider();
     if (
@@ -97,7 +54,12 @@ export class ZLinkNativeFallbackBoundSession implements ZLinkBoundSession {
       node !== undefined &&
       currentBindingGeneration(actorRef) !== undefined
     ) {
-      await this.options.runtime.disconnectNativeBoundSession(node, actorRef, signal);
+      await this.options.runtime.disconnectNativeBoundSession(
+        node,
+        actorRef,
+        this.options.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        signal
+      );
       return;
     }
     await this.options.runtime.disconnectBoundSession(this.options.actorId, signal);
@@ -258,14 +220,4 @@ function currentBindingGeneration(actorRef: ActorRef | undefined): bigint | unde
 
 function positiveBindingGeneration(generation: bigint | undefined): bigint | undefined {
   return generation !== undefined && generation > 0n ? generation : undefined;
-}
-
-function disconnectedFrameHeader(): ZLinkStreamFrameHeader {
-  return {
-    kind: ZLinkStreamMessageKind.Send,
-    codec: ZLinkStreamCodec.Raw,
-    flags: ZLinkStreamHeaderFlags.None,
-    name: ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET,
-    metadata: new Map()
-  };
 }

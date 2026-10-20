@@ -208,7 +208,7 @@ dequeue되는 시점에 끝나며, decode된 payload는 Framework의 일반 소�
 
 ## 3. Command space
 
-Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `54..255`는 reserved이며
+Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `55..255`는 reserved이며
 다른 의미로 재사용하지 않는다. 괄호 안의 이전 command 이름은 호환 진단용 이름일 뿐 decode하거나
 전송하는 command가 아니다.
 
@@ -258,6 +258,7 @@ Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `54..25
 | 51 | `boundSessionReplaced` | infrastructure | 없음 | — | 새 binding 확정 뒤 이전 session에 보내는 교체 통지 |
 | 52 | `relocationState` | infrastructure | 없음 | — | source memory에서 target으로 직접 전달하는 payload chunk 전송(base·final stage) |
 | 53 | `relocationFailed` | infrastructure | 없음 | — | 대응하는 `relocationPrepare`에 대한 assembly·준비 실패 명시 reply |
+| 54 | `boundSessionClose` | infrastructure | 없음 | — | current binding의 physical connection close를 Session owner에 요청한다 |
 
 표의 "계층"·"application payload"·"사용할 수 있는 flag" 열은 schema 선언을 그대로 옮긴 것이다.
 **application 계층 command만 application handler로 들어간다.** infrastructure command는 runtime이
@@ -306,7 +307,6 @@ callback·연결 종료는 새 bind terminal을 지연시키거나 되돌리지 
 - RouteMesh와 ClientServer는 `hello → admit|reject`로 current physical connection을 service route로 승인한다.
 - Manual 구성의 lifecycle token은 예측하기 어려운 난수를 만드는 [CSPRNG](../00-foundation/02-glossary.ko.md#csprng)로 만든 non-zero opaque equality token이다.
 - 숫자 크기로 새 값을 판단하지 않으며 current physical connection의 handover와 liveness로 이전 token을 차단한다.
-- 저장소에 owner가 기록되는 peer는 그 host가 지금도 owner인지, lease가 유효한지까지 함께 검사한다.
 
 ### DescriptorRevision ordering
 
@@ -751,8 +751,8 @@ Transport, target과 Session owner가 수행하는 검증과 그 경계는
 ### `Completed` 조건
 
 `Completed`는 accepted request count와 terminal completion count가 같고 pending relay가 0일 때만 허용한다. Source
-lease가 유효한 동안 ACK를 확인하지 못하면 Retire는 relocation root와 reply bytes를 retention 동안 보존한 채
-`ForceStopped`로 끝난다.
+lease가 유효한 동안 ACK를 확인하지 못한 채 deadline을 넘긴 경우의 결과와 보관 기간은
+[Location runtime §9.3](../05-location-relocation/01-location-runtime.ko.md#93-source가-바뀐-뒤-끝난-request를-처리한다)이 정한다.
 
 ### Root replacement
 

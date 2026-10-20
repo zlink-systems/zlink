@@ -26,7 +26,9 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <future>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -945,14 +947,136 @@ bool contains_error_frame (const zlink::framework::detail::stream_runtime_t &run
     return false;
 }
 
+int core_connected_rejection_cleanup ()
+{
+    using namespace zlink::framework;
+    service_collection_t services;
+    handler_registry_t handlers;
+    serializer_registry_t serializers;
+    auto builder = test::runtime_failure_builder ();
+    detail::zlink_builder_access_t::bind_shared_core_context (
+      builder, std::make_shared<zlink::context_t> ());
+    services.add_singleton<detail::actor_gateway_runtime_t> ();
+    services.add_factory<session_actor_manager_t> (
+      [] (service_provider_t &provider) {
+          return std::make_unique<session_actor_manager_t> (
+            provider.get_required<detail::actor_gateway_runtime_t> ().manager ());
+      },
+      service_lifetime_t::scoped);
+    auto control = std::make_shared<shutdown_session_control_t> ();
+    services.add_factory<shutdown_failure_session_t> (
+      [control] (service_provider_t &) {
+          return std::make_unique<shutdown_failure_session_t> (control);
+      },
+      service_lifetime_t::scoped);
+    zlink_framework_options_t options (services, handlers, serializers, builder);
+    options.add_route_mesh ("connected-rejection-mesh")
+      .set_routing_id (zlink::routing_id_t::from ("connected-rejection-node"))
+      .listen (loopback_tcp_any_port);
+    options.add_stream_node ("connected-rejection-stream")
+      .bind (loopback_tcp_any_port)
+      .register_session ("connected-rejection-session");
+    options.apply ();
+    for (const auto &registration : detail::mesh_node_runtime_t::registrations (builder)) {
+        registration->core_context = detail::zlink_builder_access_t::shared_core_context (builder);
+    }
+
+    std::promise<void> rejection_source;
+    auto rejected = rejection_source.get_future ();
+    dispatch_options_t dispatch;
+    dispatch.message_flow (message_flow_log_mode_t::normal);
+    detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      dispatch, [&] (const message_dispatch_error_event_t &event) {
+          if (event.surface != dispatch_error_surface_t::stream_session
+              || event.message_kind != dispatch_message_kind_t::control || !event.exception)
+              return;
+          try {
+              std::rethrow_exception (event.exception);
+          }
+          catch (const framework_exception_t &error) {
+              if (error.kind () == framework_error_kind_t::shutting_down
+                  && std::string_view (error.what ()) == "stream dispatch executor is not running")
+                  rejection_source.set_value ();
+          }
+      });
+    detail::apply_dispatch_options (builder, dispatch);
+
+    auto provider = services.build_provider ();
+    auto mesh = detail::mesh_node_runtime_t::from (builder, "connected-rejection-mesh");
+    if (!mesh)
+        return 336;
+    mesh->bind_serializers (serializers);
+    auto stream_runtime = detail::stream_runtime_t::from (builder);
+    auto listeners = std::make_shared<runtime::listener_status_registry_t> ();
+    runtime::stream_host_service_t host (
+      std::make_shared<runtime::runtime_failure_collector_t> (), stream_runtime,
+      stream_runtime.snapshots (),
+      {{"connected-rejection-session",
+        [] (service_provider_t &scope) -> packet_stream_session_t & {
+            return scope.get_required<shutdown_failure_session_t> ();
+        }}},
+      std::chrono::milliseconds{30'000}, mesh, {}, listeners);
+    struct cleanup_t
+    {
+        runtime::stream_host_service_t &host;
+        detail::mesh_node_runtime_t &mesh;
+        service_provider_t &provider;
+        ~cleanup_t ()
+        {
+            host.stop ();
+            mesh.stop ();
+            provider.close ();
+            detail::configure_stream_dispatch_executor ();
+        }
+    } cleanup{host, *mesh, provider};
+    mesh->start ();
+    host.start (provider);
+
+    // Reject admission before any connected callback can execute.
+    detail::shutdown_stream_dispatch_executor ();
+    auto client = connect_loopback (endpoint_port (
+      listener_endpoint (*listeners, listener_kind_t::stream, "connected-rejection-stream")));
+    if (!client)
+        return 337;
+    const bool rejection_observed =
+      rejected.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
+    host.stop ();
+    close_native_client (client);
+    if (!rejection_observed)
+        return 338;
+
+    // A fresh Core STREAM socket assigns its first connection RID 1. The
+    // registry uses that RID's hex key and its own first connection generation.
+    const runtime::stateful::stream_connection_t connection{
+      zlink::routing_id_t::from (std::uint32_t{1}).to_hex (), 1, mesh->routing_id (),
+      mesh->native_node ().status ().lifecycle_generation ()};
+    const auto residual = mesh->native_node ().sessions ().close (connection);
+    std::cerr << "core-connected-rejection-cleanup rejection_observed=" << rejection_observed
+              << " residual.closed=" << residual.closed << " connected=" << control->connected ()
+              << " disconnected=" << control->disconnected ()
+              << " destroyed=" << control->destroyed () << '\n';
+    if (residual.closed)
+        return 339;
+    if (control->connected () != 0 || control->disconnected () != 0 || control->destroyed () != 1)
+        return 340;
+    return 0;
+}
+
 } // namespace
 
-int main ()
+int main (int argc, char **argv)
 {
     using zlink::framework::framework_error_kind_t;
     using zlink::framework::stream_codec_t;
     using zlink::framework::detail::stream_header_flags_t;
     using zlink::framework::detail::stream_message_kind_t;
+
+    if (argc == 2 && std::string_view (argv[1]) == "--core-connected-rejection-cleanup")
+        return core_connected_rejection_cleanup ();
+    if (argc != 1)
+        return 341;
+    if (const auto result = core_connected_rejection_cleanup (); result != 0)
+        return result;
 
     zlink::monitor_event_t ready_snapshot;
     ready_snapshot.event = zlink::monitor_event::connection_ready;
@@ -1556,7 +1680,12 @@ int main ()
         runtime.attach_transport_writer (
           closing_stream, [&admission] (const auto &, const auto &) { return admission.task (); });
         bool physically_closed = false;
-        auto lifetime = std::make_shared<int> (0);
+        std::promise<void> lifetime_released;
+        auto lifetime_released_future = lifetime_released.get_future ();
+        auto lifetime = std::shared_ptr<int> (new int (0), [&lifetime_released] (int *value) {
+            delete value;
+            lifetime_released.set_value ();
+        });
         std::weak_ptr<int> retained = lifetime;
         runtime.send_session_closing (
           closing_stream, zlink::framework::stream_close_reason_t::heartbeat_timeout,
@@ -1570,6 +1699,8 @@ int main ()
           success ? zlink::framework::result_t<void>::success ()
                   : zlink::framework::result_t<void>::failure (
                       zlink::framework::framework_error_kind_t::unavailable, "send rejected"));
+        // The close callback runs in a new execution turn after complete() returns.
+        lifetime_released_future.wait ();
         if (!physically_closed || !retained.expired ())
             return 320;
     }
@@ -1684,29 +1815,36 @@ int main ()
     auto replacement_owner = std::make_shared<int> (1);
     const auto replacement_owner_weak = std::weak_ptr<int> (replacement_owner);
     auto replacement_calls = std::make_shared<std::atomic_size_t> (0);
+    bool replacement_owner_released_on_completion = false;
     std::promise<zlink::framework::result_t<void>> replacement_completion_source;
     auto replacement_completion = replacement_completion_source.get_future ();
     const auto replacement_submitted = runtime.dispatch_actor_binding_replaced_async (
       replacement_stream, "actor-exact-once",
-      [owner = replacement_owner, replacement_calls] (zlink::framework::stream_t &,
-                                                      std::string actor_id) {
+      [owner = std::move (replacement_owner), replacement_calls] (zlink::framework::stream_t &,
+                                                                  std::string actor_id) {
           if (*owner == 1 && actor_id == "actor-exact-once") {
               replacement_calls->fetch_add (1, std::memory_order_relaxed);
           }
           return zlink::framework::task_t<void> (zlink::framework::result_t<void>::success ());
       },
-      [&replacement_completion_source] (const zlink::framework::result_t<void> &result) {
+      [&replacement_completion_source, &replacement_owner_released_on_completion,
+       &replacement_owner_weak] (const zlink::framework::result_t<void> &result) {
+          replacement_owner_released_on_completion = replacement_owner_weak.expired ();
           replacement_completion_source.set_value (result);
       });
-    replacement_owner.reset ();
     if (!replacement_submitted
         || replacement_completion.wait_for (std::chrono::seconds (2)) != std::future_status::ready
         || !replacement_completion.get ()) {
         return 286;
     }
     runtime.drain_async_dispatch (replacement_stream);
-    if (replacement_calls->load (std::memory_order_relaxed) != 1
+    if (!replacement_owner_released_on_completion
+        || replacement_calls->load (std::memory_order_relaxed) != 1
         || !replacement_owner_weak.expired ()) {
+        std::cerr << "actor-binding-replacement result=287 calls="
+                  << replacement_calls->load (std::memory_order_relaxed)
+                  << " owner_released_on_completion=" << replacement_owner_released_on_completion
+                  << " owner_expired=" << replacement_owner_weak.expired () << '\n';
         return 287;
     }
 

@@ -15,6 +15,7 @@
 #include <cstdlib>
 #include <exception>
 #include <functional>
+#include <filesystem>
 #include <iostream>
 #include <mutex>
 #include <optional>
@@ -30,6 +31,8 @@ namespace
 {
 
 using zlink::framework::test::relocation_unit_spot_t;
+
+constexpr auto host_relocation_mesh_name = "host-relocation-mesh";
 
 struct degraded_channel_message_t
 {
@@ -129,8 +132,11 @@ class degraded_object_spot_t final : public zlink::framework::spot_t<zlink::fram
 
 struct relocation_ready_message_t
 {
+    static constexpr const char *packet_name = "relocation-ready";
     int value = 0;
 };
+
+NLOHMANN_DEFINE_TYPE_NON_INTRUSIVE (relocation_ready_message_t, value)
 
 class relocation_ready_spot_t final : public zlink::framework::spot_t<zlink::framework::actor_t>
 {
@@ -146,11 +152,15 @@ class relocation_ready_spot_t final : public zlink::framework::spot_t<zlink::fra
 
     void configure () override
     {
-        _context.handlers ().add_handler<&relocation_ready_spot_t::on_ready> ("relocation-ready");
+        _context.handlers ().add_handler<&relocation_ready_spot_t::on_ready> ();
     }
 
     zlink::framework::task_t<void> on_ready (const relocation_ready_message_t &)
     {
+        if (readiness_release) {
+            readiness_entered->complete (zlink::framework::result_t<void>::success ());
+            co_await readiness_release->task ();
+        }
         _context.relocation_ready ().defer ();
         co_return;
     }
@@ -187,6 +197,10 @@ class relocation_ready_spot_t final : public zlink::framework::spot_t<zlink::fra
         co_return;
     }
 
+    static inline std::shared_ptr<zlink::framework::task_completion_source_t<void>>
+      readiness_entered;
+    static inline std::shared_ptr<zlink::framework::task_completion_source_t<void>>
+      readiness_release;
     static inline std::atomic_int completion_count{0};
     static inline std::atomic_int last_outcome{-1};
 
@@ -201,6 +215,10 @@ class relocation_ready_adapter_t final
     zlink::framework::task_t<std::vector<std::byte>> capture (relocation_ready_spot_t &,
                                                               std::stop_token) override
     {
+        if (capture_release) {
+            capture_entered->complete (zlink::framework::result_t<void>::success ());
+            co_await capture_release->task ();
+        }
         co_return std::vector<std::byte>{std::byte{0x51}, std::byte{0x52}};
     }
 
@@ -213,6 +231,8 @@ class relocation_ready_adapter_t final
     }
 
     static inline std::atomic_bool restored{false};
+    static inline std::shared_ptr<zlink::framework::task_completion_source_t<void>> capture_entered;
+    static inline std::shared_ptr<zlink::framework::task_completion_source_t<void>> capture_release;
 };
 
 class configuration_actor_t final : public zlink::framework::actor_t
@@ -337,7 +357,6 @@ class relocation_source_service_t final : public zlink::framework::hosted_servic
 
     zlink::framework::task_t<void> start (zlink::framework::service_provider_t &services) override
     {
-        _runtime = &services.get_required<zlink::framework::route_mesh_runtime_t> ();
         auto manager = services.get_required<zlink::framework::spot_manager_t> ();
         auto client = _app->advanced ().zlink ().route_client (
           services.get_required<zlink::framework::serializer_registry_t> ());
@@ -352,6 +371,7 @@ class relocation_source_service_t final : public zlink::framework::hosted_servic
                     manager
                       .get_or_create (zlink::framework::spot_id_t ("host-relocation-spot"),
                                       "host-relocation-spot")
+                      .in_mesh (host_relocation_mesh_name)
                       .timeout (std::chrono::seconds (1))
                       .async ()
                       .result ();
@@ -382,7 +402,8 @@ class relocation_source_service_t final : public zlink::framework::hosted_servic
               if (submitted)
                   ready_sent.store (true, std::memory_order_release);
               else
-                  error = "readiness message submission failed";
+                  error = submitted.error () ? submitted.error ()->what ()
+                                             : "readiness message submission failed";
           });
         co_return;
     }
@@ -401,7 +422,6 @@ class relocation_source_service_t final : public zlink::framework::hosted_servic
 
   private:
     zlink::framework::app_t *_app;
-    zlink::framework::route_mesh_runtime_t *_runtime = nullptr;
     std::shared_ptr<std::atomic_bool> _submit_ready;
     std::atomic_bool _stop{false};
     std::thread _sender;
@@ -920,13 +940,8 @@ class degraded_location_host_probe_t final : public zlink::framework::hosted_ser
 {
   public:
     degraded_location_host_probe_t (zlink::framework::app_t &app,
-                                    std::shared_ptr<recovering_location_store_t> store,
-                                    std::chrono::steady_clock::time_point started_at,
-                                    std::chrono::milliseconds renew_timeout) :
-        _app (app),
-        _store (std::move (store)),
-        _started_at (started_at),
-        _renew_timeout (renew_timeout)
+                                    std::shared_ptr<recovering_location_store_t> store) :
+        _app (app), _store (std::move (store))
     {
     }
 
@@ -940,10 +955,9 @@ class degraded_location_host_probe_t final : public zlink::framework::hosted_ser
                                 serializers] () mutable {
             auto &locations = *location_repository;
             auto client = _app.advanced ().zlink ().route_client (*serializers);
-            startup_completed =
-              wait_until ([this] { return _app.is_ready (); }, std::chrono::seconds (1));
-            started_within_timeout =
-              std::chrono::steady_clock::now () - _started_at < _renew_timeout;
+            preparing_without_lease =
+              !_app.is_ready ()
+              && _app.runtime_state () == zlink::framework::framework_runtime_state_t::preparing;
             descriptor_blocked =
               locations.list_mesh_nodes ("degraded-location-host").result ().value ().items.empty ()
               && locations.list_client_servers ("degraded-client-server")
@@ -1040,8 +1054,7 @@ class degraded_location_host_probe_t final : public zlink::framework::hosted_ser
             _worker.join ();
     }
 
-    bool startup_completed = false;
-    bool started_within_timeout = false;
+    bool preparing_without_lease = false;
     bool descriptor_blocked = false;
     bool descriptor_republished = false;
     bool mesh_republished = false;
@@ -1057,8 +1070,6 @@ class degraded_location_host_probe_t final : public zlink::framework::hosted_ser
   private:
     zlink::framework::app_t &_app;
     std::shared_ptr<recovering_location_store_t> _store;
-    std::chrono::steady_clock::time_point _started_at;
-    std::chrono::milliseconds _renew_timeout;
     std::thread _worker;
 };
 
@@ -1101,22 +1112,19 @@ bool verify_degraded_host_republishes_descriptor_after_owner_claim ()
       .enable_publisher (0)
       .set_routing_id (zlink::routing_id_t::from ("degraded-fanout-publisher"));
 
-    const auto started_at = std::chrono::steady_clock::now ();
-    auto probe =
-      std::make_unique<degraded_location_host_probe_t> (app, store, started_at, renew_timeout);
+    auto probe = std::make_unique<degraded_location_host_probe_t> (app, store);
     auto *probe_view = probe.get ();
     app.add_hosted_service (std::move (probe));
     char program[] = "degraded-location-host";
     char *arguments[] = {program, nullptr};
     const auto exit_code = app.run (1, arguments);
-    if (exit_code == 0 && probe_view->startup_completed && probe_view->started_within_timeout
-        && probe_view->descriptor_blocked && probe_view->descriptor_republished
-        && probe_view->factory_blocked && probe_view->factory_resumed
-        && probe_view->message_and_timer_blocked && probe_view->message_and_timer_resumed)
+    if (exit_code == 0 && probe_view->preparing_without_lease && probe_view->descriptor_blocked
+        && probe_view->descriptor_republished && probe_view->factory_blocked
+        && probe_view->factory_resumed && probe_view->message_and_timer_blocked
+        && probe_view->message_and_timer_resumed)
         return true;
     std::cerr << "degraded Location host did not gate and republish its descriptor"
-              << " started-within-timeout=" << probe_view->started_within_timeout
-              << " startup-completed=" << probe_view->startup_completed
+              << " preparing-without-lease=" << probe_view->preparing_without_lease
               << " blocked=" << probe_view->descriptor_blocked
               << " republished=" << probe_view->descriptor_republished
               << " mesh=" << probe_view->mesh_republished
@@ -1303,10 +1311,12 @@ void configure_relocation_app (
     app.add_zlink_framework (
       [location_store, relocation_store,
        routing_id = std::move (routing_id)] (zlink::framework::zlink_framework_options_t &options) {
+          options.configure_dispatch ().message_flow (
+            zlink::framework::message_flow_log_mode_t::normal);
           options.add_location_store (location_store);
           options.add_relocation_store (relocation_store);
           options.configure_locations ().polling_interval = std::chrono::milliseconds (10);
-          auto mesh = options.add_route_mesh ("host-relocation-mesh");
+          auto mesh = options.add_route_mesh (host_relocation_mesh_name);
           mesh.channel_name ("host-relocation-channel").server ();
           mesh.set_object_role (zlink::framework::object_role_t::server)
             .listen ("tcp://127.0.0.1:0")
@@ -1460,7 +1470,9 @@ bool verify_degraded_host_blocks_and_resumes_relocation ()
     int exit_code = -1;
     std::thread run_thread ([&] { exit_code = app.run (1, arguments); });
     service_view->wait_started ();
-    const bool startup_completed = ready_view->wait_ready ();
+    const bool preparing_without_lease =
+      !app.is_ready ()
+      && app.runtime_state () == zlink::framework::framework_runtime_state_t::preparing;
     const auto blocked =
       app
         .relocate ({.mode = zlink::framework::relocation_mode_t::planned_maintenance,
@@ -1469,7 +1481,7 @@ bool verify_degraded_host_blocks_and_resumes_relocation ()
         .value ();
     const bool relocation_blocked =
       blocked.outcome == zlink::framework::relocation_outcome_t::blocked
-      && blocked.reason == zlink::framework::relocation_reason_t::store_unavailable;
+      && blocked.reason == zlink::framework::relocation_reason_t::runtime_not_ready;
 
     location_store->recover ();
     auto services = app.advanced ().services ().build_provider ();
@@ -1480,6 +1492,7 @@ bool verify_degraded_host_blocks_and_resumes_relocation ()
                   .value ()
                   .items.empty ();
     });
+    const bool recovery_completed = ready_view->wait_ready ();
     const auto resumed =
       app
         .relocate ({.mode = zlink::framework::relocation_mode_t::planned_maintenance,
@@ -1498,14 +1511,16 @@ bool verify_degraded_host_blocks_and_resumes_relocation ()
     service_view->release ();
     const auto stopped = shutdown.result ().value ();
     run_thread.join ();
-    const bool passed = startup_completed && relocation_blocked && relocation_resumed
-                        && stopped.outcome == zlink::framework::termination_outcome_t::stopped
-                        && exit_code == 0;
+    const bool passed =
+      preparing_without_lease && relocation_blocked && recovery_completed && relocation_resumed
+      && stopped.outcome == zlink::framework::termination_outcome_t::stopped && exit_code == 0;
     if (!passed) {
         std::cerr << "degraded host relocation admission did not close and resume"
-                  << " startup=" << startup_completed
+                  << " preparing-without-lease=" << preparing_without_lease
                   << " blocked-reason=" << static_cast<int> (blocked.reason)
-                  << " blocked=" << relocation_blocked << " resumed=" << relocation_resumed << '\n';
+                  << " blocked=" << relocation_blocked
+                  << " recovery-completed=" << recovery_completed
+                  << " resumed=" << relocation_resumed << '\n';
     }
     return passed;
 }
@@ -1901,8 +1916,8 @@ bool verify_relocating_status_closes_admission ()
     auto &target_mesh = target_services.get_required<zlink::framework::route_mesh_runtime_t> ();
     const auto peers_ready = wait_until (
       [&] {
-          return source_mesh.snapshot ("host-relocation-mesh").ready_peer_count > 0
-                 && target_mesh.snapshot ("host-relocation-mesh").ready_peer_count > 0;
+          return source_mesh.snapshot (host_relocation_mesh_name).ready_peer_count > 0
+                 && target_mesh.snapshot (host_relocation_mesh_name).ready_peer_count > 0;
       },
       std::chrono::seconds (7));
     auto &runtime = source_services.get_required<zlink::framework::framework_runtime_t> ();
@@ -2006,8 +2021,8 @@ bool verify_relocation_join_ignores_deadline ()
     auto &target_mesh = target_services.get_required<zlink::framework::route_mesh_runtime_t> ();
     const auto peers_ready = wait_until (
       [&] {
-          return source_mesh.snapshot ("host-relocation-mesh").ready_peer_count > 0
-                 && target_mesh.snapshot ("host-relocation-mesh").ready_peer_count > 0;
+          return source_mesh.snapshot (host_relocation_mesh_name).ready_peer_count > 0
+                 && target_mesh.snapshot (host_relocation_mesh_name).ready_peer_count > 0;
       },
       std::chrono::seconds (7));
     auto &runtime = source_services.get_required<zlink::framework::framework_runtime_t> ();
@@ -2113,8 +2128,8 @@ bool verify_relocation_reject_reports_requested_target ()
     auto &target_mesh = target_services.get_required<zlink::framework::route_mesh_runtime_t> ();
     const auto peers_ready = wait_until (
       [&] {
-          return source_mesh.snapshot ("host-relocation-mesh").ready_peer_count > 0
-                 && target_mesh.snapshot ("host-relocation-mesh").ready_peer_count > 0;
+          return source_mesh.snapshot (host_relocation_mesh_name).ready_peer_count > 0
+                 && target_mesh.snapshot (host_relocation_mesh_name).ready_peer_count > 0;
       },
       std::chrono::seconds (7));
     auto &runtime = source_services.get_required<zlink::framework::framework_runtime_t> ();
@@ -2169,11 +2184,23 @@ bool verify_relocation_reject_reports_requested_target ()
     return passed;
 }
 
-bool verify_application_signaled_relocation ()
+bool verify_application_signaled_relocation (bool shutdown_during_move = false)
 {
+    constexpr auto ready_timeout = std::chrono::seconds (7);
+    constexpr auto shutdown_timeout = std::chrono::seconds (5);
+    relocation_ready_spot_t::readiness_entered =
+      std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+    relocation_ready_spot_t::readiness_release =
+      std::make_shared<zlink::framework::task_completion_source_t<void>> ();
     relocation_ready_spot_t::completion_count.store (0, std::memory_order_release);
     relocation_ready_spot_t::last_outcome.store (-1, std::memory_order_release);
     relocation_ready_adapter_t::restored.store (false, std::memory_order_release);
+    if (shutdown_during_move) {
+        relocation_ready_adapter_t::capture_entered =
+          std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+        relocation_ready_adapter_t::capture_release =
+          std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+    }
 
     auto location_store =
       std::make_shared<zlink::framework::runtime::in_memory_location_store_t> ();
@@ -2184,6 +2211,14 @@ bool verify_application_signaled_relocation ()
     auto source = zlink::framework::app_t::create ();
     configure_relocation_app (source, location_store, relocation_store,
                               "zz-host-relocation-source");
+    if (shutdown_during_move) {
+        source.set_message_flow_mode (zlink::framework::message_flow_log_mode_t::normal);
+        source.logging ()
+          .use_file (
+            (std::filesystem::temp_directory_path () / "accepted-source-shutdown-source.flow")
+              .string ())
+          .set_min_level (zlink::framework::log_level_t::debug);
+    }
     auto source_service = std::make_unique<relocation_source_service_t> (source, submit_ready);
     auto *source_service_view = source_service.get ();
     source.add_hosted_service (std::move (source_service));
@@ -2197,7 +2232,7 @@ bool verify_application_signaled_relocation ()
               return source.is_ready ()
                      && source_service_view->created_spot.load (std::memory_order_acquire);
           },
-          std::chrono::seconds (7))) {
+          ready_timeout)) {
         std::cerr << "source app must create the application-signaled Spot: ready="
                   << source.is_ready () << " created=" << source_service_view->created_spot.load ()
                   << " error=" << source_service_view->error << '\n';
@@ -2220,6 +2255,14 @@ bool verify_application_signaled_relocation ()
     auto target = zlink::framework::app_t::create ();
     configure_relocation_app (target, location_store, relocation_store,
                               "aa-host-relocation-target");
+    if (shutdown_during_move) {
+        target.set_message_flow_mode (zlink::framework::message_flow_log_mode_t::normal);
+        target.logging ()
+          .use_file (
+            (std::filesystem::temp_directory_path () / "accepted-source-shutdown-target.flow")
+              .string ())
+          .set_min_level (zlink::framework::log_level_t::debug);
+    }
     char target_program[] = "host-relocation-target";
     char *target_arguments[] = {target_program, nullptr};
     int target_exit_code = -1;
@@ -2227,23 +2270,79 @@ bool verify_application_signaled_relocation ()
         /* Relocate starts before this replacement publishes its descriptor.
          * The source must keep checking Store and Core peer readiness until
          * the shared deadline instead of rejecting the first empty snapshot. */
-        std::this_thread::sleep_for (std::chrono::milliseconds (100));
+        if (!shutdown_during_move)
+            std::this_thread::sleep_for (std::chrono::milliseconds (100));
         target_exit_code = target.run (1, target_arguments);
     });
 
+    submit_ready->store (true, std::memory_order_release);
+    const bool readiness_accepted =
+      wait_until ([] { return relocation_ready_spot_t::readiness_entered->task ().await_ready (); },
+                  ready_timeout);
     auto relocation =
       source.relocate ({.mode = zlink::framework::relocation_mode_t::planned_maintenance,
                         .deadline = std::chrono::seconds (10)});
-    submit_ready->store (true, std::memory_order_release);
+    const bool relocating =
+      wait_until (
+        [&] {
+            return source.runtime_state ()
+                     == zlink::framework::framework_runtime_state_t::relocating
+                   || relocation.await_ready ();
+        },
+        ready_timeout)
+      && source.runtime_state () == zlink::framework::framework_runtime_state_t::relocating;
+    relocation_ready_spot_t::readiness_release->complete (
+      zlink::framework::result_t<void>::success ());
+    if (shutdown_during_move) {
+        // The source has accepted and sealed this unit before capture enters.
+        const bool accepted = wait_until (
+          [] { return relocation_ready_adapter_t::capture_entered->task ().await_ready (); },
+          ready_timeout);
+        auto stopping = source.shutdown (shutdown_timeout);
+        const bool held = !stopping.await_ready ();
+        relocation_ready_adapter_t::capture_release->complete (
+          zlink::framework::result_t<void>::success ());
+        const auto moved = relocation.result ().value ();
+        const auto stopped = stopping.result ().value ();
+        const auto target_stopped = target.shutdown (shutdown_timeout).result ().value ();
+        source_thread.join ();
+        target_thread.join ();
+        relocation_ready_spot_t::readiness_entered.reset ();
+        relocation_ready_spot_t::readiness_release.reset ();
+        relocation_ready_adapter_t::capture_entered.reset ();
+        relocation_ready_adapter_t::capture_release.reset ();
+        const bool passed =
+          readiness_accepted && relocating && accepted && held
+          && moved.outcome == zlink::framework::relocation_outcome_t::blocked
+          && moved.reason == zlink::framework::relocation_reason_t::shutdown_requested
+          && stopped.outcome == zlink::framework::termination_outcome_t::stopped
+          && stopped.reason == zlink::framework::termination_reason_t::none
+          && source.runtime_state () == zlink::framework::framework_runtime_state_t::stopped
+          && target_stopped.outcome == zlink::framework::termination_outcome_t::stopped
+          && source_exit_code == 0 && target_exit_code == 0;
+        std::cout << "accepted-source-shutdown readiness-accepted=" << readiness_accepted
+                  << " relocating=" << relocating << " accepted=" << accepted << " held=" << held
+                  << " move=" << static_cast<int> (moved.outcome)
+                  << " reason=" << static_cast<int> (moved.reason)
+                  << " stopped=" << static_cast<int> (stopped.outcome)
+                  << " termination-reason=" << static_cast<int> (stopped.reason)
+                  << " ready-sent=" << source_service_view->ready_sent.load ()
+                  << " service-error=" << source_service_view->error << " passed=" << passed
+                  << '\n';
+        return passed;
+    }
     const auto result = relocation.result ().value ();
 
-    const auto target_stopped = target.shutdown (std::chrono::seconds (5)).result ().value ();
-    const auto source_stopped = source.shutdown (std::chrono::seconds (5)).result ().value ();
+    const auto target_stopped = target.shutdown (shutdown_timeout).result ().value ();
+    const auto source_stopped = source.shutdown (shutdown_timeout).result ().value ();
     target_thread.join ();
     source_thread.join ();
 
+    relocation_ready_spot_t::readiness_entered.reset ();
+    relocation_ready_spot_t::readiness_release.reset ();
     const bool passed =
-      source_service_view->ready_sent.load (std::memory_order_acquire)
+      readiness_accepted && relocating
+      && source_service_view->ready_sent.load (std::memory_order_acquire)
       && source_service_view->error.empty ()
       && result.outcome == zlink::framework::relocation_outcome_t::relocated
       && relocation_ready_adapter_t::restored.load (std::memory_order_acquire)
@@ -2408,6 +2507,8 @@ bool verify_relocation_target_eligibility_applies_full_narrowing ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "accepted-source-shutdown")
+        return verify_application_signaled_relocation (true) ? EXIT_SUCCESS : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "stopped-host-rerun")
         return verify_deferred_framework_apply_preserves_hosted_service_order () ? EXIT_SUCCESS
                                                                                  : EXIT_FAILURE;
@@ -2468,6 +2569,9 @@ int main (int argc, char **argv)
         return EXIT_FAILURE;
 
     if (!verify_relocation_reject_reports_requested_target ())
+        return EXIT_FAILURE;
+
+    if (!verify_application_signaled_relocation (true))
         return EXIT_FAILURE;
 
     if (std::getenv ("ZLINK_CPP_RUN_HOST_RELOCATION_INTEGRATION")

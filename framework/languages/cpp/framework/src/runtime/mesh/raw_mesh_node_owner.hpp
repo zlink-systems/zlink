@@ -155,6 +155,13 @@ class raw_mesh_node_owner_t
     task_t<zlink::submit_result_t>
     send_to_node_result (const std::vector<std::uint8_t> &target_routing_id,
                          const protocol::application_payload_t &application_payload);
+    task_t<zlink::submit_result_t>
+    send_logical_multicast (const std::vector<std::uint8_t> &target_routing_id,
+                            const std::string &channel_name,
+                            const std::string &topic,
+                            const std::string &source_spot_id,
+                            const protocol::application_payload_t &application_payload,
+                            const std::vector<std::uint8_t> &metadata);
     task_t<bool> request_to_node (const std::vector<std::uint8_t> &target_routing_id,
                                   const protocol::application_payload_t &application_payload,
                                   std::chrono::milliseconds timeout,
@@ -256,6 +263,8 @@ class raw_mesh_node_owner_t
     task_t<bool>
     send_bound_session_replaced (const std::vector<std::uint8_t> &retired_session_owner_routing_id,
                                  const protocol::bound_session_replaced_t &record);
+    task_t<void> request_bound_session_close (protocol::bound_session_close_t record,
+                                              std::chrono::milliseconds timeout);
     bool reply_bound_session_bind (const service_mailbox_record_t &request,
                                    std::uint32_t terminal_result = 0,
                                    std::uint32_t failure_code = 0);
@@ -324,8 +333,9 @@ class raw_mesh_node_owner_t
     request_relocation_prepare (const std::vector<std::uint8_t> &target_routing_id,
                                 const protocol::relocation_prepare_t &prepare,
                                 std::chrono::milliseconds timeout);
-    bool reply_relocation_ready (const service_mailbox_record_t &request,
-                                 const protocol::relocation_ready_t &ready);
+    task_t<std::function<bool ()>>
+    prepare_relocation_ready_reply (const service_mailbox_record_t &request,
+                                    const protocol::relocation_ready_t &ready);
     bool reply_relocation_failed (const service_mailbox_record_t &request,
                                   const protocol::relocation_failed_t &failure);
     // actorJoin(28): durable admission over the ROUTER port.

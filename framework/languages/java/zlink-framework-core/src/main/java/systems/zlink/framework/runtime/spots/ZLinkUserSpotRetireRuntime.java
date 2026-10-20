@@ -1,18 +1,20 @@
 package systems.zlink.framework.runtime.spots;
 
-import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkSessionRelocationPeerClient;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationMode;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateFence;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAggregateRelocationCoordinator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationOwnerToken;
 import systems.zlink.framework.runtime.internal.locations.ZLinkLocationRepository;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRelocationAdapterRegistry;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 
@@ -82,8 +84,10 @@ public final class ZLinkUserSpotRetireRuntime {
             ZLinkRelocationAdapterRegistry adapters,
             long applicationVersion,
             Optional<String> maintenanceWave,
-            Duration sessionRelocationSealTimeout) {
+            Duration sessionRelocationSealTimeout,
+            java.util.function.Predicate<String> targetAdmissionSealed) {
         this.spots = Objects.requireNonNull(spots, "spots");
+        Objects.requireNonNull(targetAdmissionSealed, "targetAdmissionSealed");
         this.actors = Objects.requireNonNull(actors, "actors");
         Objects.requireNonNull(locationResolvers, "locationResolvers");
         if (applicationVersion < 0) {
@@ -174,31 +178,25 @@ public final class ZLinkUserSpotRetireRuntime {
                             peerClient,
                             CONTROL_TIMEOUT,
                             request ->
-                                    coordinator
-                                            .normalizePublishedAggregate(
-                                                    request.participants().stream()
-                                                            .map(
-                                                                    value ->
-                                                                            new ZLinkAggregateRelocationCoordinator
-                                                                                    .ExpectedParticipant(
-                                                                                    value
-                                                                                            .authorityKey(),
-                                                                                    value
-                                                                                            .objectGeneration(),
-                                                                                    value
-                                                                                            .sourceAuthorityOwnerGeneration()))
-                                                            .toList(),
-                                                    new ZLinkAggregateFence(
-                                                            request.fence().aggregateId(),
-                                                            request.fence().aggregateGeneration()),
-                                                    new ZLinkLocationOwnerToken(
-                                                            request.targetOwnerId(),
-                                                            request.targetOwnerLeaseGeneration()),
-                                                    () -> false)
-                                            .thenCompose(
-                                                    ignored ->
-                                                            restoreBoundSessions(
-                                                                    actors, node, request)),
+                                    coordinator.normalizePublishedAggregate(
+                                            request.participants().stream()
+                                                    .map(
+                                                            value ->
+                                                                    new ZLinkAggregateRelocationCoordinator
+                                                                            .ExpectedParticipant(
+                                                                            value.authorityKey(),
+                                                                            value
+                                                                                    .objectGeneration(),
+                                                                            value
+                                                                                    .sourceAuthorityOwnerGeneration()))
+                                                    .toList(),
+                                            new ZLinkAggregateFence(
+                                                    request.fence().aggregateId(),
+                                                    request.fence().aggregateGeneration()),
+                                            new ZLinkLocationOwnerToken(
+                                                    request.targetOwnerId(),
+                                                    request.targetOwnerLeaseGeneration()),
+                                            () -> false),
                             spots,
                             relocationReplyClient,
                             locations,
@@ -208,7 +206,9 @@ public final class ZLinkUserSpotRetireRuntime {
                                     adapters,
                                     spots,
                                     registration.meshName()),
-                            actorJoin);
+                            actorJoin,
+                            (request, generations) ->
+                                    installBoundSessions(node.spotNode(), request, generations));
             var relocationClient =
                     new ZLinkCanonicalRelocationStateMachine(
                             node,
@@ -218,7 +218,8 @@ public final class ZLinkUserSpotRetireRuntime {
                             coordinator,
                             target,
                             spots::scheduleRelocationCleanup,
-                            transferOptions);
+                            transferOptions,
+                            () -> targetAdmissionSealed.test(registration.meshName()));
             machines.add(relocationClient);
             new ZLinkCanonicalRelocationTransitionOwner(relocationClient).install(node);
             node.setRelocationReplyRelayHandler(target::relayCanonicalReply);
@@ -279,31 +280,34 @@ public final class ZLinkUserSpotRetireRuntime {
         }
     }
 
-    private static CompletionStage<Void> restoreBoundSessions(
-            ZLinkActorRuntime actors,
-            ZLinkInternalMeshNode node,
-            ZLinkSpotRetireControl.StageRequest request) {
-        List<CompletableFuture<Long>> restored = new ArrayList<>();
-        for (ZLinkSpotRetireControl.SessionRouteFence route : request.sessionRoutes()) {
-            ZLinkActor actor =
-                    actors.localActor(route.actorId())
-                            .orElseThrow(
-                                    () ->
-                                            new IllegalStateException(
-                                                    "relocated Actor is unavailable while restoring"
-                                                            + " its bound Session: "
-                                                            + route.actorId()));
-            restored.add(
-                    actors.bindNativeSession(
-                                    actor,
-                                    node.spotNode(),
-                                    actors.currentRef(actor),
-                                    route.sessionOwnerNodeRid(),
-                                    route.sessionRid(),
-                                    route.bindingGeneration())
+    static CompletionStage<Void> installBoundSessions(
+            ZLinkInternalSpotNode node,
+            ZLinkSpotRetireControl.StageRequest request,
+            Map<String, Long> actorOwnerGenerations) {
+        List<CompletableFuture<Void>> installed = new ArrayList<>();
+        for (var route : request.sessionRoutes()) {
+            installed.add(
+                    node.installRelocatingActorBoundSession(
+                                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                            new ZLinkBackendActorRef(
+                                                    request.targetNodeRid(),
+                                                    route.actorId(),
+                                                    route.actorObjectGeneration()),
+                                            request.targetNodeGeneration(),
+                                            Objects.requireNonNull(
+                                                    actorOwnerGenerations.get(route.actorId()),
+                                                    "committed Actor owner generation"),
+                                            request.targetOwnerLeaseGeneration()),
+                                    new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                                            route.sessionOwnerNodeRid(),
+                                            route.sessionOwnerNodeGeneration(),
+                                            route.sessionOwnerId(),
+                                            route.sessionOwnerLeaseGeneration(),
+                                            route.sessionRid(),
+                                            route.bindingGeneration()))
                             .toCompletableFuture());
         }
-        return CompletableFuture.allOf(restored.toArray(CompletableFuture[]::new));
+        return CompletableFuture.allOf(installed.toArray(CompletableFuture[]::new));
     }
 
     /**

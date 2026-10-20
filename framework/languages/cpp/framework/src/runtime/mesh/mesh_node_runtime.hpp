@@ -222,6 +222,9 @@ class mesh_node_runtime_t
                                std::chrono::steady_clock::time_point restore_deadline);
     void configure_session_route_owner (
       std::function<std::optional<location_owner_token_t> ()> owner_resolver);
+    /** Session-Actor binding §4: this host's descriptor owner token, absent
+     *  while the host has none. */
+    std::optional<location_owner_token_t> session_route_owner () const;
     void configure_bound_session_relocation_resolver (
       std::function<task_t<std::optional<bound_session_relocation_route_t>> (
         const runtime::stateful::object_ref_t &)> resolver);
@@ -246,6 +249,7 @@ class mesh_node_runtime_t
       zlink::framework::runtime::protocol::instance_spot_activation_header_t request,
       std::optional<std::vector<std::uint8_t>> metadata,
       zlink::framework::runtime::protocol::application_payload_t application_payload);
+    void configure_peer_reconcile (std::function<void (const std::vector<std::uint8_t> &)> request);
     void connect_peer (const zlink::routing_id_t &expected_routing_id,
                        const std::string &endpoint,
                        std::uint64_t expected_lifecycle_generation = 0,
@@ -358,17 +362,19 @@ class mesh_node_runtime_t
                               std::uint64_t object_generation,
                               std::uint64_t authority_owner_generation,
                               std::chrono::milliseconds timeout);
-    // Completes when the entry Spot join operation completes; nothing waits for it.
     task_t<actor_join_reply_t>
-    join_application_actor_to_entry_spot (const actor_ref_t &actor,
-                                          const node_rid_t &target_node,
-                                          const zlink::message_t &request,
+    join_application_actor_to_entry_spot (actor_ref_t actor,
+                                          node_rid_t target_node,
+                                          zlink::message_t request,
                                           std::chrono::milliseconds timeout);
     result_t<void> submit_application_actor_entry_spot_join (const actor_ref_t &actor,
                                                              const node_rid_t &target_node,
                                                              const zlink::message_t &request,
                                                              std::chrono::milliseconds timeout,
+                                                             host::pending_operation_t &operation,
                                                              actor_join_completion_t completion);
+
+    void settle_application_actor_creation (const actor_ref_t &actor, bool ready);
 
     task_t<actor_join_reply_t> join_application_actor_to_spot (
       actor_ref_t actor,
@@ -426,7 +432,7 @@ class mesh_node_runtime_t
                                              const runtime::spot_address_t &stale_route,
                                              std::chrono::milliseconds timeout) const;
     task_t<void> notify_application_actor_disconnected (const actor_ref_t &actor,
-                                                        const node_rid_t &target_node,
+                                                        runtime::stateful::stream_binding_t binding,
                                                         std::chrono::milliseconds timeout);
     result_t<operation_completion_t>
     wait_for_completion (const host::pending_operation_t &operation,
@@ -571,7 +577,6 @@ class mesh_node_runtime_t
 
   private:
     static std::vector<std::string> channel_names_on_lane (const mesh_node_builder_state_t &state);
-    bool relocation_source_stopped () const;
 
     //  Coroutine: parameters are taken by value so the frame owns them for
     //  the whole suspended seal exchange (callers pass temporaries).
@@ -579,6 +584,8 @@ class mesh_node_runtime_t
       std::vector<std::pair<runtime::stateful::object_ref_t, authority_snapshot_t>> participants,
       runtime::protocol::relocation_id_t relocation,
       runtime::protocol::relocation_coordinator_fence_t coordinator,
+      zlink::routing_id_t target_node,
+      std::uint64_t target_node_generation,
       std::chrono::milliseconds timeout,
       std::chrono::steady_clock::time_point operation_deadline);
     task_t<std::optional<std::vector<runtime::stateful::relocation_session_binding_t>>>
@@ -586,6 +593,8 @@ class mesh_node_runtime_t
       std::vector<std::pair<runtime::stateful::object_ref_t, authority_snapshot_t>> participants,
       runtime::protocol::relocation_id_t relocation,
       runtime::protocol::relocation_coordinator_fence_t coordinator,
+      zlink::routing_id_t target_node,
+      std::uint64_t target_node_generation,
       std::shared_ptr<session_relocation_seal_outcome_t> outcome,
       std::shared_ptr<bool> attempted,
       std::chrono::steady_clock::time_point operation_deadline);
@@ -671,7 +680,6 @@ class mesh_node_runtime_t
     std::map<message_follow_subscription_id_t, std::shared_ptr<message_follow_subscription_state_t>>
       _message_follow_subscriptions;
     std::map<std::string, host::spot_handle_t> _spots;
-    std::map<std::string, host::actor_handle_t> _actors;
     runtime::offload_executor_t _peer_connection_intent_lane_executor;
     runtime::state_lane_t _peer_connection_intent_lane{_peer_connection_intent_lane_executor};
     std::atomic_uint64_t _pending_application_callbacks{0};

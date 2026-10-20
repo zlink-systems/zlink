@@ -29,6 +29,7 @@ internal interface IZLinkSpotRetireTarget
     ValueTask StageAsync(
         ZLinkSpotRetireReservation reservation,
         ZLinkPreparedSpotRetireStaging relocation,
+        DateTimeOffset deadline,
         CancellationToken cancellationToken
     );
 
@@ -377,6 +378,8 @@ internal sealed class ZLinkSpotRetireScheduler(
                                             .SealActorBoundSessionRouteForRetireAsync(
                                                 actorIds[index],
                                                 sessionRelocationContext,
+                                                reservation.TargetDescriptor.Rid,
+                                                reservation.TargetDescriptorLifecycleGeneration,
                                                 cancellationToken
                                             )
                                             .ConfigureAwait(false);
@@ -562,7 +565,9 @@ internal sealed class ZLinkSpotRetireScheduler(
                 staging.Envelope
             );
             stageStarted = true;
-            await target.StageAsync(reservation, staging, cancellationToken).ConfigureAwait(false);
+            await target
+                .StageAsync(reservation, staging, deadline, cancellationToken)
+                .ConfigureAwait(false);
             ZLinkFrameworkDebugLog.SpotDiscovery(
                 $"relocation_stage_end spot={activation.SpotId} aggregate={aggregateId:N}"
             );

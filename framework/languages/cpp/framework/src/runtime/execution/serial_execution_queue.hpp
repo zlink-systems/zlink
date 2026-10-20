@@ -181,8 +181,12 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                           serial_work_options_t options,
                           std::function<bool ()> stop_requested = {});
     bool try_post_deferred (std::string name, std::function<void ()> work);
-    result_t<std::shared_ptr<detail::deferred_barrier_t>>
-    reserve_barrier_next (std::string name, bool holds_application_while_waiting = false);
+    result_t<std::shared_ptr<detail::deferred_barrier_t>> reserve_barrier_next (
+      std::string name,
+      bool holds_application_while_waiting = false,
+      serial_work_lane_t lane = serial_work_lane_t::lifecycle,
+      std::function<task_t<std::vector<std::shared_ptr<serial_execution_queue_t>>> ()>
+        participants = {});
     result_t<std::shared_ptr<detail::deferred_barrier_t>>
     reserve_handoff_barrier (std::string name);
     void post (std::string name, std::function<void ()> work);
@@ -205,6 +209,8 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     task_t<std::shared_ptr<const void>> first_pending_message_or_close ();
     task_t<std::vector<std::shared_ptr<const void>>> pending_messages () const;
     bool allows_yield () const noexcept { return _lane_policy.allows_turn_yield (); }
+    using application_start_policy_t = std::function<bool (const std::shared_ptr<const void> &)>;
+    void set_application_start_policy (application_start_policy_t policy);
     // Installs the SpotWide owner before an Actor mailbox accepts work.
     void attach_spot_gate (std::shared_ptr<serial_execution_queue_t> gate);
 
@@ -222,7 +228,6 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
         std::shared_ptr<serial_turn_handle_impl_t> turn;
         bool cancel_requested = false;
         std::optional<std::function<void ()>> suspended_completion;
-        bool holds_application_while_waiting = false;
         // The handler this item continues after a Yield; empty otherwise.
         std::shared_ptr<serial_turn_chain_t> chain;
         // The deferred-work position this item holds; empty otherwise.
@@ -345,12 +350,16 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     void release_lifecycle_hold (std::shared_ptr<serial_turn_chain_t> chain);
     void schedule_after_settle ();
     std::shared_ptr<serial_turn_handle_impl_t>
-    create_turn (const std::string &name, serial_work_lane_t lane, item_origin_t origin);
+    create_turn (const std::string &name,
+                 serial_work_lane_t lane,
+                 item_origin_t origin,
+                 bool holds_application_while_waiting = false);
     void activate_turn_locked (work_item_t &item) noexcept;
     std::deque<work_item_t>::iterator next_lifecycle_locked () noexcept;
     bool has_queued_locked () const noexcept;
     bool has_ready_locked () noexcept;
-    bool application_ready_locked () const noexcept;
+    std::deque<work_item_t>::iterator next_application_locked () noexcept;
+    bool application_ready_locked () noexcept;
     work_item_t take_next_locked (std::optional<serial_work_lane_t> forced_lane = {});
     serial_work_lane_t select_next_lane_locked () noexcept;
     void report_deferred_error (const std::string &name,
@@ -360,6 +369,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     const serial_execution_queue_options_t _options;
     const serial_lane_policy_t _lane_policy;
     error_handler_t _error_handler;
+    application_start_policy_t _application_start_policy;
     mutable std::mutex _mutex;
     std::condition_variable _empty;
     lane_state_t _application;

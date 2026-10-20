@@ -35,6 +35,7 @@ async function start() {
   else if (role === 'target') await startTarget();
   else throw new Error(`Unsupported role '${role}'.`);
   process.on('message', onMessage);
+  process.once('disconnect', () => void stop());
   process.once('SIGTERM', () => void stop());
   // The session owner reports the port it bound; the target connects to it.
   send({ type: 'ready', role, pid: process.pid, port: server?.address().port });
@@ -102,6 +103,9 @@ async function startTarget() {
     spotId: 'entry',
     sessionNodeRid: 'session-owner',
     sessionRid: 'session',
+    sessionOwnerNodeGeneration: 4n,
+    sessionOwnerId: 'session-owner-id',
+    sessionOwnerLeaseGeneration: 8n,
     bindingGeneration: 6n
   };
   transferState = {
@@ -141,12 +145,6 @@ async function startTarget() {
   };
   transferRuntime = new ZLinkActorTransferRuntime({
     authorityStore: () => ({ async readAuthority() { return authority; } }),
-    liveDescriptors: async () => [{
-      rid: 'session-owner',
-      lifecycleGeneration: 4n,
-      ownerId: 'session-owner-id',
-      leaseGeneration: 8n
-    }],
     sessionRelocationWire: () => sessionRelocationWire,
     actorHandoff: {
       begin() {},
@@ -268,7 +266,8 @@ async function targetCommand(action) {
       transferState,
       undefined,
       false,
-      { high: 7n, low: 9n }
+      { high: 7n, low: 9n },
+    { rid: 'target', lifecycleGeneration: 4n }
     );
     return {
       phase: 'sealed',

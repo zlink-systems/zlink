@@ -553,7 +553,7 @@ async function entrySpotRelocate() {
            * PeerConnections.Connect; peers are supposed to find each other
            * through the store alone. */
           const objects = mesh.objects().server();
-          objects.addEntrySpot(RelocationEntrySpot);
+          objects.addEntrySpot(RelocationEntrySpot, actorType);
           objects.addActorFactory(actorType, RelocationActorFactory, (factory) =>
             factory.preserveStateWith(RelocationActorAdapter)
           );

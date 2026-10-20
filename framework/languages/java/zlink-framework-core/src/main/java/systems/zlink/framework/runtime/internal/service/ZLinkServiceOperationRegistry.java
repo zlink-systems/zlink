@@ -8,8 +8,7 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -21,8 +20,10 @@ import java.util.function.Supplier;
 
 /** Owns operation correlation, request deadlines, and terminal-once completion. */
 public final class ZLinkServiceOperationRegistry implements AutoCloseable {
-    private final ScheduledExecutorService scheduler;
-    private ScheduledFuture<?> maintenance;
+    private final ThreadFactory maintenanceFactory;
+    private Thread maintenance;
+    // The worker's reserved wheel visit survives removal of the last pending request.
+    private long maintenanceTick = -1;
     private final LongSupplier nanoTime;
     private final Supplier<? extends Throwable> timeoutFailure;
     private final ZLinkServiceCompletionDispatcher completions =
@@ -49,37 +50,53 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
     private Entry<?> activeTail;
     private volatile boolean closed;
 
-    public ZLinkServiceOperationRegistry(ScheduledExecutorService scheduler) {
-        this(scheduler, new IllegalStateException("service runtime is closed"));
+    public ZLinkServiceOperationRegistry() {
+        this(new IllegalStateException("service runtime is closed"));
+    }
+
+    public ZLinkServiceOperationRegistry(Throwable closeFailure) {
+        this(closeFailure, () -> new TimeoutException("service operation timed out"));
+    }
+
+    ZLinkServiceOperationRegistry(ThreadFactory maintenanceFactory) {
+        this(maintenanceFactory, new IllegalStateException("service runtime is closed"));
+    }
+
+    ZLinkServiceOperationRegistry(ThreadFactory maintenanceFactory, Throwable closeFailure) {
+        this(maintenanceFactory, closeFailure, System::nanoTime);
     }
 
     public ZLinkServiceOperationRegistry(
-            ScheduledExecutorService scheduler, Throwable closeFailure) {
-        this(scheduler, closeFailure, () -> new TimeoutException("service operation timed out"));
-    }
-
-    public ZLinkServiceOperationRegistry(
-            ScheduledExecutorService scheduler,
-            Throwable closeFailure,
-            Supplier<? extends Throwable> timeoutFailure) {
-        this(scheduler, closeFailure, timeoutFailure, System::nanoTime);
+            Throwable closeFailure, Supplier<? extends Throwable> timeoutFailure) {
+        this(closeFailure, timeoutFailure, System::nanoTime);
     }
 
     ZLinkServiceOperationRegistry(
-            ScheduledExecutorService scheduler, Throwable closeFailure, LongSupplier nanoTime) {
+            ThreadFactory maintenanceFactory, Throwable closeFailure, LongSupplier nanoTime) {
         this(
-                scheduler,
+                maintenanceFactory,
                 closeFailure,
                 () -> new TimeoutException("service operation timed out"),
                 nanoTime);
     }
 
     public ZLinkServiceOperationRegistry(
-            ScheduledExecutorService scheduler,
             Throwable closeFailure,
             Supplier<? extends Throwable> timeoutFailure,
             LongSupplier nanoTime) {
-        this.scheduler = Objects.requireNonNull(scheduler, "scheduler");
+        this(
+                Thread.ofVirtual().name("zlink-jvm-operation-maintenance").factory(),
+                closeFailure,
+                timeoutFailure,
+                nanoTime);
+    }
+
+    ZLinkServiceOperationRegistry(
+            ThreadFactory maintenanceFactory,
+            Throwable closeFailure,
+            Supplier<? extends Throwable> timeoutFailure,
+            LongSupplier nanoTime) {
+        this.maintenanceFactory = Objects.requireNonNull(maintenanceFactory, "maintenanceFactory");
         this.closeFailure = Objects.requireNonNull(closeFailure, "closeFailure");
         this.timeoutFailure = Objects.requireNonNull(timeoutFailure, "timeoutFailure");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
@@ -228,13 +245,34 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
 
     @Override
     public void close() {
+        Thread worker;
+        synchronized (gate) {
+            if (closed) return;
+            closed = true;
+            worker = maintenance;
+            gate.notifyAll();
+        }
+        try {
+            cancelPendingOperations();
+        } finally {
+            if (worker != null && worker != Thread.currentThread()) {
+                boolean interrupted = false;
+                while (worker.isAlive()) {
+                    try {
+                        worker.join();
+                    } catch (InterruptedException interruption) {
+                        interrupted = true;
+                    }
+                }
+                if (interrupted) Thread.currentThread().interrupt();
+            }
+        }
+    }
+
+    public void cancelPendingOperations() {
         Entry<?> detachedHead;
         Entry<?> detachedTail;
         synchronized (gate) {
-            if (closed) {
-                return;
-            }
-            closed = true;
             detachedHead = activeHead;
             detachedTail = activeTail;
             Entry<?> current = detachedHead;
@@ -246,11 +284,7 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                 current = next;
             }
         }
-        try {
-            if (maintenance != null) maintenance.cancel(false);
-        } finally {
-            completions.postChain(detachedHead, detachedTail);
-        }
+        completions.postChain(detachedHead, detachedTail);
     }
 
     private Entry<?> take(UUID id) {
@@ -374,7 +408,6 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
                 if (deadlineCursor == null) {
                     long next = nextOccupiedTick();
                     if (next < 0) {
-                        deadlineTick = Math.max(deadlineTick, nowTick + 1);
                         break;
                     }
                     if (next > nowTick) break;
@@ -402,8 +435,29 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         return expired;
     }
 
-    private void expireMaintenance() {
-        expire(nanoTime.getAsLong());
+    private void maintainDeadlines() {
+        try {
+            while (true) {
+                synchronized (gate) {
+                    while (!closed) {
+                        long now = nanoTime.getAsLong();
+                        maintenanceTick = nextOccupiedTick();
+                        if (maintenanceTick < 0) {
+                            gate.wait();
+                        } else {
+                            long remaining =
+                                    maintenanceTick * DEADLINE_TICK_NANOS - (now - deadlineOrigin);
+                            if (remaining <= 0) break;
+                            TimeUnit.NANOSECONDS.timedWait(gate, remaining);
+                        }
+                    }
+                    if (closed) return;
+                }
+                expire(nanoTime.getAsLong());
+            }
+        } catch (InterruptedException interrupted) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private <T> Operation<T> registerLocked(long timeoutNanos, UUID suppliedId, Kind kind) {
@@ -422,14 +476,13 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         long targetTick = 0;
         if (kind == Kind.REQUEST) {
             if (maintenance == null) {
-                maintenance =
-                        scheduler.scheduleAtFixedRate(
-                                this::expireMaintenance,
-                                DEADLINE_TICK_NANOS,
-                                DEADLINE_TICK_NANOS,
-                                TimeUnit.NANOSECONDS);
+                Thread worker = maintenanceFactory.newThread(this::maintainDeadlines);
+                worker.start();
+                maintenance = worker;
             }
             long elapsed = nanoTime.getAsLong() - deadlineOrigin;
+            if (nextOccupiedTick() < 0)
+                deadlineTick = Math.max(deadlineTick, elapsed / DEADLINE_TICK_NANOS);
             targetTick =
                     elapsed / DEADLINE_TICK_NANOS
                             + timeoutNanos / DEADLINE_TICK_NANOS
@@ -453,7 +506,12 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         entry.hashNext = buckets[bucket];
         buckets[bucket] = entry;
         pendingCount++;
-        if (kind == Kind.REQUEST) indexDeadline(entry, targetTick);
+        if (kind == Kind.REQUEST) {
+            indexDeadline(entry, targetTick);
+            if (maintenanceTick < 0 || nextOccupiedTick() < maintenanceTick) {
+                gate.notifyAll();
+            }
+        }
         linkActive(entry);
         return operation;
     }

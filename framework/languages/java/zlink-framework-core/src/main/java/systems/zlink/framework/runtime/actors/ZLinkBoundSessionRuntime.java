@@ -33,9 +33,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
     private final ZLinkActor actor;
     private final ZLinkStreamCodec defaultCodec;
     private final ZLinkRelayMetadataPolicy metadataPolicy;
-    private long bindingToken;
     private int actorSlot;
-    private Runnable unbindListener = () -> {};
     private Consumer<ZLinkBackendActorRef> rebindListener = ignored -> {};
 
     ZLinkBoundSessionRuntime(
@@ -60,16 +58,12 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                 metadataPolicy == null ? ZLinkRelayMetadataPolicy.EMPTY : metadataPolicy;
     }
 
-    void setBindingToken(long bindingToken) {
-        this.bindingToken = bindingToken;
+    ZLinkInternalSpotNode spotNode() {
+        return spotNode;
     }
 
     void setActorSlot(int actorSlot) {
         this.actorSlot = actorSlot;
-    }
-
-    void setUnbindListener(Runnable unbindListener) {
-        this.unbindListener = unbindListener == null ? () -> {} : unbindListener;
     }
 
     void setRebindListener(Consumer<ZLinkBackendActorRef> rebindListener) {
@@ -152,10 +146,7 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
 
     @Override
     public CompletionStage<Void> disconnect() {
-        return stream.unbindActor(sessionRid, actorId)
-                .submit(DEFAULT_TIMEOUT)
-                .thenCompose(ignored -> actorRuntime.clearSessionBinding(actor, bindingToken))
-                .thenRun(() -> unbindListener.run());
+        return actorRuntime.closeNativeSessionBinding(actor, spotNode, DEFAULT_TIMEOUT);
     }
 
     private record SendCall(

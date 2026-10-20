@@ -22,55 +22,8 @@ namespace zlink::framework::runtime::foundation
 {
 
 using call_id_t = runtime::call_id_t;
-class operation_completion_dispatcher_t;
 struct operation_completion_item_t;
 struct operation_registry_drain_state_t;
-
-bool is_on_completion_dispatcher () noexcept;
-
-// An intrusive FIFO of already registered dispatcher slots. No new slots or
-// per-completion storage are allocated while collecting a receive rotation.
-struct operation_completion_chain_t
-{
-    operation_completion_chain_t () noexcept;
-    ~operation_completion_chain_t ();
-    operation_completion_chain_t (operation_completion_chain_t &&other) noexcept;
-    operation_completion_chain_t &operator= (operation_completion_chain_t &&) = delete;
-    operation_completion_chain_t (const operation_completion_chain_t &) = delete;
-    operation_completion_chain_t &operator= (const operation_completion_chain_t &) = delete;
-
-    operation_completion_chain_t take_first () noexcept;
-    void publish () noexcept;
-    void run_one () noexcept;
-    bool empty () const noexcept { return !head; }
-    std::size_t size () const noexcept { return _size; }
-
-  private:
-    friend class operation_completion_dispatcher_t;
-    friend class operation_registry_t;
-
-    void append (std::unique_ptr<operation_completion_item_t> completion,
-                 operation_terminal_t terminal,
-                 zlink::message_t payload = {},
-                 std::optional<operation_terminal_t> request_terminal = {}) noexcept;
-    void append (operation_completion_chain_t completions) noexcept;
-
-    std::unique_ptr<operation_completion_item_t> head;
-    operation_completion_item_t *tail = nullptr;
-    std::size_t _size = 0;
-};
-
-class operation_completion_collector_t
-{
-  public:
-    explicit operation_completion_collector_t (operation_completion_chain_t &completions) noexcept;
-    ~operation_completion_collector_t ();
-    operation_completion_collector_t (const operation_completion_collector_t &) = delete;
-    operation_completion_collector_t &operator= (const operation_completion_collector_t &) = delete;
-
-  private:
-    operation_completion_chain_t *_previous;
-};
 
 class operation_registry_t
 {
@@ -137,7 +90,6 @@ class operation_registry_t
     void index_deadline (const call_id_t &id, clock_t::time_point deadline, pending_t &pending);
     void unindex_deadline (pending_t &pending) noexcept;
 
-    std::shared_ptr<operation_completion_dispatcher_t> _completion_dispatcher;
     std::shared_ptr<operation_registry_drain_state_t> _drain_state;
     mutable std::mutex _mutex;
     std::unordered_map<call_id_t, pending_t, id_hash_t> _pending;

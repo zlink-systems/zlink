@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <exception>
 #include <future>
 #include <memory>
 #include <optional>
@@ -288,7 +289,8 @@ TEST (ZLinkFrameworkSyncSubmit, ChannelHandlerKeepsAllAsyncTerminalsAvailable)
     EXPECT_EQ (1, calls.bound_sends);
 }
 
-TEST (ZLinkFrameworkSyncSubmit, ApplicationCallbacksCompletedInlineKeepTheHandlerContext)
+TEST (ZLinkFrameworkSyncSubmit,
+      OutsideCompletionAllowsSubmissionAndInlineTerminalKeepsHandlerContext)
 {
     service_collection_t services;
     services.add_singleton<channel_handler_t> ();
@@ -297,28 +299,68 @@ TEST (ZLinkFrameworkSyncSubmit, ApplicationCallbacksCompletedInlineKeepTheHandle
     auto pending = handler.resume.task ();
     int completions = 0;
     int terminals = 0;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    std::promise<void> completed;
+    auto completion = completed.get_future ();
     ASSERT_EQ (nullptr, detail::application_job_context_t::current ());
-    detail::observe_task_completion (pending, [&] (const result_t<void> &result) {
-        EXPECT_TRUE (result);
-        handler.calls.expect_rejected ();
-        ++completions;
-    });
-    detail::observe_task_terminal (pending, [&] (const result_t<void> &result) {
-        EXPECT_TRUE (result);
-        handler.calls.expect_rejected ();
-        ++terminals;
-    });
-    serializer_registry_t serializers;
-    handler_registry_t handlers;
-    handlers.on_request<channel_handler_t, int, int> (
-      "sync-submit", "", &channel_handler_t::complete_application_callbacks,
-      {.packet_name = "request"});
-    ASSERT_TRUE (handlers.invoke ("sync-submit", "request", provider, serializers,
-                                  zlink::message_t::from (std::string ("42"))));
+    {
+        struct completion_scope_t
+        {
+            std::promise<void> &release;
+            task_completion_source_t<void> &source;
+            std::future<void> &completion;
+            ~completion_scope_t ()
+            {
+                source.complete (result_t<void>::failure (framework_error_kind_t::invalid_operation,
+                                                          "handler did not complete the source"));
+                release.set_value ();
+                completion.wait ();
+            }
+        } completion_scope{release, handler.resume, completion};
+        detail::observe_task_completion (pending, [&] (const result_t<void> &result) {
+            try {
+                EXPECT_TRUE (result);
+                if (!result) {
+                    completed.set_value ();
+                    return;
+                }
+                const auto *context = detail::application_job_context_t::current ();
+                EXPECT_EQ (nullptr, context);
+                // A broken inline observer must fail without waiting on its producer.
+                if (context != nullptr) {
+                    completed.set_value ();
+                    return;
+                }
+                // Serialize access to the shared fake counters with the handler/terminal.
+                released.wait ();
+                handler.calls.expect_application_submission ();
+                ++completions;
+                completed.set_value ();
+            }
+            catch (...) {
+                completed.set_exception (std::current_exception ());
+            }
+        });
+        detail::observe_task_terminal (pending, [&] (const result_t<void> &result) {
+            EXPECT_TRUE (result);
+            handler.calls.expect_rejected ();
+            ++terminals;
+        });
+        serializer_registry_t serializers;
+        handler_registry_t handlers;
+        handlers.on_request<channel_handler_t, int, int> (
+          "sync-submit", "", &channel_handler_t::complete_application_callbacks,
+          {.packet_name = "request"});
+        const auto reply = handlers.invoke ("sync-submit", "request", provider, serializers,
+                                            zlink::message_t::from (std::string ("42")));
+        ASSERT_TRUE (reply);
+        EXPECT_EQ ("42", reply.value ().to_string ());
+    }
+    completion.get ();
     EXPECT_EQ (1, completions);
     EXPECT_EQ (1, terminals);
     EXPECT_EQ (nullptr, detail::application_job_context_t::current ());
-    handler.calls.expect_application_submission ();
 }
 
 TEST (ZLinkFrameworkSyncSubmit, SerialHandlerTurnRejectsBeforeSideEffects)

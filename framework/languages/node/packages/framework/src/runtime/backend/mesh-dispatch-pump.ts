@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { awaitWithAbort } from '../abort';
 import { availableParallelism } from 'node:os';
 import {
   enterApplicationJobPermitScope,
@@ -93,7 +94,7 @@ export class ZLinkMeshDispatchPump {
     });
   }
 
-  async dispose(): Promise<void> {
+  async dispose(signal?: AbortSignal): Promise<void> {
     if (this.disposed) {
       return;
     }
@@ -103,7 +104,7 @@ export class ZLinkMeshDispatchPump {
     for (const wake of this.idleApplicationWorkers) wake();
     this.idleApplicationWorkers.clear();
     while (this.activeDrains.size > 0) {
-      await Promise.all([...this.activeDrains]);
+      await awaitWithAbort(Promise.all([...this.activeDrains]), signal);
     }
   }
 
@@ -425,7 +426,8 @@ export class ZLinkMeshDispatchPump {
         if (received.ok) {
           // The bounded batch stays in claim order until its records finish.
           try {
-            for (const record of received.records) {
+            for (let index = 0; index < received.records.length; index += 1) {
+              const record = received.records[index]!;
               if (this.disposed) break;
               const permit = record.applicationJobPermit ?? claimPermit;
               if (owner.ordinaryIngressPreAdmitted === true && permit === undefined) {
@@ -460,8 +462,10 @@ export class ZLinkMeshDispatchPump {
           } finally {
             // Batch ownership includes records whose dispatch never began,
             // including on failure or shutdown in the middle of the batch.
-            for (const record of received.records) {
-              for (const part of record.parts) part.close();
+            for (let index = 0; index < received.records.length; index += 1) {
+              const record = received.records[index]!;
+              for (let partIndex = 0; partIndex < record.parts.length; partIndex += 1)
+                record.parts[partIndex]!.close();
               record.releaseRetainedIngress?.();
             }
           }

@@ -87,10 +87,7 @@ export class ZLinkSpotActorAdmissionCoordinator {
       ),
       serial: activation.serial,
       actors: {
-        resolveActor: (actorId) =>
-          activation.hasDepartedActor(actorId)
-            ? undefined
-            : (activation.resolveJoinedActor(actorId) ?? this.options.actorResolver?.(actorId)),
+        resolveActor: (actorId) => this.resolveActor(activation, actorId),
         getTarget: () => activation.spot,
         defaultAccept: false,
         transfer:
@@ -206,15 +203,12 @@ export class ZLinkSpotActorAdmissionCoordinator {
     requestTerminal?: (response: unknown) => Promise<void> | void
   ): Promise<unknown> {
     return new ZLinkSpotActorPacketDispatch({
+      admission: this.options.admission,
       spot: activation.spot,
       spotId: () => String(activation.spotId),
       registry: activation.actorHandlers,
       serial: actorSerial,
-      resolveActor: (targetActorId) =>
-        activation.hasDepartedActor(targetActorId)
-          ? undefined
-          : (activation.resolveJoinedActor(targetActorId) ??
-            this.options.actorResolver?.(targetActorId)),
+      resolveActor: (targetActorId) => this.resolveActor(activation, targetActorId),
       actorLeft: (targetActorId) => activation.hasDepartedActor(targetActorId),
       onDisconnectActor: (actor) =>
         activation.serial.execute(() => activation.spot.onDisconnectActor?.(actor)),
@@ -237,6 +231,15 @@ export class ZLinkSpotActorAdmissionCoordinator {
       fallbackActorRef,
       requestTerminal
     );
+  }
+
+  private resolveActor(activation: ZLinkSpotActivation, actorId: string): ZLinkActor | undefined {
+    if (activation.hasDepartedActor(actorId)) return undefined;
+    // The manager owns relocation visibility. Membership alone cannot publish
+    // a staged Actor; resolver absence supports standalone Spot runtimes.
+    return this.options.actorResolver === undefined
+      ? activation.resolveJoinedActor(actorId)
+      : this.options.actorResolver(actorId);
   }
 
   private async commitTransferredActorTransaction(

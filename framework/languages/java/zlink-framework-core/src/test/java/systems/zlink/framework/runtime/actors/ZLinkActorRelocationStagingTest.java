@@ -22,9 +22,12 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class ZLinkActorRelocationStagingTest {
+    private static final long RETIREMENT_BOUND_SECONDS = 3;
+
     @Test
     void preparedActorIsNotVisibleUntilAggregatePublication() {
         AtomicInteger destroys = new AtomicInteger();
@@ -110,6 +113,50 @@ final class ZLinkActorRelocationStagingTest {
         CompletableFuture.allOf(active.toCompletableFuture(), cleanup.toCompletableFuture()).join();
         assertEquals(1, closes.get());
         assertTrue(runtime.localActor(prepared.actorId()).isEmpty());
+    }
+
+    @Test
+    void committedSourceRetirementDoesNotWaitForItsLifecycleBarrier() throws Exception {
+        AtomicInteger closes = new AtomicInteger();
+        ZLinkActorRuntime runtime = runtime(new AtomicInteger(), closes);
+        var prepared = publishedActor(runtime, "actor-deferred-source-retirement");
+        systems.zlink.framework.runtime.internal.handlers.ZLinkActorHandlerInstances.instance(
+                prepared.actor(), CloseableProbeHandler.class);
+        var dispatchesField = ZLinkActorRuntime.class.getDeclaredField("dispatches");
+        dispatchesField.setAccessible(true);
+        var dispatches = (ZLinkActorDispatchSerials) dispatchesField.get(runtime);
+        var entered = new CompletableFuture<Void>();
+        var release = new CompletableFuture<Void>();
+        CompletionStage<Void> barrier =
+                dispatches.enqueueBarrier(
+                        prepared.actorId(),
+                        () -> {
+                            entered.complete(null);
+                            return release;
+                        });
+        try {
+            entered.get(RETIREMENT_BOUND_SECONDS, TimeUnit.SECONDS);
+            CompletableFuture.supplyAsync(
+                            () -> runtime.retireCommittedRelocationSource(prepared.actorId()))
+                    .thenCompose(stage -> stage)
+                    .get(RETIREMENT_BOUND_SECONDS, TimeUnit.SECONDS);
+            assertFalse(barrier.toCompletableFuture().isDone());
+            assertTrue(
+                    runtime.localActor(prepared.actorId()).isEmpty(),
+                    "source membership ends before the Join barrier completes");
+            assertEquals(0, closes.get(), "scope disposal follows the lifecycle barrier");
+        } finally {
+            release.complete(null);
+            barrier.toCompletableFuture().get(RETIREMENT_BOUND_SECONDS, TimeUnit.SECONDS);
+            dispatches
+                    .awaitTeardown(prepared.actorId())
+                    .toCompletableFuture()
+                    .get(RETIREMENT_BOUND_SECONDS, TimeUnit.SECONDS);
+            runtime.closeAsync()
+                    .toCompletableFuture()
+                    .get(RETIREMENT_BOUND_SECONDS, TimeUnit.SECONDS);
+        }
+        assertEquals(1, closes.get(), "the registered cleanup executes once");
     }
 
     @Test
@@ -228,7 +275,7 @@ final class ZLinkActorRelocationStagingTest {
     void boundSessionSendWithoutFenceAtMovingBoundaryIsRetryableUnavailable() {
         ZLinkActorRuntime runtime = runtime(new AtomicInteger());
         var prepared = publishedActor(runtime, "actor-moving-fence");
-        runtime.beginRemoteMove(prepared.actor()).toCompletableFuture().join();
+        runtime.beginLocalMove(prepared.actor());
         assertTrue(runtime.isMoving(prepared.actor()));
         try (Message payload = Message.from(new byte[] {1})) {
             ZLinkFrameworkException failure =
@@ -291,6 +338,7 @@ final class ZLinkActorRelocationStagingTest {
                                                 destroys.incrementAndGet();
                                                 yield CompletableFuture.completedFuture(null);
                                             }
+                                            case "boundSessionRoute" -> java.util.Optional.empty();
                                             case "close" -> null;
                                             default -> defaultValue(method.getReturnType());
                                         });

@@ -1,12 +1,15 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/session_disconnect_probe_spot.hpp"
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/request_admission_fixture.hpp"
 
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
+#include "runtime/execution/actor_execution_context.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
@@ -325,10 +328,11 @@ int replaced_session_find_is_exact_and_disconnects_once ()
     (void) old_session.bind (actor).async ().result ().value ();
     (void) current_session.bind (actor).async ().result ().value ();
     int disconnected = 0;
-    gateway.on_disconnect ([&] (const actor_ref_t &) {
-        ++disconnected;
-        return task_t<void> (result_t<void>::success ());
-    });
+    gateway.on_disconnect (
+      [&] (const actor_ref_t &, const std::optional<runtime::stateful::stream_binding_t> &) {
+          ++disconnected;
+          return task_t<void> (result_t<void>::success ());
+      });
 
     if (old_session.find ("actor-replaced"))
         return 1;
@@ -661,10 +665,11 @@ int direct_rebind_publication_is_atomic_and_old_disconnect_is_fenced ()
     binder_entered.wait ();
 
     int disconnected = 0;
-    gateway.on_disconnect ([&] (const actor_ref_t &) {
-        ++disconnected;
-        return task_t<void> (result_t<void>::success ());
-    });
+    gateway.on_disconnect (
+      [&] (const actor_ref_t &, const std::optional<runtime::stateful::stream_binding_t> &) {
+          ++disconnected;
+          return task_t<void> (result_t<void>::success ());
+      });
     const auto stale_disconnect = stale_handle.notify_disconnected ().result ();
     if (stale_disconnect || stale_disconnect.error_kind () != framework_error_kind_t::not_configured
         || disconnected != 0 || old_session.find ("direct-rebind-actor")) {
@@ -743,10 +748,11 @@ int destroyed_or_recreated_actor_ignores_stale_disconnect_handle ()
         return 1;
     auto stale_handle = std::move (original_result.value ());
     int disconnected = 0;
-    gateway.on_disconnect ([&] (const actor_ref_t &) {
-        ++disconnected;
-        return task_t<void> (result_t<void>::success ());
-    });
+    gateway.on_disconnect (
+      [&] (const actor_ref_t &, const std::optional<runtime::stateful::stream_binding_t> &) {
+          ++disconnected;
+          return task_t<void> (result_t<void>::success ());
+      });
     if (!gateway.destroy_actor (original) || !stale_handle.notify_disconnected ().result ()
         || disconnected != 0) {
         return 2;
@@ -794,7 +800,9 @@ int get_or_create_does_not_reuse_disconnected_record ()
     const actor_ref_t stale = test_actor_ref ("actor-node-old", "player", "actor-reconnect", 7);
     const actor_ref_t current = test_actor_ref ("actor-node-new", "player", "actor-reconnect", 8);
     state->sync ([&] {
-        state->actors_by_id.emplace ("actor-reconnect", actor_record_t{stale, false, true});
+        state->actors_by_id.emplace (
+          "actor-reconnect",
+          actor_record_t{stale, false, std::make_shared<task_completion_source_t<void>> ()});
         state->bound_session_sinks.emplace (
           "actor-reconnect", std::make_shared<bound_session_sink_t> (
                                [] (std::string, stream_codec_t, const zlink::message_t &) {
@@ -834,7 +842,7 @@ int get_or_create_refreshes_foreign_session_record ()
     const actor_ref_t stale = test_actor_ref ("actor-node-old", "player", "actor-foreign", 7);
     const actor_ref_t current = test_actor_ref ("actor-node-current", "player", "actor-foreign", 7);
     state->sync ([&] {
-        state->actors_by_id.emplace ("actor-foreign", actor_record_t{stale, true, false});
+        state->actors_by_id.emplace ("actor-foreign", actor_record_t{stale, true, {}});
         state->create_dispatcher = [current] (std::string, std::string,
                                               const std::optional<zlink::message_t> &) {
             return result_t<actor_ref_t>::success (current);
@@ -891,13 +899,14 @@ int session_disconnect_is_all_settled_and_token_fenced ()
     }
 
     std::vector<std::string> disconnected;
-    gateway.on_disconnect ([&] (const actor_ref_t &actor) {
-        disconnected.emplace_back (actor.actor_id ().value ());
-        return task_t<void> (
-          actor.actor_id ().value () == "actor-a"
-            ? result_t<void>::failure (framework_error_kind_t::not_found, "actor-a callback failed")
-            : result_t<void>::success ());
-    });
+    gateway.on_disconnect (
+      [&] (const actor_ref_t &actor, const std::optional<runtime::stateful::stream_binding_t> &) {
+          disconnected.emplace_back (actor.actor_id ().value ());
+          return task_t<void> (actor.actor_id ().value () == "actor-a"
+                                 ? result_t<void>::failure (framework_error_kind_t::not_found,
+                                                            "actor-a callback failed")
+                                 : result_t<void>::success ());
+      });
     session_actor_manager_access_t::disconnect (manager);
     std::sort (disconnected.begin (), disconnected.end ());
     if (disconnected != std::vector<std::string>{"actor-a", "actor-b"}
@@ -929,10 +938,11 @@ int logical_disconnect_is_selected_and_keeps_session_live ()
     auto first_binding = manager.bind (first).async ().result ().value ();
     auto second_binding = manager.bind (second).async ().result ().value ();
     std::vector<std::string> disconnected;
-    gateway.on_disconnect ([&] (const actor_ref_t &actor) {
-        disconnected.emplace_back (actor.actor_id ().value ());
-        return task_t<void> (result_t<void>::success ());
-    });
+    gateway.on_disconnect (
+      [&] (const actor_ref_t &actor, const std::optional<runtime::stateful::stream_binding_t> &) {
+          disconnected.emplace_back (actor.actor_id ().value ());
+          return task_t<void> (result_t<void>::success ());
+      });
 
     if (!first_binding.notify_disconnected ().result ()) {
         return 1;
@@ -2502,11 +2512,12 @@ int disconnect_notification_survives_pending_dispatcher_completion ()
     auto bound = manager.bind (actor).async ().result ().value ();
     auto pending = std::make_shared<task_completion_source_t<void>> ();
     auto disconnect_started = std::make_shared<std::atomic_bool> (false);
-    gateway.on_disconnect (
-      [pending, disconnect_started, actor_id] (const actor_ref_t &disconnected_actor) {
-          return inspect_pending_disconnect_argument (disconnected_actor, pending,
-                                                      disconnect_started, actor_id);
-      });
+    gateway.on_disconnect ([pending, disconnect_started,
+                            actor_id] (const actor_ref_t &disconnected_actor,
+                                       const std::optional<runtime::stateful::stream_binding_t> &) {
+        return inspect_pending_disconnect_argument (disconnected_actor, pending, disconnect_started,
+                                                    actor_id);
+    });
 
     auto notification = bound.notify_disconnected ();
     if (!disconnect_started->load (std::memory_order_acquire))
@@ -2547,7 +2558,8 @@ int session_manager_disconnect_survives_pending_dispatcher_completion ()
     auto observed = std::make_shared<std::promise<bool>> ();
     auto actor_retained = observed->get_future ();
     gateway.on_disconnect ([pending, disconnect_started, observed,
-                            actor_id] (const actor_ref_t &disconnected_actor) {
+                            actor_id] (const actor_ref_t &disconnected_actor,
+                                       const std::optional<runtime::stateful::stream_binding_t> &) {
         return inspect_pending_manager_disconnect_argument (disconnected_actor, pending,
                                                             disconnect_started, observed, actor_id);
     });
@@ -2647,6 +2659,699 @@ int relay_send_survives_pending_dispatcher_completion ()
     return relayed.result () ? 0 : 2;
 }
 
+int session_disconnect_callback_owns_spot_lifecycle_gate ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace rt = zlink::framework::runtime;
+    for (const bool entry : {false, true}) {
+        serializer_registry_t serializers;
+        auto node =
+          test::runtime_failure_fixture<spot_node_builder_state_t> ("disconnect-gate-node");
+        node->worker_executor = std::make_shared<rt::offload_executor_t> (1, "disconnect-gate");
+        auto spot = std::make_shared<spot_context_state_t> ();
+        spot->node = node;
+        spot->node_rid = node_rid_t::from_string ("disconnect-gate-node");
+        spot->spot_id = spot_id_t ("disconnect-gate-spot");
+        spot->spot_name = "disconnect-gate";
+        spot->serial_executor = node->worker_executor;
+        spot->execution_mode =
+          entry ? user_spot_execution_mode_t::spot_wide : user_spot_execution_mode_t::per_actor;
+        spot->lifecycle_domain =
+          entry ? spot_lifecycle_domain_t::entry () : spot_lifecycle_domain_t::user ();
+        spot->serial_queue = std::make_shared<rt::serial_execution_queue_t> (
+          *node->worker_executor, rt::serial_execution_queue_options_t{},
+          rt::serial_execution_queue_t::error_handler_t{},
+          entry ? rt::serial_lane_policy_t::entry_spot ()
+                : rt::serial_lane_policy_t::per_actor_spot ());
+        node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
+        node->spot_ids_by_name.emplace (spot->spot_name, spot->spot_id);
+        if (entry)
+            node->snapshot.entry_spot_name = spot->spot_name;
+        std::atomic_int callbacks{0};
+        std::atomic_bool owned_gate{false};
+        std::atomic_bool owned_actor_context{false};
+        spot_actor_admission_callbacks_t admission;
+        admission.on_disconnect_actor = [&] (void *, void *) -> task_t<void> {
+            const auto turn = capture_current_serial_turn ();
+            owned_gate.store (turn && turn->belongs_to (spot->serial_queue.get ()),
+                              std::memory_order_release);
+            owned_actor_context.store (rt::current_actor_execution.actor_key == "player:gate-player"
+                                         && rt::current_actor_execution.spot_id
+                                              == std::string (spot->spot_id),
+                                       std::memory_order_release);
+            callbacks.fetch_add (1, std::memory_order_acq_rel);
+            co_return;
+        };
+        test::register_session_disconnect_probe (spot, std::move (admission.on_disconnect_actor));
+        spot_node_builder_state_t::actor_factory_registration_t factory;
+        factory.actor_type = std::type_index (typeid (int));
+        factory.create_instance = [] (std::string) { return std::make_shared<int> (7); };
+        factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+        node->actor_factories.emplace ("player", std::move (factory));
+        const auto actor = test_actor_ref ("disconnect-gate-node", "player", "gate-player", 1);
+        node->actor_instances.emplace ("player:gate-player", std::make_shared<int> (7));
+        node->actor_spot_ids.emplace ("player:gate-player", spot->spot_id);
+        node->actor_generations.emplace ("player:gate-player", 1);
+        record_actor_instance_index_unlocked (
+          *node, actor, node->actor_instances.at ("player:gate-player").get ());
+        service_collection_t services;
+        services.add_singleton<actor_gateway_runtime_t> ();
+        auto provider = services.build_provider ();
+        auto &gateway = provider.get_required<actor_gateway_runtime_t> ();
+        auto release = std::make_shared<task_completion_source_t<void>> ();
+        const auto coordinator = spot->ensure_spot_serial_executor ();
+        if (!coordinator || coordinator->uses_spot_execution_gate ())
+            return 2;
+        std::promise<bool> holding;
+        auto hold_signalled = std::make_shared<std::atomic_bool> (false);
+        auto held_started = holding.get_future ();
+        auto held =
+          spot->run_serial_task ("hold-disconnect-spot-lifecycle", [&] () -> task_t<void> {
+              if (!hold_signalled->exchange (true))
+                  holding.set_value (true);
+              co_await release->task ();
+          });
+        observe_task_completion (held, [&] (const auto &) {
+            if (!hold_signalled->exchange (true))
+                holding.set_value (false);
+        });
+        if (!held_started.get ()) {
+            release->complete (result_t<void>::success ());
+            (void) held.result ();
+            return 2;
+        }
+        std::promise<bool> admitted;
+        auto accepted = admitted.get_future ();
+        auto signalled = std::make_shared<std::atomic_bool> (false);
+        auto notification = spot_node_runtime_t (node).relay_actor_packet (
+          actor, gateway.actor_context (actor), stream_message_kind_t::request,
+          rt::protocol::session_disconnected_packet_name,
+          zlink::message_t::from (rt::protocol::encode_session_disconnected (
+            {zlink::routing_id_t::from ("session-owner").to_bytes (), 2, 7})),
+          provider, serializers, {}, nullptr, {}, [&] {
+              if (!signalled->exchange (true))
+                  admitted.set_value (true);
+          });
+        observe_task_completion (notification, [&] (const auto &) {
+            if (!signalled->exchange (true))
+                admitted.set_value (false);
+        });
+        const bool entered_actor = accepted.get ();
+        const bool ran_while_held =
+          callbacks.load (std::memory_order_acquire) != 0 || notification.await_ready ();
+        release->complete (result_t<void>::success ());
+        const auto held_result = held.result ();
+        const auto notified = notification.result ();
+        const bool owns_gate = owned_gate.load (std::memory_order_acquire);
+        const bool owns_actor_context = owned_actor_context.load (std::memory_order_acquire);
+        std::cerr << "Session disconnect lifecycle gate entry=" << entry
+                  << " admitted=" << entered_actor << " ran_while_held=" << ran_while_held
+                  << " owns_spot_turn=" << owns_gate << " owns_actor_context=" << owns_actor_context
+                  << std::endl;
+        spot->serial_queue->drain ();
+        node->worker_executor->drain ();
+        if (!held_result || !notified || !notified.value () || !notified.value ()->is_empty ()
+            || !entered_actor || ran_while_held || !owns_gate || !owns_actor_context
+            || callbacks != 1)
+            return 1;
+    }
+    return 0;
+}
+
+int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace rt = zlink::framework::runtime;
+    serializer_registry_t serializers;
+    service_collection_t services;
+    services.add_singleton<actor_gateway_runtime_t> ();
+    auto provider = services.build_provider ();
+    auto &gateway = provider.get_required<actor_gateway_runtime_t> ();
+    auto node =
+      test::runtime_failure_fixture<spot_node_builder_state_t> ("disconnect-context-node");
+    node->worker_executor = std::make_shared<rt::offload_executor_t> (1, "disconnect-context");
+    auto spot = std::make_shared<spot_context_state_t> ();
+    spot->node = node;
+    spot->node_rid = node_rid_t::from_string ("disconnect-context-node");
+    spot->spot_id = spot_id_t ("disconnect-context-spot");
+    spot->spot_name = "disconnect-context";
+    spot->serial_executor = node->worker_executor;
+    spot->channel_runtime = test::runtime_failure_fixture<channel_runtime_state_t> ();
+    spot->channel_runtime->serializers = &serializers;
+    auto release = std::make_shared<task_completion_source_t<void>> ();
+    std::promise<bool> entered;
+    auto callback_started = entered.get_future ();
+    auto entered_once = std::make_shared<std::atomic_bool> (false);
+    std::atomic_int callbacks{0};
+    test::register_session_disconnect_probe (spot, [&] (void *, void *) -> task_t<void> {
+        callbacks.fetch_add (1, std::memory_order_acq_rel);
+        if (!entered_once->exchange (true))
+            entered.set_value (true);
+        co_await release->task ();
+    });
+    node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.create_instance = [] (std::string) { return std::make_shared<int> (7); };
+    factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+    node->actor_factories.emplace ("player", std::move (factory));
+    const auto actor = test_actor_ref ("disconnect-context-node", "player", "context-player", 1);
+    const auto instance = std::make_shared<int> (7);
+    node->actor_instances.emplace ("player:context-player", instance);
+    node->actor_spot_ids.emplace ("player:context-player", spot->spot_id);
+    node->actor_generations.emplace ("player:context-player", 1);
+    record_actor_instance_index_unlocked (*node, actor, instance.get ());
+    (void) gateway.actor_context (actor);
+    if (!gateway.record_bound_session_route (actor, zlink::routing_id_t::from ("session-owner"),
+                                             zlink::routing_id_t::from ("session"), 2, 1, 1, 7))
+        return 1;
+    const auto body = zlink::message_t::from (rt::protocol::encode_session_disconnected (
+      {zlink::routing_id_t::from ("session-owner").to_bytes (), 2, 7}));
+    spot_node_runtime_t spots (node);
+    spots.bind_service_provider (provider);
+    if (!replay) {
+        release->complete (result_t<void>::success ());
+        auto typed_spot =
+          std::static_pointer_cast<test::session_disconnect_probe_spot_t> (spot->spot_instance);
+        std::cerr << "Session disconnect public invocation without ingress metadata starts"
+                  << std::endl;
+        const auto delivered =
+          spot_context_access_t::create (spot).handlers ().invoke_actor_packet (
+            rt::protocol::session_disconnected_packet_name, *typed_spot, *instance, provider,
+            serializers, body);
+        const auto mismatched =
+          spot_context_access_t::create (spot).handlers ().invoke_actor_packet (
+            rt::protocol::session_disconnected_packet_name, *typed_spot, *instance, provider,
+            serializers,
+            zlink::message_t::from (rt::protocol::encode_session_disconnected (
+              {zlink::routing_id_t::from ("session-owner").to_bytes (), 2, 8})));
+        int unregistered = 9;
+        const auto missing = spot_context_access_t::create (spot).handlers ().invoke_actor_packet (
+          rt::protocol::session_disconnected_packet_name, *typed_spot, unregistered, provider,
+          serializers, body);
+        node->worker_executor->drain ();
+        return delivered && delivered.value ().is_empty () && mismatched
+                   && mismatched.value ().is_empty () && callbacks == 1 && !missing
+                   && missing.error_kind () == framework_error_kind_t::not_found
+                 ? 0
+                 : 2;
+    }
+
+    auto terminal_source = std::make_shared<task_completion_source_t<zlink::message_t>> ();
+    auto terminal = terminal_source->task ();
+    std::atomic_int terminals{0};
+    std::atomic_bool preserved_route{false};
+    node->actor_handoff_terminal_sender =
+      [&] (const zlink::routing_id_t &parking, const zlink::routing_id_t &owner,
+           const rt::protocol::wire_operation_id_t &operation, std::uint64_t reply,
+           const rt::protocol::actor_route_fence_t &,
+           const result_t<zlink::message_t> &completed) -> task_t<bool> {
+        preserved_route.store (parking.to_string () == "parking-node"
+                                 && owner.to_string () == "request-owner" && operation.high == 83
+                                 && operation.low == 91 && reply == 17,
+                               std::memory_order_release);
+        terminals.fetch_add (1, std::memory_order_acq_rel);
+        if (!entered_once->exchange (true))
+            entered.set_value (false);
+        terminal_source->complete (completed);
+        co_return true;
+    };
+    const auto reserved = spots.reserve_actor_join_barrier (actor);
+    if (!reserved) {
+        release->complete (result_t<void>::success ());
+        return 3;
+    }
+    const auto barrier = reserved.value ();
+    spot_inbound_message_t metadata;
+    metadata.values.emplace (std::string (actor_handoff_source_node_key),
+                             zlink::routing_id_t::from ("request-owner").to_hex ());
+    metadata.values.emplace (std::string (actor_handoff_parking_node_key),
+                             zlink::routing_id_t::from ("parking-node").to_hex ());
+    metadata.values.emplace (std::string (actor_handoff_operation_high_key), "83");
+    metadata.values.emplace (std::string (actor_handoff_operation_low_key), "91");
+    metadata.values.emplace (std::string (actor_handoff_reply_route_key), "17");
+    auto captured = spots.relay_actor_packet (actor, gateway.actor_context (actor),
+                                              stream_message_kind_t::request,
+                                              rt::protocol::session_disconnected_packet_name, body,
+                                              provider, serializers, std::move (metadata));
+    if (!captured.await_ready ()) {
+        release->complete (result_t<void>::success ());
+        barrier->cancel ();
+        (void) captured.result ();
+        node->worker_executor->drain ();
+        return 4;
+    }
+    const auto parked = captured.result ();
+    if (!parked || parked.value () || callbacks != 0) {
+        release->complete (result_t<void>::success ());
+        barrier->cancel ();
+        node->worker_executor->drain ();
+        return 5;
+    }
+    std::cerr << "Session disconnect actual handoff replay without ingress metadata starts"
+              << std::endl;
+    const auto activated = barrier->activate ([] {});
+    if (!activated) {
+        release->complete (result_t<void>::success ());
+        barrier->cancel ();
+        node->worker_executor->drain ();
+        return 6;
+    }
+    const bool began = callback_started.get ();
+    const bool acknowledged_early = terminal.await_ready ();
+    release->complete (result_t<void>::success ());
+    const auto completed = terminal.result ();
+    if (spot->serial_queue)
+        spot->serial_queue->drain ();
+    node->worker_executor->drain ();
+    return began && !acknowledged_early && completed && completed.value ().is_empty ()
+               && callbacks == 1 && terminals == 1
+               && preserved_route.load (std::memory_order_acquire)
+               && node->actor_transfer_coordinator.pending_count () == 0
+             ? 0
+             : 7;
+}
+
+int physical_disconnect_submits_all_before_waiting_for_terminal ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    for (const bool non_std : {false, true}) {
+        actor_gateway_runtime_t gateway;
+        auto manager = gateway.manager ();
+        session_actor_manager_access_t::attach (manager, stream_t{});
+        const auto first = test_actor_ref ("owner", "player", "first", 1);
+        const auto second = test_actor_ref ("owner", "player", "second", 1);
+        auto first_bound = manager.bind (first).async ().result ().value ();
+        auto second_bound = manager.bind (second).async ().result ().value ();
+        auto release = std::make_shared<task_completion_source_t<void>> ();
+        std::vector<std::string> started;
+        gateway.on_disconnect (
+          [&] (const actor_ref_t &actor,
+               const std::optional<runtime::stateful::stream_binding_t> &) -> task_t<void> {
+              started.emplace_back (actor.actor_id ().value ());
+              if (actor.actor_id ().value () == "first") {
+                  co_await release->task ();
+                  if (non_std)
+                      throw 7;
+                  throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                               "first callback failed");
+              }
+              co_return;
+          });
+        auto pending = session_actor_manager_access_t::disconnect_async (manager);
+        const bool all_started =
+          started == std::vector<std::string>{"first", "second"} && !pending.await_ready ();
+        release->complete (result_t<void>::success ());
+        const auto completed = pending.result ();
+        const auto first_again = first_bound.notify_disconnected ().result ();
+        const auto second_again = second_bound.notify_disconnected ().result ();
+        const bool cleaned = !first_again && !second_again;
+        std::cerr << "Session disconnect terminal non_std=" << non_std
+                  << " all_started=" << all_started << " cleaned=" << cleaned
+                  << " completed=" << static_cast<bool> (completed) << std::endl;
+        if (!all_started || !completed || !cleaned || started.size () != 2)
+            return 1;
+    }
+    return 0;
+}
+int session_disconnect_dispatcher_preserves_identity_snapshot ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace sf = zlink::framework::runtime::stateful;
+    for (const int mode : {0, 1, 2, 3, 4, 5, 6, 7}) {
+        const bool physical = mode != 0 && (mode < 5 || mode == 7);
+        const bool racing = mode >= 2 && mode < 5;
+        const bool failing = mode == 3;
+        actor_gateway_runtime_t gateway;
+        auto manager = gateway.manager ();
+        session_actor_manager_access_t::attach (manager, stream_t{});
+        const auto actor = test_actor_ref ("actor-owner", "player", "snapshot-player", 1);
+        const sf::object_ref_t target{
+          sf::object_kind_t::actor, "snapshot-player", 1, 9, "mesh", "actor-owner"};
+        sf::stream_session_registry_t registry (
+          [&] (const auto &) { return std::make_optional (target); });
+        const auto connection = registry.open (
+          "connection", {}, zlink::routing_id_t::from ("original-owner"), UINT64_MAX);
+        session_actor_manager_access_t::bind_native (
+          manager, [&] (actor_ref_t, std::uint64_t token) -> task_t<void> {
+              const auto result = registry.bind_remote (connection, target, 11, 13, {}, token);
+              if (result.first != sf::stateful_error_t::none)
+                  throw std::runtime_error ("canonical bind failed");
+              co_return;
+          });
+        std::optional<sf::stream_binding_t> retired;
+        session_actor_manager_access_t::bind_disconnect (
+          manager,
+          [&] (const actor_ref_t &, std::uint64_t) {
+              return registry.current_binding (target.key);
+          },
+          [&] (sf::stream_binding_t binding) -> task_t<void> {
+              const auto removed = registry.unbind (binding);
+              retired = removed.second;
+              co_return;
+          });
+        auto bound = manager.bind (actor).async ().result ().value ();
+        const auto original = *registry.current_binding (target.key);
+        int callbacks = 0;
+        bool exact = false;
+        auto release = std::make_shared<task_completion_source_t<void>> ();
+        gateway.on_disconnect (
+          [&] (const actor_ref_t &,
+               const std::optional<sf::stream_binding_t> &snapshot) -> task_t<void> {
+              ++callbacks;
+              exact = snapshot && *snapshot == original;
+              co_await release->task ();
+              // The coroutine's snapshot argument remains alive until terminal.
+              exact = exact && snapshot && *snapshot == original;
+              if (failing)
+                  throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                               "callback failure");
+          });
+        std::optional<task_t<void>> logical;
+        if (racing && mode != 4)
+            logical.emplace (bound.notify_disconnected ());
+        std::optional<task_t<void>> pending;
+        bool closed_exactly = true;
+        if (physical) {
+            pending.emplace (session_actor_manager_access_t::disconnect_async (manager, [&] {
+                auto closed = registry.close (connection);
+                closed_exactly =
+                  closed && closed.bindings == std::vector<sf::stream_binding_t>{original}
+                  && !registry.current_binding (target.key) && !registry.close (connection);
+                // Force logical capture into the exact gap after canonical
+                // removal and before physical snapshot dispatch.
+                if (mode == 4)
+                    logical.emplace (bound.notify_disconnected ());
+                return std::move (closed.bindings);
+            }));
+        } else
+            pending.emplace (bound.notify_disconnected ());
+        bool route_changed = true;
+        if (mode == 5) {
+            const auto sealed = registry.try_seal_actor (target);
+            auto moved = target;
+            moved.node_id = "moved-actor-owner";
+            moved.authority_owner_generation = 17;
+            const auto committed =
+              registry.commit_remote_route (connection.connection_id, original.binding_generation,
+                                            target.key, target.object_generation, moved, 19, 23);
+            route_changed = sealed.first == sf::stateful_error_t::none
+                            && committed.error == sf::stateful_error_t::none;
+        } else if (mode == 6) {
+            const auto rebound = registry.bind_remote (connection, target, 11, 13, {},
+                                                       original.binding_generation + 1);
+            route_changed = rebound.first == sf::stateful_error_t::none;
+        }
+        const bool held = callbacks == 1 && !pending->await_ready ();
+        if (mode == 7)
+            manager = session_actor_manager_t ();
+        release->complete (result_t<void>::success ());
+        const auto completed = pending->result ();
+        const auto logical_result = logical ? logical->result () : result_t<void>::success ();
+        const auto remaining = registry.current_binding (target.key);
+        const bool expected_remaining =
+          mode == 6 ? remaining && remaining->binding_generation == original.binding_generation + 1
+                    : !remaining;
+        const bool cleanup_route = mode == 5
+                                     ? retired && retired->actor.node_id == "moved-actor-owner"
+                                         && retired->target_node_generation == 19
+                                         && retired->owner_lease_generation == 23
+                                   : mode == 6 ? !retired
+                                               : true;
+        if (!completed || !closed_exactly || !route_changed || !cleanup_route
+            || (static_cast<bool> (logical_result) == failing) || !held || !exact || callbacks != 1
+            || !expected_remaining)
+            return 2;
+        if (remaining)
+            (void) registry.unbind (*remaining);
+        const auto repeated = bound.notify_disconnected ().result ();
+        if (callbacks != 1 || (mode == 7 && repeated))
+            return 3;
+    }
+    return 0;
+}
+
+int common_session_disconnect_uses_actor_packet_route ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace runtime = zlink::framework::runtime;
+    serializer_registry_t serializers;
+    auto node = test::runtime_failure_fixture<spot_node_builder_state_t> ("disconnect-node");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (1, "disconnect-test");
+    auto spot = std::make_shared<spot_context_state_t> ();
+    spot->node = node;
+    spot->node_rid = node_rid_t::from_string ("disconnect-node");
+    spot->spot_id = spot_id_t ("disconnect-spot");
+    spot->spot_name = "disconnect";
+    spot->serial_executor = node->worker_executor;
+    node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
+    int callbacks = 0;
+    spot_actor_admission_callbacks_t admission;
+    admission.on_disconnect_actor = [&callbacks] (void *, void *) -> task_t<void> {
+        ++callbacks;
+        co_return;
+    };
+    test::register_session_disconnect_probe (spot, std::move (admission.on_disconnect_actor));
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.create_instance = [] (std::string) { return std::make_shared<int> (7); };
+    factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+    node->actor_factories.emplace ("player", std::move (factory));
+    const auto actor = test_actor_ref ("disconnect-node", "player", "player-one", 1);
+    node->actor_instances.emplace ("player:player-one", std::make_shared<int> (7));
+    node->actor_spot_ids.emplace ("player:player-one", spot->spot_id);
+    node->actor_generations.emplace ("player:player-one", 1);
+    record_actor_instance_index_unlocked (*node, actor,
+                                          node->actor_instances.at ("player:player-one").get ());
+    service_collection_t services;
+    services.add_singleton<actor_gateway_runtime_t> ();
+    auto provider = services.build_provider ();
+    auto &gateway = provider.get_required<actor_gateway_runtime_t> ();
+    // Canonical shortRid vector shared by .NET and Node. The runtime has no binding.
+    const std::vector<std::uint8_t> bytes{6, 'n', 'o', 'd', 'e', '-', 'a', 0, 0, 0, 0, 0,
+                                          0, 0,   2,   0,   0,   0,   0,   0, 0, 0, 7};
+    auto delivered =
+      spot_node_runtime_t (node)
+        .relay_actor_packet (actor, gateway.actor_context (actor), stream_message_kind_t::request,
+                             runtime::protocol::session_disconnected_packet_name,
+                             zlink::message_t::from (bytes), provider, serializers)
+        .result ();
+    std::cerr << "common Session disconnect: delivered=" << bool (delivered)
+              << " callbacks=" << callbacks << std::endl;
+    if (!delivered && delivered.error ())
+        std::cerr << "common Session disconnect failure: " << delivered.error ()->what ()
+                  << std::endl;
+    if (!delivered || !delivered.value () || !delivered.value ()->is_empty () || callbacks != 1)
+        return 1;
+    const auto deliver = [&] (const std::vector<std::uint8_t> &body) {
+        // A Message Follow hop has a different transport source from the body owner.
+        return spot_node_runtime_t (node)
+          .relay_actor_packet (actor, gateway.actor_context (actor), stream_message_kind_t::request,
+                               runtime::protocol::session_disconnected_packet_name,
+                               zlink::message_t::from (body), provider, serializers, {}, nullptr,
+                               {}, {}, zlink::routing_id_t::from ("forwarding-node"))
+          .result ();
+    };
+    const auto empty_success = [] (const auto &result) {
+        return result && result.value () && result.value ()->is_empty ();
+    };
+    if (!gateway.record_bound_session_route (actor, zlink::routing_id_t::from ("node-a"),
+                                             zlink::routing_id_t::from ("session-a"), 2, 1, 1, 7)
+        || !empty_success (deliver (bytes)) || callbacks != 2)
+        return 2;
+    for (const auto offset : {1u, 14u, 22u}) {
+        auto stale = bytes;
+        ++stale[offset];
+        if (!empty_success (deliver (stale)) || callbacks != 2)
+            return 3;
+    }
+    std::vector<message_dispatch_error_event_t> errors;
+    node->dispatch.message_flow (message_flow_log_mode_t::normal);
+    dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      node->dispatch, [&errors] (const auto &event) { errors.push_back (event); });
+    auto trailing = bytes;
+    trailing.push_back (0);
+    auto truncated = bytes;
+    truncated.pop_back ();
+    auto zero_owner = bytes;
+    zero_owner[14] = 0;
+    auto zero_binding = bytes;
+    zero_binding[22] = 0;
+    for (const auto &malformed :
+         {std::vector<std::uint8_t>{}, trailing, truncated, zero_owner, zero_binding}) {
+        if (!empty_success (deliver (malformed)) || callbacks != 2)
+            return 4;
+    }
+    if (errors.size () != 5)
+        return 5;
+    for (const auto &error : errors) {
+        if (error.message_kind != dispatch_message_kind_t::actor_send) {
+            std::cerr << "Session disconnect malformed diagnostic kind mismatch: expected "
+                         "actor_send, actual="
+                      << static_cast<int> (error.message_kind) << std::endl;
+            return 6;
+        }
+        if (error.reason != dispatch_error_reason_t::invalid_frame
+            || error.action != dispatch_error_action_t::drop
+            || dispatch_error_reporter_t::default_log_level (error) != log_level_t::warn)
+            return 6;
+        try {
+            std::rethrow_exception (error.exception);
+        }
+        catch (const framework_exception_t &failure) {
+            if (failure.kind () != framework_error_kind_t::protocol_error)
+                return 7;
+        }
+    }
+    // Block the Actor with an explicitly completed handler; admit the notification,
+    // replace the binding, and release the handler. The comparison belongs to the
+    // notification's Actor turn, after replacement, rather than its queue admission.
+    auto release = std::make_shared<task_completion_source_t<void>> ();
+    std::promise<bool> entered;
+    auto entered_once = std::make_shared<std::atomic_bool> (false);
+    auto started = entered.get_future ();
+    spot->handlers.push_back (
+      spot_handler_descriptor_t{spot_handler_kind_t::actor_send, "DisconnectHold", "",
+                                std::type_index (typeid (int)), std::type_index (typeid (void)),
+                                std::type_index (typeid (int)), std::type_index (typeid (void))});
+    spot->handler_invokers.push_back (
+      [release, &entered, entered_once] (
+        void *, void *, service_provider_t &, serializer_registry_t &, const zlink::message_t &,
+        const spot_inbound_message_t &) -> task_t<zlink::message_t> {
+          if (!entered_once->exchange (true))
+              entered.set_value (true);
+          co_await release->task ();
+          co_return zlink::message_t{};
+      });
+    auto held = spot_node_runtime_t (node).relay_actor_packet (
+      actor, gateway.actor_context (actor), stream_message_kind_t::send, "DisconnectHold",
+      zlink::message_t{}, provider, serializers);
+    detail::observe_task_completion (held, [&entered, entered_once] (const auto &) {
+        if (!entered_once->exchange (true))
+            entered.set_value (false);
+    });
+    if (!started.get ()) {
+        release->complete (result_t<void>::success ());
+        (void) held.result ();
+        return 8;
+    }
+    std::promise<bool> enqueued;
+    auto enqueued_once = std::make_shared<std::atomic_bool> (false);
+    auto accepted = enqueued.get_future ();
+    auto queued = spot_node_runtime_t (node).relay_actor_packet (
+      actor, gateway.actor_context (actor), stream_message_kind_t::send,
+      runtime::protocol::session_disconnected_packet_name, zlink::message_t::from (bytes), provider,
+      serializers, {}, nullptr, {}, [&enqueued, enqueued_once] {
+          if (!enqueued_once->exchange (true))
+              enqueued.set_value (true);
+      });
+    detail::observe_task_completion (queued, [&enqueued, enqueued_once] (const auto &) {
+        if (!enqueued_once->exchange (true))
+            enqueued.set_value (false);
+    });
+    if (!accepted.get ()) {
+        release->complete (result_t<void>::success ());
+        (void) held.result ();
+        (void) queued.result ();
+        return 8;
+    }
+    const bool premature = queued.await_ready () || callbacks != 2;
+    const auto replaced =
+      gateway.record_bound_session_route (actor, zlink::routing_id_t::from ("node-a"),
+                                          zlink::routing_id_t::from ("session-b"), 2, 1, 1, 8);
+    release->complete (result_t<void>::success ());
+    const auto held_result = held.result ();
+    const auto queued_result = queued.result ();
+    if (!held_result || !queued_result || premature || !replaced || callbacks != 2)
+        return 8;
+    auto current_body = bytes;
+    current_body[22] = 8;
+    if (!empty_success (deliver (current_body)) || callbacks != 3)
+        return 9;
+    // Reserve capture strictly after transfer admission and before Actor FIFO
+    // submission. The ordinary queue must save the untouched body for replay.
+    spot_node_runtime_t spots (node);
+    std::shared_ptr<deferred_barrier_t> barrier;
+    bool reserved = false;
+    node->actor_factories.at ("player").configure_instance =
+      [&] (void *, const actor_ref_t &current_actor, void *) {
+          if (reserved)
+              return;
+          reserved = true;
+          auto result = spots.reserve_actor_join_barrier (current_actor);
+          if (result)
+              barrier = std::move (result.value ());
+      };
+    auto capture =
+      spots.relay_actor_packet (actor, gateway.actor_context (actor), stream_message_kind_t::send,
+                                runtime::protocol::session_disconnected_packet_name,
+                                zlink::message_t::from (current_body), provider, serializers);
+    const bool terminal_before_release = capture.await_ready ();
+    if (!terminal_before_release) {
+        if (barrier)
+            barrier->cancel ();
+        node->actor_transfer_coordinator.cancel_move ("player:player-one");
+        (void) capture.result ();
+        return 10;
+    }
+    const auto preserved = capture.result ();
+    auto backlog = node->actor_transfer_coordinator.take_backlog ("player:player-one");
+    const bool captured =
+      preserved && barrier && callbacks == 3 && backlog.size () == 1
+      && backlog.front ().packet_name == runtime::protocol::session_disconnected_packet_name
+      && backlog.front ().payload == current_body && !backlog.front ().is_request;
+    if (barrier)
+        barrier->cancel ();
+    node->actor_transfer_coordinator.cancel_move ("player:player-one");
+    if (!captured)
+        return 10;
+    if (!empty_success (deliver (backlog.front ().payload)) || callbacks != 4)
+        return 11;
+    auto callback_terminal = std::make_shared<task_completion_source_t<void>> ();
+    std::promise<bool> callback_entered;
+    auto callback_started = callback_entered.get_future ();
+    auto callback_entered_once = std::make_shared<std::atomic_bool> (false);
+    spot->actor_admissions.at (std::type_index (typeid (int))).on_disconnect_actor =
+      [callback_terminal, &callback_entered, callback_entered_once] (void *,
+                                                                     void *) -> task_t<void> {
+        if (!callback_entered_once->exchange (true))
+            callback_entered.set_value (true);
+        co_await callback_terminal->task ();
+    };
+    auto awaiting_callback = spots.relay_actor_packet (
+      actor, gateway.actor_context (actor), stream_message_kind_t::request,
+      runtime::protocol::session_disconnected_packet_name, zlink::message_t::from (current_body),
+      provider, serializers);
+    detail::observe_task_completion (awaiting_callback,
+                                     [&callback_entered, callback_entered_once] (const auto &) {
+                                         if (!callback_entered_once->exchange (true))
+                                             callback_entered.set_value (false);
+                                     });
+    const bool began = callback_started.get ();
+    const bool acknowledged_before_callback = awaiting_callback.await_ready ();
+    callback_terminal->complete (result_t<void>::success ());
+    const auto callback_reply = awaiting_callback.result ();
+    if (!began || acknowledged_before_callback || !callback_reply || !callback_reply.value ()
+        || !callback_reply.value ()->is_empty ())
+        return 12;
+    spot->actor_admissions.at (std::type_index (typeid (int))).on_disconnect_actor =
+      [] (void *, void *) -> task_t<void> {
+        return task_t<void> (result_t<void>::failure (framework_error_kind_t::invalid_operation,
+                                                      "disconnect callback failed"));
+    };
+    const auto failed_callback = deliver (current_body);
+    if (failed_callback
+        || failed_callback.error_kind () != framework_error_kind_t::invalid_operation)
+        return 13;
+    node->worker_executor->drain ();
+    return 0;
+}
+
 int actor_request_completion_keeps_dedup_state_owned_after_runtime_wrapper_unwinds ()
 {
     using namespace zlink::framework;
@@ -2667,7 +3372,6 @@ int actor_request_completion_keeps_dedup_state_owned_after_runtime_wrapper_unwin
     spot->node_rid = node_rid_t::from_string ("actor-send-admission-node");
     spot->spot_id = spot_id_t ("actor-send-admission-spot");
     spot->spot_name = "actor-send-admission";
-    spot->spot_instance = std::make_shared<int> (1);
     spot->channel_runtime =
       zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     spot->channel_runtime->serializers = &serializers;
@@ -2681,8 +3385,8 @@ int actor_request_completion_keeps_dedup_state_owned_after_runtime_wrapper_unwin
         disconnected_started.store (true, std::memory_order_release);
         co_return;
     };
-    spot->actor_admissions.emplace (std::type_index (typeid (int)),
-                                    std::move (admission_callbacks));
+    test::register_session_disconnect_probe (spot,
+                                             std::move (admission_callbacks.on_disconnect_actor));
 
     spot_node_builder_state_t::actor_factory_registration_t factory;
     factory.actor_type = std::type_index (typeid (int));
@@ -2696,25 +3400,33 @@ int actor_request_completion_keeps_dedup_state_owned_after_runtime_wrapper_unwin
     node->actor_instances.emplace (actor_key, std::make_shared<int> (7));
     node->actor_spot_ids.emplace (actor_key, spot->spot_id);
     node->actor_generations.emplace (actor_key, 1);
+    record_actor_instance_index_unlocked (
+      *node, actor, node->actor_instances.at ("player:reconnect-player").get ());
 
     auto handler_terminal = std::make_shared<task_completion_source_t<void>> ();
     std::atomic_bool handler_started{false};
+    std::promise<bool> handler_entered;
+    auto entered = handler_entered.get_future ();
+    auto handler_signalled = std::make_shared<std::atomic_bool> (false);
     spot->handlers.push_back (
       spot_handler_descriptor_t{spot_handler_kind_t::actor_request, "JoinGameMsg", "",
                                 std::type_index (typeid (int)), std::type_index (typeid (void)),
                                 std::type_index (typeid (int)), std::type_index (typeid (void))});
     spot->handler_invokers.push_back (
-      [handler_terminal, &handler_started] (
+      [handler_terminal, &handler_started, &handler_entered, handler_signalled] (
         void *, void *, service_provider_t &, serializer_registry_t &, const zlink::message_t &,
         const spot_inbound_message_t &) -> task_t<zlink::message_t> {
           handler_started.store (true, std::memory_order_release);
+          if (!handler_signalled->exchange (true))
+              handler_entered.set_value (true);
           co_await handler_terminal->task ();
           co_return zlink::message_t{};
       });
 
     service_collection_t services;
+    services.add_singleton<actor_gateway_runtime_t> ();
     auto provider = services.build_provider ();
-    actor_gateway_runtime_t gateway;
+    auto &gateway = provider.get_required<actor_gateway_runtime_t> ();
     std::atomic_int admitted{0};
     spot_inbound_message_t request_metadata;
     request_metadata.values.emplace ("__zlink.actorRequestId", "relocating-join-request");
@@ -2732,37 +3444,51 @@ int actor_request_completion_keeps_dedup_state_owned_after_runtime_wrapper_unwin
       zlink::message_t::from ("join"), provider, serializers, std::move (request_metadata), nullptr,
       {}, [&admitted] { admitted.fetch_add (1, std::memory_order_acq_rel); });
 
-    const auto handler_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
-    while (!handler_started.load (std::memory_order_acquire)
-           && std::chrono::steady_clock::now () < handler_deadline) {
-        std::this_thread::yield ();
-    }
-    if (admitted.load (std::memory_order_acquire) != 1 || relayed.await_ready ()) {
+    observe_task_completion (relayed, [&handler_entered, handler_signalled] (const auto &) {
+        if (!handler_signalled->exchange (true))
+            handler_entered.set_value (false);
+    });
+    const bool began = entered.get ();
+    if (!began || !handler_started.load (std::memory_order_acquire)
+        || admitted.load (std::memory_order_acquire) != 1 || relayed.await_ready ()) {
+        handler_terminal->complete (result_t<void>::success ());
+        (void) relayed.result ();
         return 1;
     }
-    auto disconnected = std::async (std::launch::async, [node, actor] {
-        return spot_node_runtime_t (node).notify_actor_disconnected_erased (actor).result ();
-    });
-    if (disconnected.wait_for (std::chrono::milliseconds (50)) != std::future_status::timeout
-        || disconnected_started.load (std::memory_order_acquire)) {
-        handler_terminal->complete (result_t<void>::success ());
-        (void) disconnected.get ();
-        return 2;
-    }
+    std::promise<bool> disconnect_admitted;
+    auto disconnect_accepted = disconnect_admitted.get_future ();
+    auto disconnect_signalled = std::make_shared<std::atomic_bool> (false);
+    const auto body = runtime::protocol::encode_session_disconnected (
+      {zlink::routing_id_t::from ("session-owner").to_bytes (), 2, 7});
+    auto disconnected = spot_node_runtime_t (node).relay_actor_packet (
+      actor, gateway.actor_context (actor), stream_message_kind_t::send,
+      runtime::protocol::session_disconnected_packet_name, zlink::message_t::from (body), provider,
+      serializers, {}, nullptr, {}, [&disconnect_admitted, disconnect_signalled] {
+          if (!disconnect_signalled->exchange (true))
+              disconnect_admitted.set_value (true);
+      });
+    observe_task_completion (disconnected,
+                             [&disconnect_admitted, disconnect_signalled] (const auto &) {
+                                 if (!disconnect_signalled->exchange (true))
+                                     disconnect_admitted.set_value (false);
+                             });
+    const bool accepted = disconnect_accepted.get ();
+    const bool premature =
+      disconnected.await_ready () || disconnected_started.load (std::memory_order_acquire);
     handler_terminal->complete (result_t<void>::success ());
-    if (!relayed.result ())
+    const auto relayed_result = relayed.result ();
+    const auto disconnected_result = disconnected.result ();
+    if (!accepted || premature)
+        return 2;
+    if (!relayed_result)
         return 3;
     const auto dedup = node->dispatched_request_replies.claim ("23:player:reconnect-player83:91");
     if (dedup.state != runtime::exactly_once_claim_state::completed || !dedup.value)
         return 4;
-    if (disconnected.wait_for (std::chrono::seconds (1)) != std::future_status::ready) {
-        return 5;
-    }
-    const auto disconnected_result = disconnected.get ();
     return disconnected_result && disconnected_started.load (std::memory_order_acquire) ? 0 : 6;
 }
 
-int old_owner_forwards_cold_probe_via_active_message_follow_route ()
+int old_owner_forwards_cold_probe_via_active_message_follow_route (bool disconnect = false)
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -2820,18 +3546,31 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route ()
     constexpr std::uint64_t inbound_reply_route_id = 333;
     const std::string inbound_deadline = "2030-01-02T03:04:05Z";
 
+    const auto packet_name =
+      disconnect ? runtime::protocol::session_disconnected_packet_name : "after-transfer";
+    const auto payload = disconnect
+                           ? runtime::protocol::encode_session_disconnected (
+                               {zlink::routing_id_t::from ("session-owner").to_bytes (), 2, 7})
+                           : zlink::message_t::from (std::string ("probe")).to_bytes ();
+    auto follow_terminal =
+      std::make_shared<task_completion_source_t<std::optional<zlink::message_t>>> ();
+    std::promise<bool> follow_entered;
+    auto follow_started = follow_entered.get_future ();
+    auto follow_entered_once = std::make_shared<std::atomic_bool> (false);
     std::atomic_int relay_calls{0};
     spot_node_runtime_t spots (node);
     spots.on_actor_message_follow (
       [&] (const actor_ref_t &relayed_actor, const runtime::messaging::envelope_header_t &header,
-           const zlink::message_t &, std::chrono::milliseconds relay_timeout,
+           const zlink::message_t &body, std::chrono::milliseconds relay_timeout,
            const zlink::routing_id_t &source_node,
            const runtime::protocol::actor_route_fence_t &route, std::uint8_t hop_count,
            const runtime::protocol::wire_operation_id_t &operation,
            std::uint64_t reply_route_id) -> task_t<std::optional<zlink::message_t>> {
           relay_calls.fetch_add (1, std::memory_order_acq_rel);
+          if (disconnect && !follow_entered_once->exchange (true))
+              follow_entered.set_value (true);
           if (relayed_actor.actor_id ().value () != "actor-remote-ok" || route != source_fence
-              || hop_count != 0 || header.message_name != "after-transfer"
+              || hop_count != 0 || header.message_name != packet_name || body.to_bytes () != payload
               || header.deadline != inbound_deadline || relay_timeout != std::chrono::seconds (30)
               || source_node.to_bytes () != inbound_source_node_rid.to_bytes ()
               || operation.high != inbound_operation.high || operation.low != inbound_operation.low
@@ -2839,6 +3578,8 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route ()
               co_return result_t<std::optional<zlink::message_t>>::failure (
                 framework_error_kind_t::internal_failure, "unexpected relay arguments");
           }
+          if (disconnect)
+              co_return co_await follow_terminal->task ();
           co_return result_t<std::optional<zlink::message_t>>::success (
             std::make_optional (zlink::message_t::from (std::string ("relayed"))));
       });
@@ -2849,16 +3590,31 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route ()
     spot_inbound_message_t metadata;
 
     auto relayed = spots.relay_actor_packet (
-      actor, gateway.actor_context (actor), stream_message_kind_t::request, "after-transfer",
-      zlink::message_t::from (std::string ("probe")), provider, serializers, std::move (metadata),
-      nullptr, std::function<void ()>{}, std::function<void ()>{}, inbound_source_node_rid,
+      actor, gateway.actor_context (actor), stream_message_kind_t::request, packet_name,
+      zlink::message_t::from (payload), provider, serializers, std::move (metadata), nullptr,
+      std::function<void ()>{}, std::function<void ()>{}, inbound_source_node_rid,
       inbound_operation, inbound_reply_route_id, inbound_deadline);
 
-    const auto outcome = finite_task_result (std::move (relayed));
+    bool premature = false;
+    if (disconnect) {
+        detail::observe_task_completion (relayed,
+                                         [&follow_entered, follow_entered_once] (const auto &) {
+                                             if (!follow_entered_once->exchange (true))
+                                                 follow_entered.set_value (false);
+                                         });
+        const bool began = follow_started.get ();
+        premature = !began || relayed.await_ready ();
+        follow_terminal->complete (result_t<std::optional<zlink::message_t>>::success (
+          std::make_optional (zlink::message_t{})));
+    }
+    const auto outcome = disconnect ? std::make_optional (relayed.result ())
+                                    : finite_task_result (std::move (relayed));
     if (!outcome || !*outcome)
         return 1;
     if (relay_calls.load (std::memory_order_acquire) != 1)
         return 2;
+    if (disconnect && (premature || !outcome->value () || !outcome->value ()->is_empty ()))
+        return 4;
     if (local_materializations.load (std::memory_order_acquire) != 0)
         return 3;
     return 0;
@@ -4863,11 +5619,12 @@ int old_stream_disconnect_does_not_retire_reconnected_binding ()
     const auto new_connection = sessions.open ("new-stream-rid");
     const auto [new_error, new_binding] =
       sessions.bind_remote (new_connection, native_actor, 11, 17);
+    const auto current_binding = sessions.current_binding (native_actor.key);
     if (old_error != stateful_error_t::none || new_error != stateful_error_t::none
         || disconnect_snapshot.size () != 1 || !sessions.bindings (old_connection).empty ()
-        || sessions.bindings (new_connection).size () != 1
-        || sessions.is_current_for_connection (old_connection, new_binding)
-        || !sessions.is_current_for_connection (new_connection, new_binding)
+        || sessions.bindings (new_connection).size () != 1 || !current_binding
+        || *current_binding != new_binding || current_binding->connection != new_connection
+        || current_binding->connection == old_connection
         || new_binding.binding_generation <= old_binding.binding_generation) {
         return 1;
     }
@@ -4969,11 +5726,12 @@ int command_38_rebind_is_owned_only_by_new_connection ()
       bind_through_native_and_38 (new_connection, zlink::routing_id_t::from ("session-new"), 2);
     if (!old_binding || !new_binding)
         return 1;
+    const auto current_binding = sessions.current_binding (native_actor.key);
     const auto route = gateway.bound_session_route_async (actor).result ().value ();
     return sessions.bindings (old_connection).empty ()
-               && sessions.bindings (new_connection).size () == 1
-               && !sessions.is_current_for_connection (old_connection, *new_binding)
-               && sessions.is_current_for_connection (new_connection, *new_binding) && route
+               && sessions.bindings (new_connection).size () == 1 && current_binding
+               && *current_binding == *new_binding && current_binding->connection == new_connection
+               && current_binding->connection != old_connection && route
                && route->session_rid == zlink::routing_id_t::from ("session-new")
                && route->binding_generation == 2
              ? 0
@@ -6110,40 +6868,96 @@ int session_relay_waiter_accepts_beyond_former_capacity ()
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
 
+    constexpr std::size_t relay_count = 1026;
+    using reply_source_t = task_completion_source_t<std::optional<zlink::message_t>>;
+    struct relay_fixture_t
+    {
+        std::vector<std::shared_ptr<reply_source_t>> sources;
+        std::vector<std::promise<void>> arrived;
+        std::vector<std::future<void>> arrivals;
+        std::vector<std::string> packet_names;
+        std::size_t dispatch_count = 0;
+        std::promise<std::size_t> &released;
+
+        relay_fixture_t (std::size_t count, std::promise<std::size_t> &released) :
+            sources (count), arrived (count), packet_names (count), released (released)
+        {
+            arrivals.reserve (count);
+            for (std::size_t index = 0; index != count; ++index) {
+                sources[index] = std::make_shared<reply_source_t> ();
+                arrivals.push_back (arrived[index].get_future ());
+            }
+        }
+
+        ~relay_fixture_t () { released.set_value (dispatch_count); }
+    };
+
     actor_gateway_runtime_t gateway;
     auto manager = gateway.manager ();
     session_actor_manager_access_t::attach (manager, stream_t{});
     const actor_ref_t actor = test_actor_ref ("actor-node-a", "player", "actor-capacity", 1);
     auto binding = manager.bind (actor).async ().result ().value ();
-
-    std::vector<std::shared_ptr<task_completion_source_t<std::optional<zlink::message_t>>>>
-      dispatched;
-    gateway.on_relay ([&dispatched] (const actor_ref_t &, const actor_context_t &,
-                                     const stream_header_t &, const zlink::message_t &,
+    std::promise<std::size_t> released;
+    auto release = released.get_future ();
+    {
+        auto fixture = std::make_shared<relay_fixture_t> (relay_count, released);
+        std::vector<task_t<void>> accepted;
+        accepted.reserve (relay_count);
+        struct relay_scope_t
+        {
+            actor_gateway_runtime_t &gateway;
+            std::shared_ptr<relay_fixture_t> &fixture;
+            std::vector<task_t<void>> &accepted;
+            std::future<std::size_t> &release;
+            ~relay_scope_t ()
+            {
+                for (const auto &source : fixture->sources)
+                    source->complete (
+                      result_t<std::optional<zlink::message_t>>::success (std::nullopt));
+                for (auto &task : accepted)
+                    (void) task.result ();
+                gateway.on_relay ({});
+                fixture.reset ();
+                // The final drain observer owns its dispatch closure until it returns.
+                release.wait ();
+            }
+        } relay_scope{gateway, fixture, accepted, release};
+        gateway.on_relay ([fixture] (const actor_ref_t &, const actor_context_t &,
+                                     const stream_header_t &header, const zlink::message_t &,
                                      std::optional<bound_session_relay_source_t>,
                                      std::chrono::milliseconds) {
-        auto source =
-          std::make_shared<task_completion_source_t<std::optional<zlink::message_t>>> ();
-        dispatched.push_back (source);
-        return test::accepted_request_task (source->task ());
-    });
+            const auto index = fixture->dispatch_count++;
+            fixture->packet_names.at (index) = std::string (header.packet_name ());
+            const auto source = fixture->sources.at (index);
+            fixture->arrived.at (index).set_value ();
+            return test::accepted_request_task (source->task ());
+        });
 
-    /* One relay occupies the drain turn; the rest cross the former boundary. */
-    std::vector<task_t<void>> accepted;
-    accepted.reserve (1026);
-    for (std::size_t index = 0; index != 1026; ++index)
-        accepted.push_back (binding.relay ("packet", zlink::message_t{}));
+        /* One relay occupies the drain turn; the rest cross the former boundary. */
+        for (std::size_t index = 0; index != relay_count; ++index)
+            accepted.push_back (binding.relay (std::to_string (index), zlink::message_t{}));
+        auto completed = std::make_shared<std::promise<void>> ();
+        auto completion = completed->get_future ();
+        observe_task_completion (accepted.back (),
+                                 [completed] (const auto &) { completed->set_value (); });
 
-    /* Releasing each dispatch drains the FIFO; every relay completes once. */
-    for (std::size_t index = 0; index != dispatched.size (); ++index)
-        dispatched[index]->complete (
-          result_t<std::optional<zlink::message_t>>::success (std::nullopt));
-    if (dispatched.size () != 1026)
-        return 3;
-    for (auto &admitted : accepted) {
-        if (!admitted.await_ready () || !admitted.result ())
-            return 4;
+        /* Each arrival is observed before its source is released; order remains FIFO. */
+        for (std::size_t index = 0; index != relay_count; ++index) {
+            fixture->arrivals[index].get ();
+            if (fixture->packet_names[index] != std::to_string (index))
+                return 5;
+            fixture->sources[index]->complete (
+              result_t<std::optional<zlink::message_t>>::success (std::nullopt));
+        }
+        // Result delivery precedes the final drain frame's destruction.
+        completion.get ();
+        for (auto &admitted : accepted) {
+            if (!admitted.await_ready () || !admitted.result ())
+                return 4;
+        }
     }
+    if (release.get () != relay_count)
+        return 3;
     return 0;
 }
 
@@ -6398,9 +7212,11 @@ int actor_unbound_follows_session_termination (bool physical, bool disconnect_th
     auto disconnect_completion = std::make_shared<task_completion_source_t<void>> ();
     if (!disconnect_then_shutdown)
         disconnect_completion->complete (result_t<void>::success ());
-    state->disconnect_dispatcher = [disconnect_completion] (const actor_ref_t &) {
-        return disconnect_completion->task ();
-    };
+    state->disconnect_dispatcher =
+      [disconnect_completion] (const actor_ref_t &,
+                               const std::optional<runtime::stateful::stream_binding_t> &) {
+          return disconnect_completion->task ();
+      };
     auto binding =
       manager.bind (test_actor_ref ("node", "player", "actor-a", 1)).async ().result ();
     if (!binding)
@@ -6447,10 +7263,12 @@ int session_disconnect_uses_actor_slot_issue_order ()
           return request_task_t<void> (result_t<void>::success ());
       });
     std::vector<std::string> disconnected;
-    state->disconnect_dispatcher = [&disconnected] (const actor_ref_t &actor) {
-        disconnected.emplace_back (actor.actor_id ().value ());
-        return task_t<void> (result_t<void>::success ());
-    };
+    state->disconnect_dispatcher =
+      [&disconnected] (const actor_ref_t &actor,
+                       const std::optional<runtime::stateful::stream_binding_t> &) {
+          disconnected.emplace_back (actor.actor_id ().value ());
+          return task_t<void> (result_t<void>::success ());
+      };
     if (!manager.bind (test_actor_ref ("node", "player", "z-issued-first", 1)).async ().result ()
         || !manager.bind (test_actor_ref ("node", "player", "a-issued-second", 1))
               .async ()
@@ -6460,14 +7278,118 @@ int session_disconnect_uses_actor_slot_issue_order ()
     return disconnected == std::vector<std::string>{"z-issued-first", "a-issued-second"} ? 0 : 2;
 }
 
+int close_unbound_session_reports_invalid_operation ()
+{
+    using namespace zlink::framework;
+    detail::actor_gateway_runtime_t gateway;
+    const auto actor = test_actor_ref ("actor-owner", "player", "unbound-close", 1);
+    const auto result = gateway.actor_context (actor).bound_session ().disconnect ().result ();
+    return !result && result.error_kind () == framework_error_kind_t::invalid_operation ? 0 : 1;
+}
+
+int close_exact_session_binding_uses_physical_terminal ()
+{
+    using namespace zlink::framework;
+    namespace sf = runtime::stateful;
+    namespace wire = runtime::protocol;
+    const sf::object_ref_t actor{
+      sf::object_kind_t::actor, "close-actor", 7, 11, "game", "actor-owner"};
+    sf::stream_session_registry_t sessions (
+      [&] (const std::string &) { return std::optional (actor); });
+    const auto rid = zlink::routing_id_t::from ("session-rid");
+    const auto owner = zlink::routing_id_t::from ("session-owner");
+    unsigned closes = 0;
+    const auto connection = sessions.open (rid.to_hex (), {}, owner, 13, [&] { ++closes; });
+    const auto [error, binding] = sessions.bind (connection, actor, 17, 19);
+    if (error != sf::stateful_error_t::none)
+        return 1;
+    const wire::retired_bound_session_route_fence_t fence{
+      owner.to_bytes (), 13, owner.to_string (), 13, rid.to_bytes (), binding.binding_generation};
+    const wire::bound_session_close_t request{23, actor.key, actor.object_generation, fence};
+    const auto decoded =
+      wire::decode_bound_session_close (wire::encode_bound_session_close (request));
+    if (decoded.actor_id != request.actor_id || decoded.session != fence)
+        return 2;
+    auto stale = request;
+    ++stale.session.retired_binding_generation;
+    auto denied = sessions.close_current (stale, fence).result ();
+    if (denied || denied.error_kind () != framework_error_kind_t::unavailable || closes != 0)
+        return 3;
+    stale = request;
+    ++stale.object_generation;
+    denied = sessions.close_current (stale, fence).result ();
+    if (denied || denied.error_kind () != framework_error_kind_t::unavailable || closes != 0)
+        return 4;
+    stale = request;
+    ++stale.session.session_owner_node_generation;
+    denied = sessions.close_current (stale, fence).result ();
+    if (denied || denied.error_kind () != framework_error_kind_t::unavailable || closes != 0)
+        return 5;
+    auto closed = sessions.close_current (request, fence).result ();
+    if (!closed || closes != 1 || !sessions.current_binding (actor.key))
+        return 6;
+    const auto replacement_rid = zlink::routing_id_t::from ("replacement-session");
+    unsigned replacement_closes = 0;
+    const auto replacement =
+      sessions.open (replacement_rid.to_hex (), {}, owner, 13, [&] { ++replacement_closes; });
+    const auto [replacement_error, current] = sessions.bind (replacement, actor, 17, 19);
+    if (replacement_error != sf::stateful_error_t::none)
+        return 7;
+    denied = sessions.close_current (request, fence).result ();
+    if (denied || denied.error_kind () != framework_error_kind_t::unavailable
+        || replacement_closes != 0 || closes != 1)
+        return 8;
+    auto current_request = request;
+    current_request.session.session_routing_id = replacement_rid.to_bytes ();
+    current_request.session.retired_binding_generation = current.binding_generation;
+    closed = sessions.close_current (current_request, fence).result ();
+    if (!closed || replacement_closes != 1)
+        return 9;
+    sessions.close (connection);
+    if (!sessions.current_binding (actor.key))
+        return 10;
+    sessions.close (replacement);
+    return sessions.current_binding (actor.key) ? 11 : 0;
+}
+
 int main (int argc, char **argv)
 {
     if (argc == 2) {
         const std::string test (argv[1]);
+        if (test == "--close-unbound")
+            return close_unbound_session_reports_invalid_operation ();
+        if (test == "--close-binding")
+            return close_exact_session_binding_uses_physical_terminal ();
         if (test == "--known-generation-source-leave") {
             const auto result = known_generation_source_leave_claims_transfer ();
             std::cerr << "Known generation source leave result=" << result << '\n';
             return result;
+        }
+        if (test == "--session-disconnected-public")
+            return session_disconnect_resolves_context_without_ingress_metadata (false);
+        if (test == "--session-disconnected-replay")
+            return session_disconnect_resolves_context_without_ingress_metadata (true);
+        if (test == "--session-disconnected-terminal")
+            return physical_disconnect_submits_all_before_waiting_for_terminal ();
+        if (test == "--session-disconnected-gate")
+            return session_disconnect_callback_owns_spot_lifecycle_gate ();
+        if (test == "--session-disconnected-wire") {
+            const auto identity = common_session_disconnect_uses_actor_packet_route ();
+            std::cerr << "Session disconnect identity/turn/capture: " << identity << std::endl;
+            if (identity != 0)
+                return identity;
+            const auto followed =
+              old_owner_forwards_cold_probe_via_active_message_follow_route (true);
+            std::cerr << "Session disconnect Message Follow: " << followed << std::endl;
+            if (followed != 0)
+                return followed;
+            const auto all_settled = physical_disconnect_submits_all_before_waiting_for_terminal ();
+            std::cerr << "Session disconnect all-settled submission: " << all_settled << std::endl;
+            if (all_settled != 0)
+                return all_settled;
+            const auto snapshot = session_disconnect_dispatcher_preserves_identity_snapshot ();
+            std::cerr << "Session disconnect source snapshot: " << snapshot << std::endl;
+            return snapshot;
         }
         if (test == "--unbound-physical")
             return actor_unbound_follows_session_termination (true);
@@ -6494,6 +7416,26 @@ int main (int argc, char **argv)
             return remote_actor_join_store_read_does_not_wait_for_handler_workers ();
         return 1;
     }
+    if (const auto gate = session_disconnect_callback_owns_spot_lifecycle_gate (); gate != 0)
+        return 207;
+    if (const auto all_settled = physical_disconnect_submits_all_before_waiting_for_terminal ();
+        all_settled != 0)
+        return 206;
+    if (const auto snapshot = session_disconnect_dispatcher_preserves_identity_snapshot ();
+        snapshot != 0)
+        return 570 + snapshot;
+    if (const auto followed = old_owner_forwards_cold_probe_via_active_message_follow_route (true);
+        followed != 0)
+        return 560 + followed;
+    for (const bool replay : {false, true}) {
+        if (const auto context =
+              session_disconnect_resolves_context_without_ingress_metadata (replay);
+            context != 0)
+            return context;
+    }
+    if (const auto disconnected = common_session_disconnect_uses_actor_packet_route ();
+        disconnected != 0)
+        return 550 + disconnected;
     if (const auto route = local_relay_preserves_handoff_request_route (true); route != 0)
         return 450 + route;
     if (const auto route = local_relay_preserves_handoff_request_route (false); route != 0)

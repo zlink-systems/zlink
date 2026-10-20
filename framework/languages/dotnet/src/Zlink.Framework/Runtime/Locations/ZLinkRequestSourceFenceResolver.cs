@@ -3,44 +3,111 @@ using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.Runtime.Locations;
 
-internal static class ZLinkRequestSourceFenceResolver
+/// <summary>
+/// Chooses the descriptor that supplies the source request owner values when an owner first
+/// accepts a request (Location runtime §9.3, Session·Actor binding §4): the admitted sender's
+/// descriptor with the exact RID and node lifecycle generation whose owner lease passes the
+/// Location runtime §4.1 check. A polled descriptor is checked against the cached owner lease; a
+/// sender missing from the polled descriptors is read from the Store once.
+/// </summary>
+internal sealed class ZLinkRequestSourceFenceResolver(
+    IZLinkMeshNodeLocationResolver peers,
+    ZLinkOwnerLeaseTracker leases,
+    string meshName,
+    ZLinkMessageFlowTracer? flow = null
+) : IZLinkBackendRequestSourceAcceptance
 {
-    internal static async ValueTask<ZLinkServiceWireCodec.RequestSourceFence> ResolveAsync(
-        IZLinkBackendSpotNode node,
-        IZLinkLocationRepository store,
-        string meshName,
+    public async ValueTask<ZLinkServiceWireCodec.RequestSourceFence?> AcceptAsync(
+        ZLinkServiceWireCodec.RequestSourceFence? polled,
         RoutingId sourceNodeRid,
         ulong sourceNodeGeneration,
         CancellationToken cancellationToken
     )
     {
-        var sources = node as IZLinkBackendRequestSourceFenceObserver;
-        if (sources?.ResolveRequestSourceFence(sourceNodeRid, sourceNodeGeneration) is { } cached)
-            return cached;
+        if (sourceNodeRid.IsEmpty || sourceNodeGeneration == 0)
+            return null;
+        try
+        {
+            if (polled is { } known)
+                return
+                    known.LeaseGeneration <= long.MaxValue
+                    && await leases
+                        .IsOwnerTokenLiveAsync(
+                            new ZLinkLocationOwnerToken(known.OwnerId, (long)known.LeaseGeneration),
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false)
+                    ? known
+                    : null;
 
-        var descriptors = await store
-            .ListAllMeshNodesAsync(meshName, cancellationToken)
-            .ConfigureAwait(false);
-        var descriptor = descriptors.SingleOrDefault(value =>
-            value.Rid == sourceNodeRid && value.LifecycleGeneration == sourceNodeGeneration
-        );
-        if (
-            descriptor is null
-            || sourceNodeGeneration == 0
-            || string.IsNullOrWhiteSpace(descriptor.OwnerId)
-            || descriptor.LeaseGeneration <= 0
-        )
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Rejected,
-                "The ingress request-source fence is unavailable."
-            );
-        var source = new ZLinkServiceWireCodec.RequestSourceFence(
-            descriptor.OwnerId,
-            checked((ulong)descriptor.LeaseGeneration),
-            sourceNodeRid,
-            sourceNodeGeneration
-        );
-        sources?.ObserveRequestSourceFence(source);
-        return source;
+            var descriptors = await peers
+                .ListLiveMeshNodesAsync(meshName, cancellationToken)
+                .ConfigureAwait(false);
+            foreach (var descriptor in descriptors)
+                if (
+                    descriptor.Rid == sourceNodeRid
+                    && descriptor.LifecycleGeneration == sourceNodeGeneration
+                    && !string.IsNullOrWhiteSpace(descriptor.OwnerId)
+                    && descriptor.LeaseGeneration > 0
+                )
+                    return new ZLinkServiceWireCodec.RequestSourceFence(
+                        descriptor.OwnerId,
+                        (ulong)descriptor.LeaseGeneration,
+                        sourceNodeRid,
+                        sourceNodeGeneration
+                    );
+            return null;
+        }
+        catch (ZLinkFrameworkException error)
+            when (error.Kind == ZLinkFrameworkErrorKind.Unavailable
+                && !cancellationToken.IsCancellationRequested
+            )
+        {
+            if (flow?.DispatchErrorsEnabled == true)
+                flow.TraceDispatchError(
+                    new ZLinkDispatchFailure(
+                        ZLinkDispatchErrorSurface.Node,
+                        ZLinkDispatchMessageKind.Request,
+                        ZLinkDispatchErrorReason.StaleTarget,
+                        ZLinkDispatchErrorAction.ReplyError,
+                        null,
+                        SourceRid: sourceNodeRid.ToString(),
+                        Exception: error.InnerException ?? error,
+                        MeshName: meshName
+                    )
+                );
+            return null;
+        }
     }
+
+    /// <summary>Accepts a request on <paramref name="node"/> or ends it Unavailable.</summary>
+    internal static async ValueTask<ZLinkServiceWireCodec.RequestSourceFence> AcceptOrUnavailableAsync(
+        IZLinkBackendSpotNode node,
+        RoutingId sourceNodeRid,
+        ulong sourceNodeGeneration,
+        CancellationToken cancellationToken
+    ) =>
+        node is IZLinkBackendRequestSourceFenceObserver sources
+        && await sources
+            .AcceptRequestSourceAsync(sourceNodeRid, sourceNodeGeneration, cancellationToken)
+            .ConfigureAwait(false)
+            is { } source
+            ? source
+            : throw Unavailable(sourceNodeRid);
+
+    /// <summary>
+    /// With a Location Store, a request the dispatch pump accepted without source owner values
+    /// is not accepted: it is not captured or dispatched and ends Unavailable.
+    /// </summary>
+    internal static bool LacksRecordedSource(
+        ZLinkFrameworkRuntime runtime,
+        ZLinkServiceWireCodec.RequestSourceFence? recorded
+    ) => recorded is null && runtime.Registration.Locations.ResolveStore() is not null;
+
+    internal static ZLinkFrameworkException Unavailable(RoutingId? sourceNodeRid) =>
+        new(
+            ZLinkFrameworkErrorKind.Unavailable,
+            $"Request source '{sourceNodeRid}' has no live MeshNode descriptor.",
+            retryAdvice: ZLinkRetryAdvice.RetryAfterBackoff
+        );
 }

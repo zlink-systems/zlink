@@ -42,6 +42,7 @@ import systems.zlink.framework.runtime.internal.configuration.ZLinkLegacyTopolog
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.locations.ZLinkClientServerServerDescriptor;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetricProbe;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
 import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.internal.spots.ZLinkInstanceSpotCallRuntime;
@@ -913,11 +914,11 @@ final class ZLinkChannelRuntimeTest {
             assertEquals(1L, metrics.inflight("fake-node", "spot"));
             assertTrue(result.cancel(false));
             assertEquals(0L, metrics.inflight("fake-node", "spot"));
-            assertEquals(1L, metrics.durationCount("fake-node", "spot", "failed"));
+            assertEquals(1L, metrics.durationCount("fake-node", "spot", "cancelled"));
 
             resolution.complete(Optional.empty());
             assertEquals(0L, metrics.inflight("fake-node", "spot"));
-            assertEquals(1L, metrics.durationCount("fake-node", "spot", "failed"));
+            assertEquals(1L, metrics.durationCount("fake-node", "spot", "cancelled"));
         }
     }
 
@@ -3153,16 +3154,20 @@ final class ZLinkChannelRuntimeTest {
 
         @Override
         public boolean sendToActor(
-                ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags) {
+                ZLinkServiceM6BWireCodec.ActorRouteFence target,
+                List<Message> parts,
+                SendFlags flags) {
+
             return false;
         }
 
         public CompletionStage<List<Message>> requestToActor(
-                ZLinkBackendActorRef actor,
+                ZLinkServiceM6BWireCodec.ActorRouteFence target,
                 List<Message> parts,
                 SendFlags flags,
                 Duration timeout,
                 CompletableFuture<Void> requestAdmission) {
+
             throw new UnsupportedOperationException();
         }
 

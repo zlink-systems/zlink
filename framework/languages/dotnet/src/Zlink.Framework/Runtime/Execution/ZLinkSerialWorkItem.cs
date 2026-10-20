@@ -53,7 +53,7 @@ internal sealed class ZLinkSerialWorkItem
         _completion?.Task
         ?? throw new InvalidOperationException("Mailbox readiness has no payload completion.");
 
-    internal ZLinkSerialWorkItem? Next { get; set; }
+    internal ZLinkSerialWorkItem? Next;
 
     // Publication links belong to the publisher and the acquiring cursor;
     // Next belongs exclusively to the execution gate's mutable prefix.
@@ -90,6 +90,9 @@ internal sealed class ZLinkSerialWorkItem
 
     internal bool ReservationHeld { get; }
     internal Func<bool>? Ready { get; }
+    internal ZLinkSerialWorkPreparation? Preparation { get; set; }
+    internal Action<Exception>? ErrorReporter { get; set; }
+    internal bool IsReady => Ready?.Invoke() != false && Preparation?.IsReady != false;
 
     internal void BindTerminalRelease(Action release)
     {
@@ -146,10 +149,10 @@ internal sealed class ZLinkSerialWorkItem
         }
         catch (Exception exception)
         {
+            onUnhandledException(exception);
             ReleaseTerminal();
             _completion!.TrySetException(exception);
             _ = _completion!.Task.Exception;
-            onUnhandledException(exception);
         }
     }
 
@@ -159,10 +162,12 @@ internal sealed class ZLinkSerialWorkItem
         ZLinkSerialTurn turn
     )
     {
+        onUnhandledException = ErrorReporter ?? onUnhandledException;
         Task? callbackTask = null;
         try
         {
             using var ambient = new AmbientScope(turn, _operation);
+            Preparation?.Complete();
             var operation = _callback(cancellationToken);
             if (operation.IsCompletedSuccessfully)
             {
@@ -204,10 +209,12 @@ internal sealed class ZLinkSerialWorkItem
         }
         catch (Exception ex)
         {
+            // The failure report precedes the terminal on every path, so the caller that
+            // observes the terminal also observes the report.
+            onUnhandledException(ex);
             ReleaseTerminal();
             _completion!.TrySetException(ex);
             _ = _completion!.Task.Exception;
-            onUnhandledException(ex);
             return ZLinkSerialWorkItemResult.Completed;
         }
     }
@@ -293,11 +300,11 @@ internal sealed class ZLinkSerialWorkItem
         }
         catch (Exception ex)
         {
+            if (ex is not OperationCanceledException)
+                onUnhandledException(ex);
             await ReleaseSuspendedTerminalAsync().ConfigureAwait(false);
             _completion!.TrySetException(ex);
             _ = _completion!.Task.Exception;
-            if (ex is not OperationCanceledException)
-                onUnhandledException(ex);
         }
     }
 
@@ -305,6 +312,7 @@ internal sealed class ZLinkSerialWorkItem
     {
         if (Interlocked.Exchange(ref _terminalReleased, 1) != 0)
             return;
+        Preparation?.Cancel();
         (
             Volatile.Read(ref _terminalRelease)
             ?? throw new InvalidOperationException(

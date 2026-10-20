@@ -3,6 +3,7 @@ import {
   type ActorRef,
   type RoutingId,
   type ZLinkActor,
+  type ZLinkMeshNodeDescriptor,
   type ZLinkActorJoinOperationId,
   type ZLinkMessageSerializer,
   type ZLinkSpot,
@@ -193,11 +194,6 @@ export interface ZLinkActorTransferRuntimeOptions {
   readonly authorityStore: () =>
     (ZLinkAuthorityStore & ZLinkObjectCreationStore & ZLinkOwnerLeaseStore) | undefined;
   readonly currentOwner: () => ZLinkLocationOwnerToken | undefined;
-  /** Live admitted peers of a mesh; used to stop retries against a gone session owner. */
-  readonly liveDescriptors?: (
-    meshName: string,
-    signal?: AbortSignal
-  ) => Promise<readonly import('../../contracts').ZLinkMeshNodeDescriptor[]>;
   /** Service-wire command 42/43/44 bridge, installed after the host runtime is assembled. */
   readonly sessionRelocationWire?: () => ZLinkSessionRelocationWirePort | undefined;
   readonly clearRemoteActorPacketTarget: (actorId: string) => void;
@@ -223,6 +219,30 @@ export class ZLinkActorTransferRuntime {
       actorId,
       requireSourceObjectGeneration(actorId, state)
     );
+  }
+
+  /** Relocation activation owns admission; handler terminals are observed independently. */
+  admitRelocationPrefix(
+    actor: ZLinkActor,
+    objectGeneration: bigint,
+    packets: readonly ZLinkActorHandoffPacket[],
+    start: Promise<void>,
+    onResult: (packet: ZLinkActorHandoffPacket, result: ZLinkActorHandoffResult) => Promise<void>
+  ): void {
+    const manager = this.options.spotManager();
+    if (manager === undefined) throw new Error('Relocated Actor has no local FIFO owner.');
+    const admitted = this.options.actorHandoff.admitTransferredPrefix(
+      actor.context.actorId,
+      objectGeneration,
+      packets,
+      (records) => manager.admitSourceActorPacketPrefix(actor.context.actorId, records),
+      this.options.prepareApplicationJob,
+      start,
+      (packet, result) => {
+        void this.observeHandoffReplay(onResult(packet, result));
+      }
+    );
+    void this.observeHandoffReplay(admitted.terminal);
   }
 
   async completeDeferredActorHandoff(
@@ -481,7 +501,8 @@ export class ZLinkActorTransferRuntime {
     state: ZLinkActorRuntimeState,
     signal?: AbortSignal,
     manageMembership = true,
-    relocation?: ServiceWireOperationId
+    relocation?: ServiceWireOperationId,
+    relocationTarget?: Pick<ZLinkMeshNodeDescriptor, 'rid' | 'lifecycleGeneration'>
   ): Promise<{
     readonly target?: ZLinkRemoteBoundSessionTarget;
     readonly handoffBacklog: readonly import('../actors').ZLinkActorHandoffPacket[];
@@ -511,7 +532,7 @@ export class ZLinkActorTransferRuntime {
     // (Session–Actor binding §8.1).
     const bound = state.boundSession !== undefined;
     const sealedSession = bound
-      ? await this.sealBoundSessionRoute(actor, state, signal, relocation)
+      ? await this.sealBoundSessionRoute(actor, state, signal, relocation, relocationTarget)
       : undefined;
     try {
       if (manageMembership) {
@@ -686,7 +707,8 @@ export class ZLinkActorTransferRuntime {
     actor: ZLinkActor,
     state: ZLinkActorRuntimeState,
     signal?: AbortSignal,
-    relocation?: ServiceWireOperationId
+    relocation?: ServiceWireOperationId,
+    relocationTarget?: Pick<ZLinkMeshNodeDescriptor, 'rid' | 'lifecycleGeneration'>
   ): Promise<ZLinkRemoteBoundSessionTarget | undefined> {
     const target = state.boundSession;
     const actorRef = state.nativeActorRef;
@@ -695,6 +717,9 @@ export class ZLinkActorTransferRuntime {
       actorRef === undefined ||
       target.bindingGeneration === undefined ||
       target.bindingGeneration <= 0n ||
+      target.sessionOwnerNodeGeneration === undefined ||
+      target.sessionOwnerId === undefined ||
+      target.sessionOwnerLeaseGeneration === undefined ||
       state.locationGeneration === undefined ||
       state.locationGeneration < 0n ||
       state.ownerLeaseGeneration === undefined ||
@@ -706,27 +731,24 @@ export class ZLinkActorTransferRuntime {
     }
     const serviceWire = this.options.sessionRelocationWire?.();
     const authorityStore = this.options.authorityStore();
-    const descriptors = this.options.liveDescriptors;
     if (
       relocation === undefined ||
+      relocationTarget === undefined ||
       serviceWire === undefined ||
       authorityStore === undefined ||
-      descriptors === undefined ||
       target.sessionRid === undefined
     ) {
       throw new Error(
         `Actor '${actor.context.actorId}' Session relocation requires the command 42/43 service-wire path.`
       );
     }
-    const [authority, live] = await Promise.all([
-      authorityStore.readAuthority(encodeAuthorityKey('actor', actor.context.actorId), signal),
-      descriptors(target.routerChannelId, signal)
-    ]);
+    const authority = await authorityStore.readAuthority(
+      encodeAuthorityKey('actor', actor.context.actorId),
+      signal
+    );
     const local = this.options.primaryMeshNode().status();
-    const sessionOwner = live.find((value) => routingIdsEqual(value.rid, target.targetNodeRid));
     if (
       authority.kind !== 'snapshot' ||
-      sessionOwner === undefined ||
       !routingIdsEqual(local.routingId, actorRef.nodeRid) ||
       authority.objectGeneration !== actorRef.generation ||
       authority.authorityOwnerGeneration !== state.locationGeneration ||
@@ -748,15 +770,19 @@ export class ZLinkActorTransferRuntime {
       nodeGeneration: local.lifecycleGeneration,
       expectedAuthorityStoreVersion: authority.storeVersion.value
     };
+    // Session-Actor binding §4: command 42 carries the Session owner identity
+    // stored at bind unchanged.
     const session = {
       sessionOwnerNodeRid: target.targetNodeRid,
-      sessionOwnerNodeGeneration: sessionOwner.lifecycleGeneration,
-      sessionOwnerId: sessionOwner.ownerId,
-      sessionOwnerLeaseGeneration: sessionOwner.leaseGeneration,
+      sessionOwnerNodeGeneration: target.sessionOwnerNodeGeneration,
+      sessionOwnerId: target.sessionOwnerId,
+      sessionOwnerLeaseGeneration: target.sessionOwnerLeaseGeneration,
       sessionRid: target.sessionRid,
       bindingGeneration: target.bindingGeneration
     };
     const request: ServiceSessionRelocationSeal = {
+      targetNodeRid: relocationTarget.rid as string,
+      targetNodeGeneration: relocationTarget.lifecycleGeneration,
       relocation,
       coordinator,
       senderRole: 'source',

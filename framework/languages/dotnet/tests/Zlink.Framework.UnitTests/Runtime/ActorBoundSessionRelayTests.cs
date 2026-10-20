@@ -7,6 +7,109 @@ using Zlink.Framework.Runtime.Backend.Contracts;
 public sealed class ActorBoundSessionRelayTests
 {
     [Fact]
+    public void Disconnect_body_matches_shared_golden_identity()
+    {
+        var root = Common.FrameworkTestEnvironment.GetRepoRoot();
+        using var document = System.Text.Json.JsonDocument.Parse(
+            File.ReadAllText(
+                Path.Combine(root, "framework/runtime/protocol/golden/session-disconnected-v1.json")
+            )
+        );
+        foreach (var vector in document.RootElement.GetProperty("canonical").EnumerateArray())
+        {
+            var rid = vector.GetProperty("sessionOwnerNodeRidHex").GetString()!;
+            var expected = Convert.FromHexString(vector.GetProperty("hex").GetString()!);
+            var actual = ZLinkActorBoundSessionRelay.EncodeSessionDisconnected(
+                RoutingId.From(Convert.FromHexString(rid)),
+                ulong.Parse(vector.GetProperty("sessionOwnerNodeGeneration").GetString()!),
+                ulong.Parse(vector.GetProperty("bindingGeneration").GetString()!)
+            );
+            Assert.Equal(expected, actual);
+            Assert.True(
+                ZLinkActorBoundSessionRelay.TryDecodeSessionDisconnected(
+                    expected,
+                    out var decodedRid,
+                    out var ownerGeneration,
+                    out var bindingGeneration
+                )
+            );
+            Assert.Equal(rid, decodedRid.ToHex());
+            Assert.Equal(
+                ulong.Parse(vector.GetProperty("sessionOwnerNodeGeneration").GetString()!),
+                ownerGeneration
+            );
+            Assert.Equal(
+                ulong.Parse(vector.GetProperty("bindingGeneration").GetString()!),
+                bindingGeneration
+            );
+        }
+        foreach (var vector in document.RootElement.GetProperty("rejected").EnumerateArray())
+            Assert.False(
+                ZLinkActorBoundSessionRelay.TryDecodeSessionDisconnected(
+                    Convert.FromHexString(vector.GetProperty("hex").GetString()!),
+                    out _,
+                    out _,
+                    out _
+                )
+            );
+    }
+
+    [Theory]
+    [InlineData("node-a", 2UL, 7UL, true)]
+    [InlineData("node-b", 2UL, 7UL, false)]
+    [InlineData("node-a", 3UL, 7UL, false)]
+    [InlineData("node-a", 2UL, 8UL, false)]
+    [InlineData(null, 0UL, 0UL, true)]
+    public void Disconnect_compares_only_body_identity(
+        string? node,
+        ulong ownerGeneration,
+        ulong bindingGeneration,
+        bool expected
+    )
+    {
+        var state = new ZLinkActorRuntimeState("actor-disconnect");
+        if (node is not null)
+            state.BindSession(
+                RoutingId.From(node),
+                RoutingId.From("session"),
+                "local-token",
+                objectGeneration: 1,
+                authorityOwnerGeneration: 1,
+                meshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
+                ownerLeaseGeneration: 1,
+                bindingGeneration: bindingGeneration,
+                sessionOwnerNodeGeneration: ownerGeneration
+            );
+        using var body = Message.From(
+            ZLinkActorBoundSessionRelay.EncodeSessionDisconnected(RoutingId.From("node-a"), 2, 7)
+        );
+        Assert.Equal(
+            expected,
+            ZLinkActorBoundSessionRelay.TryValidateDisconnectedBinding(
+                state,
+                body,
+                out var token,
+                out var malformed
+            )
+        );
+        Assert.False(malformed);
+        if (expected && node is not null)
+            Assert.Equal("local-token", token);
+        if (node is null)
+            Assert.Empty(token);
+        using var invalid = Message.From(Array.Empty<byte>());
+        Assert.False(
+            ZLinkActorBoundSessionRelay.TryValidateDisconnectedBinding(
+                state,
+                invalid,
+                out _,
+                out malformed
+            )
+        );
+        Assert.True(malformed);
+    }
+
+    [Fact]
     public void Bound_Session_Operation_Runs_Only_For_The_Expected_Binding()
     {
         var state = new ZLinkActorRuntimeState("actor-1");
@@ -314,8 +417,14 @@ public sealed class ActorBoundSessionRelayTests
         Assert.False(binding.IsSamePhysicalSessionOwner(nodeRid, 11, sessionRid, "owner-b", 13));
         Assert.False(binding.IsSamePhysicalSessionOwner(nodeRid, 11, sessionRid, "owner-a", 14));
 
-        var legacyIdentity = binding with { SessionOwnerId = "", SessionOwnerLeaseGeneration = 0 };
-        Assert.True(
+        // Session-Actor binding §4: an identity without descriptor values is not guessed
+        // from the node RID and lifecycle generation.
+        var legacyIdentity = binding with
+        {
+            SessionOwnerId = "",
+            SessionOwnerLeaseGeneration = 0,
+        };
+        Assert.False(
             legacyIdentity.IsSamePhysicalSessionOwner(nodeRid, 11, sessionRid, nodeRid.ToHex(), 11)
         );
         Assert.False(

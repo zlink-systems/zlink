@@ -324,8 +324,6 @@ final class ZLinkChannelSubmitTurnTest {
         final ZLinkChannelSocketRegistry sockets = new ZLinkChannelSocketRegistry();
         final ZLinkStateLane lane = (ZLinkStateLane) field(sockets, "stateLane");
         final ZLinkStateLane operationLane = new ZLinkStateLane();
-        final java.util.concurrent.ScheduledExecutorService scheduler =
-                Executors.newSingleThreadScheduledExecutor();
         final ZLinkChannelCallRuntime runtime;
 
         Fixture() throws Exception {
@@ -334,7 +332,6 @@ final class ZLinkChannelSubmitTurnTest {
                     new ZLinkChannelCallRuntime(
                             new ZLinkMessageFlowTracer(
                                     options.registration().dispatchOptions(), null, Runnable::run),
-                            scheduler,
                             null,
                             null,
                             null);
@@ -410,7 +407,6 @@ final class ZLinkChannelSubmitTurnTest {
         @Override
         public void close() {
             runtime.beginClose();
-            scheduler.shutdownNow();
             operationLane.closeAsync().toCompletableFuture().join();
             lane.closeAsync().toCompletableFuture().join();
         }

@@ -17,6 +17,7 @@ import { enumWireRejectReason } from '../protocol/service_wire_codec.generated';
 import { SERVICE_WIRE_PREFIX_SIZE } from './service-wire-binary-primitives';
 import {
   OperationRegistry,
+  OperationTimeoutError,
   type OperationObserver,
   type PendingOperation
 } from './operation-registry';
@@ -102,6 +103,8 @@ type RawServiceChannelTargetSelection =
 type ServiceApplicationPayloadInput = ServiceApplicationPayload | Buffer;
 
 export interface RawServiceIngressRecord {
+  /** Source identity recorded once by the first accepting owner (Location runtime §9.3). */
+  requestSource?: import('../locations/request-source-resolver').ZLinkRequestSourceFence;
   readonly onAdmitted?: () => void;
   readonly command: number;
   readonly flags: number;
@@ -163,6 +166,7 @@ const livenessCodec = createServiceWireCodec({
 interface ControlSendState {
   task?: Promise<boolean>;
   next?: () => boolean | Promise<boolean>;
+  // HELLO send eligibility; admission suspension does not end the exchange.
   current?: () => boolean;
   // Admission owns the first HELLO until ADMIT or route termination.
   hello?: Uint8Array;
@@ -416,6 +420,35 @@ export class RawServiceMeshRuntime {
     };
   }
 
+  async waitForPeerRoute(
+    nodeRoutingId: string,
+    lifecycleGeneration: bigint,
+    deadlineUnixMs: bigint,
+    signal?: AbortSignal
+  ): Promise<void> {
+    const remaining = deadlineUnixMs - BigInt(Date.now());
+    if (remaining <= 0n) throw new OperationTimeoutError(0n);
+    const pending = this.operations.register(Number(remaining));
+    const check = () => {
+      if (this.isPeerRouteReady(nodeRoutingId, lifecycleGeneration)) {
+        this.operations.complete(pending.id, { terminalResult: RequestResult.Ok, failureCode: 0 });
+      }
+    };
+    const unsubscribe = this.observePeerRouteChanged((rid) => {
+      if (rid === nodeRoutingId) check();
+    });
+    const abort = () => this.operations.fail(pending.id, signal?.reason);
+    signal?.addEventListener('abort', abort, { once: true });
+    try {
+      if (signal?.aborted === true) abort();
+      else check();
+      await pending.promise;
+    } finally {
+      unsubscribe();
+      signal?.removeEventListener('abort', abort);
+    }
+  }
+
   get requestStopSignal(): AbortSignal {
     return this.applicationJobStop.signal;
   }
@@ -443,38 +476,41 @@ export class RawServiceMeshRuntime {
     for (const listener of this.peerConnectionIntentRemoved) listener(nodeRoutingId);
   }
 
-  announcePeer(nodeRoutingId: string): Promise<boolean> {
-    if (this.closed) return Promise.resolve(false);
+  announcePeer(nodeRoutingId: string): boolean {
+    if (this.closed) return false;
     const generation = this.selectedRoutes.get(nodeRoutingId);
-    if (generation === undefined) return Promise.resolve(false);
-    const current = () => {
-      const admission = this.topology.routeAdmission(nodeRoutingId);
-      return (
-        this.selectedRoutes.get(nodeRoutingId) === generation &&
-        !(
-          admission?.connectionId === routeConnectionId(generation) &&
-          admission.remoteAdmitReceived === true
-        ) &&
-        this.peerAdmissionSealed?.() !== true
-      );
-    };
+    if (generation === undefined) return false;
     const key = controlSendKey(nodeRoutingId, M6aServiceWireCommand.hello);
-    if (!current()) {
-      this.controlSends.delete(key);
-      return Promise.resolve(false);
+    if (!this.isPeerAnnouncementCurrent(nodeRoutingId, generation)) {
+      return false;
     }
+    const current = () =>
+      this.isPeerAnnouncementCurrent(nodeRoutingId, generation) &&
+      this.peerAdmissionSealed?.() !== true;
     const existing = this.controlSends.get(key);
+    if (!current()) {
+      if (existing === undefined) this.controlSends.set(key, { current });
+      return false;
+    }
     const hello =
-      existing?.current?.() === true
-        ? existing.hello!
-        : encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor());
-    return Promise.resolve(
-      this.startControlSend(
-        nodeRoutingId,
-        M6aServiceWireCommand.hello,
-        () => this.submitControl(nodeRoutingId, [hello]),
-        current,
-        hello
+      existing?.hello ??
+      encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor());
+    return this.startControlSend(
+      nodeRoutingId,
+      M6aServiceWireCommand.hello,
+      () => this.submitControl(nodeRoutingId, [hello]),
+      current,
+      hello
+    );
+  }
+
+  private isPeerAnnouncementCurrent(nodeRoutingId: string, generation: bigint): boolean {
+    const admission = this.topology.routeAdmission(nodeRoutingId);
+    return (
+      this.selectedRoutes.get(nodeRoutingId) === generation &&
+      !(
+        admission?.connectionId === routeConnectionId(generation) &&
+        admission.remoteAdmitReceived === true
       )
     );
   }
@@ -737,13 +773,21 @@ export class RawServiceMeshRuntime {
     onAdmitted?: () => void
   ): Promise<readonly Buffer[]> {
     const admission = this.topology.admittedPeer(targetNodeRoutingId)?.liveness;
-    return this.requireStarted().request(
-      targetNodeRoutingId,
-      parts,
-      timeoutMs,
-      admission?.recordReceived,
-      onAdmitted
-    );
+    try {
+      return this.requireStarted().request(
+        targetNodeRoutingId,
+        parts,
+        timeoutMs,
+        (reply) => reply,
+        (error) => {
+          throw error;
+        },
+        admission?.recordReceived,
+        onAdmitted
+      );
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   replyService(
@@ -809,9 +853,19 @@ export class RawServiceMeshRuntime {
   }
 
   /** Returns whether a receive budget ended before no-data; idle ticks only maintain peers. */
-  async pumpBatch(receiveReady = true, routeReady = false): Promise<boolean> {
-    this.observeInfrastructureFailure();
-    if (routeReady) await this.observeSelectedRoutes();
+  pumpBatch(receiveReady = true, routeReady = false): boolean | Promise<boolean> {
+    try {
+      this.observeInfrastructureFailure();
+      if (routeReady) {
+        return this.observeSelectedRoutes().then(() => this.receiveBatch(receiveReady));
+      }
+      return this.receiveBatch(receiveReady);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+  }
+
+  private receiveBatch(receiveReady: boolean): boolean | Promise<boolean> {
     const startedAtMs = performance.now();
     let messages = 0;
     let bytes = 0;
@@ -823,30 +877,49 @@ export class RawServiceMeshRuntime {
       'remote'
     ));
     if (receiveReady) rotation.reserve();
-    try {
-      while (receiveReady && messages < RAW_MESH_RECEIVE_RECORD_BUDGET && !this.closed) {
-        const received = this.receiveOne(performance.now(), observe, rotation);
-        const result = received instanceof Promise ? await received : received;
-        if (result === 'noData') {
-          receiveReady = false;
-          break;
+    // The same loop owns both immediate receives and a suspended receive's
+    // continuation; only the latter needs a Promise and retains this frame.
+    const drain = (received?: RawServicePumpResult): boolean | Promise<boolean> => {
+      try {
+        while (
+          received !== undefined ||
+          (receiveReady && messages < RAW_MESH_RECEIVE_RECORD_BUDGET && !this.closed)
+        ) {
+          if (received === undefined) {
+            const pending = this.receiveOne(performance.now(), observe, rotation);
+            if (pending instanceof Promise) {
+              return pending.then(drain, (error) => {
+                rotation.releaseUnused();
+                throw error;
+              });
+            }
+            received = pending;
+          }
+          if (received === 'noData') {
+            receiveReady = false;
+            break;
+          }
+          messages += 1;
+          received = undefined;
+          // Core owns the per-peer fair-queue cursor. The Framework limit bounds
+          // the entire round, so changing peers does not renew its byte/count budget.
+          if (
+            bytes >= RAW_MESH_RECEIVE_BYTE_BUDGET ||
+            performance.now() - startedAtMs >= RAW_MESH_RECEIVE_TIME_BUDGET_MS
+          )
+            break;
         }
-        messages += 1;
-        // Core owns the per-peer fair-queue cursor. The Framework limit bounds
-        // the entire round, so changing peers does not renew its byte/count budget.
-        if (
-          bytes >= RAW_MESH_RECEIVE_BYTE_BUDGET ||
-          performance.now() - startedAtMs >= RAW_MESH_RECEIVE_TIME_BUDGET_MS
-        )
-          break;
+      } catch (error) {
+        rotation.releaseUnused();
+        throw error;
       }
-    } finally {
       rotation.releaseUnused();
-    }
-    if (!this.closed) {
-      this.tickLiveness();
-    }
-    return receiveReady && messages > 0;
+      if (!this.closed) {
+        this.tickLiveness();
+      }
+      return receiveReady && messages > 0;
+    };
+    return drain();
   }
 
   private receiveOne(
@@ -1136,6 +1209,7 @@ export class RawServiceMeshRuntime {
       ]);
     } else if (header.command === M6aServiceWireCommand.admit) {
       this.controlSends.delete(helloKey);
+      this.refreshAdmissionPending(nowMs);
       if (result === 'notRequired') {
         this.retireNotRequiredExpectedPeer(received.sourceRid, descriptor.advertisedEndpoint);
       } else if (
@@ -1288,24 +1362,45 @@ export class RawServiceMeshRuntime {
     return this.operations.size;
   }
 
+  cancelPendingOperations(reason: unknown): void {
+    this.operations.failAll(reason);
+  }
+
   /**
    * The next management deadline of this node (spec 08 §4.2): request expiry,
    * liveness probe or timeout, or an owned HELLO exchange still awaiting
    * ADMIT, which keeps the existing announce cadence.
    */
   nextMaintenanceDeadlineMs(nowMs: number): number {
-    if (!this.closed) {
-      for (const exchange of this.controlSends.values()) {
-        if (exchange.hello !== undefined && exchange.current?.() === true) return nowMs;
-      }
-    }
+    this.refreshAdmissionPending(nowMs);
     return Math.min(this.operations.nextDeadlineMs(), this.liveness.nextDeadlineMs());
   }
 
+  private refreshAdmissionPending(nowMs: number): void {
+    let pending = false;
+    if (!this.closed && this.controlSends.size !== 0) {
+      for (const nodeRoutingId of this.selectedRoutes.keys()) {
+        const exchange = this.controlSends.get(
+          controlSendKey(nodeRoutingId, M6aServiceWireCommand.hello)
+        );
+        if (exchange?.current?.() === true) {
+          pending = true;
+          break;
+        }
+      }
+    }
+    this.liveness.setAdmissionPending(pending, nowMs);
+  }
+
   tickLiveness(nowMs = performance.now()): ServiceLivenessTick {
+    this.refreshAdmissionPending(nowMs);
+    const admissionDue = this.liveness.tickAdmission(nowMs);
     const result = this.liveness.tick(nowMs);
     this.requireStarted();
-    for (const nodeRoutingId of this.selectedRoutes.keys()) void this.announcePeer(nodeRoutingId);
+    if (!admissionDue && result.probes.length === 0 && result.timedOutNodes.length === 0)
+      return result;
+    if (admissionDue)
+      for (const nodeRoutingId of this.selectedRoutes.keys()) void this.announcePeer(nodeRoutingId);
     for (const probe of result.probes) {
       const parts = [
         livenessCodec.encodeLivenessRecord({
@@ -1359,6 +1454,7 @@ export class RawServiceMeshRuntime {
     for (const nodeRoutingId of selected) this.notifyPeerRouteChanged(nodeRoutingId);
     // A new selected route admits only through a new handshake.
     for (const nodeRoutingId of selected) await this.announcePeer(nodeRoutingId);
+    this.refreshAdmissionPending(performance.now());
     return changes;
   }
 
@@ -1488,57 +1584,53 @@ export class RawServiceMeshRuntime {
       return pending;
     }
     const parts = [header, encodedPayload];
-    let request: Promise<readonly Uint8Array[]>;
     try {
-      request = this.requireStarted().request(
+      this.requireStarted().request(
         selectedTargetNodeRoutingId,
         parts,
         timeoutMs,
+        (replyParts) => {
+          try {
+            if (replyParts.length < 1 || replyParts.length > 2) {
+              throw new ServiceWireProtocolError('Invalid reply parts.');
+            }
+            const reply = decodeReplyHeader(replyParts[0]!);
+            if (reply.correlation !== correlation)
+              throw new ServiceWireProtocolError('Reply correlation mismatch.');
+            if (reply.tail.byteLength !== 0) {
+              throw new ServiceWireProtocolError(
+                'Generic node/channel reply carries an operation-specific tail.'
+              );
+            }
+            if (reply.terminalResult === 0 && replyParts.length !== 2) {
+              throw new ServiceWireProtocolError('Successful reply omits its payload.');
+            }
+            if (reply.terminalResult !== 0 && replyParts.length !== 1) {
+              throw new ServiceWireProtocolError('Failed reply carries a payload.');
+            }
+            const result: RawServiceRequestResult = {
+              terminalResult: reply.terminalResult,
+              failureCode: reply.failureCode
+            };
+            this.operations.complete(
+              pending.id,
+              reply.terminalResult === 0
+                ? { ...result, payload: decodeApplicationPayloadView(replyParts[1]!) }
+                : result
+            );
+          } catch (error) {
+            this.operations.fail(pending.id, error);
+          }
+        },
+        (error) => {
+          this.operations.fail(pending.id, error);
+        },
         selectedPeer.liveness?.recordReceived,
         onAdmitted
       );
     } catch (error) {
       this.failRequest(pending, error);
-      return pending;
     }
-    void request.then(
-      (replyParts) => {
-        try {
-          if (replyParts.length < 1 || replyParts.length > 2) {
-            throw new ServiceWireProtocolError('Invalid reply parts.');
-          }
-          const reply = decodeReplyHeader(replyParts[0]!);
-          if (reply.correlation !== correlation)
-            throw new ServiceWireProtocolError('Reply correlation mismatch.');
-          if (reply.tail.byteLength !== 0) {
-            throw new ServiceWireProtocolError(
-              'Generic node/channel reply carries an operation-specific tail.'
-            );
-          }
-          if (reply.terminalResult === 0 && replyParts.length !== 2) {
-            throw new ServiceWireProtocolError('Successful reply omits its payload.');
-          }
-          if (reply.terminalResult !== 0 && replyParts.length !== 1) {
-            throw new ServiceWireProtocolError('Failed reply carries a payload.');
-          }
-          const result: RawServiceRequestResult = {
-            terminalResult: reply.terminalResult,
-            failureCode: reply.failureCode
-          };
-          this.operations.complete(
-            pending.id,
-            reply.terminalResult === 0
-              ? { ...result, payload: decodeApplicationPayloadView(replyParts[1]!) }
-              : result
-          );
-        } catch (error) {
-          this.operations.fail(pending.id, error);
-        }
-      },
-      (error) => {
-        this.operations.fail(pending.id, error);
-      }
-    );
     return pending;
   }
 
@@ -1675,12 +1767,10 @@ export class RawServiceMeshRuntime {
     hello?: Uint8Array
   ): boolean {
     const key = controlSendKey(target, command);
+    if (command === M6aServiceWireCommand.hello)
+      this.liveness.setAdmissionPending(true, performance.now());
     const existing = this.controlSends.get(key);
-    if (
-      existing !== undefined &&
-      existing.task !== undefined &&
-      (command !== M6aServiceWireCommand.hello || existing.current?.() === true)
-    ) {
+    if (existing?.task !== undefined) {
       if (command !== M6aServiceWireCommand.hello) {
         existing.next = attempt;
         existing.current = current;
@@ -1696,7 +1786,7 @@ export class RawServiceMeshRuntime {
     const state: ControlSendState = { current, hello };
     const completeSend = () => {
       if (owner.controlSends.get(key) !== state) return;
-      if (hello !== undefined && current?.() === true) delete state.task;
+      if (hello !== undefined) delete state.task;
       else owner.controlSends.delete(key);
     };
     const task = first.then(function drain(accepted): boolean | Promise<boolean> {
@@ -1772,7 +1862,7 @@ export class RawServiceMeshRuntime {
 }
 
 function controlSendKey(target: string, command: number): string {
-  return JSON.stringify([target, command]);
+  return `${command}:${target}`;
 }
 
 function routeConnectionId(generation: bigint): string {

@@ -137,6 +137,7 @@ struct receive_record_t
     std::uint64_t reply_route_id = 0;
     std::string channel_name;
     std::string topic;
+    std::shared_ptr<const std::vector<std::uint8_t>> metadata;
     int terminal_result = 0;
     int failure_errno = 0;
     reply_token_t reply_token;

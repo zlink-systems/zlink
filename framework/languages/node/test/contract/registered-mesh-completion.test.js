@@ -1,37 +1,56 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
-const { ZLinkMeshCompletionTable } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
-const { ZLinkNodeRawMeshBackend } = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
-const { ServiceMailbox } = require('../../packages/framework/dist/runtime/foundation/service-mailbox');
-const { ReadyDomain } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
-const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+const {
+  ZLinkMeshCompletionTable
+} = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
+const {
+  ZLinkNodeRawMeshBackend
+} = require('../../packages/framework/dist/runtime/backend/node/node-raw-mesh-backend');
+const {
+  ServiceMailbox
+} = require('../../packages/framework/dist/runtime/foundation/service-mailbox');
+const {
+  ReadyDomain
+} = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 
 function harness(table, checkSlot = true) {
   let resolve;
-  const promise = new Promise(done => { resolve = done; });
+  const promise = new Promise((done) => {
+    resolve = done;
+  });
   const backend = new ZLinkNodeRawMeshBackend('completion', 'local', {});
   backend.setCompletionHandler((terminal, materialize) => table.complete(terminal, materialize));
   let ready = 0;
-  backend.setReadyHandler(() => { ready++; return 0; });
+  backend.setReadyHandler(() => {
+    ready++;
+    return 0;
+  });
   backend.runtime = {
     mailbox: new ServiceMailbox(),
-    close() { this.mailbox.close(); },
+    close() {
+      this.mailbox.close();
+    },
     requestToNode() {
-      if (checkSlot) assert.equal(table.pendingCount, 1, 'completion slot exists before transport submission');
+      if (checkSlot)
+        assert.equal(table.pendingCount, 1, 'completion slot exists before transport submission');
       return { id: 7n, promise };
     }
   };
   return { backend, resolve, ready: () => ready };
 }
 
-test('registered completion reaches its caller with the infrastructure pump stopped', async t => {
-  t.mock.method(globalThis, 'setTimeout', () => assert.fail('completion must not yield to a timer'));
+test('registered completion reaches its caller with the infrastructure pump stopped', async (t) => {
+  t.mock.method(globalThis, 'setTimeout', () =>
+    assert.fail('completion must not yield to a timer')
+  );
   const table = new ZLinkMeshCompletionTable();
   const h = harness(table, false);
   let result;
-  const pending = table.submit(() =>
-    h.backend.requestToNode('peer', [Buffer.from('request')])
-  ).then(value => { result = value; });
+  const pending = table
+    .submit(() => h.backend.requestToNode('peer', [Buffer.from('request')]))
+    .then((value) => {
+      result = value;
+    });
   h.resolve({ terminalResult: 0, failureCode: 0 });
   // Only Promise dispatch runs: neither infrastructure pumping nor timer yield is available.
   for (let i = 0; i < 8; i++) await Promise.resolve();
@@ -45,14 +64,15 @@ test('registered completion reaches its caller with the infrastructure pump stop
 for (const terminal of ['cancel', 'close']) {
   test(`registered ${terminal} consumes the slot and diagnoses a late native completion`, async () => {
     const diagnostics = [];
-    const table = new ZLinkMeshCompletionTable(value => diagnostics.push(value));
+    const table = new ZLinkMeshCompletionTable((value) => diagnostics.push(value));
     const h = harness(table);
     const controller = new AbortController();
-    const pending = table.submit(() =>
-      h.backend.requestToNode('peer', [Buffer.from('request')]), controller.signal
+    const pending = table.submit(
+      () => h.backend.requestToNode('peer', [Buffer.from('request')]),
+      controller.signal
     );
     const reason = new Error(terminal);
-    const rejected = assert.rejects(pending, error => error === reason);
+    const rejected = assert.rejects(pending, (error) => error === reason);
     if (terminal === 'cancel') controller.abort(reason);
     else {
       await h.backend.close();
@@ -72,9 +92,21 @@ for (const terminal of ['cancel', 'close']) {
 test('immediate terminal rejection uses the registered owner without infrastructure readiness', async () => {
   const table = new ZLinkMeshCompletionTable();
   const h = harness(table);
-  h.backend.stateful = { registry: { binding: () => undefined } };
-  const result = await table.submit(() => h.backend.closeActorBoundSession({}, 1n));
-  assert.equal(result.terminalResult, RequestResult.NotFound);
+  const {
+    ServiceStatefulRuntime
+  } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
+  const {
+    wireReplyFailureException
+  } = require('../../packages/framework/dist/runtime/framework-errors-internal');
+  const { ZLinkFrameworkErrorKind } = require('../../packages/framework/dist/internal');
+  h.backend.stateful = new ServiceStatefulRuntime({ setServiceIngress() {} }, 'local', 1n);
+  const result = await table.submit(() =>
+    h.backend.closeActorBoundSession({ actorId: 'missing', nodeRid: 'local', generation: 1n }, 1n)
+  );
+  assert.equal(
+    wireReplyFailureException(result.terminalResult, result.failureErrno).kind,
+    ZLinkFrameworkErrorKind.InvalidOperation
+  );
   assert.equal(table.pendingCount, 0);
   assert.equal(h.ready(), 0);
   table.dispose();
@@ -108,13 +140,17 @@ test('raw pull completion uses the existing mailbox and releases its claim', asy
 
 test('registered materialization failure rejects its consumed slot and late results do not decode', async () => {
   const diagnostics = [];
-  const table = new ZLinkMeshCompletionTable(value => diagnostics.push(value));
+  const table = new ZLinkMeshCompletionTable((value) => diagnostics.push(value));
   const operationId = { high: 1n, low: 9n };
   const pending = table.submit(() => operationId);
   const failure = new Error('invalid multipart');
-  table.complete({ operationId, terminalResult: 0 }, () => { throw failure; });
-  await assert.rejects(pending, error => error === failure);
-  table.complete({ operationId, terminalResult: 0 }, () => assert.fail('late completion must not decode'));
+  table.complete({ operationId, terminalResult: 0 }, () => {
+    throw failure;
+  });
+  await assert.rejects(pending, (error) => error === failure);
+  table.complete({ operationId, terminalResult: 0 }, () =>
+    assert.fail('late completion must not decode')
+  );
   assert.equal(table.pendingCount, 0);
   assert.equal(diagnostics.length, 1);
   table.dispose();
@@ -123,19 +159,37 @@ test('registered materialization failure rejects its consumed slot and late resu
 test('submission failure and cancellation release the reserved slot without removing a duplicate waiter', async () => {
   const table = new ZLinkMeshCompletionTable();
   const failure = new Error('submission failed');
-  await assert.rejects(table.submit(() => { throw failure; }), error => error === failure);
+  await assert.rejects(
+    table.submit(() => {
+      throw failure;
+    }),
+    (error) => error === failure
+  );
   assert.equal(table.pendingCount, 0);
   const controller = new AbortController();
-  await assert.rejects(table.submit(() => {
-    controller.abort(failure);
-    return { high: 1n, low: 10n };
-  }, controller.signal), error => error === failure);
+  await assert.rejects(
+    table.submit(() => {
+      controller.abort(failure);
+      return { high: 1n, low: 10n };
+    }, controller.signal),
+    (error) => error === failure
+  );
   assert.equal(table.pendingCount, 0);
   const operationId = { high: 1n, low: 11n };
   const first = table.submit(() => operationId);
-  await assert.rejects(table.submit(() => operationId), /already pending/);
+  await assert.rejects(
+    table.submit(() => operationId),
+    /already pending/
+  );
   assert.equal(table.pendingCount, 1);
-  table.complete({ operationId, terminalResult: 0, failureErrno: 0, operationKind: 0, kindData: null, parts: [] });
+  table.complete({
+    operationId,
+    terminalResult: 0,
+    failureErrno: 0,
+    operationKind: 0,
+    kindData: null,
+    parts: []
+  });
   await first;
   assert.equal(table.pendingCount, 0);
   table.dispose();

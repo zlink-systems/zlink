@@ -907,6 +907,7 @@ Application이 반환한 `Rejected`와 callback exception은 다른 결과다. P
 |---|---|---|
 | 같은 type의 `Ready` | `AlreadyExists` | 기존 ref |
 | 같은 type의 `Creating` | `AlreadyExists` | 진행 중인 생성 결과를 기다린다. |
+| 같은 type의 `Closing` | `AlreadyExists` | User Spot은 [Spot 주소 메시징 §3.2](../03-spot-actor/06-spot-address-messaging.ko.md#32-동시-요청의-수렴)의 authority 변경 대기와 후속 절차를 따른다. |
 | 다른 Actor type | `TypeMismatch` | `TypeMismatch` |
 | 다른 Spot 종류 또는 type | `TypeMismatch` | `TypeMismatch` |
 
@@ -1336,6 +1337,12 @@ Spot admission 준비가 끝나면 `ToSpot`, Create와 Join에 대해 Ready가 �
 `OperationId`와 `ReplyRouteId`는 같은 source host 실행 중에 0이 아니며 재사용하지 않는다.
 값을 모두 사용하면 runtime이 더 진행할 수 없는 오류다.
 
+**Source request 정보의 `OwnerId`와 `LeaseGeneration`은 request를 보낸 admitted peer의 MeshNode descriptor에서
+얻는다. Descriptor를 고르는 규칙과 찾지 못했을 때의 결과는 bind의 Session owner identity와 같다([Session·Actor
+binding §4](../04-session/02-session-actor-binding.ko.md#4-binding이-잇는-값과-보관하는-정보)).** Request를 처음 수락하는
+owner가 수락할 때 이 값을 한 번 읽어 기록한다. Relay나 relocation으로 넘겨받은 request는 기록한 값을 그대로 쓰고
+Store를 다시 읽지 않는다. Peer admission은 Store에서 이 descriptor를 읽을 때까지 기다리지 않는다.
+
 Framework는 각 object의 완료 결과를 object 순서로 저장한다. 같은 source request 정보와
 `OperationId`를 중복해서 넣지 않는다. **새 완료 결과와 payload를 Relocation Store에 먼저
 저장한 뒤 Location Store의 payload 위치, checksum, 완료 수와 전달 대기 수를 CAS 한 번으로
@@ -1352,7 +1359,7 @@ Framework는 각 object의 완료 결과를 object 순서로 저장한다. 같�
 
 Connection 종료나 재연결만으로 완료 결과를 받았다고 판단하지 않는다. Target은 현재 route로
 전달을 계속한다. Source owner lease가 유효한 상태에서 `Relocate` deadline을 넘으면
-`ForceStopped`다. 이 경우 payload와 reply bytes를 24시간 보관한다.
+`ForceStopped`다. 이 경우 relocation root와 payload, reply bytes를 24시간 보관한다.
 
 ### 9.4 Relay-ready accepted 전 취소
 

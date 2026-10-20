@@ -4,6 +4,7 @@
 #include <zlink/framework.hpp>
 
 #include "runtime/channels/channel_runtime.hpp"
+#include "runtime/channels/channel_runtime_manager.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
 #include <zlink/Contracts/Core/context.hpp>
@@ -16,8 +17,13 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
+#include <exception>
+#include <functional>
+#include <future>
+#include <iostream>
 #include <memory>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -76,6 +82,17 @@ struct transport_copy_counter_t
     transport_copy_counter_t (transport_copy_counter_t &&) noexcept = default;
     unsigned *copies;
 };
+
+template <typename Predicate> bool wait_until (Predicate predicate)
+{
+    const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    while (!predicate ()) {
+        if (std::chrono::steady_clock::now () >= deadline)
+            return false;
+        std::this_thread::yield ();
+    }
+    return true;
+}
 
 } // namespace
 
@@ -157,7 +174,9 @@ TEST (CppFrameworkRouteClientChannelRouting, PendingNodeRequestRetainsReplacedTr
             framework_error_kind_t::not_found, "test target is absent")));
         EXPECT_EQ (pending.result ().error_kind (), framework_error_kind_t::not_found);
     }
-    EXPECT_TRUE (retained.expired ());
+    // Submit and completion spec §11 permits independent completion before the
+    // producer stack returns. Observing the result does not join transport cleanup.
+    EXPECT_TRUE (wait_until ([&] { return retained.expired (); }));
 }
 
 TEST (CppFrameworkRouteClientChannelRouting, OneWaySendDoesNotCreateCorrelation)
@@ -512,4 +531,351 @@ TEST (CppFrameworkRouteClientChannelRouting, NodeRequestPublishesItsOwnAdmission
 TEST (CppFrameworkRouteClientChannelRouting, SpotRequestPublishesItsOwnAdmissionBeforeReply)
 {
     verify_mesh_request_admission (true);
+}
+
+namespace
+{
+struct spot_lookup_copy_observer_t
+{
+    explicit spot_lookup_copy_observer_t (unsigned &lane_copies) : lane_copies (&lane_copies) {}
+    spot_lookup_copy_observer_t (const spot_lookup_copy_observer_t &other) :
+        lane_copies (other.lane_copies)
+    {
+        if (zlink::framework::runtime::state_lane_t::current ())
+            ++*lane_copies;
+    }
+    spot_lookup_copy_observer_t (spot_lookup_copy_observer_t &&) noexcept = default;
+    unsigned *lane_copies;
+};
+} // namespace
+
+TEST (CppFrameworkRouteClientChannelRouting, SpotSenderLookupDoesNotEnterStateLane)
+{
+    using namespace zlink::framework;
+    using runtime::messaging::message_parts_t;
+    serializer_registry_t serializers;
+    add_int_serializer<route_event_t> (serializers, "application/x-route-event");
+    auto builder = test::runtime_failure_builder ();
+    auto channel = detail::channel_runtime_t::from (builder.message_bus ());
+    channel.bind_serializers (serializers);
+    admitted_spot_resolver_t resolver;
+    channel.bind_spot_address_resolver (resolver);
+    runtime::offload_executor_t target_executor{1, "spot-target-admission"};
+    runtime::state_lane_t target_lane{target_executor};
+    unsigned lookup_lane_copies = 0, target_admissions = 0;
+    channel.bind_spot_mesh_transport (
+      "admission-mesh",
+      [observer = spot_lookup_copy_observer_t (lookup_lane_copies), &target_lane,
+       &target_admissions] (const zlink::routing_id_t &node, const std::string &spot,
+                            std::uint64_t generation, message_parts_t) -> task_t<result_t<void>> {
+          EXPECT_EQ (node.to_string (), "target");
+          EXPECT_EQ (spot, "admission-spot");
+          EXPECT_EQ (generation, 1u);
+          co_return co_await target_lane.run_task ([&] {
+              ++target_admissions;
+              return result_t<void>::success ();
+          });
+      },
+      {});
+    auto client = builder.route_client (serializers);
+    lookup_lane_copies = 0;
+    constexpr unsigned submits = 1000;
+    for (unsigned i = 0; i < submits; ++i)
+        ASSERT_TRUE (client.send_to_spot ("admission-spot", route_event_t{7}).async ().result ());
+    EXPECT_EQ (target_admissions, submits);
+    EXPECT_EQ (lookup_lane_copies, 0u)
+      << "one sender copy inside the channel lane identifies each lookup turn";
+    std::cout << "spot submits=" << submits
+              << " lookup_lane_copy_observations=" << lookup_lane_copies
+              << " target_admission_turns=" << target_admissions << '\n';
+}
+
+TEST (CppFrameworkRouteClientChannelRouting, PendingSpotSendRetainsTransportThroughRebindAndClose)
+{
+    using namespace zlink::framework;
+    using runtime::messaging::message_parts_t;
+    serializer_registry_t serializers;
+    add_int_serializer<route_event_t> (serializers, "application/x-route-event");
+    auto builder = test::runtime_failure_builder ();
+    auto channel = detail::channel_runtime_t::from (builder.message_bus ());
+    channel.bind_serializers (serializers);
+    admitted_spot_resolver_t resolver;
+    channel.bind_spot_address_resolver (resolver);
+    auto lifetime = std::make_shared<int> (7);
+    std::weak_ptr<int> retained = lifetime;
+    task_completion_source_t<result_t<void>> target_admission;
+    bool entered = false;
+    channel.bind_spot_mesh_transport ("admission-mesh",
+                                      [lifetime, &target_admission, &entered] (
+                                        const zlink::routing_id_t &, const std::string &,
+                                        std::uint64_t, message_parts_t) -> task_t<result_t<void>> {
+                                          entered = true;
+                                          auto result = co_await target_admission.task ();
+                                          EXPECT_EQ (*lifetime, 7);
+                                          co_return result;
+                                      },
+                                      {});
+    lifetime.reset ();
+    auto client = builder.route_client (serializers);
+    {
+        auto pending = client.send_to_spot ("admission-spot", route_event_t{7}).async ();
+        EXPECT_TRUE (entered);
+        unsigned replacement_submits = 0;
+        channel.bind_spot_mesh_transport (
+          "admission-mesh",
+          [&replacement_submits] (const zlink::routing_id_t &, const std::string &, std::uint64_t,
+                                  message_parts_t) -> task_t<result_t<void>> {
+              ++replacement_submits;
+              co_return result_t<void>::success ();
+          },
+          {});
+        EXPECT_FALSE (retained.expired ());
+        EXPECT_TRUE (client.send_to_spot ("admission-spot", route_event_t{8}).async ().result ());
+        EXPECT_EQ (replacement_submits, 1u);
+        channel.close ();
+        EXPECT_FALSE (retained.expired ());
+        target_admission.complete (result_t<result_t<void>>::success (result_t<void>::failure (
+          framework_error_kind_t::shutting_down, "target admission closed")));
+        EXPECT_EQ (pending.result ().error_kind (), framework_error_kind_t::shutting_down);
+    }
+    // Same Submit and completion §11 rule as PendingNodeRequestRetainsReplacedTransport.
+    EXPECT_TRUE (wait_until ([&] { return retained.expired (); }));
+}
+
+TEST (CppFrameworkRouteClientChannelRouting, MissingSpotTransportRemainsUnavailable)
+{
+    using namespace zlink::framework;
+    serializer_registry_t serializers;
+    add_int_serializer<route_event_t> (serializers, "application/x-route-event");
+    auto builder = test::runtime_failure_builder ();
+    auto channel = detail::channel_runtime_t::from (builder.message_bus ());
+    channel.bind_serializers (serializers);
+    admitted_spot_resolver_t resolver;
+    channel.bind_spot_address_resolver (resolver);
+    const auto result = builder.route_client (serializers)
+                          .send_to_spot ("admission-spot", route_event_t{7})
+                          .async ()
+                          .result ();
+    EXPECT_EQ (result.error_kind (), framework_error_kind_t::unavailable);
+}
+namespace
+{
+struct publication_copy_action_t
+{
+    explicit publication_copy_action_t (std::function<void ()> action) : action (std::move (action))
+    {
+    }
+    publication_copy_action_t (const publication_copy_action_t &other) : action (other.action)
+    {
+        action ();
+    }
+    publication_copy_action_t (publication_copy_action_t &&) noexcept = default;
+    std::function<void ()> action;
+};
+} // namespace
+
+TEST (CppFrameworkRouteClientChannelRouting, SpotSenderPublicationRetriesWithoutLosingInputs)
+{
+    using namespace zlink::framework;
+    using runtime::messaging::message_parts_t;
+    auto state = std::make_shared<detail::channel_runtime_state_t> ();
+    detail::channel_runtime_t channel (state);
+    bool compete = false;
+    unsigned competing_publications = 0, sender_copies = 0, sends = 0;
+    std::promise<void> prepared, release;
+    auto prepared_future = prepared.get_future ();
+    const auto released = release.get_future ().share ();
+    bool signalled = false;
+    std::exception_ptr bind_error;
+    channel.bind_spot_mesh_transport (
+      "existing",
+      [action = publication_copy_action_t ([&] {
+           if (std::exchange (compete, false)) {
+               ++competing_publications;
+               state->publish_node_transports (
+                 [] (auto &index) { index.route_channels.insert ("concurrent-route"); });
+               EXPECT_TRUE (state->spot_mesh_requesters.contains ("retry"));
+               signalled = true;
+               prepared.set_value ();
+               released.wait ();
+           }
+       })] (const zlink::routing_id_t &, const std::string &, std::uint64_t,
+            message_parts_t) -> task_t<result_t<void>> { co_return result_t<void>::success (); },
+      {});
+    compete = true;
+    std::jthread binder ([&] {
+        try {
+            channel.bind_spot_mesh_transport (
+              "retry",
+              [action = publication_copy_action_t ([&] {
+                   ++sender_copies;
+                   if (runtime::state_lane_t::current ())
+                       EXPECT_TRUE (state->spot_mesh_requesters.contains ("retry"));
+               }),
+               &sends] (const zlink::routing_id_t &, const std::string &, std::uint64_t,
+                        message_parts_t) -> task_t<result_t<void>> {
+                  ++sends;
+                  co_return result_t<void>::success ();
+              },
+              {});
+        }
+        catch (...) {
+            bind_error = std::current_exception ();
+            if (!signalled)
+                prepared.set_exception (bind_error);
+        }
+    });
+    {
+        struct release_on_exit_t
+        {
+            std::promise<void> &release;
+            ~release_on_exit_t () { release.set_value (); }
+        } release_on_exit{release};
+        prepared_future.get ();
+        const auto before =
+          std::atomic_load_explicit (&state->node_transports, std::memory_order_acquire);
+        EXPECT_TRUE (before->route_channels.contains ("concurrent-route"));
+        EXPECT_FALSE (before->spot_mesh_senders.contains ("retry"));
+    }
+    binder.join ();
+    if (bind_error)
+        std::rethrow_exception (bind_error);
+    const auto index =
+      std::atomic_load_explicit (&state->node_transports, std::memory_order_acquire);
+    ASSERT_TRUE (index->route_channels.contains ("concurrent-route"));
+    ASSERT_TRUE (index->spot_mesh_senders.contains ("existing"));
+    ASSERT_TRUE (index->spot_mesh_senders.contains ("retry"));
+    EXPECT_EQ (competing_publications, 1u);
+    EXPECT_GE (sender_copies, 2u);
+    const auto &sender = index->spot_mesh_senders.at ("retry");
+    EXPECT_TRUE (static_cast<bool> (sender));
+    if (sender)
+        EXPECT_TRUE (sender (zlink::routing_id_t::from ("target"), "spot", 1, {}).result ());
+    EXPECT_EQ (sends, 1u);
+    std::cout << "competing_publications=" << competing_publications
+              << " sender_copies=" << sender_copies << " published_sender_submits=" << sends
+              << '\n';
+}
+
+TEST (CppFrameworkRouteClientChannelRouting, BothRouteInitializersPublishAfterPreparation)
+{
+    using namespace zlink::framework;
+    for (const bool use_registration : {false, true}) {
+        auto state = std::make_shared<detail::channel_runtime_state_t> ();
+        detail::channel_runtime_t channel (state);
+        detail::channel_runtime_manager_t manager (state);
+        std::promise<void> prepared, release;
+        auto prepared_future = prepared.get_future ();
+        const auto released = release.get_future ().share ();
+        bool pause = false;
+        channel.bind_spot_mesh_transport (
+          "existing",
+          [action = publication_copy_action_t ([&] {
+               if (std::exchange (pause, false)) {
+                   prepared.set_value ();
+                   released.wait ();
+               }
+           })] (const zlink::routing_id_t &, const std::string &, std::uint64_t,
+                runtime::messaging::message_parts_t) -> task_t<result_t<void>> {
+              co_return result_t<void>::success ();
+          },
+          {});
+        const auto before = std::atomic_load (&state->node_transports);
+        pause = true;
+        std::exception_ptr initialization_error;
+        std::jthread initializer ([&] {
+            try {
+                if (use_registration) {
+                    std::map<std::string, std::shared_ptr<detail::route_channel_builder_state_t>>
+                      registrations;
+                    registrations.emplace (
+                      "published",
+                      std::make_shared<detail::route_channel_builder_state_t> ("published"));
+                    manager.initialize_route_channels (registrations);
+                } else {
+                    manager.initialize_route_channels (std::vector<std::string>{"published"});
+                }
+            }
+            catch (...) {
+                initialization_error = std::current_exception ();
+                prepared.set_exception (initialization_error);
+            }
+        });
+        {
+            struct release_on_exit_t
+            {
+                std::promise<void> &release;
+                ~release_on_exit_t () { release.set_value (); }
+            } release_on_exit{release};
+            prepared_future.get ();
+            EXPECT_TRUE (state->route_channels.contains ("published"));
+            EXPECT_TRUE (state->route_channels.at ("published")->running ());
+            EXPECT_EQ (std::atomic_load (&state->node_transports), before);
+            EXPECT_FALSE (before->route_channels.contains ("published"));
+        }
+        initializer.join ();
+        if (initialization_error)
+            std::rethrow_exception (initialization_error);
+        const auto after = std::atomic_load (&state->node_transports);
+        EXPECT_TRUE (after->route_channels.contains ("published"));
+        EXPECT_TRUE (after->spot_mesh_senders.contains ("existing"));
+        EXPECT_FALSE (before->route_channels.contains ("published"));
+        manager.initialize_route_channels (std::vector<std::string>{"published"});
+        EXPECT_EQ (std::atomic_load (&state->node_transports), after);
+        channel.close ();
+        EXPECT_TRUE (
+          std::atomic_load (&state->node_transports)->route_channels.contains ("published"));
+    }
+}
+
+TEST (CppFrameworkRouteClientChannelRouting, RoutePresenceKeepsPriorityOverReboundSpotMesh)
+{
+    using namespace zlink::framework;
+    using runtime::messaging::message_parts_t;
+    serializer_registry_t serializers;
+    add_int_serializer<route_event_t> (serializers, "application/x-route-event");
+    add_int_serializer<route_request_t> (serializers, "application/x-route-request");
+    add_int_serializer<route_reply_t> (serializers, "application/x-route-reply");
+    auto builder = test::runtime_failure_builder ();
+    auto channel = detail::channel_runtime_t::from (builder.message_bus ());
+    channel.bind_serializers (serializers);
+    admitted_spot_resolver_t resolver;
+    channel.bind_spot_address_resolver (resolver);
+    auto manager = detail::channel_runtime_manager_t::from (builder);
+    manager.initialize_route_channels (std::vector<std::string>{"admission-mesh"});
+    // A stopped route gives an immediate, identifiable rejection without waiting
+    // for a peer. Its presence must still take precedence over the mesh transport.
+    manager.get_route_channel ("admission-mesh").stop ();
+    unsigned mesh_calls = 0;
+    auto client = builder.route_client (serializers);
+    for (unsigned binding = 0; binding != 2; ++binding) {
+        channel.bind_spot_mesh_transport (
+          "admission-mesh",
+          [&] (const zlink::routing_id_t &, const std::string &, std::uint64_t,
+               message_parts_t) -> task_t<result_t<void>> {
+              ++mesh_calls;
+              co_return result_t<void>::success ();
+          },
+          [&] (const zlink::routing_id_t &, const std::string &, std::uint64_t, message_parts_t,
+               std::chrono::milliseconds) -> request_task_t<result_t<message_parts_t>> {
+              ++mesh_calls;
+              co_return result_t<message_parts_t>::failure (framework_error_kind_t::not_found,
+                                                            "mesh selected");
+          });
+        const auto sent =
+          client.send_to_spot ("admission-spot", route_event_t{7}).async ().result ();
+        EXPECT_EQ (sent.error_kind (), framework_error_kind_t::unavailable);
+        EXPECT_EQ (error_message (sent), "route channel runtime is not running");
+        const auto reply = client.request_to_spot ("admission-spot", route_request_t{7})
+                             .async<route_reply_t> ()
+                             .result ();
+        EXPECT_EQ (reply.error_kind (), framework_error_kind_t::unavailable);
+        EXPECT_EQ (error_message (reply), "route channel runtime is not running");
+        EXPECT_EQ (mesh_calls, 0u);
+    }
+    channel.close ();
+    EXPECT_EQ (
+      client.send_to_spot ("admission-spot", route_event_t{7}).async ().result ().error_kind (),
+      framework_error_kind_t::unavailable);
+    EXPECT_EQ (mesh_calls, 0u);
 }

@@ -2635,12 +2635,26 @@ bool verify_spot_wide_yield_blocks_idle_eviction_until_handler_terminal ()
                                           && node->spot_contexts_by_id.contains (context->spot_id);
     }
 
+    const auto coordinator = context->ensure_spot_serial_executor ();
+    const auto actor_executor = coordinator->find_actor_executor (actor_key);
+    auto terminal_fence = std::make_shared<serial_test_signal_t> ();
     probe->reply->complete (result_t<int>::success (7));
+    const auto handler_resumed = probe->handler_resumed.wait_for ();
+    const auto terminal_fence_posted =
+      actor_executor && handler_resumed
+      && coordinator->execute_actor (actor_key, "yield-idle-eviction-terminal-fence",
+                                     [terminal_fence] (auto complete) {
+                                         complete ([terminal_fence] { terminal_fence->set (); });
+                                     });
+    const auto terminal_observed = terminal_fence_posted && terminal_fence->wait_for ();
+    // Yield releases the Spot gate, while this Actor FIFO retains the handler claim.
+    if (actor_executor)
+        actor_executor->queue ()->drain ();
     context->serial_queue->drain ();
     executor->drain ();
 
     const auto handler_completed =
-      probe->handler_resumed.is_set () && !context->has_active_callback ();
+      terminal_observed && probe->handler_resumed.is_set () && !context->has_active_callback ();
     if (!handler_entered || !follower_ran || !single_lifecycle_claim
         || !eviction_rejected_while_yielded || !handler_completed) {
         return false;
@@ -5050,7 +5064,7 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
       std::make_shared<std::promise<runtime::host::actor_join_operation_result_t>> ();
     auto second_future = second_promise->get_future ();
     owner.dispatch_wire_actor_join_admission (
-      spot_id_t ("target-spot"),
+      spot_id_t ("target-spot"), second_actor.actor.actor_id,
       [node, local_rid, second_actor, &serializers, second_promise] () -> task_t<void> {
           second_promise->set_value (
             admit_wire_actor_join (node, local_rid, second_actor, std::nullopt, &serializers));
@@ -5119,7 +5133,7 @@ bool verify_wire_join_requires_active_local_target ()
     std::atomic<int> unavailable{0};
     const auto receive = [&] (const char *target) {
         owner.dispatch_wire_actor_join_admission (
-          spot_id_t (target),
+          spot_id_t (target), std::string_view{},
           [&] () -> task_t<void> {
               ++accepted;
               co_return;
@@ -5172,7 +5186,7 @@ bool verify_relocation_abort_does_not_hold_receive_worker ()
         owner.abort_relocation_materialization (
           {{.kind = runtime::stateful::object_kind_t::user_spot, .key = "abort-target"}});
         owner.dispatch_wire_actor_join_admission (
-          spot_id_t ("following-target"), [] () -> task_t<void> { co_return; },
+          spot_id_t ("following-target"), std::string_view{}, [] () -> task_t<void> { co_return; },
           [&] { following_frame.set_value (); });
     });
     const bool entered = started.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
@@ -5751,7 +5765,7 @@ bool verify_join_commit_does_not_wait_for_joined_callback (bool lifecycle_failur
     std::thread receiver ([&] {
         committed.store (owner.commit_relocation_materialization ({target}));
         owner.dispatch_wire_actor_join_admission (
-          spot_id_t ("following-target"), [] () -> task_t<void> { co_return; },
+          spot_id_t ("following-target"), std::string_view{}, [] () -> task_t<void> { co_return; },
           [&] { following_frame.set_value (); });
     });
     const bool entered = started.wait_for (std::chrono::seconds (2)) == std::future_status::ready;
@@ -5837,12 +5851,13 @@ class actor_cutover_probe_t final : public zlink::framework::actor_t
         target_joined.store (false, std::memory_order_release);
         submit_bound_push_on_join.store (false, std::memory_order_release);
         joined_bound_push_submitted.store (false, std::memory_order_release);
-        source_leave_entered.store (false, std::memory_order_release);
         source_leave_before_target_joined.store (false, std::memory_order_release);
         source_leave_calls.store (0, std::memory_order_release);
         target_completion_gate =
           std::make_shared<zlink::framework::task_completion_source_t<void>> ();
         source_leave_gate = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+        source_leave_started =
+          std::make_shared<zlink::framework::task_completion_source_t<void>> ();
     }
 
     static inline std::atomic_int source_completions{0};
@@ -5857,7 +5872,6 @@ class actor_cutover_probe_t final : public zlink::framework::actor_t
     static inline std::atomic_bool target_joined{false};
     static inline std::atomic_bool submit_bound_push_on_join{false};
     static inline std::atomic_bool joined_bound_push_submitted{false};
-    static inline std::atomic_bool source_leave_entered{false};
     static inline std::atomic_bool source_leave_before_target_joined{false};
     static inline std::atomic_int source_leave_calls{0};
     static inline std::shared_ptr<zlink::framework::task_completion_source_t<void>>
@@ -5865,6 +5879,8 @@ class actor_cutover_probe_t final : public zlink::framework::actor_t
         std::make_shared<zlink::framework::task_completion_source_t<void>> ();
     static inline std::shared_ptr<zlink::framework::task_completion_source_t<void>>
       source_leave_gate = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+    static inline std::shared_ptr<zlink::framework::task_completion_source_t<void>>
+      source_leave_started = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
 
   private:
     zlink::framework::actor_context_t _context;
@@ -5935,7 +5951,8 @@ class actor_cutover_probe_spot_t final : public zlink::framework::spot_t<actor_c
             actor_cutover_probe_t::source_leave_before_target_joined.store (
               !actor_cutover_probe_t::target_joined.load (std::memory_order_acquire),
               std::memory_order_release);
-            actor_cutover_probe_t::source_leave_entered.store (true, std::memory_order_release);
+            actor_cutover_probe_t::source_leave_started->complete (
+              zlink::framework::result_t<void>::success ());
             co_await actor_cutover_probe_t::source_leave_gate->task ();
         }
         co_return;
@@ -6962,7 +6979,9 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     return true;
 }
 
-bool verify_remote_actor_cutover_completion_is_target_owned ()
+bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_delay = false,
+                                                             bool unknown_at_teardown = false,
+                                                             bool stopped_management = false)
 {
     using namespace std::chrono_literals;
     using namespace zlink::framework;
@@ -6970,13 +6989,78 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
     namespace runtime = zlink::framework::runtime;
     namespace stateful = zlink::framework::runtime::stateful;
 
+    struct source_settlement_probe_t final : stateful::authority_relocation_port_t
+    {
+        stateful::authority_relocation_port_t &delegate;
+        std::atomic_bool leave_accepted{false};
+        std::atomic_int observations{0};
+        std::atomic_bool cancellation_requested{false};
+        bool keep_unknown = false;
+        std::function<void ()> cancel_management;
+        explicit source_settlement_probe_t (stateful::authority_relocation_port_t &port) :
+            delegate (port)
+        {
+        }
+        stateful::source_relocation_settlement_t
+        settle_source_relocation (const stateful::relocation_authority_fence_t &fence,
+                                  const std::vector<stateful::object_ref_t> &participants,
+                                  bool preserve) override
+        {
+            observations.fetch_add (1, std::memory_order_relaxed);
+            // Stop the delay synchronously in the source decision that observes
+            // the real early Leave. That decision stays UNKNOWN, so the next
+            // delay must observe cancellation before any confirmed read.
+            if (!leave_accepted.load (std::memory_order_acquire))
+                return {};
+            if (!cancellation_requested.exchange (true, std::memory_order_acq_rel)) {
+                cancel_management ();
+                return {};
+            }
+            if (keep_unknown)
+                return {};
+            return delegate.settle_source_relocation (fence, participants, preserve);
+        }
+        stateful::authority_publish_result_t publish (const stateful::object_ref_t &source,
+                                                      const stateful::object_ref_t &target,
+                                                      location_owner_token_t owner,
+                                                      object_creation_target_t placement,
+                                                      std::string reference,
+                                                      std::uint32_t checksum,
+                                                      stateful::inventory_digest_t digest,
+                                                      std::vector<std::byte> payload,
+                                                      std::string version,
+                                                      runtime::protocol::relocation_id_t relocation,
+                                                      location_owner_token_t source_owner) override
+        {
+            return delegate.publish (source, target, std::move (owner), std::move (placement),
+                                     std::move (reference), checksum, digest, std::move (payload),
+                                     std::move (version), relocation, std::move (source_owner));
+        }
+        std::optional<stateful::authority_relocation_reference_t>
+        read (stateful::object_kind_t kind, const std::string &key) override
+        {
+            return delegate.read (kind, key);
+        }
+        std::optional<bool> owner_lease_live (const location_owner_token_t &owner) override
+        {
+            return delegate.owner_lease_live (owner);
+        }
+    };
+
+    const auto join_timeout = 5s;
     actor_cutover_probe_t::reset ();
+    if (cancel_source_delay) {
+        actor_cutover_probe_t::source_leave_gate->complete (result_t<void>::success ());
+        actor_cutover_probe_t::target_completion_gate->complete (result_t<void>::success ());
+    }
     serializer_registry_t serializers;
     const auto core_context = std::make_shared<zlink::context_t> ();
     const auto make_state = [&] (const std::string &rid, bool target) {
         auto state = zlink::framework::test::runtime_failure_fixture<
           zlink::framework::detail::mesh_node_builder_state_t> ("actor-cutover-mesh");
         state->core_context = core_context;
+        if (cancel_source_delay)
+            state->spot_state->dispatch.message_flow (message_flow_log_mode_t::normal);
         state->listen_endpoint = "tcp://127.0.0.1:0";
         state->routing_id = zlink::routing_id_t::from (rid);
         state->spot_state->snapshot.routing_id = *state->routing_id;
@@ -7045,7 +7129,22 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
       [] (const stateful::object_ref_t &, const std::string &, const std::vector<std::byte> &) {
           return runtime::host::user_spot_materialize_result_t{true, std::nullopt};
       });
-    source.configure_relocation_runtime (authority, relocations);
+    auto source_settlement = std::make_shared<source_settlement_probe_t> (*authority);
+    source_settlement->keep_unknown = unknown_at_teardown;
+    task_completion_source_t<void> management_stopped;
+    source_settlement->cancel_management = [&] {
+        source.request_stop ();
+        delays.request_stop (unknown_at_teardown
+                               ? std::chrono::steady_clock::now ()
+                               : std::chrono::steady_clock::now () + join_timeout);
+        if (stopped_management)
+            management_stopped.task ().result ().value ();
+    };
+    source.configure_relocation_runtime (
+      cancel_source_delay
+        ? std::static_pointer_cast<stateful::authority_relocation_port_t> (source_settlement)
+        : authority,
+      relocations);
     target.configure_relocation_runtime (authority, relocations);
     source.configure_session_route_owner (
       [source_owner] { return std::optional<location_owner_token_t>{source_owner}; });
@@ -7239,7 +7338,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
            && std::chrono::steady_clock::now () < admitted_deadline) {
         (void) source.dispatch_ready (discard);
         (void) target.dispatch_ready (discard);
-        std::this_thread::sleep_for (1ms);
+        if (!cancel_source_delay)
+            std::this_thread::sleep_for (1ms);
     }
     if (!source.has_admitted_peer (target.status ().routing_id (),
                                    target.status ().lifecycle_generation ())
@@ -7298,7 +7398,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
         target.stop ();
         return false;
     }
-    actor_cutover_probe_t::submit_bound_push_on_join.store (true, std::memory_order_release);
+    actor_cutover_probe_t::submit_bound_push_on_join.store (!cancel_source_delay,
+                                                            std::memory_order_release);
     actor_gateway_runtime_t source_actor_gateway;
     source_state->spot_state->lane
       .run_checked ([&] {
@@ -7372,18 +7473,72 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
       });
     auto source_provider = location_provider;
     auto target_provider = location_provider;
+    auto source_shared = std::shared_ptr<mesh_node_runtime_t> (&source, [] (auto *) {});
+    task_completion_source_t<bool> early_leave;
+    auto early_leave_ready = early_leave.task ();
+    task_completion_source_t<void> active_drained;
     const auto dispatch_source = [&] {
         while (!stop_dispatch.load (std::memory_order_acquire)) {
             (void) source.dispatch_ready ([&] (const host::ready_record_t &owner,
                                                const host::receive_record_t &record,
                                                std::vector<zlink::message_t> parts) {
+                if (!cancel_source_delay) {
+                    (void) source_spots.dispatch_mesh_record (
+                      owner, record, parts,
+                      runtime::decode_mesh_record_header (record, parts, false).value (),
+                      source_provider, serializers);
+                    return;
+                }
+                // Match the hosted dispatcher admission/terminal ownership. The
+                // early Leave transfers this terminal into its actual reservation.
+                source.application_work_enqueued ();
+                source.application_work_started ();
+                if (record.retain_mailbox_reservation)
+                    record.retain_mailbox_reservation ();
+                auto terminal = std::make_shared<runtime::application_dispatch_terminal_owner_t> (
+                  source_shared, record.complete_stateful_dispatch,
+                  record.release_mailbox_reservation);
+                bool deferred = false;
                 (void) source_spots.dispatch_mesh_record (
                   owner, record, parts,
-                  zlink::framework::runtime::decode_mesh_record_header (record, parts, false)
-                    .value (),
-                  source_provider, serializers);
+                  runtime::decode_mesh_record_header (record, parts, false).value (),
+                  source_provider, serializers,
+                  [&, terminal] {
+                      terminal->settle ();
+                      if (source_settlement->leave_accepted.load (std::memory_order_acquire)
+                          && source.active_application_callbacks () == 0)
+                          active_drained.complete (result_t<void>::success ());
+                  },
+                  &deferred, record.before_application_handler);
+                if (!deferred)
+                    terminal->settle ();
+                const auto retained =
+                  source_state->spot_state->lane
+                    .run ([&] {
+                        const auto &pending = source_state->spot_state->pending_remote_actor_leaves;
+                        return !pending.empty () && pending.front ().transfer_owner_reservation
+                               && source_state->spot_state->actor_transfer_coordinator.phase (
+                                    "actor.cutover.probe:actor-cutover-probe")
+                                    == actor_move_phase_t::source_remote;
+                    })
+                    .get ();
+                if (retained
+                    && !source_settlement->leave_accepted.exchange (true,
+                                                                    std::memory_order_acq_rel)) {
+                    early_leave.complete (
+                      result_t<bool>::success (source.active_application_callbacks () == 1));
+                }
             });
-            std::this_thread::sleep_for (1ms);
+            if (cancel_source_delay) {
+                // The production receive loop advances this same management
+                // owner after a dispatch turn; it returns abandoned early Leave
+                // reservations only after their canonical source move closes.
+                source_spots.advance_management_async (false).result ().value ();
+                if (!stop_dispatch.load (std::memory_order_acquire))
+                    (void) source.native_node ().wait_for_dispatch_activity (
+                      std::chrono::milliseconds (-1), true, std::nullopt);
+            } else
+                std::this_thread::sleep_for (1ms);
         }
     };
     const auto dispatch_target = [&] {
@@ -7397,11 +7552,25 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
                     .value (),
                   target_provider, serializers);
             });
-            std::this_thread::sleep_for (1ms);
+            if (cancel_source_delay) {
+                if (!stop_dispatch.load (std::memory_order_acquire))
+                    (void) target.native_node ().wait_for_dispatch_activity (
+                      std::chrono::milliseconds (-1), true, std::nullopt);
+            } else
+                std::this_thread::sleep_for (1ms);
         }
     };
     std::thread source_dispatch (dispatch_source);
     std::thread target_dispatch (dispatch_target);
+    const auto stop_management = [&] {
+        stop_dispatch.store (true, std::memory_order_release);
+        source.signal_dispatch_activity ();
+        target.signal_dispatch_activity ();
+        if (source_dispatch.joinable ())
+            source_dispatch.join ();
+        if (target_dispatch.joinable ())
+            target_dispatch.join ();
+    };
     const auto source_lifecycle_generation = source.status ().lifecycle_generation ();
     const runtime::spot_address_t target_address{
       .mesh_name = "actor-cutover-mesh",
@@ -7417,17 +7586,77 @@ bool verify_remote_actor_cutover_completion_is_target_owned ()
       target_address.node_generation, target_address.authority_owner_generation,
       static_cast<std::uint64_t> (target_address.owner.lease_generation));
     auto joined = std::async (std::launch::async, [&] {
-        return std::move (source.join_application_actor_to_spot (actor, target_address,
-                                                                 zlink::message_t{}, 5s))
-          .result ();
+        const auto result = std::move (source.join_application_actor_to_spot (
+                                         actor, target_address, zlink::message_t{}, join_timeout))
+                              .result ();
+        if (cancel_source_delay)
+            early_leave.complete (result_t<bool>::success (false));
+        return result;
     });
-    const auto source_leave_deadline = std::chrono::steady_clock::now () + 2s;
-    while (!actor_cutover_probe_t::source_leave_entered.load (std::memory_order_acquire)
-           && std::chrono::steady_clock::now () < source_leave_deadline) {
-        std::this_thread::sleep_for (1ms);
+    if (cancel_source_delay) {
+        const bool retained_active = early_leave_ready.result ().value ();
+        if (stopped_management) {
+            // The source decision is held while its real management producers
+            // stop. Only the canonical source terminal can return this Leave.
+            stop_management ();
+            management_stopped.complete (result_t<void>::success ());
+        }
+        const auto joined_result = joined.get ();
+        const bool expected_terminal =
+          unknown_at_teardown
+            ? !joined_result && joined_result.error_kind () == framework_error_kind_t::unavailable
+            : static_cast<bool> (joined_result);
+        // Membership §Actor Join completion: the one-way source Leave does not
+        // delay target completion. Observe its own entry before counting calls.
+        if (expected_terminal && !unknown_at_teardown)
+            (void) actor_cutover_probe_t::source_leave_started->task ().result_for (join_timeout);
+        if (expected_terminal && !stopped_management)
+            active_drained.task ().result ().value ();
+        const auto active = source.active_application_callbacks ();
+        const auto pending =
+          source_state->spot_state->lane
+            .run ([&] { return source_state->spot_state->pending_remote_actor_leaves.size (); })
+            .get ();
+        const auto inventory = source.native_node ().objects ().inventory ();
+        const bool dispatch_closed =
+          std::none_of (inventory.begin (), inventory.end (), [] (const auto &item) {
+              return item.owner.kind == stateful::object_kind_t::actor
+                     && item.owner.key == "actor-cutover-probe"
+                     && item.state == stateful::object_state_t::ready;
+          });
+        const auto leave_calls =
+          actor_cutover_probe_t::source_leave_calls.load (std::memory_order_acquire);
+        std::cerr << "Source mesh cancellation joined=" << static_cast<bool> (joined_result)
+                  << " retained-active=" << retained_active << " active=" << active
+                  << " pending-leaves=" << pending << " unknown=" << unknown_at_teardown
+                  << " stopped-management=" << stopped_management
+                  << " expected-terminal=" << expected_terminal
+                  << " dispatch-closed=" << dispatch_closed << " source-leave-calls=" << leave_calls
+                  << " authority-observations=" << source_settlement->observations.load ()
+                  << " error="
+                  << (joined_result.error () ? joined_result.error ()->what () : "none") << '\n';
+        const bool passed = expected_terminal && retained_active && active == 0 && pending == 0
+                            && dispatch_closed && leave_calls == (unknown_at_teardown ? 0 : 1);
+        if (!passed) {
+            // Failure was recorded in the snapshot above. Release only the failed
+            // fixture's reservation so the red process can stop cooperatively.
+            source_state->spot_state->actor_transfer_coordinator.cancel_move (
+              "actor.cutover.probe:actor-cutover-probe");
+            source_spots.cleanup_expired_actor_admissions_at (std::chrono::steady_clock::now ());
+            std::cerr << "Source mesh cancellation red fixture teardown released\n";
+        }
+        bound_delivery_gate->complete (result_t<void>::success ());
+        actor_cutover_probe_t::source_leave_gate->complete (result_t<void>::success ());
+        actor_cutover_probe_t::target_completion_gate->complete (result_t<void>::success ());
+        stop_management ();
+        source.stop ();
+        target.stop ();
+        return passed;
     }
+    const auto source_leave_observation =
+      actor_cutover_probe_t::source_leave_started->task ().result_for (2s);
     const auto source_leave_started =
-      actor_cutover_probe_t::source_leave_entered.load (std::memory_order_acquire);
+      source_leave_observation && static_cast<bool> (*source_leave_observation);
     const auto returned_while_source_leave_blocked =
       joined.wait_for (250ms) == std::future_status::ready;
     const auto target_completion_deadline = std::chrono::steady_clock::now () + 250ms;
@@ -7769,10 +7998,350 @@ int verify_deferred_join_waits_for_handler_terminal_across_yield ()
     return 0;
 }
 
+bool verify_relocation_readiness_root_rejection ()
+{
+    namespace fw = zlink::framework;
+    namespace detail = zlink::framework::detail;
+    namespace rt = zlink::framework::runtime;
+    auto mesh =
+      fw::test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("readiness-rejection");
+    auto node = mesh->spot_state;
+    node->worker_executor = std::make_shared<rt::offload_executor_t> (2, "readiness-rejection");
+    auto spot = std::make_shared<detail::spot_context_state_t> ();
+    spot->node = node;
+    spot->spot_id = fw::spot_id_t ("rejected-source");
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->serial_executor = node->worker_executor;
+    spot->relocation_coordination_mode =
+      fw::spot_relocation_coordination_mode_t::application_signaled;
+    spot->relocation_boundary_active = true;
+    const auto coordinator = spot->ensure_spot_serial_executor ();
+    spot->serial_queue = coordinator->spot_queue ();
+    node->actor_spot_ids.emplace ("probe:member", spot->spot_id);
+    const auto actor = coordinator->actor_executor ("probe:member")->queue ();
+    std::promise<void> finished;
+    bool rejected = false;
+    spot->serial_queue->post ("reject-readiness-root", [&] {
+        spot->serial_queue->close ();
+        try {
+            spot->defer_relocation_ready ();
+        }
+        catch (const fw::framework_exception_t &error) {
+            rejected = error.kind () == fw::framework_error_kind_t::shutting_down;
+        }
+        finished.set_value ();
+    });
+    finished.get_future ().wait ();
+    spot->serial_queue->drain ();
+    actor->drain ();
+    coordinator->close ();
+    node->worker_executor->drain ();
+    std::cout << "readiness-root-rejection rejected=" << rejected
+              << " deferred=" << spot->relocation_ready_deferred
+              << " holder=" << bool (spot->relocation_ready_barrier)
+              << " pending=" << actor->pending_count () << '\n';
+    return rejected && !spot->relocation_ready_deferred && !spot->relocation_ready_barrier
+           && actor->pending_count () == 0;
+}
+
+bool verify_relocation_participant_resources (bool fail_reserve, bool abort)
+{
+    namespace fw = zlink::framework;
+    namespace detail = zlink::framework::detail;
+    namespace rt = zlink::framework::runtime;
+    auto mesh =
+      fw::test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("readiness-resources");
+    auto node = mesh->spot_state;
+    node->worker_executor = std::make_shared<rt::offload_executor_t> (2, "readiness-resources");
+    auto spot = std::make_shared<detail::spot_context_state_t> ();
+    spot->node = node;
+    spot->spot_id = fw::spot_id_t ("resource-source");
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->serial_executor = node->worker_executor;
+    spot->relocation_coordination_mode =
+      fw::spot_relocation_coordination_mode_t::application_signaled;
+    spot->relocation_boundary_active = true;
+    node->spot_contexts_by_id.emplace (spot->spot_id, detail::spot_context_access_t::create (spot));
+    const auto coordinator = spot->ensure_spot_serial_executor ();
+    spot->serial_queue = coordinator->spot_queue ();
+    std::vector<std::shared_ptr<rt::serial_execution_queue_t>> actors;
+    for (const auto &key : {"probe:first", "probe:second"}) {
+        node->actor_spot_ids.emplace (key, spot->spot_id);
+        actors.push_back (coordinator->actor_executor (key)->queue ());
+    }
+    std::atomic_int completions{0};
+    spot->lifecycle.on_relocation_ready_completed =
+      [&] (void *, const fw::spot_relocation_ready_completion_t &completion) {
+          if (completion.outcome == fw::spot_relocation_ready_outcome_t::continued)
+              ++completions;
+      };
+    std::promise<void> handler_entered;
+    detail::task_scheduler_t resume;
+    rt::serial_execution_queue_t::async_completion_t terminal;
+    if (fail_reserve) {
+        actors[1]->close ();
+    } else {
+        actors[1]->post_async ("participant-resource-handler", [&] (auto complete) {
+            terminal = std::move (complete);
+            const auto turn = detail::capture_current_serial_turn ();
+            resume = turn->resume_scheduler ();
+            turn->release ();
+            handler_entered.set_value ();
+        });
+        handler_entered.get_future ().wait ();
+    }
+    std::promise<void> registered;
+    spot->serial_queue->post ("resource-readiness", [&] {
+        spot->defer_relocation_ready ();
+        registered.set_value ();
+    });
+    registered.get_future ().wait ();
+    std::atomic_bool captured{false};
+    auto capture = spot->relocation_ready_barrier->run ([&] () -> fw::task_t<void> {
+        captured.store (true);
+        co_return;
+    });
+    if (!fail_reserve) {
+        std::promise<void> acquisition_checkpoint;
+        spot->serial_queue->post ("participant-acquisition-checkpoint",
+                                  [&] { acquisition_checkpoint.set_value (); });
+        acquisition_checkpoint.get_future ().wait ();
+        if (abort)
+            spot->complete_relocation_ready (fw::spot_relocation_ready_outcome_t::continued);
+        else
+            actors[1]->cancel_pending ();
+    }
+    const auto result = capture.result ();
+    std::size_t pending_before_continued = 0;
+    int continued_before = completions.load ();
+    bool next_before_continued = false;
+    std::atomic_bool next_started{false};
+    std::promise<void> next_terminal;
+    auto next_completed = next_terminal.get_future ();
+    if (!abort) {
+        std::promise<void> released_head_checkpoint;
+        // The participant head was connected before acquisition failed. This
+        // later root FIFO item observes its terminal if cancellation released it.
+        spot->serial_queue->post ("failed-participant-release-checkpoint",
+                                  [&] { released_head_checkpoint.set_value (); });
+        released_head_checkpoint.get_future ().wait ();
+        pending_before_continued = actors[0]->pending_count ();
+        actors[0]->post ("after-failed-participant-acquisition", [&] {
+            next_started.store (true);
+            next_terminal.set_value ();
+        });
+        // A retained boundary is already a deterministic failure. Release it
+        // through Continued instead of waiting on work behind that boundary.
+        if (pending_before_continued == 0)
+            next_completed.wait ();
+        next_before_continued = next_started.load ();
+        spot->complete_relocation_ready (fw::spot_relocation_ready_outcome_t::continued);
+    }
+    if (!fail_reserve)
+        resume ([&] { terminal ([] {}); });
+    for (const auto &actor : actors)
+        actor->drain ();
+    spot->serial_queue->drain ();
+    coordinator->close ();
+    node->worker_executor->drain ();
+    std::cout << "readiness-resources reserve_failure=" << fail_reserve << " abort=" << abort
+              << " capture_started=" << captured.load () << " result=" << bool (result)
+              << " error=" << (result ? 0 : static_cast<int> (result.error_kind ()))
+              << " pending_before_continued=" << pending_before_continued
+              << " next_before_continued=" << next_before_continued
+              << " continued_before=" << continued_before << " continued=" << completions.load ()
+              << " pending_first=" << actors[0]->pending_count ()
+              << " pending_second=" << actors[1]->pending_count () << '\n';
+    return !result && !captured.load ()
+           && (abort
+               || (pending_before_continued == 0 && next_before_continued && continued_before == 0))
+           && completions.load () == 1 && actors[0]->pending_count () == 0
+           && actors[1]->pending_count () == 0;
+}
+
+bool verify_relocation_membership_pending_releases_root_turn ()
+{
+    namespace fw = zlink::framework;
+    namespace detail = zlink::framework::detail;
+    namespace rt = zlink::framework::runtime;
+    auto mesh = fw::test::runtime_failure_fixture<detail::mesh_node_builder_state_t> (
+      "readiness-node-pending");
+    auto node = mesh->spot_state;
+    node->worker_executor = std::make_shared<rt::offload_executor_t> (2, "readiness-node-pending");
+    auto spot = std::make_shared<detail::spot_context_state_t> ();
+    spot->node = node;
+    spot->spot_id = fw::spot_id_t ("node-pending-source");
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->serial_executor = node->worker_executor;
+    spot->relocation_coordination_mode =
+      fw::spot_relocation_coordination_mode_t::application_signaled;
+    spot->relocation_boundary_active = true;
+    node->spot_contexts_by_id.emplace (spot->spot_id, detail::spot_context_access_t::create (spot));
+    const auto coordinator = spot->ensure_spot_serial_executor ();
+    spot->serial_queue = coordinator->spot_queue ();
+    std::promise<void> node_entered;
+    auto node_entered_future = node_entered.get_future ();
+    std::promise<void> node_release;
+    auto node_release_future = node_release.get_future ();
+    std::promise<void> node_terminal;
+    auto node_terminal_future = node_terminal.get_future ();
+    std::promise<void> registered;
+    std::atomic_bool captured{false};
+    std::atomic_int continued{0};
+    spot->lifecycle.on_relocation_ready_completed =
+      [&] (void *, const fw::spot_relocation_ready_completion_t &completion) {
+          if (completion.outcome == fw::spot_relocation_ready_outcome_t::continued)
+              ++continued;
+      };
+    spot->serial_queue->post ("register-before-node-hold", [&] {
+        spot->defer_relocation_ready ();
+        // Registration has completed every synchronous state capture. Hold the
+        // node lane before this root turn ends and its lifecycle provider starts.
+        node->lane.try_post ([&] {
+            node_entered.set_value ();
+            node_release_future.wait ();
+            node_terminal.set_value ();
+        });
+        node_entered_future.wait ();
+        registered.set_value ();
+    });
+    registered.get_future ().wait ();
+    auto capture = spot->relocation_ready_barrier->run ([&] () -> fw::task_t<void> {
+        captured.store (true);
+        co_return;
+    });
+    std::promise<void> root_checkpoint;
+    bool captured_while_node_pending = false;
+    spot->serial_queue->post ("root-progress-with-node-pending", [&] {
+        captured_while_node_pending = captured.load ();
+        root_checkpoint.set_value ();
+    });
+    root_checkpoint.get_future ().wait ();
+    node_release.set_value ();
+    node_terminal_future.wait ();
+    const auto result = capture.result ();
+    spot->complete_relocation_ready (fw::spot_relocation_ready_outcome_t::continued);
+    spot->serial_queue->drain ();
+    node->lane.run ([] {}).get ();
+    coordinator->close ();
+    node->worker_executor->drain ();
+    std::cout << "readiness-node-pending root_checkpoint=1 captured_while_pending="
+              << captured_while_node_pending << " captured=" << captured.load ()
+              << " result=" << bool (result) << " continued=" << continued.load ()
+              << " pending=" << spot->serial_queue->pending_count () << '\n';
+    return !captured_while_node_pending && captured.load () && result && continued.load () == 1
+           && spot->serial_queue->pending_count () == 0;
+}
+bool verify_teardown_observes_actor_handoff_terminal ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    auto node = zlink::framework::test::runtime_failure_fixture<spot_node_builder_state_t> (
+      "source-terminal-drain");
+    auto workers = std::make_shared<runtime::offload_executor_t> (1);
+    // The fixture owns this executor through cleanup, including a failing snapshot.
+    auto context = std::make_shared<spot_context_state_t> ();
+    context->node = node;
+    context->spot_id = "source-terminal-spot";
+    context->serial_executor = workers;
+    context->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *workers, runtime::serial_execution_queue_options_t{},
+      runtime::serial_execution_queue_t::error_handler_t{},
+      runtime::serial_lane_policy_t::spot_wide ());
+    node->spot_contexts_by_id.emplace (context->spot_id, spot_context_access_t::create (context));
+    auto executor = context->ensure_spot_serial_executor ();
+    auto actor = executor->actor_executor ("source-terminal-actor");
+    auto barrier =
+      executor->reserve_actor_handoff_barrier ("source-terminal-actor", "accepted-source-handoff");
+    if (!barrier)
+        return false;
+    task_completion_source_t<void> entered;
+    task_completion_source_t<bool> first_event;
+    deferred_barrier_t::async_completion_t finish_source;
+    const auto activated = barrier.value ()->activate_async ([&] (auto complete) {
+        finish_source = std::move (complete);
+        entered.complete (result_t<void>::success ());
+    });
+    if (!activated)
+        return false;
+    entered.task ().result ().value ();
+    std::atomic_bool sentinel_ran{false};
+    const auto sentinel = actor->queue ()->try_post_cancellable_async (
+      "pending-after-source",
+      [&] (auto complete) {
+          sentinel_ran.store (true, std::memory_order_release);
+          complete ([] {});
+      },
+      [&] { first_event.complete (result_t<bool>::success (true)); });
+    const bool pending = sentinel && actor->queue ()->pending_count () >= 2
+                         && !sentinel_ran.load (std::memory_order_acquire);
+    if (!pending) {
+        actor->queue ()->cancel_pending ();
+        finish_source (result_t<void>::success ());
+        drain_spot_node_executors (*node);
+        actor->queue ()->drain ();
+        workers->drain ();
+        std::cerr << "Actor source teardown prerequisite pending=0\n";
+        return false;
+    }
+    std::thread teardown ([&] {
+        drain_spot_node_executors (*node);
+        first_event.complete (result_t<bool>::success (false));
+    });
+    const bool cancelled_before_teardown = first_event.task ().result ().value ();
+    // The immutable result precedes fixture cleanup on the old implementation.
+    if (!cancelled_before_teardown)
+        actor->queue ()->cancel_pending ();
+    finish_source (result_t<void>::success ());
+    teardown.join ();
+    actor->queue ()->drain ();
+    workers->drain ();
+    std::cerr << "Actor source teardown pending=" << pending
+              << " cancelled-before-teardown=" << cancelled_before_teardown
+              << " sentinel-ran=" << sentinel_ran.load () << '\n';
+    return pending && cancelled_before_teardown && !sentinel_ran.load ();
+}
+
+
 } // namespace
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--aggregate-membership-pending")
+        return verify_relocation_membership_pending_releases_root_turn () ? EXIT_SUCCESS
+                                                                          : EXIT_FAILURE;
+    if (argc == 1
+        && (!verify_relocation_participant_resources (true, false)
+            || !verify_relocation_participant_resources (false, false)
+            || !verify_relocation_participant_resources (false, true)
+            || !verify_relocation_readiness_root_rejection ()
+            || !verify_relocation_membership_pending_releases_root_turn ()))
+        return EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--aggregate-failure-release") {
+        const bool reserve_failure = verify_relocation_participant_resources (true, false);
+        const bool run_failure = verify_relocation_participant_resources (false, false);
+        return reserve_failure && run_failure ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--aggregate-holder-resources")
+        return verify_relocation_participant_resources (true, false)
+                   && verify_relocation_participant_resources (false, false)
+                   && verify_relocation_participant_resources (false, true)
+                   && verify_relocation_readiness_root_rejection ()
+                 ? EXIT_SUCCESS
+                 : EXIT_FAILURE;
+
+    if (argc == 2 && std::string_view (argv[1]) == "--source-mesh-stopped-management")
+        return verify_remote_actor_cutover_completion_is_target_owned (true, true, true)
+                 ? EXIT_SUCCESS
+                 : EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--source-actor-drain")
+        return verify_teardown_observes_actor_handoff_terminal () ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--source-mesh-unknown")
+        return verify_remote_actor_cutover_completion_is_target_owned (true, true) ? EXIT_SUCCESS
+                                                                                   : EXIT_FAILURE;
+    if (argc == 2 && std::string_view (argv[1]) == "--source-mesh-cancel")
+        return verify_remote_actor_cutover_completion_is_target_owned (true) ? EXIT_SUCCESS
+                                                                             : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "--spotwide-consumer-gate") {
         const bool passed = verify_spot_wide_consumer_waits_for_shared_gate ();
         std::cout << "SpotWide consumer waits for shared gate=" << passed << '\n';
@@ -8314,6 +8883,18 @@ int main (int argc, char **argv)
         std::cerr << "actor cutover production ownership regression failed\n";
         return 95;
     }
+    if (!verify_teardown_observes_actor_handoff_terminal ())
+        return EXIT_FAILURE;
+    if (!verify_remote_actor_cutover_completion_is_target_owned (true, true, true))
+        return EXIT_FAILURE;
+    if (!verify_remote_actor_cutover_completion_is_target_owned (true)) {
+        std::cerr << "source mesh cancellation terminal did not drain\n";
+        return EXIT_FAILURE;
+    }
+    if (!verify_remote_actor_cutover_completion_is_target_owned (true, true)) {
+        std::cerr << "source mesh UNKNOWN terminal did not drain\n";
+        return EXIT_FAILURE;
+    }
     if (!verify_remote_actor_completion_keeps_session_ref_until_route_ack ()) {
         return 62;
     }
@@ -8430,10 +9011,10 @@ int main (int argc, char **argv)
         return 10;
     }
     scheduler->run_worker_job ();
+    const auto submit_result = submit_task.result ();
     if (!submit_task.await_ready ()) {
         return 11;
     }
-    const auto submit_result = submit_task.result ();
     if (worker_thread == std::thread::id{} || !submit_result || submit_result.value () != 42) {
         return 12;
     }

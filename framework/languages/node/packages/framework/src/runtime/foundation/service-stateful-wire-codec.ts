@@ -1,3 +1,5 @@
+import { decodeRoutingId } from '../routing-id';
+import { decodeBoundSessionCloseCommand } from '../protocol/service_wire_codec.generated';
 import { UINT64_MAX, ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { RELOCATION_STATE_CHUNK_DATA_MAX_BYTES } from '../../contracts/Configuration/InternalDefaults';
 import { isCanonicalWireReplyTerminal } from '../framework-errors-internal';
@@ -177,6 +179,7 @@ interface ServiceWireRelocationBase {
 
 export interface ServiceMaintenanceRelocationPrepare extends ServiceWireRelocationBase {
   readonly kind: 'prepare';
+  readonly deadlineUnixMs: bigint;
   readonly target: ServiceWireRelocationTarget;
   readonly initiatorRole: ServiceWireRelocationRole;
   readonly object: ServiceWireRelocationObject;
@@ -324,6 +327,8 @@ export interface ServiceSessionRelocationOwnerFence {
 }
 
 export interface ServiceSessionRelocationSeal {
+  readonly targetNodeRid: string;
+  readonly targetNodeGeneration: bigint;
   readonly relocation: ServiceWireOperationId;
   readonly coordinator: ServiceWireRelocationCoordinatorFence;
   readonly senderRole: 'source' | 'coordinator';
@@ -660,6 +665,8 @@ function toGeneratedSessionRelocationSeal(
   value: ServiceSessionRelocationSeal
 ): GeneratedSessionRelocationSeal42 {
   return {
+    targetNodeRid: toGeneratedRoutingId(value.targetNodeRid, 'targetNodeRid'),
+    targetNodeGeneration: value.targetNodeGeneration,
     relocation: value.relocation,
     coordinator: toGeneratedCoordinatorFence(value.coordinator),
     senderRole: value.senderRole,
@@ -672,6 +679,8 @@ function fromGeneratedSessionRelocationSeal(
   value: GeneratedSessionRelocationSeal42
 ): ServiceSessionRelocationSeal {
   return {
+    targetNodeRid: fromGeneratedRoutingId(value.targetNodeRid, 'targetNodeRid'),
+    targetNodeGeneration: value.targetNodeGeneration,
     relocation: value.relocation,
     coordinator: fromGeneratedCoordinatorFence(value.coordinator),
     senderRole: value.senderRole as ServiceSessionRelocationSeal['senderRole'],
@@ -777,6 +786,7 @@ function fromGeneratedRelocationPrepare(
 ): ServiceMaintenanceRelocationPrepare {
   return {
     kind: 'prepare',
+    deadlineUnixMs: value.deadlineUnixMs,
     ...fromGeneratedRelocationBase(value),
     target: fromGeneratedTargetFence(value.target),
     initiatorRole: value.initiatorRole,
@@ -1081,6 +1091,12 @@ export type ServiceStatefulWireRecord =
       readonly actor: ServiceActorRouteFence;
       readonly sessionRid: string;
       readonly binding: ServiceBoundSessionTransition;
+    }
+  | {
+      readonly kind: 'boundSessionClose';
+      readonly correlation: bigint;
+      readonly actor: { readonly actorId: string; readonly generation: bigint };
+      readonly session: ServiceRetiredBoundSessionRouteFence;
     }
   | {
       readonly kind: 'boundSessionReplaced';
@@ -1713,6 +1729,25 @@ export function decodeStatefulHeader(
             : { state: 'tombstone', retiredGeneration: generation }
       };
     }
+    case M6bServiceWireCommand.boundSessionClose: {
+      const decoded = decodeBoundSessionCloseCommand([frame], {});
+      return {
+        kind: 'boundSessionClose',
+        correlation: decoded.correlation,
+        actor: { actorId: decoded.actor.actorId, generation: decoded.actor.objectGeneration },
+        session: {
+          ...decoded.session,
+          sessionOwnerNodeRid: decodeRoutingId(
+            Buffer.from(decoded.session.sessionOwnerNodeRid).toString('utf8'),
+            Buffer.from(decoded.session.sessionOwnerNodeRid).toString('hex')
+          ),
+          sessionRid: decodeRoutingId(
+            Buffer.from(decoded.session.sessionRid).toString('utf8'),
+            Buffer.from(decoded.session.sessionRid).toString('hex')
+          )
+        }
+      };
+    }
     case M6bServiceWireCommand.boundSessionReplaced: {
       requireFlags(command.flags, 0);
       const actor = reader.actorRef('actorAuthority.actor');
@@ -1881,7 +1916,8 @@ export function encodeMaintenanceRelocationControl(
           payloadTotalLength: value.payloadTotalLength,
           payloadChunkCount: value.payloadChunkCount,
           payloadChecksumCrc32c: value.payloadChecksumCrc32c,
-          applicationVersion: value.applicationVersion
+          applicationVersion: value.applicationVersion,
+          deadlineUnixMs: value.deadlineUnixMs
         })
       );
     case 'ready':
@@ -2009,6 +2045,7 @@ export function decodeStatefulReply(
     | 'actorJoin'
     | 'streamBind'
     | 'streamUnbind'
+    | 'boundSessionClose'
     | 'instanceSpotRequest'
     | 'userSpotCreate'
     | 'userSpotClose'
@@ -2023,6 +2060,8 @@ export function decodeStatefulReply(
   const terminalResult = reader.u32('terminalResult');
   const failureCode = reader.u32('failureCode');
   validateReplyTerminal(terminalResult, failureCode, hasPayload);
+  if (operationKind === 'boundSessionClose' && hasPayload)
+    fail('A bound Session close reply cannot carry application payload.');
   let tail: ServiceStatefulReplyTail | undefined;
   if (terminalResult === 0) {
     if (operationKind === 'actorLookup') {

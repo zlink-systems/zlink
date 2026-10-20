@@ -233,16 +233,17 @@ export class ZLinkSpotActivation {
   }
 
   async notifyRelocatedBoundary(): Promise<void> {
-    await this.serial.post(() =>
+    await this.serial.postBarrierTurn(() =>
       this.notifyRelocationReadyCompleted(ZLinkSpotRelocationReadyOutcome.Relocated)
     );
   }
 
   executeActor<T>(
     actorId: string,
-    operation: (serial: ZLinkSpotSerialTurnExecutor) => Promise<T> | T
+    operation: (serial: ZLinkSpotSerialTurnExecutor) => Promise<T> | T,
+    workOptions?: import('../execution/serial-execution-queue').ZLinkSerialWorkOptions
   ): Promise<T> {
-    return this.serialExecutor.executeActor(actorId, operation);
+    return this.serialExecutor.executeActor(actorId, operation, workOptions);
   }
 
   /** @internal Restores a non-executing durable prefix into one Actor FIFO. */

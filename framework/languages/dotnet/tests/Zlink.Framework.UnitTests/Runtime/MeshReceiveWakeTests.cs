@@ -38,13 +38,7 @@ public sealed class MeshReceiveWakeTests
             // ingress seam to exhaust admission without modifying an active poller.
             typeof(ZLinkManagedMeshNode)
                 .GetMethod("DrainRawSocket", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .Invoke(
-                    node,
-                    [
-                        stop.Token,
-                        new ZLinkApplicationJobQueueLease?[ZLinkReceiveBatchBudget.MaximumRecords],
-                    ]
-                );
+                .Invoke(node, [stop.Token]);
             Assert.Equal(1UL, queue.GetStatus().CapacityWaiters);
             poller.AllowWait();
             held.Dispose();

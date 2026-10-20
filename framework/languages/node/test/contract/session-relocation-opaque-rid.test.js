@@ -24,6 +24,7 @@ const {
   ZLinkMeshCompletionTable
 } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
 const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+const { withTestSessionOwners } = require('./fixtures/session-owner-descriptors');
 const {
   OperationKind
 } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
@@ -42,7 +43,7 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
   let bindWireSession;
   const completions = new ZLinkMeshCompletionTable();
   if (nativeBinding) {
-    stateful = new ServiceStatefulRuntime(
+    stateful = withTestSessionOwners(new ServiceStatefulRuntime(
       {
         observePeerRoute: () => ({ generation: 2n, ready: true }),
         observePeerRouteChanged: () => () => {},
@@ -68,7 +69,7 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
       },
       ids.owner,
       4n
-    );
+    ));
     stateful.rememberActorRoute({
       actor: { nodeRid: ids.source, actorId: 'opaque-relocation-actor', generation: 5n },
       targetNodeGeneration: 2n,
@@ -170,11 +171,12 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
       sendToNode: (_target, bytes) => submit(sourceRuntime, ids.owner, bytes)
     }),
     boundSessionRelocation: {
-      receiveSeal: async (value, signal) => {
+      receiveSeal: async (value, signal, onInstalled) => {
         await hooks.beforeSeal?.();
         return host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
           value,
-          signal
+          signal,
+          onInstalled
         );
       },
       receiveRoute: (value) =>
@@ -186,9 +188,6 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
   const transfer = new ZLinkActorTransferRuntime({
     primaryMeshNode: () => ({ status: () => ({ routingId: ids.source, lifecycleGeneration: 2n }) }),
     authorityStore: () => ({ readAuthority: async () => currentAuthority }),
-    liveDescriptors: async () => [
-      { rid: ids.owner, lifecycleGeneration: 4n, ownerId: 'session-owner-id', leaseGeneration: 8n }
-    ],
     sessionRelocationWire: () => ({
       requestSessionRelocationSeal: (mesh, target, request, signal) => {
         sent.push(request);
@@ -213,6 +212,9 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
       routerChannelId: 'mesh',
       targetNodeRid: ids.owner,
       sessionRid: ids.session,
+      sessionOwnerNodeGeneration: 4n,
+      sessionOwnerId: 'session-owner-id',
+      sessionOwnerLeaseGeneration: 8n,
       bindingGeneration: 6n
     }
   };
@@ -233,7 +235,7 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
     sourceRuntime,
     sessionRuntime,
     dispatch,
-    seal: () => transfer.sealBoundSessionRoute(actor, state, abort.signal, { high: 7n, low: 9n }),
+    seal: () => transfer.sealBoundSessionRoute(actor, state, abort.signal, { high: 7n, low: 9n }, { rid: ids.target, lifecycleGeneration: 3n }),
     receiveSeal: (request) =>
       dispatch(sessionRuntime, ids.source, wire.encodeSessionRelocationSeal(request)),
     commit: async (sealed) => {
@@ -298,6 +300,7 @@ for (const [name, ids] of Object.entries({
       assert.equal(request.session.sessionOwnerNodeRid, ids.owner, 'owner RoutingId is preserved');
       assert.equal(request.session.sessionRid, ids.session, 'Session RoutingId is preserved');
       for (const [actual, expected] of [
+        [request.targetNodeRid, ids.target],
         [request.actor.actor.nodeRid, ids.source],
         [request.coordinator.nodeRid, ids.source],
         [request.session.sessionOwnerNodeRid, ids.owner],
@@ -694,6 +697,8 @@ test('Session owner records each participant and rejects any changed command 42 
       { ...request, coordinator: { ...request.coordinator, ownerId: 'other-owner' } },
       { ...request, session: { ...request.session, sessionRid: 'other-session' } },
       { ...request, session: { ...request.session, bindingGeneration: 7n } },
+      { ...request, targetNodeRid: 'other-target' },
+      { ...request, targetNodeGeneration: 42n },
       {
         ...request,
         actor: { ...request.actor, actor: { ...request.actor.actor, generation: 6n } }
@@ -906,9 +911,22 @@ for (const binding of ['absent', 'same', 'successor']) {
     } = require('../../packages/framework/dist/runtime/host/actor-packet-relay');
     const packets = require('../../packages/framework/dist/runtime/actors/actor-packet-relay-wire');
     const protocol = require('../../packages/framework/dist/runtime/streams/protocol');
+    const {
+      encodeSessionDisconnected
+    } = require('../../packages/framework/dist/runtime/actors/session-disconnected-wire');
+    const {
+      DefaultZLinkActorContext
+    } = require('../../packages/framework/dist/runtime/actors/actor-context');
+    const {
+      ZLinkSpotActorPacketDispatch
+    } = require('../../packages/framework/dist/runtime/spots/spot-actor-packet-dispatch');
     const entered = barrier();
     const allowNotification = barrier();
-    let currentBinding = { sessionNodeRid: 'session-owner', bindingGeneration: 6n };
+    let currentBinding = {
+      sessionNodeRid: 'session-owner',
+      sessionOwnerNodeGeneration: 4n,
+      bindingGeneration: 6n
+    };
     let callbacks = 0;
     let submissions = 0;
     const actorRelay = new ZLinkActorPacketRelay({
@@ -918,9 +936,27 @@ for (const binding of ['absent', 'same', 'successor']) {
         getState: () => ({ boundSession: currentBinding, spotId: 'spot', actor: {} })
       }),
       spotManager: () => ({
-        async notifyJoinedSpotActorDisconnected() {
-          callbacks++;
-          return true;
+        async dispatchRoutedActorPacket(origin, _spotId, actorId, parts) {
+          const state = new framework.ZLinkActorRuntimeState(actorId);
+          if (currentBinding !== undefined)
+            state.installBoundSessionBinding({
+              routerChannelId: 'route',
+              targetNodeRid: 'session-owner',
+              spotId: 'entry',
+              sessionRid: 'session',
+              sessionOwnerId: 'session-owner-id',
+              sessionOwnerLeaseGeneration: 8n,
+              ...currentBinding
+            });
+          return new ZLinkSpotActorPacketDispatch({
+            spot: {},
+            spotId: () => 'spot',
+            registry: {},
+            resolveActor: () => ({ context: new DefaultZLinkActorContext(state) }),
+            onDisconnectActor: async () => {
+              callbacks++;
+            }
+          }).dispatch(origin, actorId, parts);
         }
       })
     });
@@ -940,7 +976,7 @@ for (const binding of ['absent', 'same', 'successor']) {
               name: packets.ZLINK_REMOTE_ACTOR_SESSION_DISCONNECTED_PACKET,
               metadata: new Map()
             }),
-            payload: Buffer.alloc(0)
+            payload: encodeSessionDisconnected('session-owner', 4n, 6n)
           });
           entered.release();
           await allowNotification.joined;
@@ -970,7 +1006,11 @@ for (const binding of ['absent', 'same', 'successor']) {
           ? undefined
           : binding === 'same'
             ? currentBinding
-            : { sessionNodeRid: 'session-owner', bindingGeneration: 7n };
+            : {
+                sessionNodeRid: 'session-owner',
+                sessionOwnerNodeGeneration: 4n,
+                bindingGeneration: 7n
+              };
       const absent =
         await h.host.boundSessionRelay.boundSessions.receiveServiceWireSessionRelocationSeal(
           h.sent[0]

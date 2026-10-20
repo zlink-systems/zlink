@@ -7,6 +7,7 @@ import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.spots.ZLinkSpot;
 
 import java.time.Duration;
@@ -27,6 +28,7 @@ final class ZLinkActorContextState {
     // can recreate its local binding while retaining the owner's fence.
     private long sessionBindingToken;
     private long sessionBindingGeneration;
+    private long sessionOwnerNodeGeneration;
     private RoutingId boundSessionSourceNodeRid;
     private RoutingId boundSessionSourceSessionRid;
     private RoutingId entrySpotNodeRid;
@@ -158,6 +160,21 @@ final class ZLinkActorContextState {
         }
     }
 
+    /**
+     * The SpotNode that holds this Actor's current binding record, or {@code null} when the binding
+     * has no SpotNode record. That record owns the binding facts, including the Session owner
+     * identity (Session-Actor binding §4).
+     */
+    ZLinkInternalSpotNode bindingSpotNode() {
+        if (boundSession instanceof ZLinkNativeBoundSessionRuntime runtime) {
+            return runtime.spotNode();
+        }
+        if (boundSession instanceof ZLinkBoundSessionRuntime runtime) {
+            return runtime.spotNode();
+        }
+        return null;
+    }
+
     ZLinkBoundSession requireBoundSession() {
         if (boundSession == null) {
             //  Spec 32-framework-error-model:41 — an operation that requires a
@@ -231,6 +248,15 @@ final class ZLinkActorContextState {
             RoutingId sourceNodeRid,
             RoutingId sourceSessionRid,
             long bindingGeneration) {
+        return bindSession(boundSession, sourceNodeRid, sourceSessionRid, bindingGeneration, 0);
+    }
+
+    long bindSession(
+            ZLinkBoundSession boundSession,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            long bindingGeneration,
+            long sessionOwnerNodeGeneration) {
         if (bindingGeneration < 0) {
             throw new IllegalArgumentException("bound Session binding generation is negative");
         }
@@ -252,6 +278,7 @@ final class ZLinkActorContextState {
             this.boundSession = boundSession;
             return sessionBindingToken;
         }
+        this.sessionOwnerNodeGeneration = sessionOwnerNodeGeneration;
         boundSessionSourceNodeRid = sourceNodeRid;
         boundSessionSourceSessionRid = sourceSessionRid;
         sessionBindingToken++;
@@ -269,7 +296,10 @@ final class ZLinkActorContextState {
             return null;
         }
         return new BoundSessionSource(
-                boundSessionSourceNodeRid, boundSessionSourceSessionRid, sessionBindingGeneration);
+                boundSessionSourceNodeRid,
+                boundSessionSourceSessionRid,
+                sessionBindingGeneration,
+                sessionOwnerNodeGeneration);
     }
 
     boolean clearBoundSession(long bindingToken) {
@@ -278,6 +308,7 @@ final class ZLinkActorContextState {
             boundSessionSourceNodeRid = null;
             boundSessionSourceSessionRid = null;
             sessionBindingGeneration = 0;
+            sessionOwnerNodeGeneration = 0;
             return true;
         }
         return false;
@@ -288,7 +319,10 @@ final class ZLinkActorContextState {
     }
 
     record BoundSessionSource(
-            RoutingId sourceNodeRid, RoutingId sourceSessionRid, long bindingGeneration) {}
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            long bindingGeneration,
+            long sessionOwnerNodeGeneration) {}
 
     CompletionStage<Void> rebindNativeActor(ZLinkBackendActorRef targetActor, Duration timeout) {
         if (boundSession instanceof ZLinkBoundSessionRuntime runtime) {
@@ -342,6 +376,7 @@ final class ZLinkActorContextState {
         entryRouterChannelId = null;
         sessionBindingToken++;
         sessionBindingGeneration = 0;
+        sessionOwnerNodeGeneration = 0;
         spotId = null;
         spot = null;
         joined = false;

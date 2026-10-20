@@ -61,12 +61,29 @@ export type ZLinkBackendObjectPlacement =
   | { readonly kind: 'capacity' }
   | { readonly kind: 'unavailable' };
 
+export type ZLinkBackendRequestSourceAcceptance = (
+  nodeRid: string,
+  nodeGeneration: bigint
+) =>
+  | import('../../locations/request-source-resolver').ZLinkRequestSourceFence
+  | undefined
+  | Promise<import('../../locations/request-source-resolver').ZLinkRequestSourceFence | undefined>;
+
 export interface ZLinkBackendMeshNode {
+  acceptRelocatedActorTerminal?(
+    operation: { readonly high: bigint; readonly low: bigint },
+    replyRouteId: bigint,
+    result: import('../../foundation/service-stateful-runtime').ServiceStatefulResult
+  ): 'terminalReceived' | 'alreadyTerminal' | undefined;
   readonly routingId?: RoutingId;
+  cancelPendingOperations?(reason: unknown): void;
   completeClosedInstance?(spotId: string, objectGeneration: bigint): void;
   setDispatchErrorReporter?(
     reporter: import('../../channels/dispatch-error-reporter').ZLinkDispatchErrorReporter,
     meshName: string
+  ): void;
+  setSessionOwnerDescriptors?(
+    source: import('../../foundation/service-stateful-runtime').ServiceSessionOwnerDescriptors
   ): void;
   setRoutingId(routingId: unknown): void;
   setBind(endpoint: string): void;
@@ -184,12 +201,23 @@ export interface ZLinkBackendMeshNode {
     readonly securityIdentity?: string;
     readonly lifecycleGeneration: bigint;
   }): void;
+  /**
+   * Installs the source request owner check the first accepting owner runs on Actor and Spot
+   * ingress (Location runtime §9.3). Undefined from the check ends the request Unavailable.
+   */
+  setRequestSourceAcceptance?(acceptance: ZLinkBackendRequestSourceAcceptance): void;
   isObjectClientNodeDirectTarget?(targetRid: unknown): boolean;
   observePeerRoute?(
     targetRid: unknown
   ): import('../../foundation/durable-service-request').PeerRouteObservation;
   hasPeerRouteOrConnectionIntent?(targetRid: unknown, endpoint: string): boolean;
   isPeerRouteReady?(targetRid: unknown, lifecycleGeneration?: bigint): boolean;
+  waitForPeerRoute?(
+    targetRid: unknown,
+    lifecycleGeneration: bigint,
+    deadlineUnixMs: bigint,
+    signal?: AbortSignal
+  ): Promise<void>;
   sendToNode(
     targetRid: unknown,
     parts: MessageLike | readonly MessageLike[],
@@ -366,7 +394,10 @@ export interface ZLinkBackendMeshNode {
   sendToActor(
     actor: ZLinkBackendActorRef,
     parts: MessageLike | readonly MessageLike[],
-    options?: { flags?: number }
+    options?: {
+      flags?: number;
+      routeFence?: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence;
+    }
   ): Promise<SubmitResult>;
   requestToActor(
     actor: ZLinkBackendActorRef,
@@ -376,6 +407,7 @@ export interface ZLinkBackendMeshNode {
       timeoutMs?: number;
       applicationMetadata?: Buffer;
       onAdmitted?: () => void;
+      routeFence?: import('../../foundation/service-stateful-wire-codec').ServiceActorRouteFence;
     }
   ): MeshOperationId;
   actorSendToActor(

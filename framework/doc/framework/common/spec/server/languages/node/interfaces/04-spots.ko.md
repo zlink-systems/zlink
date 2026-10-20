@@ -271,8 +271,8 @@ Entry·User·Instance SpotId는 UTF-8 encoded 크기 1..255 bytes의 global stri
 Create와 GetOrCreate call은 single-use다. 같은 option을 두 번 설정하거나 terminal
 `submit(...)`을 두 번 호출하면 `InvalidOperation`이다. User Spot `create`는 Framework가 새 global Spot ID를 발급한다.
 `getOrCreate`는 같은 User kind·[stable type](../../../00-foundation/02-glossary.ko.md#stable-type)의
-ready Spot을 `existing`으로 반환한다. Creating이면 authority 변경을 기다리고, Ready가
-되면 `existing`, cleanup으로 Missing이 되면 새 reservation을 경쟁한다. Kind나 type이 다르면
+ready Spot을 `existing`으로 반환한다. Creating·Closing authority를 관찰했을 때의 대기와 후속 절차는
+[Spot 주소 메시징 §3.2](../../../03-spot-actor/06-spot-address-messaging.ko.md#32-동시-요청의-수렴)를 따른다. Kind나 type이 다르면
 `TypeMismatch`, [deadline](../../../00-foundation/02-glossary.ko.md#deadline) 안에 terminal state가 되지 않으면 `DeadlineExceeded`다.
 
 `close(spotRef)`는 지정한 incarnation만 닫는다. Generation이 다르면 `InvalidOperation`, 이동 중이면

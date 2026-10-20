@@ -14,6 +14,7 @@ import java.nio.charset.CharacterCodingException;
 import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.List;
 import java.util.Objects;
 
 /**
@@ -321,6 +322,75 @@ public final class ZLinkServiceM6BWireCodec {
                 sessionRid,
                 state == ServiceWireCodec.BoundSessionBindingState.ACTIVE.wire,
                 generation);
+    }
+
+    public record BoundSessionClose(
+            long correlation,
+            String actorId,
+            long objectGeneration,
+            RetiredSessionRouteFence session) {}
+
+    public ZLinkServiceM6AWireCodec.Reply decodeBoundSessionCloseReply(byte[] frame) {
+        try {
+            if (!(ServiceWireCodec.decodeCommand(List.of(frame), generatedContext())
+                    instanceof ServiceWireCodec.ReplyCommand reply))
+                throw protocol("command is not a Session close reply");
+            return new ZLinkServiceM6AWireCodec.Reply(
+                    reply.correlation().value(),
+                    (int) reply.terminalResult().wire,
+                    (int) reply.failureCode().wire);
+        } catch (IOException failure) {
+            throw protocol("invalid boundSessionClose reply: " + failure.getMessage());
+        }
+    }
+
+    public byte[] encodeBoundSessionClose(BoundSessionClose close) {
+        var session = close.session();
+        try {
+            return ServiceWireCodec.encodeCommand(
+                    new ServiceWireCodec.BoundSessionCloseCommand(
+                            0,
+                            new ServiceWireCodec.NonzeroU64(close.correlation()),
+                            new ServiceWireCodec.ActorRef(
+                                    new ServiceWireCodec.Text8(close.actorId()),
+                                    new ServiceWireCodec.NonzeroU64(close.objectGeneration())),
+                            new ServiceWireCodec.RetiredBoundSessionRouteFence(
+                                    new ServiceWireCodec.Rid(
+                                            session.sessionOwnerNodeRid().toBytes()),
+                                    new ServiceWireCodec.NonzeroU64(
+                                            session.sessionOwnerNodeGeneration()),
+                                    new ServiceWireCodec.Text8(session.sessionOwnerId()),
+                                    new ServiceWireCodec.NonzeroU64(
+                                            session.sessionOwnerLeaseGeneration()),
+                                    new ServiceWireCodec.Rid(session.sessionRid().toBytes()),
+                                    new ServiceWireCodec.NonzeroU64(
+                                            session.retiredBindingGeneration()))),
+                    generatedContext());
+        } catch (IOException failure) {
+            throw protocol("invalid boundSessionClose: " + failure.getMessage());
+        }
+    }
+
+    public BoundSessionClose decodeBoundSessionClose(byte[] frame) {
+        try {
+            if (!(ServiceWireCodec.decodeCommand(List.of(frame), generatedContext())
+                    instanceof ServiceWireCodec.BoundSessionCloseCommand close))
+                throw protocol("command is not boundSessionClose");
+            var session = close.session();
+            return new BoundSessionClose(
+                    close.correlation().value(),
+                    close.actor().actorId().value(),
+                    close.actor().objectGeneration().value(),
+                    new RetiredSessionRouteFence(
+                            RoutingId.from(session.sessionOwnerNodeRid().value()),
+                            session.sessionOwnerNodeGeneration().value(),
+                            session.sessionOwnerId().value(),
+                            session.sessionOwnerLeaseGeneration().value(),
+                            RoutingId.from(session.sessionRid().value()),
+                            session.retiredBindingGeneration().value()));
+        } catch (IOException failure) {
+            throw protocol("invalid boundSessionClose: " + failure.getMessage());
+        }
     }
 
     public byte[] encodeBoundSessionReplaced(BoundSessionReplaced replacement) {
@@ -983,25 +1053,39 @@ public final class ZLinkServiceM6BWireCodec {
     public byte[] encodeSessionRelocationRoute(SessionRelocationRoute route) {
         Objects.requireNonNull(route, "route");
         try {
-            ServiceWirePilotCodec.SessionRouteUpdate update =
+            ServiceWireCodec.SessionRelocationRouteUpdate update =
                     route.action() == SessionRelocationRouteAction.COMMIT
-                            ? new ServiceWirePilotCodec.SessionRouteCommit(
-                                    route.previousAuthorityOwnerGeneration(),
-                                    route.currentAuthorityOwnerGeneration(),
-                                    route.targetNodeRid().toBytes(),
-                                    route.targetNodeGeneration(),
-                                    route.targetOwnerLeaseGeneration())
-                            : new ServiceWirePilotCodec.SessionRouteAbort(
-                                    route.currentAuthorityOwnerGeneration());
-            return ServiceWirePilotCodec.encodeSessionRelocationRoute44(
-                    new ServiceWirePilotCodec.SessionRelocationRoute44(
+                            ? new ServiceWireCodec.SessionRelocationRouteUpdateCommit(
+                                    ServiceWireCodec.SessionRelocationRouteAction.COMMIT,
+                                    new ServiceWireCodec.NonzeroU64(
+                                            route.previousAuthorityOwnerGeneration()),
+                                    new ServiceWireCodec.NonzeroU64(
+                                            route.currentAuthorityOwnerGeneration()),
+                                    new ServiceWireCodec.Rid(route.targetNodeRid().toBytes()),
+                                    new ServiceWireCodec.NonzeroU64(route.targetNodeGeneration()),
+                                    new ServiceWireCodec.NonzeroU64(
+                                            route.targetOwnerLeaseGeneration()))
+                            : new ServiceWireCodec.SessionRelocationRouteUpdateAbort(
+                                    ServiceWireCodec.SessionRelocationRouteAction.ABORT,
+                                    new ServiceWireCodec.NonzeroU64(
+                                            route.currentAuthorityOwnerGeneration()));
+            return ServiceWireCodec.encodeCommand(
+                    new ServiceWireCodec.SessionRelocationRouteCommand(
+                            0,
                             toGenerated(route.relocation()),
                             toGenerated(route.coordinator()),
                             toGenerated(route.senderRole()),
-                            new ServiceWirePilotCodec.ActorRef(
-                                    route.actor().actorId(), route.actor().generation()),
-                            toGenerated(route.session()),
-                            update));
+                            new ServiceWireCodec.ActorRef(
+                                    new ServiceWireCodec.Text8(route.actor().actorId()),
+                                    new ServiceWireCodec.NonzeroU64(route.actor().generation())),
+                            new ServiceWireCodec.Rid(route.session().nodeRid().toBytes()),
+                            new ServiceWireCodec.NonzeroU64(route.session().nodeGeneration()),
+                            new ServiceWireCodec.Text8(route.session().ownerId()),
+                            new ServiceWireCodec.NonzeroU64(route.session().ownerLeaseGeneration()),
+                            new ServiceWireCodec.Rid(route.session().sessionRid().toBytes()),
+                            new ServiceWireCodec.NonzeroU64(route.session().bindingGeneration()),
+                            update),
+                    generatedContext());
         } catch (IOException failure) {
             throw protocol("invalid sessionRelocationRoute command: " + failure.getMessage());
         }
@@ -1010,24 +1094,29 @@ public final class ZLinkServiceM6BWireCodec {
     public SessionRelocationRoute decodeSessionRelocationRoute(byte[] frame) {
         Objects.requireNonNull(frame, "frame");
         try {
-            var generated = ServiceWirePilotCodec.decodeSessionRelocationRoute44(frame);
+            if (!(ServiceWireCodec.decodeCommand(List.of(frame), generatedContext())
+                    instanceof ServiceWireCodec.SessionRelocationRouteCommand generated)) {
+                throw protocol("command is not sessionRelocationRoute");
+            }
             SessionRelocationRouteAction action;
             long previous;
             long current;
             RoutingId targetNodeRid;
             long targetNodeGeneration;
             long targetOwnerLeaseGeneration;
-            if (generated.route() instanceof ServiceWirePilotCodec.SessionRouteCommit commit) {
+            if (generated.route()
+                    instanceof ServiceWireCodec.SessionRelocationRouteUpdateCommit commit) {
                 action = SessionRelocationRouteAction.COMMIT;
-                previous = commit.previousAuthorityOwnerGeneration();
-                current = commit.targetAuthorityOwnerGeneration();
-                targetNodeRid = RoutingId.from(commit.targetNodeRid());
-                targetNodeGeneration = commit.targetNodeGeneration();
-                targetOwnerLeaseGeneration = commit.targetOwnerLeaseGeneration();
-            } else if (generated.route() instanceof ServiceWirePilotCodec.SessionRouteAbort abort) {
+                previous = commit.previousAuthorityOwnerGeneration().value();
+                current = commit.targetAuthorityOwnerGeneration().value();
+                targetNodeRid = RoutingId.from(commit.targetNodeRid().value());
+                targetNodeGeneration = commit.targetNodeGeneration().value();
+                targetOwnerLeaseGeneration = commit.targetOwnerLeaseGeneration().value();
+            } else if (generated.route()
+                    instanceof ServiceWireCodec.SessionRelocationRouteUpdateAbort abort) {
                 action = SessionRelocationRouteAction.ABORT;
                 previous = 0;
-                current = abort.currentAuthorityOwnerGeneration();
+                current = abort.currentAuthorityOwnerGeneration().value();
                 targetNodeRid = null;
                 targetNodeGeneration = 0;
                 targetOwnerLeaseGeneration = 0;
@@ -1039,8 +1128,15 @@ public final class ZLinkServiceM6BWireCodec {
                     fromGenerated(generated.coordinator()),
                     fromGenerated(generated.senderRole()),
                     new ActorIdentity(
-                            generated.actor().actorId(), generated.actor().objectGeneration()),
-                    fromGenerated(generated.session()),
+                            generated.actor().actorId().value(),
+                            generated.actor().objectGeneration().value()),
+                    fromGenerated(
+                            generated.sessionOwnerNodeRid(),
+                            generated.sessionOwnerNodeGeneration(),
+                            generated.sessionOwnerId(),
+                            generated.sessionOwnerLeaseGeneration(),
+                            generated.sessionRid(),
+                            generated.bindingGeneration()),
                     action,
                     previous,
                     current,
@@ -1080,13 +1176,22 @@ public final class ZLinkServiceM6BWireCodec {
     public byte[] encodeSessionRelocationSeal(SessionRelocationSeal seal) {
         Objects.requireNonNull(seal, "seal");
         try {
-            return ServiceWirePilotCodec.encodeSessionRelocationSeal42(
-                    new ServiceWirePilotCodec.SessionRelocationSeal42(
+            return ServiceWireCodec.encodeCommand(
+                    new ServiceWireCodec.SessionRelocationSealCommand(
+                            0,
                             toGenerated(seal.relocation()),
                             toGenerated(seal.coordinator()),
                             toGenerated(seal.senderRole()),
                             toGenerated(seal.actor()),
-                            toGenerated(seal.session())));
+                            new ServiceWireCodec.Rid(seal.session().nodeRid().toBytes()),
+                            new ServiceWireCodec.NonzeroU64(seal.session().nodeGeneration()),
+                            new ServiceWireCodec.Text8(seal.session().ownerId()),
+                            new ServiceWireCodec.NonzeroU64(seal.session().ownerLeaseGeneration()),
+                            new ServiceWireCodec.Rid(seal.session().sessionRid().toBytes()),
+                            new ServiceWireCodec.NonzeroU64(seal.session().bindingGeneration()),
+                            new ServiceWireCodec.Rid(seal.targetNodeRid().toBytes()),
+                            new ServiceWireCodec.NonzeroU64(seal.targetNodeGeneration())),
+                    generatedContext());
         } catch (IOException failure) {
             throw protocol("invalid sessionRelocationSeal command: " + failure.getMessage());
         }
@@ -1095,13 +1200,24 @@ public final class ZLinkServiceM6BWireCodec {
     public SessionRelocationSeal decodeSessionRelocationSeal(byte[] frame) {
         Objects.requireNonNull(frame, "frame");
         try {
-            var generated = ServiceWirePilotCodec.decodeSessionRelocationSeal42(frame);
+            if (!(ServiceWireCodec.decodeCommand(List.of(frame), generatedContext())
+                    instanceof ServiceWireCodec.SessionRelocationSealCommand generated)) {
+                throw protocol("command is not sessionRelocationSeal");
+            }
             return new SessionRelocationSeal(
                     fromGenerated(generated.relocation()),
                     fromGenerated(generated.coordinator()),
                     fromGenerated(generated.senderRole()),
                     fromGenerated(generated.actor()),
-                    fromGenerated(generated.session()));
+                    fromGenerated(
+                            generated.sessionOwnerNodeRid(),
+                            generated.sessionOwnerNodeGeneration(),
+                            generated.sessionOwnerId(),
+                            generated.sessionOwnerLeaseGeneration(),
+                            generated.sessionRid(),
+                            generated.bindingGeneration()),
+                    RoutingId.from(generated.targetNodeRid().value()),
+                    generated.targetNodeGeneration().value());
         } catch (IOException failure) {
             throw protocol("invalid sessionRelocationSeal command: " + failure.getMessage());
         }
@@ -1110,13 +1226,23 @@ public final class ZLinkServiceM6BWireCodec {
     public byte[] encodeSessionRelocationSealed(SessionRelocationSealed sealed) {
         Objects.requireNonNull(sealed, "sealed");
         try {
-            return ServiceWirePilotCodec.encodeSessionRelocationSealed43(
-                    new ServiceWirePilotCodec.SessionRelocationSealed43(
+            return ServiceWireCodec.encodeCommand(
+                    new ServiceWireCodec.SessionRelocationSealedCommand(
+                            0,
                             toGenerated(sealed.relocation()),
                             toGenerated(sealed.coordinator()),
                             toGenerated(sealed.actor()),
-                            toGenerated(sealed.session()),
-                            sealed.result()));
+                            new ServiceWireCodec.Rid(sealed.session().nodeRid().toBytes()),
+                            new ServiceWireCodec.NonzeroU64(sealed.session().nodeGeneration()),
+                            new ServiceWireCodec.Text8(sealed.session().ownerId()),
+                            new ServiceWireCodec.NonzeroU64(
+                                    sealed.session().ownerLeaseGeneration()),
+                            new ServiceWireCodec.Rid(sealed.session().sessionRid().toBytes()),
+                            new ServiceWireCodec.NonzeroU64(sealed.session().bindingGeneration()),
+                            sealed.sealed()
+                                    ? ServiceWireCodec.SessionSealResult.SEALED
+                                    : ServiceWireCodec.SessionSealResult.BINDING_ABSENT),
+                    generatedContext());
         } catch (IOException failure) {
             throw protocol("invalid sessionRelocationSealed command: " + failure.getMessage());
         }
@@ -1125,13 +1251,24 @@ public final class ZLinkServiceM6BWireCodec {
     public SessionRelocationSealed decodeSessionRelocationSealed(byte[] frame) {
         Objects.requireNonNull(frame, "frame");
         try {
-            var generated = ServiceWirePilotCodec.decodeSessionRelocationSealed43(frame);
+            if (!(ServiceWireCodec.decodeCommand(List.of(frame), generatedContext())
+                    instanceof ServiceWireCodec.SessionRelocationSealedCommand generated)) {
+                throw protocol("command is not sessionRelocationSealed");
+            }
             return new SessionRelocationSealed(
                     fromGenerated(generated.relocation()),
                     fromGenerated(generated.coordinator()),
                     fromGenerated(generated.actor()),
-                    fromGenerated(generated.session()),
-                    generated.sealResult());
+                    fromGenerated(
+                            generated.sessionOwnerNodeRid(),
+                            generated.sessionOwnerNodeGeneration(),
+                            generated.sessionOwnerId(),
+                            generated.sessionOwnerLeaseGeneration(),
+                            generated.sessionRid(),
+                            generated.bindingGeneration()),
+                    generated.sealResult() == ServiceWireCodec.SessionSealResult.SEALED
+                            ? ServiceWirePilotCodec.SessionSealResult.SEALED
+                            : ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT);
         } catch (IOException failure) {
             throw protocol("invalid sessionRelocationSealed command: " + failure.getMessage());
         }
@@ -1224,8 +1361,13 @@ public final class ZLinkServiceM6BWireCodec {
             RelocationCoordinatorFence coordinator,
             RelocationRole senderRole,
             ActorRouteFence actor,
-            SessionOwnerFence session) {
+            SessionOwnerFence session,
+            RoutingId targetNodeRid,
+            long targetNodeGeneration) {
         public SessionRelocationSeal {
+            Objects.requireNonNull(targetNodeRid, "targetNodeRid");
+            if (targetNodeGeneration == 0)
+                throw protocol("Relocation target generation is required");
             Objects.requireNonNull(relocation, "relocation");
             Objects.requireNonNull(coordinator, "coordinator");
             Objects.requireNonNull(senderRole, "senderRole");
@@ -1238,8 +1380,8 @@ public final class ZLinkServiceM6BWireCodec {
     }
 
     /**
-     * Command 43. Echoes every command 42 field except senderRole and carries the Session owner's
-     * seal result (Session-Actor binding §8.2·§8.3).
+     * Command 43. Echoes the command 42 relocation, coordinator, Actor and Session fences and
+     * carries the Session owner's seal result (Session-Actor binding §8.2·§8.3).
      */
     public record SessionRelocationSealed(
             RelocationIdentity relocation,
@@ -1866,43 +2008,44 @@ public final class ZLinkServiceM6BWireCodec {
                 Integer.toUnsignedLong(value.pendingCapacityDelta()));
     }
 
-    private static ServiceWirePilotCodec.RelocationId toGenerated(RelocationIdentity value) {
-        return new ServiceWirePilotCodec.RelocationId(value.high(), value.low());
+    private static ServiceWireCodec.RelocationId toGenerated(RelocationIdentity value) {
+        return new ServiceWireCodec.RelocationId(
+                new ServiceWireCodec.U64(value.high()), new ServiceWireCodec.U64(value.low()));
     }
 
-    private static RelocationIdentity fromGenerated(ServiceWirePilotCodec.RelocationId value) {
-        return new RelocationIdentity(value.high(), value.low());
+    private static RelocationIdentity fromGenerated(ServiceWireCodec.RelocationId value) {
+        return new RelocationIdentity(value.high().value(), value.low().value());
     }
 
-    private static ServiceWirePilotCodec.CoordinatorFence toGenerated(
+    private static ServiceWireCodec.RelocationCoordinatorFence toGenerated(
             RelocationCoordinatorFence value) {
-        return new ServiceWirePilotCodec.CoordinatorFence(
-                value.ownerId(),
-                value.leaseGeneration(),
-                value.nodeRid().toBytes(),
-                value.nodeGeneration(),
-                value.expectedAuthorityStoreVersion());
+        return new ServiceWireCodec.RelocationCoordinatorFence(
+                new ServiceWireCodec.Text8(value.ownerId()),
+                new ServiceWireCodec.NonzeroU64(value.leaseGeneration()),
+                new ServiceWireCodec.Rid(value.nodeRid().toBytes()),
+                new ServiceWireCodec.NonzeroU64(value.nodeGeneration()),
+                new ServiceWireCodec.AuthorityStoreVersion(value.expectedAuthorityStoreVersion()));
     }
 
     private static RelocationCoordinatorFence fromGenerated(
-            ServiceWirePilotCodec.CoordinatorFence value) {
+            ServiceWireCodec.RelocationCoordinatorFence value) {
         return new RelocationCoordinatorFence(
-                value.coordinatorOwnerId(),
-                value.coordinatorLeaseGeneration(),
-                RoutingId.from(value.coordinatorNodeRid()),
-                value.coordinatorNodeGeneration(),
-                value.expectedAuthorityStoreVersion());
+                value.coordinatorOwnerId().value(),
+                value.coordinatorLeaseGeneration().value(),
+                RoutingId.from(value.coordinatorNodeRid().value()),
+                value.coordinatorNodeGeneration().value(),
+                value.expectedAuthorityStoreVersion().value());
     }
 
-    private static ServiceWirePilotCodec.RelocationRole toGenerated(RelocationRole value) {
+    private static ServiceWireCodec.RelocationRole toGenerated(RelocationRole value) {
         return switch (value) {
-            case SOURCE -> ServiceWirePilotCodec.RelocationRole.SOURCE;
-            case TARGET -> ServiceWirePilotCodec.RelocationRole.TARGET;
-            case COORDINATOR -> ServiceWirePilotCodec.RelocationRole.COORDINATOR;
+            case SOURCE -> ServiceWireCodec.RelocationRole.SOURCE;
+            case TARGET -> ServiceWireCodec.RelocationRole.TARGET;
+            case COORDINATOR -> ServiceWireCodec.RelocationRole.COORDINATOR;
         };
     }
 
-    private static RelocationRole fromGenerated(ServiceWirePilotCodec.RelocationRole value) {
+    private static RelocationRole fromGenerated(ServiceWireCodec.RelocationRole value) {
         return switch (value) {
             case SOURCE -> RelocationRole.SOURCE;
             case TARGET -> RelocationRole.TARGET;
@@ -1910,43 +2053,42 @@ public final class ZLinkServiceM6BWireCodec {
         };
     }
 
-    private static ServiceWirePilotCodec.Fence toGenerated(ActorRouteFence value) {
-        return new ServiceWirePilotCodec.Fence(
-                value.actor().actorId(),
-                value.actor().generation(),
-                value.actor().nodeRid().toBytes(),
-                value.targetNodeGeneration(),
-                value.authorityOwnerGeneration(),
-                value.ownerLeaseGeneration());
+    private static ServiceWireCodec.ActorRouteFence toGenerated(ActorRouteFence value) {
+        return new ServiceWireCodec.ActorRouteFence(
+                new ServiceWireCodec.ActorRef(
+                        new ServiceWireCodec.Text8(value.actor().actorId()),
+                        new ServiceWireCodec.NonzeroU64(value.actor().generation())),
+                new ServiceWireCodec.Rid(value.actor().nodeRid().toBytes()),
+                new ServiceWireCodec.NonzeroU64(value.targetNodeGeneration()),
+                new ServiceWireCodec.NonzeroU64(value.authorityOwnerGeneration()),
+                new ServiceWireCodec.NonzeroU64(value.ownerLeaseGeneration()));
     }
 
-    private static ActorRouteFence fromGenerated(ServiceWirePilotCodec.Fence value) {
-        RoutingId targetNodeRid = RoutingId.from(value.targetNodeRid());
+    private static ActorRouteFence fromGenerated(ServiceWireCodec.ActorRouteFence value) {
         return new ActorRouteFence(
-                new ZLinkBackendActorRef(targetNodeRid, value.id(), value.generation()),
-                value.targetNodeGeneration(),
-                value.expectedAuthorityOwnerGeneration(),
-                value.expectedOwnerLeaseGeneration());
+                new ZLinkBackendActorRef(
+                        RoutingId.from(value.targetNodeRid().value()),
+                        value.actor().actorId().value(),
+                        value.actor().objectGeneration().value()),
+                value.targetNodeGeneration().value(),
+                value.expectedAuthorityOwnerGeneration().value(),
+                value.expectedOwnerLeaseGeneration().value());
     }
 
-    private static ServiceWirePilotCodec.SessionIdentity toGenerated(SessionOwnerFence value) {
-        return new ServiceWirePilotCodec.SessionIdentity(
-                value.nodeRid().toBytes(),
-                value.nodeGeneration(),
-                value.ownerId(),
-                value.ownerLeaseGeneration(),
-                value.sessionRid().toBytes(),
-                value.bindingGeneration());
-    }
-
-    private static SessionOwnerFence fromGenerated(ServiceWirePilotCodec.SessionIdentity value) {
+    private static SessionOwnerFence fromGenerated(
+            ServiceWireCodec.Rid nodeRid,
+            ServiceWireCodec.NonzeroU64 nodeGeneration,
+            ServiceWireCodec.Text8 ownerId,
+            ServiceWireCodec.NonzeroU64 leaseGeneration,
+            ServiceWireCodec.Rid sessionRid,
+            ServiceWireCodec.NonzeroU64 bindingGeneration) {
         return new SessionOwnerFence(
-                RoutingId.from(value.sessionOwnerNodeRid()),
-                value.sessionOwnerNodeGeneration(),
-                value.sessionOwnerId(),
-                value.sessionOwnerLeaseGeneration(),
-                RoutingId.from(value.sessionRid()),
-                value.bindingGeneration());
+                RoutingId.from(nodeRid.value()),
+                nodeGeneration.value(),
+                ownerId.value(),
+                leaseGeneration.value(),
+                RoutingId.from(sessionRid.value()),
+                bindingGeneration.value());
     }
 
     private static Writer replyPrefix(long correlation, int terminalResult, int failureCode) {

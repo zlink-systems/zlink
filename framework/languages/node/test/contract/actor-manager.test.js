@@ -3005,6 +3005,9 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
     spotId: 'session-entry',
     sessionNodeRid: rid('session-node'),
     sessionRid: rid('session-rid'),
+    sessionOwnerNodeGeneration: 4n,
+    sessionOwnerId: 'session-owner',
+    sessionOwnerLeaseGeneration: 8n,
     bindingGeneration: 11n
   };
   const state = {
@@ -3075,17 +3078,6 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
       }
     }),
     relocationStore: () => undefined,
-    liveDescriptors: async (meshName) => {
-      assert.equal(meshName, 'session.route');
-      return [
-        {
-          rid: rid('session-node'),
-          lifecycleGeneration: 4n,
-          ownerId: 'session-owner',
-          leaseGeneration: 8n
-        }
-      ];
-    },
     sessionRelocationWire: () => ({
       async requestSessionRelocationSeal(meshName, targetNodeRid, request) {
         seals.push({ meshName, targetNodeRid, request });
@@ -3108,12 +3100,15 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
     state,
     undefined,
     true,
-    relocation
+    relocation,
+    { rid: 'target', lifecycleGeneration: 4n }
   );
   assert.equal(seals.length, 1);
   assert.equal(seals[0].meshName, 'session.route');
   assert.equal(String(seals[0].targetNodeRid), 'session-node');
   assert.deepEqual(seals[0].request, {
+    targetNodeRid: 'target',
+    targetNodeGeneration: 4n,
     relocation,
     coordinator: {
       ownerId: 'source-owner',
@@ -3184,6 +3179,9 @@ test('precommit abort reopens source admission and replays backlog before one-wa
     spotId: 'session-entry',
     sessionNodeRid: rid('session-node'),
     sessionRid: rid('session-rid'),
+    sessionOwnerNodeGeneration: 4n,
+    sessionOwnerId: 'session-owner',
+    sessionOwnerLeaseGeneration: 8n,
     bindingGeneration: 11n
   };
   const state = {
@@ -3255,7 +3253,10 @@ test('precommit abort reopens source admission and replays backlog before one-wa
                 events.push(`replay:${parts[1].data().toString()}`);
               })),
             preparation: record.preparation,
-            workOptions: { payloadBytes: record.payloadBytes }
+            workOptions: {
+              payloadBytes: record.payloadBytes,
+              onWithdrawable: record.onWithdrawable
+            }
           }))
         );
         prefixTerminal = Promise.all(terminals).then(() => undefined);
@@ -3303,12 +3304,6 @@ test('precommit abort reopens source admission and replays backlog before one-wa
     actorHandoff: coordinator,
     authorityStore: () => ({ async readAuthority() { return authority; } }),
     relocationStore: () => undefined,
-    liveDescriptors: async () => [{
-      rid: rid('session-node'),
-      lifecycleGeneration: 4n,
-      ownerId: 'session-owner',
-      leaseGeneration: 8n
-    }],
     sessionRelocationWire: () => ({
       async requestSessionRelocationSeal(_meshName, _targetNodeRid, request) {
         events.push('session-sealed');
@@ -3351,7 +3346,8 @@ test('precommit abort reopens source admission and replays backlog before one-wa
             state,
             undefined,
             true,
-            relocation
+            relocation,
+    { rid: 'target', lifecycleGeneration: 4n }
           );
           for (const value of ['P1', 'P2']) {
             const parts = [zlink.Message.from(`header:${value}`), zlink.Message.from(value)];

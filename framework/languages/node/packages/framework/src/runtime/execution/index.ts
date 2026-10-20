@@ -267,7 +267,7 @@ export function isCurrentZLinkSpotSerialTurn(executor: ZLinkSpotSerialTurnExecut
 
 export interface ZLinkExecutionBarrierSeal {
   readonly generation: bigint;
-  readonly kind: 'close' | 'relocation';
+  readonly kind: 'close' | 'relocation' | 'activation';
 }
 
 export interface ZLinkExecutionBarrierClaim {

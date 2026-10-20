@@ -138,14 +138,20 @@ internal sealed class ZLinkRuntimeTaskRunner
             TaskScheduler.Default
         );
 
-    public async ValueTask StopAsync()
+    public ValueTask StopAsync() => StopAsync(CancellationToken.None);
+
+    public async ValueTask StopAsync(CancellationToken cancellationToken)
     {
         if (IsCurrentRunnerExecution)
             throw new InvalidOperationException(
                 "A runtime task cannot synchronously stop the runner that owns it."
             );
 
-        await _supervisor.StopRunnerAsync(this, _ownsSupervisor).ConfigureAwait(false);
+        await _supervisor
+            .StopRunnerAsync(this, _ownsSupervisor)
+            .AsTask()
+            .WaitAsync(cancellationToken)
+            .ConfigureAwait(false);
     }
 
     // The work is either an asynchronous callback, which runs on the ThreadPool, or a

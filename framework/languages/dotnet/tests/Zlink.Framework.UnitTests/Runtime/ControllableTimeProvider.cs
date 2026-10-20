@@ -26,6 +26,22 @@ internal sealed class ControllableTimeProvider : TimeProvider
         }
     }
 
+    private event Action<TimeSpan>? TimerCreated;
+
+    internal Task WaitForNextTimerAsync(TimeSpan dueTime)
+    {
+        var created = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnTimerCreated(TimeSpan scheduledDueTime)
+        {
+            if (scheduledDueTime != dueTime)
+                return;
+            TimerCreated -= OnTimerCreated;
+            created.TrySetResult();
+        }
+        TimerCreated += OnTimerCreated;
+        return created.Task;
+    }
+
     public override ITimer CreateTimer(
         TimerCallback callback,
         object? state,
@@ -39,6 +55,7 @@ internal sealed class ControllableTimeProvider : TimeProvider
             _timers.Add(timer);
             timer.ChangeCore(_timestamp, dueTime, period);
         }
+        TimerCreated?.Invoke(dueTime);
         return timer;
     }
 

@@ -90,20 +90,36 @@ internal sealed class ZLinkSpotActivationFactory(
 
             activation.AttachSpot(spot);
 
-            await activation
-                .ConfigureAsync(
-                    frameworkRegistration.ScannedHandlerCatalog.SpotHandlers,
-                    spot.Configure,
-                    logicalTimers,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            await activation.BindDescriptorsAsync(cancellationToken).ConfigureAwait(false);
-            if (!invokeCreate)
-                activation.AttachNativeDispatch();
-            var response = invokeCreate
-                ? await activation.InitializeAsync(request, cancellationToken).ConfigureAwait(false)
-                : ZLinkSpotCreateResponse.Accept();
+            var response = ZLinkSpotCreateResponse.Accept();
+            async ValueTask Initialize(CancellationToken ct)
+            {
+                await activation
+                    .ConfigureAsync(
+                        frameworkRegistration.ScannedHandlerCatalog.SpotHandlers,
+                        spot.Configure,
+                        logicalTimers,
+                        ct
+                    )
+                    .ConfigureAwait(false);
+                await activation.BindDescriptorsAsync(ct).ConfigureAwait(false);
+                response = invokeCreate
+                    ? await activation.InitializeAsync(request, ct).ConfigureAwait(false)
+                    : ZLinkSpotCreateResponse.Accept();
+            }
+            if (invokeCreate)
+                await activation
+                    ._serial.PrepareActivationAsync(Initialize, cancellationToken)
+                    .ConfigureAwait(false);
+            else
+            {
+                await activation._serial.BeginTargetPreparationAsync().ConfigureAwait(false);
+                await activation
+                    ._serial.ExecuteTargetPreparationAsync(
+                        (_, ct) => Initialize(ct),
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+            }
             return new ZLinkSpotActivationCreateResult(activation, response);
         }
         catch (Exception initializationFailure)
@@ -134,7 +150,8 @@ internal sealed class ZLinkSpotActivationFactory(
         string spotId,
         CancellationToken cancellationToken,
         bool restoreLogicalTimers = false,
-        IReadOnlyList<ZLinkRelocationLogicalTimer>? logicalTimers = null
+        IReadOnlyList<ZLinkRelocationLogicalTimer>? logicalTimers = null,
+        bool relocationTarget = false
     )
     {
         AsyncServiceScope spotScope = default;
@@ -159,16 +176,35 @@ internal sealed class ZLinkSpotActivationFactory(
             var spot = (IZLinkInstanceSpot)
                 ActivatorUtilities.CreateInstance(spotScope.ServiceProvider, spotType, activation);
             activation.AttachInstanceSpot(spot);
-            await activation
-                .ConfigureAsync(
-                    frameworkRegistration.ScannedHandlerCatalog.SpotHandlers,
-                    spot.Configure,
-                    logicalTimers,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-            await activation.BindDescriptorsAsync(cancellationToken).ConfigureAwait(false);
-            await activation.InitializeAsync(cancellationToken).ConfigureAwait(false);
+            async ValueTask Initialize(CancellationToken ct)
+            {
+                await activation
+                    .ConfigureAsync(
+                        frameworkRegistration.ScannedHandlerCatalog.SpotHandlers,
+                        spot.Configure,
+                        logicalTimers,
+                        ct
+                    )
+                    .ConfigureAwait(false);
+                await activation.BindDescriptorsAsync(ct).ConfigureAwait(false);
+                await activation.InitializeAsync(ct).ConfigureAwait(false);
+            }
+            if (relocationTarget)
+            {
+                await activation._serial.BeginTargetPreparationAsync().ConfigureAwait(false);
+                // The staging seal owns the target's lifecycle; initialization
+                // executes under that owner instead of a second lane item.
+                await activation
+                    ._serial.ExecuteTargetPreparationAsync(
+                        (_, ct) => Initialize(ct),
+                        cancellationToken
+                    )
+                    .ConfigureAwait(false);
+            }
+            else
+                await activation
+                    ._serial.PrepareActivationAsync(Initialize, cancellationToken)
+                    .ConfigureAwait(false);
             return activation;
         }
         catch (Exception initializationFailure)

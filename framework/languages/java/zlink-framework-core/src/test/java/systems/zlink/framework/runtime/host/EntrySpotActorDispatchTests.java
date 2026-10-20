@@ -7,6 +7,8 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.MethodSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.messaging.Message;
@@ -93,6 +95,179 @@ final class EntrySpotActorDispatchTests {
     private static final int NO_BIND = 1;
     private static final ZLinkJsonMessageSerializer SERIALIZER = new ZLinkJsonMessageSerializer();
     private static final ZLinkMessageSerializer PROTOBUF_SERIALIZER = new ProbeProtobufSerializer();
+
+    static java.util.stream.Stream<org.junit.jupiter.params.provider.Arguments>
+            disconnectRequests() {
+        return java.util.stream.Stream.of(
+                        "unbound",
+                        "current",
+                        "owner",
+                        "lifecycle",
+                        "binding",
+                        "malformed",
+                        "empty",
+                        "callback-error",
+                        "callback-protocol")
+                .flatMap(
+                        scenario ->
+                                java.util.stream.Stream.of(0, NO_BIND)
+                                        .map(
+                                                flags ->
+                                                        org.junit.jupiter.params.provider.Arguments
+                                                                .of(scenario, flags)));
+    }
+
+    @ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints = {0, NO_BIND})
+    void malformedDisconnectRequestLogsWarningAtDefaultDiagnostics(int replyFlags)
+            throws Exception {
+        var logger =
+                java.util.logging.Logger.getLogger(
+                        systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer.class
+                                .getName());
+        LinkedBlockingQueue<java.util.logging.LogRecord> records = new LinkedBlockingQueue<>();
+        var handler =
+                new java.util.logging.Handler() {
+                    @Override
+                    public void publish(java.util.logging.LogRecord record) {
+                        if (record.getMessage().contains("reason=invalid_frame")
+                                && record.getMessage()
+                                        .contains(
+                                                systems.zlink.framework.runtime.actors
+                                                        .ZLinkActorSpotRoutePackets
+                                                        .SESSION_DISCONNECTED_PACKET_NAME)) {
+                            records.add(record);
+                        }
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(handler);
+        try {
+            disconnectRequestRepliesAfterCallbackOrDiscard("malformed", replyFlags);
+            var record = records.poll(5, TimeUnit.SECONDS);
+            assertTrue(record != null, "malformed disconnect must produce a dispatch error log");
+            assertEquals(java.util.logging.Level.WARNING, record.getLevel());
+            assertTrue(records.isEmpty(), "one discarded notification must produce one error log");
+        } finally {
+            logger.removeHandler(handler);
+        }
+    }
+
+    @ParameterizedTest
+    @MethodSource("disconnectRequests")
+    void disconnectRequestRepliesAfterCallbackOrDiscard(String scenario, int replyFlags)
+            throws Exception {
+        TestBackend backend = startBackend();
+        try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
+            runtime.actorManager()
+                    .create("actor-a", "probe")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+            var actors = (ZLinkActorRuntime) runtime.actorManager();
+            var actor = (ProbeActor) actors.localActor("actor-a").orElseThrow();
+            if (!scenario.equals("unbound")) {
+                backend.node.canonicalBoundSessionRoute =
+                        Optional.of(
+                                new ZLinkInternalSpotNode.BoundSessionRoute(
+                                        RoutingId.from("binding-owner"),
+                                        -1L,
+                                        "binding-owner-host",
+                                        1L,
+                                        RoutingId.from("bound-session"),
+                                        7L));
+                backend.node.announceSessionBinding(actors.currentRef(actor));
+                assertEquals(7L, actors.boundSessionRoute(actor).orElseThrow().bindingGeneration());
+            }
+            byte[] identity =
+                    new systems.zlink.framework.runtime.actors.ZLinkSessionDisconnected(
+                                    RoutingId.from(
+                                            scenario.equals("owner")
+                                                    ? "other-owner"
+                                                    : "binding-owner"),
+                                    scenario.equals("lifecycle") ? 2L : -1L,
+                                    scenario.equals("binding") ? 8L : 7L)
+                            .encode();
+            if (scenario.equals("malformed")) identity = new byte[] {1};
+            if (scenario.equals("empty")) identity = new byte[0];
+            var parts =
+                    actorRequestParts(
+                            "actor-a",
+                            systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets
+                                    .SESSION_DISCONNECTED_PACKET_NAME,
+                            "unused",
+                            42,
+                            replyFlags);
+            parts.get(1).close();
+            var body =
+                    new ZLinkBackendActorReceived(
+                            parts.get(0).actor(),
+                            RoutingId.from("source-node"),
+                            RoutingId.from("source-session"),
+                            Optional.empty(),
+                            0,
+                            0,
+                            Message.from(identity),
+                            false);
+            boolean callback =
+                    scenario.equals("unbound")
+                            || scenario.equals("current")
+                            || scenario.startsWith("callback-");
+            var replies =
+                    replyFlags == NO_BIND
+                            ? backend.node.noBindReplies
+                            : backend.node.boundSessionReplies;
+            try {
+                backend.entrySpot.raiseActorReadable(List.of(parts.get(0), body));
+                if (callback) {
+                    actor.disconnectEntered.get(5, TimeUnit.SECONDS);
+                    assertTrue(replies.isEmpty(), "reply must wait for callback terminal");
+                    if (scenario.equals("callback-error"))
+                        actor.disconnectTerminal.completeExceptionally(
+                                new IllegalStateException("disconnect callback failure"));
+                    else if (scenario.equals("callback-protocol"))
+                        actor.disconnectTerminal.completeExceptionally(
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                        "callback protocol failure"));
+                    else actor.disconnectTerminal.complete(null);
+                }
+                ReplyRecord reply = awaitSingle(replies);
+                DecodedFrame frame = decodeFrame(reply.parts().getFirst());
+                assertEquals(
+                        scenario.startsWith("callback-")
+                                ? ZLinkStreamMessageKind.ERROR
+                                : ZLinkStreamMessageKind.RESPONSE,
+                        frame.header().kind());
+                assertEquals(Optional.of(1L), frame.header().requestSequence());
+                if (replyFlags == NO_BIND) {
+                    assertEquals(42, reply.requestId());
+                    assertEquals(RoutingId.from("source-node"), reply.sourceNodeRid());
+                    assertEquals(RoutingId.from("source-session"), reply.sourceSessionRid());
+                }
+                if (!scenario.startsWith("callback-")) {
+                    assertEquals(ZLinkStreamCodec.RAW, frame.header().codec());
+                    assertEquals(0, frame.body().length);
+                } else
+                    assertTrue(
+                            new String(frame.body(), StandardCharsets.UTF_8).contains("callback"));
+                assertEquals(callback ? 1 : 0, actor.disconnectCallbacks.get());
+                assertTrue(
+                        (replyFlags == NO_BIND
+                                        ? backend.node.boundSessionReplies
+                                        : backend.node.noBindReplies)
+                                .isEmpty());
+            } finally {
+                actor.disconnectTerminal.complete(null);
+                replies.forEach(reply -> reply.parts().forEach(Message::close));
+            }
+        }
+    }
 
     @Test
     void spotShutdownFromSerialTurnReturnsWithoutBlockingOnInfrastructure() throws Exception {
@@ -451,6 +626,8 @@ final class EntrySpotActorDispatchTests {
                         new ZLinkInternalSpotNode.BoundSessionRoute(
                                 RoutingId.from("source-node"),
                                 17,
+                                "source-owner",
+                                1,
                                 RoutingId.from("source-session"),
                                 sessionOwnerBindingGeneration));
         try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
@@ -522,6 +699,32 @@ final class EntrySpotActorDispatchTests {
             DecodedFrame frame = decodeFrame(reply.parts().get(0));
             assertEquals(ZLinkStreamMessageKind.RESPONSE, frame.header().kind());
             assertTrue(backend.node.boundSessionReplies.isEmpty());
+        }
+    }
+
+    @Test
+    void entrySpotActorDispatchNoBindMissingHandlerRepliesNoBindError() throws Exception {
+        TestBackend backend = startBackend();
+        try (ZLinkFrameworkRuntime runtime = startRuntime(backend)) {
+            runtime.actorManager()
+                    .create("actor-a", "probe")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+
+            backend.entrySpot.raiseActorReadable(
+                    actorRequestParts("actor-a", "missing-handler", "value", 44, NO_BIND));
+
+            ReplyRecord reply = awaitSingle(backend.node.noBindReplies);
+            DecodedFrame frame = decodeFrame(reply.parts().get(0));
+            assertEquals(ZLinkStreamMessageKind.ERROR, frame.header().kind());
+            assertTrue(
+                    new String(frame.body(), StandardCharsets.UTF_8)
+                            .contains("No SPOT actor request handler is registered"));
+            assertEquals(44, reply.requestId());
+            assertEquals(NO_BIND, reply.flags());
+            assertTrue(backend.node.boundSessionReplies.isEmpty());
+            assertEquals(0, backend.node.remoteSessionBinds.size());
         }
     }
 
@@ -1336,9 +1539,20 @@ final class EntrySpotActorDispatchTests {
         public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             return CompletableFuture.completedFuture(null);
         }
+
+        @Override
+        public CompletionStage<Void> onDisconnectActor(ZLinkActor actor) {
+            var probe = (ProbeActor) actor;
+            probe.disconnectCallbacks.incrementAndGet();
+            probe.disconnectEntered.complete(null);
+            return probe.disconnectTerminal;
+        }
     }
 
     public static final class ProbeActor implements ZLinkActor {
+        private final AtomicInteger disconnectCallbacks = new AtomicInteger();
+        private final CompletableFuture<Void> disconnectEntered = new CompletableFuture<>();
+        private final CompletableFuture<Void> disconnectTerminal = new CompletableFuture<>();
         private final String actorId;
         private final ZLinkActorContext context;
         private final AtomicInteger handled = new AtomicInteger();
@@ -1613,6 +1827,8 @@ final class EntrySpotActorDispatchTests {
                         new ZLinkInternalSpotNode.BoundSessionRoute(
                                 RoutingId.from("source-node"),
                                 1,
+                                "source-owner",
+                                1,
                                 RoutingId.from("source-session"),
                                 7));
 
@@ -1727,16 +1943,20 @@ final class EntrySpotActorDispatchTests {
 
         @Override
         public boolean sendToActor(
-                ZLinkBackendActorRef actor, List<Message> parts, SendFlags flags) {
+                ZLinkServiceM6BWireCodec.ActorRouteFence target,
+                List<Message> parts,
+                SendFlags flags) {
+
             throw new UnsupportedOperationException();
         }
 
         public CompletionStage<List<Message>> requestToActor(
-                ZLinkBackendActorRef actor,
+                ZLinkServiceM6BWireCodec.ActorRouteFence target,
                 List<Message> parts,
                 SendFlags flags,
                 Duration timeout,
                 CompletableFuture<Void> requestAdmission) {
+
             throw new UnsupportedOperationException();
         }
 

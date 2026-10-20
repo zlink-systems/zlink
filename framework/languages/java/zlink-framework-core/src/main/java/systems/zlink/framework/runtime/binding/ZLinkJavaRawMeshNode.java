@@ -137,8 +137,11 @@ final class ZLinkJavaRawMeshNode
     private static final Duration MAX_INGRESS_WAIT_TIMEOUT = Duration.ofMillis(100);
     private static final long MAX_INFRASTRUCTURE_CONTROL_BYTES = 256L * 1024;
     private static final long MAX_INFRASTRUCTURE_PAYLOAD_BYTES = 4_294_966_774L;
-    private static final String RELOCATION_CONTROL_PACKET =
-            "zlink.internal.spot.relocation.control.v1";
+    private static final byte[] RELOCATION_CONTROL_PACKET =
+            "zlink.internal.spot.relocation.control.v1".getBytes(StandardCharsets.UTF_8);
+    // Session·Actor binding §4: a request whose sender has no live descriptor ends Unavailable.
+    private static final int[] SOURCE_OWNER_UNAVAILABLE =
+            ZLinkRequestFailureMapping.outgoing(ZLinkFrameworkErrorKind.UNAVAILABLE);
     private static final long USER_SPOT_TERMINAL_RETENTION_NANOS = Duration.ofMinutes(5).toNanos();
 
     private final String meshName;
@@ -182,7 +185,7 @@ final class ZLinkJavaRawMeshNode
     private final Executor applicationDispatch = ZLinkProcessExecutionLanes.applicationLane();
     private final ZLinkServiceOperationRegistry operations =
             new ZLinkServiceOperationRegistry(
-                    deadlines, ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
+                    ZLinkOneWayCalls.failureForStatus(ZLinkOneWayCalls.SHUTDOWN));
     private final ConcurrentLinkedQueue<PeerCloseRequest> pendingPeerCloseRequests =
             new ConcurrentLinkedQueue<>();
     // RID -> route generation Core selected, as last observed by the receive pump (the ROUTER's
@@ -252,6 +255,7 @@ final class ZLinkJavaRawMeshNode
     private volatile ZLinkInternalMeshNode.PeerAuthorityResolver peerAuthorityResolver;
     private volatile ZLinkInternalMeshNode.PeerAuthorityFence localAuthorityFence;
     private volatile ZLinkInternalMeshNode.RelocationControlHandler relocationControlHandler;
+    private volatile Consumer<RoutingId> peerReconcileRequester = peer -> {};
     private volatile ZLinkInternalMeshNode.CanonicalRelocationControlHandler
             canonicalRelocationControlHandler;
     private volatile ZLinkInternalMeshNode.ActorLeftHandler actorLeftHandler;
@@ -367,7 +371,7 @@ final class ZLinkJavaRawMeshNode
                                                 () ->
                                                         new IllegalStateException(
                                                                 "local MeshNode authority"
-                                                                        + " descriptor is not live")));
+                                                                    + " descriptor is not live")));
     }
 
     ZLinkInternalMeshNode.PeerAuthorityFence localAuthorityFence() {
@@ -450,6 +454,26 @@ final class ZLinkJavaRawMeshNode
                 || ownerLeaseGeneration <= 0) {
             return null;
         }
+        return localActorMessage(
+                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                        actor,
+                        descriptor.lifecycleGeneration(),
+                        ownerGeneration,
+                        ownerLeaseGeneration),
+                sourceNodeRid,
+                sourceSessionRid,
+                sourceBindingGeneration,
+                sourceSessionSequence,
+                requestId);
+    }
+
+    ZLinkServiceM6BWireCodec.ActorMessage localActorMessage(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+            RoutingId sourceNodeRid,
+            RoutingId sourceSessionRid,
+            long sourceBindingGeneration,
+            long sourceSessionSequence,
+            long requestId) {
         var boundSession =
                 sourceSessionRid == null
                         ? null
@@ -464,11 +488,7 @@ final class ZLinkJavaRawMeshNode
                 operation.getLeastSignificantBits(),
                 0,
                 null,
-                new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                        actor,
-                        descriptor.lifecycleGeneration(),
-                        ownerGeneration,
-                        ownerLeaseGeneration),
+                target,
                 boundSession);
     }
 
@@ -1092,90 +1112,126 @@ final class ZLinkJavaRawMeshNode
         closedPeerIntents.remove(connectionIntentId);
         closeRequestedPeerIntents.remove(connectionIntentId);
         RoutingId learnedRoutingId = peerIntentRoutingIds.remove(connectionIntentId);
-        if (removed != null && router != null) {
-            if (removed.expectedRoutingId() != null) {
-                notRequiredPeers.remove(removed.expectedRoutingId());
-                rejectedPeers.remove(removed.expectedRoutingId());
-                disconnectAdmitted(
-                        removed.expectedRoutingId(),
-                        admittedConnectionId(removed.expectedRoutingId()));
-                forgetKnownPeerChannelsIfUntracked(removed.expectedRoutingId());
-            }
-            if (disconnectEndpoint) {
-                router.disconnect(removed.endpoint());
-            }
+        if (removed == null) return;
+        RoutingId target =
+                removed.expectedRoutingId() == null
+                        ? learnedRoutingId
+                        : removed.expectedRoutingId();
+        if (target != null) {
+            notRequiredPeers.remove(target);
+            rejectedPeers.remove(target);
         }
-        signalStateChanged(removed == null ? learnedRoutingId : removed.expectedRoutingId());
+        if (router != null && disconnectEndpoint) {
+            router.disconnect(removed.endpoint());
+        }
+        retireUnownedPeer(target);
     }
 
     @Override
-    public void observePeerAdmissionExpectation(
+    public CompletionStage<Void> observePeerAdmissionExpectation(
             RoutingId peerRid,
             String endpoint,
             long lifecycleGeneration,
             String securityIdentity,
             ZLinkMeshNodeObjectRole objectRole) {
-        peerAdmissionExpectations.put(
-                Objects.requireNonNull(peerRid, "peerRid"),
-                new PeerAdmissionExpectation(
-                        endpoint, lifecycleGeneration, securityIdentity, objectRole));
+        return runDescriptorTurn(
+                () ->
+                        peerAdmissionExpectations.put(
+                                Objects.requireNonNull(peerRid, "peerRid"),
+                                new PeerAdmissionExpectation(
+                                        endpoint,
+                                        lifecycleGeneration,
+                                        securityIdentity,
+                                        objectRole)));
     }
 
     @Override
-    public void forgetPeerAdmissionExpectation(RoutingId peerRid) {
-        peerAdmissionExpectations.remove(peerRid);
-        forgetKnownPeerChannelsIfUntracked(peerRid);
-        signalStateChanged(peerRid);
+    public CompletionStage<Void> forgetPeerAdmissionExpectation(RoutingId peerRid) {
+        return runDescriptorTurn(
+                () -> {
+                    if (peerAdmissionExpectations.remove(peerRid) != null)
+                        retireUnownedPeer(peerRid);
+                });
     }
 
-    private record StateObserver(RoutingId target, Runnable callback) {}
+    private void retireUnownedPeer(RoutingId target) {
+        if (target == null || hasPeerExpectation(target)) {
+            signalStateChanged(target);
+            return;
+        }
+        disconnectAdmitted(target, admittedConnectionId(target));
+        knownPeerChannels.remove(target);
+        if (topology == null || topology.peer(target).isEmpty()) signalLifecycleEnded(target);
+    }
+
+    private record StateObserver(
+            RoutingId target, Runnable routeChanged, Runnable lifecycleEnded) {}
 
     @Override
     public AutoCloseable onStateChanged(Runnable listener) {
-        return observeState(null, listener);
+        return observeState(null, listener, listener);
     }
 
-    private AutoCloseable onPeerStateChanged(RoutingId target, Runnable listener) {
-        return observeState(Objects.requireNonNull(target, "target"), listener);
+    @Override
+    public AutoCloseable onPeerStateChanged(
+            RoutingId target, Runnable routeChanged, Runnable lifecycleEnded) {
+        return observeState(Objects.requireNonNull(target, "target"), routeChanged, lifecycleEnded);
     }
 
-    private AutoCloseable observeState(RoutingId target, Runnable listener) {
-        var observer = new StateObserver(target, Objects.requireNonNull(listener, "listener"));
+    private AutoCloseable observeState(
+            RoutingId target, Runnable routeChanged, Runnable lifecycleEnded) {
+        var observer =
+                new StateObserver(
+                        target,
+                        Objects.requireNonNull(routeChanged, "routeChanged"),
+                        Objects.requireNonNull(lifecycleEnded, "lifecycleEnded"));
         stateListeners.add(observer);
-        deliverStateSignal(() -> notifyStateListener(observer));
-        return () -> stateListeners.remove(observer);
+        deliverStateSignal(() -> notifyStateListener(observer, observer.routeChanged()));
+        return () -> stateListeners.removeIf(current -> current == observer);
     }
 
     /** Local descriptor changes are observations, not target route progress. */
     void signalStateChanged() {
-        signalStateChanged(null, false);
+        signalStateChanged(null);
     }
 
     private void signalStateChanged(RoutingId target) {
-        signalStateChanged(target, false);
-    }
-
-    private void signalLifecycleEnded() {
-        signalStateChanged(null, true);
-    }
-
-    private void signalStateChanged(RoutingId target, boolean lifecycleEnded) {
         if (stateListeners.isEmpty()) return;
         deliverStateSignal(
                 () ->
                         stateListeners.forEach(
                                 observer -> {
                                     if (observer.target() == null
-                                            || lifecycleEnded
                                             || observer.target().equals(target))
-                                        notifyStateListener(observer);
+                                        notifyStateListener(observer, observer.routeChanged());
                                 }));
     }
 
-    private void deliverStateSignal(Runnable signal) {
+    private void signalLifecycleEnded() {
+        signalLifecycleEnded(null);
+    }
+
+    private CompletionStage<Void> signalLifecycleEnded(RoutingId target) {
+        var observers =
+                stateListeners.stream()
+                        .filter(
+                                observer ->
+                                        target == null
+                                                || observer.target() == null
+                                                || observer.target().equals(target))
+                        .toList();
+        if (observers.isEmpty()) return CompletableFuture.completedFuture(null);
+        return deliverStateSignal(
+                () ->
+                        observers.forEach(
+                                observer ->
+                                        notifyStateListener(observer, observer.lifecycleEnded())));
+    }
+
+    private CompletionStage<Void> deliverStateSignal(Runnable signal) {
         // Enter after the publishing turn. Callbacks may enter another owner
         // and must never occupy the shared deadline executor.
-        CompletableFuture.completedStage(null)
+        return CompletableFuture.completedStage(null)
                 .thenComposeAsync(unused -> descriptorStateLane.runAsync(() -> null))
                 .thenRunAsync(signal)
                 .whenComplete(
@@ -1188,10 +1244,10 @@ final class ZLinkJavaRawMeshNode
                         });
     }
 
-    private void notifyStateListener(StateObserver observer) {
-        if (!stateListeners.contains(observer)) return;
+    private void notifyStateListener(StateObserver observer, Runnable callback) {
+        if (stateListeners.stream().noneMatch(current -> current == observer)) return;
         try {
-            observer.callback().run();
+            callback.run();
         } catch (RuntimeException failure) {
             LOGGER.log(Level.WARNING, "MeshNode state observer failed", failure);
         }
@@ -1784,9 +1840,8 @@ final class ZLinkJavaRawMeshNode
     }
 
     @Override
-    public String localAuthorityOwnerId() {
-        ZLinkInternalMeshNode.PeerAuthorityFence local = localAuthorityFence;
-        return local == null ? routingId().toString() : local.ownerId();
+    public Optional<ZLinkInternalMeshNode.PeerAuthorityFence> localSessionOwner() {
+        return Optional.ofNullable(localAuthorityFence);
     }
 
     long bindingGenerationSeed() {
@@ -2327,20 +2382,13 @@ final class ZLinkJavaRawMeshNode
         }
     }
 
-    CompletionStage<Void> sendActor(ZLinkBackendActorRef actor, List<Message> parts) {
+    CompletionStage<Void> sendActor(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target, List<Message> parts) {
+        ZLinkBackendActorRef actor = target.actor();
         Optional<ZLinkServiceTopologyRegistry.Peer> peer =
                 topology == null ? Optional.empty() : topology.peerFromOwner(actor.nodeRid());
-        ZLinkJavaRawSpotNode spots = (ZLinkJavaRawSpotNode) spotNode();
-        long authorityOwnerGeneration = spots.actorAuthorityOwnerGeneration(actor);
-        long ownerLeaseGeneration = spots.actorAuthorityOwnerLeaseGeneration(actor);
-        if (peer.isEmpty()
-                || actor.generation() <= 0
-                || authorityOwnerGeneration <= 0
-                || ownerLeaseGeneration <= 0) {
-            return CompletableFuture.failedFuture(
-                    new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
-        }
-        if (!isReadyPeer(peer.orElseThrow())) {
+        if (peer.isEmpty() || !isReadyPeer(peer.orElseThrow())) {
+
             return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -2355,11 +2403,7 @@ final class ZLinkJavaRawMeshNode
                                 operation.getLeastSignificantBits(),
                                 0,
                                 null,
-                                new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                                        actor,
-                                        peer.orElseThrow().descriptor().lifecycleGeneration(),
-                                        authorityOwnerGeneration,
-                                        ownerLeaseGeneration)),
+                                target),
                         wire.encodeFrameworkMultipartFrame(parts));
         return port.send(requireStarted(), actor.nodeRid(), frames);
     }
@@ -3146,7 +3190,7 @@ final class ZLinkJavaRawMeshNode
         return now + duration;
     }
 
-    CompletionStage<List<Message>> requestActor(
+    CompletionStage<List<Message>> requestExactActor(
             ZLinkBackendActorRef actor,
             List<Message> parts,
             Duration timeout,
@@ -3165,6 +3209,31 @@ final class ZLinkJavaRawMeshNode
                             ZLinkFrameworkErrorKind.UNAVAILABLE,
                             "remote Actor route is not connected"));
         }
+        return requestActor(
+                new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                        actor,
+                        peer.orElseThrow().descriptor().lifecycleGeneration(),
+                        authorityOwnerGeneration,
+                        ownerLeaseGeneration),
+                parts,
+                timeout,
+                requestAdmission);
+    }
+
+    CompletionStage<List<Message>> requestActor(
+            ZLinkServiceM6BWireCodec.ActorRouteFence target,
+            List<Message> parts,
+            Duration timeout,
+            CompletableFuture<Void> requestAdmission) {
+        ZLinkBackendActorRef actor = target.actor();
+        Optional<ZLinkServiceTopologyRegistry.Peer> peer =
+                topology == null ? Optional.empty() : topology.peerFromOwner(actor.nodeRid());
+        if (peer.isEmpty()) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "remote Actor route is not connected"));
+        }
         long correlation = allocateCorrelation();
         UUID operationId = UUID.randomUUID();
         List<byte[]> frames =
@@ -3177,11 +3246,7 @@ final class ZLinkJavaRawMeshNode
                                 operationId.getLeastSignificantBits(),
                                 0,
                                 null,
-                                new ZLinkServiceM6BWireCodec.ActorRouteFence(
-                                        actor,
-                                        peer.orElseThrow().descriptor().lifecycleGeneration(),
-                                        authorityOwnerGeneration,
-                                        ownerLeaseGeneration)),
+                                target),
                         wire.encodeFrameworkMultipartFrame(parts));
         ZLinkServiceOperationRegistry.Operation<ZLinkBackendReceived> operation =
                 operations.register(operationId, timeout);
@@ -3266,11 +3331,18 @@ final class ZLinkJavaRawMeshNode
                             }
                             ZLinkServiceM6AWireCodec.Reply reply =
                                     wire.decodeReplyHeader(replies.getFirst());
-                            if (reply.correlation() != correlation
-                                    || reply.terminalResult() != 0
-                                    || reply.failureCode() != 0) {
+                            if (reply.correlation() != correlation) {
                                 throw new IllegalArgumentException(
-                                        "bound session binding was rejected");
+                                        "bound session binding reply correlation");
+                            }
+                            if (reply.terminalResult() != 0 || reply.failureCode() != 0) {
+                                throw ZLinkRequestFailureMapping.receivedFailure(
+                                        ZLinkBackendRequestResult.fromWireTerminal(
+                                                        reply.terminalResult())
+                                                .toFrameworkErrorKind(reply.failureCode()),
+                                        "bound session binding was rejected",
+                                        reply.failureCode(),
+                                        java.util.Map.of());
                             }
                         });
     }
@@ -3325,9 +3397,7 @@ final class ZLinkJavaRawMeshNode
             return handler.handle(routingId, payload).thenApply(byte[]::clone);
         }
         List<Message> parts =
-                List.of(
-                        Message.from(RELOCATION_CONTROL_PACKET.getBytes(StandardCharsets.UTF_8)),
-                        Message.from(payload));
+                List.of(Message.from(RELOCATION_CONTROL_PACKET), Message.from(payload));
         CompletionStage<ZLinkBackendReceived> request;
         try {
             request = requestNode(targetNodeRid, new byte[0], parts, timeout, null, null, null);
@@ -3492,6 +3562,124 @@ final class ZLinkJavaRawMeshNode
         }
         requireStarted();
         return port.send(requireStarted(), targetNodeRid, List.of(record));
+    }
+
+    private volatile java.util.function.Function<
+                    ZLinkServiceM6BWireCodec.BoundSessionClose, CompletionStage<Void>>
+            boundSessionCloseHandler;
+
+    @Override
+    public void setBoundSessionCloseHandler(
+            java.util.function.Function<
+                            ZLinkServiceM6BWireCodec.BoundSessionClose, CompletionStage<Void>>
+                    handler) {
+        boundSessionCloseHandler = Objects.requireNonNull(handler);
+    }
+
+    @Override
+    public CompletionStage<Void> requestBoundSessionClose(
+            ZLinkServiceM6BWireCodec.BoundSessionClose request, Duration timeout) {
+        byte[] encoded = statefulWire.encodeBoundSessionClose(request);
+        if (request.session().sessionOwnerNodeRid().equals(routingId))
+            return acceptBoundSessionClose(statefulWire.decodeBoundSessionClose(encoded))
+                    .toCompletableFuture()
+                    .orTimeout(timeout.toNanos(), TimeUnit.NANOSECONDS)
+                    .handle(
+                            (ignored, failure) -> {
+                                if (failure != null) {
+                                    var result =
+                                            canonicalActorJoinFailurePair(
+                                                    unwrapCompletionFailure(failure));
+                                    throw ZLinkRequestFailureMapping.receivedFailure(
+                                            ZLinkBackendRequestResult.fromWireTerminal(result[0])
+                                                    .toFrameworkErrorKind(result[1]),
+                                            "Bound Session close failed",
+                                            result[1],
+                                            Map.of());
+                                }
+                                return (Void) null;
+                            });
+        var submitted =
+                port.request(
+                        requireStarted(),
+                        request.session().sessionOwnerNodeRid(),
+                        List.of(encoded),
+                        timeout,
+                        null);
+        var terminal =
+                submitted.thenApply(
+                        frames -> {
+                            if (frames.size() != 1)
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                        "Invalid Session close reply");
+                            final ZLinkServiceM6AWireCodec.Reply reply;
+                            try {
+                                reply =
+                                        statefulWire.decodeBoundSessionCloseReply(
+                                                frames.getFirst());
+                            } catch (IllegalArgumentException failure) {
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                        "Session close reply could not be processed",
+                                        failure);
+                            }
+                            if (reply.correlation() != request.correlation())
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                        "Session close correlation mismatch");
+                            if (reply.terminalResult() != RequestResult.OK.value()
+                                    || reply.failureCode()
+                                            != ServiceWireConstants.FRAMEWORK_ERROR_NONE)
+                                throw ZLinkRequestFailureMapping.receivedFailure(
+                                        ZLinkBackendRequestResult.fromWireTerminal(
+                                                        reply.terminalResult())
+                                                .toFrameworkErrorKind(reply.failureCode()),
+                                        "Bound Session close failed",
+                                        reply.failureCode(),
+                                        Map.of());
+                            return (Void) null;
+                        });
+        ZLinkCompletionBridge.forwardCancellation(terminal.toCompletableFuture(), submitted);
+        return terminal;
+    }
+
+    private CompletionStage<Void> acceptBoundSessionClose(
+            ZLinkServiceM6BWireCodec.BoundSessionClose request) {
+        var handler = boundSessionCloseHandler;
+        if (handler == null)
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE, "Session owner is unavailable"));
+        try {
+            return handler.apply(request);
+        } catch (RuntimeException failure) {
+            return CompletableFuture.failedFuture(failure);
+        }
+    }
+
+    private void dispatchBoundSessionClose(ZLinkJavaRawServicePort.Inbound inbound) {
+        if (inbound.frames().size() != 1 || inbound.requestSequence() == null) return;
+        var request = statefulWire.decodeBoundSessionClose(inbound.frames().getFirst());
+        acceptBoundSessionClose(request)
+                .whenComplete(
+                        (ignored, failure) -> {
+                            int[] result =
+                                    failure == null
+                                            ? new int[] {
+                                                RequestResult.OK.value(),
+                                                (int) ServiceWireConstants.FRAMEWORK_ERROR_NONE
+                                            }
+                                            : canonicalActorJoinFailurePair(
+                                                    unwrapCompletionFailure(failure));
+                            port.reply(
+                                    requireStarted(),
+                                    inbound.source(),
+                                    inbound.requestSequence(),
+                                    List.of(
+                                            wire.encodeReplyHeader(
+                                                    request.correlation(), result[0], result[1])));
+                        });
     }
 
     @Override
@@ -3875,7 +4063,8 @@ final class ZLinkJavaRawMeshNode
         Throwable cause = unwrap(failure);
         if (cause instanceof ZLinkFrameworkException) return cause;
         if (cause instanceof ZLinkUserSpotOperationException typed)
-            return userSpotFailure(typed.terminalResult(), typed.failureCode(), cause);
+            return ZLinkRequestFailureMapping.userSpotFailure(
+                    typed.terminalResult(), typed.failureCode(), cause);
         RequestResult terminal = requestResult(cause);
         return terminal == null
                 ? failure
@@ -3948,7 +4137,7 @@ final class ZLinkJavaRawMeshNode
                             failure -> {
                                 UserSpotTerminalReply reply = terminalFailure(failure);
                                 return CompletableFuture.failedFuture(
-                                        userSpotFailure(
+                                        ZLinkRequestFailureMapping.userSpotFailure(
                                                 reply.terminalResult(),
                                                 reply.failureCode(),
                                                 unwrap(failure)));
@@ -4056,6 +4245,13 @@ final class ZLinkJavaRawMeshNode
     }
 
     @Override
+    public CompletionStage<Void> instanceActivationRecoveryCompleted(
+            ZLinkServiceM6BWireCodec.InstanceRouteFence route, Throwable failure) {
+        return ((ZLinkJavaRawSpotNode) spotNode())
+                .instanceActivationRecoveryCompleted(route, failure);
+    }
+
+    @Override
     public CompletionStage<Void> recoverInstanceActivation(
             systems.zlink.framework.runtime.internal.service.ZLinkInstanceActivationRecoveryCodec
                             .RecoveryEnvelope
@@ -4109,7 +4305,8 @@ final class ZLinkJavaRawMeshNode
                 //  authoritative ownership-aware translator instead of
                 //  collapsing to a generic rejection
                 //  (spec 32-framework-error-model:81-118, 99-108).
-                throw userSpotFailure(reply.terminalResult(), reply.failureCode(), null);
+                throw ZLinkRequestFailureMapping.userSpotFailure(
+                        reply.terminalResult(), reply.failureCode(), null);
             }
             if (reply.success() == null
                     || (reply.success().result()
@@ -4228,7 +4425,8 @@ final class ZLinkJavaRawMeshNode
                 //  authoritative ownership-aware translator instead of
                 //  collapsing to a generic rejection
                 //  (spec 32-framework-error-model:81-118, 99-108).
-                throw userSpotFailure(reply.terminalResult(), reply.failureCode(), null);
+                throw ZLinkRequestFailureMapping.userSpotFailure(
+                        reply.terminalResult(), reply.failureCode(), null);
             }
             if (reply.closed() == null) {
                 throw new ZLinkFrameworkException(
@@ -4255,28 +4453,13 @@ final class ZLinkJavaRawMeshNode
         }
     }
 
-    /** Classifies a User Spot terminal the same way for a remote reply and a local owner. */
-    private static ZLinkFrameworkException userSpotFailure(
-            int terminalResult, int failureCode, Throwable cause) {
-        return ZLinkRequestFailureMapping.receivedFailure(
-                ZLinkBackendRequestResult.fromWireTerminal(terminalResult)
-                        .toFrameworkErrorKind(failureCode),
-                "User Spot operation failed: terminal="
-                        + terminalResult
-                        + " failureCode="
-                        + failureCode,
-                failureCode,
-                java.util.Map.of(),
-                cause);
-    }
-
     /**
      * A target lifecycle that differs from the Close fence is an owner fence change: SpotMoving
      * (terminal 107, failure 34), translated like every other User Spot Close terminal.
      */
     private static ZLinkFrameworkException userSpotCloseTargetMoved(
             long expectedGeneration, long currentGeneration) {
-        return userSpotFailure(
+        return ZLinkRequestFailureMapping.userSpotFailure(
                 107,
                 34,
                 new IllegalStateException(
@@ -4289,9 +4472,8 @@ final class ZLinkJavaRawMeshNode
 
     CompletionStage<Void> sendBoundSession(
             ZLinkJavaRawSpotNode.ActorSessionBinding binding, List<Message> parts) {
-        BoundSessionRouteStateSnapshot route = boundSessionRouteStateSnapshot(binding);
-        boolean ready = route.readyFor(binding);
-        if (!ready) {
+        if (!sessionOwnerRouteReady(
+                binding.sessionOwnerNodeRid(), binding.sessionOwnerNodeGeneration())) {
             return CompletableFuture.failedFuture(
                     new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
         }
@@ -4310,17 +4492,64 @@ final class ZLinkJavaRawMeshNode
         return submission;
     }
 
-    private BoundSessionRouteStateSnapshot boundSessionRouteStateSnapshot(
-            ZLinkJavaRawSpotNode.ActorSessionBinding binding) {
-        RoutingId target = binding.sessionOwnerNodeRid();
+    /**
+     * The one ready condition for a route to a Session owner: the push submits on it, and a
+     * relocation target waits for it before relay-ready (relocation §4.3).
+     */
+    private boolean sessionOwnerRouteReady(RoutingId sessionOwner, long sessionOwnerGeneration) {
         ZLinkServiceTopologyRegistry currentTopology = topology;
         ZLinkServiceTopologyRegistry.Peer peer =
-                currentTopology == null ? null : currentTopology.peerFromOwner(target).orElse(null);
-        if (peer == null) {
-            return new BoundSessionRouteStateSnapshot(null, null, false);
+                currentTopology == null
+                        ? null
+                        : currentTopology.peerFromOwner(sessionOwner).orElse(null);
+        return peer != null
+                && peer.descriptor().lifecycleGeneration() == sessionOwnerGeneration
+                && isReadyPeer(peer);
+    }
+
+    @Override
+    public CompletionStage<Void> secureSessionOwnerRoute(
+            RoutingId sessionOwnerNodeRid, long sessionOwnerNodeGeneration) {
+        Objects.requireNonNull(sessionOwnerNodeRid, "sessionOwnerNodeRid");
+        if (sessionOwnerRouteReady(sessionOwnerNodeRid, sessionOwnerNodeGeneration)) {
+            return CompletableFuture.completedFuture(null);
         }
-        String admissionConnectionId = admissionControlReadyConnections.get(target);
-        return new BoundSessionRouteStateSnapshot(peer, admissionConnectionId, isReadyPeer(peer));
+        var ready = new CompletableFuture<Void>();
+        AutoCloseable registration =
+                onPeerStateChanged(
+                        sessionOwnerNodeRid,
+                        () -> {
+                            if (sessionOwnerRouteReady(
+                                    sessionOwnerNodeRid, sessionOwnerNodeGeneration))
+                                ready.complete(null);
+                        },
+                        // The relocation attempt owns termination and cancels this wait.
+                        () -> {});
+        ready.whenComplete(
+                (unused, failure) -> {
+                    try {
+                        registration.close();
+                    } catch (Exception cleanupFailure) {
+                        LOGGER.log(
+                                Level.WARNING,
+                                "Session owner route observer cleanup failed",
+                                cleanupFailure);
+                    }
+                });
+        requestPeerReconcile(sessionOwnerNodeRid, sessionOwnerNodeGeneration);
+        return ready;
+    }
+
+    @Override
+    public void requestPeerReconcile(RoutingId peerRid, long peerGeneration) {
+        if (!routingId.equals(peerRid) && !sessionOwnerRouteReady(peerRid, peerGeneration)) {
+            peerReconcileRequester.accept(peerRid);
+        }
+    }
+
+    @Override
+    public void setPeerReconcileRequester(Consumer<RoutingId> requester) {
+        peerReconcileRequester = Objects.requireNonNull(requester, "requester");
     }
 
     private void completeActorRequest(
@@ -4502,6 +4731,11 @@ final class ZLinkJavaRawMeshNode
     }
 
     @Override
+    public void cancelPendingOperations() {
+        operations.cancelPendingOperations();
+    }
+
+    @Override
     public void close() {
         if (!closed.compareAndSet(false, true)) {
             return;
@@ -4562,23 +4796,31 @@ final class ZLinkJavaRawMeshNode
     }
 
     private void pumpTurn(RouterSocket pumpSocket) {
-        if (closed.get()) return;
-        int ready =
-                port.waitForReady(
-                        pumpSocket,
-                        pendingRawMulticast != null && pendingReceiveAcquire.get() == null
-                                ? Duration.ZERO
-                                : ingressWaitTimeout);
-        long now = System.nanoTime();
-        // The existing pump remains this ROUTER's one route observer.
-        if ((ready & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0) {
-            observeSelectedRoutes();
-        }
-        drainPeerCloseRequests();
-        tickLiveness(now);
-        if ((ready & ZLinkJavaSocketReceivePoller.READABLE) != 0 || pendingRawMulticast != null) {
-            drainIngressBatch(pumpSocket);
-        }
+        // Spec 08 §4.1 I0–I4 and §4.2: readiness blocks between receive rotations;
+        // the same receive owner needs no executor round trip for the next rotation.
+        // Permit grants share this single-thread executor with receive rotations.
+        // Yield to that grant before continuing, while keeping completion and management
+        // progress on the existing receive turns even when ordinary capacity is exhausted.
+        do {
+            if (closed.get()) return;
+            int ready =
+                    port.waitForReady(
+                            pumpSocket,
+                            pendingRawMulticast != null && pendingReceiveAcquire.get() == null
+                                    ? Duration.ZERO
+                                    : managementWaitTimeout(nanoTime.getAsLong()));
+            long now = nanoTime.getAsLong();
+            // The existing pump remains this ROUTER's one route observer.
+            if ((ready & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0) {
+                observeSelectedRoutes();
+            }
+            drainPeerCloseRequests();
+            tickLiveness(now);
+            if ((ready & ZLinkJavaSocketReceivePoller.READABLE) != 0
+                    || pendingRawMulticast != null) {
+                drainIngressBatch(pumpSocket);
+            }
+        } while (pendingReceiveAcquire.get() == null);
         if (!closed.get()) {
             try {
                 pump.execute(pumpRotation);
@@ -4765,6 +5007,7 @@ final class ZLinkJavaRawMeshNode
                 || command == ServiceWireConstants.COMMAND_REPLY_RELAY_ACK
                 || command == ServiceWireConstants.COMMAND_MESSAGE_FOLLOW
                 || command == ServiceWireConstants.COMMAND_BOUND_SESSION_REPLACED
+                || command == ServiceWireConstants.COMMAND_BOUND_SESSION_CLOSE
                 || command == ServiceWireConstants.COMMAND_SESSION_RELOCATION_SEAL
                 || command == ServiceWireConstants.COMMAND_SESSION_RELOCATION_SEALED
                 || command == ServiceWireConstants.COMMAND_SESSION_RELOCATION_ROUTE;
@@ -4874,6 +5117,10 @@ final class ZLinkJavaRawMeshNode
                 dispatchSessionRelocationSeal(inbound);
                 return;
             }
+            if (command == ServiceWireConstants.COMMAND_BOUND_SESSION_CLOSE) {
+                dispatchBoundSessionClose(inbound);
+                return;
+            }
             if (command == ServiceWireConstants.COMMAND_BOUND_SESSION_REPLACED) {
                 dispatchBoundSessionReplaced(inbound);
                 return;
@@ -4969,15 +5216,11 @@ final class ZLinkJavaRawMeshNode
                 replyApplicationProtocolFailure(inbound, correlation, kind);
                 return;
             }
-            boolean relocationControl = false;
-            if (channelName == null && correlation != null && messages.size() == 2) {
-                try {
-                    relocationControl =
-                            RELOCATION_CONTROL_PACKET.equals(messages.getFirst().toUtf8String());
-                } catch (RuntimeException invalidPacketName) {
-                    relocationControl = false;
-                }
-            }
+            boolean relocationControl =
+                    channelName == null
+                            && correlation != null
+                            && messages.size() == 2
+                            && messages.getFirst().contentEquals(RELOCATION_CONTROL_PACKET);
             if (relocationControl) {
                 try {
                     byte[] relocationCommand = messages.get(1).toByteArray();
@@ -5596,7 +5839,11 @@ final class ZLinkJavaRawMeshNode
                                 try (ZLinkApplicationJobContext.Scope ignored =
                                         ZLinkApplicationJobContext.enterQueued(applicationJob)) {
                                     if (failure != null || authorities.isEmpty()) {
-                                        replySpotFailure(inbound, header, 107, 33);
+                                        replySpotFailure(
+                                                inbound,
+                                                header,
+                                                SOURCE_OWNER_UNAVAILABLE[0],
+                                                SOURCE_OWNER_UNAVAILABLE[1]);
                                         inbound.close();
                                         return;
                                     }
@@ -6590,11 +6837,7 @@ final class ZLinkJavaRawMeshNode
             replyActorFailure(inbound, header, 104, 12);
             return false;
         }
-        if (header.request() != (inbound.requestSequence() != null)
-                || !header.target().actor().nodeRid().equals(routingId)
-                || localDescriptor == null
-                || header.target().targetNodeGeneration()
-                        != localDescriptor.lifecycleGeneration()) {
+        if (header.request() != (inbound.requestSequence() != null)) {
             replyActorFailure(inbound, header, 102, 1);
             return false;
         }
@@ -6632,7 +6875,11 @@ final class ZLinkJavaRawMeshNode
                                         ZLinkApplicationJobContext.enterQueued(applicationJob)) {
                                     if (failure != null || authorities.isEmpty()) {
                                         receivedMessages.forEach(Message::close);
-                                        replyActorFailure(inbound, header, 107, 21);
+                                        replyActorFailure(
+                                                inbound,
+                                                header,
+                                                SOURCE_OWNER_UNAVAILABLE[0],
+                                                SOURCE_OWNER_UNAVAILABLE[1]);
                                         inbound.close();
                                         return;
                                     }
@@ -6792,24 +7039,26 @@ final class ZLinkJavaRawMeshNode
         resolveSourceAuthority(inbound)
                 .handle(
                         (authority, failure) -> {
-                            String ownerId =
-                                    authority != null && authority.isPresent()
-                                            ? authority.orElseThrow().ownerId()
-                                            : inbound.source().toString();
-                            long ownerLease =
-                                    authority != null && authority.isPresent()
-                                            ? authority.orElseThrow().ownerLeaseGeneration()
-                                            : 1L;
-                            if (failure != null) {
-                                replyBoundSessionBind(inbound, binding, false);
+                            // Session-Actor binding §4: the identity comes from the admitted
+                            // peer descriptor that passed the owner lease check, or the bind
+                            // is rejected.
+                            // Without that descriptor the bind is Unavailable.
+                            if (failure != null || authority == null || authority.isEmpty()) {
+                                replyBoundSessionBindFailure(
+                                        inbound,
+                                        binding,
+                                        ZLinkRequestFailureMapping.outgoing(
+                                                ZLinkFrameworkErrorKind.UNAVAILABLE));
                                 return null;
                             }
+                            ZLinkInternalMeshNode.PeerAuthorityFence sessionOwner =
+                                    authority.orElseThrow();
                             ((ZLinkJavaRawSpotNode) spotNode())
                                     .applyRemoteStreamBinding(
                                             inbound.source(),
                                             sourceGeneration,
-                                            ownerId,
-                                            ownerLease,
+                                            sessionOwner.ownerId(),
+                                            sessionOwner.ownerLeaseGeneration(),
                                             binding,
                                             accepted ->
                                                     replyBoundSessionBind(
@@ -6822,13 +7071,33 @@ final class ZLinkJavaRawMeshNode
             ZLinkJavaRawServicePort.Inbound inbound,
             ZLinkServiceM6BWireCodec.BoundSessionBind binding,
             boolean accepted) {
+        if (accepted) {
+            port.reply(
+                    requireStarted(),
+                    inbound.source(),
+                    inbound.requestSequence(),
+                    List.of(wire.encodeReplyHeader(binding.correlation(), 0, 0)));
+            return;
+        }
+        replyBoundSessionBindFailure(
+                inbound,
+                binding,
+                ZLinkRequestFailureMapping.outgoing(
+                        ZLinkFrameworkErrorKind.NOT_FOUND,
+                        (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_ROUTE_NOT_FOUND));
+    }
+
+    private void replyBoundSessionBindFailure(
+            ZLinkJavaRawServicePort.Inbound inbound,
+            ZLinkServiceM6BWireCodec.BoundSessionBind binding,
+            int[] terminalAndCode) {
         port.reply(
                 requireStarted(),
                 inbound.source(),
                 inbound.requestSequence(),
                 List.of(
                         wire.encodeReplyHeader(
-                                binding.correlation(), accepted ? 0 : 102, accepted ? 0 : 1)));
+                                binding.correlation(), terminalAndCode[0], terminalAndCode[1])));
     }
 
     private void dispatchBoundSessionReplaced(ZLinkJavaRawServicePort.Inbound inbound) {
@@ -7045,6 +7314,7 @@ final class ZLinkJavaRawMeshNode
             if (command == ServiceWireConstants.COMMAND_ADMIT) {
                 helloExchanges.put(
                         inbound.source(), new HelloExchange(inbound.routeGeneration(), null, null));
+                refreshAdmissionPending(nanoTime.getAsLong());
                 markAdmissionControlReady(inbound.source(), connectionId, command);
                 // HELLO and the host's SERVING transition can cross. In that
                 // race the peer admits the PREPARING descriptor carried by
@@ -7308,7 +7578,7 @@ final class ZLinkJavaRawMeshNode
     }
 
     /** MeshNode §7.1: every selected route retries HELLO until its ADMIT is received. */
-    private void announceExpectedPeers() {
+    private void announceExpectedPeers(boolean admissionDue) {
         if (peerAdmissionSealed.getAsBoolean()) return;
         selectedRoutes.forEach(
                 (peerRid, generation) -> {
@@ -7317,8 +7587,9 @@ final class ZLinkJavaRawMeshNode
                     HelloExchange current = helloExchanges.get(peerRid);
                     boolean sameRoute = current != null && current.routeGeneration() == generation;
                     if (sameRoute
-                            && (current.submission() == null || !current.submission().isDone()))
-                        return;
+                            && (!admissionDue
+                                    || current.submission() == null
+                                    || !current.submission().isDone())) return;
                     var submission = new CompletableFuture<Void>();
                     var exchange =
                             new HelloExchange(
@@ -7355,8 +7626,35 @@ final class ZLinkJavaRawMeshNode
                 });
     }
 
+    private void refreshAdmissionPending(long nowNanos) {
+        boolean pending = false;
+        if (!peerAdmissionSealed.getAsBoolean()) {
+            for (var route : selectedRoutes.entrySet()) {
+                if (notRequiredPeers.contains(route.getKey())
+                        || rejectedPeers.contains(route.getKey())) continue;
+                HelloExchange exchange = helloExchanges.get(route.getKey());
+                if (exchange == null
+                        || exchange.routeGeneration() != route.getValue()
+                        || exchange.submission() != null) {
+                    pending = true;
+                    break;
+                }
+            }
+        }
+        liveness.setAdmissionPending(pending, nowNanos);
+    }
+
+    private Duration managementWaitTimeout(long nowNanos) {
+        long remaining = liveness.nextDeadlineNanos(nowNanos) - nowNanos;
+        return remaining <= 0
+                ? Duration.ZERO
+                : Duration.ofNanos(Math.min(remaining, ingressWaitTimeout.toNanos()));
+    }
+
     private void tickLiveness(long nowNanos) {
-        announceExpectedPeers();
+        refreshAdmissionPending(nowNanos);
+        boolean admissionDue = liveness.tickAdmission(nowNanos);
+        announceExpectedPeers(admissionDue);
         ZLinkServiceLivenessRegistry.Tick tick = liveness.tick(nowNanos);
         for (ZLinkServiceLivenessRegistry.Probe probe : tick.probes()) {
             try {
@@ -7431,12 +7729,6 @@ final class ZLinkJavaRawMeshNode
         return true;
     }
 
-    private void forgetKnownPeerChannelsIfUntracked(RoutingId peer) {
-        if (!hasPeerExpectation(peer)) {
-            knownPeerChannels.remove(peer);
-        }
-    }
-
     private boolean hasPeerExpectation(RoutingId peer) {
         return peerAdmissionExpectations.containsKey(peer)
                 || peerIntents.entrySet().stream()
@@ -7461,13 +7753,6 @@ final class ZLinkJavaRawMeshNode
                                 == generation
                         && isReadyPeer(peer.orElseThrow());
         return new PeerRouteObservation(generation, ready);
-    }
-
-    @Override
-    public boolean targetLifecycleEnded(RoutingId target) {
-        // Location owns logical removal. A physical disconnect still has an
-        // expectation and must retain durable replay (routing §2, actor model §5).
-        return !hasPeerExpectation(target) && (topology == null || topology.peer(target).isEmpty());
     }
 
     private Map.Entry<Long, PeerIntent> findExpectedPeer(
@@ -7508,7 +7793,7 @@ final class ZLinkJavaRawMeshNode
         return String.join(",", fields);
     }
 
-    private CompletionStage<Void> runDurableTurn(Runnable command) {
+    private CompletionStage<Void> runDescriptorTurn(Runnable command) {
         if (!descriptorStateLane.isOnLane())
             return descriptorStateLane.runNowOrQueue(
                     () -> {
@@ -7536,10 +7821,9 @@ final class ZLinkJavaRawMeshNode
                 },
                 (frames, remaining, admission) ->
                         requestApplication(target, frames, remaining, admission),
-                () -> targetLifecycleEnded(target),
                 () -> observePeerRoute(target),
-                listener -> onPeerStateChanged(target, listener),
-                this::runDurableTurn,
+                (changed, ended) -> onPeerStateChanged(target, changed, ended),
+                this::runDescriptorTurn,
                 timeout,
                 nanoTime);
     }
@@ -7552,32 +7836,6 @@ final class ZLinkJavaRawMeshNode
         CompletionStage<List<byte[]>> submission =
                 port.request(requireStarted(), target, frames, timeout, requestAdmission);
         return submission;
-    }
-
-    private record BoundSessionRouteStateSnapshot(
-            ZLinkServiceTopologyRegistry.Peer peer,
-            String admissionConnectionId,
-            boolean livenessReady) {
-
-        boolean peerPresent() {
-            return peer != null;
-        }
-
-        long peerGeneration() {
-            return peer == null ? 0L : peer.descriptor().lifecycleGeneration();
-        }
-
-        boolean admissionConnectionMatches() {
-            return peer != null && peer.connectionId().equals(admissionConnectionId);
-        }
-
-        boolean readyFor(ZLinkJavaRawSpotNode.ActorSessionBinding binding) {
-            return peer != null
-                    && peer.descriptor().lifecycleGeneration()
-                            == binding.sessionOwnerNodeGeneration()
-                    && admissionConnectionMatches()
-                    && livenessReady;
-        }
     }
 
     private record PeerCloseRequest(long connectionIntentId, String endpoint) {}

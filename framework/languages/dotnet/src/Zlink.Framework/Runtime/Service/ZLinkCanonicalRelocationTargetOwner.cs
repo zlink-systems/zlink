@@ -11,15 +11,14 @@ namespace Zlink.Framework.Runtime.Service;
 internal sealed class ZLinkCanonicalRelocationTargetOwner(
     RoutingId localNodeRid,
     ulong localNodeGeneration,
-    TimeSpan prepareDeadline,
+    ZLinkDrainAdmissionGate drainAdmission,
     ZLinkSpotRetireTargetRuntime? targetRuntime = null,
     ZLinkStandaloneActorRelocationRuntime? standaloneActorRuntime = null,
-    Func<CancellationToken, ValueTask>? awaitTargetReady = null
+    Func<ZLinkRelocationEnvelope, CancellationToken, ValueTask>? awaitTargetReady = null
 ) : ICanonicalRelocationTarget
 {
-    private static readonly TimeSpan DefaultPrepareDeadline = TimeSpan.FromSeconds(30);
-    private readonly Func<CancellationToken, ValueTask> _awaitTargetReady =
-        awaitTargetReady ?? (static _ => ValueTask.CompletedTask);
+    private readonly Func<ZLinkRelocationEnvelope, CancellationToken, ValueTask> _awaitTargetReady =
+        awaitTargetReady ?? (static (_, _) => ValueTask.CompletedTask);
 
     public async ValueTask<ZLinkServiceWireCodec.RelocationReadyRecord> PrepareAsync(
         ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
@@ -30,7 +29,16 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
     )
     {
         ValidateAttempt(prepare, authenticatedSourceNodeRid);
-        await WaitForTargetReadinessAsync(cancellationToken).ConfigureAwait(false);
+        // Host relocation §14: one new-owner lease covers Actor and SPOT
+        // staging. Shutdown waits for accepted admissions before closing targets.
+        if (!drainAdmission.TryEnterActorAdmission(out var ownerAdmission))
+            throw new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.ShuttingDown,
+                "Relocation target admission is sealed for drain."
+            );
+        using var ownerAdmissionLease = ownerAdmission;
+        await WaitForTargetReadinessAsync(prepare, envelope, cancellationToken)
+            .ConfigureAwait(false);
 
         switch (ObjectKind(prepare.Object.Kind))
         {
@@ -191,19 +199,30 @@ internal sealed class ZLinkCanonicalRelocationTargetOwner(
         };
     }
 
-    private async ValueTask WaitForTargetReadinessAsync(CancellationToken cancellationToken)
+    private async ValueTask WaitForTargetReadinessAsync(
+        ZLinkServiceWireCodec.RelocationPrepareRecord prepare,
+        ZLinkRelocationEnvelope envelope,
+        CancellationToken cancellationToken
+    )
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        deadline.CancelAfter(
-            prepareDeadline > TimeSpan.Zero ? prepareDeadline : DefaultPrepareDeadline
-        );
+        var remaining =
+            DateTimeOffset.FromUnixTimeMilliseconds(checked((long)prepare.DeadlineUnixMs))
+            - DateTimeOffset.UtcNow;
+        if (remaining <= TimeSpan.Zero)
+            deadline.Cancel();
+        else
+            deadline.CancelAfter(remaining);
         try
         {
-            await _awaitTargetReady(deadline.Token).ConfigureAwait(false);
+            await _awaitTargetReady(envelope, deadline.Token).ConfigureAwait(false);
+            deadline.Token.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw Unavailable("The relocation target RouteMesh is not ready.");
+            throw Unavailable(
+                "The relocation target RouteMesh or bound Session route is not ready."
+            );
         }
     }
 

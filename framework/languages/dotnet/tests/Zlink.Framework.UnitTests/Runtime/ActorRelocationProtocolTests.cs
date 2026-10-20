@@ -14,6 +14,53 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class ActorRelocationProtocolTests
 {
+    [Fact]
+    public async Task Target_prepare_uses_command_40_deadline_instead_of_local_timeout()
+    {
+        var source = RoutingId.From("source");
+        var target = RoutingId.From("target");
+        var prepare = new ZLinkServiceWireCodec.RelocationPrepareRecord(
+            new(1, 2),
+            1,
+            new("source", 1, source, 1, "v1"),
+            new(target, 1, "target", 1),
+            1,
+            new(1, "Actor", "actor", 1, 1),
+            source,
+            1,
+            0,
+            0,
+            0,
+            1,
+            checked((ulong)DateTimeOffset.UtcNow.AddDays(-1).ToUnixTimeMilliseconds())
+        );
+        var owner = new ZLinkCanonicalRelocationTargetOwner(
+            target,
+            1,
+            new ZLinkDrainAdmissionGate(),
+            awaitTargetReady: (_, token) =>
+                token.IsCancellationRequested
+                    ? ValueTask.FromCanceled(token)
+                    : ValueTask.FromException(
+                        new InvalidOperationException("Command 40 deadline was ignored.")
+                    )
+        );
+        var lease = new ZLinkCanonicalRelocationPreparationLease();
+        var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+            owner
+                .PrepareAsync(
+                    prepare,
+                    new ZLinkRelocationEnvelope(Guid.NewGuid(), 1, ReadOnlyMemory<byte>.Empty, []),
+                    source,
+                    lease,
+                    CancellationToken.None
+                )
+                .AsTask()
+        );
+        Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, failure.Kind);
+        Assert.False(lease.IsPrepared);
+    }
+
     [Theory]
     [InlineData((int)ZLinkObjectMaintenancePolicyKind.Recreate)]
     [InlineData((int)ZLinkObjectMaintenancePolicyKind.Snapshot)]

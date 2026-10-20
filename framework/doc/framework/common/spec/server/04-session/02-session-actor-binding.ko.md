@@ -132,9 +132,19 @@ Session owner는 Actor마다 다음 정보를 하나의 binding으로 보관한�
 | `ActorId`, `ObjectGeneration` | 같은 ID로 다시 만들어진 다른 Actor에게 보내지 않기 위해 사용한다. |
 | `MeshName`, owner `NodeRid` | Bind 이후 relay와 disconnect 통지를 보낼 주소로 사용한다. |
 | `NodeGeneration`, `AuthorityOwnerGeneration`, `OwnerLeaseGeneration` | 재시작 전 node나 이전 owner에게 보내지 않기 위해 검증한다. |
-| Session owner RID와 lifecycle generation, binding generation과 token | 이전 connection이나 교체된 binding의 늦은 message를 거부한다. |
+| Session owner identity(아래 정의), binding generation과 token | 이전 connection이나 교체된 binding의 늦은 message를 거부한다. |
 | [Session sequence](../00-foundation/02-glossary.ko.md#session-sequence) | 같은 session에서 수락한 message의 순서를 보존한다. |
 | Actor slot | STREAM session 안에서 binding 하나를 가리키는 `0`이 아닌 `u16` 주소다. 새 binding에만 아직 발급하지 않은 다음 값을 할당하고 같은 session 안에서 다시 쓰지 않는다. 같은 physical session의 current binding을 다시 bind하거나 `BindOrGet`으로 얻으면 기존 slot을 유지한다. `65535`까지 발급한 session에서 새 binding이 필요하면 기존 binding을 바꾸지 않고 `InvalidOperation`으로 끝낸다. |
+
+**Session owner identity는 Node RID·lifecycle generation·owner ID·owner lease generation 네 값이다.** Owner ID와 owner
+lease generation은 Session owner host의 `(OwnerId, LeaseGeneration)`([Location runtime §3.1](../05-location-relocation/01-location-runtime.ko.md#31-host-process가-다시-시작됐는지-구분한다))이며
+그 node의 MeshNode descriptor에 게시된 값이다. Actor owner는 bind를 수락할 때 이 값을 descriptor에서 얻어 current binding에
+저장한다. Session owner가 다른 node이면 그 peer의 [Peer admission](../00-foundation/02-glossary.ko.md#peer-admission)과
+RID·lifecycle generation이 일치하고 [Location runtime §4.1](../05-location-relocation/01-location-runtime.ko.md#41-대상-descriptor의-owner-lease-검증)의
+owner lease 검증을 통과한 descriptor를, 같은 node이면 자기 descriptor를 사용한다. 그런 descriptor가 없으면 그 operation을
+`Unavailable`로 거부한다. 이 identity를 담는 command 42·51·54는
+저장한 값을 그대로 보내고, 받는 Session owner는 자기 현재 값과 정확히 비교한다. 아래 binding identity는 이 중 Node RID와
+lifecycle generation만 사용하며, owner ID와 owner lease generation은 command 42·51·54의 fence 값이다.
 
 Binding identity는 session owner Node RID, 그 node의 lifecycle generation과
 owner-local binding generation을 함께 사용한다. Binding generation의 대소 비교는 같은
@@ -187,6 +197,19 @@ caller 측 lookup·projection이 실어 온 lease 사본과 Actor owner의 curre
 다르다는 이유로 bind를 거부하지 않는다. lease는 route fence
 검증([routing](../03-spot-actor/08-routing.ko.md))의 관심사이고, bind 승인에까지 사용하면
 파생 사본 불일치가 stale 판정 근거가 되어 §8.1의 판정 권위 원칙과 충돌한다.
+
+**Actor owner는 승인한 요청을 current binding과 한 번 비교해 결과를 정한다.** binding generation의
+대소는 [§4](#4-binding이-잇는-값과-보관하는-정보)대로 같은 Session owner lifecycle 안에서만 비교한다.
+
+| 요청과 current binding의 관계 | 결과 |
+|---|---|
+| Binding identity(§4)와 SessionRid가 모두 같다. | current를 유지하고 성공한다. |
+| 첫 행에 해당하지 않고, Session owner Node RID·lifecycle generation이 같으며 요청 binding generation이 current 이하다. | current를 유지하고 [§12](#12-실패와-오류)의 binding fence stale(`Unavailable`)로 끝난다. |
+| 그 밖의 경우(current 없음, 같은 Session owner lifecycle의 더 큰 generation, 다른 Session owner lifecycle) | 요청 identity를 current로 등록한다([§6](#6-rebind와-이전-연결-교체)). |
+
+`boundSessionBind(38)` 성공 reply의 tail은 이 비교에서 수락한 binding의 binding generation과
+`AuthorityOwnerGeneration`이다. 성공은 첫 행이거나 요청 identity를 등록한 경우뿐이므로 두 값은
+요청 값과 같다. Session owner는 이 두 값으로 binding을 commit한다.
 
 Session에서 Actor로 들어가는 payload는 등록된 binding generation과
 session sequence를 포함한 `actorSend(24)`
@@ -307,6 +330,19 @@ Bound-session API는 current binding으로 one-way push를 보내거나 connecti
 요청한다. 임의의 session을 지정하는 global proxy는 제공하지 않는다. Disconnect는
 binding을 해제하지만 Actor를 destroy하거나 Spot membership을 바꾸지 않는다.
 
+**Connection close는 Session owner가 수행한다.** Actor가 current binding의 close를 요청하면 Actor owner는 current
+binding이 가리키는 Session owner identity, SessionRid, binding generation과
+ActorId·ObjectGeneration을 보존해 `boundSessionClose(54)`에 담아 Session owner에 보낸다. Session owner가 같은
+process에 있어도 같은 판정을 거친다. Session owner의 binding aggregate는 §2의 binding 검증을 한 번 수행하고, 요청의
+전체 identity가 current binding과 일치할 때만 그 session의 physical connection close를 시작한다. 불일치는 `Unavailable`로
+끝내며 다른 binding이나 connection으로 대상을 바꾸지 않는다. Actor route의 발신 권한은 기존 transport·authority 경계가
+검증하며, Session owner는 Actor authority를 다시 조회하지 않는다. Relocation seal과 route 적용은 유효한 current binding의
+close를 지연시키지 않는다.
+
+Close reply는 transport close terminal을 전달하며, 이 close가 일으킨 §7의 disconnect callback·tombstone·local cleanup
+완료를 기다리지 않는다. Binding 정리와 Actor 통지는 §7이 한 번 수행하며, close 요청 경로는 binding을 따로 해제하지
+않는다. Command 54의 request/reply는 기존 correlation·deadline·취소·오류 terminal 계약을 따른다.
+
 이 절과 §8.2가 사용하는 control command는 다음과 같다.
 
 | Command | 이름 | 오가는 방향과 용도 | 완료 방식 |
@@ -315,6 +351,7 @@ binding을 해제하지만 Actor를 destroy하거나 Spot membership을 바꾸�
 | 24 | `actorSend` | Session owner → Actor owner: session→Actor payload(bound-session tail 포함) | send 또는 request relay — 기존 correlation·deadline 계약 그대로 |
 | 36 | `boundSessionSend` | Actor owner → Session owner: Actor→session push | send |
 | 51 | `boundSessionReplaced` | Actor owner → 이전 Session owner: binding 교체 통지 | one-way, 최대 1회 |
+| 54 | `boundSessionClose` | Actor owner → Session owner: current binding의 physical connection close 요청 | request/reply, terminal 1회 |
 | 42 | `sessionRelocationSeal` | Relocation coordinator → Session owner: 이동 대상 binding에 seal 설치 요청 | request |
 | 43 | `sessionRelocationSealed` | Session owner → Relocation coordinator: seal 설치 결과 또는 exact binding 부재(`sealResult`, §8.3) | reply |
 | 44 | `sessionRelocationRoute` | Target runtime 또는 relocation coordinator → Session owner: route 적용 또는 abort | one-way(send), 응답 없음 |
@@ -351,9 +388,8 @@ sequenceDiagram
 ```
 
 Framework는 교체된 이전 binding에 `boundSessionReplaced(51)` one-way record를
-최대 한 번 적용한다. Record는 Actor authority source fence와 이전 session owner의 Node
-RID·lifecycle generation·owner ID·owner lease generation·session RID·retired binding
-generation을 함께 전달한다. 보내는 node는 record의 Actor authority target과 일치해야
+최대 한 번 적용한다. Record는 Actor authority source fence와 이전 session owner의 Session
+owner identity(§4)·session RID·retired binding generation을 함께 전달한다. 보내는 node는 record의 Actor authority target과 일치해야
 한다. 받는 node는 이전 session owner identity의 모든 값이 현재 교체 대상과 일치할
 때만 session의 Actor 중복 연결 callback을 실행한다. Actor authority source fence는
 받는 node가 local Actor를 찾는 용도로 사용하지 않는다.
@@ -549,7 +585,7 @@ message를 source route로 다시 제출하며 reply를 만들지 않는다. Rel
 
 ### 8.2 Control message 42·43·44
 
-Command 42와 43은 Session seal의 설치 request와 reply를 전달한다. Command 43은 seal 설치 결과(`sealResult`)만 전달하며 Session message sequence나 high-water는 포함하지 않는다. `sealResult`는 `sealed`(1) 또는 `bindingAbsent`(2)이고, `bindingAbsent`의 판정과 처리는 §8.3이 소유한다.
+Command 42와 43은 Session seal의 설치 request와 reply를 전달한다. Command 43은 seal 설치 결과(`sealResult`)만 전달하며 Session message sequence나 high-water는 포함하지 않는다. `sealResult`는 `sealed`(1) 또는 `bindingAbsent`(2)이고, `bindingAbsent`의 판정과 처리는 §8.3이 소유한다. **Session owner가 command 42를 거부하면 command 43을 보내지 않는다.** 거부는 §4의 descriptor 부재와 §8.3의 불일치·protocol error다. Session owner는 거부를 [message flow](../06-observability/03-message-flow-tracing.ko.md)에 남기고, coordinator는 아래 "실패"의 seal 대기 deadline으로 그 participant의 실패를 확정한다.
 
 Command 44는 target runtime의 commit 또는 relocation coordinator의 relay-ready accepted
 전 abort를 전달하는 one-way control이다. **Command 44는 response 없이 한 번만 제출하고
@@ -601,7 +637,7 @@ Store CAS가 결정했으므로 Session owner가 Store나 Actor authority mirror
 |---|---|
 | Seal 설치 | §8.1대로 seal을 설치하고 command 43을 `sealResult = sealed`로 반환한다. |
 | Exact binding 부재 | Seal, held message, seal timeout을 만들지 않고 command 43을 `sealResult = bindingAbsent`로 반환한다. |
-| 불일치 | 기존대로 거부한다. 부재로 바꿔 반환하지 않는다. |
+| 불일치 | 거부한다(§8.2, command 43 없음). 부재로 바꿔 반환하지 않는다. |
 
 `bindingAbsent`는 seal을 설치했다는 뜻이 아니라 seal할 current binding이 없다는 뜻이다. 이 결과는
 Session binding과 seal에 관한 결과만 나타내며, disconnect callback의 진행 상태를 알려 주지 않는다.
@@ -654,7 +690,7 @@ identity 단위로 계속 소유한다. 통지는 일반 Actor message와 같이
 수락했으면 saved work로 target에 옮겨지고, capture 뒤에 도착하면 Message Follow로 target에 전달된다.
 Actor owner는 §7의 identity 비교로 통지를 판정한다. Coordinator는 disconnect 통지를 새로 만들거나 다시 제출하지 않는다.
 
-**실패.** Command 42가 불일치로 거부되거나 seal 대기 deadline에 도달하면 relocation은 실패한다.
+**실패.** Seal 대기 deadline까지 command 43을 받지 못하면 relocation은 실패한다. Session owner의 거부(§8.2)도 이 경우다.
 복원 대상은 이미 시작한 모든 participant의 capture와, 이미 `sealed`로 확인한 participant의 seal이다.
 복원 순서는 §8.1의 abort 순서를 따른다. Durable abort와 source queue 복원을 먼저 확정한 뒤 matching
 command 44 abort를 보낸다

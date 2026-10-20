@@ -96,6 +96,19 @@ task_t<void> actor_transfer_coordinator_t::wait_for_source_completion (std::stri
         co_await completion->task ();
 }
 
+task_t<void> actor_transfer_coordinator_t::wait_for_source_completions ()
+{
+    const auto keys = co_await _lane.run_task ([this] {
+        std::vector<std::string> result;
+        result.reserve (_moves.size ());
+        for (const auto &[key, move] : _moves)
+            result.push_back (key);
+        return result;
+    });
+    for (const auto &key : keys)
+        co_await wait_for_source_completion (key);
+}
+
 void actor_transfer_coordinator_t::erase_move_on_lane (const std::string &actor_key)
 {
     auto move = _moves.extract (actor_key);
@@ -1247,10 +1260,6 @@ actor_transfer_cleanup_snapshot_t actor_transfer_coordinator_t::cleanup_expired_
             found = _completed_admissions.erase (found);
         else
             ++found;
-    }
-    for (const auto &[key, move] : _moves) {
-        if (is_source_remote (move))
-            snapshot.source_remote_transfers.emplace_back (key, move.transfer_id);
     }
     for (const auto &key : blocked_candidates) {
         if (_moves.contains (key))

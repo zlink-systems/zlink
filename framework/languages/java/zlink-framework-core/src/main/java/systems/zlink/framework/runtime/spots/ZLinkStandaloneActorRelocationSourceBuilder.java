@@ -164,7 +164,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                 validateDirectSourceAndTarget(
                                                                         owned, descriptors, goal),
                                                                 directTarget(descriptors, goal),
-                                                                sessionRoute(owned, descriptors))))
+                                                                sessionRoute(owned))))
                 .thenCompose(
                         admission ->
                                 validateDirectTargetSpot(goal, cancellation)
@@ -226,7 +226,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                                         owned,
                                                                         descriptors,
                                                                         targetPolicy),
-                                                                sessionRoute(owned, descriptors))));
+                                                                sessionRoute(owned))));
     }
 
     private CompletionStage<PreparedSource> sealAndCapture(
@@ -234,6 +234,11 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
             Admission admission,
             ZLinkActorJoinRelocationPort.Goal directJoin,
             ZLinkStoreCancellation cancellation) {
+        var metrics =
+                new ZLinkRelocationMetricOperation(
+                        meshName,
+                        systems.zlink.framework.locations.ZLinkPlacementObjectKind.ACTOR,
+                        admission.owned().snapshotPolicy());
         return sealAtTurnBoundary(
                         admission.owned().actorId(),
                         directJoin == null ? null : directJoin.activeTurnSeal(),
@@ -245,6 +250,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                         new IllegalStateException(
                                                 "Actor relocation queue cannot be sealedResult"));
                             }
+                            long sealedNanos = System.nanoTime();
+                            metrics.sealed(sealedNanos);
                             ZLinkSerialExecutionQueue.RelocationSeal seal =
                                     sealedResult.orElseThrow();
                             byte[] timerEnvelope =
@@ -406,10 +413,12 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                 return sealSessionRoute(
                                                                 admission.owned(),
                                                                 relocationId,
-                                                                capturedRoute)
+                                                                capturedRoute,
+                                                                admission.target())
                                                         .thenApply(
                                                                 sessionRoute ->
                                                                         new PreparedSource(
+                                                                                metrics,
                                                                                 locations,
                                                                                 actors,
                                                                                 relocationReplies,
@@ -477,6 +486,10 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                         .thenCompose(
                                                                 ignored -> failed(unwrap(failure)));
                                             });
+                        })
+                .whenComplete(
+                        (prepared, failure) -> {
+                            if (failure != null) metrics.complete(null, failure);
                         });
     }
 
@@ -822,7 +835,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
     private CompletionStage<Optional<SealedSessionRoute>> sealSessionRoute(
             Owned actor,
             UUID relocationId,
-            Optional<ZLinkSpotRetireControl.SessionRouteFence> captured) {
+            Optional<ZLinkSpotRetireControl.SessionRouteFence> captured,
+            ZLinkMeshNodeDescriptor targetNode) {
         if (captured.isEmpty()) {
             return CompletableFuture.completedFuture(Optional.empty());
         }
@@ -862,7 +876,9 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                 route.sessionOwnerId(),
                                 route.sessionOwnerLeaseGeneration(),
                                 route.sessionRid(),
-                                route.bindingGeneration()));
+                                route.bindingGeneration()),
+                        targetNode.rid(),
+                        targetNode.lifecycleGeneration());
         //  The command 43 ACK completes on the mesh transport dispatch thread;
         //  staging the relocation root must not run there.
         return sessionSealer
@@ -936,38 +952,27 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
         return Optional.empty();
     }
 
-    private Optional<ZLinkSpotRetireControl.SessionRouteFence> sessionRoute(
-            Owned actor, List<ZLinkMeshNodeDescriptor> descriptors) {
-        var knownRoute = actors.boundSessionRoute(actor.actorId());
-        return knownRoute.map(
-                route -> {
-                    ZLinkMeshNodeDescriptor owner =
-                            descriptors.stream()
-                                    .filter(
-                                            value ->
-                                                    value.rid().equals(route.sessionOwnerNodeRid()))
-                                    .findFirst()
-                                    .orElseThrow(
-                                            () ->
-                                                    new IllegalStateException(
-                                                            "bound Session owner descriptor is"
-                                                                    + " unavailable: "
-                                                                    + route.sessionOwnerNodeRid()));
-                    return new ZLinkSpotRetireControl.SessionRouteFence(
-                            actor.actorId(),
-                            actor.snapshot().objectGeneration(),
-                            actor.snapshot().authorityOwnerGeneration(),
-                            actor.snapshot().storeVersion(),
-                            route.sessionOwnerNodeRid(),
-                            owner.lifecycleGeneration(),
-                            owner.ownerId(),
-                            owner.leaseGeneration(),
-                            route.sessionRid(),
-                            route.bindingGeneration());
-                });
+    // Session-Actor binding §4: command 42 carries the Session owner identity stored with the
+    // binding at bind; the relocation does not read the descriptor again.
+    private Optional<ZLinkSpotRetireControl.SessionRouteFence> sessionRoute(Owned actor) {
+        return actors.boundSessionRoute(actor.actorId())
+                .map(
+                        route ->
+                                new ZLinkSpotRetireControl.SessionRouteFence(
+                                        actor.actorId(),
+                                        actor.snapshot().objectGeneration(),
+                                        actor.snapshot().authorityOwnerGeneration(),
+                                        actor.snapshot().storeVersion(),
+                                        route.sessionOwnerNodeRid(),
+                                        route.sessionOwnerNodeGeneration(),
+                                        route.sessionOwnerId(),
+                                        route.sessionOwnerLeaseGeneration(),
+                                        route.sessionRid(),
+                                        route.bindingGeneration()));
     }
 
     static final class PreparedSource {
+        final ZLinkRelocationMetricOperation metrics;
         private final ZLinkLocationRepository locations;
         private final ZLinkActorSessionCoordinator actors;
         private final ZLinkSpotRuntime relocationReplies;
@@ -1000,6 +1005,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                         retained) {}
 
         private PreparedSource(
+                ZLinkRelocationMetricOperation metrics,
                 ZLinkLocationRepository locations,
                 ZLinkActorSessionCoordinator actors,
                 ZLinkSpotRuntime relocationReplies,
@@ -1013,6 +1019,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                 byte[] timerEnvelope,
                 ZLinkSpotRetireControl.StageRequest stageRequest,
                 String targetSpotId) {
+            this.metrics = metrics;
             this.locations = locations;
             this.actors = actors;
             this.relocationReplies = relocationReplies;
@@ -1059,34 +1066,6 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
 
         long sourceAuthorityOwnerGeneration() {
             return owned.snapshot().authorityOwnerGeneration();
-        }
-
-        CompletionStage<Optional<Long>> committedTargetAuthorityOwnerGeneration() {
-            return locations
-                    .read(owned.authorityKey(), () -> false)
-                    .thenApply(
-                            read -> {
-                                if (!(read instanceof ZLinkAuthoritySnapshot snapshot)
-                                        || !isTargetOwner(snapshot)) {
-                                    return Optional.empty();
-                                }
-                                boolean targetPayload =
-                                        new ZLinkActorAuthorityPayloadCodec()
-                                                .decode(snapshot.payload())
-                                                .filter(
-                                                        value ->
-                                                                value.nodeRid().equals(target.rid())
-                                                                        && value.nodeGeneration()
-                                                                                == target
-                                                                                        .lifecycleGeneration()
-                                                                        && value.currentSpotId()
-                                                                                .equals(
-                                                                                        targetSpotId))
-                                                .isPresent();
-                                return targetPayload
-                                        ? Optional.of(snapshot.authorityOwnerGeneration())
-                                        : Optional.empty();
-                            });
         }
 
         private boolean isTargetOwner(ZLinkAuthoritySnapshot snapshot) {
@@ -1197,7 +1176,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                             () -> {
                                                 if (terminal || committed)
                                                     throw new IllegalStateException(
-                                                            "Actor relocation relay boundary is terminal");
+                                                            "Actor relocation relay boundary is"
+                                                                    + " terminal");
                                                 return relayed;
                                             }))
                     .thenCompose(relayed -> relayJournal(relayed, client, timeout));
@@ -1428,7 +1408,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                                     relocationReplies
                                                             .closeActorTimersAfterRelocation(
                                                                     owned.actorId())),
-                            () -> actors.completeRelocationSource(List.of(owned.actorId()))));
+                            () -> actors.retireCommittedRelocationSource(owned.actorId())));
         }
 
         /**

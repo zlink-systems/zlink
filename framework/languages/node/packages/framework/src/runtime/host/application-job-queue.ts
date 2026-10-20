@@ -149,6 +149,10 @@ export class ApplicationJobQueuePermit implements ApplicationJobPermitPort {
     return true;
   }
 
+  reacquire(signal: AbortSignal): Promise<ApplicationJobPermitPort> {
+    return this.owner.acquire(signal, this.origin);
+  }
+
   releaseStorage(): void {
     if (this.storage === undefined || this.state === 'idle') return;
     if (this.state !== 'released')
@@ -178,6 +182,10 @@ export class ApplicationJobQueuePermit implements ApplicationJobPermitPort {
     this.owner.releasePermit(this);
   }
 
+  releaseUnqueued(): void {
+    if (this.state === 'reserved') this.owner.releasePermit(this);
+  }
+
   takeReleaseState(): 'reserved' | 'queued' | undefined {
     if (this.state === 'released' || this.state === 'idle') return undefined;
     const state = this.state;
@@ -205,10 +213,21 @@ class ApplicationJobReceiveRotation implements ApplicationJobReceiveRotationPort
 
   reserve(): void {
     this.releaseUnused();
-    const count = this.owner.receiveRotationCapacity(this.capacity);
-    if (count === 0) return;
-    this.granted = count;
-    this.owner.reserveReceiveRotation(count);
+    this.granted = this.owner.tryReserveCount(this.capacity) ?? 0;
+  }
+
+  async acquire(signal: AbortSignal): Promise<void> {
+    this.releaseUnused();
+    this.granted = await new Promise<number>((resolve, reject) => {
+      const count = this.owner.acquireCountOrResume(
+        resolve,
+        reject,
+        signal,
+        this.origin,
+        this.capacity
+      );
+      if (count !== undefined) resolve(count);
+    });
   }
 
   take(): ApplicationJobQueuePermit | undefined {
@@ -233,7 +252,8 @@ class ApplicationJobReceiveRotation implements ApplicationJobReceiveRotationPort
 
 interface CapacityWaiter {
   readonly origin: ApplicationJobOrigin;
-  readonly resolve: (permit: ApplicationJobQueuePermit) => void;
+  readonly requested: number;
+  readonly resolve: (count: number) => void;
   readonly reject: (reason: unknown) => void;
   readonly signal?: AbortSignal;
   readonly abort: () => void;
@@ -295,19 +315,15 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
   createReceiveRotation(
     capacity: number,
     origin: ApplicationJobOrigin
-  ): ApplicationJobReceiveRotationPort {
+  ): ApplicationJobReceiveRotation {
     if (!Number.isSafeInteger(capacity) || capacity < 1)
       throw new RangeError('Receive capacity must be positive.');
     return new ApplicationJobReceiveRotation(this, capacity, origin);
   }
 
-  receiveRotationCapacity(capacity: number): number {
-    if (this.waiters.length !== 0) return 0;
-    return Math.min(capacity, this.limitCount - this.permitsInUse());
-  }
-
-  reserveReceiveRotation(count: number): void {
-    this.reserveSupply(count);
+  tryReserveCount(requested: number): number | undefined {
+    if (this.waiters.length !== 0 || this.permitsInUse() === this.limitCount) return undefined;
+    return this.reserveCount(requested);
   }
 
   registerReceiveFlowTarget(
@@ -368,17 +384,34 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
     signal: AbortSignal | undefined,
     origin: ApplicationJobOrigin
   ): ApplicationJobQueuePermit | undefined {
+    const count = this.acquireCountOrResume(
+      () => resume(new ApplicationJobQueuePermit(this, origin)),
+      reject,
+      signal,
+      origin,
+      1
+    );
+    return count === undefined ? undefined : new ApplicationJobQueuePermit(this, origin);
+  }
+
+  acquireCountOrResume(
+    resume: (count: number) => void,
+    reject: (reason: unknown) => void,
+    signal: AbortSignal | undefined,
+    origin: ApplicationJobOrigin,
+    requested: number
+  ): number | undefined {
     if (signal?.aborted === true) {
       reject(abortReason(signal));
       return undefined;
     }
-    if (this.waiters.length === 0 && this.permitsInUse() < this.limitCount) {
-      return this.reserve(origin);
-    }
+    const count = this.tryReserveCount(requested);
+    if (count !== undefined) return count;
 
-    new Promise<ApplicationJobQueuePermit>((resolve, reject) => {
+    new Promise<number>((resolve, reject) => {
       const waiter: CapacityWaiter = {
         origin,
+        requested,
         resolve,
         reject,
         signal,
@@ -507,12 +540,10 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
     if (evaluatePressure) this.evaluatePressure();
   }
 
-  private reserve(
-    origin: ApplicationJobOrigin,
-    evaluatePressure = true
-  ): ApplicationJobQueuePermit {
-    this.reserveSupply(1, evaluatePressure);
-    return new ApplicationJobQueuePermit(this, origin);
+  private reserveCount(requested: number, evaluatePressure = true): number {
+    const count = Math.min(requested, this.limitCount - this.permitsInUse());
+    this.reserveSupply(count, evaluatePressure);
+    return count;
   }
 
   private drainWaiters(): void {
@@ -522,7 +553,7 @@ export class ApplicationJobQueue implements ApplicationJobQueuePort {
       waiter.active = false;
       waiter.signal?.removeEventListener('abort', waiter.abort);
       this.recordCompletedWait(waiter);
-      waiter.resolve(this.reserve(waiter.origin, false));
+      waiter.resolve(this.reserveCount(waiter.requested, false));
     }
   }
 

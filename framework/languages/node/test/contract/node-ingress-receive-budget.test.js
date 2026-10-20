@@ -4,6 +4,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 const { ZLinkChannelReceiveLoop } = require('../../packages/framework/dist/runtime/channels/channel-receive-loops');
 
+const { ApplicationJobQueue, resolveApplicationJobQueueConfiguration } = require('../../packages/framework/dist/runtime/host/application-job-queue');
+
 for (const [bytes, expected] of [[1, 64], [2 * 1024 * 1024, 2], [4 * 1024 * 1024, 1]]) {
   test(`receive budget yields after ${expected} records of ${bytes} bytes without BigInt allocation`, async t => {
     let received = 0;
@@ -22,7 +24,7 @@ for (const [bytes, expected] of [[1, 64], [2 * 1024 * 1024, 2], [4 * 1024 * 1024
       undefined,
       () => true,
       { wait() { readinessChecks++; return true; }, dispose() {} },
-      { acquire() { return Promise.resolve({ releaseAfterInternalProcessing() {} }); } }
+      new ApplicationJobQueue(resolveApplicationJobQueueConfiguration())
     );
     const bigint = BigInt;
     t.mock.method(global, 'BigInt', value => { conversions++; return bigint(value); });
@@ -33,7 +35,7 @@ for (const [bytes, expected] of [[1, 64], [2 * 1024 * 1024, 2], [4 * 1024 * 1024
       assert.equal(received, expected);
       assert.equal(closed, expected);
       assert.equal(conversions, 0);
-      assert.equal(readinessChecks, received);
+      assert.equal(readinessChecks, 1);
     } finally {
       stop.abort();
       await loop.stop();
