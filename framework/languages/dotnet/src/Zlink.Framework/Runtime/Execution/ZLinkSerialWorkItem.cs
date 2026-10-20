@@ -178,17 +178,21 @@ internal sealed class ZLinkSerialWorkItem
 
             callbackTask = operation.AsTask();
             turn.BindOwnerTask(callbackTask);
-            var bounded = callbackTask.WaitAsync(cancellationToken);
             // Cancellation still joins the callback. Keep observing its suspension
             // so that cleanup cannot retain a gate the yielded callback needs.
             var completed = await Task.WhenAny(callbackTask, turn.Suspended).ConfigureAwait(false);
             if (ReferenceEquals(completed, turn.Suspended))
             {
-                _ = CompleteAfterSuspensionAsync(bounded, callbackTask, onUnhandledException);
+                _ = CompleteAfterSuspensionAsync(
+                    callbackTask.WaitAsync(cancellationToken),
+                    callbackTask,
+                    onUnhandledException
+                );
                 return ZLinkSerialWorkItemResult.Suspended;
             }
 
-            await bounded.ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            await callbackTask.ConfigureAwait(false);
             ReleaseTerminal();
             _completion!.TrySetResult();
             return ZLinkSerialWorkItemResult.Completed;
