@@ -32,6 +32,222 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed partial class EntrySpotActorDispatchTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Owned_disconnect_finishes_callback_and_the_next_actor_record(bool joined)
+    {
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            new CapturingSpotNode(),
+            entrySpotType: typeof(OwnedDisconnectEntrySpot),
+            userSpotType: typeof(OwnedDisconnectSpot)
+        );
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+            if (joined)
+            {
+                var created = await runtime.GetOrCreateAsync<OwnedDisconnectSpot>(
+                    "owned-disconnect-spot"
+                );
+                Assert.True(
+                    (
+                        await GetSpotActivation(runtime, created.Spot.SpotId)
+                            .JoinActorAsync(actor, ZLinkMessage.Empty, default)
+                    ).Accepted
+                );
+            }
+            state.BindSession(
+                RoutingId.From("session-owner"),
+                RoutingId.From("session"),
+                "binding",
+                objectGeneration: actorRef.Generation,
+                authorityOwnerGeneration: 1,
+                meshName: ZLinkMeshName.FromBoundary("entry", "mesh"),
+                ownerLeaseGeneration: 1,
+                bindingGeneration: 7,
+                sessionOwnerNodeGeneration: 2
+            );
+            var frame = new ZLinkSpotActorFrame(
+                ZLinkApplicationJobOrigin.Remote,
+                actorRef,
+                actorRef,
+                RoutingId.From("message-follow-hop"),
+                RoutingId.From("hop-session"),
+                7,
+                ZLinkActorBoundSessionRelay.ActorRecvInfoNoBind,
+                new ZLinkBackendActorRouteContext(default, 1, 0, 0, 0),
+                new ZlinkStreamHeader(
+                    ZlinkStreamMessageKind.Request,
+                    ZlinkStreamCodec.Raw,
+                    ZlinkStreamHeaderFlags.HasRequestSeq,
+                    new ZlinkStreamRequestSeq(7),
+                    ZLinkRemoteActorJoinPackets.SessionDisconnectedPacketName,
+                    ZlinkStreamMetadata.Empty
+                ),
+                Message.From(
+                    ZLinkActorBoundSessionRelay.EncodeSessionDisconnected(
+                        RoutingId.From("session-owner"),
+                        2,
+                        7
+                    )
+                ),
+                requestSource: AcceptedRequestSource(RoutingId.From("message-follow-hop"))
+            );
+            var pipeline = new ZLinkActorInboundPipeline(
+                runtime,
+                new ZLinkEntrySpotActorInboundEndpoint(runtime)
+            );
+            var replies = new List<ZLinkActorReply?>();
+            var terminals = state.AdmitDurablePrefix([
+                new ZLinkActorDurableRecord(async ct =>
+                {
+                    using var dispatch = state.EnterDispatch();
+                    await pipeline.DispatchOwnedFrameAsync(
+                        new([frame]),
+                        (_, reply, _) =>
+                        {
+                            replies.Add(reply);
+                            return ValueTask.CompletedTask;
+                        },
+                        deadline.Token
+                    );
+                }),
+                new ZLinkActorDurableRecord(async ct =>
+                {
+                    using var dispatch = state.EnterDispatch();
+                    await pipeline.DispatchOwnedFrameAsync(
+                        ZLinkActorHandoffIngress.CaptureMovingFrames(
+                            ZLinkApplicationJobOrigin.Remote,
+                            runtime,
+                            CreateActorRequestParts(actorRef, "after-disconnect", "next", 0, 0)
+                        ),
+                        (_, reply, _) =>
+                        {
+                            replies.Add(reply);
+                            return ValueTask.CompletedTask;
+                        },
+                        deadline.Token
+                    );
+                }),
+            ]);
+            await Task.WhenAll(terminals).WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.Equal(1, actor.OwnedDisconnectCalls);
+            Assert.False(state.TryGetBoundSession(out _));
+            Assert.Equal(2, replies.Count);
+            Assert.All(
+                replies,
+                reply => Assert.Equal(ZlinkStreamMessageKind.Response, reply?.Kind)
+            );
+        }
+        finally
+        {
+            deadline.Cancel();
+            await runtime.StopAsync(default);
+        }
+    }
+
+    private sealed class OwnedDisconnectEntrySpot(IZLinkEntrySpotContext context)
+        : IZLinkEntrySpot<ProbeActor>
+    {
+        public IZLinkEntrySpotContext Context { get; } = context;
+
+        public void Configure() =>
+            Context.Handlers.AddActorPacket<OwnedDisconnectNextHandler, ProbeActor>(
+                "after-disconnect"
+            );
+
+        public ValueTask OnJoinedActorAsync(
+            ProbeActor actor,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+
+        public ValueTask OnLeaveActorAsync(ProbeActor actor, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnDisconnectActorAsync(
+            ProbeActor actor,
+            CancellationToken cancellationToken
+        )
+        {
+            actor.OwnedDisconnectCalls++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class OwnedDisconnectNextHandler
+        : IZLinkEntrySpotActorRequestHandler<
+            OwnedDisconnectEntrySpot,
+            ProbeActor,
+            string,
+            ProbeReply
+        >
+    {
+        public ValueTask<ProbeReply> HandleAsync(
+            OwnedDisconnectEntrySpot spot,
+            ProbeActor actor,
+            IZLinkMessageContext context,
+            string request,
+            CancellationToken cancellationToken
+        )
+        {
+            Assert.Equal(1, actor.OwnedDisconnectCalls);
+            return ValueTask.FromResult(new ProbeReply(request));
+        }
+    }
+
+    private sealed class OwnedDisconnectSpot(IZLinkSpotContext context) : IZLinkSpot<ProbeActor>
+    {
+        public IZLinkSpotContext Context { get; } = context;
+
+        public void Configure() =>
+            Context.Handlers.AddActorPacket<OwnedDisconnectSpotNextHandler, ProbeActor>(
+                "after-disconnect"
+            );
+
+        public ValueTask<ZLinkSpotActorJoinResult> OnActorJoinAsync(
+            string actorId,
+            ZLinkMessage request,
+            CancellationToken cancellationToken
+        ) => ValueTask.FromResult(ZLinkSpotActorJoinResult.Accept());
+
+        public ValueTask OnJoinedActorAsync(
+            ProbeActor actor,
+            CancellationToken cancellationToken
+        ) => ValueTask.CompletedTask;
+
+        public ValueTask OnLeaveActorAsync(ProbeActor actor, CancellationToken cancellationToken) =>
+            ValueTask.CompletedTask;
+
+        public ValueTask OnDisconnectActorAsync(
+            ProbeActor actor,
+            CancellationToken cancellationToken
+        )
+        {
+            Assert.Equal(Context.SpotId, ZLinkSpotAmbientContext.CurrentOrDefault?.SpotId);
+            actor.OwnedDisconnectCalls++;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class OwnedDisconnectSpotNextHandler
+        : IZLinkSpotActorRequestHandler<OwnedDisconnectSpot, ProbeActor, string, ProbeReply>
+    {
+        public ValueTask<ProbeReply> HandleAsync(
+            OwnedDisconnectSpot spot,
+            ProbeActor actor,
+            IZLinkMessageContext context,
+            string request,
+            CancellationToken cancellationToken
+        )
+        {
+            Assert.Equal(1, actor.OwnedDisconnectCalls);
+            return ValueTask.FromResult(new ProbeReply(request));
+        }
+    }
+
+    [Theory]
     [InlineData("same", 1, false)]
     [InlineData("other-rid", 0, false)]
     [InlineData("other-owner-generation", 0, false)]
@@ -12239,6 +12455,8 @@ public sealed partial class EntrySpotActorDispatchTests
     internal sealed class ProbeActor(string actorId, IZLinkActorContext? context = null)
         : IZLinkActor
     {
+        internal int OwnedDisconnectCalls { get; set; }
+
         // Test-only convenience identity for dispatch fixtures that do not create a runtime Context.
         public string ActorId { get; } = actorId;
 
