@@ -10622,15 +10622,20 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         );
     }
 
-    private async ValueTask<IReadOnlyList<Message>> RequestDirectWireAsync(
+    private ValueTask<IReadOnlyList<Message>> RequestDirectWireAsync(
         RoutingId target,
         IReadOnlyList<Message> messages,
         TimeSpan timeout,
         CancellationToken cancellationToken,
         ZLinkServiceLiveness? admission = null,
         ZLinkRequestAdmission? requestAdmission = null
-    ) =>
-        await RequestDirectWireAsync(
+    )
+    {
+        try
+        {
+            // This overload only forwards the reply observation owned below.
+            // Keep submission failures on the returned asynchronous result.
+            return RequestDirectWireAsync(
                 target,
                 messages,
                 timeout,
@@ -10638,8 +10643,13 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 cancellationToken,
                 admission,
                 requestAdmission
-            )
-            .ConfigureAwait(false);
+            );
+        }
+        catch (Exception failure)
+        {
+            return ValueTask.FromException<IReadOnlyList<Message>>(failure);
+        }
+    }
 
     private ValueTask<IReadOnlyList<Message>> RequestDirectWireAsync(
         RoutingId target,
