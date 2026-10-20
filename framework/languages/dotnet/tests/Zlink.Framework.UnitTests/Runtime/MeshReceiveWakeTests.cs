@@ -188,6 +188,135 @@ public sealed class MeshReceiveWakeTests
         }
     }
 
+    [Fact]
+    public async Task RawIngressAddsNoAllocationToTheReceivedContainer()
+    {
+        await using var inner = Systems.Zlink.Zlink.CreateContext();
+        var context = new EmptyIngressContext(inner);
+        var poller = new ControlledReceivePoller();
+        var node = new ZLinkManagedMeshNode(
+            context,
+            "ingress-allocation",
+            receivePollerFactory: () => poller
+        );
+        node.SetRoutingId(RoutingId.From("ingress-allocation"));
+        node.Start();
+        try
+        {
+            await poller.FirstWait.Task.WaitAsync(CompletionBound);
+            var router = Assert.IsType<EmptyIngressRouter>(context.Router);
+            // The real receive owner is held before Wait. Its existing internal
+            // drain seam runs on this thread against a public socket adapter.
+            for (var index = 0; index < 128; index++)
+            {
+                router.Remaining = 1;
+                do node.DrainRawSocket(CancellationToken.None);
+                while (router.Remaining != 0);
+            }
+            const int iterations = 1000;
+            var calls = router.Calls;
+            var start = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < iterations; index++)
+            {
+                router.Remaining = 1;
+                do node.DrainRawSocket(CancellationToken.None);
+                while (router.Remaining != 0);
+            }
+            var actual = GC.GetAllocatedBytesForCurrentThread() - start;
+            Assert.Equal(iterations, router.Accepted - 128);
+            Assert.True(router.Calls - calls >= iterations);
+            // Match the number of receipt containers the bounded drain really
+            // attempted; no platform-specific object size is embedded here.
+            start = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < router.Calls - calls; index++)
+            {
+                using var receipt = Received.Create();
+                if (index < iterations)
+                    _ = receipt.Parts;
+                _ = receipt.RoutingId;
+            }
+            var baseline = GC.GetAllocatedBytesForCurrentThread() - start;
+            Assert.True(
+                actual == baseline,
+                $"ingress={actual}B, receipt baseline={baseline}B, excess={actual - baseline}B/{iterations}"
+            );
+        }
+        finally
+        {
+            var shutdown = node.DisposeAsync();
+            poller.ReleaseWait();
+            await shutdown;
+        }
+    }
+
+    private sealed class EmptyIngressRouter(IRouterSocket inner)
+        : PressureSocket<IRouterSocket>(inner),
+            IRouterSocket
+    {
+        internal IRouterSocket Inner => inner;
+        internal int Remaining;
+        internal int Calls;
+        internal int Accepted;
+        public new RouterSocketOptions Options => inner.Options;
+
+        public void SetRoutingId(RoutingId rid) => inner.SetRoutingId(rid);
+
+        public RoutingId GetRoutingId() => inner.GetRoutingId();
+
+        public SendOperation Send(RoutingId rid) => inner.Send(rid);
+
+        public RequestOperation Request(RoutingId rid) => inner.Request(rid);
+
+        public ReplyOperation Reply(RoutingId rid, ReplyToken token) => inner.Reply(rid, token);
+
+        public IReadOnlyList<RouterRoute> RoutesSnapshot() => inner.RoutesSnapshot();
+
+        public new bool Recv(Received result, RecvFlags flags = RecvFlags.None)
+        {
+            Calls++;
+            if (Remaining == 0)
+                return false;
+            Remaining--;
+            Accepted++;
+            // An empty receipt exercises rejection and automatic ownership return.
+            return true;
+        }
+    }
+
+    private sealed class EmptyIngressContext(IContext inner) : IContext
+    {
+        internal EmptyIngressRouter? Router;
+        public IContextOptions Options => inner.Options;
+
+        public IRouterSocket CreateRouterSocket() => Router = new(inner.CreateRouterSocket());
+
+        public IPairSocket CreatePairSocket() => inner.CreatePairSocket();
+
+        public IDealerSocket CreateDealerSocket() => inner.CreateDealerSocket();
+
+        public IPubSocket CreatePubSocket() => inner.CreatePubSocket();
+
+        public ISubSocket CreateSubSocket() => inner.CreateSubSocket();
+
+        public IXPubSocket CreateXPubSocket() => inner.CreateXPubSocket();
+
+        public IXSubSocket CreateXSubSocket() => inner.CreateXSubSocket();
+
+        public IStreamSocket CreateStreamSocket() => inner.CreateStreamSocket();
+
+        public void Shutdown() => inner.Shutdown();
+
+        public void RecalculateAutoHwm() => inner.RecalculateAutoHwm();
+
+        public CoreHwmBudgetSnapshot GetCoreHwmBudgetSnapshot() => inner.GetCoreHwmBudgetSnapshot();
+
+        public void ResetCoreHwmBudgetMetrics() => inner.ResetCoreHwmBudgetMetrics();
+
+        public void Dispose() => inner.Dispose();
+
+        public ValueTask DisposeAsync() => inner.DisposeAsync();
+    }
+
     private sealed class CountingWakeTimer : IZlinkTimer
     {
         internal int Starts { get; set; }
@@ -277,13 +406,13 @@ public sealed class MeshReceiveWakeTests
                 if (FailRearm)
                     throw new InvalidOperationException("Controlled receive rearm failure.");
             }
-            _inner.Modify(socket, events);
+            _inner.Modify(socket is EmptyIngressRouter adapter ? adapter.Inner : socket, events);
         }
 
         public int Size => _inner.Size;
 
         public void Add(IZlinkSocket socket, PollEventFlags events, nuint slot) =>
-            _inner.Add(socket, events, slot);
+            _inner.Add(socket is EmptyIngressRouter adapter ? adapter.Inner : socket, events, slot);
 
         public void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot) =>
             _inner.Add(monitor, events, slot);
@@ -298,7 +427,8 @@ public sealed class MeshReceiveWakeTests
 
         public void ModifyFd(int fd, PollEventFlags events) => _inner.ModifyFd(fd, events);
 
-        public bool Remove(IZlinkSocket socket) => _inner.Remove(socket);
+        public bool Remove(IZlinkSocket socket) =>
+            _inner.Remove(socket is EmptyIngressRouter adapter ? adapter.Inner : socket);
 
         public bool Remove(ISocketMonitor monitor) => _inner.Remove(monitor);
 
