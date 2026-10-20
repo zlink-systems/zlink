@@ -14,6 +14,9 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -97,9 +100,11 @@ final class ZLinkJavaMeshReceiveWakeTest {
 
     @Test
     void signalReleasesTheExistingBlockedReceiveMonitor() throws Exception {
-        try (var fixture = new Fixture()) {
+        try (var workers = Executors.newFixedThreadPool(2);
+                var fixture = new Fixture()) {
             var pending =
-                    CompletableFuture.supplyAsync(() -> fixture.receive.waitForReady(INFINITE));
+                    CompletableFuture.supplyAsync(
+                            () -> fixture.receive.waitForReady(INFINITE), workers);
             fixture.poller.entered.get(5, TimeUnit.SECONDS);
             fixture.receive.signal();
             assertEquals(0, pending.get(5, TimeUnit.SECONDS));
@@ -110,11 +115,15 @@ final class ZLinkJavaMeshReceiveWakeTest {
 
     @Test
     void closeWakesBeforeTakingTheReceiveMonitorAndDisposesAfterWait() throws Exception {
-        try (var fixture = new Fixture()) {
+        // Native wait occupies a worker until close signals it. Both operations need workers
+        // owned by this test, even when unrelated work occupies the common pool.
+        try (var workers = Executors.newFixedThreadPool(2);
+                var fixture = new Fixture()) {
             var pending =
-                    CompletableFuture.supplyAsync(() -> fixture.receive.waitForReady(INFINITE));
+                    CompletableFuture.supplyAsync(
+                            () -> fixture.receive.waitForReady(INFINITE), workers);
             fixture.poller.entered.get(5, TimeUnit.SECONDS);
-            var closing = CompletableFuture.runAsync(fixture.receive::close);
+            var closing = CompletableFuture.runAsync(fixture.receive::close, workers);
             closing.get(5, TimeUnit.SECONDS);
             assertEquals(0, pending.get(5, TimeUnit.SECONDS));
             assertEquals(1, fixture.timer.starts.get());
@@ -122,6 +131,35 @@ final class ZLinkJavaMeshReceiveWakeTest {
             assertEquals(List.of("wait-exit", "poller-close", "timer-close"), fixture.order);
             fixture.receive.signal();
             assertEquals(1, fixture.timer.starts.get(), "closed owner cannot start another wake");
+        }
+    }
+
+    @Test
+    void closeWakesWhenTheCommonPoolHasOnlyOneAvailableWorker() throws Exception {
+        int blockers = ForkJoinPool.getCommonPoolParallelism() - 1;
+        var started = new CountDownLatch(blockers);
+        var release = new CountDownLatch(1);
+        var finished = new CountDownLatch(blockers);
+        try {
+            for (int index = 0; index < blockers; index++) {
+                ForkJoinPool.commonPool()
+                        .execute(
+                                () -> {
+                                    started.countDown();
+                                    try {
+                                        release.await();
+                                    } catch (InterruptedException error) {
+                                        Thread.currentThread().interrupt();
+                                    } finally {
+                                        finished.countDown();
+                                    }
+                                });
+            }
+            assertTrue(started.await(5, TimeUnit.SECONDS));
+            closeWakesBeforeTakingTheReceiveMonitorAndDisposesAfterWait();
+        } finally {
+            release.countDown();
+            assertTrue(finished.await(5, TimeUnit.SECONDS));
         }
     }
 
