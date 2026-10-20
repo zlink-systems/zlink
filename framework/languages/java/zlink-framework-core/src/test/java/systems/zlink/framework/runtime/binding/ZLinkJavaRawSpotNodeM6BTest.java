@@ -76,6 +76,139 @@ final class ZLinkJavaRawSpotNodeM6BTest {
     private static final Duration MULTICAST_TIMEOUT = Duration.ofSeconds(5);
 
     @Test
+    void sharedBindRegistrationContractVectors() throws Exception {
+        var fixture =
+                new com.fasterxml.jackson.databind.ObjectMapper()
+                        .readTree(
+                                java.nio.file.Path.of(
+                                                "../../../runtime/protocol/fixtures/bind-registration-v1.json")
+                                        .toFile());
+        for (var vector : fixture.get("cases")) {
+            try (var context = Zlink.createContext();
+                    var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+                node.setRoutingId(RoutingId.from("registration-actor-owner"));
+                node.setBind("inproc://registration-vector-" + System.nanoTime());
+                node.start();
+                var target = (ZLinkJavaRawSpotNode) node.spotNode();
+                ZLinkBackendActorRef actor;
+                try (Message create = Message.from("create")) {
+                    actor = target.createActor("registration-actor", create);
+                }
+                target.rememberActorAuthority(actor, 41, 1);
+                var route =
+                        new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                                actor, node.lifecycleGeneration(), 41, 1);
+                var initial = fixture.get("current");
+                assertTrue(
+                        acceptRemoteStreamBinding(
+                                target,
+                                RoutingId.from(initial.get("node").asText()),
+                                initial.get("lifecycle").asLong(),
+                                initial.get("ownerId").asText(),
+                                initial.get("lease").asLong(),
+                                new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                        1,
+                                        route,
+                                        RoutingId.from(initial.get("session").asText()),
+                                        true,
+                                        initial.get("generation").asLong())));
+                var before = target.boundSessionRoute(actor).orElseThrow();
+                var terminal =
+                        new java.util.concurrent.atomic.AtomicReference<
+                                ZLinkServiceM6BWireCodec.BoundSessionBindReply>();
+                boolean accepted =
+                        target.applyRemoteStreamBinding(
+                                        RoutingId.from(vector.get("node").asText()),
+                                        vector.get("lifecycle").asLong(),
+                                        vector.get("ownerId").asText(),
+                                        vector.get("lease").asLong(),
+                                        new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                                2,
+                                                route,
+                                                RoutingId.from(vector.get("session").asText()),
+                                                true,
+                                                vector.get("generation").asLong()),
+                                        terminal::set)
+                                .toCompletableFuture()
+                                .join();
+                assertEquals(
+                        vector.get("success").asBoolean(), accepted, vector.get("name").asText());
+                var reply = terminal.get();
+                var codec = new ZLinkServiceM6BWireCodec();
+                assertEquals(
+                        reply,
+                        codec.decodeBoundSessionBindReply(
+                                codec.encodeBoundSessionBindReply(reply, true), true));
+                if (accepted) {
+                    assertEquals(vector.get("generation").asLong(), reply.bindingGeneration());
+                    assertEquals(41, reply.authorityOwnerGeneration());
+                    assertEquals(
+                            reply.bindingGeneration(),
+                            target.boundSessionRoute(actor).orElseThrow().bindingGeneration());
+                } else {
+                    assertEquals(before, target.boundSessionRoute(actor).orElseThrow());
+                    assertEquals(105, reply.terminalResult());
+                    assertEquals(13, reply.failureCode());
+                }
+            }
+        }
+    }
+
+    @Test
+    void bindRegistrationTableUsesOnlyLifecycleAndBindingIdentity() throws Exception {
+        try (var context = Zlink.createContext();
+                var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
+            RoutingId owner = RoutingId.from("registration-actor-owner");
+            RoutingId source = RoutingId.from("registration-session-owner");
+            RoutingId session = RoutingId.from("registration-session");
+            node.setRoutingId(owner);
+            node.setBind("inproc://registration-" + System.nanoTime());
+            node.start();
+            ZLinkJavaRawSpotNode target = (ZLinkJavaRawSpotNode) node.spotNode();
+            ZLinkBackendActorRef actor;
+            try (Message create = Message.from("create")) {
+                actor = target.createActor("registration-actor", create);
+            }
+            target.rememberActorAuthority(actor, 41, 1);
+            var route =
+                    new ZLinkServiceM6BWireCodec.ActorRouteFence(
+                            actor, node.lifecycleGeneration(), 41, 1);
+            var initial = new ZLinkServiceM6BWireCodec.BoundSessionBind(1, route, session, true, 9);
+            assertTrue(acceptRemoteStreamBinding(target, source, 7, initial));
+            assertFalse(
+                    acceptRemoteStreamBinding(
+                            target,
+                            source,
+                            7,
+                            new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                    2, route, session, true, 8)));
+            assertFalse(
+                    acceptRemoteStreamBinding(
+                            target,
+                            source,
+                            7,
+                            new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                    3, route, RoutingId.from("conflict"), true, 9)));
+            // Lease changes do not change the identity or make a new owner lifecycle.
+            assertTrue(acceptRemoteStreamBinding(target, source, 7, "renewed-owner", 2, initial));
+            assertTrue(
+                    acceptRemoteStreamBinding(
+                            target,
+                            source,
+                            8,
+                            new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                    4, route, session, true, 1)));
+            assertTrue(
+                    acceptRemoteStreamBinding(
+                            target,
+                            RoutingId.from("new-owner"),
+                            1,
+                            new ZLinkServiceM6BWireCodec.BoundSessionBind(
+                                    5, route, session, true, 1)));
+        }
+    }
+
+    @Test
     void readyFrameWithoutIntentPassesFalseToClosingOwnerAdmission() throws Exception {
         try (var context = Zlink.createContext();
                 var node = new ZLinkJavaRawMeshNode(context, "mesh")) {
@@ -2401,7 +2534,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                         new ZLinkServiceM6BWireCodec.BoundSessionBind(
                                                 2, route, sessionRid, false, 3),
                                         accepted -> {
-                                            assertTrue(accepted);
+                                            assertEquals(0, accepted.terminalResult());
                                             Thread.ofVirtual()
                                                     .start(
                                                             () ->
@@ -2485,7 +2618,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                     1,
                                     command,
                                     accepted -> {
-                                        assertTrue(accepted);
+                                        assertEquals(0, accepted.terminalResult());
                                         assertEquals(
                                                 command.bindingGeneration(),
                                                 actorBinding.get().bindingGeneration());
@@ -2647,10 +2780,10 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                     true,
                                     3),
                             accepted -> {});
-            CompletionStage<Void> local =
+            var local =
                     target.bindStreamSession(
                             localSessionRid, actor, 9, 1, null, Duration.ofSeconds(1));
-            target.publishStreamSession(localSessionRid, actor, 9, 1, null);
+            target.publishStreamSession(localSessionRid, actor, 9, 1, null, 41);
             release.complete(null);
             assertTrue(remote.toCompletableFuture().get(5, TimeUnit.SECONDS));
             local.toCompletableFuture().get(5, TimeUnit.SECONDS);
@@ -2743,12 +2876,14 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             var lifecycle =
                     new ZLinkJavaStreamSocket.BoundSessionLifecycle() {
                         @Override
-                        public CompletionStage<Void> bind(
+                        public CompletionStage<ZLinkServiceM6BWireCodec.BoundSessionBindReply> bind(
                                 RoutingId sessionRid,
                                 ZLinkBackendActorRef actor,
                                 long generation,
                                 Duration timeout) {
-                            return CompletableFuture.completedFuture(null);
+                            return CompletableFuture.completedFuture(
+                                    new ZLinkServiceM6BWireCodec.BoundSessionBindReply(
+                                            1, 0, 0, generation, 1));
                         }
 
                         @Override
@@ -2800,14 +2935,16 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             ZLinkJavaStreamSocket.BoundSessionLifecycle lifecycle =
                     new ZLinkJavaStreamSocket.BoundSessionLifecycle() {
                         @Override
-                        public CompletionStage<Void> bind(
+                        public CompletionStage<ZLinkServiceM6BWireCodec.BoundSessionBindReply> bind(
                                 RoutingId sessionRid,
                                 systems.zlink.framework.runtime.internal.backend
                                                 .ZLinkBackendActorRef
                                         actor,
                                 long bindingGeneration,
                                 Duration timeout) {
-                            return CompletableFuture.completedFuture(null);
+                            return CompletableFuture.completedFuture(
+                                    new ZLinkServiceM6BWireCodec.BoundSessionBindReply(
+                                            1, 0, 0, bindingGeneration, 1));
                         }
 
                         @Override
