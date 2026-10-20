@@ -265,3 +265,101 @@ test('Actor registration preserves exact, wildcard, inherited order and type-nam
     Second
   );
 });
+
+function countedArray(array) {
+  const calls = { iterators: 0, splice: 0 };
+  array[Symbol.iterator] = function () {
+    calls.iterators++;
+    return Array.prototype[Symbol.iterator].call(this);
+  };
+  array.splice = function (...args) {
+    calls.splice++;
+    return Array.prototype.splice.apply(this, args);
+  };
+  return calls;
+}
+test('idle waiter notification resolves native waiters without snapshot or iterator allocations', async () => {
+  const scheduler = queue();
+  const calls = countedArray(scheduler.idleWaiters);
+  const events = [];
+  const first = new Promise((resolve) => scheduler.idleWaiters.push(resolve)).then(() =>
+    events.push('first')
+  );
+  const second = new Promise((resolve) => scheduler.idleWaiters.push(resolve)).then(() =>
+    events.push('second')
+  );
+  scheduler.resolveIdleWaiters();
+  scheduler.resolveIdleWaiters();
+  await Promise.all([first, second]);
+  assert.deepEqual(events, ['first', 'second']);
+  assert.equal(scheduler.idleWaiters.length, 0);
+  assert.deepEqual(calls, { iterators: 0, splice: 0 });
+  await scheduler.close();
+});
+test('pending application visitation retains live array order without an iterator', async () => {
+  const scheduler = queue();
+  const pending = [scheduler.submit(() => 1)];
+  const calls = countedArray(scheduler.application.records);
+  const visited = [];
+  scheduler.visitPendingApplication((record) => {
+    visited.push(record.acceptedSequence);
+    if (visited.length === 1) pending.push(scheduler.submit(() => 2));
+  });
+  assert.deepEqual(visited, [1n, 2n]);
+  assert.equal(calls.iterators, 0);
+  assert.deepEqual(await Promise.all(pending), [1, 2]);
+  await scheduler.close();
+});
+test('non-head selection and withdrawal remove one reference without a splice result', async () => {
+  for (const withdraw of [false, true]) {
+    const scheduler = queue();
+    let withdrawal;
+    let canceled = 0;
+    const first = scheduler.submit(() => 1);
+    const second = withdraw
+      ? scheduler.admitDurablePrefix(
+          () => 2,
+          {
+            onWithdrawable: (callback) => {
+              withdrawal = callback;
+            }
+          },
+          undefined,
+          {
+            async prepare() {},
+            cancel() {
+              canceled++;
+            }
+          }
+        )
+      : scheduler.submit(() => 2);
+    const pending = [first, second, scheduler.submit(() => 3)];
+    const records = [...scheduler.application.records];
+    const calls = countedArray(scheduler.application.records);
+    if (withdraw) {
+      assert.equal(withdrawal(), true);
+      assert.equal(withdrawal(), false);
+    } else {
+      assert.equal(scheduler.takeApplication(records[1]), records[1]);
+      records[1].resolve(2);
+      records[1].release();
+    }
+    assert.equal(scheduler.application.records.length, 2);
+    assert.strictEqual(scheduler.application.records[0], records[0]);
+    assert.strictEqual(scheduler.application.records[1], records[2]);
+    assert.equal(canceled, withdraw ? 1 : 0);
+    assert.equal(calls.splice, 0);
+    assert.deepEqual(await Promise.all(pending), [1, withdraw ? undefined : 2, 3]);
+    await scheduler.close();
+  }
+});
+test('continuation admission reuses the existing default lane without an options bag', async () => {
+  const scheduler = queue();
+  const admit = scheduler.admit;
+  scheduler.admit = function (operation, options, ...rest) {
+    assert.equal(options, undefined);
+    return admit.call(this, operation, options, ...rest);
+  };
+  assert.equal(await scheduler.submitContinuation(() => 42), 42);
+  await scheduler.close();
+});

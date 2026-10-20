@@ -129,7 +129,7 @@ export class ZLinkSerialExecutionQueue {
    */
   submitContinuation<T>(operation: () => Promise<T> | T, context?: unknown): Promise<T> {
     try {
-      return this.admit(operation, { lane: 'application' }, context);
+      return this.admit(operation, undefined, context);
     } catch (error) {
       return Promise.reject(error);
     }
@@ -175,7 +175,8 @@ export class ZLinkSerialExecutionQueue {
   }
 
   visitPendingApplication(visitor: (record: ZLinkSerialWorkRecord<unknown>) => void): void {
-    for (const record of this.application.records) {
+    for (let index = 0; index < this.application.records.length; index++) {
+      const record = this.application.records[index]!;
       if (record.mailbox === undefined) visitor(record);
     }
   }
@@ -276,7 +277,8 @@ export class ZLinkSerialExecutionQueue {
     options?.onWithdrawable?.(() => {
       const index = target.records.indexOf(record as SerialWorkRecord<unknown>);
       if (index < 0) return false;
-      target.records.splice(index, 1);
+      target.records.copyWithin(index, index + 1);
+      target.records.length -= 1;
       record.preparationController?.abort(
         new Error('Durable record transferred to another handoff.')
       );
@@ -496,7 +498,9 @@ export class ZLinkSerialExecutionQueue {
     this.lifecycleDebt = false;
     if (this.application.records[0] === selected) return this.application.records.shift()!;
     const index = this.application.records.indexOf(selected);
-    return this.application.records.splice(index, 1)[0]!;
+    this.application.records.copyWithin(index, index + 1);
+    this.application.records.length -= 1;
+    return selected;
   }
 
   private startPreparation(record: SerialWorkRecord<unknown>): void {
@@ -557,7 +561,8 @@ export class ZLinkSerialExecutionQueue {
   }
 
   private resolveIdleWaiters(): void {
-    for (const resolve of this.idleWaiters.splice(0)) resolve();
+    for (let index = 0; index < this.idleWaiters.length; index++) this.idleWaiters[index]!();
+    this.idleWaiters.length = 0;
   }
 }
 
