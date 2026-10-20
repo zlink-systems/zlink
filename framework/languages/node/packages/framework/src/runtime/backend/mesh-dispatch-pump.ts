@@ -16,6 +16,7 @@ import {
   type Claim,
   type ReadyBatch,
   type ReadyRecord,
+  type ReceiveBatch,
   type ReceiveRecord
 } from '../foundation/service-runtime-contracts';
 import {
@@ -150,7 +151,7 @@ export class ZLinkMeshDispatchPump {
     this.applicationWorkerCount += 1;
     let worker: Promise<void>;
     worker = detachedMeshDispatchScope(() =>
-      runZLinkExecutionArea('application', () => this.drainClaims(ReadyDomain.Application))
+      runZLinkExecutionArea('application', () => this.drainClaim(ReadyDomain.Application))
     ).finally(() => {
       this.applicationWorkerCount -= 1;
       this.activeDrains.delete(worker);
@@ -317,7 +318,7 @@ export class ZLinkMeshDispatchPump {
           claimsDrained += 1;
           const owner = drained.records[index]!;
           this.beginDrain();
-          const drain = this.drainClaims(ReadyDomain.Infrastructure, owner, claim);
+          const drain = this.drainClaim(ReadyDomain.Infrastructure, owner, claim);
           this.activeDrains.add(drain);
           void drain.finally(() => {
             this.draining -= 1;
@@ -354,18 +355,23 @@ export class ZLinkMeshDispatchPump {
   }
 
   /** Each worker owns claim continuations for its entire lifetime. */
-  private async drainClaims(domain: number, owner?: ReadyRecord, claim?: Claim): Promise<void> {
+  private async drainClaim(
+    domain: number,
+    owner?: ReadyRecord,
+    claim?: Claim,
+    suppliedReceiveBatch?: ReceiveBatch
+  ): Promise<void> {
     // Application workers claim one owner at a time; infrastructure supplies
     // the claim already obtained by its bounded lifecycle drain.
-    const readyBatch =
-      domain === ReadyDomain.Application ? this.node.createReadyBatch(1) : undefined;
+    const readyBatch = claim === undefined ? this.node.createReadyBatch(1) : undefined;
     let receiveBatch =
-      readyBatch === undefined
+      suppliedReceiveBatch ??
+      (readyBatch === undefined
         ? undefined
         : this.node.createReceiveBatch(
             MESH_DISPATCH_RECEIVE_CAPACITY,
             this.options.partCapacity ?? DEFAULT_MESH_PART_CAPACITY
-          );
+          ));
     let claimedOwner = owner!;
     let claimed = claim!;
     try {
@@ -489,7 +495,7 @@ export class ZLinkMeshDispatchPump {
         if (this.disposed) return;
       } while (readyBatch !== undefined);
     } finally {
-      receiveBatch?.close();
+      if (suppliedReceiveBatch === undefined) receiveBatch?.close();
       readyBatch?.close();
     }
   }
