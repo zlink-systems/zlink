@@ -69,6 +69,7 @@ namespace zlink::framework::runtime::host
 {
 // Test-only access to the relocation terminal state (defined by unit tests).
 struct public_host_runtime_test_access_t;
+struct application_claim_batch_t;
 
 namespace relocation_detail
 {
@@ -974,7 +975,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<std::size_t> dispatch_application_claim (
       std::shared_ptr<mesh::service_mailbox_claim_t> claim,
       const std::function<void (
-        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch);
+        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
+      std::shared_ptr<application_claim_batch_t> batch = {});
     task_t<bool>
     dispatch_native_spot (stateful::object_ref_t object,
                           mesh::service_mailbox_t::claim_handle_t slot,

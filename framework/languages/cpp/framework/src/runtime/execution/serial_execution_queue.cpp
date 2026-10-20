@@ -72,12 +72,6 @@ struct serial_turn_chain_t
           ->handler_terminal.task ();
     }
 
-    bool finished ()
-    {
-        std::lock_guard lock (mutex);
-        return std::holds_alternative<result_t<void>> (completion);
-    }
-
     std::optional<task_t<void>> observed_terminal ()
     {
         std::lock_guard lock (mutex);
@@ -617,10 +611,16 @@ class serial_turn_handle_impl_t final
     bool released () const override
     {
         std::lock_guard lock (_mutex);
-        return _phase == phase_t::released;
+        return _phase == phase_t::released || _phase == phase_t::finished;
     }
 
-    bool handler_finished () { return chain ()->finished (); }
+    bool handler_finished ()
+    {
+        if (const auto *resume = std::get_if<serial_execution_queue_t::handler_resume_t> (&_origin))
+            return resume->handler->handler_finished ();
+        std::lock_guard lock (_mutex);
+        return _phase == phase_t::finished;
+    }
 
     bool is_resume () const noexcept
     {
@@ -655,14 +655,14 @@ class serial_turn_handle_impl_t final
         return shared_from_this ();
     }
 
-    std::shared_ptr<serial_turn_chain_t> fifo ()
+    std::shared_ptr<serial_turn_chain_t> fifo (bool create = true)
     {
         if (const auto *resume = std::get_if<serial_execution_queue_t::handler_resume_t> (&_origin))
-            return resume->handler->fifo ();
+            return resume->handler->fifo (create);
         if (const auto *callback =
               std::get_if<serial_execution_queue_t::borrowed_callback_t> (&_origin))
             return callback->fifo;
-        return chain ();
+        return chain (create);
     }
 
     bool claim_yield () override
@@ -861,8 +861,9 @@ class serial_turn_handle_impl_t final
         {
             auto handler = _handler.lock ();
             auto &source = handler ? *handler : *this;
-            if (auto pending = source.chain ()->observed_terminal ())
-                terminal = std::make_shared<task_t<void>> (std::move (*pending));
+            if (auto owner = source.chain (false))
+                if (auto pending = owner->observed_terminal ())
+                    terminal = std::make_shared<task_t<void>> (std::move (*pending));
         }
         if (!terminal) {
             completion (std::move (claim));
@@ -915,16 +916,16 @@ class serial_turn_handle_impl_t final
     }
 
   private:
-    std::shared_ptr<serial_turn_chain_t> chain ()
+    std::shared_ptr<serial_turn_chain_t> chain (bool create = true)
     {
         std::lock_guard lock (_mutex);
         return std::visit (
-          [this] (auto &origin) -> std::shared_ptr<serial_turn_chain_t> {
+          [this, create] (auto &origin) -> std::shared_ptr<serial_turn_chain_t> {
               using origin_t = std::decay_t<decltype (origin)>;
               if constexpr (std::is_same_v<origin_t, serial_execution_queue_t::handler_resume_t>) {
-                  return origin.handler->chain ();
+                  return origin.handler->chain (create);
               } else {
-                  if (!origin.handler) {
+                  if (!origin.handler && create) {
                       const auto peer = _handler.lock ();
                       auto &owner =
                         peer && peer->_queue.shared_spot_gate () ? peer->_queue : _queue;
@@ -934,6 +935,8 @@ class serial_turn_handle_impl_t final
                             std::make_shared<serial_turn_chain_t> (origin.fifo->queue);
                       else
                           origin.handler = std::make_shared<serial_turn_chain_t> (owner);
+                      if (_phase == phase_t::finished)
+                          origin.handler->finish ();
                   }
                   return origin.handler;
               }
@@ -946,7 +949,7 @@ class serial_turn_handle_impl_t final
         serial_execution_queue_t::async_completion_t complete;
         {
             std::lock_guard lock (_mutex);
-            if (_phase == phase_t::released)
+            if (_phase == phase_t::released || _phase == phase_t::finished)
                 return false;
             _phase = phase_t::released;
             complete = std::move (_complete);
@@ -959,9 +962,11 @@ class serial_turn_handle_impl_t final
 
     void finish_handler_owned (std::function<void ()> completion, bool succeeded)
     {
-        auto owner = chain ();
-        if (owner->finished ())
-            return;
+        {
+            std::lock_guard lock (_mutex);
+            if (_phase == phase_t::finished)
+                return;
+        }
         std::exception_ptr error;
         try {
             if (completion)
@@ -971,13 +976,21 @@ class serial_turn_handle_impl_t final
             succeeded = false;
             error = std::current_exception ();
         }
-        settle_owned (succeeded);
-        owner->finish ();
+        auto owner = chain (false);
+        if (owner)
+            settle_owned (*owner, succeeded);
+        {
+            std::lock_guard lock (_mutex);
+            _phase = phase_t::finished;
+        }
+        if (owner)
+            owner->finish ();
         // A barrier retains its executing turn while pending. Its origin
         // relinquishes the reverse reference at the same terminal boundary.
         if (auto *barrier = std::get_if<serial_execution_queue_t::barrier_origin_t> (&_origin))
             barrier->barrier.reset ();
-        _queue.release_lifecycle_hold (fifo ());
+        if (auto retained_fifo = fifo (false))
+            _queue.release_lifecycle_hold (std::move (retained_fifo));
         std::shared_ptr<serial_turn_handle_impl_t> current;
         {
             std::unique_lock lock (_queue._mutex, std::defer_lock);
@@ -1010,10 +1023,9 @@ class serial_turn_handle_impl_t final
 
     void end_chain_owned (bool succeeded) noexcept { finish_handler_owned ({}, succeeded); }
 
-    void settle_owned (bool succeeded) noexcept
+    void settle_owned (serial_turn_chain_t &owner, bool succeeded) noexcept
     {
-        auto owner = chain ();
-        auto entries = owner->take ();
+        auto entries = owner.take ();
         if (entries.empty ())
             return;
         const bool open = !_queue.closed ();
@@ -1056,7 +1068,8 @@ class serial_turn_handle_impl_t final
     {
         open,
         yield_admitted,
-        released
+        released,
+        finished
     };
     phase_t _phase = phase_t::open;
 };
