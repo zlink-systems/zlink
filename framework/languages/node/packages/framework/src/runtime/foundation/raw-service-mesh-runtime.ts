@@ -1015,7 +1015,8 @@ export class RawServiceMeshRuntime {
       if (result === 'protocolError') this.reportProtocolError(received);
       if (observe !== undefined) {
         let bytes = 0;
-        for (const part of received.parts) bytes += part.byteLength;
+        for (let index = 0; index < received.parts.length; index += 1)
+          bytes += received.parts[index]!.byteLength;
         observe(received.sourceRid, bytes);
       }
       return result;
