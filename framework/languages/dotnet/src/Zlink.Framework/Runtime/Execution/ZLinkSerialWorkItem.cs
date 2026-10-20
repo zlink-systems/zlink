@@ -13,7 +13,7 @@ internal sealed class ZLinkSerialWorkItem
     private ReadOnlyMemory<byte> _acceptedPayload;
 
     private readonly TaskCompletionSource? _completion;
-    private Action? _terminalRelease;
+    private object? _terminalRelease;
     private int _terminalReleased;
 
     public ZLinkSerialWorkItem(
@@ -94,7 +94,7 @@ internal sealed class ZLinkSerialWorkItem
     internal Action<Exception>? ErrorReporter { get; set; }
     internal bool IsReady => Ready?.Invoke() != false && Preparation?.IsReady != false;
 
-    internal void BindTerminalRelease(Action release)
+    internal void BindTerminalRelease(ZLinkSerialExecutionQueue release)
     {
         ArgumentNullException.ThrowIfNull(release);
         if (Interlocked.CompareExchange(ref _terminalRelease, release, null) is not null)
@@ -113,17 +113,19 @@ internal sealed class ZLinkSerialWorkItem
             Volatile.Read(ref _terminalReleased) != 0
             || Interlocked.CompareExchange(
                 ref _terminalRelease,
-                () =>
-                {
-                    try
+                (Action<ZLinkSerialWorkItem>)(
+                    item =>
                     {
-                        release();
+                        try
+                        {
+                            release();
+                        }
+                        finally
+                        {
+                            InvokeTerminalRelease(current, item);
+                        }
                     }
-                    finally
-                    {
-                        current();
-                    }
-                },
+                ),
                 current
             ) != current
         )
@@ -319,12 +321,21 @@ internal sealed class ZLinkSerialWorkItem
         if (Interlocked.Exchange(ref _terminalReleased, 1) != 0)
             return;
         Preparation?.Cancel();
-        (
+        InvokeTerminalRelease(
             Volatile.Read(ref _terminalRelease)
-            ?? throw new InvalidOperationException(
-                "ZLink serial work has no terminal release callback."
-            )
-        )();
+                ?? throw new InvalidOperationException(
+                    "ZLink serial work has no terminal release callback."
+                ),
+            this
+        );
+    }
+
+    private static void InvokeTerminalRelease(object release, ZLinkSerialWorkItem item)
+    {
+        if (release is ZLinkSerialExecutionQueue owner)
+            owner.CompletePendingItem(item);
+        else
+            ((Action<ZLinkSerialWorkItem>)release)(item);
     }
 
     private ValueTask ReleaseSuspendedTerminalAsync() =>

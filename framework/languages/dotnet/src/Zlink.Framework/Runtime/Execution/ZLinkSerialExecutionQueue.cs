@@ -1076,14 +1076,14 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     {
         if (!item.ReservationHeld)
         {
-            item.BindTerminalRelease(() => CompletePendingItem(item));
+            item.BindTerminalRelease(this);
             PublishWorkUnderLock(destination, item);
             return;
         }
         // This queue owns ordering only. The queued callback retains the
         // actual Core receive owner until its terminal path disposes it.
         var applicationDrained = NewApplicationDrainedSignalUnderLock(lane);
-        item.BindTerminalRelease(() => CompletePendingItem(item));
+        item.BindTerminalRelease(this);
         PublishWorkUnderLock(destination, item);
         CommitReservationUnderLock(lane, applicationDrained);
     }
@@ -1974,7 +1974,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         }
     }
 
-    private void CompletePendingItem(ZLinkSerialWorkItem item)
+    internal void CompletePendingItem(ZLinkSerialWorkItem item)
     {
         if (_sharedOwner is not null)
         {
@@ -2072,7 +2072,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 }
                 else
                 {
-                    item.BindTerminalRelease(() => CompletePendingItem(item));
+                    item.BindTerminalRelease(this);
                     lifecycleOwner.ReadyContinuation = item;
                 }
             }

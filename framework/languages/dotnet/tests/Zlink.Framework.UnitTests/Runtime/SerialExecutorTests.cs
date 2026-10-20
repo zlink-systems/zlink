@@ -22,6 +22,54 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
+    public async Task BusyQueueAdmissionAllocatesOnlyWorkItemStorage()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var execution = queue
+            .RunAsync(
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await release.Task;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        Func<CancellationToken, ValueTask> callback = static _ => ValueTask.CompletedTask;
+        try
+        {
+            await entered.Task;
+            Assert.True(queue.TryPost(callback, out _));
+            GC.KeepAlive(new ZLinkSerialWorkItem(callback));
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 1000; i++)
+                GC.KeepAlive(new ZLinkSerialWorkItem(callback));
+            var storage = GC.GetAllocatedBytesForCurrentThread() - before;
+            before = GC.GetAllocatedBytesForCurrentThread();
+            var admitted = 0;
+            for (var i = 0; i < 1000; i++)
+                if (queue.TryPost(callback, out _))
+                    admitted++;
+            var admissionStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Equal(1000, admitted);
+            Assert.Equal(storage, admissionStorage);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await execution;
+            await queue.ApplicationDrained;
+        }
+    }
+
+    [Fact]
     public void SerialTurnConcurrentSuspensionObservationDoesNotLoseSignals()
     {
         const int iterations = 1000;
@@ -62,6 +110,106 @@ public sealed class SerialExecutorTests
             signaler.Join();
         }
         Assert.Equal(iterations, completed);
+    }
+
+    [Fact]
+    public async Task TerminalCompositionAllocatesOnlyItsTwoCallbackReferences()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var execution = queue
+            .RunAsync(
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await releaseFirst.Task;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        var items = new ZLinkSerialWorkItem[1000];
+        Action release = static () => { };
+        static Action Baseline(object current, Action release) =>
+            () =>
+            {
+                GC.KeepAlive(current);
+                release();
+            };
+        try
+        {
+            await entered.Task;
+            for (var i = 0; i < items.Length; i++)
+                Assert.True(queue.TryPost(static _ => ValueTask.CompletedTask, out items[i]));
+            GC.KeepAlive(Baseline(queue, release));
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < items.Length; i++)
+                GC.KeepAlive(Baseline(queue, release));
+            var stateStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+            before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < items.Length; i++)
+                items[i].AddTerminalRelease(release);
+            Assert.Equal(stateStorage, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+            await execution;
+            await queue.ApplicationDrained;
+        }
+    }
+
+    [Fact]
+    public async Task ComposedTerminalFailureStillReleasesQueueReservationExactlyOnce()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var execution = queue
+            .RunAsync(
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await release.Task;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        try
+        {
+            await entered.Task;
+            Assert.True(queue.TryPost(static _ => ValueTask.CompletedTask, out var item));
+            var releases = 0;
+            item.AddTerminalRelease(() =>
+            {
+                releases++;
+                throw new InvalidOperationException("terminal failure");
+            });
+            release.TrySetResult();
+            await execution;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => item.Completion);
+            await queue.ApplicationDrained;
+            item.ReleaseForRelocation(static _ => { });
+            Assert.Equal(1, releases);
+            Assert.Equal(0, queue.ApplicationPendingCount);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await execution;
+        }
     }
 
     [Fact]
@@ -153,6 +301,12 @@ public sealed class SerialExecutorTests
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var yield = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
         var item = new ZLinkSerialWorkItem(
             async _ =>
             {
@@ -161,9 +315,10 @@ public sealed class SerialExecutorTests
                 ZLinkSerialTurn.Current!.SignalSuspended();
                 await release.Task;
             },
-            lane: lifecycle ? ZLinkSerialWorkLane.Lifecycle : ZLinkSerialWorkLane.Application
+            lane: lifecycle ? ZLinkSerialWorkLane.Lifecycle : ZLinkSerialWorkLane.Application,
+            reservationHeld: false
         );
-        item.BindTerminalRelease(static () => { });
+        item.BindTerminalRelease(queue);
         var turn = new ZLinkSerialTurn(
             static (_, _) => ZLinkSerialPostAdmission.Closed,
             static _ => false,
