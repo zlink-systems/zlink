@@ -428,9 +428,9 @@ class slow_claim_repository_t final : public in_memory_location_repository_t
 
 TEST (ZLinkFrameworkLocationRuntime, RenewLatenessIsMeasuredFromTheHeartbeatSchedule)
 {
-    // Startup claims the lease and the heartbeat schedules its first renewal one interval after
-    // the claim completed. Lateness compares a renewal start with that schedule, so a slow claim
-    // must not appear as lateness of the first heartbeat.
+    // Lateness compares the renewal start with the scheduled deadline (the initial lease
+    // operation start plus one interval), rather than with the claim start itself. A slow claim
+    // must not be reported in full as heartbeat lateness.
     metric_test::provider_t metrics;
     const auto claim_delay = std::chrono::milliseconds (300);
     slow_claim_repository_t store (claim_delay);
