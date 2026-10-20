@@ -447,7 +447,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         }
         this.directOutbound =
                 new ZLinkSpotDirectOutbound(
-                        routeMessages, this.handlerExecutor, dispatchErrors.flow());
+                        routeMessages, dispatchErrors.flow());
         this.routedOutbound =
                 new ZLinkSpotRoutedOutbound(
                         channels,

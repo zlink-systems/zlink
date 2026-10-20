@@ -152,7 +152,6 @@ final class ZLinkSpotOutboundApplicationFlowTest {
         options.messageFlow(mode);
         return new ZLinkSpotDirectOutbound(
                 new ZLinkSpotRouteMessages(new ZLinkStringMessageSerializer()),
-                Runnable::run,
                 new ZLinkMessageFlowTracer(
                         options, ZLinkHandlerActivator.reflection(), Runnable::run));
     }
