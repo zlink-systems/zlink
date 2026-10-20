@@ -99,6 +99,7 @@ test('channel request and reply encode allocate only the final parts representat
     assert.deepEqual(codec.decodeChannelPayload(response), data);
   }
   assert.equal(counts.get('encodePayload:object:contentType,message') ?? 0, 0);
+  assert.equal(counts.get('parseWireJson:object:rejectPropertyName') ?? 0, 0);
 });
 
 test('correlation validation accepts the full ASCII contract without per-call RegExp objects', () => {
@@ -268,4 +269,40 @@ test('creation payload decode borrows the encoded body without intermediate byte
     assert.deepEqual(codec.decodeFrameworkCreationPayload(frame), value);
   }
   assert.equal(copiedBytes, 0, `Avoid copying the ${bodyBytes}-byte encoded body twice per decode.`);
+});
+
+
+test('JSON parser policies are immutable and reused without per-decode option objects', t => {
+  const profilePath = require.resolve('@zlink-systems/stream-wire/internal/json');
+  const implementation = require(path.join(path.dirname(profilePath), 'framework-json-v1.js'));
+  const parse = implementation.parseFrameworkJsonV1;
+  const policies = [];
+  t.mock.method(implementation, 'parseFrameworkJsonV1', (text, options = {}, ...args) => {
+    policies.push(options);
+    return parse(text, options, ...args);
+  });
+  const { codec: json } = countedCodec('messaging/framework-json-v1');
+  assert.deepEqual(json.parseFrameworkJsonV1('{"body":1}'), { body: 1 });
+  assert.deepEqual(json.parseFrameworkJsonV1('{"body":2}'), { body: 2 });
+  assert.equal(policies[0], policies[1]);
+  assert.equal(Object.isFrozen(policies[0]), true);
+  const explicit = { rejectPropertyName: name => name === 'blocked' };
+  assert.throws(() => json.parseFrameworkJsonV1('{"blocked":1}', explicit));
+  assert.equal(policies[2], explicit);
+
+  const frameworkJson = require('../../packages/framework/dist/runtime/messaging/framework-json-v1');
+  const parseFramework = frameworkJson.parseFrameworkJsonV1;
+  const channelPolicies = [];
+  t.mock.method(frameworkJson, 'parseFrameworkJsonV1', (text, options, ...args) => {
+    channelPolicies.push(options);
+    return parseFramework(text, options, ...args);
+  });
+  const { codec: channel } = countedCodec('channels/channel-envelope');
+  const header = { contentType: 'application/json', kind: 1, messageName: 'Packet' };
+  for (let index = 0; index < 2; index++) {
+    assert.deepEqual(channel.decodeChannelPayload({ header, payload: Buffer.from('{"body":1}') }), { body: 1 });
+  }
+  assert.equal(channelPolicies[0], channelPolicies[1]);
+  assert.equal(Object.isFrozen(channelPolicies[0]), true);
+  assert.throws(() => channel.decodeChannelPayload({ header, payload: Buffer.from('{"__proto__":1}') }));
 });

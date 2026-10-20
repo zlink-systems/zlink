@@ -880,14 +880,10 @@ export function decodeChannelHeader(
   return validateChannelHeader(parseChannelHeaderBytes(parts[0].data()), flowEnabled);
 }
 
+const CHANNEL_JSON_PARSE_OPTIONS = Object.freeze({ rejectPropertyName: isPrototypeKey });
+
 function parseWireJson(payload: string, schema?: ZLinkJsonSchema): unknown {
-  return parseFrameworkJsonV1(
-    payload,
-    {
-      rejectPropertyName: isPrototypeKey
-    },
-    schema
-  );
+  return parseFrameworkJsonV1(payload, CHANNEL_JSON_PARSE_OPTIONS, schema);
 }
 
 function parseChannelHeaderBytes(payload: Buffer): unknown {

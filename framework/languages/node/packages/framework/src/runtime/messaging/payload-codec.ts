@@ -217,7 +217,7 @@ function decodeFrameworkEncodedPayload<T>(
   const text = payload.getString('utf8');
   try {
     return materializeZLinkMessageValue(
-      parseFrameworkJsonV1(text, {}, schemaForDecode(type, packetName, contractPart)) as T,
+      parseFrameworkJsonV1(text, undefined, schemaForDecode(type, packetName, contractPart)) as T,
       type
     );
   } catch (error) {
