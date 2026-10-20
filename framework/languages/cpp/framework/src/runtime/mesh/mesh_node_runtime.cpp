@@ -3511,8 +3511,8 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
     const auto kind = header.kind () == stream_message_kind_t::send
                         ? runtime::messaging::message_kind_t::command
                         : runtime::messaging::message_kind_t::request;
-    auto envelope =
-      codec.create_envelope (kind, "actor", std::string (header.packet_name ()), timeout);
+    auto envelope = codec.create_envelope (kind, actor_message_channel_name,
+                                           std::string (header.packet_name ()), timeout);
     envelope.content_type = std::string (stream_content_type (header.codec ()));
     envelope.metadata = header.metadata ().values ();
     if (const auto correlation = header.correlation_id ())
@@ -3761,10 +3761,7 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
                 authority_owner_generation = snapshot->authority_owner_generation;
         }
         const auto kind = header.kind;
-        const bool ordered_bound_session_relay =
-          header.metadata.contains (std::string (detail::bound_session_relay_sequence_key));
-        auto encoded =
-          runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (header, payload);
+        auto encoded = encode_actor_packet (header, payload);
         const auto native_actor = host::mesh_node_t::remote_actor_ref (
           target_node_rid, std::string (target_actor.actor_id ().value ()),
           target_actor.object_generation ());
@@ -3777,8 +3774,7 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
                 bound_session_source->session_rid.to_bytes (),
                 bound_session_source->binding_generation, bound_session_source->session_sequence});
         }();
-        if (kind == runtime::messaging::message_kind_t::command && !await_remote_admission
-            && !ordered_bound_session_relay) {
+        if (kind == runtime::messaging::message_kind_t::command) {
             const auto submitted = co_await send_to_actor (
               native_actor, encoded.items (), {}, authority_owner_generation,
               owner_lease_generation, wire_bound_session_source);
@@ -3808,32 +3804,8 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
         if (!completed)
             co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (
               completed.exception ());
-        if (kind == runtime::messaging::message_kind_t::command)
-            co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
-        runtime::messaging::message_parts_t reply (std::move (completed.value ()));
-        auto reply_header = runtime::messaging::envelope_codec_t{}.decode_header (reply, false);
-        if (!reply_header) {
-            co_return result_t<std::optional<zlink::message_t>>::failure (
-              reply_header.error_kind (), reply_header.error ()
-                                            ? reply_header.error ()->what ()
-                                            : "Actor relay reply header decode failed");
-        }
-        if (reply_header.value ().kind == runtime::messaging::message_kind_t::error) {
-            const auto message =
-              reply_header.value ().error_message.value_or ("Actor relay request failed");
-            runtime::messaging::request_failure_mapper_t failure_mapper;
-            auto mapped = failure_mapper.error_header_exception (
-              reply_header.value ().error_code.value_or ("request_failed"), message,
-              "Actor relay request");
-            mapped = runtime::messaging::restore_failure_origin (reply_header.value (),
-                                                                 std::move (mapped));
-            co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (mapped);
-        }
-        auto body = runtime::messaging::envelope_codec_t{}.decode_body (reply);
-        if (!body)
-            co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
-        co_return result_t<std::optional<zlink::message_t>>::success (
-          std::make_optional (std::move (body.value ())));
+        co_return decode_actor_reply (
+          runtime::messaging::message_parts_t (std::move (completed.value ())));
     }
     catch (const framework_exception_t &error) {
         co_return detail::result_access_t::failure<std::optional<zlink::message_t>> (error);
