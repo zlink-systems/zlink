@@ -48,16 +48,21 @@ const void *current_completion_owner () noexcept;
 bool can_reuse_completion_turn (bool known_runtime_worker = false,
                                 const void *caller_job = nullptr,
                                 bool caller_owned_turn = false) noexcept;
+class completion_dispatcher_t;
+using completion_dispatcher_ref_t = std::shared_ptr<completion_dispatcher_t>;
+completion_dispatcher_ref_t acquire_completion_dispatcher ();
 void dispatch_completion (std::function<void ()> work,
                           bool inline_allowed = false,
-                          const void *owner = nullptr);
+                          const void *owner = nullptr,
+                          completion_dispatcher_ref_t dispatcher = {});
 inline bool dispatch_shutdown_fallback (std::function<void ()> &work,
                                         const std::stop_token &wait_owner,
-                                        bool inline_allowed)
+                                        bool inline_allowed,
+                                        completion_dispatcher_ref_t dispatcher = {})
 {
     if (wait_owner.stop_possible ())
         return false;
-    dispatch_completion (std::move (work), inline_allowed);
+    dispatch_completion (std::move (work), inline_allowed, nullptr, std::move (dispatcher));
     return true;
 }
 void ensure_blocking_submit_allowed ();
@@ -289,7 +294,8 @@ inline task_scheduler_t capture_native_continuation_scheduler ()
       held_turn ? held_serial_turn_scheduler (std::move (held_turn)) : task_scheduler_t{};
     task_scheduler_t runtime_scheduler = capture_runtime_native_continuation_scheduler ();
     auto ambient = capture_ambient_context ();
-    return [turn_scheduler = std::move (turn_scheduler),
+    auto dispatcher = acquire_completion_dispatcher ();
+    return [dispatcher = std::move (dispatcher), turn_scheduler = std::move (turn_scheduler),
             runtime_scheduler = std::move (runtime_scheduler), ambient = std::move (ambient),
             inline_allowed] (std::function<void ()> work) mutable {
         auto resume = [ambient, work = std::move (work)] () mutable {
@@ -311,12 +317,13 @@ inline task_scheduler_t capture_native_continuation_scheduler ()
             }
             catch (const framework_exception_t &error) {
                 if (error.kind () != framework_error_kind_t::shutting_down
-                    || !dispatch_shutdown_fallback (dispatch, ambient.wait_owner, inline_allowed))
+                    || !dispatch_shutdown_fallback (dispatch, ambient.wait_owner, inline_allowed,
+                                                    dispatcher))
                     throw;
                 return;
             }
         }
-        dispatch_completion (std::move (dispatch), inline_allowed);
+        dispatch_completion (std::move (dispatch), inline_allowed, nullptr, dispatcher);
     };
 }
 
@@ -345,7 +352,8 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
         _work (std::move (work)),
         _scheduler (std::move (explicit_scheduler)),
         _turn (capture_current_serial_turn ()),
-        _ambient (capture_ambient_context ())
+        _ambient (capture_ambient_context ()),
+        _completion_dispatcher (acquire_completion_dispatcher ())
     {
         // Completion owners place the caller's turn (hot path E5 and state
         // lane scope exit). Internal task wrappers propagate that result in
@@ -387,7 +395,8 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
             if (_scheduler)
                 _scheduler (std::move (resume));
             else
-                dispatch_completion (std::move (resume), inline_allowed);
+                dispatch_completion (std::move (resume), inline_allowed, nullptr,
+                                     _completion_dispatcher);
         }
         catch (const framework_exception_t &error) {
             if (error.kind () != framework_error_kind_t::shutting_down)
@@ -398,7 +407,8 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
             /* Cancellation §5.1: the owner ends this wait, even when its stop
              * is already requested and its callback has not run yet. The
              * registration stays owned until that callback settles it. */
-            if (!dispatch_shutdown_fallback (resume, _ambient.wait_owner, inline_allowed))
+            if (!dispatch_shutdown_fallback (resume, _ambient.wait_owner, inline_allowed,
+                                             _completion_dispatcher))
                 return false;
             return true;
         }
@@ -429,6 +439,7 @@ class task_wait_registration_t : public std::enable_shared_from_this<task_wait_r
     task_scheduler_t _scheduler;
     std::shared_ptr<serial_turn_t> _turn;
     ambient_context_snapshot_t _ambient;
+    completion_dispatcher_ref_t _completion_dispatcher;
     struct cancellation_t
     {
         std::weak_ptr<task_wait_registration_t> waiter;

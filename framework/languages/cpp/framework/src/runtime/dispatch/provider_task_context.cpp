@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <atomic>
 #include <optional>
+#include <semaphore>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -33,8 +34,13 @@ struct completion_turn_scope_t
     const void *previous;
     ~completion_turn_scope_t () { completion_owner = previous; }
 };
-class completion_dispatcher_t;
-std::atomic<completion_dispatcher_t *> active_completion_dispatcher{nullptr};
+std::atomic<std::weak_ptr<completion_dispatcher_t>> active_completion_dispatcher;
+std::mutex completion_creation_mutex;
+// A lifetime permit spans construction through the final worker join, including
+// cleanup transferred off a worker. A new dispatcher cannot overlap that drain.
+std::binary_semaphore completion_lifetime{1};
+}
+
 
 class completion_dispatcher_t
 {
@@ -47,14 +53,12 @@ class completion_dispatcher_t
         _workers.reserve (count);
         for (unsigned index = 0; index < count; ++index)
             _workers.emplace_back ([this] { _context.run (); });
-        active_completion_dispatcher.store (this, std::memory_order_release);
     }
 
     ~completion_dispatcher_t ()
     {
         // Let run() drain accepted turns, including work posted by those turns.
         // stop() would abandon queued callbacks and their registry reservations.
-        active_completion_dispatcher.store (nullptr, std::memory_order_release);
         _work.reset ();
         _workers.clear ();
     }
@@ -64,6 +68,7 @@ class completion_dispatcher_t
         boost::asio::post (_context, std::forward<Work> (work));
     }
     void poll_one () { _context.poll_one (); }
+    bool running_in_this_thread () { return _context.get_executor ().running_in_this_thread (); }
     std::size_t worker_count () const noexcept { return _workers.size (); }
 
   private:
@@ -74,16 +79,54 @@ class completion_dispatcher_t
       _context.get_executor ()};
 };
 
-completion_dispatcher_t &completion_dispatcher ()
+namespace
 {
-    // Submit/completion §11 requires one process dispatcher. Provider tasks and
-    // registries also exist without a host and outlive an individual host stop.
-    static completion_dispatcher_t dispatcher;
-    return dispatcher;
-}
+struct release_completion_dispatcher_t
+{
+    void operator() (completion_dispatcher_t *dispatcher) const noexcept
+    {
+        auto finish = [dispatcher] {
+            delete dispatcher;
+            completion_lifetime.release ();
+        };
+        // The final accepted turn can release the last reference on its worker.
+        // Move the same drain/join operation off that thread; never self-join.
+        if (dispatcher->running_in_this_thread ())
+            std::thread (std::move (finish)).detach ();
+        else
+            finish ();
+    }
+};
 
 std::atomic<const ambient_context_hooks_t *> ambient_context_hooks{nullptr};
 std::atomic<const runtime_execution_hooks_t *> runtime_execution_hooks{nullptr};
+}
+
+completion_dispatcher_ref_t acquire_completion_dispatcher ()
+{
+    if (auto dispatcher = active_completion_dispatcher.load (std::memory_order_acquire).lock ())
+        return dispatcher;
+    const std::lock_guard lock (completion_creation_mutex);
+    if (auto dispatcher = active_completion_dispatcher.load (std::memory_order_acquire).lock ())
+        return dispatcher;
+    completion_lifetime.acquire ();
+    completion_dispatcher_t *created;
+    try {
+        created = new completion_dispatcher_t;
+    }
+    catch (...) {
+        completion_lifetime.release ();
+        throw;
+    }
+    completion_dispatcher_ref_t dispatcher (created, release_completion_dispatcher_t{});
+    active_completion_dispatcher.store (dispatcher, std::memory_order_release);
+    return dispatcher;
+}
+
+void wait_for_completion_dispatcher_shutdown ()
+{
+    completion_lifetime.acquire ();
+    completion_lifetime.release ();
 }
 
 const void *current_completion_owner () noexcept
@@ -103,7 +146,10 @@ bool can_reuse_completion_turn (bool known_runtime_worker,
            && !current_wait_owner_token.stop_possible ();
 }
 
-void dispatch_completion (std::function<void ()> work, bool inline_allowed, const void *owner)
+void dispatch_completion (std::function<void ()> work,
+                          bool inline_allowed,
+                          const void *owner,
+                          completion_dispatcher_ref_t dispatcher)
 {
     if (!work)
         return;
@@ -111,7 +157,10 @@ void dispatch_completion (std::function<void ()> work, bool inline_allowed, cons
         work ();
         return;
     }
-    completion_dispatcher ().post ([work = std::move (work), owner] {
+    if (!dispatcher)
+        dispatcher = acquire_completion_dispatcher ();
+    auto *target = dispatcher.get ();
+    target->post ([dispatcher = std::move (dispatcher), work = std::move (work), owner] {
         const completion_turn_scope_t scope{
           std::exchange (completion_owner, owner != nullptr ? owner : &process_completion_owner)};
         work ();
@@ -127,14 +176,14 @@ bool dispatch_completion_receive_handoff (const std::function<bool ()> &handoff)
     // Only Framework completions enter this context. Application system-executor
     // handlers cannot be consumed by the resource that just handed off receive.
     // An empty first rotation must not create workers just to attempt a dequeue.
-    if (auto *dispatcher = active_completion_dispatcher.load (std::memory_order_acquire))
+    if (auto dispatcher = active_completion_dispatcher.load (std::memory_order_acquire).lock ())
         dispatcher->poll_one ();
     return true;
 }
 
 std::size_t completion_dispatcher_worker_count () noexcept
 {
-    const auto *dispatcher = active_completion_dispatcher.load (std::memory_order_acquire);
+    const auto dispatcher = active_completion_dispatcher.load (std::memory_order_acquire).lock ();
     return dispatcher != nullptr ? dispatcher->worker_count () : 0;
 }
 

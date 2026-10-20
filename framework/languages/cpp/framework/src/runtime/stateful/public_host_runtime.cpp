@@ -1024,7 +1024,9 @@ void public_host_runtime_t::start ()
           if (_started || _closing) {
               return;
           }
+          auto dispatcher = detail::acquire_completion_dispatcher ();
           _transport->start ();
+          _completion_dispatcher = std::move (dispatcher);
           _started = true;
       })
       .get ();
@@ -1072,7 +1074,12 @@ void public_host_runtime_t::close () noexcept
     _sessions.drop_held_relays (message_flow_reason_t::shutdown);
     _transport->close ();
     _local_dispatch_completion_lane.run ([&] { _local_application_dispatches.clear (); }).get ();
-    _lifecycle_configuration_lane.run ([&] { _closing = false; }).get ();
+    _lifecycle_configuration_lane
+      .run ([&] {
+          _completion_dispatcher.reset ();
+          _closing = false;
+      })
+      .get ();
 }
 
 void public_host_runtime_t::configure_peer_reconcile (

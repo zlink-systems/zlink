@@ -5,6 +5,7 @@
 #include <zlink/Contracts/Core/context.hpp>
 
 #include "runtime/channels/channel_runtime.hpp"
+#include "runtime/dispatch/completion_turn.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -1080,8 +1081,77 @@ bool verify_source_waiter_host_ownership (bool completion_first = false,
 
 } // namespace
 
+int verify_completion_dispatcher_hosts ()
+{
+    using namespace zlink::framework;
+    class ready_service_t final : public hosted_service_t
+    {
+      public:
+        std::promise<std::weak_ptr<detail::completion_dispatcher_t>> started;
+        task_t<void> start (service_provider_t &) override
+        {
+            started.set_value (detail::acquire_completion_dispatcher ());
+            co_return;
+        }
+        void stop () noexcept override {}
+    };
+    auto run_host = [] (app_t &host) {
+        return std::async (std::launch::async, [&host] { return host.run (0, nullptr); });
+    };
+    auto first = app_t::create ();
+    auto second = app_t::create ();
+    auto first_service = std::make_unique<ready_service_t> ();
+    auto second_service = std::make_unique<ready_service_t> ();
+    auto first_ready = first_service->started.get_future ();
+    auto second_ready = second_service->started.get_future ();
+    first.add_hosted_service (std::move (first_service));
+    second.add_hosted_service (std::move (second_service));
+    auto first_run = run_host (first);
+    auto second_run = run_host (second);
+    auto first_dispatcher = first_ready.get ();
+    auto second_dispatcher = second_ready.get ();
+    const bool same = !first_dispatcher.owner_before (second_dispatcher)
+                      && !second_dispatcher.owner_before (first_dispatcher);
+    first.shutdown ().result ().value ();
+    const auto first_exit = first_run.get ();
+    task_completion_source_t<int> source;
+    auto pending = source.task ();
+    std::promise<int> completed;
+    auto completion = completed.get_future ();
+    detail::observe_task_completion (
+      pending, [&] (const auto &value) { completed.set_value (value.value ()); });
+    source.complete (result_t<int>::success (1867));
+    const bool independent = completion.get () == 1867 && !second_dispatcher.expired ();
+    second.shutdown ().result ().value ();
+    const auto second_exit = second_run.get ();
+    detail::wait_for_completion_dispatcher_shutdown ();
+    const bool joined = first_dispatcher.expired () && second_dispatcher.expired ()
+                        && detail::completion_dispatcher_worker_count () == 0;
+
+    auto restarted = app_t::create ();
+    auto next_service = std::make_unique<ready_service_t> ();
+    auto next_ready = next_service->started.get_future ();
+    restarted.add_hosted_service (std::move (next_service));
+    auto next_run = run_host (restarted);
+    auto next_dispatcher = next_ready.get ();
+    const bool recreated = !next_dispatcher.expired ()
+                           && (next_dispatcher.owner_before (first_dispatcher)
+                               || first_dispatcher.owner_before (next_dispatcher));
+    restarted.shutdown ().result ().value ();
+    const auto next_exit = next_run.get ();
+    detail::wait_for_completion_dispatcher_shutdown ();
+    std::cout << "dispatcher-hosts shared=" << same << " independent=" << independent
+              << " joined=" << joined << " recreated=" << recreated << std::endl;
+    return same && independent && joined && recreated && next_dispatcher.expired ()
+               && first_exit == 0 && second_exit == 0 && next_exit == 0
+             ? 0
+             : 1;
+}
+
 int main (int test_argc, char **test_argv)
 {
+    if (test_argc == 2 && std::string (test_argv[1]) == "--dispatcher-hosts")
+        return verify_completion_dispatcher_hosts ();
 #ifdef _WIN32
     if (test_argc == 2 && std::string (test_argv[1]) == "--windows-break-shutdown") {
         auto signal_app = zlink::framework::app_t::create ();

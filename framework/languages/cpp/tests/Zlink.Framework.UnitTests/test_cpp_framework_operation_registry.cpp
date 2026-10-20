@@ -241,12 +241,66 @@ std::atomic_size_t shutdown_delivered{0};
 std::atomic_bool shutdown_release{false};
 }
 
+void verify_provider_completion_releases_dispatcher ()
+{
+    namespace framework = zlink::framework;
+    framework::task_completion_source_t<int> source;
+    auto pending = source.task ();
+    std::promise<int> delivered;
+    auto result = delivered.get_future ();
+    framework::detail::observe_task_completion (
+      pending, [&] (const auto &value) { delivered.set_value (value.value ()); });
+    assert (source.complete (framework::result_t<int>::success (1867)));
+    assert (result.get () == 1867);
+    assert (
+      wait_until ([] { return framework::detail::completion_dispatcher_worker_count () == 0; }));
+    framework::detail::wait_for_completion_dispatcher_shutdown ();
+}
+
+void verify_worker_releases_last_dispatcher_reference ()
+{
+    namespace detail = zlink::framework::detail;
+    auto dispatcher = detail::acquire_completion_dispatcher ();
+    const std::weak_ptr<detail::completion_dispatcher_t> observed (dispatcher);
+    std::latch entered (1), release (1);
+    detail::dispatch_completion (
+      [&] {
+          entered.count_down ();
+          release.wait ();
+      },
+      false, nullptr, dispatcher);
+    entered.wait ();
+    dispatcher.reset ();
+    assert (!observed.expired ());
+    release.count_down ();
+    detail::wait_for_completion_dispatcher_shutdown ();
+    assert (observed.expired ());
+    assert (detail::completion_dispatcher_worker_count () == 0);
+}
+
+void verify_registry_owns_dispatcher_until_delivery ()
+{
+    foundation::operation_registry_t registry;
+    std::promise<void> delivered;
+    auto result = delivered.get_future ();
+    assert (registry.register_operation (
+      id (1), foundation::operation_registry_t::clock_t::time_point::max (),
+      [&] (auto terminal, auto) {
+          assert (terminal == foundation::operation_terminal_t::completed);
+          delivered.set_value ();
+      }));
+    assert (zlink::framework::detail::completion_dispatcher_worker_count () != 0);
+    assert (registry.complete (id (1), {}));
+    result.get ();
+    assert (registry.shutdown () == 0);
+    zlink::framework::detail::wait_for_completion_dispatcher_shutdown ();
+    assert (zlink::framework::detail::completion_dispatcher_worker_count () == 0);
+}
+
 void verify_dispatcher_shutdown_drains ()
 {
     namespace detail = zlink::framework::detail;
-    // Register before construction so verification runs after dispatcher teardown.
-    assert (std::atexit ([] { assert (shutdown_delivered == shutdown_round_trips * 2); }) == 0);
-    detail::dispatch_completion ([] {});
+    auto dispatcher = detail::acquire_completion_dispatcher ();
     const auto workers = detail::completion_dispatcher_worker_count ();
     auto occupied = std::make_shared<std::latch> (workers);
     for (std::size_t index = 0; index < workers; ++index)
@@ -261,13 +315,12 @@ void verify_dispatcher_shutdown_drains ()
             detail::dispatch_completion ([] { ++shutdown_delivered; }, false, &shutdown_delivered);
         });
     assert (shutdown_delivered == 0);
-    // Release only at process exit. All queued and subsequently posted turns
-    // must drain before the earlier verification handler can run.
-    assert (std::atexit ([] {
-                shutdown_release = true;
-                shutdown_release.notify_all ();
-            })
-            == 0);
+    dispatcher.reset ();
+    shutdown_release = true;
+    shutdown_release.notify_all ();
+    detail::wait_for_completion_dispatcher_shutdown ();
+    assert (shutdown_delivered == shutdown_round_trips * 2);
+    assert (detail::completion_dispatcher_worker_count () == 0);
 }
 
 void verify_handoff_excludes_application_system_handlers ()
@@ -276,7 +329,7 @@ void verify_handoff_excludes_application_system_handlers ()
     assert (detail::completion_dispatcher_worker_count () == 0);
     assert (detail::dispatch_completion_receive_handoff ([] { return true; }));
     assert (detail::completion_dispatcher_worker_count () == 0);
-    detail::dispatch_completion ([] {});
+    const auto dispatcher = detail::acquire_completion_dispatcher ();
     const auto framework_workers = detail::completion_dispatcher_worker_count ();
     std::latch framework_occupied (framework_workers), framework_release (1),
       framework_exited (framework_workers);
@@ -417,6 +470,12 @@ void verify_completion_resource_transitions ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--dispatcher-lifetime") {
+        verify_provider_completion_releases_dispatcher ();
+        verify_worker_releases_last_dispatcher_reference ();
+        verify_registry_owns_dispatcher_until_delivery ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--dispatcher-shutdown") {
         verify_dispatcher_shutdown_drains ();
         return 0;
@@ -426,6 +485,7 @@ int main (int argc, char **argv)
         return 0;
     }
     verify_handoff_excludes_application_system_handlers ();
+    const auto dispatcher = zlink::framework::detail::acquire_completion_dispatcher ();
     if (argc == 2 && std::string_view (argv[1]) == "--handoff-counts") {
         verify_completion_resource_transitions ();
         return 0;

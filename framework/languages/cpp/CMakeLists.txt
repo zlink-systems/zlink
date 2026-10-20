@@ -1193,6 +1193,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     LABELS "framework-unit;framework-foundation;operation;resource"
     TIMEOUT 30)
 
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_completion_dispatcher_lifetime
+    COMMAND test_cpp_framework_operation_registry --dispatcher-lifetime
+    LABELS "framework-unit;framework-regression;framework-foundation;operation;resource"
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_m6a_runtime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp)
   target_compile_features(test_cpp_framework_m6a_runtime PRIVATE cxx_std_20)
@@ -1808,6 +1814,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     NAME test_cpp_framework_http_integration
     COMMAND test_cpp_framework_app_host
     LABELS "framework-integration;framework-http;framework-http-e2e;http"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_completion_dispatcher_hosts
+    COMMAND test_cpp_framework_app_host --dispatcher-hosts
+    LABELS "framework-unit;framework-regression;framework-host;resource"
     TIMEOUT 30)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_http_sync_submit

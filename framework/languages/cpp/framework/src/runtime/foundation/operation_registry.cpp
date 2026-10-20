@@ -41,7 +41,9 @@ struct operation_completion_item_t
     explicit operation_completion_item_t (
       operation_registry_t::callback_t callback,
       std::shared_ptr<operation_registry_drain_state_t> drain_state) :
-        callback (std::move (callback)), drain_state (std::move (drain_state))
+        callback (std::move (callback)),
+        drain_state (std::move (drain_state)),
+        dispatcher (detail::acquire_completion_dispatcher ())
     {
         this->drain_state->admit ();
     }
@@ -59,6 +61,7 @@ struct operation_completion_item_t
 
     operation_registry_t::callback_t callback;
     std::shared_ptr<operation_registry_drain_state_t> drain_state;
+    detail::completion_dispatcher_ref_t dispatcher;
     operation_terminal_t terminal = operation_terminal_t::transport_failed;
     zlink::message_t payload;
     std::unique_ptr<operation_completion_item_t> next;
@@ -112,7 +115,7 @@ void post_completions (operation_completion_chain_t completions) noexcept
                   // A consumer failure must still release its drain reservation.
               }
           },
-          false, owner);
+          false, owner, completion->dispatcher);
         (void) completion.release ();
     }
 }
