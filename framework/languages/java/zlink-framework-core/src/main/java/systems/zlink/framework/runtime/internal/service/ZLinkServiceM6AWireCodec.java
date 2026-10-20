@@ -87,11 +87,11 @@ public final class ZLinkServiceM6AWireCodec {
         route.u32(extension.size());
         route.raw(extension.toByteArray());
 
-        Writer result = prefix(command, 0);
-        result.u8(1);
-        result.u32(route.size());
-        result.raw(route.toByteArray());
-        return result.toByteArray();
+        return prefix(command, 0, Byte.BYTES + Integer.BYTES + route.size())
+                .put((byte) 1)
+                .putInt(route.size())
+                .put(route.toByteArray())
+                .array();
     }
 
     public ZLinkServiceNodeDescriptor decodeAdmission(
@@ -206,14 +206,14 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     public byte[] encodeNodeSendHeader(int flags) {
-        return prefix(ServiceWireConstants.COMMAND_NODE_SEND, flags).toByteArray();
+        return prefix(ServiceWireConstants.COMMAND_NODE_SEND, flags, 0).array();
     }
 
     public byte[] encodeNodeRequestHeader(long correlation, int flags) {
         requireCorrelation(correlation);
-        Writer result = prefix(ServiceWireConstants.COMMAND_NODE_REQUEST, flags);
-        result.opaqueU64(correlation);
-        return result.toByteArray();
+        return prefix(ServiceWireConstants.COMMAND_NODE_REQUEST, flags, Long.BYTES)
+                .putLong(correlation)
+                .array();
     }
 
     public long decodeNodeRequestHeader(byte[] frame) {
@@ -228,9 +228,11 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     public byte[] encodeChannelSendHeader(String channelName, int flags) {
-        Writer result = prefix(ServiceWireConstants.COMMAND_CHANNEL_SEND, flags);
-        result.text8(channelName, "channelName");
-        return result.toByteArray();
+        byte[] channel = Writer.text8Bytes(channelName, "channelName");
+        return prefix(ServiceWireConstants.COMMAND_CHANNEL_SEND, flags, Byte.BYTES + channel.length)
+                .put((byte) channel.length)
+                .put(channel)
+                .array();
     }
 
     public String decodeChannelSendHeader(byte[] frame) {
@@ -246,10 +248,15 @@ public final class ZLinkServiceM6AWireCodec {
 
     public byte[] encodeChannelRequestHeader(long correlation, String channelName, int flags) {
         requireCorrelation(correlation);
-        Writer result = prefix(ServiceWireConstants.COMMAND_CHANNEL_REQUEST, flags);
-        result.opaqueU64(correlation);
-        result.text8(channelName, "channelName");
-        return result.toByteArray();
+        byte[] channel = Writer.text8Bytes(channelName, "channelName");
+        return prefix(
+                        ServiceWireConstants.COMMAND_CHANNEL_REQUEST,
+                        flags,
+                        Long.BYTES + Byte.BYTES + channel.length)
+                .putLong(correlation)
+                .put((byte) channel.length)
+                .put(channel)
+                .array();
     }
 
     public ChannelRequest decodeChannelRequestHeader(byte[] frame) {
@@ -266,11 +273,11 @@ public final class ZLinkServiceM6AWireCodec {
 
     public byte[] encodeReplyHeader(long correlation, int terminalResult, int failureCode) {
         validateReply(correlation, terminalResult, failureCode);
-        Writer result = prefix(ServiceWireConstants.COMMAND_REPLY, 0);
-        result.opaqueU64(correlation);
-        result.u32(terminalResult);
-        result.u32(failureCode);
-        return result.toByteArray();
+        return prefix(ServiceWireConstants.COMMAND_REPLY, 0, Long.BYTES + 2 * Integer.BYTES)
+                .putLong(correlation)
+                .putInt(terminalResult)
+                .putInt(failureCode)
+                .array();
     }
 
     public Reply decodeReplyHeader(byte[] frame) {
@@ -530,9 +537,7 @@ public final class ZLinkServiceM6AWireCodec {
         if (reason < 1 || reason > 12) {
             throw protocol("invalid reject reason");
         }
-        Writer result = prefix(ServiceWireConstants.COMMAND_REJECT, 0);
-        result.u32(reason);
-        return result.toByteArray();
+        return prefix(ServiceWireConstants.COMMAND_REJECT, 0, Integer.BYTES).putInt(reason).array();
     }
 
     public int decodeReject(byte[] frame) {
@@ -549,17 +554,17 @@ public final class ZLinkServiceM6AWireCodec {
         return reason;
     }
 
-    private static Writer prefix(int command, int flags) {
+    private static ByteBuffer prefix(int command, int flags, int bodySize) {
         if ((flags & ~ServiceWireConstants.FLAG_METADATA) != 0) {
             throw protocol("M6A application header contains an unknown flag");
         }
-        Writer result = new Writer();
-        result.u8(ServiceWireConstants.MAGIC_0);
-        result.u8(ServiceWireConstants.MAGIC_1);
-        result.u8(ServiceWireConstants.WIRE_MAJOR);
-        result.u8(command);
-        result.u8(flags);
-        return result;
+        return ByteBuffer.allocate(ZLinkServiceWireCodec.PREFIX_BYTES + bodySize)
+                .order(ByteOrder.BIG_ENDIAN)
+                .put((byte) ServiceWireConstants.MAGIC_0)
+                .put((byte) ServiceWireConstants.MAGIC_1)
+                .put((byte) ServiceWireConstants.WIRE_MAJOR)
+                .put((byte) command)
+                .put((byte) flags);
     }
 
     private static void validateReply(long correlation, int terminal, int failure) {
@@ -690,15 +695,7 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     private static final class Writer {
-        private final ByteArrayOutputStream output;
-
-        Writer() {
-            this(32);
-        }
-
-        Writer(int initialCapacity) {
-            output = new ByteArrayOutputStream(initialCapacity);
-        }
+        private final ByteArrayOutputStream output = new ByteArrayOutputStream();
 
         static byte[] bytes(Consumer consumer) {
             Writer writer = new Writer();
@@ -717,19 +714,18 @@ public final class ZLinkServiceM6AWireCodec {
             if (value < 0 || value > 0xffff) {
                 throw protocol("value exceeds u16");
             }
-            output.writeBytes(
-                    ByteBuffer.allocate(2)
-                            .order(ByteOrder.BIG_ENDIAN)
-                            .putShort((short) value)
-                            .array());
+            output.write(value >>> 8);
+            output.write(value);
         }
 
         void u32(long value) {
             if (value < 0 || value > 0xffff_ffffL) {
                 throw protocol("value exceeds u32");
             }
-            output.writeBytes(
-                    ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt((int) value).array());
+            output.write((int) (value >>> 24));
+            output.write((int) (value >>> 16));
+            output.write((int) (value >>> 8));
+            output.write((int) value);
         }
 
         void u64(long value) {
@@ -745,17 +741,23 @@ public final class ZLinkServiceM6AWireCodec {
          * #u64} instead.
          */
         void opaqueU64(long value) {
-            output.writeBytes(
-                    ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putLong(value).array());
+            for (int shift = Long.SIZE - Byte.SIZE; shift >= 0; shift -= Byte.SIZE) {
+                output.write((int) (value >>> shift));
+            }
         }
 
         void text8(String value, String field) {
+            byte[] bytes = text8Bytes(value, field);
+            u8(bytes.length);
+            raw(bytes);
+        }
+
+        private static byte[] text8Bytes(String value, String field) {
             byte[] bytes = text(value, field);
             if (bytes.length > 0xff) {
                 throw protocol(field + " exceeds text8");
             }
-            u8(bytes.length);
-            raw(bytes);
+            return bytes;
         }
 
         void text16(String value, String field) {
