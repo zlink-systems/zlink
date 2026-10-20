@@ -730,7 +730,10 @@ int main ()
     auto shared = delayed_reply_task (40);
     auto first_waiter = await_shared_reply (shared, 1);
     auto second_waiter = await_shared_reply (shared, 2);
-    if (first_waiter.result ().value () != 41 || second_waiter.result ().value () != 42) {
+    // Settle both waiters first: the second reads `shared` after the first resumes.
+    const auto first_reply = first_waiter.result ();
+    const auto second_reply = second_waiter.result ();
+    if (first_reply.value () != 41 || second_reply.value () != 42) {
         return 32;
     }
 

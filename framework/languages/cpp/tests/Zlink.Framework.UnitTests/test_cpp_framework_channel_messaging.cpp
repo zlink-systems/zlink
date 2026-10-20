@@ -422,21 +422,27 @@ class reentrant_api_route_handler_t
     zlink::framework::route_client_t _routes;
 };
 
+// Shared with the observer so errors arriving after the test scope ended still
+// land in live storage.
+struct dispatch_error_log_t
+{
+    std::vector<zlink::framework::message_dispatch_error_event_t> events;
+    std::mutex mutex;
+};
+
 class recording_dispatch_observer_t
 {
   public:
-    explicit recording_dispatch_observer_t (
-      std::vector<zlink::framework::message_dispatch_error_event_t> &events,
-      std::mutex &mutex,
-      std::filesystem::path log_path = {}) :
-        _events (&events), _mutex (&mutex), _log_path (std::move (log_path))
+    explicit recording_dispatch_observer_t (std::shared_ptr<dispatch_error_log_t> log,
+                                            std::filesystem::path log_path = {}) :
+        _log (std::move (log)), _log_path (std::move (log_path))
     {
     }
 
     void on_dispatch_error (const zlink::framework::message_dispatch_error_event_t &error)
     {
-        std::lock_guard lock (*_mutex);
-        _events->push_back (error);
+        std::lock_guard lock (_log->mutex);
+        _log->events.push_back (error);
         if (!_log_path.empty ()) {
             std::ofstream log (_log_path, std::ios::app);
             log << "dispatch-error" << " surface=" << surface_name (error.surface)
@@ -527,8 +533,7 @@ class recording_dispatch_observer_t
         }
     }
 
-    std::vector<zlink::framework::message_dispatch_error_event_t> *_events;
-    std::mutex *_mutex;
+    std::shared_ptr<dispatch_error_log_t> _log;
     std::filesystem::path _log_path;
 };
 
@@ -1106,8 +1111,9 @@ int main ()
     zlink::framework::zlink_builder_t local_server =
       zlink::framework::test::runtime_failure_builder ();
     local_server.channel ("local").enable_server ().bind ("tcp://127.0.0.1:7401");
-    std::vector<zlink::framework::message_dispatch_error_event_t> dispatch_errors;
-    std::mutex dispatch_errors_mutex;
+    const auto dispatch_error_log = std::make_shared<dispatch_error_log_t> ();
+    auto &dispatch_errors = dispatch_error_log->events;
+    auto &dispatch_errors_mutex = dispatch_error_log->mutex;
     const auto dispatch_log_path =
       std::filesystem::temp_directory_path ()
       / ("zlink-cpp-derr-009-"
@@ -1115,8 +1121,8 @@ int main ()
          + ".log");
     std::filesystem::remove (dispatch_log_path);
     zlink::framework::dispatch_options_t local_dispatch;
-    auto dispatch_observer = std::make_shared<recording_dispatch_observer_t> (
-      dispatch_errors, dispatch_errors_mutex, dispatch_log_path);
+    auto dispatch_observer =
+      std::make_shared<recording_dispatch_observer_t> (dispatch_error_log, dispatch_log_path);
     zlink::framework::detail::dispatch_options_access_t::set_dispatch_error_observer_for_tests (
       local_dispatch,
       [dispatch_observer] (const zlink::framework::message_dispatch_error_event_t &event) {
@@ -3568,7 +3574,8 @@ int main ()
     std::promise<void> release_delayed_backend;
     auto delayed_backend_entered_future = delayed_backend_entered.get_future ();
     auto release_delayed_backend_future = release_delayed_backend.get_future ().share ();
-    std::atomic_bool delayed_completed = false;
+    // The observer owns the flag: the task may complete after an early return.
+    auto delayed_completed = std::make_shared<std::atomic_bool> (false);
     public_route.set_request_backend (
       [&delayed_backend_entered, release_delayed_backend_future, &envelope_codec, &serializers] (
         const zlink::routing_id_t &, const std::optional<std::string> &,
@@ -3592,14 +3599,14 @@ int main ()
         .timeout (std::chrono::milliseconds (50))
         .async<reply_t> ();
     zlink::framework::detail::observe_task_completion (
-      delayed_task, [&delayed_completed] (const zlink::framework::result_t<reply_t> &) {
-          delayed_completed = true;
+      delayed_task, [delayed_completed] (const zlink::framework::result_t<reply_t> &) {
+          *delayed_completed = true;
       });
     if (delayed_backend_entered_future.wait_for (std::chrono::seconds (1))
         != std::future_status::ready) {
         return 63;
     }
-    if (delayed_completed.load ()) {
+    if (delayed_completed->load ()) {
         return 64;
     }
     release_delayed_backend.set_value ();
@@ -3609,11 +3616,11 @@ int main ()
      * instead of reading it in the same breath. */
     const auto delayed_observed_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (1);
-    while (!delayed_completed.load ()
+    while (!delayed_completed->load ()
            && std::chrono::steady_clock::now () < delayed_observed_deadline) {
         std::this_thread::sleep_for (std::chrono::milliseconds (1));
     }
-    if (!delayed_reply || delayed_reply.value ().value != 451 || !delayed_completed.load ()) {
+    if (!delayed_reply || delayed_reply.value ().value != 451 || !delayed_completed->load ()) {
         return 65;
     }
 
