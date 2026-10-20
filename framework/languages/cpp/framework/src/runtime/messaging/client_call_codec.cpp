@@ -121,11 +121,9 @@ envelope_header_t client_call_codec_t::create_envelope (message_kind_t kind,
                                                         std::optional<std::string> topic,
                                                         std::optional<std::string> source) const
 {
-    envelope_header_t header;
-    header.kind = kind;
-    header.channel_name = std::move (channel_name);
-    header.message_name = std::move (message_name);
-    header.content_type = envelope_codec_t::default_content_type;
+    envelope_header_t header{.kind = kind,
+                             .channel_name = std::move (channel_name),
+                             .message_name = std::move (message_name)};
     if (kind == message_kind_t::request) {
         header.correlation_id = next_correlation_id ();
     }
