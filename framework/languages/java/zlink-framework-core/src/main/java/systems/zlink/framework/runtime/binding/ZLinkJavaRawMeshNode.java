@@ -371,7 +371,7 @@ final class ZLinkJavaRawMeshNode
                                                 () ->
                                                         new IllegalStateException(
                                                                 "local MeshNode authority"
-                                                                        + " descriptor is not live")));
+                                                                    + " descriptor is not live")));
     }
 
     ZLinkInternalMeshNode.PeerAuthorityFence localAuthorityFence() {
@@ -4808,8 +4808,8 @@ final class ZLinkJavaRawMeshNode
                             pumpSocket,
                             pendingRawMulticast != null && pendingReceiveAcquire.get() == null
                                     ? Duration.ZERO
-                                    : ingressWaitTimeout);
-            long now = System.nanoTime();
+                                    : managementWaitTimeout(nanoTime.getAsLong()));
+            long now = nanoTime.getAsLong();
             // The existing pump remains this ROUTER's one route observer.
             if ((ready & ZLinkJavaSocketReceivePoller.ROUTE_CHANGED) != 0) {
                 observeSelectedRoutes();
@@ -7314,6 +7314,7 @@ final class ZLinkJavaRawMeshNode
             if (command == ServiceWireConstants.COMMAND_ADMIT) {
                 helloExchanges.put(
                         inbound.source(), new HelloExchange(inbound.routeGeneration(), null, null));
+                refreshAdmissionPending(nanoTime.getAsLong());
                 markAdmissionControlReady(inbound.source(), connectionId, command);
                 // HELLO and the host's SERVING transition can cross. In that
                 // race the peer admits the PREPARING descriptor carried by
@@ -7577,7 +7578,7 @@ final class ZLinkJavaRawMeshNode
     }
 
     /** MeshNode §7.1: every selected route retries HELLO until its ADMIT is received. */
-    private void announceExpectedPeers() {
+    private void announceExpectedPeers(boolean admissionDue) {
         if (peerAdmissionSealed.getAsBoolean()) return;
         selectedRoutes.forEach(
                 (peerRid, generation) -> {
@@ -7586,8 +7587,9 @@ final class ZLinkJavaRawMeshNode
                     HelloExchange current = helloExchanges.get(peerRid);
                     boolean sameRoute = current != null && current.routeGeneration() == generation;
                     if (sameRoute
-                            && (current.submission() == null || !current.submission().isDone()))
-                        return;
+                            && (!admissionDue
+                                    || current.submission() == null
+                                    || !current.submission().isDone())) return;
                     var submission = new CompletableFuture<Void>();
                     var exchange =
                             new HelloExchange(
@@ -7624,8 +7626,35 @@ final class ZLinkJavaRawMeshNode
                 });
     }
 
+    private void refreshAdmissionPending(long nowNanos) {
+        boolean pending = false;
+        if (!peerAdmissionSealed.getAsBoolean()) {
+            for (var route : selectedRoutes.entrySet()) {
+                if (notRequiredPeers.contains(route.getKey())
+                        || rejectedPeers.contains(route.getKey())) continue;
+                HelloExchange exchange = helloExchanges.get(route.getKey());
+                if (exchange == null
+                        || exchange.routeGeneration() != route.getValue()
+                        || exchange.submission() != null) {
+                    pending = true;
+                    break;
+                }
+            }
+        }
+        liveness.setAdmissionPending(pending, nowNanos);
+    }
+
+    private Duration managementWaitTimeout(long nowNanos) {
+        long remaining = liveness.nextDeadlineNanos(nowNanos) - nowNanos;
+        return remaining <= 0
+                ? Duration.ZERO
+                : Duration.ofNanos(Math.min(remaining, ingressWaitTimeout.toNanos()));
+    }
+
     private void tickLiveness(long nowNanos) {
-        announceExpectedPeers();
+        refreshAdmissionPending(nowNanos);
+        boolean admissionDue = liveness.tickAdmission(nowNanos);
+        announceExpectedPeers(admissionDue);
         ZLinkServiceLivenessRegistry.Tick tick = liveness.tick(nowNanos);
         for (ZLinkServiceLivenessRegistry.Probe probe : tick.probes()) {
             try {
