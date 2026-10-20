@@ -4601,19 +4601,64 @@ test('Instance Spot activation dispatch rematerializes a missing application bef
   assert.deepEqual(events, ['configure', 'initialize', 'handle:9']);
 });
 
+const registrationFixture = JSON.parse(
+  readFileSync('../../runtime/protocol/fixtures/bind-registration-v1.json', 'utf8')
+) as {
+  current: RegistrationVector;
+  cases: (RegistrationVector & { name: string; success: boolean })[];
+};
+interface RegistrationVector {
+  node: string;
+  lifecycle: string;
+  session: string;
+  generation: string;
+  ownerId: string;
+  lease: string;
+}
+for (const vector of registrationFixture.cases) {
+  test(`bind registration table: ${vector.name}`, () => {
+    const registry = new ServiceStatefulRegistry('actor-owner', 1n);
+    const actor = registry.createActor('registration-actor');
+    const binding = (value: RegistrationVector) => ({
+      actor: actor.ref,
+      sessionRid: value.session,
+      sessionOwnerNodeRid: value.node,
+      sessionOwnerNodeGeneration: BigInt(value.lifecycle),
+      sessionOwnerId: value.ownerId,
+      sessionOwnerLeaseGeneration: BigInt(value.lease),
+      bindingGeneration: BigInt(value.generation),
+      membershipEpoch: actor.membershipEpoch
+    });
+    const initial = binding(registrationFixture.current);
+    registry.installSessionBinding(initial);
+    if (vector.success) {
+      const accepted = registry.installSessionBinding(binding(vector));
+      assert.equal(accepted.bindingGeneration, BigInt(vector.generation));
+      assert.deepEqual(registry.binding(actor.ref), accepted);
+    } else {
+      assert.throws(
+        () => registry.installSessionBinding(binding(vector)),
+        ServiceStaleGenerationError
+      );
+      assert.deepEqual(registry.binding(actor.ref), initial);
+    }
+  });
+}
 test('membership and session binding generations advance and remain scoped to their session owner', async () => {
   const registry = new ServiceStatefulRegistry('node-a', 1n);
   const firstSpot = registry.createSpot('spot-a');
   const secondSpot = registry.createSpot('spot-b');
   const actor = registry.createActor('actor-a', 'Player', firstSpot.ref);
-  const binding = registry.bindSession(
-    actor.ref,
-    'session-a',
-    'node-session',
-    3n,
-    'node-session',
-    3n
-  );
+  const binding = registry.installSessionBinding({
+    actor: actor.ref,
+    sessionRid: 'session-a',
+    sessionOwnerNodeRid: 'node-session',
+    sessionOwnerNodeGeneration: 3n,
+    sessionOwnerId: 'node-session',
+    sessionOwnerLeaseGeneration: 3n,
+    bindingGeneration: 1n,
+    membershipEpoch: actor.membershipEpoch
+  });
   const transition = registry.joinActor(actor.ref, secondSpot.ref);
   assert.equal(transition.previousMembershipEpoch, 1n);
   assert.equal(transition.currentMembershipEpoch, 2n);
@@ -5312,7 +5357,12 @@ test('active session bind replies only after the Actor binding control turn', as
   let ingress: ((record: RawServiceIngressRecord) => string | undefined) | undefined;
   const mailbox: Array<{
     readonly stateful?: {
-      readonly kindData?: { readonly kind?: string; readonly transition?: string };
+      readonly kindData?: {
+        readonly kind?: string;
+        readonly transition?: string;
+        readonly sessionOwnerId?: string;
+        readonly sessionOwnerLeaseGeneration?: bigint;
+      };
       reply(terminalResult: number, failureCode: number): boolean;
     };
   }> = [];
@@ -5361,7 +5411,7 @@ test('active session bind replies only after the Actor binding control turn', as
       ownerLeaseGeneration: 3n
     },
     'session-linearized',
-    { state: 'active', generation: 12n }
+    { state: 'active', generation: 11n }
   );
 
   assert.equal(
@@ -5420,6 +5470,32 @@ test('active session bind replies only after the Actor binding control turn', as
     11n
   );
 
+  runtime.setSessionOwnerDescriptors({
+    local: () => testSessionOwnerToken('actor-node', 3n),
+    peer: async () => ({ ownerId: 'renewed-owner', leaseGeneration: 999n })
+  });
+  await ingress?.({
+    command: M6bServiceWireCommand.boundSessionBind,
+    flags: 0,
+    sourceRoutingId: 'session-node',
+    requestSequence: 10n,
+    parts: [duplicateHeader]
+  });
+  const renewedControl = mailbox.shift()!.stateful!;
+  assert.equal(renewedControl.kindData?.sessionOwnerId, 'renewed-owner');
+  assert.equal(renewedControl.reply(RequestResult.Ok, 0), true);
+  assert.equal(
+    renewedControl.kindData?.sessionOwnerId,
+    testSessionOwnerToken('session-node', 3n).ownerId
+  );
+  assert.equal(
+    renewedControl.kindData?.sessionOwnerLeaseGeneration,
+    testSessionOwnerToken('session-node', 3n).leaseGeneration
+  );
+  assert.equal(
+    runtime.registry.binding(actor.ref)?.sessionOwnerId,
+    testSessionOwnerToken('session-node', 3n).ownerId
+  );
   const tombstoneHeader = encodeBoundSessionBindHeader(
     45n,
     {
@@ -5437,12 +5513,12 @@ test('active session bind replies only after the Actor binding control turn', as
       flags: 0,
       sourceRoutingId: 'session-node',
       sourceNodeGeneration: 3n,
-      requestSequence: 10n,
+      requestSequence: 11n,
       parts: [tombstoneHeader]
     }),
     'infrastructure'
   );
-  assert.equal(replies.length, 2);
+  assert.equal(replies.length, 3);
   assert.equal(runtime.registry.binding(actor.ref)?.bindingGeneration, 11n);
   assert.deepEqual(mailbox[0]!.stateful?.kindData, {
     kind: 'actorBinding',
@@ -5461,7 +5537,7 @@ test('active session bind replies only after the Actor binding control turn', as
   assert.equal(mailbox.shift()!.stateful!.reply(RequestResult.Ok, 0), true);
   assert.equal(runtime.registry.binding(actor.ref), undefined);
   assert.equal(
-    decodeStatefulReply(replies[2]![0]!, 45n, 'streamUnbind').terminalResult,
+    decodeStatefulReply(replies[3]![0]!, 45n, 'streamUnbind').terminalResult,
     RequestResult.Ok
   );
   runtime.close();

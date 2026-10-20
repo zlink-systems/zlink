@@ -290,6 +290,38 @@ public final class ZLinkServiceM6BWireCodec {
         return writer.toByteArray();
     }
 
+    public record BoundSessionBindReply(
+            long correlation,
+            int terminalResult,
+            int failureCode,
+            long bindingGeneration,
+            long authorityOwnerGeneration) {}
+
+    public byte[] encodeBoundSessionBindReply(BoundSessionBindReply reply, boolean active) {
+        Writer writer =
+                replyPrefix(reply.correlation(), reply.terminalResult(), reply.failureCode());
+        if (active && reply.terminalResult() == 0) {
+            writer.nonzero(reply.bindingGeneration(), "bindingGeneration");
+            writer.nonzero(reply.authorityOwnerGeneration(), "authorityOwnerGeneration");
+        }
+        return writer.toByteArray();
+    }
+
+    public BoundSessionBindReply decodeBoundSessionBindReply(byte[] frame, boolean active) {
+        Reader reader = replyReader(frame);
+        long correlation = reader.nonzeroU64("correlation");
+        int terminal = reader.u32("terminalResult");
+        int failure = reader.u32("failureCode");
+        if (!validTerminalFailurePair(terminal, failure)) {
+            throw protocol("invalid bound Session binding terminal reply");
+        }
+        long binding = active && terminal == 0 ? reader.nonzeroU64("bindingGeneration") : 0;
+        long authority =
+                active && terminal == 0 ? reader.nonzeroU64("authorityOwnerGeneration") : 0;
+        reader.end();
+        return new BoundSessionBindReply(correlation, terminal, failure, binding, authority);
+    }
+
     public BoundSessionBind decodeBoundSessionBindHeader(byte[] frame) {
         Reader reader = new Reader(frame);
         Header header = reader.prefix();
