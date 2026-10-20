@@ -101,16 +101,16 @@ public final class ZLinkServiceM6AWireCodec {
         if ((header >>> Byte.SIZE) != expectedCommand || (header & 0xff) != 0) {
             throw protocol("unexpected admission header");
         }
-        Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
-        if (reader.u8("topologyKind") != 1) {
+        ByteBuffer reader = Reader.view(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
+        if (Reader.u8(reader, "topologyKind") != 1) {
             throw protocol("admission is not RouteMesh topology");
         }
-        long routeLength = reader.u32("routeLength");
+        long routeLength = Reader.u32(reader, "routeLength");
         if (routeLength != reader.remaining()) {
             throw protocol("RouteMesh admission length mismatch");
         }
-        String meshName = reader.text8("meshName");
-        String securityIdentity = reader.text8("securityIdentity");
+        String meshName = Reader.text8(reader, "meshName");
+        String securityIdentity = Reader.text8(reader, "securityIdentity");
         //  spec 13 §7.1 / service-wire-v1.schema.json `nonzero-u64`: the
         //  lifecycle generation is an OPAQUE equality token produced by a
         //  CSPRNG -- "which lifecycle is newer isn't judged by numeric
@@ -121,18 +121,18 @@ public final class ZLinkServiceM6AWireCodec {
         //  about half the time, at random, per process lifetime. Java keeps
         //  the raw 64-bit pattern in a long and only ever compares it for
         //  equality, which is exactly the contract.
-        long lifecycleGeneration = reader.opaqueNonzeroU64("lifecycleGeneration");
-        long descriptorRevision = reader.nonzeroU64("descriptorRevision");
-        String endpoint = reader.text16("advertisedEndpoint");
-        int channelCount = reader.u16("channelCount");
+        long lifecycleGeneration = Reader.opaqueNonzeroU64(reader, "lifecycleGeneration");
+        long descriptorRevision = Reader.nonzeroU64(reader, "descriptorRevision");
+        String endpoint = Reader.text16(reader, "advertisedEndpoint");
+        int channelCount = Reader.u16(reader, "channelCount");
         List<ZLinkServiceNodeDescriptor.Channel> channels = new ArrayList<>(channelCount);
         for (int index = 0; index < channelCount; index++) {
             channels.add(
                     new ZLinkServiceNodeDescriptor.Channel(
-                            reader.text8("channelName"),
-                            reader.intU32("channelWeight")));
+                            Reader.text8(reader, "channelName"),
+                            Reader.intU32(reader, "channelWeight")));
         }
-        long extensionLength = reader.u32("extensionLength");
+        long extensionLength = Reader.u32(reader, "extensionLength");
         if (extensionLength != reader.remaining()) {
             throw protocol("descriptor extension length mismatch");
         }
@@ -145,40 +145,40 @@ public final class ZLinkServiceM6AWireCodec {
         boolean[] capacityFound = new boolean[5];
         int previousId = 0;
         while (reader.remaining() > 0) {
-            int id = reader.u8("extensionId");
-            int length = reader.intU32("extensionFieldLength");
+            int id = Reader.u8(reader, "extensionId");
+            int length = Reader.intU32(reader, "extensionFieldLength");
             if (id <= previousId || length > reader.remaining()) {
                 throw protocol("invalid descriptor TLV");
             }
             previousId = id;
-            Reader value = new Reader(reader.bytes(length, "extensionValue"));
+            ByteBuffer value = Reader.view(Reader.bytes(reader, length, "extensionValue"));
             switch (id) {
-                case FIELD_STATE -> state = stateFromWire(value.u8("state"));
+                case FIELD_STATE -> state = stateFromWire(Reader.u8(value, "state"));
                 case FIELD_APPLICATION_VERSION ->
-                        applicationVersion = value.nonnegativeU64("applicationVersion");
+                        applicationVersion = Reader.nonnegativeU64(value, "applicationVersion");
                 case FIELD_PROTOCOL_CAPABILITIES -> {
-                    int count = value.u16("capabilityCount");
+                    int count = Reader.u16(value, "capabilityCount");
                     List<String> found = new ArrayList<>(count);
                     for (int index = 0; index < count; index++) {
-                        found.add(value.text8("protocolCapability"));
+                        found.add(Reader.text8(value, "protocolCapability"));
                     }
                     capabilities = List.copyOf(found);
                 }
-                case FIELD_OBJECT_ROLE -> role = roleFromWire(value.u8("objectRole"));
+                case FIELD_OBJECT_ROLE -> role = roleFromWire(Reader.u8(value, "objectRole"));
                 case FIELD_PLACEMENT_WEIGHT,
                         FIELD_ACTIVE_CAPACITY_LIMIT,
                         FIELD_PENDING_CAPACITY_LIMIT,
                         FIELD_ACTIVE_CAPACITY_USED,
                         FIELD_PENDING_CAPACITY_USED -> {
                     int offset = id - FIELD_PLACEMENT_WEIGHT;
-                    capacity[offset] = value.intU32("capacity");
+                    capacity[offset] = Reader.intU32(value, "capacity");
                     capacityFound[offset] = true;
                 }
-                default -> value.skipRemaining();
+                default -> Reader.skipRemaining(value);
             }
-            value.end();
+            Reader.end(value);
         }
-        reader.end();
+        Reader.end(reader);
         if (state == null || applicationVersion == null || capabilities == null || role == null) {
             throw protocol("descriptor extension omits a required field");
         }
@@ -222,9 +222,9 @@ public final class ZLinkServiceM6AWireCodec {
         if ((header >>> Byte.SIZE) != ServiceWireConstants.COMMAND_NODE_REQUEST) {
             throw protocol("invalid nodeRequest header");
         }
-        Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
-        long correlation = reader.opaqueNonzeroU64("correlation");
-        reader.end();
+        ByteBuffer reader = Reader.view(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
+        long correlation = Reader.opaqueNonzeroU64(reader, "correlation");
+        Reader.end(reader);
         return correlation;
     }
 
@@ -241,9 +241,9 @@ public final class ZLinkServiceM6AWireCodec {
         if ((header >>> Byte.SIZE) != ServiceWireConstants.COMMAND_CHANNEL_SEND) {
             throw protocol("invalid channelSend header");
         }
-        Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
-        String channelName = reader.text8("channelName");
-        reader.end();
+        ByteBuffer reader = Reader.view(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
+        String channelName = Reader.text8(reader, "channelName");
+        Reader.end(reader);
         return channelName;
     }
 
@@ -265,10 +265,10 @@ public final class ZLinkServiceM6AWireCodec {
         if ((header >>> Byte.SIZE) != ServiceWireConstants.COMMAND_CHANNEL_REQUEST) {
             throw protocol("invalid channelRequest header");
         }
-        Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
-        long correlation = reader.opaqueNonzeroU64("correlation");
-        String channelName = reader.text8("channelName");
-        reader.end();
+        ByteBuffer reader = Reader.view(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
+        long correlation = Reader.opaqueNonzeroU64(reader, "correlation");
+        String channelName = Reader.text8(reader, "channelName");
+        Reader.end(reader);
         return new ChannelRequest(correlation, channelName);
     }
 
@@ -294,12 +294,12 @@ public final class ZLinkServiceM6AWireCodec {
         //  requires the fixed 16-byte body to be present; trailing bytes
         //  belong to the tail and are validated by the operation-specific
         //  reply decoder, matching Node/.NET's decodeReplyHeader semantics.
-        //  Do not call reader.end() here: it would reject a reply that
+        //  Do not call Reader.end(reader) here: it would reject a reply that
         //  carries a non-empty tail.
-        Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
-        long correlation = reader.opaqueNonzeroU64("correlation");
-        int terminal = reader.intU32("terminalResult");
-        int failure = reader.intU32("failureCode");
+        ByteBuffer reader = Reader.view(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
+        long correlation = Reader.opaqueNonzeroU64(reader, "correlation");
+        int terminal = Reader.intU32(reader, "terminalResult");
+        int failure = Reader.intU32(reader, "failureCode");
         validateReply(correlation, terminal, failure);
         return new Reply(correlation, terminal, failure);
     }
@@ -437,7 +437,7 @@ public final class ZLinkServiceM6AWireCodec {
         return decodeMultipartView(
                         payload.packetName(),
                         payload.contentType(),
-                        new Reader(payload.payloadForCodec()))
+                        Reader.view(payload.payloadForCodec()))
                 .detachAll();
     }
 
@@ -451,47 +451,47 @@ public final class ZLinkServiceM6AWireCodec {
      * parts. The caller must keep the frame owner alive until the returned view is closed.
      */
     public static ZLinkFrameworkMultipartView decodeFrameworkMultipartFrameView(ByteBuffer frame) {
-        Reader reader = new Reader(frame);
-        if (reader.u8("version") != 1) {
+        ByteBuffer reader = Reader.view(frame);
+        if (Reader.u8(reader, "version") != 1) {
             throw protocol("invalid application payload version");
         }
-        if (reader.u32("bodyLength") != reader.remaining()) {
+        if (Reader.u32(reader, "bodyLength") != reader.remaining()) {
             throw protocol("application payload body length mismatch");
         }
         String packetName;
         String contentType;
         // The generated profile's two text8 fields are fixed bytes; compare them in place and
         // decode text only for any other profile, which the view check then rejects.
-        if (reader.skipIfEquals(FRAMEWORK_MULTIPART_PROFILE_FIELDS)) {
+        if (Reader.skipIfEquals(reader, FRAMEWORK_MULTIPART_PROFILE_FIELDS)) {
             packetName = ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME;
             contentType = ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE;
         } else {
-            packetName = reader.text8("packetName");
-            contentType = reader.text8("contentType");
+            packetName = Reader.text8(reader, "packetName");
+            contentType = Reader.text8(reader, "contentType");
         }
-        if (reader.intU32("payloadLength") != reader.remaining()) {
+        if (Reader.intU32(reader, "payloadLength") != reader.remaining()) {
             throw protocol("application payload length mismatch");
         }
         return decodeMultipartView(packetName, contentType, reader);
     }
 
     private static ZLinkFrameworkMultipartView decodeMultipartView(
-            String packetName, String contentType, Reader reader) {
+            String packetName, String contentType, ByteBuffer reader) {
         if (!ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME.equals(packetName)
                 || !ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE.equals(contentType)) {
             throw protocol("framework application payload profile is unsupported");
         }
 
-        long count = reader.u32("frameworkMultipartPartCount");
+        long count = Reader.u32(reader, "frameworkMultipartPartCount");
         if (count == 0 || count > reader.remaining() / (long) Integer.BYTES) {
             throw protocol("framework multipart part count is invalid");
         }
         List<ByteBuffer> parts = new ArrayList<>((int) count);
         for (long index = 0; index < count; index++) {
-            int size = reader.intU32("frameworkMultipartPartLength");
-            parts.add(reader.buffer(size, "frameworkMultipartPart"));
+            int size = Reader.intU32(reader, "frameworkMultipartPartLength");
+            parts.add(Reader.buffer(reader, size, "frameworkMultipartPart"));
         }
-        reader.end();
+        Reader.end(reader);
         return new ZLinkFrameworkMultipartView(parts);
     }
 
@@ -501,22 +501,22 @@ public final class ZLinkServiceM6AWireCodec {
 
     /** Borrows the frame; its owner must outlive payload decoding or encoding. */
     public ApplicationPayload decodeApplicationPayload(ByteBuffer frame) {
-        Reader reader = new Reader(frame);
-        if (reader.u8("version") != 1) {
+        ByteBuffer reader = Reader.view(frame);
+        if (Reader.u8(reader, "version") != 1) {
             throw protocol("invalid application payload version");
         }
-        long bodyLength = reader.u32("bodyLength");
+        long bodyLength = Reader.u32(reader, "bodyLength");
         if (bodyLength != reader.remaining()) {
             throw protocol("application payload body length mismatch");
         }
-        String packetName = reader.text8("packetName");
-        String contentType = reader.text8("contentType");
-        int payloadLength = reader.intU32("payloadLength");
+        String packetName = Reader.text8(reader, "packetName");
+        String contentType = Reader.text8(reader, "contentType");
+        int payloadLength = Reader.intU32(reader, "payloadLength");
         if (payloadLength != reader.remaining()) {
             throw protocol("application payload length mismatch");
         }
-        ByteBuffer payload = reader.buffer(payloadLength, "payload");
-        reader.end();
+        ByteBuffer payload = Reader.buffer(reader, payloadLength, "payload");
+        Reader.end(reader);
         return new ApplicationPayload(packetName, contentType, payload);
     }
 
@@ -551,9 +551,9 @@ public final class ZLinkServiceM6AWireCodec {
         if ((header >>> Byte.SIZE) != ServiceWireConstants.COMMAND_REJECT || (header & 0xff) != 0) {
             throw protocol("invalid reject record");
         }
-        Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
-        int reason = reader.intU32("reason");
-        reader.end();
+        ByteBuffer reader = Reader.view(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
+        int reason = Reader.intU32(reader, "reason");
+        Reader.end(reader);
         if (reason < 1 || reason > 12) {
             throw protocol("invalid reject reason");
         }
@@ -807,58 +807,49 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     private static final class Reader {
-        private final ByteBuffer input;
+        private Reader() {}
 
-        Reader(byte[] value) {
-            this(value, 0);
+        static ByteBuffer view(byte[] value) {
+            return view(value, 0);
         }
 
-        Reader(ByteBuffer value) {
-            input = Objects.requireNonNull(value, "value").slice().order(ByteOrder.BIG_ENDIAN);
+        static ByteBuffer view(ByteBuffer value) {
+            return Objects.requireNonNull(value, "value").slice().order(ByteOrder.BIG_ENDIAN);
         }
 
-        Reader(byte[] value, int offset) {
+        static ByteBuffer view(byte[] value, int offset) {
             Objects.requireNonNull(value, "value");
             if (offset < 0 || offset > value.length) {
                 throw protocol("invalid reader offset");
             }
-            input = ByteBuffer.wrap(value).order(ByteOrder.BIG_ENDIAN);
-            input.position(offset);
+            return ByteBuffer.wrap(value).order(ByteOrder.BIG_ENDIAN).position(offset);
         }
 
-        int u8(String field) {
-            require(1, field);
+        static int u8(ByteBuffer input, String field) {
+            require(input, 1, field);
             return Byte.toUnsignedInt(input.get());
         }
 
-        int u16(String field) {
-            require(2, field);
+        static int u16(ByteBuffer input, String field) {
+            require(input, 2, field);
             return Short.toUnsignedInt(input.getShort());
         }
 
-        long u32(String field) {
-            require(4, field);
+        static long u32(ByteBuffer input, String field) {
+            require(input, 4, field);
             return Integer.toUnsignedLong(input.getInt());
         }
 
-        int intU32(String field) {
-            long value = u32(field);
+        static int intU32(ByteBuffer input, String field) {
+            long value = u32(input, field);
             if (value > Integer.MAX_VALUE) {
                 throw protocol(field + " exceeds JVM integer range");
             }
             return (int) value;
         }
 
-        int positiveU32(String field) {
-            int value = intU32(field);
-            if (value <= 0) {
-                throw protocol(field + " must be positive");
-            }
-            return value;
-        }
-
-        long nonzeroU64(String field) {
-            long value = nonnegativeU64(field);
+        static long nonzeroU64(ByteBuffer input, String field) {
+            long value = nonnegativeU64(input, field);
             if (value == 0) {
                 throw protocol(field + " must be non-zero");
             }
@@ -870,8 +861,8 @@ public final class ZLinkServiceM6AWireCodec {
          * range is valid and the raw bit pattern is kept in a long. Only fields that are compared
          * for ORDER (such as descriptorRevision) may use the range-checked {@link #nonzeroU64}.
          */
-        long opaqueNonzeroU64(String field) {
-            require(8, field);
+        static long opaqueNonzeroU64(ByteBuffer input, String field) {
+            require(input, 8, field);
             long value = input.getLong();
             if (value == 0) {
                 throw protocol(field + " must be non-zero");
@@ -879,8 +870,8 @@ public final class ZLinkServiceM6AWireCodec {
             return value;
         }
 
-        long nonnegativeU64(String field) {
-            require(8, field);
+        static long nonnegativeU64(ByteBuffer input, String field) {
+            require(input, 8, field);
             long value = input.getLong();
             if (value < 0) {
                 throw protocol(field + " exceeds supported JVM u64 range");
@@ -888,7 +879,7 @@ public final class ZLinkServiceM6AWireCodec {
             return value;
         }
 
-        String text8(String field) {
+        static String text8(ByteBuffer input, String field) {
             if (!input.hasRemaining()) {
                 throw protocol("truncated " + field + ".length");
             }
@@ -896,10 +887,10 @@ public final class ZLinkServiceM6AWireCodec {
             if (length == 0) {
                 throw protocol(field + " must be non-empty");
             }
-            return decodeText(bytes(length, field), field);
+            return decodeText(bytes(input, length, field), field);
         }
 
-        String text16(String field) {
+        static String text16(ByteBuffer input, String field) {
             if (input.remaining() < Short.BYTES) {
                 throw protocol("truncated " + field + ".length");
             }
@@ -907,11 +898,11 @@ public final class ZLinkServiceM6AWireCodec {
             if (length == 0 || length > MAX_ENDPOINT_BYTES) {
                 throw protocol(field + " has invalid length");
             }
-            return decodeText(bytes(length, field), field);
+            return decodeText(bytes(input, length, field), field);
         }
 
         /** Consumes {@code expected} when the next bytes equal it; otherwise reads nothing. */
-        boolean skipIfEquals(byte[] expected) {
+        static boolean skipIfEquals(ByteBuffer input, byte[] expected) {
             int start = input.position();
             if (input.remaining() < expected.length) {
                 return false;
@@ -925,39 +916,31 @@ public final class ZLinkServiceM6AWireCodec {
             return true;
         }
 
-        byte[] bytes(int length, String field) {
-            require(length, field);
+        static byte[] bytes(ByteBuffer input, int length, String field) {
+            require(input, length, field);
             byte[] result = new byte[length];
             input.get(result);
             return result;
         }
 
-        Message message(int length, String field) {
-            return Message.from(buffer(length, field));
-        }
-
-        ByteBuffer buffer(int length, String field) {
-            require(length, field);
+        static ByteBuffer buffer(ByteBuffer input, int length, String field) {
+            require(input, length, field);
             ByteBuffer result = input.slice(input.position(), length);
             input.position(input.position() + length);
             return result;
         }
 
-        int remaining() {
-            return input.remaining();
-        }
-
-        void skipRemaining() {
+        static void skipRemaining(ByteBuffer input) {
             input.position(input.limit());
         }
 
-        void end() {
+        static void end(ByteBuffer input) {
             if (input.hasRemaining()) {
                 throw protocol("trailing bytes are forbidden");
             }
         }
 
-        private void require(int length, String field) {
+        private static void require(ByteBuffer input, int length, String field) {
             if (length < 0 || input.remaining() < length) {
                 throw protocol("truncated " + field);
             }
