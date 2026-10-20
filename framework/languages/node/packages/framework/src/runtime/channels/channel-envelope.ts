@@ -1,5 +1,4 @@
 import type { Message } from '../../contracts/Common/Message';
-import { ZLinkBufferMessage } from '../backend/runtime-message';
 import type { ZLinkBackendMessageLike as MessageLike } from '../backend/runtime-values';
 import { randomBytes } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
@@ -98,7 +97,7 @@ const CHANNEL_CORRELATION_TEXT = /^[0-9a-f]{32}$/;
 const CHANNEL_FLOW_FIELD = ',"flowId":';
 // A flow id is a lowercase UUIDv7 (spec 27 §3): fixed 36 JSON-safe ASCII bytes.
 const PREPARED_CHANNEL_FLOW = '00000000-0000-7000-8000-000000000000';
-const CHANNEL_FLOW_TEXT = /^[0-9a-f-]{36}$/;
+const CHANNEL_FLOW_TEXT = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
 // A per-process random 64-bit prefix followed by a per-process counter, both
 // as lowercase hex: unique among the runtime's pending requests (spec 06-obs/04
@@ -109,9 +108,11 @@ let channelCorrelationCounter = 0;
 
 export function newChannelCorrelationId(): string {
   channelCorrelationCounter += 1;
+  const suffix = channelCorrelationCounter.toString(16);
   return (
     CHANNEL_CORRELATION_PREFIX +
-    channelCorrelationCounter.toString(16).padStart(CHANNEL_CORRELATION_TEXT_LENGTH / 2, '0')
+    PREPARED_CHANNEL_CORRELATION.slice(suffix.length, CHANNEL_CORRELATION_TEXT_LENGTH / 2) +
+    suffix
   );
 }
 
@@ -166,33 +167,21 @@ export function encodeChannelEnvelopePartsAtDeadline(
     throw new RangeError('deadlineUnixMs must be a positive safe integer.');
   }
   const messageName = resolveFrameworkPacketName(payload, packetName, 'Channel');
-  const encoded = encodePayload(
+  return encodePayload(
     payload,
     codecsForFrameworkPacket(messageName, codecs),
     messageName,
-    'payload'
+    'payload',
+    kind,
+    channelName,
+    correlationId,
+    deadlineUnixMs,
+    topic,
+    createFlow,
+    metadata,
+    undefined,
+    codecs
   );
-  const flow = createFlow ? currentOrCreateFlow('Application') : undefined;
-  const envelopeCorrelationId = correlationIdForOutboundKind(kind, correlationId);
-  return [
-    encodeChannelHeader(
-      kind,
-      channelName,
-      messageName,
-      encoded.contentType,
-      envelopeCorrelationId,
-      deadlineUnixMs === undefined ? null : new Date(deadlineUnixMs).toISOString(),
-      topic ?? null,
-      null,
-      null,
-      undefined,
-      applicationMetadataRecord(metadata),
-      flow?.flowId,
-      flow?.flowOrigin,
-      codecs
-    ),
-    encoded.message
-  ];
 }
 
 export function encodeChannelPublishEnvelopeParts(
@@ -205,31 +194,19 @@ export function encodeChannelPublishEnvelopeParts(
   metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
 ): readonly MessageLike[] {
   const messageName = resolveFrameworkPacketName(payload, packetName, 'Channel');
-  const encoded = encodePayload(
+  return encodePayload(
     payload,
     codecsForFrameworkPacket(messageName, codecs),
     messageName,
-    'payload'
+    'payload',
+    ZLinkChannelMessageKind.Publish,
+    channelName,
+    undefined,
+    undefined,
+    topic,
+    createFlow,
+    metadata
   );
-  const flow = createFlow ? currentOrCreateFlow('Application') : undefined;
-  return [
-    encodeChannelHeader(
-      ZLinkChannelMessageKind.Publish,
-      channelName,
-      messageName,
-      encoded.contentType,
-      null,
-      null,
-      topic,
-      null,
-      null,
-      undefined,
-      applicationMetadataRecord(metadata),
-      flow?.flowId,
-      flow?.flowOrigin
-    ),
-    encoded.message
-  ];
 }
 
 export function encodeChannelReplyParts(
@@ -237,31 +214,21 @@ export function encodeChannelReplyParts(
   payload: unknown,
   codecs?: ZLinkChannelEnvelopeCodecRegistry
 ): readonly MessageLike[] {
-  const encoded = encodePayload(
+  return encodePayload(
     payload ?? Buffer.alloc(0),
     codecsForFrameworkPacket(request.messageName, codecs),
     request.messageName,
-    'reply'
+    'reply',
+    ZLinkChannelMessageKind.Response,
+    request.channelName,
+    request.correlationId ?? undefined,
+    undefined,
+    undefined,
+    false,
+    EMPTY_OUTBOUND_METADATA,
+    request,
+    codecs
   );
-  return [
-    encodeChannelHeader(
-      ZLinkChannelMessageKind.Response,
-      request.channelName,
-      request.messageName,
-      encoded.contentType,
-      request.correlationId,
-      null,
-      null,
-      undefined,
-      undefined,
-      undefined,
-      EMPTY_APPLICATION_METADATA,
-      request.flowId,
-      request.flowOrigin,
-      codecs
-    ),
-    encoded.message
-  ];
 }
 
 /**
@@ -364,20 +331,18 @@ export function decodeChannelReply<TReply>(
   ) {
     throw unsupportedChannelContentType(header.contentType);
   }
-  if (parts.length < 2 || parts[1].data().length === 0) {
+  const body = parts.length < 2 ? undefined : parts[1].data();
+  if (body === undefined || body.length === 0) {
     return undefined as TReply;
   }
   if (header.contentType === BINARY_CONTENT_TYPE) {
-    return ZLinkBufferMessage.retainPayload(parts[1]) as TReply;
+    return body as TReply;
   }
   if (serializer !== undefined) {
-    return serializer.deserialize<TReply>(
-      encodedPayloadFromOwned(parts[1].data()),
-      Object as never
-    );
+    return serializer.deserialize<TReply>(encodedPayloadFromOwned(body), Object as never);
   }
   return parseWireJson(
-    parts[1].data().toString(),
+    body.toString(),
     readZLinkPacketJsonContract(header.messageName)?.reply
   ) as TReply;
 }
@@ -491,35 +456,64 @@ function encodePayload(
   value: unknown,
   codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
   packetName: string,
-  contractPart: 'payload' | 'reply'
-): {
-  readonly contentType: string;
-  readonly message: MessageLike;
-} {
+  contractPart: 'payload' | 'reply',
+  kind: ZLinkChannelMessageKind,
+  channelName: string,
+  correlationId: string | undefined,
+  deadlineUnixMs: number | undefined,
+  topic: string | undefined,
+  createFlow: boolean,
+  metadata: ReadonlyMap<string, string>,
+  request?: ZLinkChannelEnvelopeHeader,
+  headerCodecs?: ZLinkChannelEnvelopeCodecRegistry
+): readonly MessageLike[] {
+  let declaredType;
+  let contentType: string;
+  let message: MessageLike;
   if (isZLinkMessage(value) && value.isEncoded()) {
     const payload = value.toEncodedPayload();
-    return {
-      contentType: BINARY_CONTENT_TYPE,
-      message: borrowEncodedPayload(payload) ?? payload.data()
-    };
+    contentType = BINARY_CONTENT_TYPE;
+    message = borrowEncodedPayload(payload) ?? payload.data();
+  } else {
+    if (isZLinkMessage(value)) {
+      declaredType = readZLinkMessageDeclaredType(value);
+      value = value.decode();
+    }
+    const selected = selectSerializerWithContentType(value, codecs, declaredType);
+    if (
+      selected !== undefined &&
+      !(Buffer.isBuffer(value) || value instanceof Uint8Array || isMessage(value))
+    ) {
+      const payload = selected.serializer.serialize(value);
+      contentType = selected.contentType;
+      message = borrowEncodedPayload(payload) ?? payload.data();
+    } else {
+      contentType = contentTypeOf(value);
+      message = toMessageLike(value, readZLinkPacketJsonContract(packetName)?.[contractPart]);
+    }
   }
-  const declaredType = isZLinkMessage(value) ? readZLinkMessageDeclaredType(value) : undefined;
-  if (isZLinkMessage(value)) value = value.decode();
-  const selected = selectSerializerWithContentType(value, codecs, declaredType);
-  if (
-    selected !== undefined &&
-    !(Buffer.isBuffer(value) || value instanceof Uint8Array || isMessage(value))
-  ) {
-    const payload = selected.serializer.serialize(value);
-    return {
-      contentType: selected.contentType,
-      message: borrowEncodedPayload(payload) ?? payload.data()
-    };
-  }
-  return {
-    contentType: contentTypeOf(value),
-    message: toMessageLike(value, readZLinkPacketJsonContract(packetName)?.[contractPart])
-  };
+  const flow = request ?? (createFlow ? currentOrCreateFlow('Application') : undefined);
+  return [
+    encodeChannelHeader(
+      kind,
+      channelName,
+      packetName,
+      contentType,
+      request === undefined
+        ? correlationIdForOutboundKind(kind, correlationId)
+        : request.correlationId,
+      deadlineUnixMs === undefined ? null : new Date(deadlineUnixMs).toISOString(),
+      topic ?? null,
+      contractPart === 'reply' ? undefined : null,
+      contractPart === 'reply' ? undefined : null,
+      undefined,
+      applicationMetadataRecord(metadata),
+      flow?.flowId,
+      flow?.flowOrigin,
+      headerCodecs
+    ),
+    message
+  ];
 }
 
 function toMessageLike(value: unknown, schema?: ZLinkJsonSchema): MessageLike {
@@ -886,14 +880,10 @@ export function decodeChannelHeader(
   return validateChannelHeader(parseChannelHeaderBytes(parts[0].data()), flowEnabled);
 }
 
+const CHANNEL_JSON_PARSE_OPTIONS = Object.freeze({ rejectPropertyName: isPrototypeKey });
+
 function parseWireJson(payload: string, schema?: ZLinkJsonSchema): unknown {
-  return parseFrameworkJsonV1(
-    payload,
-    {
-      rejectPropertyName: isPrototypeKey
-    },
-    schema
-  );
+  return parseFrameworkJsonV1(payload, CHANNEL_JSON_PARSE_OPTIONS, schema);
 }
 
 function parseChannelHeaderBytes(payload: Buffer): unknown {
@@ -944,7 +934,13 @@ function tryParseCanonicalChannelHeader(
     contentType,
     correlationId: correlationId === NULL_JSON_STRING ? null : correlationId,
     deadline: deadline === NULL_JSON_STRING ? null : deadline,
-    topic: topic === NULL_JSON_STRING ? null : topic
+    topic: topic === NULL_JSON_STRING ? null : topic,
+    errorCode: null,
+    errorMessage: null,
+    source: undefined,
+    metadata: undefined,
+    flowId: undefined,
+    flowOrigin: undefined
   };
   if (!reader.readOptionalNullableString(CANONICAL_ERROR_CODE, 'errorCode', header))
     return undefined;
@@ -1179,10 +1175,11 @@ function validateCorrelationForKind(
 const MAXIMUM_CORRELATION_ID_BYTES = 64;
 
 export function isValidChannelCorrelationId(value: string): boolean {
-  const byteLength = Buffer.byteLength(value, 'utf8');
-  return (
-    byteLength >= 1 && byteLength <= MAXIMUM_CORRELATION_ID_BYTES && /^[\x00-\x7f]*$/.test(value)
-  );
+  if (value.length < 1 || value.length > MAXIMUM_CORRELATION_ID_BYTES) return false;
+  for (let index = 0; index < value.length; index++) {
+    if (value.charCodeAt(index) > 0x7f) return false;
+  }
+  return true;
 }
 
 function validateCorrelationValue(correlationId: string): void {
@@ -1270,7 +1267,7 @@ function optionalFlowOrigin(value: unknown): ZLinkFlowOrigin | undefined {
 
 function requireFlowId(value: unknown): string {
   const flowId = requireString(value, 'flowId');
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(flowId)) {
+  if (!CHANNEL_FLOW_TEXT.test(flowId)) {
     throw new ZLinkConfigurationException('Channel envelope flowId must be a lowercase UUIDv7.');
   }
   return flowId;
