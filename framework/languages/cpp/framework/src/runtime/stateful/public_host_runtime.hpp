@@ -246,7 +246,7 @@ struct host_options_t
     std::chrono::milliseconds owner_lease_fencing_margin{5'000};
     std::shared_ptr<zlink::context_t> core_context;
     std::chrono::milliseconds session_relocation_seal_timeout =
-      location_options_t{}.session_relocation_seal_timeout;
+      zlink::framework::detail::default_session_relocation_seal_timeout;
     std::chrono::milliseconds user_spot_operation_replay_retention = std::chrono::minutes (5);
 };
 
