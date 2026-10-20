@@ -8,7 +8,7 @@ using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests;
 
-public sealed class MeshMailboxReadinessTests
+public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelper output)
 {
     [Fact]
     public void ClaimKeepsItsOriginalPrefixAndEachRecordItsOwnPermit()
@@ -338,6 +338,95 @@ public sealed class MeshMailboxReadinessTests
         Assert.Equal(fixture.KeyValue<string>(next, "SpotId"), batch[0].SpotId);
         Assert.False((bool)fixture.Ready[stale]!);
         Assert.Null(fixture.BeforeLookup);
+    }
+
+    [Fact]
+    public void ReusedBatchKeepsExistingClaimsAndCompactsCompetingCandidates()
+    {
+        using var fixture = new ReadyRegistryFixture();
+        var first = fixture.Add(MeshOwnerKind.Node, "a", MeshReadyDomains.Application);
+        using var batch = new MeshReadyBatch { MaximumRecords = 2 };
+        Assert.False(fixture.Node.DrainReady(MeshReadyDomains.All, batch));
+        var original = batch.TakeClaim(0);
+        var stale = fixture.Add(MeshOwnerKind.Node, "b", MeshReadyDomains.Application);
+        var next = fixture.Add(MeshOwnerKind.Node, "c", MeshReadyDomains.Application);
+        fixture.BeforeLookup = () => fixture.Ready[stale] = false;
+        Assert.False(fixture.Node.DrainReady(MeshReadyDomains.All, batch));
+        Assert.Equal(2, batch.Count);
+        Assert.Same(original, batch.TakeClaim(0));
+        Assert.Equal(fixture.KeyValue<string>(first, "SpotId"), batch[0].SpotId);
+        Assert.Equal(fixture.KeyValue<string>(next, "SpotId"), batch[1].SpotId);
+        batch.Reset();
+        Assert.False(fixture.Node.DrainReady(MeshReadyDomains.All, batch));
+        Assert.Equal(0, batch.Count);
+    }
+
+    [Theory]
+    [InlineData(0, (int)MeshReadyDomains.All)]
+    [InlineData(32, (int)MeshReadyDomains.Infrastructure)]
+    [InlineData(32, (int)MeshReadyDomains.Application)]
+    public void ReadySelectionAddsNoAllocationBeyondRegistryEnumeration(
+        int owners,
+        int requestedDomains
+    )
+    {
+        var domains = (MeshReadyDomains)requestedDomains;
+        const int iterations = 1000;
+        using var fixture = new ReadyRegistryFixture();
+        for (var index = 0; index < owners; index++)
+            fixture.Add(MeshOwnerKind.Node, $"owner-{index}", MeshReadyDomains.Application);
+        // A zero output limit exercises selection and global ordering without
+        // allocating claims or involving mailbox release. Warm the reused batch
+        // first, as the real pump does when it retains its output batch.
+        using var batch = new MeshReadyBatch { MaximumRecords = 0 };
+        var enumerate = (Action)
+            typeof(MeshMailboxReadinessTests)
+                .GetMethod(
+                    nameof(CreateRegistryEnumerator),
+                    BindingFlags.Static | BindingFlags.NonPublic
+                )!
+                .MakeGenericMethod(fixture.Ready.GetType().GenericTypeArguments[0])
+                .Invoke(null, [fixture.Ready])!;
+        for (var index = 0; index < iterations; index++)
+        {
+            enumerate();
+            fixture.Node.DrainReady(domains, batch);
+        }
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+            enumerate();
+        var enumerationBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+            fixture.Node.DrainReady(domains, batch);
+        var selectionBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        output.WriteLine(
+            $"owners={owners}; domains={domains}; calls={iterations}; "
+                + $"enumeration bytes/call={enumerationBytes / iterations}; "
+                + $"selection bytes/call={selectionBytes / iterations}"
+        );
+        // The registry enumeration is the only allowed allocation. Newer runtimes
+        // may allocate less for the same enumeration, never more for selection.
+        Assert.True(
+            selectionBytes <= enumerationBytes,
+            $"selection allocated {selectionBytes} bytes, enumeration {enumerationBytes}"
+        );
+        Assert.Equal(0, batch.Count);
+        Assert.All(fixture.Ready.Values.Cast<bool>(), Assert.True);
+    }
+
+    private static Action CreateRegistryEnumerator<TKey>(object registry)
+        where TKey : notnull
+    {
+        var ready = (ConcurrentDictionary<TKey, bool>)registry;
+        return () =>
+        {
+            foreach (var entry in ready)
+            {
+                if (entry.Value)
+                    continue;
+            }
+        };
     }
 
     // Framework-only fixture: no native context, transport, or worker is started.

@@ -1,3 +1,4 @@
+import { mapZLinkRequestReply } from '../messaging/request-result';
 import { type ActorRef, type RoutingId, ZLinkFrameworkException } from '../../contracts';
 
 import type { Message } from '../../contracts/Common/Message';
@@ -1729,10 +1730,12 @@ export class ZLinkActorHandoffCoordinator {
     const relayDeadlineMs = performance.now() + timeoutMs;
     if (this.options.routedTransport.requestRawToSpot === undefined) {
       const reply = await waitRequestReply(
-        this.options.routedTransport.requestToSpot<Record<string, unknown>>(target, payload, {
-          packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
-          timeoutMs
-        }),
+        mapZLinkRequestReply(
+          this.options.routedTransport.requestToSpot<Record<string, unknown>>(target, payload, {
+            packetName: ZLINK_REMOTE_ACTOR_PACKET_RELAY_PACKET,
+            timeoutMs
+          })
+        ),
         actorId,
         relayDeadlineMs
       );

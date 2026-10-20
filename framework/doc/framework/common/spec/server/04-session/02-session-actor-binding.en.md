@@ -233,6 +233,23 @@ verification ([routing](../03-spot-actor/08-routing.en.md)); using it in bind
 admission would turn a derived-copy mismatch into grounds for a stale verdict,
 conflicting with the judging-authority principle of §8.1.
 
+**The Actor owner compares an admitted request with the current binding once
+and decides the result.** It compares binding generations only within the same
+Session owner lifecycle, as [§4](#4-what-binding-connects-and-what-it-stores)
+requires.
+
+| Request compared with the current binding | Result |
+|---|---|
+| Both the binding identity (§4) and SessionRid are the same. | The current binding stays and the bind succeeds. |
+| The first row does not apply, the Session owner Node RID and lifecycle generation are the same, and the requested binding generation is less than or equal to the current one. | The current binding stays and the bind ends with the binding fence stale result of [§12](#12-failure-and-errors) (`Unavailable`). |
+| Any other case (no current binding, a larger generation in the same Session owner lifecycle, a different Session owner lifecycle) | The requested identity is registered as current ([§6](#6-rebind-and-replacing-the-previous-connection)). |
+
+The tail of a successful `boundSessionBind(38)` reply carries the binding
+generation and `AuthorityOwnerGeneration` of the binding accepted by this
+comparison. A bind succeeds only in the first row or when the requested
+identity is registered, so both values equal the requested values.
+The Session owner commits the binding with these two values.
+
 Payload going from session to Actor is delivered to the Actor owner as an
 `actorSend(24)` record including the registered binding generation and
 session sequence. Outside a relocation seal, the payload is

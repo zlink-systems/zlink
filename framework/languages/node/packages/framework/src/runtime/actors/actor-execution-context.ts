@@ -9,13 +9,13 @@ interface ZLinkActorExecutionContext {
 const actorExecutionStorage = new AsyncLocalStorage<ZLinkActorExecutionContext>();
 
 /** Runs one Actor handler while retaining its Actor FIFO claim across Yield. */
-export async function runZLinkActorExecution<T>(
+export function runZLinkActorExecution<T>(
   actorId: string,
   spotId: unknown,
   operation: () => Promise<T> | T
 ): Promise<T> {
   const context: ZLinkActorExecutionContext = { actorId, spotId, active: true };
-  return await actorExecutionStorage.run(context, async () => {
+  return actorExecutionStorage.run(context, async () => {
     try {
       return await operation();
     } finally {

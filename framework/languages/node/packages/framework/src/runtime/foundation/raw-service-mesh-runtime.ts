@@ -166,6 +166,7 @@ const livenessCodec = createServiceWireCodec({
 interface ControlSendState {
   task?: Promise<boolean>;
   next?: () => boolean | Promise<boolean>;
+  // HELLO send eligibility; admission suspension does not end the exchange.
   current?: () => boolean;
   // Admission owns the first HELLO until ADMIT or route termination.
   hello?: Uint8Array;
@@ -481,15 +482,19 @@ export class RawServiceMeshRuntime {
     if (generation === undefined) return false;
     const key = controlSendKey(nodeRoutingId, M6aServiceWireCommand.hello);
     if (!this.isPeerAnnouncementCurrent(nodeRoutingId, generation)) {
-      this.controlSends.delete(key);
       return false;
     }
-    const current = () => this.isPeerAnnouncementCurrent(nodeRoutingId, generation);
+    const current = () =>
+      this.isPeerAnnouncementCurrent(nodeRoutingId, generation) &&
+      this.peerAdmissionSealed?.() !== true;
     const existing = this.controlSends.get(key);
+    if (!current()) {
+      if (existing === undefined) this.controlSends.set(key, { current });
+      return false;
+    }
     const hello =
-      existing?.current?.() === true
-        ? existing.hello!
-        : encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor());
+      existing?.hello ??
+      encodeRouteMeshAdmission(M6aServiceWireCommand.hello, this.topology.localDescriptor());
     return this.startControlSend(
       nodeRoutingId,
       M6aServiceWireCommand.hello,
@@ -506,8 +511,7 @@ export class RawServiceMeshRuntime {
       !(
         admission?.connectionId === routeConnectionId(generation) &&
         admission.remoteAdmitReceived === true
-      ) &&
-      this.peerAdmissionSealed?.() !== true
+      )
     );
   }
 
@@ -1205,6 +1209,7 @@ export class RawServiceMeshRuntime {
       ]);
     } else if (header.command === M6aServiceWireCommand.admit) {
       this.controlSends.delete(helloKey);
+      this.refreshAdmissionPending(nowMs);
       if (result === 'notRequired') {
         this.retireNotRequiredExpectedPeer(received.sourceRid, descriptor.advertisedEndpoint);
       } else if (
@@ -1367,18 +1372,35 @@ export class RawServiceMeshRuntime {
    * ADMIT, which keeps the existing announce cadence.
    */
   nextMaintenanceDeadlineMs(nowMs: number): number {
-    if (!this.closed) {
-      for (const exchange of this.controlSends.values()) {
-        if (exchange.hello !== undefined && exchange.current?.() === true) return nowMs;
-      }
-    }
+    this.refreshAdmissionPending(nowMs);
     return Math.min(this.operations.nextDeadlineMs(), this.liveness.nextDeadlineMs());
   }
 
+  private refreshAdmissionPending(nowMs: number): void {
+    let pending = false;
+    if (!this.closed && this.controlSends.size !== 0) {
+      for (const nodeRoutingId of this.selectedRoutes.keys()) {
+        const exchange = this.controlSends.get(
+          controlSendKey(nodeRoutingId, M6aServiceWireCommand.hello)
+        );
+        if (exchange?.current?.() === true) {
+          pending = true;
+          break;
+        }
+      }
+    }
+    this.liveness.setAdmissionPending(pending, nowMs);
+  }
+
   tickLiveness(nowMs = performance.now()): ServiceLivenessTick {
+    this.refreshAdmissionPending(nowMs);
+    const admissionDue = this.liveness.tickAdmission(nowMs);
     const result = this.liveness.tick(nowMs);
     this.requireStarted();
-    for (const nodeRoutingId of this.selectedRoutes.keys()) void this.announcePeer(nodeRoutingId);
+    if (!admissionDue && result.probes.length === 0 && result.timedOutNodes.length === 0)
+      return result;
+    if (admissionDue)
+      for (const nodeRoutingId of this.selectedRoutes.keys()) void this.announcePeer(nodeRoutingId);
     for (const probe of result.probes) {
       const parts = [
         livenessCodec.encodeLivenessRecord({
@@ -1432,6 +1454,7 @@ export class RawServiceMeshRuntime {
     for (const nodeRoutingId of selected) this.notifyPeerRouteChanged(nodeRoutingId);
     // A new selected route admits only through a new handshake.
     for (const nodeRoutingId of selected) await this.announcePeer(nodeRoutingId);
+    this.refreshAdmissionPending(performance.now());
     return changes;
   }
 
@@ -1744,12 +1767,10 @@ export class RawServiceMeshRuntime {
     hello?: Uint8Array
   ): boolean {
     const key = controlSendKey(target, command);
+    if (command === M6aServiceWireCommand.hello)
+      this.liveness.setAdmissionPending(true, performance.now());
     const existing = this.controlSends.get(key);
-    if (
-      existing !== undefined &&
-      existing.task !== undefined &&
-      (command !== M6aServiceWireCommand.hello || existing.current?.() === true)
-    ) {
+    if (existing?.task !== undefined) {
       if (command !== M6aServiceWireCommand.hello) {
         existing.next = attempt;
         existing.current = current;
@@ -1765,7 +1786,7 @@ export class RawServiceMeshRuntime {
     const state: ControlSendState = { current, hello };
     const completeSend = () => {
       if (owner.controlSends.get(key) !== state) return;
-      if (hello !== undefined && current?.() === true) delete state.task;
+      if (hello !== undefined) delete state.task;
       else owner.controlSends.delete(key);
     };
     const task = first.then(function drain(accepted): boolean | Promise<boolean> {
