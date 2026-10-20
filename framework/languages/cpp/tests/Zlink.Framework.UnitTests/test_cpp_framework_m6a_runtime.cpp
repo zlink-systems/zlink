@@ -4131,6 +4131,7 @@ void verify_unadmitted_route (bool repeat_hello)
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     if (argc == 4 && std::string_view (argv[1]) == "--only") {
         const std::string_view name (argv[2]);
         const int repetitions = std::stoi (argv[3]);

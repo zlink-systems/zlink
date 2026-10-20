@@ -254,6 +254,7 @@ void operator delete[] (void *memory, std::size_t, std::align_val_t) noexcept
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     void *probe_allocation = nullptr;
     const std::size_t probe = count_allocations ([&] { probe_allocation = ::operator new (64); });
     ::operator delete (probe_allocation);

@@ -127,10 +127,10 @@ coroutine_executor_t &handler_coroutine_executor ()
 }
 
 void configure_handler_coroutine_executor (std::size_t worker_count,
-                                           detail::completion_dispatcher_ref_t dispatcher)
+                                           detail::completion_dispatcher_borrow_t dispatcher)
 {
     if (!dispatcher)
-        dispatcher = detail::acquire_completion_dispatcher ();
+        dispatcher = detail::borrow_completion_dispatcher ();
     if (worker_count == 0) {
         worker_count = default_worker_count ();
     }
@@ -180,7 +180,7 @@ namespace zlink::framework::detail
 
 task_scheduler_t
 capture_host_continuation_scheduler (bool scope_exit_only,
-                                     completion_dispatcher_ref_t *dispatcher = nullptr)
+                                     completion_dispatcher_borrow_t *dispatcher = nullptr)
 {
     // Execution gate §13: a Store chain awaited by an infrastructure wait
     // resumes on the thread that completes each Store step, not behind
@@ -226,7 +226,7 @@ void check_blocking_submit_context ();
 
 namespace
 {
-task_scheduler_t capture_native_scheduler (completion_dispatcher_ref_t *dispatcher)
+task_scheduler_t capture_native_scheduler (completion_dispatcher_borrow_t *dispatcher)
 {
     return capture_host_continuation_scheduler (false, dispatcher);
 }
@@ -236,8 +236,16 @@ task_scheduler_t capture_scope_exit_scheduler ()
     return capture_host_continuation_scheduler (true);
 }
 
+completion_dispatcher_borrow_t borrow_host_dispatcher ()
+{
+    const std::lock_guard lock (runtime::executor_mutex ());
+    const auto &executor = runtime::executor_instance ();
+    return executor ? executor->completion_dispatcher () : nullptr;
+}
+
 constexpr runtime_execution_hooks_t host_execution_hooks{
-  &capture_native_scheduler, &capture_scope_exit_scheduler, &check_blocking_submit_context};
+  &borrow_host_dispatcher, &capture_native_scheduler, &capture_scope_exit_scheduler,
+  &check_blocking_submit_context};
 } // namespace
 
 } // namespace zlink::framework::detail

@@ -12,6 +12,7 @@
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     using namespace zlink::framework;
     using namespace std::chrono_literals;
     auto registration =

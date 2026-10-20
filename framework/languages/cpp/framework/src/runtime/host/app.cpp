@@ -3023,7 +3023,8 @@ app_t &app_t::add_hosted_service (std::unique_ptr<hosted_service_t> service)
 
 int app_t::run (int argc, char **argv)
 try {
-    const auto completion_dispatcher = detail::acquire_completion_dispatcher ();
+    const completion_owner_t completion_owner;
+    const auto completion_dispatcher = detail::borrow_completion_dispatcher ();
     _apply_zlink_framework ();
     _state->config.load_cli (argc, argv);
     detail::serializer_registry_access_t::freeze (_state->serializers);

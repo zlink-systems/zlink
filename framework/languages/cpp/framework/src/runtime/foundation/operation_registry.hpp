@@ -91,7 +91,6 @@ class operation_registry_t
     void index_deadline (const call_id_t &id, clock_t::time_point deadline, pending_t &pending);
     void unindex_deadline (pending_t &pending) noexcept;
 
-    detail::completion_dispatcher_ref_t _completion_dispatcher;
     std::shared_ptr<operation_registry_drain_state_t> _drain_state;
     mutable std::mutex _mutex;
     std::unordered_map<call_id_t, pending_t, id_hash_t> _pending;

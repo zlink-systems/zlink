@@ -1687,6 +1687,7 @@ bool verify_yield_continuation_owned_by_spot_queue (yield_reply_order_t order)
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     if (!verify_released_turn_wrapper_handoff ())
         return 39;
     for (const bool stopped_host : {false, true})

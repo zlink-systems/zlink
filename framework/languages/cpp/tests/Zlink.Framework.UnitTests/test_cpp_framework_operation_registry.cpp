@@ -244,6 +244,7 @@ std::atomic_bool shutdown_release{false};
 void verify_provider_completion_releases_dispatcher ()
 {
     namespace framework = zlink::framework;
+    framework::completion_owner_t owner;
     framework::task_completion_source_t<int> source;
     auto pending = source.task ();
     std::promise<int> delivered;
@@ -252,35 +253,37 @@ void verify_provider_completion_releases_dispatcher ()
       pending, [&] (const auto &value) { delivered.set_value (value.value ()); });
     assert (source.complete (framework::result_t<int>::success (1867)));
     assert (result.get () == 1867);
-    assert (
-      wait_until ([] { return framework::detail::completion_dispatcher_worker_count () == 0; }));
-    framework::detail::wait_for_completion_dispatcher_shutdown ();
+    owner.close ();
+    assert (framework::detail::completion_dispatcher_worker_count () == 0);
 }
 
-void verify_worker_releases_last_dispatcher_reference ()
+void verify_worker_lifecycle_is_rejected ()
 {
-    namespace detail = zlink::framework::detail;
-    auto dispatcher = detail::acquire_completion_dispatcher ();
-    const std::weak_ptr<detail::completion_dispatcher_t> observed (dispatcher);
-    std::latch entered (1), release (1);
-    detail::dispatch_completion (
-      [&, dispatcher] {
-          assert (dispatcher);
-          entered.count_down ();
-          release.wait ();
-      },
-      false, nullptr, dispatcher);
-    entered.wait ();
-    dispatcher.reset ();
+    using namespace zlink::framework;
+    completion_owner_t owner;
+    const auto observed = detail::observe_completion_dispatcher ();
+    std::promise<bool> rejected;
+    auto result = rejected.get_future ();
+    detail::dispatch_completion ([&] {
+        try {
+            owner.close ();
+            rejected.set_value (false);
+        }
+        catch (const framework_exception_t &error) {
+            rejected.set_value (error.kind () == framework_error_kind_t::invalid_operation);
+        }
+    });
+    assert (result.get ());
     assert (!observed.expired ());
-    release.count_down ();
-    detail::wait_for_completion_dispatcher_shutdown ();
+    owner.close ();
+    owner.close ();
     assert (observed.expired ());
     assert (detail::completion_dispatcher_worker_count () == 0);
 }
 
-void verify_registry_owns_dispatcher_until_delivery ()
+void verify_registry_borrows_dispatcher_until_delivery ()
 {
+    zlink::framework::completion_owner_t owner;
     foundation::operation_registry_t registry;
     std::promise<void> delivered;
     auto result = delivered.get_future ();
@@ -294,14 +297,15 @@ void verify_registry_owns_dispatcher_until_delivery ()
     assert (registry.complete (id (1), {}));
     result.get ();
     assert (registry.shutdown () == 0);
-    zlink::framework::detail::wait_for_completion_dispatcher_shutdown ();
+    owner.close ();
     assert (zlink::framework::detail::completion_dispatcher_worker_count () == 0);
 }
 
 void verify_dispatcher_shutdown_drains ()
 {
     namespace detail = zlink::framework::detail;
-    auto dispatcher = detail::acquire_completion_dispatcher ();
+    zlink::framework::completion_owner_t owner;
+    auto dispatcher = detail::borrow_completion_dispatcher ();
     const auto workers = detail::completion_dispatcher_worker_count ();
     auto occupied = std::make_shared<std::latch> (workers);
     for (std::size_t index = 0; index < workers; ++index)
@@ -312,16 +316,19 @@ void verify_dispatcher_shutdown_drains ()
         });
     occupied->wait ();
     for (std::size_t index = 0; index < shutdown_round_trips; ++index)
-        detail::dispatch_completion ([dispatcher] {
+        detail::dispatch_completion ([] {
             ++shutdown_delivered;
-            detail::dispatch_completion ([] { ++shutdown_delivered; }, false, &shutdown_delivered,
-                                         dispatcher);
+            detail::dispatch_completion ([] { ++shutdown_delivered; }, false, &shutdown_delivered);
         });
     assert (shutdown_delivered == 0);
-    dispatcher.reset ();
-    shutdown_release = true;
-    shutdown_release.notify_all ();
-    detail::wait_for_completion_dispatcher_shutdown ();
+    const auto observed = detail::observe_completion_dispatcher ();
+    std::jthread unblock ([&] {
+        while (!observed.expired ())
+            std::this_thread::yield ();
+        shutdown_release = true;
+        shutdown_release.notify_all ();
+    });
+    owner.close ();
     assert (shutdown_delivered == shutdown_round_trips * 2);
     assert (detail::completion_dispatcher_worker_count () == 0);
 }
@@ -332,7 +339,8 @@ void verify_handoff_excludes_application_system_handlers ()
     assert (detail::completion_dispatcher_worker_count () == 0);
     assert (detail::dispatch_completion_receive_handoff ([] { return true; }));
     assert (detail::completion_dispatcher_worker_count () == 0);
-    const auto dispatcher = detail::acquire_completion_dispatcher ();
+    zlink::framework::completion_owner_t owner;
+    const auto dispatcher = detail::borrow_completion_dispatcher ();
     const auto framework_workers = detail::completion_dispatcher_worker_count ();
     std::latch framework_occupied (framework_workers), framework_release (1),
       framework_exited (framework_workers);
@@ -475,8 +483,8 @@ int main (int argc, char **argv)
 {
     if (argc == 2 && std::string_view (argv[1]) == "--dispatcher-lifetime") {
         verify_provider_completion_releases_dispatcher ();
-        verify_worker_releases_last_dispatcher_reference ();
-        verify_registry_owns_dispatcher_until_delivery ();
+        verify_worker_lifecycle_is_rejected ();
+        verify_registry_borrows_dispatcher_until_delivery ();
         return 0;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--dispatcher-shutdown") {
@@ -488,7 +496,7 @@ int main (int argc, char **argv)
         return 0;
     }
     verify_handoff_excludes_application_system_handlers ();
-    const auto dispatcher = zlink::framework::detail::acquire_completion_dispatcher ();
+    zlink::framework::completion_owner_t owner;
     if (argc == 2 && std::string_view (argv[1]) == "--handoff-counts") {
         verify_completion_resource_transitions ();
         return 0;

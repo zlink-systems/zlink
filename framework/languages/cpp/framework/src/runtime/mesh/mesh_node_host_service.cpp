@@ -2374,7 +2374,7 @@ void execute_actor_create_operation_target (
 task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
 {
     try {
-        _completion_dispatcher = detail::acquire_completion_dispatcher ();
+        _completion_dispatcher = detail::borrow_completion_dispatcher ();
         _services = &services;
         const auto actor_gateway = services.get<detail::actor_gateway_runtime_t> ();
         if (actor_gateway) {
@@ -3187,7 +3187,7 @@ void mesh_node_host_service_t::stop () noexcept
         node->signal_dispatch_activity ();
     if (_application_dispatch)
         _runtime_failures->capture ([&] { _application_dispatch->drain (); });
-    _completion_dispatcher.reset ();
+    _completion_dispatcher = nullptr;
     for (auto &node : _nodes)
         _runtime_failures->capture ([&] { node->bind_descriptor_publisher ({}); });
     const auto owner = current_location_owner ();

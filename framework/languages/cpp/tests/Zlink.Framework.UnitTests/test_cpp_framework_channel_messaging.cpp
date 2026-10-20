@@ -752,6 +752,7 @@ await_native_reply (zlink::async_result_t<std::vector<zlink::message_t>> pending
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     // The Mesh classification decode carries flow capture through route dispatch.
     {
         using namespace zlink::framework;

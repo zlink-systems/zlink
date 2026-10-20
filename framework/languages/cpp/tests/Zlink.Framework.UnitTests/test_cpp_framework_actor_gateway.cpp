@@ -7423,6 +7423,7 @@ int join_completion_callback_failure_is_reported ()
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     if (argc == 2) {
         const std::string test (argv[1]);
         if (test == "--prepare-runtime-failure")

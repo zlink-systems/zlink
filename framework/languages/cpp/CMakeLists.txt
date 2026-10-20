@@ -1567,6 +1567,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
 
   add_executable(test_cpp_framework_completion_dispatcher_owner
     tests/Zlink.Framework.UnitTests/test_cpp_framework_completion_dispatcher_owner.cpp)
+  target_include_directories(test_cpp_framework_completion_dispatcher_owner PRIVATE framework/src)
   target_link_libraries(test_cpp_framework_completion_dispatcher_owner PRIVATE
     zlink::framework_provider_abstractions Threads::Threads)
   zlink_framework_cpp_add_test(

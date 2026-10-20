@@ -188,7 +188,7 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     mutable std::mutex _dispatch_gate_mutex;
     std::condition_variable _dispatch_gate_changed;
     std::uint64_t _active_direct_dispatch = 0;
-    detail::completion_dispatcher_ref_t _completion_dispatcher;
+    detail::completion_dispatcher_borrow_t _completion_dispatcher{};
     std::shared_ptr<offload_executor_t> _application_dispatch;
     std::shared_ptr<application_job_queue_t> _application_jobs;
     std::shared_ptr<listener_status_registry_t> _listener_statuses;

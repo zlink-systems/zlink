@@ -13,12 +13,10 @@ namespace zlink::framework::detail
 // The dispatch owner decides
 // whether this resource can join the existing completion dispatcher as a worker.
 bool dispatch_completion_receive_handoff (const std::function<bool ()> &handoff,
-                                          const completion_dispatcher_ref_t &dispatcher = {});
+                                          const completion_dispatcher_borrow_t &dispatcher = {});
 
 // Internal occupancy query for deterministic dispatcher resource tests.
 std::size_t completion_dispatcher_worker_count () noexcept;
-// Joins cleanup transferred by the last worker-owned reference. No live owner
-// may remain when a deterministic lifecycle test calls this barrier.
-void wait_for_completion_dispatcher_shutdown ();
+std::weak_ptr<completion_dispatcher_t> observe_completion_dispatcher ();
 
 } // namespace zlink::framework::detail

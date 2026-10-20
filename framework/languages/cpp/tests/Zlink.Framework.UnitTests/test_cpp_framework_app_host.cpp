@@ -929,6 +929,7 @@ bool verify_source_waiter_host_ownership (bool completion_first = false,
 {
     using namespace zlink::framework;
     using namespace std::chrono_literals;
+    completion_owner_t provider_owner;
     task_completion_source_t<void> source;
     task_completion_source_t<void> outside_phase;
     source_wait_probe_t first{.awaited = source.task ()};
@@ -1090,7 +1091,7 @@ int verify_completion_dispatcher_hosts ()
         std::promise<std::weak_ptr<detail::completion_dispatcher_t>> started;
         task_t<void> start (service_provider_t &) override
         {
-            started.set_value (detail::acquire_completion_dispatcher ());
+            started.set_value (detail::observe_completion_dispatcher ());
             co_return;
         }
         void stop () noexcept override {}
@@ -1124,7 +1125,6 @@ int verify_completion_dispatcher_hosts ()
     const bool independent = completion.get () == 1867 && !second_dispatcher.expired ();
     second.shutdown ().result ().value ();
     const auto second_exit = second_run.get ();
-    detail::wait_for_completion_dispatcher_shutdown ();
     const bool joined = first_dispatcher.expired () && second_dispatcher.expired ()
                         && detail::completion_dispatcher_worker_count () == 0;
 
@@ -1139,7 +1139,6 @@ int verify_completion_dispatcher_hosts ()
                                || first_dispatcher.owner_before (next_dispatcher));
     restarted.shutdown ().result ().value ();
     const auto next_exit = next_run.get ();
-    detail::wait_for_completion_dispatcher_shutdown ();
     std::cout << "dispatcher-hosts shared=" << same << " independent=" << independent
               << " joined=" << joined << " recreated=" << recreated << std::endl;
     return same && independent && joined && recreated && next_dispatcher.expired ()

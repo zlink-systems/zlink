@@ -8267,6 +8267,7 @@ void verify_relocation_failure_code_classification_is_distinct ()
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
     if (argc == 2 && std::string_view (argv[1]) == "--descriptor-bind-handler") {

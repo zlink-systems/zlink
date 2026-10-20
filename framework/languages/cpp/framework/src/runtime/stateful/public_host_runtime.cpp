@@ -1024,9 +1024,9 @@ void public_host_runtime_t::start ()
           if (_started || _closing) {
               return;
           }
-          auto dispatcher = detail::acquire_completion_dispatcher ();
+          auto owner = std::make_unique<completion_owner_t> ();
           _transport->start ();
-          _completion_dispatcher = std::move (dispatcher);
+          _completion_owner = std::move (owner);
           _started = true;
       })
       .get ();
@@ -1076,7 +1076,7 @@ void public_host_runtime_t::close () noexcept
     _local_dispatch_completion_lane.run ([&] { _local_application_dispatches.clear (); }).get ();
     _lifecycle_configuration_lane
       .run ([&] {
-          _completion_dispatcher.reset ();
+          _completion_owner.reset ();
           _closing = false;
       })
       .get ();

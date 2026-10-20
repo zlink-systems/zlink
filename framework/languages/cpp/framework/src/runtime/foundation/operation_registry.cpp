@@ -41,7 +41,7 @@ struct operation_completion_item_t
     explicit operation_completion_item_t (
       operation_registry_t::callback_t callback,
       std::shared_ptr<operation_registry_drain_state_t> drain_state,
-      detail::completion_dispatcher_ref_t dispatcher) :
+      detail::completion_dispatcher_borrow_t dispatcher) :
         callback (std::move (callback)),
         drain_state (std::move (drain_state)),
         dispatcher (std::move (dispatcher))
@@ -60,9 +60,9 @@ struct operation_completion_item_t
         request_metric.complete (terminal);
     }
 
+    detail::completion_dispatcher_borrow_t dispatcher{};
     operation_registry_t::callback_t callback;
     std::shared_ptr<operation_registry_drain_state_t> drain_state;
-    detail::completion_dispatcher_ref_t dispatcher;
     operation_terminal_t terminal = operation_terminal_t::transport_failed;
     zlink::message_t payload;
     std::unique_ptr<operation_completion_item_t> next;
@@ -128,7 +128,6 @@ operation_registry_t::operation_registry_t () : operation_registry_t (&clock_t::
 }
 
 operation_registry_t::operation_registry_t (now_t now) :
-    _completion_dispatcher (detail::acquire_completion_dispatcher ()),
     _drain_state (std::make_shared<operation_registry_drain_state_t> ()),
     _now (now),
     _deadline_origin (now ())
@@ -175,7 +174,7 @@ bool operation_registry_t::register_operation (call_id_t id,
     try {
         index_deadline (id, deadline, inserted.first->second);
         auto completion = std::make_unique<operation_completion_item_t> (
-          std::move (callback), _drain_state, _completion_dispatcher);
+          std::move (callback), _drain_state, detail::borrow_completion_dispatcher ());
         completion->request_metric = std::move (request_metric);
         completion->request_metric.start ();
         inserted.first->second.completion = std::move (completion);
@@ -435,7 +434,6 @@ operation_registry_t::next_deadline () const
 
 std::size_t operation_registry_t::shutdown ()
 {
-    detail::completion_dispatcher_ref_t dispatcher;
     operation_completion_chain_t completions;
     std::size_t stopped = 0;
     {
@@ -448,13 +446,12 @@ std::size_t operation_registry_t::shutdown ()
                 unindex_deadline (pending);
             }
             _pending.clear ();
-            dispatcher = std::move (_completion_dispatcher);
             stopped = completions.size;
         }
     }
     post_completions (std::move (completions));
-    // Only this registry's callback may release its final owner without
-    // waiting for its own reservation. Other completion turns still drain.
+    // A callback cannot wait for its own reservation. Other completion turns
+    // still drain before registry shutdown returns.
     if (detail::current_completion_owner () != _drain_state.get ())
         _drain_state->wait ();
     return stopped;
