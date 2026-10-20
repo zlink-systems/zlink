@@ -235,6 +235,26 @@ dequeued into the binding/Framework, and the decoded payload follows ordinary
 Framework ownership rules. The Framework acquires an application job queue permit
 before receive/claim, limiting handler admission by job count.
 
+### Actor Typed Message Profile
+
+The typed messages sent to an Actor, `actorSend` (24) and `actorRequest` (25), use the
+[Framework multipart application profile](#framework-multipart-application-profile) for their application
+payload and build its parts as follows. There is one header format, the
+[STREAM header](../../../stream-connector/32-stream-connector.en.md#42-header). Messages that a Session relays to
+an Actor use the same header, so an Actor receives one header format whatever the path.
+
+| Message | Parts |
+|---|---|
+| `actorSend`·`actorRequest` | Part 0 is a STREAM header whose kind is `Send` or `Request` and which carries the packet name. Part 1 is the payload made with the header's codec. |
+| Payload of the command 20 reply to `actorRequest` | One part holding a complete [STREAM frame](../../../stream-connector/32-stream-connector.en.md#41-frame). The header kind is `Response` or `Error` and the packet name is empty. An `Error` payload is the [error payload](../../../stream-connector/32-stream-connector.en.md#53-error-payload). |
+
+- The receiver decodes part 0 only as a STREAM header. A message whose decode fails is an invalid frame; the
+  receiver doesn't reinterpret the header bytes as a packet name or as another header format.
+- Dispatch errors such as a missing handler, and application errors, are replied with a STREAM frame that has
+  an `Error` header. The reply never sends a payload without a header.
+- Command 25's `correlation` owns reply correlation. The STREAM header's `request_seq` doesn't select the reply
+  target.
+
 ## 3. Command Space
 
 Wire v1 uses the following IDs. `7..15`, `32`, `35`, `41`, `45`, and `55..255` are
