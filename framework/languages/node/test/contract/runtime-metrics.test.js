@@ -1,5 +1,7 @@
 'use strict';
 
+const { mapZLinkRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
+
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
@@ -489,7 +491,7 @@ test('channel terminal metrics normalize all five outcomes including caller canc
     const transport = new ZLinkRuntimeRouteTransport(() => undefined, undefined,
       () => ({ meshNode: () => node, meshCompletionTable: () => table }),
       undefined, undefined, undefined, metrics, () => false);
-    const pending = transport.requestToChannel('mesh', 'orders', 'Probe', { value: 1 }, 1000, caller.signal);
+    const pending = mapZLinkRequestReply(transport.requestToChannel('mesh', 'orders', 'Probe', { value: 1 }, 1000, caller.signal));
     if (outcome === 'completed') assert.deepEqual(await pending, { ok: true });
     else await assert.rejects(pending);
   }

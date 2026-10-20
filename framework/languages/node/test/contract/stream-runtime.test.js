@@ -1,3 +1,4 @@
+const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -1500,10 +1501,10 @@ test('remote actor session binding uses a non-correlated command over the actor 
       };
     }
   });
-  host.routeTransport.request = async (meshName, targetNodeRid, packetName, request) => {
+  host.routeTransport.request = (meshName, targetNodeRid, packetName, request) => prepareZLinkRequestReply((async () => {
     routed.push({ meshName, targetNodeRid, packetName, request });
     return { ok: true, response: { acknowledged: true } };
-  };
+  })(), identityRequestReply);
 
   await host.boundSessionRelay.actorPackets.confirmRemoteSessionBinding(
     actorRef,
@@ -1603,11 +1604,11 @@ test('acknowledged remote actor session bind nack surfaces the remote failure cl
   });
   const lastFailure = 'actor does not hold a current session binding';
   let replyErrorKind = framework.ZLinkFrameworkInternalErrorKind.ActorSessionNotBound;
-  host.routeTransport.request = async () => ({
+  host.routeTransport.request = () => prepareZLinkRequestReply((async () => ({
     ok: false,
     error: lastFailure,
     ...(replyErrorKind === undefined ? {} : { errorKind: replyErrorKind })
-  });
+  }))(), identityRequestReply);
 
   await assert.rejects(
     host.boundSessionRelay.actorPackets.confirmRemoteSessionBinding(
@@ -2446,10 +2447,10 @@ test('runtime host local actor keeps its current stream route when a remote pack
   const host = new framework.ZLinkFrameworkRuntimeHost({
     registration: framework.createFrameworkRegistration()
   });
-  host.routeTransport.requestToSpot = async (...args) => {
+  host.routeTransport.requestToSpot = (...args) => prepareZLinkRequestReply((async () => {
     routeCalls.push(args);
     return { ok: true };
-  };
+  })(), identityRequestReply);
   const stream = recordingStream('session-current', 'rid-current');
   const context = host.streamBindingRuntime.createSessionContext(stream);
   await context.actors.bind(actorRef);
@@ -2827,9 +2828,9 @@ test('runtime host remote bound session send submits a routed Session command', 
     registration: framework.createFrameworkRegistration()
   });
   const routeCalls = [];
-  host.routeTransport.requestToSpot = async () => {
+  host.routeTransport.requestToSpot = () => prepareZLinkRequestReply((async () => {
     throw new Error('bound session send must not wait for a routed reply');
-  };
+  })(), identityRequestReply);
   host.routeTransport.submitInfrastructure = async (
     routerChannelId,
     targetNodeRid,
@@ -8430,12 +8431,12 @@ test('runtime host awaits routed actor disconnect notification before session cl
       routeChannels: ['spot.service']
     })
   });
-  runtime.routeTransport.request = async () => {
+  runtime.routeTransport.request = () => prepareZLinkRequestReply((async () => {
     sendStarted = true;
     await new Promise((resolve) => {
       releaseSend = resolve;
     });
-  };
+  })(), identityRequestReply);
 
   let disconnectCompleted = false;
   const disconnecting = runtime.boundSessionRelay.actorPackets
