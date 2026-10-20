@@ -2329,7 +2329,7 @@ mesh_node_runtime_t::join_application_actor_to_entry_spot (actor_ref_t actor,
         co_return detail::propagate_failure<actor_join_reply_t> (
           delivered, "Entry Actor Join completion callback failed");
     if (reply && reply.value ().result_code == 0) {
-        const auto opened = spots.open_local_actor_handoff (reply.value ().actor);
+        const auto opened = co_await spots.open_local_actor_handoff (reply.value ().actor);
         if (!opened)
             co_return detail::propagate_failure<actor_join_reply_t> (
               opened, "Entry Actor handoff prefix could not be opened");
@@ -2344,11 +2344,15 @@ void mesh_node_runtime_t::settle_application_actor_creation (const actor_ref_t &
         spots.cancel_local_actor_handoff (actor);
         return;
     }
-    const auto opened = spots.open_local_actor_handoff (actor);
-    if (!opened) {
-        spots.cancel_local_actor_handoff (actor);
-        _state->spot_state->runtime_failures ()->report (opened.exception ());
-    }
+    auto opened = spots.open_local_actor_handoff (actor);
+    detail::observe_task_completion (opened, [state = _state->spot_state] (
+                                               const result_t<result_t<void>> &completion) {
+        const auto result =
+          completion ? completion.value ()
+                     : detail::propagate_failure<void> (completion, "Actor handoff opening failed");
+        if (!result)
+            state->runtime_failures ()->report (result.exception ());
+    });
 }
 
 result_t<void>
@@ -2518,7 +2522,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
             co_return detail::propagate_failure<actor_join_reply_t> (
               delivered, "local Actor Join completion callback failed");
         if (joined && joined.value ().result_code == 0) {
-            const auto opened = spot_runtime.open_local_actor_handoff (joined.value ().actor);
+            const auto opened =
+              co_await spot_runtime.open_local_actor_handoff (joined.value ().actor);
             if (!opened)
                 co_return detail::propagate_failure<actor_join_reply_t> (
                   opened, "local Actor Join backlog prefix could not be opened");
