@@ -1881,7 +1881,7 @@ public final class ZLinkSerialExecutionQueue {
     private Entry finish(Entry entry, boolean continueBatch) {
         if (sharedSpotGate != null) return finishShared(entry);
         release(entry);
-        List<CompletableFuture<Void>> quiescent = List.of();
+        List<CompletableFuture<Void>> quiescent;
         boolean scheduleDrain = false;
         Entry next = null;
         boolean continueDrain = false;
@@ -2661,7 +2661,7 @@ public final class ZLinkSerialExecutionQueue {
 
     private List<CompletableFuture<Void>> takeQuiescenceWaitersIfReady() {
         if (quiescenceWaiters.isEmpty()) {
-            return List.of();
+            return java.util.Collections.emptyList();
         }
         List<CompletableFuture<Void>> ready = new ArrayList<>();
         quiescenceWaiters.removeIf(

@@ -122,11 +122,30 @@ public final class ZLinkSerialTurnAllocationTest {
             long futures = 0;
             long baseline = 0;
             long actions = 0;
+            long iterators = 0;
             try (var events = new RecordingFile(recordingPath)) {
                 while (events.hasMoreEvents()) {
                     var event = events.readEvent();
                     if (!event.getEventType().getName().equals("jdk.ObjectAllocationOutsideTLAB"))
                         continue;
+                    String allocatedClass = event.getClass("objectClass").getName();
+                    if (allocatedClass.startsWith("java.util.")
+                            && !allocatedClass.contains("$$Lambda")
+                            && java.util.Iterator.class.isAssignableFrom(
+                                    Class.forName(allocatedClass))
+                            && event.getStackTrace().getFrames().stream()
+                                    .anyMatch(
+                                            frame ->
+                                                    frame.getMethod()
+                                                                    .getType()
+                                                                    .getName()
+                                                                    .equals(
+                                                                            ZLinkSerialExecutionQueue
+                                                                                    .class
+                                                                                    .getName())
+                                                            && frame.getMethod()
+                                                                    .getName()
+                                                                    .equals("finish"))) iterators++;
                     if (event.getClass("objectClass")
                                     .getName()
                                     .startsWith(
@@ -183,9 +202,16 @@ public final class ZLinkSerialTurnAllocationTest {
                             + "/1000; completion observer baseline="
                             + baseline);
             System.out.println("serial worker submission actions: " + actions + "/1000");
+            System.out.println("serial finish Iterator allocations: " + iterators + "/1000");
+            long finishIterators = iterators;
             long submittedActions = actions;
             long turnFutures = futures - baseline;
             org.junit.jupiter.api.Assertions.assertAll(
+                    () ->
+                            assertEquals(
+                                    0,
+                                    finishIterators,
+                                    "empty quiescence notification must not allocate an iterator"),
                     () ->
                             assertEquals(
                                     2000,
