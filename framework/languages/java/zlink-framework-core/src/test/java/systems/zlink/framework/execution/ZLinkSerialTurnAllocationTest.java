@@ -33,6 +33,7 @@ public final class ZLinkSerialTurnAllocationTest {
                     new ProcessBuilder(
                                     Path.of(System.getProperty("java.home"), "bin", "java")
                                             .toString(),
+                                    "--enable-native-access=ALL-UNNAMED",
                                     "-Xint",
                                     "-XX:-UseTLAB",
                                     "-XX:FlightRecorderOptions=stackdepth=128",
@@ -106,6 +107,41 @@ public final class ZLinkSerialTurnAllocationTest {
                 var recording = new Recording()) {
             var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic());
             var completed = CompletableFuture.<Void>completedFuture(null);
+            var unfiltered =
+                    systems.zlink.framework.runtime.channels.ZLinkChannelDispatchStageBudgetTest
+                            .allocationFixture(false);
+            var rejected =
+                    systems.zlink.framework.runtime.channels.ZLinkChannelDispatchStageBudgetTest
+                            .rejectingAllocationFixture();
+            var filtered =
+                    systems.zlink.framework.runtime.channels.ZLinkChannelDispatchStageBudgetTest
+                            .allocationFixture(true);
+            for (int i = 0; i < 20; i++) {
+                unfiltered.run();
+                filtered.run();
+                rejected.run();
+            }
+            var unfilteredWork =
+                    new java.util.concurrent.FutureTask<Void>(
+                            () -> {
+                                for (int i = 0; i < 1000; i++) unfiltered.run();
+                                return null;
+                            });
+            var filteredWork =
+                    new java.util.concurrent.FutureTask<Void>(
+                            () -> {
+                                for (int i = 0; i < 1000; i++) filtered.run();
+                                return null;
+                            });
+            var rejectedWork =
+                    new java.util.concurrent.FutureTask<Void>(
+                            () -> {
+                                for (int i = 0; i < 1000; i++) rejected.run();
+                                return null;
+                            });
+            var rejectedThread = new Thread(rejectedWork);
+            var unfilteredThread = new Thread(unfilteredWork);
+            var filteredThread = new Thread(filteredWork);
             try {
                 for (int i = 0; i < 20; i++) runTurn(queue, executor, completed);
                 queue.awaitQuiescence().toCompletableFuture().join();
@@ -114,6 +150,15 @@ public final class ZLinkSerialTurnAllocationTest {
                 for (int i = 0; i < 1000; i++) observeCompleted(completed);
                 for (int i = 0; i < 1000; i++) runTurn(queue, executor, completed);
                 queue.awaitQuiescence().toCompletableFuture().join();
+                unfilteredThread.start();
+                unfilteredThread.join();
+                unfilteredWork.get();
+                filteredThread.start();
+                filteredThread.join();
+                filteredWork.get();
+                rejectedThread.start();
+                rejectedThread.join();
+                rejectedWork.get();
                 recording.stop();
                 recording.dump(recordingPath);
             } finally {
@@ -124,12 +169,71 @@ public final class ZLinkSerialTurnAllocationTest {
             long actions = 0;
             long iterators = 0;
             long turnContextEntries = 0;
+            long unfilteredActions = 0;
+            long unfilteredBytes = 0;
+            long filteredActions = 0;
+            long filteredBytes = 0;
+            long unfilteredArguments = 0;
+            long filteredArguments = 0;
+            long rejectedArguments = 0;
             try (var events = new RecordingFile(recordingPath)) {
                 while (events.hasMoreEvents()) {
                     var event = events.readEvent();
                     if (!event.getEventType().getName().equals("jdk.ObjectAllocationOutsideTLAB"))
                         continue;
                     String allocatedClass = event.getClass("objectClass").getName();
+                    if (allocatedClass.equals("[Ljava.lang.Object;")) {
+                        var stack = event.getStackTrace().getFrames();
+                        var owner =
+                                stack.stream()
+                                        .filter(
+                                                frame ->
+                                                        frame.getMethod()
+                                                                .getType()
+                                                                .getName()
+                                                                .startsWith(
+                                                                        "systems.zlink.framework."))
+                                        .findFirst();
+                        boolean backtrace =
+                                stack.stream()
+                                        .anyMatch(
+                                                frame ->
+                                                        frame.getMethod()
+                                                                        .getType()
+                                                                        .getName()
+                                                                        .equals(
+                                                                                Throwable.class
+                                                                                        .getName())
+                                                                && frame.getMethod()
+                                                                        .getName()
+                                                                        .equals(
+                                                                                "fillInStackTrace"));
+                        if (!backtrace
+                                && owner.isPresent()
+                                && owner.get()
+                                        .getMethod()
+                                        .getType()
+                                        .getName()
+                                        .equals(
+                                                "systems.zlink.framework.runtime.channels.ZLinkChannelHandlerInvoker")) {
+                            long thread = event.getThread("eventThread").getJavaThreadId();
+                            if (thread == unfilteredThread.threadId()) unfilteredArguments++;
+                            else if (thread == filteredThread.threadId()) filteredArguments++;
+                            else if (thread == rejectedThread.threadId()) rejectedArguments++;
+                        }
+                    }
+                    if (allocatedClass.startsWith(
+                            "systems.zlink.framework.runtime.channels.ZLinkChannelHandlerInvoker$$Lambda")) {
+                        if (event.getThread("eventThread").getJavaThreadId()
+                                == unfilteredThread.threadId()) {
+                            unfilteredActions++;
+                            unfilteredBytes += event.getLong("allocationSize");
+                        } else if (event.getThread("eventThread").getJavaThreadId()
+                                == filteredThread.threadId()) {
+                            filteredActions++;
+                            filteredBytes += event.getLong("allocationSize");
+                        }
+                    }
                     if (allocatedClass.equals("java.lang.ThreadLocal$ThreadLocalMap$Entry")) {
                         var owner =
                                 event.getStackTrace().getFrames().stream()
@@ -228,6 +332,28 @@ public final class ZLinkSerialTurnAllocationTest {
                     "serial physical/deferred context ThreadLocal entries: "
                             + turnContextEntries
                             + "/1000");
+            System.out.println(
+                    "channel unfiltered owner actions: "
+                            + unfilteredActions
+                            + "/1000; bytes="
+                            + unfilteredBytes);
+            System.out.println(
+                    "channel filtered owner actions: "
+                            + filteredActions
+                            + "/1000; bytes="
+                            + filteredBytes);
+            System.out.println(
+                    "channel invocation argument arrays: unfiltered="
+                            + unfilteredArguments
+                            + " filtered="
+                            + filteredArguments
+                            + " rejected="
+                            + rejectedArguments
+                            + "/1000");
+            long plainArguments = unfilteredArguments;
+            long permittedArguments = filteredArguments;
+            long skippedArguments = rejectedArguments;
+            long channelActions = unfilteredActions;
             long contextEntries = turnContextEntries;
             long finishIterators = iterators;
             long submittedActions = actions;
@@ -235,10 +361,31 @@ public final class ZLinkSerialTurnAllocationTest {
             org.junit.jupiter.api.Assertions.assertAll(
                     () ->
                             assertEquals(
+                                    1000,
+                                    plainArguments,
+                                    "one invocation argument pack per unfiltered handler"),
+                    () ->
+                            assertEquals(
+                                    1000,
+                                    permittedArguments,
+                                    "one invocation argument pack per filter-permitted handler"),
+                    () ->
+                            assertEquals(
+                                    0,
+                                    skippedArguments,
+                                    "a skipped handler must not prepare invocation arguments"),
+                    () ->
+                            assertEquals(
+                                    3000,
+                                    channelActions,
+                                    "unfiltered dispatch only needs its scope operation, reply"
+                                            + " mapping and scope cleanup actions"),
+                    () ->
+                            assertEquals(
                                     2000,
                                     contextEntries,
                                     "one physical turn and one deferred-release context entry per"
-                                        + " turn"),
+                                            + " turn"),
                     () ->
                             assertEquals(
                                     0,
@@ -254,7 +401,7 @@ public final class ZLinkSerialTurnAllocationTest {
                                     1000,
                                     turnFutures,
                                     "one execution gate per turn beyond the JDK observer"
-                                        + " baseline"));
+                                            + " baseline"));
         } finally {
             Files.deleteIfExists(recordingPath);
         }

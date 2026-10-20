@@ -15,7 +15,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 
-final class ZLinkChannelDispatchStageBudgetTest {
+public final class ZLinkChannelDispatchStageBudgetTest {
     @Test
     void unfilteredRequestOnlyMapsTheReplyAndRetainsScopeCompletion() {
         var counts = new int[3];
@@ -62,6 +62,79 @@ final class ZLinkChannelDispatchStageBudgetTest {
         assertEquals(1000, counts[0], "one handler invocation per request");
         assertEquals(1000, counts[1] - baseline[1], "one reply mapping per request");
         assertEquals(0, counts[2], "no asynchronous composition without a filter");
+    }
+
+    public static Runnable allocationFixture(boolean filtered) {
+        return allocationFixture(filtered ? PassThroughFilter.class : null);
+    }
+
+    public static Runnable rejectingAllocationFixture() {
+        return allocationFixture(RejectingFilter.class);
+    }
+
+    private static Runnable allocationFixture(
+            Class<? extends systems.zlink.framework.ZLinkHandlerFilter> filterType) {
+        var counts = new int[3];
+        var handler = new Handler(counts);
+        var serializer = new ZLinkStringMessageSerializer();
+        var invoker =
+                new ZLinkChannelHandlerInvoker(
+                        serializer,
+                        new ZLinkCodecRegistration(),
+                        type ->
+                                type == PassThroughFilter.class
+                                        ? new PassThroughFilter()
+                                        : type == RejectingFilter.class
+                                                ? new RejectingFilter()
+                                                : handler,
+                        Runnable::run,
+                        filterType == null ? List.of() : List.of(filterType));
+        var registration =
+                new ChannelRequestHandlerRegistration(
+                        Handler.class, String.class, String.class, "request");
+        return () -> {
+            try (var payload = Message.from("request")) {
+                var result = invoker.invokeRequestHandler("channel", registration, payload);
+                if (filterType == RejectingFilter.class) {
+                    var rejected =
+                            org.junit.jupiter.api.Assertions.assertThrows(
+                                    java.util.concurrent.CompletionException.class,
+                                    () -> result.toCompletableFuture().join());
+                    var error =
+                            org.junit.jupiter.api.Assertions.assertInstanceOf(
+                                    systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                                    rejected.getCause());
+                    assertEquals(
+                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.REJECTED,
+                            error.kind());
+                    assertEquals(0, counts[0]);
+                } else {
+                    try (var reply = result.toCompletableFuture().join()) {
+                        assertEquals("reply", reply.toUtf8String());
+                    }
+                }
+            }
+        };
+    }
+
+    public static final class RejectingFilter
+            implements systems.zlink.framework.ZLinkHandlerFilter {
+        @Override
+        public <T> CompletionStage<T> invoke(
+                systems.zlink.framework.ZLinkHandlerFilterContext context,
+                systems.zlink.framework.ZLinkHandlerFilterNext<T> next) {
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
+    public static final class PassThroughFilter
+            implements systems.zlink.framework.ZLinkHandlerFilter {
+        @Override
+        public <T> CompletionStage<T> invoke(
+                systems.zlink.framework.ZLinkHandlerFilterContext context,
+                systems.zlink.framework.ZLinkHandlerFilterNext<T> next) {
+            return next.invoke();
+        }
     }
 
     public static final class Handler implements ZLinkRequestHandler<String, String> {
