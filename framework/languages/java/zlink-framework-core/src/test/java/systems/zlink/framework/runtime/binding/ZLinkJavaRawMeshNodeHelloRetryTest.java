@@ -69,12 +69,8 @@ final class ZLinkJavaRawMeshNodeHelloRetryTest {
                             node.helloExchanges.get(remoteRid),
                             "a receive rotation before the management deadline must not submit"
                                     + " HELLO");
-                    var wait =
-                            ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                                    "managementWaitTimeout", long.class);
-                    wait.setAccessible(true);
                     assertTrue(
-                            ((Duration) wait.invoke(node, time)).compareTo(Duration.ZERO) > 0,
+                            node.managementDeadlineNanos(time) - time > 0,
                             "waiting for ADMIT must not pin the management deadline to now");
                 }
                 now.set(due);
