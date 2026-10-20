@@ -100,3 +100,54 @@ test('channel request and reply encode allocate only the final parts representat
   }
   assert.equal(counts.get('encodePayload:object:contentType,message') ?? 0, 0);
 });
+
+async function trackedCodecAllocations(filename, action) {
+  const inspector = require('node:inspector');
+  const session = new inspector.Session();
+  session.connect();
+  const post = (method, params = {}) => new Promise((resolve, reject) => {
+    session.post(method, params, (error, result) => error ? reject(error) : resolve(result));
+  });
+  const chunks = [];
+  try {
+    await post('HeapProfiler.enable');
+    await post('HeapProfiler.startTrackingHeapObjects', { trackAllocations: true });
+    for (let index = 0; index < 1000; index++) action();
+    session.on('HeapProfiler.addHeapSnapshotChunk', ({ params }) => chunks.push(params.chunk));
+    await post('HeapProfiler.stopTrackingHeapObjects', { reportProgress: false });
+  } finally {
+    session.disconnect();
+  }
+  const snapshot = JSON.parse(chunks.join(''));
+  const fields = snapshot.snapshot.meta.trace_function_info_fields;
+  const infos = snapshot.trace_function_infos;
+  const allocations = new Map();
+  function visit(nodes, owner) {
+    for (let index = 0; index < nodes.length; index += 5) {
+      const offset = nodes[index + 1] * fields.length;
+      const name = snapshot.strings[infos[offset + fields.indexOf('name')]];
+      const script = snapshot.strings[infos[offset + fields.indexOf('script_name')]];
+      const next = script.endsWith(filename) ? name : owner;
+      if (next !== undefined) {
+        const entry = allocations.get(next) ?? { objects: 0, bytes: 0 };
+        entry.objects += nodes[index + 2];
+        entry.bytes += nodes[index + 3];
+        allocations.set(next, entry);
+      }
+      visit(nodes[index + 4], next);
+    }
+  }
+  visit(snapshot.trace_tree);
+  return allocations;
+}
+
+test('warmed serializer lookup does not allocate preparation closure contexts', async () => {
+  const { codec } = countedCodec('messaging/payload-codec');
+  class Payload {}
+  const payload = new Payload();
+  const serializers = new Map([['application/x-test', {}]]);
+  const lookup = () => codec.selectSerializerWithContentType(payload, serializers);
+  for (let index = 0; index < 1000; index++) lookup();
+  const allocations = await trackedCodecAllocations('/runtime/messaging/payload-codec.js', lookup);
+  assert.equal(allocations.get('serializerSelectionPlanOf')?.objects ?? 0, 0);
+});

@@ -286,11 +286,12 @@ function serializerSelectionPlanOf(
   if (serializers === undefined || serializers.size === 0) {
     return undefined;
   }
-  const key = serializers as object;
-  const cached = serializerSelectionPlans.get(key);
-  if (cached !== undefined) {
-    return cached;
-  }
+  return serializerSelectionPlans.get(serializers) ?? prepareSerializerSelectionPlan(serializers);
+}
+
+function prepareSerializerSelectionPlan(
+  serializers: ReadonlyMap<string, ZLinkMessageSerializer>
+): ZLinkSerializerSelectionPlan {
   const entries: ZLinkSerializerSelectionEntry[] = [];
   const registeredSelections = codecSerializerSelectionsOf(serializers);
   for (const [contentType, serializer] of serializers) {
@@ -326,7 +327,7 @@ function serializerSelectionPlanOf(
       return selected;
     }
   };
-  serializerSelectionPlans.set(key, plan);
+  serializerSelectionPlans.set(serializers, plan);
   return plan;
 }
 
