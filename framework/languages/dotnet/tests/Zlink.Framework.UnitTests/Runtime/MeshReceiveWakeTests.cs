@@ -1,4 +1,3 @@
-using System.Reflection;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Service;
 
@@ -7,6 +6,89 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MeshReceiveWakeTests
 {
     private static readonly TimeSpan CompletionBound = TimeSpan.FromSeconds(5);
+
+    [Theory]
+    [InlineData(1, 20)]
+    [InlineData(100, 20)]
+    [InlineData(1, 30)]
+    [InlineData(100, 30)]
+    public async Task ManagedDeadlineWakesOnlyWhenItAdvancesTheNextWait(
+        int additionalRequests,
+        int timeoutMilliseconds
+    )
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            "deadline-wake-count",
+            deadlineTimeProvider: new ControllableTimeProvider()
+        );
+        var wake = new CountingWakeTimer();
+        // No receive loop runs here: registration and the actual wake timer
+        // starts are deterministic, including equal deadlines in the same slot.
+        node._receiveWakeTimer = wake;
+        Register(TimeSpan.FromMilliseconds(20));
+        Assert.Equal(1, wake.Starts);
+        wake.Starts = 0;
+        for (var index = 0; index < additionalRequests; index++)
+            Register(TimeSpan.FromMilliseconds(timeoutMilliseconds));
+        Assert.Equal(0, wake.Starts);
+        Register(TimeSpan.FromMilliseconds(10));
+        Assert.Equal(1, wake.Starts);
+
+        void Register(TimeSpan timeout) =>
+            Assert.True(node.TryBeginOperation(MeshOperationKind.SpotRequest, timeout, out _));
+    }
+
+    [Fact]
+    public async Task NewManagedDeadlineWakesAnIdleReceiveOwner()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        using var held = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        var poller = new ControlledReceivePoller { RespectTimeoutAfterWake = true };
+        var node = new ZLinkManagedMeshNode(
+            context,
+            "deadline-wake",
+            applicationJobQueue: queue,
+            receivePollerFactory: () => poller
+        );
+        node.SetRoutingId(RoutingId.From("deadline-wake"));
+        node.Start();
+        try
+        {
+            await poller.FirstWait.Task.WaitAsync(CompletionBound);
+            Assert.True(
+                node.TryBeginOperation(
+                    MeshOperationKind.NodeRequest,
+                    TimeSpan.FromMilliseconds(10),
+                    out var operation
+                )
+            );
+            var token = operation.Token;
+            var expired = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            using var registration = token.Register(() => expired.TrySetResult());
+            poller.AllowWait();
+            // The first wait cannot time out. A deadline registration must wake
+            // the owner, which then uses the 10 ms bound on its next rotation.
+            await expired.Task.WaitAsync(CompletionBound);
+            Assert.True(poller.SecondWait.Task.IsCompleted);
+            Assert.Equal(0UL, queue.GetStatus().CapacityWaiters);
+        }
+        finally
+        {
+            var shutdown = node.DisposeAsync();
+            poller.ReleaseWait();
+            await shutdown;
+        }
+    }
 
     [Theory]
     [InlineData(false)]
@@ -30,15 +112,13 @@ public sealed class MeshReceiveWakeTests
         );
         node.SetRoutingId(RoutingId.From("receive-wake"));
         node.Start();
-        var stop = Field<CancellationTokenSource>(node, "_stop");
+        var stop = node.ReceiveStopToken;
         try
         {
             await poller.FirstWait.Task.WaitAsync(CompletionBound);
             // The owner is held before entering native Wait. Use the existing
             // ingress seam to exhaust admission without modifying an active poller.
-            typeof(ZLinkManagedMeshNode)
-                .GetMethod("DrainRawSocket", BindingFlags.Instance | BindingFlags.NonPublic)!
-                .Invoke(node, [stop.Token]);
+            node.DrainRawSocket(stop);
             Assert.Equal(1UL, queue.GetStatus().CapacityWaiters);
             poller.AllowWait();
             held.Dispose();
@@ -52,9 +132,9 @@ public sealed class MeshReceiveWakeTests
         }
         finally
         {
-            stop.Cancel();
+            var shutdown = node.DisposeAsync();
             poller.ReleaseWait();
-            await node.DisposeAsync();
+            await shutdown;
         }
     }
 
@@ -78,17 +158,11 @@ public sealed class MeshReceiveWakeTests
         );
         node.SetRoutingId(RoutingId.From("shutdown-wake"));
         node.Start();
-        var stop = Field<CancellationTokenSource>(node, "_stop");
+        var stop = node.ReceiveStopToken;
         try
         {
             await poller.FirstWait.Task.WaitAsync(CompletionBound);
-            var handoff = (Task)
-                typeof(ZLinkManagedMeshNode)
-                    .GetMethod(
-                        "WaitForRawApplicationAdmissionAsync",
-                        BindingFlags.Instance | BindingFlags.NonPublic
-                    )!
-                    .Invoke(node, [queue, stop.Token])!;
+            var handoff = node.WaitForRawApplicationAdmissionAsync(queue, stop);
             held.Dispose();
             await handoff.WaitAsync(CompletionBound);
             Assert.Equal(1UL, queue.GetStatus().ReservedSupplyPermits);
@@ -96,7 +170,7 @@ public sealed class MeshReceiveWakeTests
             var stopping = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously
             );
-            using var registration = stop.Token.Register(() => stopping.TrySetResult());
+            using var registration = stop.Register(() => stopping.TrySetResult());
             var shutdown = node.DisposeAsync();
             await stopping.Task.WaitAsync(CompletionBound);
             Assert.Equal(1UL, queue.GetStatus().ReservedSupplyPermits);
@@ -104,9 +178,7 @@ public sealed class MeshReceiveWakeTests
             await shutdown.AsTask().WaitAsync(CompletionBound);
             Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
             Assert.Equal(0UL, queue.GetStatus().CapacityWaiters);
-            Assert.Null(
-                Field<ZLinkApplicationJobQueueLease?>(node, "_reservedRawApplicationAdmission")
-            );
+            Assert.False(node.HasReservedRawApplicationAdmission);
         }
         finally
         {
@@ -116,11 +188,22 @@ public sealed class MeshReceiveWakeTests
         }
     }
 
-    private static T Field<T>(ZLinkManagedMeshNode node, string name) =>
-        (T)
-            typeof(ZLinkManagedMeshNode)
-                .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
-                .GetValue(node)!;
+    private sealed class CountingWakeTimer : IZlinkTimer
+    {
+        internal int Starts { get; set; }
+
+        public void Start(TimeSpan interval, ulong repeatCount) => Starts++;
+
+        public void Stop() { }
+
+        public ulong? Recv(RecvFlags flags = RecvFlags.None) => null;
+
+        public void Close() { }
+
+        public void Dispose() { }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    }
 
     private sealed class ControlledReceivePoller : IPoller
     {
@@ -139,6 +222,7 @@ public sealed class MeshReceiveWakeTests
         internal int OwnerThread { get; private set; }
         internal int ResumeThread { get; private set; }
         internal bool FailRearm { get; init; }
+        internal bool RespectTimeoutAfterWake { get; init; }
 
         internal ControlledReceivePoller() => _inner.Add(_control, ControlSlot);
 
@@ -160,7 +244,10 @@ public sealed class MeshReceiveWakeTests
             }
             else
                 SecondWait.TrySetResult();
-            var count = _inner.Wait(destination, Timeout.InfiniteTimeSpan);
+            var count = _inner.Wait(
+                destination,
+                RespectTimeoutAfterWake && _waitCount > 1 ? timeout : Timeout.InfiniteTimeSpan
+            );
             var written = 0;
             for (var index = 0; index < count; index++)
             {
