@@ -2350,7 +2350,6 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
         record.source_binding_generation = 19;
         record.source_session_sequence = sequence;
         record.actor_route = std::move (target);
-        messaging::envelope_codec_t codec;
         auto encoded = zlink::framework::detail::encode_actor_packet (
           messaging::envelope_header_t{.kind = messaging::message_kind_t::command,
                                        .channel_name = "actor",
@@ -4114,8 +4113,8 @@ std::shared_ptr<zlink::framework::runtime::serial_application_record_t> accepted
 {
     namespace runtime = zlink::framework::runtime;
     const bool request = envelope.kind == runtime::messaging::message_kind_t::request;
-    auto parts = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
-      envelope, zlink::message_t::from (payload));
+    auto parts =
+      zlink::framework::detail::encode_actor_packet (envelope, zlink::message_t::from (payload));
     runtime::protocol::actor_message_header_t header;
     header.operation = {1, sequence};
     header.target = source_fence;
@@ -6946,7 +6945,6 @@ int parked_request_reply_case (const std::string &requester_rid,
                                      .spot_id = std::string (spot->spot_id),
                                      .actor = actor};
 
-    messaging::envelope_codec_t codec;
     auto encoded = zlink::framework::detail::encode_actor_packet (
       messaging::envelope_header_t{.kind = messaging::message_kind_t::request,
                                    .channel_name = "actor",
@@ -7167,7 +7165,6 @@ int relayed_request_without_deferred_terminal_receives_follow_reply ()
                                      .spot_id = std::string ("actor-a-user"),
                                      .actor = actor};
 
-    messaging::envelope_codec_t codec;
     auto encoded = zlink::framework::detail::encode_actor_packet (
       messaging::envelope_header_t{.kind = messaging::message_kind_t::request,
                                    .channel_name = "actor",
