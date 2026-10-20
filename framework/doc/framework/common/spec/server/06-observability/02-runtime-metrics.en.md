@@ -294,7 +294,7 @@ using its ID is called an
 | `stable_type` | Only the stable type of a User/Instance Spot registered at startup with a limited count is used. |
 | `object_kind` | `actor|user_spot|instance_spot` |
 | `policy` | `recreate|snapshot` |
-| Relocation `outcome` | `completed|aborted|failed|shutdown` |
+| Relocation `outcome` | `completed|aborted|failed|shutdown`. It's the result the source observed. `completed` means the source confirmed the target's commit; `aborted` means the source restored the original object with `Preserve`; `failed` means the source cleaned up without confirming the commit (including reading the authority as `Missing`); `shutdown` means the source ended it by shutting down. |
 | `transport` | One of the allowed values fixed at startup registration. |
 | `close_reason` | `client_close|idle_timeout|heartbeat_timeout|server_shutdown|protocol_error|transport_error` |
 
