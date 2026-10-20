@@ -6,7 +6,6 @@ import org.springframework.context.annotation.Bean;
 
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
-import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
 import systems.zlink.framework.monitoring.ZLinkRouteMeshRuntime;
 import systems.zlink.framework.spring.EnableZLinkFramework;
@@ -34,7 +33,7 @@ public final class ApiServerApplication {
     @Bean
     ZLinkFrameworkConfigurer apiFramework(SampleTopology topology) {
         return options -> {
-            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            options.configureDispatch().messageFlow(topology.diagnosticsLevel());
             // --8<-- [start:doc-codec-register]
             // Every payload this process sends is encoded with Protobuf instead of the default
             // codec.
