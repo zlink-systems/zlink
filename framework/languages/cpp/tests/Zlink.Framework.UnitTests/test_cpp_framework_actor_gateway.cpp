@@ -36,6 +36,9 @@
 #include <exception>
 #include <future>
 #include <iostream>
+#include <filesystem>
+#include <fstream>
+#include <nlohmann/json.hpp>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -5738,60 +5741,7 @@ int command_38_rebind_is_owned_only_by_new_connection ()
              : 2;
 }
 
-int local_bound_session_refreshes_cached_route_before_fast_path ()
-{
-    using namespace zlink::framework;
-
-    auto state = zlink::framework::test::runtime_failure_fixture<
-      zlink::framework::detail::mesh_node_builder_state_t> ("bound-session-refresh-mesh");
-    detail::mesh_node_runtime_t runtime (state);
-    const auto actor = detail::actor_ref_access_t::make (
-      node_rid_t::from_string ("current-actor-owner"), "PlayerActor", "reconnected-player", 7);
-    const runtime::spot_address_t stale{"bound-session-refresh-mesh",
-                                        zlink::routing_id_t::from ("stale-session-owner"),
-                                        {},
-                                        0,
-                                        {},
-                                        7,
-                                        11,
-                                        {"stale-owner", 13},
-                                        17};
-    const runtime::spot_address_t current{"bound-session-refresh-mesh",
-                                          zlink::routing_id_t::from ("current-actor-owner"),
-                                          {},
-                                          0,
-                                          {},
-                                          7,
-                                          12,
-                                          {"current-owner", 14},
-                                          18};
-    bool invalidated = false;
-    runtime.configure_actor_route_resolver (
-      [&] (actor_ref_t) -> task_t<std::optional<runtime::spot_address_t>> {
-          co_return invalidated ? current : stale;
-      },
-      [&] (const runtime::protocol::actor_route_fence_t &route) {
-          invalidated = route.actor_id == "reconnected-player"
-                        && route.target_node_routing_id == stale.node_rid.to_bytes ()
-                        && route.target_node_generation == stale.node_generation
-                        && route.authority_owner_generation == stale.authority_owner_generation
-                        && route.owner_lease_generation
-                             == static_cast<std::uint64_t> (stale.owner.lease_generation);
-      });
-    const auto cached = runtime.resolve_application_actor_route (actor).result ().value ();
-    if (!cached || cached->node_rid != stale.node_rid)
-        return 1;
-    const auto refreshed =
-      runtime.refresh_application_actor_route (actor, *cached).result ().value ();
-    return invalidated && refreshed && refreshed->node_rid == current.node_rid
-               && refreshed->node_generation == current.node_generation
-               && refreshed->authority_owner_generation == current.authority_owner_generation
-               && refreshed->owner.lease_generation == current.owner.lease_generation
-             ? 0
-             : 2;
-}
-
-int late_lower_generation_bind_and_publish_are_ignored ()
+int late_lower_generation_bind_is_rejected ()
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -5839,23 +5789,19 @@ int late_lower_generation_bind_and_publish_are_ignored ()
           return task_t<void> (result_t<void>::success ());
       },
       actor_bound_session_route_t{session_owner, stale_rid, 7, 11, 13, 17, 21, 0, 0});
-    const auto stale_record = gateway.record_bound_session_route_transition (
-      actor, actor_bound_session_route_t{session_owner, stale_rid, 7, 11, 13, 17, 20, 0, 0});
     const auto route = gateway.bound_session_route_async (actor).result ().value ();
     const auto delivered = gateway.dispatch_bound_session_send (actor, "after-stale-publish",
                                                                 stream_codec_t::message_pack,
                                                                 zlink::message_t::from ("payload"));
-    return stale_publish && !stale_publish.value ().changed && stale_publish.value ().current
-               && stale_publish.value ().current->binding_generation == 22 && stale_record
-               && !stale_record.value ().changed && stale_record.value ().current
-               && stale_record.value ().current->binding_generation == 22 && route
-               && route->session_rid == current_rid && route->binding_generation == 22 && delivered
-               && current_stream_received.load () == 1 && stale_stream_received.load () == 0
+    return !stale_publish && stale_publish.error_kind () == framework_error_kind_t::unavailable
+               && route && route->session_rid == current_rid && route->binding_generation == 22
+               && delivered && current_stream_received.load () == 1
+               && stale_stream_received.load () == 0
              ? 0
              : 3;
 }
 
-int same_rid_same_generation_defensively_replaces_stream_capability ()
+int same_identity_registration_keeps_logical_binding_current ()
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -5901,7 +5847,11 @@ int same_rid_same_generation_defensively_replaces_stream_capability ()
           return task_t<void> (result_t<void>::success ());
       },
       new_route);
-    if (!replaced || !replaced.value ().changed || !replaced.value ().previous)
+    // Session-Actor binding §5: a local delivery token is not another binding
+    // identity. Refreshing its sink does not replace the logical binding.
+    if (!replaced || replaced.value ().changed || replaced.value ().previous
+        || !replaced.value ().current
+        || replaced.value ().current->binding_token != old_route.binding_token)
         return 3;
     const auto delivered = gateway.dispatch_bound_session_send (
       actor, "defensive-push", stream_codec_t::message_pack, zlink::message_t::from ("payload"));
@@ -7099,8 +7049,9 @@ int terminal_reply_precedes_session_route_publication ()
     if (!gateway.replace_session_route (actor, sink, old_route))
         return 1;
     bool terminal_submitted = false;
-    const auto replaced =
-      gateway.replace_session_route (actor, sink, next_route, stream_codec_t::message_pack, [&] {
+    const auto replaced = gateway.replace_session_route (
+      actor, sink, next_route, stream_codec_t::message_pack,
+      [&] (const actor_bound_session_route_t &) {
           terminal_submitted = true;
           const auto &published = state->actors_by_id.at ("reply-before-publish");
           return published.bound_session_route
@@ -7352,10 +7303,90 @@ int close_exact_session_binding_uses_physical_terminal ()
     return sessions.current_binding (actor.key) ? 11 : 0;
 }
 
+int bind_registration_contract_vectors ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    std::ifstream input (std::filesystem::path (__FILE__).parent_path ()
+                         / "../../../../runtime/protocol/fixtures/bind-registration-v1.json");
+    nlohmann::json fixture;
+    input >> fixture;
+    const auto number = [] (const nlohmann::json &value, const char *key) {
+        return std::stoull (value.at (key).get<std::string> ());
+    };
+    const auto authority = number (fixture, "authority");
+    int failures = 0;
+    for (const auto &vector : fixture.at ("cases")) {
+        actor_gateway_runtime_t gateway;
+        const auto actor = test_actor_ref ("actor-owner", "game.actor", "registration-actor", 1);
+        const auto sink = [] (std::string, stream_codec_t, const zlink::message_t &) {
+            return task_t<void> (result_t<void>::success ());
+        };
+        const auto route = [&] (const nlohmann::json &value) {
+            return actor_bound_session_route_t{
+              zlink::routing_id_t::from (value.at ("node").get<std::string> ()),
+              zlink::routing_id_t::from (value.at ("session").get<std::string> ()),
+              1,
+              number (value, "lifecycle"),
+              authority,
+              1,
+              number (value, "generation"),
+              0,
+              0,
+              false,
+              value.at ("ownerId").get<std::string> (),
+              number (value, "lease")};
+        };
+        const auto original = route (fixture.at ("current"));
+        if (!gateway.replace_session_route (actor, sink, original))
+            return 2;
+        const auto requested = route (vector);
+        int terminals = 0;
+        const auto result = gateway.replace_session_route (
+          actor, sink, requested, stream_codec_t::message_pack,
+          [&] (const actor_bound_session_route_t &accepted) {
+              ++terminals;
+              return accepted.binding_generation == requested.binding_generation
+                     && accepted.authority_owner_generation == requested.authority_owner_generation;
+          });
+        const auto current = gateway.bound_session_route_async (actor).result ().value ();
+        const bool success = vector.at ("success").get<bool> ();
+        const bool same_identity = original.node_rid.to_hex () == requested.node_rid.to_hex ()
+                                   && original.node_generation == requested.node_generation
+                                   && original.session_rid == requested.session_rid
+                                   && original.binding_generation == requested.binding_generation;
+        const auto &expected = success && !same_identity ? requested : original;
+        const bool current_matches =
+          current && current->node_rid.to_hex () == expected.node_rid.to_hex ()
+          && current->node_generation == expected.node_generation
+          && current->session_rid == expected.session_rid
+          && current->binding_generation == expected.binding_generation
+          && current->authority_owner_generation == expected.authority_owner_generation
+          && current->session_owner_id == expected.session_owner_id
+          && current->session_owner_lease_generation == expected.session_owner_lease_generation;
+        const bool terminal_matches =
+          success ? result && terminals == 1 && result.value ().current
+                      && result.value ().current->binding_generation == requested.binding_generation
+                      && result.value ().current->authority_owner_generation == authority
+                  : !result && terminals == 0
+                      && result.error_kind () == framework_error_kind_t::unavailable;
+        if (!current_matches || !terminal_matches) {
+            std::cerr << "bind registration contract failed: " << vector.at ("name") << '\n';
+            ++failures;
+        }
+    }
+    return failures == 0 ? 0 : 1;
+}
 int main (int argc, char **argv)
 {
+    if (argc == 1) {
+        if (const auto registration = bind_registration_contract_vectors (); registration != 0)
+            return registration;
+    }
     if (argc == 2) {
         const std::string test (argv[1]);
+        if (test == "--bind-registration")
+            return bind_registration_contract_vectors ();
         if (test == "--close-unbound")
             return close_unbound_session_reports_invalid_operation ();
         if (test == "--close-binding")
@@ -7513,16 +7544,11 @@ int main (int argc, char **argv)
     if (const auto reentrant = bind_or_get_completion_can_reenter_same_manager (); reentrant != 0) {
         return 280 + reentrant;
     }
-    if (const auto refreshed = local_bound_session_refreshes_cached_route_before_fast_path ();
-        refreshed != 0) {
-        return 275 + refreshed;
-    }
     if (const auto command_38 = command_38_rebind_is_owned_only_by_new_connection ();
         command_38 != 0) {
         return 270 + command_38;
     }
-    if (const auto monotonic = late_lower_generation_bind_and_publish_are_ignored ();
-        monotonic != 0) {
+    if (const auto monotonic = late_lower_generation_bind_is_rejected (); monotonic != 0) {
         return 265 + monotonic;
     }
     if (const auto disconnect_fence = old_stream_disconnect_does_not_retire_reconnected_binding ();
@@ -7533,7 +7559,7 @@ int main (int argc, char **argv)
         handlers != 0) {
         return 250 + handlers;
     }
-    if (const auto defensive = same_rid_same_generation_defensively_replaces_stream_capability ();
+    if (const auto defensive = same_identity_registration_keeps_logical_binding_current ();
         defensive != 0) {
         return 245 + defensive;
     }

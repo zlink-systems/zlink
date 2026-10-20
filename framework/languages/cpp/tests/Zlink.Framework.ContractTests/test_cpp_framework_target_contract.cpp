@@ -775,7 +775,7 @@ int main ()
                       == std::string::npos
                     && mesh_node_runtime.find ("emit_backlog_enqueued_marker") == std::string::npos,
                   "E2E-CP-57", "actor bridge still emits environment-gated stderr handoff markers");
-    const auto stream_bind_begin = stream_host.find ("task_t<void> bind_actor_session");
+    const auto stream_bind_begin = stream_host.find ("bind_actor_session (");
     const auto stream_remote_bind =
       stream_host.find ("_mesh_node->bind_application_actor_session", stream_bind_begin);
     gate.require (stream_bind_begin != std::string::npos && stream_remote_bind != std::string::npos

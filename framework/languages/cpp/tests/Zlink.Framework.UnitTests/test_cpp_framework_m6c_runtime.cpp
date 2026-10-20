@@ -5273,9 +5273,15 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     detail::actor_gateway_runtime_t target_gateway (
       std::make_shared<detail::actor_gateway_state_t> ());
     target.configure_bound_session_operations (host::bound_session_operations_t{
-      .bind = [] (const protocol::bound_session_bind_t &, const zlink::routing_id_t &,
-                  std::uint64_t, const framework::location_owner_token_t &,
-                  std::function<bool ()>) { return host::bound_session_bind_operation_result_t{}; },
+      .bind =
+        [] (
+          const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
+          const framework::location_owner_token_t &,
+          std::function<bool (const protocol::stream_bind_reply_tail_t &)> submit_terminal_reply) {
+            (void) submit_terminal_reply (
+              {bind.binding.generation, bind.actor.authority_owner_generation});
+            return host::bound_session_bind_operation_result_t{};
+        },
       .send = [] (const protocol::bound_session_send_t &,
                   std::vector<zlink::message_t>) { return stateful_error_t::conflict; },
       .replaced = [] (const protocol::bound_session_replaced_t &) {},

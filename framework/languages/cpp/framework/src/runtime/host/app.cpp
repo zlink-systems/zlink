@@ -2638,7 +2638,8 @@ void app_t::_apply_zlink_framework ()
               const runtime::protocol::bound_session_bind_t &bind,
               const zlink::routing_id_t &session_owner, std::uint64_t session_owner_generation,
               const location_owner_token_t &session_owner_token,
-              std::function<bool ()> submit_terminal_reply) mutable {
+              std::function<bool (const runtime::protocol::stream_bind_reply_tail_t &)>
+                submit_terminal_reply) mutable {
                 const auto actor = detail::actor_ref_access_t::make (
                   node_rid_t::from_string (
                     zlink::routing_id_t::from (bind.actor.target_node_routing_id).to_string ()),
@@ -2724,7 +2725,12 @@ void app_t::_apply_zlink_framework ()
                     bind.actor.owner_lease_generation, bind.binding.generation, 0, 0, false,
                     session_owner_token.owner_id,
                     static_cast<std::uint64_t> (session_owner_token.lease_generation)},
-                  stream_codec_t::message_pack, std::move (submit_terminal_reply));
+                  stream_codec_t::message_pack,
+                  [submit_terminal_reply = std::move (submit_terminal_reply)] (
+                    const detail::actor_bound_session_route_t &accepted) {
+                      return submit_terminal_reply (
+                        {accepted.binding_generation, accepted.authority_owner_generation});
+                  });
                 if (!transition) {
                     return runtime::host::bound_session_bind_operation_result_t{
                       runtime::stateful::stateful_error_t::conflict, std::nullopt};
@@ -2739,18 +2745,6 @@ void app_t::_apply_zlink_framework ()
                              + " replaced=" + (change.changed ? "true" : "false");
                   },
                   &session_rid);
-                if (change.current
-                    && change.current->binding_generation != bind.binding.generation) {
-                    actor_gateway_runtime.trace_bound_session_send_stage (
-                      bind.actor.actor_id, "actor_owner_route_publish_stale_ignored",
-                      [&] {
-                          return "session_rid=" + session_rid.to_hex ()
-                                 + " binding_generation=" + std::to_string (bind.binding.generation)
-                                 + " current_binding_generation="
-                                 + std::to_string (change.current->binding_generation);
-                      },
-                      &session_rid);
-                }
                 if (change.changed && change.previous && change.previous->session_rid
                     && change.previous->node_generation != 0
                     && change.previous->binding_generation != 0

@@ -79,12 +79,14 @@ TEST (FrameworkRelocationSealContract, public_actor_push_submits_while_session_r
     ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
 
     host::bound_session_operations_t operations;
-    operations.bind = [] (const protocol::bound_session_bind_t &, const zlink::routing_id_t &,
-                          std::uint64_t, const location_owner_token_t &,
-                          std::function<bool ()> submit_terminal_reply) {
-        (void) submit_terminal_reply ();
-        return host::bound_session_bind_operation_result_t{};
-    };
+    operations.bind =
+      [] (const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
+          const location_owner_token_t &,
+          std::function<bool (const protocol::stream_bind_reply_tail_t &)> submit_terminal_reply) {
+          (void) submit_terminal_reply (
+            {bind.binding.generation, bind.actor.authority_owner_generation});
+          return host::bound_session_bind_operation_result_t{};
+      };
     operations.send = [&deliveries, &delivered] (const protocol::bound_session_send_t &,
                                                  std::vector<zlink::message_t> parts) {
         if (parts.size () != 1)

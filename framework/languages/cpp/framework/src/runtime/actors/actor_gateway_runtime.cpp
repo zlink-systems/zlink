@@ -2133,8 +2133,7 @@ bool same_physical_bound_session (const actor_bound_session_route_t &left,
     // Actor authority changes on relocation while the physical Session and
     // its binding generation remain current. Only a physical identity change
     // retires the existing stream binding.
-    return left.node_rid.to_bytes () == right.node_rid.to_bytes ()
-           && left.session_rid == right.session_rid
+    return left.node_rid == right.node_rid && left.session_rid == right.session_rid
            && left.object_generation == right.object_generation
            && left.node_generation == right.node_generation
            && left.binding_generation == right.binding_generation
@@ -2316,21 +2315,22 @@ admit_session_relay_unlocked (actor_gateway_state_t &state,
     return result_t<void>::success ();
 }
 
-result_t<void> bind_session_components (const std::shared_ptr<actor_gateway_state_t> &state,
-                                        actor_ref_t actor_ref,
-                                        bound_session_sink_t sink,
-                                        stream_codec_t codec,
-                                        bool replace_existing,
-                                        std::optional<actor_bound_session_route_t> route,
-                                        actor_bound_session_transition_t *transition = nullptr,
-                                        const std::function<bool ()> &before_publish = {})
+result_t<void> bind_session_components (
+  const std::shared_ptr<actor_gateway_state_t> &state,
+  actor_ref_t actor_ref,
+  bound_session_sink_t sink,
+  stream_codec_t codec,
+  bool replace_existing,
+  std::optional<actor_bound_session_route_t> route,
+  actor_bound_session_transition_t *transition = nullptr,
+  const std::function<bool (const actor_bound_session_route_t &)> &before_publish = {})
 {
     const auto actor_id = std::string (actor_ref.actor_id ().value ());
     return state->sync ([&] {
         auto found = state->actors_by_id.find (actor_id);
         bool keep_existing_sink = false;
         if (found == state->actors_by_id.end ()) {
-            if (before_publish && !before_publish ()) {
+            if (before_publish && !before_publish (*route)) {
                 return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                                 "bound Session terminal reply was not submitted");
             }
@@ -2363,16 +2363,23 @@ result_t<void> bind_session_components (const std::shared_ptr<actor_gateway_stat
             }
             if (route && route->binding_generation == 0)
                 route->binding_generation = found->second.source_binding_generation;
-            if (route && found->second.bound_session_route && route->binding_generation != 0
-                && found->second.bound_session_route->binding_generation
-                     > route->binding_generation) {
-                if (transition != nullptr) {
-                    transition->current = *found->second.bound_session_route;
-                    transition->changed = false;
+            if (route && found->second.bound_session_route) {
+                const auto &current = *found->second.bound_session_route;
+                const bool same_owner_lifecycle =
+                  current.node_rid == route->node_rid
+                  && current.node_generation == route->node_generation;
+                if (same_owner_lifecycle && current.session_rid == route->session_rid
+                    && current.binding_generation == route->binding_generation) {
+                    route->binding_token = current.binding_token;
+                    route->session_owner_id = current.session_owner_id;
+                    route->session_owner_lease_generation = current.session_owner_lease_generation;
+                } else if (same_owner_lifecycle
+                           && route->binding_generation <= current.binding_generation) {
+                    return result_t<void>::failure (framework_error_kind_t::unavailable,
+                                                    "bound Session registration is stale");
                 }
-                return result_t<void>::success ();
             }
-            if (before_publish && !before_publish ()) {
+            if (before_publish && !before_publish (*route)) {
                 return result_t<void>::failure (framework_error_kind_t::internal_failure,
                                                 "bound Session terminal reply was not submitted");
             }
@@ -2401,9 +2408,8 @@ result_t<void> bind_session_components (const std::shared_ptr<actor_gateway_stat
                 if (found->second.bound_session_route
                     && same_physical_bound_session (*found->second.bound_session_route, *route)) {
                     /* Relocation can refresh authority for the same physical
-                 * Session.  Its already-attached direct writer remains the
-                 * right capability; only a physical identity replacement
-                 * must swap it. */
+                     * Session. Its already-attached direct writer remains the
+                     * delivery capability; remote sinks follow the new authority. */
                     keep_existing_sink = found->second.bound_session_stream_sink
                                          && existing_sink != state->bound_session_sinks.end ();
                     *route = merge_bound_session_route_fence (*found->second.bound_session_route,
@@ -2779,12 +2785,12 @@ result_t<void> actor_gateway_runtime_t::bind_session_route (
                                     replace_existing, std::move (route));
 }
 
-result_t<actor_bound_session_transition_t>
-actor_gateway_runtime_t::replace_session_route (actor_ref_t actor_ref,
-                                                bound_session_sink_t sink,
-                                                actor_bound_session_route_t route,
-                                                stream_codec_t codec,
-                                                std::function<bool ()> before_publish)
+result_t<actor_bound_session_transition_t> actor_gateway_runtime_t::replace_session_route (
+  actor_ref_t actor_ref,
+  bound_session_sink_t sink,
+  actor_bound_session_route_t route,
+  stream_codec_t codec,
+  std::function<bool (const actor_bound_session_route_t &)> before_publish)
 {
     actor_bound_session_transition_t transition;
     const auto bound =
@@ -2848,13 +2854,6 @@ actor_gateway_runtime_t::record_bound_session_route_transition (const actor_ref_
                   framework_error_kind_t::invalid_operation, "actor generation is stale");
             if (route.binding_generation == 0)
                 route.binding_generation = found->second.source_binding_generation;
-            if (!publish && found->second.bound_session_route && route.binding_generation != 0
-                && found->second.bound_session_route->binding_generation
-                     > route.binding_generation) {
-                actor_bound_session_transition_t transition;
-                transition.current = *found->second.bound_session_route;
-                return result_t<actor_bound_session_transition_t>::success (std::move (transition));
-            }
         }
         if (publish && (!route.session_rid || route.binding_generation == 0))
             return result_t<actor_bound_session_transition_t>::failure (
