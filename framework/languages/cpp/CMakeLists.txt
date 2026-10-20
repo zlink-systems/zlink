@@ -1590,8 +1590,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     execute_process(
       COMMAND "${GIT_EXECUTABLE}" -C "${ZLINK_FRAMEWORK_CPP_DIR}" rev-parse --git-path index
       RESULT_VARIABLE _zlink_layout_git_result
-      OUTPUT_VARIABLE _zlink_layout_git_index OUTPUT_STRIP_TRAILING_WHITESPACE
-      ERROR_QUIET)
+      OUTPUT_QUIET ERROR_QUIET)
     if(_zlink_layout_git_result EQUAL 0)
       set(_zlink_layout_manifest "${CMAKE_CURRENT_BINARY_DIR}/layout-source-files")
       add_custom_target(zlink_cpp_layout_manifest

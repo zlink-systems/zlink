@@ -121,54 +121,38 @@ struct public_host_runtime_test_access_t
               attempt.terminal = std::make_shared<task_completion_source_t<void>> ();
           })
           .get ();
-        std::promise<void> release_index;
-        auto release_index_ready = release_index.get_future ();
-        std::promise<void> index_entered;
-        auto index = std::async (std::launch::async, [&] {
-            host._spot_actor_index_lane
-              .run ([&] {
-                  index_entered.set_value ();
-                  release_index_ready.wait ();
-              })
-              .get ();
-        });
-        struct release_and_join_t
-        {
-            std::promise<void> &release;
-            std::future<void> &worker;
-            ~release_and_join_t ()
-            {
-                if (worker.valid ()) {
-                    release.set_value ();
-                    worker.wait ();
-                }
-            }
-        } release_and_join{release_index, index};
-        index_entered.get_future ().get ();
         std::optional<task_t<bool>> activated;
-        if (activation_started)
-            activated.emplace (host.activate_relocation_assembly (key, pending, staging));
-        auto discarded =
-          host._relocation_session_terminal_lane
-            .run ([&] {
-                auto &attempt = host._relocation_target_attempts.at (key);
-                auto cleanup = host.take_relocation_target_discard (attempt);
-                if (!cleanup)
-                    attempt.terminal->complete (result_t<void>::success ());
-                if (replaced) {
-                    attempt = public_host_runtime_t::relocation_target_attempt_t{};
-                    attempt.pending =
-                      std::make_shared<public_host_runtime_t::pending_relocation_assembly_t> (
-                        *pending);
-                } else
-                    host._relocation_target_attempts.erase (key);
-                return cleanup;
-            })
-            .get ();
-        if (!activation_started)
-            activated.emplace (host.activate_relocation_assembly (key, pending, staging));
-        release_index.set_value ();
-        index.get ();
+        std::optional<public_host_runtime_t::relocation_target_attempt_t> discarded;
+        // Keep registration pending behind this index turn. Attempt removal or
+        // replacement happens before the index FIFO advances, without waiting
+        // for an external completion from inside a state lane.
+        host._spot_actor_index_lane
+          .run ([&] {
+              if (activation_started) {
+                  activated.emplace (host.activate_relocation_assembly (key, pending, staging));
+                  EXPECT_FALSE (activated->await_ready ());
+              }
+              discarded =
+                host._relocation_session_terminal_lane
+                  .run ([&] {
+                      auto &attempt = host._relocation_target_attempts.at (key);
+                      auto cleanup = host.take_relocation_target_discard (attempt);
+                      if (!cleanup)
+                          attempt.terminal->complete (result_t<void>::success ());
+                      if (replaced) {
+                          attempt = public_host_runtime_t::relocation_target_attempt_t{};
+                          attempt.pending =
+                            std::make_shared<public_host_runtime_t::pending_relocation_assembly_t> (
+                              *pending);
+                      } else
+                          host._relocation_target_attempts.erase (key);
+                      return cleanup;
+                  })
+                  .get ();
+              if (!activation_started)
+                  activated.emplace (host.activate_relocation_assembly (key, pending, staging));
+          })
+          .get ();
         if (discarded) {
             std::vector<public_host_runtime_t::relocation_target_attempt_t> cleanup;
             cleanup.push_back (std::move (*discarded));
