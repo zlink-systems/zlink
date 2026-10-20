@@ -30,7 +30,7 @@ struct startup_handler_t
 
 // The last hosted service supplies the startup barrier. The tests do not
 // depend on a metric being registered as a side effect of startup.
-class startup_meter_t
+class startup_signal_t
 {
   public:
     std::promise<void> started;
@@ -42,24 +42,19 @@ class startup_meter_t
   private:
     std::once_flag _started;
 };
-class startup_metrics_t
-{
-  public:
-    std::shared_ptr<startup_meter_t> meter = std::make_shared<startup_meter_t> ();
-};
 class startup_barrier_t final : public hosted_service_t
 {
   public:
-    explicit startup_barrier_t (startup_meter_t &meter) : _meter (meter) {}
+    explicit startup_barrier_t (startup_signal_t &signal) : _signal (signal) {}
     task_t<void> start (service_provider_t &) override
     {
-        _meter.notify_started_or_exited ();
+        _signal.notify_started_or_exited ();
         co_return;
     }
     void stop () noexcept override {}
 
   private:
-    startup_meter_t &_meter;
+    startup_signal_t &_signal;
 };
 
 class held_lease_repository_t final : public runtime::in_memory_location_repository_t
@@ -257,15 +252,15 @@ class running_host_t
   public:
     running_host_t (app_t &app,
                     std::shared_ptr<held_lease_repository_t> store,
-                    startup_meter_t &meter) :
+                    startup_signal_t &signal) :
         _app (app), _store (std::move (store))
     {
-        _app.add_hosted_service (std::make_unique<startup_barrier_t> (meter));
-        _host = std::thread ([this, &meter] {
+        _app.add_hosted_service (std::make_unique<startup_barrier_t> (signal));
+        _host = std::thread ([this, &signal] {
             char program[] = "startup-lease";
             char *argv[] = {program};
             exit_code.store (_app.run (1, argv));
-            meter.notify_started_or_exited ();
+            signal.notify_started_or_exited ();
         });
     }
     ~running_host_t ()
@@ -285,8 +280,8 @@ class running_host_t
 
 TEST (ZLinkFrameworkStartupLease, PreparingUntilServingDescriptorIsStored)
 {
-    startup_metrics_t metrics;
-    auto started = metrics.meter->started.get_future ();
+    startup_signal_t startup;
+    auto started = startup.started.get_future ();
     auto store = std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
     auto requested = store->descriptor_requested.get_future ();
     auto stored = store->descriptor_stored.get_future ();
@@ -304,7 +299,7 @@ TEST (ZLinkFrameworkStartupLease, PreparingUntilServingDescriptorIsStored)
     auto runtime_future = probe->framework_runtime.get_future ();
     auto fanout_future = probe->fanout.get_future ();
     app.add_hosted_service (std::move (probe));
-    running_host_t host (app, store, *metrics.meter);
+    running_host_t host (app, store, startup);
     started.wait ();
     ASSERT_EQ (-1, host.exit_code.load ());
     auto *runtime = runtime_future.get ();
@@ -357,15 +352,15 @@ TEST (ZLinkFrameworkStartupLease, PreparingUntilServingDescriptorIsStored)
 
 TEST (ZLinkFrameworkStartupLease, HostWithoutMeshAlsoWaitsForLeaseRecovery)
 {
-    startup_metrics_t metrics;
-    auto started = metrics.meter->started.get_future ();
+    startup_signal_t startup;
+    auto started = startup.started.get_future ();
     auto store = std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
     auto app = app_t::create ();
     configure (app, store, false);
     auto probe = std::make_unique<runtime_probe_t> ();
     auto runtime_future = probe->framework_runtime.get_future ();
     app.add_hosted_service (std::move (probe));
-    running_host_t host (app, store, *metrics.meter);
+    running_host_t host (app, store, startup);
     started.wait ();
     ASSERT_EQ (-1, host.exit_code.load ());
     EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
@@ -384,13 +379,13 @@ TEST (ZLinkFrameworkStartupLease, HostWithoutMeshAlsoWaitsForLeaseRecovery)
 
 TEST (ZLinkFrameworkStartupLease, ProviderErrorStartsPreparingAndStopsWithoutLease)
 {
-    startup_metrics_t metrics;
-    auto started = metrics.meter->started.get_future ();
+    startup_signal_t startup;
+    auto started = startup.started.get_future ();
     auto store =
       std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::unavailable);
     auto app = app_t::create ();
     configure (app, store);
-    running_host_t host (app, store, *metrics.meter);
+    running_host_t host (app, store, startup);
     started.wait ();
     EXPECT_EQ (-1, host.exit_code.load ());
     EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
@@ -419,8 +414,8 @@ TEST (ZLinkFrameworkStartupLease, UnknownDescriptorPublicationRetriesAfterRenewa
 {
     for (const auto kind : {"MeshNode", "ClientServer", "Fanout"}) {
         SCOPED_TRACE (kind);
-        startup_metrics_t metrics;
-        auto started = metrics.meter->started.get_future ();
+        startup_signal_t startup;
+        auto started = startup.started.get_future ();
         auto store =
           std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
         store->release_claim.complete (result_t<void>::success ());
@@ -462,7 +457,7 @@ TEST (ZLinkFrameworkStartupLease, UnknownDescriptorPublicationRetriesAfterRenewa
         auto location = probe->location.get_future ();
         auto runtime = probe->framework_runtime.get_future ();
         app.add_hosted_service (std::move (probe));
-        running_host_t host (app, store, *metrics.meter);
+        running_host_t host (app, store, startup);
         started.wait ();
         EXPECT_EQ (-1, host.exit_code.load ());
         if (host.exit_code.load () != -1)
@@ -492,7 +487,6 @@ TEST (ZLinkFrameworkStartupLease, ConfirmedDescriptorConflictFailsStartup)
 {
     for (const auto kind : {"MeshNode", "ClientServer", "Fanout"}) {
         SCOPED_TRACE (kind);
-        startup_metrics_t metrics;
         auto store =
           std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
         store->release ();
@@ -530,14 +524,14 @@ TEST (ZLinkFrameworkStartupLease, ConfirmedDescriptorConflictFailsStartup)
 
 TEST (ZLinkFrameworkStartupLease, AcquiredLeaseStorePendingKeepsPreparing)
 {
-    startup_metrics_t metrics;
-    auto started = metrics.meter->started.get_future ();
+    startup_signal_t startup;
+    auto started = startup.started.get_future ();
     auto store = std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
     store->release_claim.complete (result_t<void>::success ());
     auto requested = store->descriptor_requested.get_future ();
     auto app = app_t::create ();
     configure (app, store);
-    running_host_t host (app, store, *metrics.meter);
+    running_host_t host (app, store, startup);
     requested.wait ();
     EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
     EXPECT_FALSE (app.is_ready ());
@@ -547,7 +541,6 @@ TEST (ZLinkFrameworkStartupLease, AcquiredLeaseStorePendingKeepsPreparing)
 
 TEST (ZLinkFrameworkStartupLease, DescriptorCancellationFailsStartup)
 {
-    startup_metrics_t metrics;
     auto store = std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
     store->release ();
     store->cancel_mesh_write = true;
@@ -565,8 +558,8 @@ TEST (ZLinkFrameworkStartupLease, UnansweredPublicationStartsPreparingAndRecover
 {
     for (const auto kind : {"MeshNode", "ClientServer", "Fanout"}) {
         SCOPED_TRACE (kind);
-        startup_metrics_t metrics;
-        auto started = metrics.meter->started.get_future ();
+        startup_signal_t startup;
+        auto started = startup.started.get_future ();
         auto store =
           std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
         store->release_claim.complete (result_t<void>::success ());
@@ -605,7 +598,7 @@ TEST (ZLinkFrameworkStartupLease, UnansweredPublicationStartsPreparingAndRecover
         auto location = probe->location.get_future ();
         auto framework = probe->framework_runtime.get_future ();
         app.add_hosted_service (std::move (probe));
-        running_host_t host (app, store, *metrics.meter);
+        running_host_t host (app, store, startup);
         requested.wait ();
         EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
         EXPECT_FALSE (app.is_ready ());

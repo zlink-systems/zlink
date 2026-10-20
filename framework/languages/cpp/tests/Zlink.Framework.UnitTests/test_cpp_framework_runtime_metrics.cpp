@@ -5,6 +5,7 @@
 #include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include <zlink/framework.hpp>
 #include <cmath>
 #include <iostream>
@@ -56,9 +57,11 @@ void require_one_current_host_state (metric_test::provider_t &provider)
     const auto data = provider.collect ();
     metric_test::validate_metric_contract (data);
     for (const auto &metric : data) {
-        if (metric.instrument_descriptor.name_ != "zlink.host.state") continue;
+        if (metric.instrument_descriptor.name_ != "zlink.host.state")
+            continue;
         for (const auto &point : metric.point_data_attr_) {
-            const auto &gauge = opentelemetry::nostd::get<metric_test::sdk::LastValuePointData> (point.point_data);
+            const auto &gauge =
+              opentelemetry::nostd::get<metric_test::sdk::LastValuePointData> (point.point_data);
             total += opentelemetry::nostd::get<double> (gauge.value_);
         }
     }
@@ -305,10 +308,25 @@ void provider_failure_preserves_shutdown ()
           opentelemetry::metrics::Provider::GetMeterProvider ();
         ~provider_scope_t () { opentelemetry::metrics::Provider::SetMeterProvider (previous); }
     } scope;
+    mesh::raw_mesh_node_options_t options;
+    options.descriptor.mesh_name = "unavailable-meter";
+    options.descriptor.node_routing_id = {'m', 'e', 't', 'e', 'r'};
+    options.descriptor.lifecycle_generation = options.descriptor.descriptor_revision = 1;
+    options.descriptor.advertised_endpoint = "tcp://127.0.0.1:0";
+    options.metric_channel_names = {"unavailable-channel"};
+    mesh::service_topology_registry_t available (options.descriptor, options.metric_channel_names);
+    const auto expected_missing = available.select ("unavailable-channel");
+    require (!expected_missing, "missing channel unexpectedly selected a member");
     opentelemetry::metrics::Provider::SetMeterProvider (
       opentelemetry::nostd::shared_ptr<opentelemetry::metrics::MeterProvider> (
         std::static_pointer_cast<opentelemetry::metrics::MeterProvider> (
           std::make_shared<unavailable_meter_provider_t> ())));
+    mesh::raw_mesh_node_owner_t node (test::runtime_failure_options (std::move (options)));
+    node.start ();
+    const auto missing = node.topology ().select ("unavailable-channel");
+    require (!missing && missing.error_kind () == expected_missing.error_kind (),
+             "unavailable meter changed the missing-member result");
+    node.close ();
     auto app = app_t::create ();
     require (app.shutdown (1s).result ().value ().outcome == termination_outcome_t::stopped,
              "unavailable meter changed host Shutdown result");
@@ -330,6 +348,43 @@ void contract_rejects_real_bad_label ()
     require (rejected, "contract accepted real invalid operation label");
     std::cout << "negative contract: rejected operation=not_an_operation\n";
 }
+
+void contract_rejects_wrong_metadata ()
+{
+    const auto rejects = [] (auto emit, const char *expected) {
+        metric_test::provider_t provider;
+        runtime_metrics_t metrics (test::runtime_failure_monitoring ());
+        emit (metrics);
+        try {
+            metric_test::validate_metric_contract (provider.collect ());
+        }
+        catch (const std::runtime_error &error) {
+            require (std::string (error.what ()).find (expected) != std::string::npos,
+                     "contract rejected measurement for the wrong reason");
+            return;
+        }
+        throw std::runtime_error ("contract accepted invalid metric metadata");
+    };
+    rejects (
+      [] (auto &metrics) {
+          metrics.counter ("zlink.location.store.errors", "s", 1, {{"operation", "read"}});
+      },
+      "metric unit:");
+    rejects (
+      [] (auto &metrics) {
+          metrics.histogram ("zlink.location.store.errors", "{error}", 1, {{"operation", "read"}});
+      },
+      "metric kind:");
+    rejects ([] (auto &metrics) { metrics.counter ("zlink.location.store.errors", "{error}", 1); },
+             "missing metric label:");
+    rejects (
+      [] (auto &metrics) {
+          metrics.counter ("zlink.location.store.errors", "{error}", 1,
+                           {{"operation", "read"}, {"actor_id", "unbounded"}});
+      },
+      "metric label outside contract:");
+    std::cout << "negative contract: rejected wrong unit, kind, missing and extra labels\n";
+}
 } // namespace
 int main ()
 {
@@ -339,6 +394,7 @@ int main ()
         capacity_transitions ();
         provider_failure_preserves_shutdown ();
         contract_rejects_real_bad_label ();
+        contract_rejects_wrong_metadata ();
     }
     catch (const std::exception &error) {
         std::cerr << error.what () << '\n';

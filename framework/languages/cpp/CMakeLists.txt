@@ -2316,14 +2316,18 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   find_package(Python3 REQUIRED COMPONENTS Interpreter)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_runtime_metrics_names
+    TIER contract
     TIMEOUT 15
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/runtime_metrics_contract.py
     LABELS "framework-unit;framework-contract;framework-observability;metrics")
   add_zlink_framework_test(
     test_cpp_framework_runtime_metrics
     tests/Zlink.Framework.UnitTests/test_cpp_framework_runtime_metrics.cpp
-    "framework-unit;framework-contract;framework-observability;metrics")
+    "framework-unit;framework-contract;framework-observability;metrics"
+    contract)
   target_link_libraries(test_cpp_framework_runtime_metrics PRIVATE opentelemetry-cpp::metrics)
+  target_include_directories(test_cpp_framework_runtime_metrics PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
     test_cpp_framework_mesh_metrics
     tests/Zlink.Framework.UnitTests/test_cpp_framework_mesh_metrics.cpp

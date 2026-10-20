@@ -704,6 +704,7 @@ void client_server_location_runtime_t::start_server (
                 }));
           }
           catch (const std::exception &) {
+              _channel_runtime.runtime_failures ()->report (std::current_exception ());
               std::lock_guard lock (_server_progress_mutex);
               --_active_application_drains;
               _server_progress_changed.notify_all ();
@@ -712,7 +713,7 @@ void client_server_location_runtime_t::start_server (
           try {
               detail::observe_task_terminal (*task, [this] (const result_t<void> &result) {
                   if (!result)
-
+                      _channel_runtime.runtime_failures ()->report (result.exception ());
                   {
                       std::lock_guard lock (_server_progress_mutex);
                       --_active_application_drains;
@@ -721,6 +722,7 @@ void client_server_location_runtime_t::start_server (
               });
           }
           catch (const std::exception &) {
+              _channel_runtime.runtime_failures ()->report (std::current_exception ());
           }
       });
     raw->start ();
@@ -865,16 +867,16 @@ void client_server_location_runtime_t::run ()
             const bool published = result && result.value ();
             const bool reconcile_after_publish = serving.empty ();
             if (!result)
-
-                if (!reconcile_after_publish) {
-                    {
-                        std::lock_guard lock (_server_progress_mutex);
-                        for (const auto &request : serving)
-                            request->completion.complete (result_t<bool>::success (published));
-                    }
-                    serving.clear ();
-                    _server_progress_changed.notify_all ();
+                _channel_runtime.runtime_failures ()->report (result.exception ());
+            if (!reconcile_after_publish) {
+                {
+                    std::lock_guard lock (_server_progress_mutex);
+                    for (const auto &request : serving)
+                        request->completion.complete (result_t<bool>::success (published));
                 }
+                serving.clear ();
+                _server_progress_changed.notify_all ();
+            }
             if (reconcile_after_publish && result && !_stop->load (std::memory_order_acquire)) {
                 pending_reconcile = std::make_shared<task_t<void>> (
                   reconcile_task ([this] (std::function<void ()> work) {
@@ -890,7 +892,8 @@ void client_server_location_runtime_t::run ()
         }
         if (pending_reconcile && pending_reconcile->await_ready ()) {
             auto completed = std::move (pending_reconcile);
-            (void) completed->result ();
+            if (!completed->result ())
+                _channel_runtime.runtime_failures ()->report (completed->result ().exception ());
             next_reconcile =
               std::chrono::steady_clock::now () + _locations->options ().polling_interval;
         }
@@ -1774,6 +1777,7 @@ void client_server_location_runtime_t::seal_application_dispatch () noexcept
             server->mailbox ().close ();
     }
     catch (const std::exception &) {
+        _channel_runtime.runtime_failures ()->report (std::current_exception ());
     }
 }
 
@@ -1835,6 +1839,7 @@ bool client_server_location_runtime_t::wait_for_accepted_callbacks_until (
         return settled ();
     }
     catch (const std::exception &) {
+        _channel_runtime.runtime_failures ()->report (std::current_exception ());
         return false;
     }
 }

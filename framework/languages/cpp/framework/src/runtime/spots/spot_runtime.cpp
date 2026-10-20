@@ -5582,7 +5582,7 @@ class actor_dispatch_admission_token_t final
     {
         try {
             return _state->lane
-              .run ([this, &actor_ref, request] {
+              .run ([this, &actor_ref] {
                   if (_state->retiring_actor_keys.contains (_actor_key)) {
                       return result_t<phase_snapshot_t>::failure (framework_error_kind_t::not_found,
                                                                   "actor destruction is pending");

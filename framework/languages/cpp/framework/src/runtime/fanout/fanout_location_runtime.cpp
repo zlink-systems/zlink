@@ -273,6 +273,7 @@ void fanout_location_runtime_t::run ()
                 publish_snapshot_changes ();
             }
             catch (...) {
+                _channel_runtime.runtime_failures ()->report (std::current_exception ());
             }
             next_reconcile = now + _locations->options ().polling_interval;
         }
