@@ -1,5 +1,16 @@
 package systems.zlink.framework.runtime.spots;
 
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkRelocationCancellation;
@@ -24,18 +35,6 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
 import systems.zlink.framework.runtime.locations.ZLinkActorAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
-
-import java.time.Duration;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.UUID;
-import java.util.concurrent.CancellationException;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
-import java.util.function.Supplier;
 
 /**
  * Builds the reversible source half of one Entry Spot Actor relocation from the live Actor and its
@@ -489,7 +488,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                         })
                 .whenComplete(
                         (prepared, failure) -> {
-                            if (failure != null) metrics.complete(null, failure);
+                            if (failure != null) metrics.complete(null, false);
                         });
     }
 
@@ -1268,9 +1267,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                     throw new IllegalStateException(
                                             "Actor relocation target did not commit");
                                 }
-                                var snapshot =
-                                        Objects.requireNonNull(
-                                                result.target(), "committed target authority");
+                                var snapshot = result.target();
+                                if (snapshot == null) return null;
                                 if (snapshot.objectGeneration()
                                                 != owned.snapshot().objectGeneration()
                                         || !isTargetOwner(snapshot)

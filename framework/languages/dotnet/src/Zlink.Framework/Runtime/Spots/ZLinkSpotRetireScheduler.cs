@@ -269,30 +269,25 @@ internal sealed class ZLinkSpotRetireScheduler(
                     selection,
                     deadline,
                     detachSource,
+                    metric,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            metric.Complete(
-                result.Outcome switch
-                {
-                    ZLinkRelocationUnitOutcome.Completed => ZLinkRelocationMetricOutcome.Completed,
-                    ZLinkRelocationUnitOutcome.Pending => ZLinkRelocationMetricOutcome.Aborted,
-                    _ when result.TerminalReason
-                            == ZLinkFrameworkRelocationReason.ShutdownRequested =>
-                        ZLinkRelocationMetricOutcome.Shutdown,
-                    _ => ZLinkRelocationMetricOutcome.Failed,
-                }
+            metric.CompleteSource(
+                null,
+                result.TerminalReason == ZLinkFrameworkRelocationReason.ShutdownRequested
+                    && runtime.ShutdownToken.IsCancellationRequested
             );
             return result;
         }
-        catch (OperationCanceledException)
+        catch (OperationCanceledException) when (runtime.ShutdownToken.IsCancellationRequested)
         {
-            metric.Complete(ZLinkRelocationMetricOutcome.Shutdown);
+            metric.CompleteSource(null, sourceStopped: true);
             throw;
         }
         catch
         {
-            metric.Complete(ZLinkRelocationMetricOutcome.Failed);
+            metric.CompleteSource(null);
             throw;
         }
     }
@@ -303,6 +298,7 @@ internal sealed class ZLinkSpotRetireScheduler(
         ZLinkRelocationTargetSelection selection,
         DateTimeOffset deadline,
         Func<ZLinkSpotActivation, ValueTask> detachSource,
+        ZLinkRuntimeMetrics.ZLinkRelocationMetricOperation metric,
         CancellationToken cancellationToken
     )
     {
@@ -634,6 +630,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                             AbortSealedSessionRoutesAsync
                         )
                         .ConfigureAwait(false);
+                    metric.CompleteSource(ZLinkSourceSettlement.SourcePreserved);
                     return ZLinkRelocationUnitResult.Terminal(
                         ZLinkFrameworkRelocationReason.RelocationFailed,
                         ZLinkRelocationCommitKnowledge.NotCommitted,
@@ -763,6 +760,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                     try
                     {
                         await AbortUncommittedAsync().ConfigureAwait(false);
+                        metric.CompleteSource(ZLinkSourceSettlement.SourcePreserved);
                         return ZLinkRelocationUnitResult.Terminal(
                             ZLinkFrameworkRelocationReason.RelocationFailed,
                             ZLinkRelocationCommitKnowledge.NotCommitted,
@@ -863,6 +861,7 @@ internal sealed class ZLinkSpotRetireScheduler(
                         )
                         .ConfigureAwait(false);
                     targetPublished = true;
+                    metric.CompleteSource(ZLinkSourceSettlement.TargetCommitted);
                 }
                 // Reconciliation can discover a target publication after the
                 // original StageAsync acknowledgement was lost. Complete the
