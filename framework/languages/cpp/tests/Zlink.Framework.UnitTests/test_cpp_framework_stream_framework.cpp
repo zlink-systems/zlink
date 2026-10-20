@@ -1064,8 +1064,115 @@ int core_connected_rejection_cleanup ()
 
 } // namespace
 
+class descriptor_drop_session_t final : public zlink::framework::packet_stream_session_t
+{
+  public:
+    std::promise<zlink::routing_id_t> connected;
+    zlink::framework::task_t<void> on_connected (zlink::framework::stream_t &stream) override
+    {
+        connected.set_value (stream.routing_id ().value ());
+        co_return;
+    }
+    zlink::framework::task_t<void> on_disconnected (zlink::framework::stream_t &) override
+    {
+        co_return;
+    }
+    zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
+                                             const zlink::framework::stream_error_t &) override
+    {
+        co_return;
+    }
+    zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
+                                              const zlink::framework::session_message_context_t &,
+                                              const zlink::message_t &) override
+    {
+        co_return;
+    }
+};
+
+int descriptor_unavailable_replacement_records_drop ()
+{
+    using namespace zlink::framework;
+    detail::configure_stream_dispatch_executor ();
+    service_collection_t services;
+    handler_registry_t handlers;
+    serializer_registry_t serializers;
+    auto builder = test::runtime_failure_builder ();
+    detail::zlink_builder_access_t::bind_shared_core_context (
+      builder, std::make_shared<zlink::context_t> ());
+    services.add_singleton<detail::actor_gateway_runtime_t> ();
+    services.add_factory<session_actor_manager_t> (
+      [] (service_provider_t &provider) {
+          return std::make_unique<session_actor_manager_t> (
+            provider.get_required<detail::actor_gateway_runtime_t> ().manager ());
+      },
+      service_lifetime_t::scoped);
+    auto session = std::make_shared<descriptor_drop_session_t> ();
+    auto connected = session->connected.get_future ();
+    zlink_framework_options_t options (services, handlers, serializers, builder);
+    options.add_route_mesh ("drop-mesh")
+      .set_routing_id (zlink::routing_id_t::from ("drop-node"))
+      .listen (loopback_tcp_any_port);
+    options.add_stream_node ("drop-stream")
+      .bind (loopback_tcp_any_port)
+      .register_session ("drop-session");
+    options.apply ();
+    std::atomic_int drops{0};
+    dispatch_options_t dispatch;
+    dispatch.message_flow (message_flow_log_mode_t::normal);
+    detail::dispatch_options_access_t::set_observer_for_tests (
+      dispatch, [&] (const message_flow_event_t &event) {
+          if (event.packet_name == std::optional<std::string> ("boundSessionReplaced")
+              && event.outcome == message_flow_outcome_t::dropped
+              && event.reason == message_flow_reason_t::location_unavailable)
+              ++drops;
+      });
+    detail::apply_dispatch_options (builder, dispatch);
+    for (const auto &registration : detail::mesh_node_runtime_t::registrations (builder))
+        registration->core_context = detail::zlink_builder_access_t::shared_core_context (builder);
+    auto provider = services.build_provider ();
+    auto mesh = detail::mesh_node_runtime_t::from (builder, "drop-mesh");
+    mesh->bind_serializers (serializers);
+    mesh->start ();
+    auto runtime = detail::stream_runtime_t::from (builder);
+    auto listeners = std::make_shared<runtime::listener_status_registry_t> ();
+    runtime::stream_host_service_t host (
+      std::make_shared<runtime::runtime_failure_collector_t> (), runtime, runtime.snapshots (),
+      {{"drop-session",
+        [session] (service_provider_t &) -> packet_stream_session_t & { return *session; }}},
+      std::chrono::seconds (30), mesh, {}, listeners);
+    host.start (provider);
+    auto client = connect_loopback (
+      endpoint_port (listener_endpoint (*listeners, listener_kind_t::stream, "drop-stream")));
+    int result = 0;
+    if (!client || connected.wait_for (std::chrono::seconds (5)) != std::future_status::ready)
+        result = 1;
+    else {
+        namespace protocol = zlink::framework::runtime::protocol;
+        const protocol::bound_session_replaced_t notice{
+          {"actor", 7, zlink::routing_id_t::from ("actor-owner").to_bytes (), 11, 13, 17},
+          {mesh->status ().routing_id ().to_bytes (), mesh->status ().lifecycle_generation (),
+           "owner", 19, connected.get ().to_bytes (), 23}};
+        if (provider.get_required<detail::actor_gateway_runtime_t> ()
+              .dispatch_bound_session_replaced (notice))
+            result = 2;
+        if (drops != 1)
+            result = 3;
+    }
+    close_native_client (client);
+    host.stop ();
+    mesh->stop ();
+    provider.close ();
+    detail::shutdown_stream_dispatch_executor ();
+    return result;
+}
+
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--descriptor-drop")
+        return descriptor_unavailable_replacement_records_drop ();
+    if (descriptor_unavailable_replacement_records_drop () != 0)
+        return 202;
     using zlink::framework::framework_error_kind_t;
     using zlink::framework::stream_codec_t;
     using zlink::framework::detail::stream_header_flags_t;

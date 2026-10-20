@@ -13,7 +13,7 @@ import {
   type ZLinkRuntimeMessageFlowEvent,
   type ZLinkRuntimeMessageFlowResult
 } from '../../contracts/Dispatch/ZLinkDispatchOptions';
-import { ERROR_MESSAGE_MAX_LENGTH } from './dispatch-error-details';
+import { ERROR_MESSAGE_MAX_LENGTH, dispatchErrorDetails } from './dispatch-error-details';
 import type { ZLinkDispatchErrorSink } from './dispatch-error-port';
 import { currentFlowContext, FLOW_ORIGIN_VALUES } from './flow-context';
 const MESSAGE_FLOW_EVENT_ID = 'zlink.message_flow';
@@ -145,6 +145,28 @@ export function flowIfEnabled(
 
 export interface ZLinkMessageFlowTracePoint {
   trace(flowInput: MessageFlowInput): void;
+}
+
+export function traceSessionBindingControlDrop(
+  flow: ZLinkMessageFlowTracer | undefined,
+  sourceRid: string,
+  actorId: string,
+  packetName: string,
+  errorReason: 'location_unavailable' | 'stale_target',
+  error?: unknown
+): void {
+  const point = flowIfEnabled(flow, ZLinkMessageFlowOutcome.Dropped);
+  if (point === undefined) return;
+  point.trace({
+    outcome: ZLinkMessageFlowOutcome.Dropped,
+    surface: ZLinkDispatchErrorSurface.StreamSession,
+    messageKind: ZLinkDispatchMessageKind.Control,
+    sourceRid,
+    actorId,
+    packetName,
+    errorReason,
+    ...dispatchErrorDetails(error)
+  });
 }
 
 type MessageFlowInput = Omit<

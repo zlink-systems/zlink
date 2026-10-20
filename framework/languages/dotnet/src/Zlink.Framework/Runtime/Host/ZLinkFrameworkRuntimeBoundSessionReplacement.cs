@@ -30,16 +30,33 @@ internal sealed partial class ZLinkFrameworkRuntime
                     )
                 )
             );
+        if (nodeRuntime?.LocalSessionOwner is not { } sessionOwner)
+        {
+            Flow.TraceSessionBindingControlDrop(
+                sourceNodeRid,
+                authority.ActorId,
+                "boundSessionReplaced",
+                ZLinkMessageFlowReason.LocationUnavailable
+            );
+            return false;
+        }
         if (
-            nodeRuntime?.LocalSessionOwner is not { } sessionOwner
-            || !sessionOwner.IdentifiesSessionOwner(
+            !sessionOwner.IdentifiesSessionOwner(
                 retired.SessionOwnerNodeRid,
                 retired.SessionOwnerNodeGeneration,
                 retired.SessionOwnerId,
                 retired.SessionOwnerLeaseGeneration
             )
         )
+        {
+            Flow.TraceSessionBindingControlDrop(
+                sourceNodeRid,
+                authority.ActorId,
+                "boundSessionReplaced",
+                ZLinkMessageFlowReason.StaleTarget
+            );
             return false;
+        }
 
         // The Actor authority fence is deliberately not consulted to find an
         // Actor here. It only authenticates the transport source above; the
