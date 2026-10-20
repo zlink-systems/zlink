@@ -6,6 +6,22 @@ namespace Zlink.Framework.UnitTests;
 public sealed class SerialExecutorTests
 {
     [Fact]
+    public async Task AbsentDrainDoesNotAllocate()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
+        queue.PublishDrain(null);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+            queue.PublishDrain(null);
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
     public void SerialTurnConcurrentSuspensionObservationDoesNotLoseSignals()
     {
         const int iterations = 1000;

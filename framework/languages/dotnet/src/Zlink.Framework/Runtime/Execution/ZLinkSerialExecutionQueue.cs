@@ -1279,11 +1279,14 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             return;
         }
         if (!_taskRunner.TryRunDetached("serial-queue-drain", drain))
-            _ = Task.Run(
-                async () => await drain(CancellationToken.None).ConfigureAwait(false),
-                CancellationToken.None
-            );
+            PublishFallbackDrain(drain);
     }
+
+    private static void PublishFallbackDrain(Func<CancellationToken, ValueTask> drain) =>
+        _ = Task.Run(
+            async () => await drain(CancellationToken.None).ConfigureAwait(false),
+            CancellationToken.None
+        );
 
     internal void SchedulePendingWork()
     {
