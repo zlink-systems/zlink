@@ -58,6 +58,19 @@ std::size_t default_worker_count ()
     return std::max (1u, std::thread::hardware_concurrency ());
 }
 
+// Caller holds executor_mutex; capture and late-bound delivery share creation.
+coroutine_executor_t &ensure_executor_locked ()
+{
+    auto &executor = executor_instance ();
+    if (!executor) {
+        const auto workers =
+          configured_worker_count () == 0 ? default_worker_count () : configured_worker_count ();
+        executor = std::make_unique<coroutine_executor_t> (workers);
+        executor_fast_path ().store (executor.get (), std::memory_order_release);
+    }
+    return *executor;
+}
+
 } // namespace
 
 coroutine_executor_t::coroutine_executor_t (std::size_t worker_count) :
@@ -107,21 +120,17 @@ coroutine_executor_t &handler_coroutine_executor ()
         return *ready;
     }
     std::lock_guard lock (executor_mutex ());
-    auto &executor = executor_instance ();
-    if (!executor) {
-        if (executor_shutdown_requested ()) {
-            throw std::runtime_error ("handler coroutine executor is shut down");
-        }
-        const auto workers =
-          configured_worker_count () == 0 ? default_worker_count () : configured_worker_count ();
-        executor = std::make_unique<coroutine_executor_t> (workers);
-        executor_fast_path ().store (executor.get (), std::memory_order_release);
+    if (!executor_instance () && executor_shutdown_requested ()) {
+        throw std::runtime_error ("handler coroutine executor is shut down");
     }
-    return *executor;
+    return ensure_executor_locked ();
 }
 
-void configure_handler_coroutine_executor (std::size_t worker_count)
+void configure_handler_coroutine_executor (std::size_t worker_count,
+                                           detail::completion_dispatcher_ref_t dispatcher)
 {
+    if (!dispatcher)
+        dispatcher = detail::acquire_completion_dispatcher ();
     if (worker_count == 0) {
         worker_count = default_worker_count ();
     }
@@ -134,10 +143,13 @@ void configure_handler_coroutine_executor (std::size_t worker_count)
         stopped_executor = std::move (executor);
     }
     if (executor) {
+        executor->bind_completion_dispatcher (std::move (dispatcher));
         return;
     }
     executor_shutdown_requested () = false;
     configured_worker_count () = worker_count;
+    auto &configured = ensure_executor_locked ();
+    configured.bind_completion_dispatcher (std::move (dispatcher));
 }
 
 void shutdown_handler_coroutine_executor () noexcept
@@ -166,19 +178,24 @@ void shutdown_handler_coroutine_executor () noexcept
 namespace zlink::framework::detail
 {
 
-task_scheduler_t capture_host_continuation_scheduler (bool scope_exit_only)
+task_scheduler_t
+capture_host_continuation_scheduler (bool scope_exit_only,
+                                     completion_dispatcher_ref_t *dispatcher = nullptr)
 {
     // Execution gate §13: a Store chain awaited by an infrastructure wait
     // resumes on the thread that completes each Store step, not behind
     // application handlers.
-    if (current_infrastructure_wait ())
-        return {};
     {
         std::lock_guard lock (runtime::executor_mutex ());
         if (runtime::executor_shutdown_requested () || runtime::executor_owner_count () == 0) {
             return {};
         }
+        auto &configured = runtime::ensure_executor_locked ();
+        if (dispatcher != nullptr)
+            *dispatcher = configured.completion_dispatcher ();
     }
+    if (current_infrastructure_wait ())
+        return {};
     const auto *caller_job = application_job_context_t::current ();
     // Classify the registered caller for the provider's reuse decision; this
     // snapshot grants no execution authority on the completing thread.
@@ -196,15 +213,7 @@ task_scheduler_t capture_host_continuation_scheduler (bool scope_exit_only)
               configured && configured->is_current (), caller_job, caller_owned_turn);
             if (runtime::state_lane_t::current () != nullptr
                 || (!scope_exit_only && !completion_turn)) {
-                if (!configured) {
-                    const auto workers = runtime::configured_worker_count () == 0
-                                           ? runtime::default_worker_count ()
-                                           : runtime::configured_worker_count ();
-                    configured = std::make_unique<runtime::coroutine_executor_t> (workers);
-                    runtime::executor_fast_path ().store (configured.get (),
-                                                          std::memory_order_release);
-                }
-                configured->post_native_continuation (std::move (work));
+                runtime::ensure_executor_locked ().post_native_continuation (std::move (work));
                 return;
             }
         }
@@ -217,9 +226,9 @@ void check_blocking_submit_context ();
 
 namespace
 {
-task_scheduler_t capture_native_scheduler ()
+task_scheduler_t capture_native_scheduler (completion_dispatcher_ref_t *dispatcher)
 {
-    return capture_host_continuation_scheduler (false);
+    return capture_host_continuation_scheduler (false, dispatcher);
 }
 
 task_scheduler_t capture_scope_exit_scheduler ()

@@ -40,10 +40,11 @@ struct operation_completion_item_t
 {
     explicit operation_completion_item_t (
       operation_registry_t::callback_t callback,
-      std::shared_ptr<operation_registry_drain_state_t> drain_state) :
+      std::shared_ptr<operation_registry_drain_state_t> drain_state,
+      detail::completion_dispatcher_ref_t dispatcher) :
         callback (std::move (callback)),
         drain_state (std::move (drain_state)),
-        dispatcher (detail::acquire_completion_dispatcher ())
+        dispatcher (std::move (dispatcher))
     {
         this->drain_state->admit ();
     }
@@ -115,7 +116,7 @@ void post_completions (operation_completion_chain_t completions) noexcept
                   // A consumer failure must still release its drain reservation.
               }
           },
-          false, owner, completion->dispatcher);
+          false, owner, std::move (completion->dispatcher));
         (void) completion.release ();
     }
 }
@@ -127,6 +128,7 @@ operation_registry_t::operation_registry_t () : operation_registry_t (&clock_t::
 }
 
 operation_registry_t::operation_registry_t (now_t now) :
+    _completion_dispatcher (detail::acquire_completion_dispatcher ()),
     _drain_state (std::make_shared<operation_registry_drain_state_t> ()),
     _now (now),
     _deadline_origin (now ())
@@ -172,8 +174,8 @@ bool operation_registry_t::register_operation (call_id_t id,
         return false;
     try {
         index_deadline (id, deadline, inserted.first->second);
-        auto completion =
-          std::make_unique<operation_completion_item_t> (std::move (callback), _drain_state);
+        auto completion = std::make_unique<operation_completion_item_t> (
+          std::move (callback), _drain_state, _completion_dispatcher);
         completion->request_metric = std::move (request_metric);
         completion->request_metric.start ();
         inserted.first->second.completion = std::move (completion);
@@ -445,6 +447,7 @@ std::size_t operation_registry_t::shutdown ()
                 unindex_deadline (pending);
             }
             _pending.clear ();
+            _completion_dispatcher.reset ();
             stopped = completions.size;
         }
     }

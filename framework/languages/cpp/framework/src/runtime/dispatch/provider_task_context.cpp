@@ -167,7 +167,8 @@ void dispatch_completion (std::function<void ()> work,
     });
 }
 
-bool dispatch_completion_receive_handoff (const std::function<bool ()> &handoff)
+bool dispatch_completion_receive_handoff (const std::function<bool ()> &handoff,
+                                          const completion_dispatcher_ref_t &existing_dispatcher)
 {
     // Completion publication and lane-current scopes have returned before entry.
     // Only the executor can reserve an idle resource for the next receive turn.
@@ -176,7 +177,10 @@ bool dispatch_completion_receive_handoff (const std::function<bool ()> &handoff)
     // Only Framework completions enter this context. Application system-executor
     // handlers cannot be consumed by the resource that just handed off receive.
     // An empty first rotation must not create workers just to attempt a dequeue.
-    if (auto dispatcher = active_completion_dispatcher.load (std::memory_order_acquire).lock ())
+    const auto dispatcher =
+      existing_dispatcher ? existing_dispatcher
+                          : active_completion_dispatcher.load (std::memory_order_acquire).lock ();
+    if (dispatcher)
         dispatcher->poll_one ();
     return true;
 }
@@ -187,10 +191,11 @@ std::size_t completion_dispatcher_worker_count () noexcept
     return dispatcher != nullptr ? dispatcher->worker_count () : 0;
 }
 
-task_scheduler_t capture_runtime_native_continuation_scheduler ()
+task_scheduler_t
+capture_runtime_native_continuation_scheduler (completion_dispatcher_ref_t *dispatcher)
 {
     const auto *hooks = runtime_execution_hooks.load (std::memory_order_acquire);
-    return hooks != nullptr ? hooks->capture_scheduler () : task_scheduler_t{};
+    return hooks != nullptr ? hooks->capture_scheduler (dispatcher) : task_scheduler_t{};
 }
 
 task_scheduler_t capture_runtime_scope_exit_scheduler ()

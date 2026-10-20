@@ -2118,7 +2118,8 @@ struct mesh_node_host_service_t::node_receive_role_t final
             }
         }
         if (detail::dispatch_completion_receive_handoff (
-              [&] { return host._application_dispatch->try_assign_role (shared_from_this ()); }))
+              [&] { return host._application_dispatch->try_assign_role (shared_from_this ()); },
+              host._completion_dispatcher))
             return true;
         // A pump may consume the wake for supply delivered after this turn's
         // take. Recheck its owner state before waiting for the next rotation.
@@ -2373,6 +2374,7 @@ void execute_actor_create_operation_target (
 task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
 {
     try {
+        _completion_dispatcher = detail::acquire_completion_dispatcher ();
         _services = &services;
         const auto actor_gateway = services.get<detail::actor_gateway_runtime_t> ();
         if (actor_gateway) {
@@ -3185,6 +3187,7 @@ void mesh_node_host_service_t::stop () noexcept
         node->signal_dispatch_activity ();
     if (_application_dispatch)
         _runtime_failures->capture ([&] { _application_dispatch->drain (); });
+    _completion_dispatcher.reset ();
     for (auto &node : _nodes)
         _runtime_failures->capture ([&] { node->bind_descriptor_publisher ({}); });
     const auto owner = current_location_owner ();

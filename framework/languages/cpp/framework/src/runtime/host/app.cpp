@@ -3048,7 +3048,8 @@ try {
     try {
         runtime::install_host_context_hooks ();
         runtime::configure_handler_coroutine_executor (
-          _state->framework_options ? _state->framework_options->handler_coroutine_workers () : 0);
+          _state->framework_options ? _state->framework_options->handler_coroutine_workers () : 0,
+          completion_dispatcher);
         _state->start_hosted_services (provider, started);
         (void) detail::app_state_t::enter_serving_after_publication (
           _state->status_access, _state->startup_publication ());
