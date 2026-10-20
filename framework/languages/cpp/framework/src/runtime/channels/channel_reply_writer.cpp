@@ -14,13 +14,11 @@ runtime::messaging::envelope_header_t channel_reply_writer_t::create_reply_heade
   std::string channel_name,
   const runtime::messaging::envelope_header_t &request) const
 {
-    runtime::messaging::envelope_header_t header;
-    header.kind = kind;
-    header.channel_name = std::move (channel_name);
-    header.message_name = request.message_name;
-    header.content_type = request.content_type;
-    header.correlation_id = request.correlation_id;
-    return header;
+    return {.kind = kind,
+            .channel_name = std::move (channel_name),
+            .message_name = request.message_name,
+            .content_type = request.content_type,
+            .correlation_id = request.correlation_id};
 }
 
 runtime::messaging::envelope_header_t
