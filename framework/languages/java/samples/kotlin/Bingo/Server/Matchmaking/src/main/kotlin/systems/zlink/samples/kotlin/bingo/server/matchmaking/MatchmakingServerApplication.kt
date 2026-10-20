@@ -27,6 +27,7 @@ class MatchmakingServerApplication {
     @Bean
     fun framework(topology: SampleTopology): ZLinkFrameworkConfigurer =
         ZLinkFrameworkConfigurer { options ->
+            options.configureDispatch { messageFlow(topology.diagnosticsLevel) }
             options.codecs().use(ZLinkProtobufCodec.defaultCodec())
             options.configureLocations()
             options.addLocationStore(SampleLocationStore.create(topology))
