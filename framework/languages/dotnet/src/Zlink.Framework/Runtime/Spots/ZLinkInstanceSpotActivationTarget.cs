@@ -472,7 +472,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
     ZLinkSpotNodeRegistration registration,
     // Read when an activation runs: a host without an owner lease builds the
     // target before the lease is claimed (location runtime §5).
-    Func<ZLinkLocationOwnerToken> owner
+    Func<ZLinkLocationOwnerToken> owner,
+    ZLinkMessageFlowTracer? flow = null
 ) : IInstanceSpotActivationTarget
 {
     private const int RecoveryScanPageSize = 128;
@@ -498,7 +499,10 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
                 operation.Target.MeshName,
                 operation.Target.StableType,
                 PendingBytes(metadata, payload),
-                () => DispatchAsync()
+                () => DispatchAsync(),
+                operation,
+                payload,
+                flow
             )
         );
 

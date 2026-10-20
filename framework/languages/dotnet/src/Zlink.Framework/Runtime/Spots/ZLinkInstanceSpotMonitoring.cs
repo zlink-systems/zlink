@@ -1,17 +1,34 @@
 using System.Collections.Concurrent;
 using Zlink.Framework.Runtime.Diagnostics;
+using Zlink.Framework.Runtime.Messaging;
 
 namespace Zlink.Framework.Runtime.Spots;
 
 internal sealed class ZLinkInstanceSpotMonitoring
 {
-    private const string ReadyOutcome = "ready";
-    private const string RejectedOutcome = "rejected";
-    private const string TimedOutOutcome = "timed_out";
-    private const string ShutdownOutcome = "shutdown";
-    private const string FencedOutcome = "fenced";
-    private const string ConflictOutcome = "conflict";
-    private const string StoreFailureOutcome = "store_failure";
+    private enum ActivationOutcome
+    {
+        Ready,
+        Rejected,
+        TimedOut,
+        Shutdown,
+        Fenced,
+        Conflict,
+        StoreFailure,
+    }
+
+    private static string OutcomeKey(ActivationOutcome outcome) =>
+        outcome switch
+        {
+            ActivationOutcome.Ready => "ready",
+            ActivationOutcome.Rejected => "rejected",
+            ActivationOutcome.TimedOut => "timed_out",
+            ActivationOutcome.Shutdown => "shutdown",
+            ActivationOutcome.Fenced => "fenced",
+            ActivationOutcome.Conflict => "conflict",
+            ActivationOutcome.StoreFailure => "store_failure",
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome)),
+        };
 
     private readonly ConcurrentDictionary<string, Operation> _operations = new(
         StringComparer.Ordinal
@@ -25,7 +42,10 @@ internal sealed class ZLinkInstanceSpotMonitoring
         string meshName,
         string stableType,
         ulong pendingBytes,
-        Func<Task<InstanceSpotActivationTerminal>> operation
+        Func<Task<InstanceSpotActivationTerminal>> operation,
+        InstanceSpotActivationOperation activation,
+        IReadOnlyList<ReadOnlyMemory<byte>> payload,
+        ZLinkMessageFlowTracer? flow
     )
     {
         var selected = _operations.GetOrAdd(
@@ -43,50 +63,108 @@ internal sealed class ZLinkInstanceSpotMonitoring
         var aggregate = _aggregates.GetOrAdd(stableType, static _ => new Aggregate());
         if (selected.TryAccept())
             aggregate.Accept(pendingBytes);
+        Exception? failure = null;
         try
         {
             var terminal = await operation().ConfigureAwait(false);
-            if (_operations.TryRemove(new KeyValuePair<string, Operation>(operationKey, selected)))
-            {
-                var outcome = terminal.Result == RequestResult.Ok ? ReadyOutcome : RejectedOutcome;
-                aggregate.Complete(pendingBytes, outcome);
-                selected.Metrics.Complete(outcome);
-            }
+            if (terminal.Result != RequestResult.Ok)
+                failure = ZLinkRequestFailureMapper.CreateCompletionException(
+                    terminal.Result,
+                    (int)terminal.FailureCode,
+                    "Instance Spot activation"
+                );
             return terminal;
         }
         catch (Exception exception)
         {
+            failure = exception;
+            throw;
+        }
+        finally
+        {
             if (_operations.TryRemove(new KeyValuePair<string, Operation>(operationKey, selected)))
             {
-                var outcome = Outcome(exception);
-                aggregate.Complete(pendingBytes, outcome);
-                selected.Metrics.Complete(outcome);
+                var outcome = failure is null ? ActivationOutcome.Ready : Outcome(failure);
+                var key = OutcomeKey(outcome);
+                aggregate.Complete(pendingBytes, key);
+                selected.Metrics.Complete(key);
+                if (failure is not null)
+                    TraceFailure(activation, payload, flow, outcome, failure);
             }
-            throw;
         }
     }
 
     internal ZLinkInstanceSpotOperationSnapshot Snapshot(string stableType) =>
         _aggregates.TryGetValue(stableType, out var aggregate) ? aggregate.Snapshot() : default;
 
-    private static string Outcome(Exception exception) =>
+    private static void TraceFailure(
+        InstanceSpotActivationOperation activation,
+        IReadOnlyList<ReadOnlyMemory<byte>> payload,
+        ZLinkMessageFlowTracer? flow,
+        ActivationOutcome outcome,
+        Exception error
+    )
+    {
+        if (activation.IsRequest || flow is null || !flow.Enabled(ZLinkMessageFlowOutcome.Dropped))
+            return;
+
+        ZLinkEnvelopeHeader? header = null;
+        if (flow.CaptureEnabled && payload.Count > 0)
+        {
+            try
+            {
+                header = ZLinkEnvelopeCodec.DecodeHeader(payload[0].Span, validateFlow: true);
+            }
+            catch (ZLinkEnvelopeProtocolException protocolError)
+            {
+                // Preserve readable correlation even when the first message is malformed.
+                header = protocolError.Header;
+            }
+        }
+        var pair = header is null ? default : ZLinkEnvelopeCodec.ValidFlow(header);
+        var details = ZLinkTraceFormat.DispatchErrorDetails(error);
+        flow.Trace(
+            new ZLinkMessageFlowEvent(
+                ZLinkMessageFlowOutcome.Dropped,
+                ZLinkDispatchErrorSurface.InstanceSpot,
+                ZLinkDispatchMessageKind.Send,
+                PacketName: header?.MessageName,
+                CorrelationId: header?.CorrelationId,
+                SourceRid: activation.SourceNodeRid.ToHex(),
+                SpotId: activation.Target.TargetSpotId,
+                MeshName: activation.Target.MeshName,
+                InstanceSpotType: activation.Target.StableType,
+                Reason: outcome == ActivationOutcome.TimedOut
+                    ? ZLinkMessageFlowReason.ActivationTimeout
+                    : ZLinkMessageFlowReason.ActivationRejected
+            )
+            {
+                FlowId = pair.FlowId ?? string.Empty,
+                FlowOrigin = pair.FlowOrigin,
+                ErrorType = details.Type,
+                ErrorMessage = details.Message,
+            }
+        );
+    }
+
+    private static ActivationOutcome Outcome(Exception exception) =>
         exception switch
         {
-            TimeoutException => TimedOutOutcome,
-            OperationCanceledException => ShutdownOutcome,
+            TimeoutException => ActivationOutcome.TimedOut,
+            OperationCanceledException => ActivationOutcome.Shutdown,
             ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.DeadlineExceeded } =>
-                TimedOutOutcome,
+                ActivationOutcome.TimedOut,
             ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.ShuttingDown } =>
-                ShutdownOutcome,
+                ActivationOutcome.Shutdown,
             ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.InvalidOperation } =>
-                FencedOutcome,
+                ActivationOutcome.Fenced,
             ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.AlreadyExists } =>
-                ConflictOutcome,
+                ActivationOutcome.Conflict,
             ZLinkFrameworkException
             {
                 Kind: ZLinkFrameworkErrorKind.InternalFailure or ZLinkFrameworkErrorKind.NotFound
-            } => StoreFailureOutcome,
-            _ => RejectedOutcome,
+            } => ActivationOutcome.StoreFailure,
+            _ => ActivationOutcome.Rejected,
         };
 
     private sealed class Operation(
