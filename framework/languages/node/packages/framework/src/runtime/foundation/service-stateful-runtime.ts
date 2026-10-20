@@ -1,5 +1,5 @@
 import { encodeBoundSessionCloseCommand } from '../protocol/service_wire_codec.generated';
-import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
+import { decodeRoutingId, encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts';
@@ -1251,8 +1251,14 @@ export class ServiceStatefulRuntime {
     const acceptance = this.requestSourceAcceptance;
     if (acceptance === undefined) return undefined;
     const generation = this.tryPeerGeneration(ingress.sourceRoutingId);
-    const source =
-      generation === undefined ? undefined : acceptance(ingress.sourceRoutingId, generation);
+    const sourceRid =
+      ingress.sourceRoute === undefined || ingress.sourceRoute.length === 0
+        ? ingress.sourceRoutingId
+        : decodeRoutingId(
+            ingress.sourceRoutingId,
+            Buffer.from(ingress.sourceRoute).toString('hex')
+          );
+    const source = generation === undefined ? undefined : acceptance(sourceRid, generation);
     if (source instanceof Promise) {
       return source.then(
         (read) => this.recordRequestSource(ingress, read),

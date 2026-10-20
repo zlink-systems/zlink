@@ -12,6 +12,7 @@ const test = require('node:test');
 const {
   ZLinkRequestSourceResolver
 } = require('../../packages/framework/dist/runtime/locations/request-source-resolver');
+const { decodeRoutingId } = require('../../packages/framework/dist/runtime/routing-id');
 const {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
@@ -110,6 +111,57 @@ function wireValue(name) {
   assert.equal(new Set(found).size, 1, `wire name ${name}`);
   return found[0];
 }
+
+for (const polled of [false, true]) {
+  test(`SourceRequestOwner compares opaque RID bytes polled=${polled}`, async () => {
+    const descriptor = {
+      rid: decodeRoutingId('same display', 'ff00'),
+      lifecycleGeneration: 5n,
+      ownerId: 'owner',
+      leaseGeneration: 3n
+    };
+    let reads = 0;
+    const resolver = new ZLinkRequestSourceResolver({
+      listLiveMeshNodes: async () => {
+        reads++;
+        return [descriptor];
+      },
+      remainingOwnerTokenLeaseMs: async () => 1000
+    });
+    if (polled) await resolver.observeLiveDescriptors('mesh', [descriptor]);
+    const source = await resolver.accept('mesh', decodeRoutingId('other display', 'ff00'), 5n);
+    assert.equal(source?.ownerId, 'owner');
+    assert.equal(reads, polled ? 0 : 1);
+    assert.strictEqual(resolver.accept('mesh', decodeRoutingId('', 'ff00'), 5n), source);
+    assert.equal(reads, polled ? 0 : 1);
+    assert.equal(
+      await resolver.accept('mesh', decodeRoutingId('same display', 'ff01'), 5n),
+      undefined
+    );
+    assert.equal(await resolver.accept('mesh', decodeRoutingId('', 'ff00'), 6n), undefined);
+  });
+}
+
+test('SourceRequestOwner uses received RID bytes instead of its display string', async () => {
+  const runtime = new ServiceStatefulRuntime(
+    {
+      setServiceIngress() {},
+      topology: { peer: () => ({ descriptor: { lifecycleGeneration: 5n } }) }
+    },
+    'local',
+    7n
+  );
+  runtime.setRequestSourceAcceptance((rid, generation) => {
+    assert.equal(
+      require('../../packages/framework/dist/runtime/routing-id').encodeRoutingIdStorageHex(rid),
+      'ff00'
+    );
+    return { ownerId: 'owner', leaseGeneration: 3n, nodeRid: rid, nodeGeneration: generation };
+  });
+  const ingress = { sourceRoutingId: 'display', sourceRoute: Buffer.from('ff00', 'hex') };
+  await runtime.acceptRequestSource(ingress);
+  assert.equal(ingress.requestSource.ownerId, 'owner');
+});
 
 test('SourceRequestOwner propagates programming errors from Store reads', async () => {
   const error = new TypeError('broken descriptor reader');

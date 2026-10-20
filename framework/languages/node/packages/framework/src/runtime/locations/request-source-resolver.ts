@@ -1,6 +1,7 @@
 import type { RoutingId } from '../../contracts/Common';
 import type { ZLinkMeshNodeDescriptor } from '../../contracts/Locations/Rows';
 import type { ZLinkLocationOwnerToken } from './internal-location-contracts';
+import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 
 /** Source request owner values the first accepting owner records (Location runtime §9.3). */
 export interface ZLinkRequestSourceFence {
@@ -35,7 +36,7 @@ interface PolledSource {
  * missing from them is read from the Store once and kept with them.
  */
 export class ZLinkRequestSourceResolver {
-  private readonly polled = new Map<string, Map<RoutingId, PolledSource>>();
+  private readonly polled = new Map<string, Map<string, PolledSource>>();
   private readonly monotonicNowMs: () => number;
 
   constructor(private readonly options: ZLinkRequestSourceResolverOptions) {
@@ -48,10 +49,10 @@ export class ZLinkRequestSourceResolver {
     descriptors: readonly ZLinkMeshNodeDescriptor[],
     signal?: AbortSignal
   ): Promise<void> {
-    const sources = new Map<RoutingId, PolledSource>();
+    const sources = new Map<string, PolledSource>();
     for (const descriptor of descriptors) {
       const source = await this.polledSource(descriptor, signal);
-      if (source !== undefined) sources.set(descriptor.rid, source);
+      if (source !== undefined) sources.set(encodeRoutingIdStorageHex(descriptor.rid), source);
     }
     this.polled.set(meshName, sources);
   }
@@ -65,7 +66,7 @@ export class ZLinkRequestSourceResolver {
     nodeRid: RoutingId,
     nodeGeneration: bigint
   ): ZLinkRequestSourceFence | undefined | Promise<ZLinkRequestSourceFence | undefined> {
-    const known = this.polled.get(meshName)?.get(nodeRid);
+    const known = this.polled.get(meshName)?.get(encodeRoutingIdStorageHex(nodeRid));
     if (known !== undefined && known.fence.nodeGeneration === nodeGeneration) {
       return this.monotonicNowMs() < known.leaseDeadlineMs ? known.fence : undefined;
     }
@@ -81,7 +82,7 @@ export class ZLinkRequestSourceResolver {
     // cause for the ingress error reporter, and let programming errors propagate unchanged.
     const descriptors = await this.options.listLiveMeshNodes(meshName);
     const descriptor = descriptors.find(
-      (value) => value.rid === nodeRid && value.lifecycleGeneration === nodeGeneration
+      (value) => routingIdsEqual(value.rid, nodeRid) && value.lifecycleGeneration === nodeGeneration
     );
     const source = descriptor === undefined ? undefined : await this.polledSource(descriptor);
     if (source === undefined) return undefined;
@@ -90,7 +91,7 @@ export class ZLinkRequestSourceResolver {
       sources = new Map();
       this.polled.set(meshName, sources);
     }
-    sources.set(nodeRid, source);
+    sources.set(encodeRoutingIdStorageHex(nodeRid), source);
     return source.fence;
   }
 
