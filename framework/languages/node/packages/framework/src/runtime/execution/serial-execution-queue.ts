@@ -341,14 +341,13 @@ export class ZLinkSerialExecutionQueue {
 
   /** Called only by the shared scheduler's consumer, never by a producer. */
   private consumeMailbox(): void {
-    const selection = this.selectNext();
-    if (selection === undefined) {
+    const record = this.selectNext();
+    if (record === undefined) {
       if (!this.hasPendingWork) this.resolveIdleWaiters();
       return;
     }
-    const record = selection.record;
-    if (!this.prepareSelected(selection)) return;
-    this.takeSelected(selection);
+    if (!this.prepareSelected(record)) return;
+    this.takeSelected(record);
     if (record.preparationState === 'failed') {
       record.preparation?.cancel();
       record.fail(record.preparationError);
@@ -388,14 +387,13 @@ export class ZLinkSerialExecutionQueue {
     let waitingForPreparation = false;
     try {
       for (;;) {
-        const selection = this.selectNext();
-        if (selection === undefined) break;
-        const record = selection.record;
-        if (!this.prepareSelected(selection)) {
+        const record = this.selectNext();
+        if (record === undefined) break;
+        if (!this.prepareSelected(record)) {
           waitingForPreparation = true;
           break;
         }
-        this.takeSelected(selection);
+        this.takeSelected(record);
         if (record.preparationState === 'failed') {
           record.preparation?.cancel();
           record.fail(record.preparationError);
@@ -448,27 +446,18 @@ export class ZLinkSerialExecutionQueue {
     }
   }
 
-  private prepareSelected(selection: {
-    readonly lane: ZLinkSerialWorkLane;
-    readonly record: SerialWorkRecord<unknown>;
-  }): boolean {
+  private prepareSelected(record: SerialWorkRecord<unknown>): boolean {
     if (
-      selection.lane === 'lifecycle' &&
+      record.lane === 'lifecycle' &&
       this.application.records.length > 0 &&
       !this.cancelPreparationForRearbitration(this.application.records[0]!)
     )
       return false;
-    const record = selection.record;
     if (record.preparationState === 'idle') this.startPreparation(record);
     return record.preparationState !== 'pending' && record.preparationState !== 'canceling';
   }
 
-  private selectNext():
-    | {
-        readonly lane: ZLinkSerialWorkLane;
-        readonly record: SerialWorkRecord<unknown>;
-      }
-    | undefined {
+  private selectNext(): SerialWorkRecord<unknown> | undefined {
     const lifecycleOwner = this.activeLifecycle?.context as ZLinkSerialLifecycleContext | undefined;
     const applicationRecord =
       lifecycleOwner === undefined
@@ -478,30 +467,24 @@ export class ZLinkSerialExecutionQueue {
     const lifecycleReady = this.activeLifecycle === undefined && this.lifecycle.records.length > 0;
     if (!applicationReady && !lifecycleReady) return undefined;
     if (!applicationReady) {
-      return { lane: 'lifecycle', record: this.lifecycle.records[0]! };
+      return this.lifecycle.records[0]!;
     }
     if (!lifecycleReady) {
-      return { lane: 'application', record: applicationRecord! };
+      return applicationRecord!;
     }
     if (!this.lifecycleDebt && this.lifecycleStreak < this.lifecycleBurstLimit) {
-      return { lane: 'lifecycle', record: this.lifecycle.records[0]! };
+      return this.lifecycle.records[0]!;
     }
-    return { lane: 'application', record: applicationRecord! };
+    return applicationRecord!;
   }
 
-  private takeSelected(selection: {
-    readonly lane: ZLinkSerialWorkLane;
-    readonly record: SerialWorkRecord<unknown>;
-  }): ZLinkSerialWorkRecord<unknown> {
+  private takeSelected(selected: SerialWorkRecord<unknown>): ZLinkSerialWorkRecord<unknown> {
     const record =
-      selection.lane === 'lifecycle'
-        ? this.takeLifecycle()
-        : this.takeApplication(selection.record);
-    if (record !== selection.record) {
+      selected.lane === 'lifecycle' ? this.takeLifecycle() : this.takeApplication(selected);
+    if (record !== selected) {
       throw new Error('The selected serial work record changed before owner claim.');
     }
-    if (selection.record.mailbox !== undefined)
-      selection.record.mailbox.ownerMembership = undefined;
+    if (record.mailbox !== undefined) record.mailbox.ownerMembership = undefined;
     return record;
   }
 
