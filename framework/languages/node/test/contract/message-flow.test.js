@@ -1,5 +1,7 @@
 'use strict';
 
+const { mapZLinkRequestReply, createZLinkRequest } = require('../../packages/framework/dist/runtime/messaging/request-result');
+
 // MFLOW-xxx: message-flow tracing parity (mirrors C++/.NET/Java). Exercises the tracer's
 // mode gating (zero-cost off), OpenTelemetry provider output, the live-mode toggle,
 // and the stream correlation_id wire round-trip
@@ -364,7 +366,8 @@ test('request failure terminals remain visible at Errors level', () => {
   assert.equal(telemetryRecords[0].attributes.outcome, 'failed');
 });
 
-test('node direct request records one source flow with sent and reply terminal', async () => {
+for (const deliver of [mapZLinkRequestReply, (result) => createZLinkRequest(() => result)]) {
+test(`node direct request records one source flow with sent and reply terminal (${deliver === mapZLinkRequestReply ? 'yield' : 'submit'})`, async () => {
   const { tracer } = makeTracer(diagnostics('normal'));
   let requestParts;
   let failure = false;
@@ -388,7 +391,7 @@ test('node direct request records one source flow with sent and reply terminal',
     undefined, undefined, undefined, undefined, () => true, () => tracer
   );
 
-  assert.deepEqual(await transport.request('mesh', 'target', 'Probe', { value: 1 }, 1000), { ok: true });
+  assert.deepEqual(await deliver(transport.request('mesh', 'target', 'Probe', { value: 1 }, 1000)), { ok: true });
   assert.deepEqual(telemetryRecords.map(record => record.attributes.phase), ['sent', 'reply_received']);
   assert.match(telemetryRecords[0].attributes.flow_id, /^[0-9a-f-]{36}$/i);
   assert.match(telemetryRecords[0].attributes.correlation_id, /^[0-9a-f]{32}$/i);
@@ -399,7 +402,7 @@ test('node direct request records one source flow with sent and reply terminal',
 
   telemetryRecords.length = 0;
   failure = true;
-  await assert.rejects(() => transport.request('mesh', 'target', 'Probe', { value: 2 }, 1000));
+  await assert.rejects(() => deliver(transport.request('mesh', 'target', 'Probe', { value: 2 }, 1000)));
   assert.deepEqual(telemetryRecords.map(record => record.attributes.phase), ['sent', 'reply_received']);
   assert.equal(telemetryRecords[1].attributes.outcome, 'failed');
   assert.equal(telemetryRecords[0].attributes.flow_id, telemetryRecords[1].attributes.flow_id);
@@ -407,6 +410,8 @@ test('node direct request records one source flow with sent and reply terminal',
   assert.equal(telemetryRecords[1].attributes.error_type, 'ZLinkFrameworkException');
   assert.match(telemetryRecords[1].attributes.error_message, /result 101/);
 });
+
+}
 
 test('spec 26 maps every added surface and control without admitting publish as a flow kind', () => {
   const { tracer } = makeTracer(diagnostics('normal'));
