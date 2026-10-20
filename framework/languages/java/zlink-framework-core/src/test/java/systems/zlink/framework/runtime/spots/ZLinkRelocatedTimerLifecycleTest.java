@@ -35,7 +35,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
         ConstructorTimerSpot.entered = new CompletableFuture<>();
         ConstructorTimerSpot.release = new CompletableFuture<>();
         ConstructorTimerSpot.deliveries.set(0);
-        ConstructorTimerInstance.ticked = null;
+        ConstructorTimerInstance.ticked = new CompletableFuture<>();
         var options = new DefaultZLinkFrameworkOptions();
         options.addLocationStore(new ZLinkInMemoryLocationStore());
         options.addRouteMesh("mesh")
@@ -111,7 +111,10 @@ final class ZLinkRelocatedTimerLifecycleTest {
                             .toCompletableFuture()
                             .get(3, java.util.concurrent.TimeUnit.SECONDS);
                     assertEquals(0, ConstructorTimerSpot.deliveries.get());
-                } else assertEquals(1, ConstructorTimerSpot.deliveries.get());
+                } else {
+                    ConstructorTimerInstance.ticked.get(3, java.util.concurrent.TimeUnit.SECONDS);
+                    assertEquals(1, ConstructorTimerSpot.deliveries.get());
+                }
             } finally {
                 ConstructorTimerSpot.release.complete(null);
                 var prepared =
@@ -190,7 +193,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
 
     public static final class ConstructorTimerInstance
             implements systems.zlink.framework.spots.ZLinkInstanceSpot {
-        static CompletableFuture<Void> ticked;
+        static volatile CompletableFuture<Void> ticked;
         final systems.zlink.framework.spots.ZLinkInstanceSpotContext context;
 
         public ConstructorTimerInstance(
@@ -330,6 +333,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
                         .resumeReservedIngress(prepared, hold)
                         .toCompletableFuture()
                         .get(3, java.util.concurrent.TimeUnit.SECONDS);
+                spot.ticked.get(3, java.util.concurrent.TimeUnit.SECONDS);
                 assertFalse(
                         spot.closeRequested
                                 .toCompletableFuture()
