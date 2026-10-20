@@ -9925,7 +9925,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             var activity = Volatile.Read(ref _admissionActivityTicks);
             if (
                 activity == NoAdmissionActivityTicks
-                || _deadlineClock.Elapsed.Ticks - activity < ZLinkServiceLiveness.ProbeInterval.Ticks
+                || _deadlineClock.Elapsed.Ticks - activity
+                    < ZLinkServiceLiveness.ProbeInterval.Ticks
             )
                 return [];
             return RunInboundOperationState(() =>
