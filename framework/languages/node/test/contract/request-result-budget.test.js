@@ -1,7 +1,17 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createHook } = require('node:async_hooks');
-const { createZLinkRequest } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const {
+  createZLinkRequest: createMappedRequest,
+  mapZLinkRequestReply,
+  identityRequestReply
+} = require('../../packages/framework/dist/runtime/messaging/request-result');
+
+// The source owns its result mapping; the public helper owns admission state.
+function createZLinkRequest(start, deliverReply) {
+  return createMappedRequest((admitted, observer) =>
+    mapZLinkRequestReply(start(admitted), identityRequestReply, observer), deliverReply);
+}
 
 function deferred() {
   let resolve;
@@ -86,23 +96,23 @@ test('one request admission failure does not alter a completed or waiting siblin
   assert.equal(await first, 'first reply');
 });
 
-test('admission notification and reply success reuse one callback', async () => {
+test('admission notification and reply mapping use the same admission owner', async () => {
   const pending = deferred();
   let markAdmitted;
-  let completeReply;
-  const then = pending.promise.then;
-  pending.promise.then = function (success, failure) {
-    completeReply = success;
-    return then.call(this, success, failure);
-  };
-  const request = createZLinkRequest((admitted) => {
+  let replyOwner;
+  const request = createMappedRequest((admitted, observer) => {
     markAdmitted = admitted;
-    return pending.promise;
+    replyOwner = observer;
+    return mapZLinkRequestReply(pending.promise, identityRequestReply, observer);
   });
+  const admitted = request.admitted;
   markAdmitted();
+  await admitted;
   pending.resolve('reply');
   assert.equal(await request, 'reply');
-  assert.equal(completeReply, markAdmitted);
+  assert.equal(request.admitted, admitted);
+  replyOwner.fail(new Error('late failure'));
+  await admitted;
 });
 
 test('reply delivery retains its Promise identity and admission getter attributes', async () => {

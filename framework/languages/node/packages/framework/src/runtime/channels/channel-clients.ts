@@ -1,5 +1,9 @@
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
-import { createZLinkRequest } from '../messaging/request-result';
+import {
+  createZLinkRequest,
+  passthroughRequestReplyObserver,
+  type ZLinkRequestReplyObserver
+} from '../messaging/request-result';
 import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
 import type {
   ZLinkChannelClient,
@@ -219,7 +223,7 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
     if (prepared === undefined) {
       prepared = {
         validate: () => this.requireMesh(meshName),
-        submit: (packetName, timeoutMs, metadata, signal, onAdmitted, message) =>
+        submit: (replyObserver, packetName, timeoutMs, metadata, signal, onAdmitted, message) =>
           this.requireTransport().request(
             meshName,
             targetNodeRid,
@@ -228,7 +232,8 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
             timeoutMs,
             signal,
             metadata,
-            onAdmitted
+            onAdmitted,
+            replyObserver
           )
       };
       targets.set(targetNodeRid, prepared);
@@ -267,7 +272,7 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
   requestToChannel(channelName: string, request: unknown): ZLinkChannelRequestCall {
     return new DefaultZLinkRequestCall(
       () => this.requireChannelRoute(channelName),
-      (packetName, timeoutMs, metadata, signal, onAdmitted) => {
+      (replyObserver, packetName, timeoutMs, metadata, signal, onAdmitted) => {
         const route = this.requireChannelRoute(channelName);
         if (route.kind === 'route-mesh') {
           return this.requireTransport().requestToChannel(
@@ -278,7 +283,8 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
             timeoutMs,
             signal,
             metadata,
-            onAdmitted
+            onAdmitted,
+            replyObserver
           );
         }
         return this.requireChannelTransport().request(
@@ -288,7 +294,8 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
           timeoutMs,
           signal,
           metadata,
-          onAdmitted
+          onAdmitted,
+          replyObserver
         );
       },
       this.defaultRequestTimeoutForChannel(channelName)
@@ -315,12 +322,13 @@ export class DefaultZLinkRouteClient implements ZLinkRouteClient {
       () => {
         this.requireSpotTransport();
       },
-      (_packetName, timeoutMs, metadata, signal, onAdmitted) =>
+      (replyObserver, _packetName, timeoutMs, metadata, signal, onAdmitted) =>
         requestToSpotHandle(this.requireSpotTransport(), spot, request, {
           timeoutMs,
           signal,
           metadata,
           onAdmitted,
+          replyObserver,
           spotRouterChannelIdForMesh: this.spotRouterChannelIdForMesh
         }),
       this.registration.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
@@ -522,6 +530,7 @@ function normalizeSubmitResult(
 }
 
 type ZLinkRequestSubmitter = <TReply>(
+  replyObserver: ZLinkRequestReplyObserver,
   packetName: string | undefined,
   timeoutMs: number | undefined,
   metadata: ReadonlyMap<string, string>,
@@ -563,10 +572,11 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
   }
 
   submit<TReply>(signal?: AbortSignal): ZLinkRequest<TReply> {
-    return createZLinkRequest((onAdmitted) => {
+    return createZLinkRequest((onAdmitted, replyObserver) => {
       throwIfAborted(signal);
       this.validate();
       return this.submitter<TReply>(
+        replyObserver,
         undefined,
         this.timeoutMs ?? this.defaultRequestTimeoutMs,
         this.selectedMetadata === undefined ? EMPTY_CALL_METADATA : new Map(this.selectedMetadata),
@@ -582,6 +592,7 @@ class DefaultZLinkRequestCall implements ZLinkChannelRequestCall {
     throwIfAborted(signal);
     this.validate();
     const pending = this.submitter<TReply>(
+      passthroughRequestReplyObserver,
       undefined,
       this.timeoutMs ?? this.defaultRequestTimeoutMs,
       this.selectedMetadata === undefined ? EMPTY_CALL_METADATA : new Map(this.selectedMetadata),

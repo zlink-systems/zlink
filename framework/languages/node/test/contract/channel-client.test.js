@@ -1,3 +1,4 @@
+const { mapZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -582,9 +583,9 @@ test('Spot outbound selects a RouteMesh ChannelName for send and request', async
       calls.push({ kind: 'send', args });
       return { status: ZLinkSubmitStatus.Submitted };
     },
-    async requestToChannel(...args) {
+    requestToChannel(...args) {
       calls.push({ kind: 'request', args });
-      return { accepted: true };
+      return mapZLinkRequestReply(Promise.resolve({ accepted: true }), identityRequestReply, args[8]);
     }
   };
   const channelClient = new framework.DefaultZLinkChannelClient(
@@ -625,9 +626,9 @@ test('ZLinkRouteClient selects the ClientServer path for ChannelName calls', asy
       calls.push({ kind: 'send', args });
       return { status: ZLinkSubmitStatus.Submitted };
     },
-    async request(...args) {
+    request(...args) {
       calls.push({ kind: 'request', args });
-      return { accepted: true };
+      return mapZLinkRequestReply(Promise.resolve({ accepted: true }), identityRequestReply, args[7]);
     }
   };
   const client = new framework.DefaultZLinkRouteClient(
@@ -807,12 +808,12 @@ test('ZLinkRouteClient uses one SpotHandle snapshot and does not retry a stale r
       async sendToSpot(target, message, options) {
         sends.push({ target, message, options });
       },
-      async requestToSpot(target, request, options) {
+      requestToSpot(target, request, options) {
         requests.push({ target, request, options });
-        throw new framework.ZLinkFrameworkException(
+        return mapZLinkRequestReply(Promise.reject(new framework.ZLinkFrameworkException(
           framework.ZLinkFrameworkErrorKind.NotFound,
           'stale spot route'
-        );
+        )), identityRequestReply, options.replyObserver);
       }
     },
     (meshName) => `${meshName}.route`
@@ -912,9 +913,9 @@ test('ZLinkRouteClient channel request call snapshots metadata and passes timeou
   const registration = meshChannelRegistration('mesh', 'api');
   const client = new framework.DefaultZLinkRouteClient(registration, {
     async submitToChannel() {},
-    async requestToChannel(meshName, channelName, packetName, request, timeoutMs, _signal, metadata) {
+    requestToChannel(meshName, channelName, packetName, request, timeoutMs, _signal, metadata, _admitted, observer) {
       calls.push({ meshName, channelName, packetName, request, timeoutMs, metadata: [...metadata] });
-      return { ok: true };
+      return mapZLinkRequestReply(Promise.resolve({ ok: true }), identityRequestReply, observer);
     },
     async submit() {},
     async request() {}
@@ -944,9 +945,9 @@ test('ZLinkRouteClient applies registration request timeout when channel call ti
   const registration = meshChannelRegistration('mesh', 'api', { requestTimeoutMs: 7000 });
   const client = new framework.DefaultZLinkRouteClient(registration, {
     async submitToChannel() {},
-    async requestToChannel(meshName, channelName, packetName, request, timeoutMs) {
+    requestToChannel(meshName, channelName, packetName, request, timeoutMs, _signal, _metadata, _admitted, observer) {
       calls.push({ meshName, channelName, packetName, request, timeoutMs });
-      return { ok: true };
+      return mapZLinkRequestReply(Promise.resolve({ ok: true }), identityRequestReply, observer);
     },
     async submit() {},
     async request() {}
@@ -970,9 +971,9 @@ test('ZLinkRouteClient applies RouteMesh request timeout before registration def
   });
   const client = new framework.DefaultZLinkRouteClient(registration, {
     async submitToChannel() {},
-    async requestToChannel(meshName, channelName, packetName, request, timeoutMs) {
+    requestToChannel(meshName, channelName, packetName, request, timeoutMs, _signal, _metadata, _admitted, observer) {
       calls.push({ meshName, channelName, packetName, request, timeoutMs });
-      return { ok: true };
+      return mapZLinkRequestReply(Promise.resolve({ ok: true }), identityRequestReply, observer);
     },
     async submit() {},
     async request() {}
@@ -1134,9 +1135,9 @@ test('ZLinkRouteClient applies route channel request timeout before registration
   });
   const client = new framework.DefaultZLinkRouteClient(registration, {
     submit() {},
-    async request(routerChannelId, targetNodeRid, packetName, request, timeoutMs) {
+    request(routerChannelId, targetNodeRid, packetName, request, timeoutMs, _signal, _metadata, _admitted, observer) {
       calls.push({ routerChannelId, targetNodeRid, packetName, request, timeoutMs });
-      return { ok: true };
+      return mapZLinkRequestReply(Promise.resolve({ ok: true }), identityRequestReply, observer);
     }
   });
 

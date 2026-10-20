@@ -1,4 +1,10 @@
-import { createZLinkRequest } from '../messaging/request-result';
+import {
+  createZLinkRequest,
+  mapZLinkRequestReply,
+  identityRequestReply,
+  passthroughRequestReplyObserver,
+  type ZLinkRequestReplyObserver
+} from '../messaging/request-result';
 import {
   type RoutingId,
   type ZLinkChannelClient,
@@ -235,6 +241,7 @@ export interface ZLinkSpotRoutedSendOptions {
 
 export interface ZLinkSpotRoutedRequestOptions extends ZLinkSpotRoutedSendOptions {
   readonly onAdmitted?: () => void;
+  readonly replyObserver?: ZLinkRequestReplyObserver;
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
 }
@@ -361,7 +368,8 @@ function createAddressedSpotRequestCall(
       markSubmitted(options);
       rejectSameSpotAsyncRequest(serial, spotId, 'async');
       return createZLinkRequest(
-        (onAdmitted) => begin<TReply>(signal, onAdmitted),
+        (onAdmitted, observer) =>
+          mapZLinkRequestReply(begin<TReply>(signal, onAdmitted), identityRequestReply, observer),
         (pending) => (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending))
       );
     },
@@ -501,7 +509,8 @@ function wrapRequestCall(
     },
     submit<TReply>(signal?: AbortSignal) {
       return createZLinkRequest(
-        (onAdmitted) => begin<TReply>(signal, onAdmitted),
+        (onAdmitted, observer) =>
+          mapZLinkRequestReply(begin<TReply>(signal, onAdmitted), identityRequestReply, observer),
         (pending) => (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending))
       );
     },
@@ -618,7 +627,8 @@ function wrapRoutedSpotRequestCall(
     submit<TReply>(signal?: AbortSignal) {
       rejectSameSpotAsyncRequest(serial, spot.spotId, 'async');
       return createZLinkRequest(
-        (onAdmitted) => begin<TReply>(signal, onAdmitted),
+        (onAdmitted, observer) =>
+          mapZLinkRequestReply(begin<TReply>(signal, onAdmitted), identityRequestReply, observer),
         (pending) => (serial.isCurrentTurn ? pending : deliverOnSerial(serial, pending))
       );
     },
@@ -647,6 +657,7 @@ function rejectSameSpotAsyncRequest(
 
 export interface ZLinkSpotHandleCallOptions {
   readonly onAdmitted?: () => void;
+  readonly replyObserver?: ZLinkRequestReplyObserver;
   readonly metadata?: ReadonlyMap<string, string>;
   readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
@@ -684,28 +695,34 @@ export async function requestToSpotHandle<TReply = unknown>(
   request: unknown,
   options: ZLinkSpotHandleCallOptions = {}
 ): Promise<TReply> {
-  const packetName = resolveFrameworkPacketName(request, undefined, 'SPOT');
-  const requestResolved = async (resolved: ResolvedSpotHandle): Promise<TReply> => {
-    const target = spotRefToSpotRouteTarget(resolved, options.spotRouterChannelIdForMesh);
-    const transportOptions = {
-      packetName,
-      timeoutMs: options.timeoutMs,
-      signal: options.signal,
-      onAdmitted: options.onAdmitted,
-      metadata: options.metadata
+  try {
+    const packetName = resolveFrameworkPacketName(request, undefined, 'SPOT');
+    const requestResolved = (resolved: ResolvedSpotHandle): Promise<TReply> => {
+      const target = spotRefToSpotRouteTarget(resolved, options.spotRouterChannelIdForMesh);
+      const transportOptions = {
+        packetName,
+        timeoutMs: options.timeoutMs,
+        signal: options.signal,
+        onAdmitted: options.onAdmitted,
+        replyObserver: options.replyObserver,
+        metadata: options.metadata
+      };
+      if (options.sourceSpot !== undefined && transport.requestFromSpotToSpot !== undefined) {
+        return transport.requestFromSpotToSpot<TReply>(
+          options.sourceSpot,
+          target,
+          request,
+          transportOptions
+        );
+      }
+      return transport.requestToSpot<TReply>(target, request, transportOptions);
     };
-    if (options.sourceSpot !== undefined && transport.requestFromSpotToSpot !== undefined) {
-      return transport.requestFromSpotToSpot<TReply>(
-        options.sourceSpot,
-        target,
-        request,
-        transportOptions
-      );
-    }
-    return transport.requestToSpot<TReply>(target, request, transportOptions);
-  };
 
-  return requestResolved(await requireSpotRef(spot, options.signal));
+    return requestResolved(await requireSpotRef(spot, options.signal));
+  } catch (error) {
+    (options.replyObserver ?? passthroughRequestReplyObserver).fail(error);
+    throw error;
+  }
 }
 
 async function requireSpotRef(

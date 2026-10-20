@@ -1,3 +1,9 @@
+import {
+  mapZLinkRequestReply,
+  identityRequestReply,
+  passthroughRequestReplyObserver,
+  type ZLinkRequestReplyObserver
+} from '../messaging/request-result';
 import { ZLinkFrameworkException } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
@@ -78,7 +84,8 @@ export interface ZLinkChannelClientTransport {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    replyObserver?: ZLinkRequestReplyObserver
   ): Promise<TReply>;
   tryPublish?(
     channelName: string,
@@ -136,7 +143,8 @@ export interface ZLinkRouteClientTransport {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    replyObserver?: ZLinkRequestReplyObserver
   ): Promise<TReply>;
   submitToChannel(
     meshName: string,
@@ -153,7 +161,8 @@ export interface ZLinkRouteClientTransport {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    replyObserver?: ZLinkRequestReplyObserver
   ): Promise<TReply>;
   sendToSpot?(
     spotRouteTarget: ZLinkSpotRouteTarget,
@@ -190,7 +199,8 @@ interface ZLinkChannelTransportRuntime {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    replyObserver?: ZLinkRequestReplyObserver
   ): Promise<TReply>;
   tryPublish(
     channelName: string,
@@ -420,7 +430,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    replyObserver: ZLinkRequestReplyObserver = passthroughRequestReplyObserver
   ): Promise<TReply> {
     if (!this.flowCreationEnabled())
       return this.requestScoped<TReply>(
@@ -431,7 +442,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         timeoutMs,
         signal,
         metadata,
-        onAdmitted
+        onAdmitted,
+        replyObserver
       );
     return runWithOutboundFlow(true, () =>
       this.requestScoped<TReply>(
@@ -442,35 +454,60 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         timeoutMs,
         signal,
         metadata,
-        onAdmitted
+        onAdmitted,
+        replyObserver
       )
     );
   }
 
-  private async requestScoped<TReply>(
+  private requestScoped<TReply>(
     meshName: string,
     targetNodeRid: string,
     packetName: string | undefined,
     request: unknown,
     timeoutMs: number | undefined,
-    signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>,
-    onAdmitted?: () => void
+    signal: AbortSignal | undefined,
+    metadata: ReadonlyMap<string, string> | undefined,
+    onAdmitted: (() => void) | undefined,
+    replyObserver: ZLinkRequestReplyObserver
   ): Promise<TReply> {
-    const node = this.meshNode(meshName);
-    if (node === undefined) {
-      return this.requireManager().routeRequest(
-        meshName,
-        targetNodeRid,
-        packetName,
-        request,
-        timeoutMs,
-        signal,
-        metadata,
-        onAdmitted
-      );
+    let node: ZLinkBackendMeshNode | undefined;
+    try {
+      node = this.meshNode(meshName);
+      if (node === undefined) {
+        return mapZLinkRequestReply(
+          this.requireManager().routeRequest<TReply>(
+            meshName,
+            targetNodeRid,
+            packetName,
+            request,
+            timeoutMs,
+            signal,
+            metadata,
+            onAdmitted
+          ),
+          identityRequestReply,
+          replyObserver
+        );
+      }
+    } catch (error) {
+      return mapZLinkRequestReply(Promise.reject(error), identityRequestReply, replyObserver);
     }
     const correlationId = newChannelCorrelationId();
+    const traceFailure = (error: unknown): unknown => {
+      if (!isRemoteChannelErrorReply(error)) {
+        this.traceNodeRequest(
+          ZLinkMessageFlowOutcome.ReplyReceived,
+          requestTerminalResult(error, signal),
+          meshName,
+          targetNodeRid,
+          packetName,
+          correlationId,
+          error
+        );
+      }
+      return error;
+    };
     try {
       throwIfAborted(signal);
       if (node.isObjectClientNodeDirectTarget?.(toBackendRoutingId(targetNodeRid)) === true) {
@@ -489,9 +526,9 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         correlationId
       );
       const requestOptions = { flags: 1, onAdmitted, timeoutMs: requestTimeoutBudget(timeoutMs) };
-      let completion: ZLinkMeshCompletion;
+      let pending: Promise<ZLinkMeshCompletion>;
       try {
-        completion = await this.completionTable(meshName).submit(() => {
+        pending = this.completionTable(meshName).submit(() => {
           const operationId = node.requestToNode(
             toBackendRoutingId(targetNodeRid),
             parts,
@@ -508,34 +545,41 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
           return operationId;
         }, signal);
       } catch (error) {
-        throw mapMeshSubmissionError(
-          error,
-          `MeshNode '${meshName}' request to node '${targetNodeRid}'`
-        );
+        pending = Promise.reject(error);
       }
-      const reply = this.decodeMeshReply<TReply>(meshName, completion);
-      this.traceNodeRequest(
-        ZLinkMessageFlowOutcome.ReplyReceived,
-        'succeeded',
-        meshName,
-        targetNodeRid,
-        packetName,
-        correlationId
+      return mapZLinkRequestReply(
+        pending,
+        (completion) => {
+          try {
+            const reply = this.decodeMeshReply<TReply>(meshName, completion);
+            this.traceNodeRequest(
+              ZLinkMessageFlowOutcome.ReplyReceived,
+              'succeeded',
+              meshName,
+              targetNodeRid,
+              packetName,
+              correlationId
+            );
+            return reply;
+          } catch (error) {
+            throw traceFailure(error);
+          }
+        },
+        replyObserver,
+        (error) =>
+          traceFailure(
+            mapMeshSubmissionError(
+              error,
+              `MeshNode '${meshName}' request to node '${targetNodeRid}'`
+            )
+          )
       );
-      return reply;
     } catch (error) {
-      if (!isRemoteChannelErrorReply(error)) {
-        this.traceNodeRequest(
-          ZLinkMessageFlowOutcome.ReplyReceived,
-          requestTerminalResult(error, signal),
-          meshName,
-          targetNodeRid,
-          packetName,
-          correlationId,
-          error
-        );
-      }
-      throw error;
+      return mapZLinkRequestReply(
+        Promise.reject(traceFailure(error)),
+        identityRequestReply,
+        replyObserver
+      );
     }
   }
 
@@ -612,7 +656,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     timeoutMs: number | undefined,
     signal?: AbortSignal,
     metadata?: ReadonlyMap<string, string>,
-    onAdmitted?: () => void
+    onAdmitted?: () => void,
+    replyObserver: ZLinkRequestReplyObserver = passthroughRequestReplyObserver
   ): Promise<TReply> {
     if (!this.flowCreationEnabled())
       return this.requestToChannelScoped<TReply>(
@@ -623,7 +668,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         timeoutMs,
         signal,
         metadata,
-        onAdmitted
+        onAdmitted,
+        replyObserver
       );
     return runWithOutboundFlow(true, () =>
       this.requestToChannelScoped<TReply>(
@@ -634,58 +680,78 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         timeoutMs,
         signal,
         metadata,
-        onAdmitted
+        onAdmitted,
+        replyObserver
       )
     );
   }
 
-  private async requestToChannelScoped<TReply>(
+  private requestToChannelScoped<TReply>(
     meshName: string,
     channelName: string,
     packetName: string | undefined,
     request: unknown,
     timeoutMs: number | undefined,
-    signal?: AbortSignal,
-    metadata?: ReadonlyMap<string, string>,
-    onAdmitted?: () => void
+    signal: AbortSignal | undefined,
+    metadata: ReadonlyMap<string, string> | undefined,
+    onAdmitted: (() => void) | undefined,
+    replyObserver: ZLinkRequestReplyObserver
   ): Promise<TReply> {
-    throwIfAborted(signal);
-    const node = this.requireMeshNode(meshName);
-    const parts = this.encodeMessage(
-      ZLinkChannelMessageKind.Request,
-      channelName,
-      packetName,
-      request,
-      timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      metadata
-    );
-    const metric = this.metrics?.startRequest(meshName, 'channel');
     try {
+      throwIfAborted(signal);
+      const node = this.requireMeshNode(meshName);
+      const parts = this.encodeMessage(
+        ZLinkChannelMessageKind.Request,
+        channelName,
+        packetName,
+        request,
+        timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+        metadata
+      );
+      const metric = this.metrics?.startRequest(meshName, 'channel');
+      const recordFailure = (error: unknown): unknown => {
+        metric?.complete(requestMetricOutcome(error, signal));
+        if (
+          error instanceof ZLinkFrameworkException &&
+          internalFrameworkErrorKind(error) ===
+            ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
+        ) {
+          this.metrics?.recordChannelSelectionFailure(meshName, channelName, 'no_ready_target');
+        }
+        return error;
+      };
       const requestOptions = { flags: 1, timeoutMs: requestTimeoutBudget(timeoutMs), onAdmitted };
-      let completion: ZLinkMeshCompletion;
+      let pending: Promise<ZLinkMeshCompletion>;
       try {
-        completion = await this.completionTable(meshName).submit(
+        pending = this.completionTable(meshName).submit(
           () => node.requestToChannel(channelName, parts, requestOptions),
           signal
         );
       } catch (error) {
-        throw mapMeshSubmissionError(
-          error,
-          `MeshNode '${meshName}' request to channel '${channelName}'`
-        );
+        pending = Promise.reject(error);
       }
-      const reply = this.decodeMeshReply<TReply>(meshName, completion);
-      metric?.complete('completed');
-      return reply;
+      return mapZLinkRequestReply(
+        pending,
+        (completion) => {
+          try {
+            const reply = this.decodeMeshReply<TReply>(meshName, completion);
+            metric?.complete('completed');
+            return reply;
+          } catch (error) {
+            throw recordFailure(error);
+          }
+        },
+        replyObserver,
+        (error) =>
+          recordFailure(
+            mapMeshSubmissionError(
+              error,
+              `MeshNode '${meshName}' request to channel '${channelName}'`
+            )
+          )
+      );
     } catch (error) {
-      metric?.complete(requestMetricOutcome(error, signal));
-      if (
-        error instanceof ZLinkFrameworkException &&
-        internalFrameworkErrorKind(error) === ZLinkFrameworkInternalErrorKind.RequestTargetNotFound
-      ) {
-        this.metrics?.recordChannelSelectionFailure(meshName, channelName, 'no_ready_target');
-      }
-      throw error;
+      return mapZLinkRequestReply(Promise.reject(error), identityRequestReply, replyObserver);
     }
   }
 
@@ -794,74 +860,83 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     request: unknown,
     options: ZLinkSpotRoutedRequestOptions
   ): Promise<TReply> {
-    const meshName = spotRouteTarget.routerChannelId;
-    const node = this.meshNode(meshName);
-    if (node === undefined) {
-      if (spotRouteTarget.spotKind === ZLinkSpotKind.Instance) {
-        throw new ZLinkConfigurationException(
-          'Instance Spot routes require the MeshNode command 39 transport.'
+    try {
+      const meshName = spotRouteTarget.routerChannelId;
+      const node = this.meshNode(meshName);
+      if (node === undefined) {
+        if (spotRouteTarget.spotKind === ZLinkSpotKind.Instance) {
+          throw new ZLinkConfigurationException(
+            'Instance Spot routes require the MeshNode command 39 transport.'
+          );
+        }
+        return mapZLinkRequestReply(
+          this.requireManager().routeRequestToSpot<TReply>(
+            spotRouteTarget,
+            options.packetName,
+            request,
+            options.timeoutMs,
+            options.signal,
+            options.metadata,
+            options.onAdmitted
+          ),
+          identityRequestReply,
+          options.replyObserver
         );
       }
-      return this.requireManager().routeRequestToSpot<TReply>(
-        spotRouteTarget,
-        options.packetName,
-        request,
-        options.timeoutMs,
-        options.signal,
-        options.metadata,
-        options.onAdmitted
-      );
-    }
-    throwIfAborted(options.signal);
-    let completionPromise: Promise<ZLinkMeshCompletion>;
-    try {
-      const encoded = this.encodeMessage(
-        ZLinkChannelMessageKind.Request,
-        meshName,
-        options.packetName,
-        request,
-        options.timeoutMs,
-        options.metadata
-      );
-      completionPromise = this.completionTable(meshName).submit(
-        () =>
-          spotRouteTarget.spotKind === ZLinkSpotKind.Instance
-            ? node.requestInstanceSpot(
-                instanceSpotRouteFence(spotRouteTarget),
-                encoded,
-                options.timeoutMs,
-                undefined,
-                options.metadata,
-                options.instanceSpot,
-                options.onAdmitted
-              )
-            : node
-                .entrySpot()
-                .requestToSpot(
-                  toBackendRoutingId(spotRouteTarget.targetNodeRid),
-                  toBackendRoutingId(spotRouteTarget.spotId),
-                  spotRouteTarget.targetSpotGeneration ?? 0n,
+      throwIfAborted(options.signal);
+      let completionPromise: Promise<ZLinkMeshCompletion>;
+      try {
+        const encoded = this.encodeMessage(
+          ZLinkChannelMessageKind.Request,
+          meshName,
+          options.packetName,
+          request,
+          options.timeoutMs,
+          options.metadata
+        );
+        completionPromise = this.completionTable(meshName).submit(
+          () =>
+            spotRouteTarget.spotKind === ZLinkSpotKind.Instance
+              ? node.requestInstanceSpot(
+                  instanceSpotRouteFence(spotRouteTarget),
                   encoded,
-                  {
-                    flags: 1,
-                    onAdmitted: options.onAdmitted,
-                    timeoutMs: options.timeoutMs,
-                    routeFence: directSpotRouteFence(spotRouteTarget),
-                    entrySpot: spotRouteTarget.spotKind === ZLinkSpotKind.Entry
-                  }
-                ),
-        options.signal
-      );
+                  options.timeoutMs,
+                  undefined,
+                  options.metadata,
+                  options.instanceSpot,
+                  options.onAdmitted
+                )
+              : node
+                  .entrySpot()
+                  .requestToSpot(
+                    toBackendRoutingId(spotRouteTarget.targetNodeRid),
+                    toBackendRoutingId(spotRouteTarget.spotId),
+                    spotRouteTarget.targetSpotGeneration ?? 0n,
+                    encoded,
+                    {
+                      flags: 1,
+                      onAdmitted: options.onAdmitted,
+                      timeoutMs: options.timeoutMs,
+                      routeFence: directSpotRouteFence(spotRouteTarget),
+                      entrySpot: spotRouteTarget.spotKind === ZLinkSpotKind.Entry
+                    }
+                  ),
+          options.signal
+        );
+      } catch (error) {
+        throw mapMeshSubmissionError(
+          error,
+          `MeshNode '${meshName}' request to Spot '${spotRouteTarget.spotId}'`
+        );
+      }
+      return this.waitForMeshReply<TReply>(meshName, completionPromise, options.replyObserver);
     } catch (error) {
-      throw mapMeshSubmissionError(
-        error,
-        `MeshNode '${meshName}' request to Spot '${spotRouteTarget.spotId}'`
-      );
+      (options.replyObserver ?? passthroughRequestReplyObserver).fail(error);
+      throw error;
     }
-    return this.waitForMeshReply<TReply>(meshName, completionPromise);
   }
 
-  async requestFromSpotToSpot<TReply = unknown>(
+  requestFromSpotToSpot<TReply = unknown>(
     sourceSpot: ZLinkBackendSpot,
     spotRouteTarget: ZLinkSpotRouteTarget,
     request: unknown,
@@ -870,17 +945,24 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       readonly timeoutMs?: number;
       readonly signal?: AbortSignal;
       readonly onAdmitted?: () => void;
+      readonly replyObserver?: ZLinkRequestReplyObserver;
     }
   ): Promise<TReply> {
-    return this.requireManager().routeRequestFromSpotToSpot<TReply>(
-      sourceSpot,
-      spotRouteTarget,
-      options.packetName,
-      request,
-      options.timeoutMs,
-      options.signal,
-      options.onAdmitted
-    );
+    let pending: Promise<TReply>;
+    try {
+      pending = this.requireManager().routeRequestFromSpotToSpot<TReply>(
+        sourceSpot,
+        spotRouteTarget,
+        options.packetName,
+        request,
+        options.timeoutMs,
+        options.signal,
+        options.onAdmitted
+      );
+    } catch (error) {
+      pending = Promise.reject(error);
+    }
+    return mapZLinkRequestReply(pending, identityRequestReply, options.replyObserver);
   }
 
   async requestRawFromSpotToSpot(
@@ -1067,12 +1149,16 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     );
   }
 
-  private async waitForMeshReply<TReply>(
+  private waitForMeshReply<TReply>(
     meshName: string,
-    completionPromise: Promise<ZLinkMeshCompletion>
+    completionPromise: Promise<ZLinkMeshCompletion>,
+    replyObserver: ZLinkRequestReplyObserver = passthroughRequestReplyObserver
   ): Promise<TReply> {
-    const completion = await completionPromise;
-    return this.decodeMeshReply<TReply>(meshName, completion);
+    return mapZLinkRequestReply(
+      completionPromise,
+      (completion) => this.decodeMeshReply<TReply>(meshName, completion),
+      replyObserver
+    );
   }
 
   private decodeMeshReply<TReply>(meshName: string, completion: ZLinkMeshCompletion): TReply {
