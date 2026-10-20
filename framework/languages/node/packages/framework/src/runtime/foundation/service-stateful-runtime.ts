@@ -1,4 +1,10 @@
-import { awaitWithAbort } from '../abort';
+import { awaitWithAbort, isAbortError } from '../abort';
+import { decodeChannelHeader } from '../channels/channel-envelope';
+import { ZLinkBufferMessage } from '../backend/runtime-message';
+import {
+  dispatchErrorDetails,
+  dispatchReasonFromError
+} from '../diagnostics/dispatch-error-details';
 import { encodeBoundSessionCloseCommand } from '../protocol/service_wire_codec.generated';
 import { decodeRoutingId, encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
@@ -108,11 +114,16 @@ import {
   SERVICE_WIRE_COMMAND_OFFSET,
   SERVICE_WIRE_FLAGS_OFFSET
 } from './service-wire-binary-primitives';
-import { SERVICE_WIRE_MAGIC, SERVICE_WIRE_MAJOR } from './service-wire-constants.generated';
+import {
+  SERVICE_WIRE_MAGIC,
+  SERVICE_WIRE_MAJOR,
+  SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
+} from './service-wire-constants.generated';
 import {
   ServiceWireProtocolError,
   decodeApplicationPayload,
   decodeApplicationPayloadView,
+  decodeMultipartApplicationParts,
   encodeApplicationPayload,
   type ServiceApplicationPayload
 } from './service-wire-m6a-codec';
@@ -2398,7 +2409,13 @@ export class ServiceStatefulRuntime {
           decoded.activation === 'missing' &&
           (error instanceof ZLinkFrameworkException || error instanceof ServiceStaleGenerationError)
         ) {
-          this.finishMissingInstanceActivationFailure(record, decoded, error);
+          this.finishMissingInstanceActivationFailure(
+            record,
+            decoded,
+            error,
+            undefined,
+            payloadFrame
+          );
           return 'infrastructure';
         }
         const correlation = statefulCorrelation(decoded);
@@ -2806,7 +2823,7 @@ export class ServiceStatefulRuntime {
         }
       });
     } catch (error) {
-      this.finishMissingInstanceActivationFailure(ingress, record, error, localReply);
+      this.finishMissingInstanceActivationFailure(ingress, record, error, localReply, payloadFrame);
     }
   }
 
@@ -2998,7 +3015,8 @@ export class ServiceStatefulRuntime {
       { readonly kind: 'instanceSpot'; readonly activation: 'missing' }
     >,
     error: unknown,
-    localReply?: NonNullable<ServiceStatefulMailboxData['reply']>
+    localReply?: NonNullable<ServiceStatefulMailboxData['reply']>,
+    payloadFrame?: Buffer
   ): void {
     if (record.operationKind === 'request') {
       if (record.deadlineUnixMs <= BigInt(Date.now())) return;
@@ -3011,17 +3029,51 @@ export class ServiceStatefulRuntime {
       return;
     }
     const reporter = this.dispatchErrors;
+    const tracePoint = flowIfEnabled(reporter?.flow, ZLinkMessageFlowOutcome.Dropped);
+    if (tracePoint === undefined && reporter?.captureEnabled() !== true) return;
+    const reason = isAbortError(error)
+      ? ZLinkDispatchErrorReason.Shutdown
+      : dispatchReasonFromError(error);
+    // Decode the retained first message only after diagnostics accepts the terminal.
+    // Detached local and remote activation share this owner and its explicit flow.
+    const payload =
+      payloadFrame === undefined ? undefined : decodeApplicationPayloadView(payloadFrame);
+    const header =
+      payload?.contentType === SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
+        ? decodeChannelHeader(
+            decodeMultipartApplicationParts(payloadFrame!, ZLinkBufferMessage.fromOwned),
+            reporter?.flow.flowCreationEnabled()
+          )
+        : undefined;
+    const context = {
+      surface: ZLinkDispatchErrorSurface.InstanceSpot,
+      messageKind: ZLinkDispatchMessageKind.Send,
+      meshName: this.dispatchErrorMeshName,
+      sourceRid: record.sourceNodeRid,
+      spotId: record.target.targetSpotId,
+      instanceSpotType: record.target.stableType,
+      activationState: 'activating' as const,
+      packetName: header?.messageName ?? payload?.packetName,
+      flowId: header?.flowId,
+      flowOrigin: header?.flowOrigin
+    };
+    tracePoint?.trace({
+      ...context,
+      outcome: ZLinkMessageFlowOutcome.Dropped,
+      errorReason:
+        reason === ZLinkDispatchErrorReason.Shutdown
+          ? reason
+          : error instanceof ZLinkFrameworkException &&
+              error.kind === ZLinkFrameworkErrorKind.DeadlineExceeded
+            ? 'activation_timeout'
+            : 'activation_rejected',
+      ...dispatchErrorDetails(error)
+    });
     if (reporter?.captureEnabled() === true) {
       reporter.report({
-        surface: ZLinkDispatchErrorSurface.InstanceSpot,
-        messageKind: ZLinkDispatchMessageKind.Send,
-        reason: ZLinkDispatchErrorReason.StaleTarget,
+        ...context,
+        reason,
         action: ZLinkDispatchErrorAction.Drop,
-        meshName: this.dispatchErrorMeshName,
-        sourceRid: record.sourceNodeRid,
-        spotId: record.target.targetSpotId,
-        instanceSpotType: record.target.stableType,
-        activationState: 'activating',
         error
       });
     }
@@ -3240,12 +3292,25 @@ export class ServiceStatefulRuntime {
   ): Promise<unknown> {
     const key = record.target.targetSpotId;
     const pending = this.pendingInstanceActivations.get(key);
+    const metric =
+      pending === undefined
+        ? this.dispatchErrors?.metrics?.startInstanceSpotActivation(
+            record.target.targetMeshName,
+            record.target.stableType
+          )
+        : undefined;
     const ready =
       pending ??
-      this.runMissingInstanceActivation(record, payloadFrame, metadataFrame).then((activation) => ({
-        ...activation,
-        stableType: record.target.stableType
-      }));
+      this.runMissingInstanceActivation(record, payloadFrame, metadataFrame).then(
+        (activation) => {
+          metric?.complete('ready');
+          return { ...activation, stableType: record.target.stableType };
+        },
+        (error) => {
+          metric?.complete(instanceActivationOutcome(error));
+          throw error;
+        }
+      );
     const operation = ready.then(async (value) => {
       if (pending !== undefined) {
         await this.asyncInstanceAuthority?.read(
@@ -3298,11 +3363,11 @@ export class ServiceStatefulRuntime {
     const target = record.target;
     if (
       target.targetNodeRid !== this.nodeRid ||
-      target.targetNodeGeneration !== this.nodeGeneration ||
-      record.deadlineUnixMs < BigInt(Date.now())
+      target.targetNodeGeneration !== this.nodeGeneration
     ) {
       throw new ServiceStaleGenerationError('spot', target.targetSpotId);
     }
+    remainingDeadlineMs(record.deadlineUnixMs);
     const authority = this.asyncInstanceAuthority;
     if (authority === undefined) {
       throw new Error('Async Instance activation authority is not registered.');
@@ -3419,8 +3484,14 @@ export class ServiceStatefulRuntime {
       deadline.close();
     }
     if (this.closed || record.deadlineUnixMs < BigInt(Date.now())) {
+      const error = new ZLinkFrameworkException(
+        this.closed
+          ? ZLinkFrameworkErrorKind.ShuttingDown
+          : ZLinkFrameworkErrorKind.DeadlineExceeded,
+        this.closed ? 'Runtime stopped during Instance activation.' : 'Operation deadline exceeded.'
+      );
       await authority.abort(target, reserved.reservation);
-      throw new ServiceStaleGenerationError('spot', target.targetSpotId);
+      throw error;
     }
 
     let activation: { readonly spot: ServiceSpotState; readonly created: boolean };
@@ -5714,6 +5785,25 @@ function isEntrySpotFence(fence: ServiceSpotRouteFence): boolean {
     fence.authorityOwnerGeneration === fence.targetNodeGeneration &&
     fence.ownerLeaseGeneration === fence.targetNodeGeneration
   );
+}
+
+function instanceActivationOutcome(error: unknown): string {
+  if (isAbortError(error)) return 'shutdown';
+  if (error instanceof ZLinkFrameworkException) {
+    switch (error.kind) {
+      case ZLinkFrameworkErrorKind.DeadlineExceeded:
+        return 'timed_out';
+      case ZLinkFrameworkErrorKind.ShuttingDown:
+        return 'shutdown';
+      case ZLinkFrameworkErrorKind.AlreadyExists:
+        return 'conflict';
+      case ZLinkFrameworkErrorKind.InvalidOperation:
+        return 'fenced';
+      case ZLinkFrameworkErrorKind.Unavailable:
+        return 'store_failure';
+    }
+  }
+  return 'rejected';
 }
 
 function operationDeadline(deadlineUnixMs: bigint): {
