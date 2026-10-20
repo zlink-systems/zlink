@@ -22,21 +22,7 @@ final class ActorPacketFrames {
     private ActorPacketFrames() {}
 
     static Header decode(ZLinkBackendActorReceived headerPart) {
-        byte[] bytes = headerPart.message().toByteArray();
-        try {
-            return decodeStream(bytes, headerPart.requestSeq());
-        } catch (RuntimeException ignored) {
-            return new Header(
-                    headerPart.message().toUtf8String(),
-                    headerPart.requestSeq(),
-                    false,
-                    0,
-                    EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
-                    Map.of(),
-                    Optional.empty(),
-                    Optional.empty(),
-                    Optional.empty());
-        }
+        return decodeStream(headerPart.message().toByteArray(), headerPart.requestSeq());
     }
 
     static Message encodeReply(Header packetHeader, Message payload) {
@@ -52,12 +38,9 @@ final class ActorPacketFrames {
             Message payload,
             String replyPacketName,
             ZLinkStreamCodec replyCodec) {
-        if (!packetHeader.streamHeader() || packetHeader.requestSeq().isEmpty()) {
-            return Message.from(payload);
-        }
         ZLinkStreamHeader replyHeader =
                 ZLinkStreamHeader.createResponse(
-                        packetHeader.toRequestHeader(),
+                        packetHeader.toStreamHeader(),
                         replyCodec,
                         EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
                         replyPacketName,
@@ -114,12 +97,9 @@ final class ActorPacketFrames {
 
     static Message encodeError(Header packetHeader, Throwable error) {
         byte[] body = ZLinkStreamErrorPayload.encode(error);
-        if (!packetHeader.streamHeader() || packetHeader.requestSeq().isEmpty()) {
-            return Message.from(body);
-        }
         ZLinkStreamHeader replyHeader =
                 ZLinkStreamHeader.createErrorResponse(
-                        packetHeader.toRequestHeader(), packetHeader.packetName());
+                        packetHeader.toStreamHeader(), packetHeader.packetName());
         return Message.from(ZLinkStreamFrameCodec.encode(replyHeader, body));
     }
 
@@ -134,7 +114,6 @@ final class ActorPacketFrames {
         return new Header(
                 header.packetName(),
                 requestSeq,
-                true,
                 header.codec().value(),
                 header.flags(),
                 header.metadata(),
@@ -146,7 +125,6 @@ final class ActorPacketFrames {
     record Header(
             String packetName,
             Optional<Long> requestSeq,
-            boolean streamHeader,
             int codec,
             EnumSet<ZLinkStreamHeaderFlag> flags,
             Map<String, String> metadata,
@@ -164,19 +142,6 @@ final class ActorPacketFrames {
             correlationId = correlationId == null ? Optional.empty() : correlationId;
             flowId = flowId == null ? Optional.empty() : flowId;
             flowOrigin = flowOrigin == null ? Optional.empty() : flowOrigin;
-        }
-
-        ZLinkStreamHeader toRequestHeader() {
-            return new ZLinkStreamHeader(
-                    ZLinkStreamMessageKind.REQUEST,
-                    ZLinkStreamCodec.fromValue(codec),
-                    flags,
-                    requestSeq,
-                    packetName,
-                    metadata,
-                    correlationId,
-                    flowId,
-                    flowOrigin);
         }
 
         ZLinkStreamHeader toStreamHeader() {
