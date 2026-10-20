@@ -5,12 +5,13 @@ import {
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import type { ZLinkMessageSerializer } from '../../contracts';
 import {
-  decodeApplicationPayload,
+  decodeApplicationPayloadView,
   encodeApplicationPayload
 } from '../foundation/service-wire-m6a-codec';
 import {
   decodeFrameworkPayloadMessage,
-  encodeFrameworkPayload,
+  encodeFrameworkPayloadMessage,
+  frameworkPayloadContentType,
   type ZLinkSerializerRegistryLike
 } from './payload-codec';
 
@@ -20,15 +21,15 @@ export function encodeFrameworkCreationPayload(
   payload: unknown,
   registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>
 ): Buffer {
-  const encoded = encodeFrameworkPayload(payload ?? null, registry);
+  const message = encodeFrameworkPayloadMessage(payload ?? null, registry);
   try {
     return encodeApplicationPayload({
       packetName: CREATION_PACKET_NAME,
-      contentType: encoded.contentType,
-      payload: encoded.message.data()
+      contentType: frameworkPayloadContentType(message),
+      payload: message.data()
     });
   } finally {
-    encoded.message.close();
+    message.close();
   }
 }
 
@@ -37,11 +38,12 @@ export function decodeFrameworkCreationPayload<T>(
   registry?: ZLinkSerializerRegistryLike | ReadonlyMap<string, ZLinkMessageSerializer>
 ): T {
   try {
-    const application = decodeApplicationPayload(payload);
+    const application = decodeApplicationPayloadView(payload);
     if (application.packetName !== CREATION_PACKET_NAME) {
       throw new RangeError('Creation payload has an unexpected packet name.');
     }
-    const message = RuntimeMessage.from(application.payload);
+    // The M6A view decoder returns a Buffer over the retained input storage.
+    const message = RuntimeMessage.fromOwned(application.payload as Buffer);
     try {
       return decodeFrameworkPayloadMessage<T>(
         message,
