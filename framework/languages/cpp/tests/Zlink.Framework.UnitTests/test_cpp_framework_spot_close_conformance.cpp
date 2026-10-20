@@ -1633,17 +1633,19 @@ const std::set<std::string> &known_scenarios ()
 
 nlohmann::json run_scenario (const nlohmann::json &scenario, std::string &failure)
 {
-    observation_t observation;
-    observed = &observation;
+    // The observer is owned by the runtime and can fire after this scope ends.
+    const auto observation_owner = std::make_shared<observation_t> ();
+    observed = observation_owner.get ();
 
-    const auto observe_diagnostics = [&observation] (const zf::message_flow_event_t &event) {
+    const auto observe_diagnostics = [observation_owner] (const zf::message_flow_event_t &event) {
+        auto &state = *observation_owner;
         if (event.outcome == zf::message_flow_outcome_t::admitted
             && event.packet_name == std::optional<std::string> (close_probe_request_t::packet_name)
             && event.detail_stage == std::optional<std::string> ("invoke_erased.post_serial")) {
-            std::lock_guard lock (observation.mutex);
-            if (observation.queued_request_admitted) {
-                observation.queued_request_admitted->set_value ();
-                observation.queued_request_admitted.reset ();
+            std::lock_guard lock (state.mutex);
+            if (state.queued_request_admitted) {
+                state.queued_request_admitted->set_value ();
+                state.queued_request_admitted.reset ();
             }
         }
         if (event.result == zf::message_flow_result_t::failed) {
@@ -1660,13 +1662,13 @@ nlohmann::json run_scenario (const nlohmann::json &scenario, std::string &failur
                     note += ":non-standard-exception";
                 }
             }
-            std::lock_guard lock (observation.mutex);
-            observation.notes.push_back (std::move (note));
+            std::lock_guard lock (state.mutex);
+            state.notes.push_back (std::move (note));
         }
         if (event.packet_name == std::optional<std::string> ("spot_close")
             && event.detail_result == std::optional<std::string> ("on_closing_failed")) {
-            std::lock_guard lock (observation.mutex);
-            observation.diagnostics.push_back ("onClosingFailed");
+            std::lock_guard lock (state.mutex);
+            state.diagnostics.push_back ("onClosingFailed");
         }
     };
 
