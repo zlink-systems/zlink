@@ -91,16 +91,34 @@ public sealed class ReceiveClaimCostTests(Xunit.Abstractions.ITestOutputHelper o
         const int iterations = 1000;
         long allocated = 0;
         long baselineBytes = 0;
-        for (var index = 0; index < warmup + iterations; index++)
+        var warmupStart = GC.GetTotalAllocatedBytes(precise: true);
+        var enteredNoGc = false;
+        try
         {
-            completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
-            source.Publish();
-            var measured = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            if (index >= warmup)
+            for (var index = 0; index < warmup + iterations; index++)
             {
-                allocated += measured.Actual;
-                baselineBytes += measured.Baseline;
+                if (index == warmup)
+                {
+                    var warmupBytes = GC.GetTotalAllocatedBytes(precise: true) - warmupStart;
+                    var noGcBudget = checked(warmupBytes * ((iterations + warmup - 1) / warmup));
+                    // Background GC can count an unused allocation-context tail, so isolate measurements from GC.
+                    Assert.True(GC.TryStartNoGCRegion(noGcBudget));
+                    enteredNoGc = true;
+                }
+                completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                source.Publish();
+                var measured = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+                if (index >= warmup)
+                {
+                    allocated += measured.Actual;
+                    baselineBytes += measured.Baseline;
+                }
             }
+        }
+        finally
+        {
+            if (enteredNoGc)
+                GC.EndNoGCRegion();
         }
         Assert.Equal(request ? batchSize * (warmup + iterations) : 0, replies);
         output.WriteLine(
