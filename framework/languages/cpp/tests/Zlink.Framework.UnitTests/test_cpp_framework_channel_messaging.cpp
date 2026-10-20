@@ -2950,8 +2950,8 @@ int main ()
     if (!public_route.running () || public_route.list_connections ().size () != 2) {
         return 57;
     }
-    test_spot_address_resolver_t public_spot_resolver;
-    public_spot_resolver.set (
+    auto public_spot_resolver = std::make_shared<test_spot_address_resolver_t> ();
+    public_spot_resolver->set (
       "target-spot", zlink::framework::runtime::spot_address_t{
                        "public.route", zlink::routing_id_t::from ("target-node"), "target-spot"});
     zlink::framework::detail::channel_runtime_t::from (public_route_builder.message_bus ())
@@ -3263,16 +3263,16 @@ int main ()
       zlink::framework::test::runtime_failure_builder ();
     auto spot_only_runtime =
       zlink::framework::detail::channel_runtime_t::from (spot_only_builder.message_bus ());
-    test_spot_address_resolver_t spot_only_resolver;
+    auto spot_only_resolver = std::make_shared<test_spot_address_resolver_t> ();
     int spot_only_send_count = 0;
     int spot_only_node_send_count = 0;
     bool spot_only_request_called = false;
     /* The handle carries a concrete ObjectGeneration so the transport can assert the
      * exact generation the SPOT address snapshot published. */
     constexpr std::uint64_t spot_only_generation = 7;
-    spot_only_resolver.set ("spot-rid", zlink::framework::runtime::spot_address_t{
-                                          "spot-only", zlink::routing_id_t::from ("spot-node"),
-                                          "spot-rid", spot_only_generation});
+    spot_only_resolver->set ("spot-rid", zlink::framework::runtime::spot_address_t{
+                                           "spot-only", zlink::routing_id_t::from ("spot-node"),
+                                           "spot-rid", spot_only_generation});
     spot_only_runtime.bind_spot_address_resolver (spot_only_resolver);
     spot_only_runtime.bind_spot_mesh_transport (
       "spot-only",
@@ -3364,7 +3364,7 @@ int main ()
       zlink::framework::test::runtime_failure_builder ();
     auto activation_runtime =
       zlink::framework::detail::channel_runtime_t::from (activation_builder.message_bus ());
-    test_spot_address_resolver_t activation_resolver;
+    auto activation_resolver = std::make_shared<test_spot_address_resolver_t> ();
     activation_runtime.bind_spot_address_resolver (activation_resolver);
     std::atomic_int activation_count{0};
     std::atomic_int ready_instance_request_count{0};
@@ -3384,7 +3384,7 @@ int main ()
           ++activation_count;
           auto address = zlink::framework::runtime::spot_address_t{
             "commerce", zlink::routing_id_t::from ("cart-node"), "cart-17", 1};
-          activation_resolver.set ("cart-17", address);
+          activation_resolver->set ("cart-17", address);
           co_return zlink::framework::result_t<void>::success ();
       },
       [&] (const auto &, const auto &, const auto &cached_route, auto, auto, auto, auto, auto) {
@@ -3453,10 +3453,10 @@ int main ()
       zlink::framework::test::runtime_failure_builder ();
     auto retry_runtime =
       zlink::framework::detail::channel_runtime_t::from (retry_builder.message_bus ());
-    test_spot_address_resolver_t retry_resolver;
-    retry_resolver.set ("moving-spot",
-                        zlink::framework::runtime::spot_address_t{
-                          "retry-mesh", zlink::routing_id_t::from ("retry-node"), "stale-spot"});
+    auto retry_resolver = std::make_shared<test_spot_address_resolver_t> ();
+    retry_resolver->set ("moving-spot",
+                         zlink::framework::runtime::spot_address_t{
+                           "retry-mesh", zlink::routing_id_t::from ("retry-node"), "stale-spot"});
     retry_runtime.bind_spot_address_resolver (retry_resolver);
     std::atomic_int retry_stale_attempts{0};
     std::atomic_int retry_fresh_attempts{0};
@@ -3503,19 +3503,20 @@ int main ()
                                     .result ();
     if (stale_spot_reply
         || stale_spot_reply.error_kind () != zlink::framework::framework_error_kind_t::not_found
-        || retry_resolver.resolve_count.load () != 1 || retry_resolver.invalidate_count.load () != 1
-        || retry_stale_attempts.load () != 1 || retry_fresh_attempts.load () != 0) {
+        || retry_resolver->resolve_count.load () != 1
+        || retry_resolver->invalidate_count.load () != 1 || retry_stale_attempts.load () != 1
+        || retry_fresh_attempts.load () != 0) {
         return 143;
     }
-    retry_resolver.set ("moving-spot",
-                        zlink::framework::runtime::spot_address_t{
-                          "retry-mesh", zlink::routing_id_t::from ("retry-node"), "fresh-spot"});
+    retry_resolver->set ("moving-spot",
+                         zlink::framework::runtime::spot_address_t{
+                           "retry-mesh", zlink::routing_id_t::from ("retry-node"), "fresh-spot"});
     const auto fresh_reply = retry_client.request_to_spot ("moving-spot", request_t{54})
                                .timeout (std::chrono::milliseconds (75))
                                .async<reply_t> ()
                                .result ();
     if (!fresh_reply || fresh_reply.value ().value != 454
-        || retry_resolver.resolve_count.load () != 2 || retry_stale_attempts.load () != 1
+        || retry_resolver->resolve_count.load () != 2 || retry_stale_attempts.load () != 1
         || retry_fresh_attempts.load () != 1) {
         return 144;
     }

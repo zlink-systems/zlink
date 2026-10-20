@@ -598,7 +598,7 @@ class location_runtime_t
               }
           });
         attempt.reset ();
-        auto result = co_await ready;
+        auto result = co_await std::move (ready);
         if (auto active = weak_attempt.lock ()) {
             if (auto heartbeat = active->heartbeat.lock ()) {
                 std::lock_guard lock (heartbeat->gate);

@@ -16,8 +16,8 @@ constexpr std::size_t inventory_count = 257;
 
 void *operator new (std::size_t size)
 {
-    auto expected = size;
-    if (size != 0 && fail_size.compare_exchange_strong (expected, 0)) {
+    auto expected = fail_size.load ();
+    if (expected != 0 && size >= expected && fail_size.compare_exchange_strong (expected, 0)) {
         ++injected;
         throw std::bad_alloc ();
     }

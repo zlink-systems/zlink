@@ -38,6 +38,7 @@
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/sha256.hpp"
 #include "runtime/configuration/endpoint_connections.hpp"
+#include "runtime/configuration/service_scope.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/diagnostics/runtime_metrics.hpp"
@@ -1393,8 +1394,8 @@ void app_t::_apply_zlink_framework ()
         _state->services.add_factory<runtime::spot_address_resolver_t> (
           [] (service_provider_t &provider) {
               return std::shared_ptr<runtime::spot_address_resolver_t> (
-                &provider.get_required<runtime::store_location_resolvers_t> (),
-                [] (runtime::spot_address_resolver_t *) noexcept {});
+                detail::service_scope_access_t::resolve_shared<
+                  runtime::store_location_resolvers_t> (provider));
           },
           service_lifetime_t::singleton);
     }
@@ -1503,7 +1504,8 @@ void app_t::_apply_zlink_framework ()
     {
         auto provider = _state->services.build_provider ();
         channel_runtime.bind_spot_address_resolver (
-          provider.get_required<runtime::spot_address_resolver_t> ());
+          detail::service_scope_access_t::resolve_shared<runtime::spot_address_resolver_t> (
+            provider));
         provider.get_required<runtime::store_location_resolvers_t> ().set_actor_mesh_name (
           application_mesh_name);
         auto &location_lifecycle = provider.get_required<runtime::location_lifecycle_t> ();

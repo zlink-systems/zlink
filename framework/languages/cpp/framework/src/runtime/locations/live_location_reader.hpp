@@ -129,13 +129,14 @@ class live_location_reader_t final
         std::sort (sources->begin (), sources->end (), [] (const auto &left, const auto &right) {
             return rid_less (left.descriptor.rid, right.descriptor.rid);
         });
-        auto previous = _mesh_sources.load (std::memory_order_acquire);
+        auto previous = std::atomic_load_explicit (&_mesh_sources, std::memory_order_acquire);
         do {
             auto next = std::make_shared<mesh_source_catalog_t> (*previous);
             next->insert_or_assign (mesh_name, sources);
             std::shared_ptr<const mesh_source_catalog_t> published = std::move (next);
-            if (_mesh_sources.compare_exchange_weak (previous, published, std::memory_order_release,
-                                                     std::memory_order_acquire))
+            if (std::atomic_compare_exchange_weak_explicit (&_mesh_sources, &previous, published,
+                                                            std::memory_order_release,
+                                                            std::memory_order_acquire))
                 break;
         } while (true);
         co_return sources;
@@ -146,7 +147,7 @@ class live_location_reader_t final
                            const std::vector<std::uint8_t> &rid,
                            std::uint64_t generation) const
     {
-        const auto catalog = _mesh_sources.load (std::memory_order_acquire);
+        const auto catalog = std::atomic_load_explicit (&_mesh_sources, std::memory_order_acquire);
         const auto mesh = catalog->find (mesh_name);
         if (mesh != catalog->end ())
             if (const auto *source = find_mesh_source (*mesh->second, rid, generation))
@@ -253,7 +254,7 @@ class live_location_reader_t final
     }
 
     using mesh_source_catalog_t = std::map<std::string, std::shared_ptr<const mesh_sources_t>>;
-    std::atomic<std::shared_ptr<const mesh_source_catalog_t>> _mesh_sources{
+    std::shared_ptr<const mesh_source_catalog_t> _mesh_sources{
       std::make_shared<const mesh_source_catalog_t> ()};
     location_repository_t *_store;
     location_options_t _options;
