@@ -2,11 +2,42 @@ using System.Diagnostics.Metrics;
 using Microsoft.Extensions.Logging;
 using Systems.Zlink.Stream.Connector.Contracts;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Host;
 
 namespace Zlink.Framework.UnitTests;
 
 public sealed class RuntimeMetricsTests
 {
+    [Theory]
+    [InlineData((int)ZLinkSourceSettlement.TargetCommitted, false, "completed")]
+    [InlineData((int)ZLinkSourceSettlement.SourcePreserved, false, "aborted")]
+    [InlineData((int)ZLinkSourceSettlement.SourceLeaseExpired, false, "failed")]
+    [InlineData(null, true, "shutdown")]
+    [InlineData(null, false, "failed")]
+    [InlineData((int)ZLinkSourceSettlement.TargetCommitted, true, "completed")]
+    [InlineData((int)ZLinkSourceSettlement.SourcePreserved, true, "aborted")]
+    public void Relocation_outcome_uses_source_observation(
+        int? settlementValue,
+        bool sourceStopped,
+        string expected
+    )
+    {
+        var outcomes = new List<string>();
+        using var listener = Listen<long>(
+            "zlink.relocation.completed",
+            (_, _, tags) => outcomes.Add(Tags(tags)["outcome"])
+        );
+        var operation = ZLinkRuntimeMetrics.StartRelocation(
+            "source-observation",
+            ZLinkRelocationMetricObjectKind.Actor,
+            ZLinkRelocationMetricPolicy.Snapshot
+        );
+        operation.CompleteSource((ZLinkSourceSettlement?)settlementValue, sourceStopped);
+        // A later cleanup failure has no additional source observation.
+        operation.CompleteSource(null);
+        Assert.Equal(expected, Assert.Single(outcomes));
+    }
+
     [Fact]
     public void Request_Terminals_Use_The_Five_Shared_Outcomes()
     {
@@ -818,14 +849,7 @@ public sealed class RuntimeMetricsTests
             (_, _, tags) => terminal.Add(Tags(tags))
         );
 
-        var outcomes = new[]
-        {
-            ZLinkRelocationMetricOutcome.Completed,
-            ZLinkRelocationMetricOutcome.Aborted,
-            ZLinkRelocationMetricOutcome.Recovered,
-            ZLinkRelocationMetricOutcome.Failed,
-            ZLinkRelocationMetricOutcome.Shutdown,
-        };
+        var outcomes = Enum.GetValues<ZLinkRelocationMetricOutcome>();
         foreach (var outcome in outcomes)
             ZLinkRuntimeMetrics
                 .StartRelocation(
@@ -835,10 +859,8 @@ public sealed class RuntimeMetricsTests
                 )
                 .Complete(outcome);
 
-        //  `recovered` stays an allowed outcome value even though the derived
-        //  counter was removed from the spec.
         Assert.Equal(
-            ["completed", "aborted", "recovered", "failed", "shutdown"],
+            ["completed", "aborted", "failed", "shutdown"],
             terminal.Select(static sample => sample["outcome"])
         );
     }

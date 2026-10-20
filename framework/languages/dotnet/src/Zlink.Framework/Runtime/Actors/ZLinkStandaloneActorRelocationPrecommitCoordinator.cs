@@ -311,12 +311,28 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
             ) || !SameRelocation(projection, relocationId)
         )
             throw DataLost("Standalone Actor source Preserve lost its captured source attempt.");
+        return await TryPreserveSourceCoreAsync(
+                key,
+                captured,
+                projection.SteadyAuthorityPayload,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+    }
+
+    private async ValueTask<ZLinkAuthoritySnapshot?> TryPreserveSourceCoreAsync(
+        ZLinkAuthorityKey key,
+        ZLinkAuthoritySnapshot captured,
+        ReadOnlyMemory<byte> steadyAuthorityPayload,
+        CancellationToken cancellationToken
+    )
+    {
         var result = await store
             .CompareExchangeAuthorityAsync(
                 key,
                 captured.StoreVersion,
                 new ZLinkAuthorityMutation.Put(
-                    projection.SteadyAuthorityPayload,
+                    steadyAuthorityPayload,
                     ZLinkAuthorityGenerationTransition.Preserve,
                     null,
                     null
@@ -337,7 +353,8 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
     internal async ValueTask<ZLinkAuthoritySnapshot> AbortSourceAsync(
         ZLinkAuthorityKey key,
         Guid relocationId,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action? onPreserved = null
     )
     {
         while (true)
@@ -370,49 +387,45 @@ internal sealed class ZLinkStandaloneActorRelocationPrecommitCoordinator(
                     != checked((long)projection.State.SourceOwnerLeaseGeneration)
             )
                 throw DataLost("Standalone Actor precommit abort lost its exact source fence.");
+            var preserved = await TryPreserveSourceCoreAsync(
+                    key,
+                    found.Snapshot,
+                    projection.SteadyAuthorityPayload,
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
+            if (preserved is not null)
+            {
+                onPreserved?.Invoke();
+                return preserved;
+            }
+            var afterConflict = await store
+                .ReadAuthorityAsync(key, cancellationToken)
+                .ConfigureAwait(false);
+            if (
+                afterConflict is not ZLinkAuthorityReadResult.Found current
+                || !StringComparer.Ordinal.Equals(
+                    current.Snapshot.StoreVersion,
+                    found.Snapshot.StoreVersion
+                )
+            )
+                continue;
+            // The source row is unchanged. Recovery can use its exact
+            // version and owner identity through Restore.
             var result = await store
                 .CompareExchangeAuthorityAsync(
                     key,
                     found.Snapshot.StoreVersion,
-                    new ZLinkAuthorityMutation.Put(
+                    new ZLinkAuthorityMutation.Restore(
                         projection.SteadyAuthorityPayload,
-                        ZLinkAuthorityGenerationTransition.Preserve,
-                        null,
-                        null
+                        new ZLinkLocationOwnerToken(
+                            found.Snapshot.OwnerId,
+                            found.Snapshot.OwnerLeaseGeneration
+                        )
                     ),
                     cancellationToken
                 )
                 .ConfigureAwait(false);
-            if (result is ZLinkAuthorityCompareExchangeResult.Conflict)
-            {
-                var afterConflict = await store
-                    .ReadAuthorityAsync(key, cancellationToken)
-                    .ConfigureAwait(false);
-                if (
-                    afterConflict is not ZLinkAuthorityReadResult.Found current
-                    || !StringComparer.Ordinal.Equals(
-                        current.Snapshot.StoreVersion,
-                        found.Snapshot.StoreVersion
-                    )
-                )
-                    continue;
-                // The source row is unchanged. Recovery can use its exact
-                // version and owner identity through Restore.
-                result = await store
-                    .CompareExchangeAuthorityAsync(
-                        key,
-                        found.Snapshot.StoreVersion,
-                        new ZLinkAuthorityMutation.Restore(
-                            projection.SteadyAuthorityPayload,
-                            new ZLinkLocationOwnerToken(
-                                found.Snapshot.OwnerId,
-                                found.Snapshot.OwnerLeaseGeneration
-                            )
-                        ),
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-            }
             if (result is ZLinkAuthorityCompareExchangeResult.Stored stored)
                 return stored.Snapshot;
             if (result is not ZLinkAuthorityCompareExchangeResult.Conflict)
