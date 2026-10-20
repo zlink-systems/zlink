@@ -1157,8 +1157,7 @@ struct relay_peer_pair_t
     using host_type = fw::runtime::host::public_host_runtime_t;
     using descriptor_type = fw::runtime::mesh::service_node_descriptor_t;
     fw::runtime::in_memory_location_repository_t source_store;
-    fw::runtime::location_runtime_t source_catalog_runtime{source_store};
-    fw::runtime::live_location_reader_t source_reader{source_store, {}, &source_catalog_runtime};
+    fw::runtime::live_location_reader_t source_reader{source_store};
     std::shared_ptr<host_type> source, target;
     descriptor_type source_wire, target_wire;
     std::shared_ptr<const fw::mesh_node_descriptor_t> original;
@@ -2179,8 +2178,7 @@ struct native_intake_fixture_t
     static constexpr auto source_id = "boundary-source";
     std::vector<std::uint8_t> rid = zlink::routing_id_t::from ("intake-boundary").to_bytes ();
     fw::runtime::in_memory_location_repository_t source_store;
-    fw::runtime::location_runtime_t source_catalog_runtime{source_store};
-    fw::runtime::live_location_reader_t source_reader{source_store, {}, &source_catalog_runtime};
+    fw::runtime::live_location_reader_t source_reader{source_store};
     fw::runtime::stateful::accepted_record_authority_resolver_t resolver;
     std::shared_ptr<fw::runtime::host::public_host_runtime_t> host;
     explicit native_intake_fixture_t (

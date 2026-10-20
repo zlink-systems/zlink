@@ -20,7 +20,6 @@
 #include <functional>
 #include <iostream>
 #include <memory>
-#include <map>
 #include <mutex>
 #include <random>
 #include <stop_token>
@@ -153,70 +152,6 @@ class location_runtime_t
     };
 
   public:
-    struct mesh_source_t
-    {
-        mesh_node_descriptor_t descriptor;
-        std::chrono::steady_clock::time_point admission_deadline;
-        bool available () const noexcept
-        {
-            return std::chrono::steady_clock::now () < admission_deadline;
-        }
-    };
-    using mesh_sources_t = std::vector<mesh_source_t>;
-
-    task_t<void> publish_mesh_sources (std::string mesh_name,
-                                       std::shared_ptr<const mesh_sources_t> sources)
-    {
-        return _lane.run_task (
-          [this, mesh_name = std::move (mesh_name), sources = std::move (sources)] {
-              _mesh_sources.insert_or_assign (mesh_name, sources);
-          });
-    }
-
-    task_t<std::optional<std::shared_ptr<const mesh_node_descriptor_t>>> cached_request_source (
-      std::string mesh_name, std::vector<std::uint8_t> rid, std::uint64_t generation) const
-    {
-        return _lane.run_task (
-          [this, mesh_name = std::move (mesh_name), rid = std::move (rid),
-           generation] () -> std::optional<std::shared_ptr<const mesh_node_descriptor_t>> {
-              const auto mesh = _mesh_sources.find (mesh_name);
-              if (mesh != _mesh_sources.end ())
-                  if (const auto *source = find_mesh_source (*mesh->second, rid, generation))
-                      return source_original (mesh->second, source);
-              return std::nullopt;
-          });
-    }
-
-    static const mesh_source_t *find_mesh_source (const mesh_sources_t &sources,
-                                                  const std::vector<std::uint8_t> &rid,
-                                                  std::uint64_t generation)
-    {
-        auto source = std::lower_bound (
-          sources.begin (), sources.end (), rid, [] (const auto &candidate, const auto &identity) {
-              const auto &value = candidate.descriptor.rid;
-              return std::lexicographical_compare (value.data (), value.data () + value.size (),
-                                                   identity.begin (), identity.end ());
-          });
-        for (; source != sources.end (); ++source) {
-            const auto &identity = source->descriptor.rid;
-            if (identity.size () != rid.size ()
-                || !std::equal (rid.begin (), rid.end (), identity.data ()))
-                break;
-            if (source->descriptor.lifecycle_generation == generation)
-                return &*source;
-        }
-        return nullptr;
-    }
-
-    static std::shared_ptr<const mesh_node_descriptor_t>
-    source_original (const std::shared_ptr<const mesh_sources_t> &sources,
-                     const mesh_source_t *source)
-    {
-        if (!source || !source->available ())
-            return {};
-        return {sources, &source->descriptor};
-    }
-
     struct observation_status_t
     {
         std::optional<std::string> last_error;
@@ -1106,7 +1041,6 @@ class location_runtime_t
       std::make_shared<const owner_lease_snapshot_t> ()};
     mutable std::optional<std::string> _last_error;
     mutable std::vector<std::shared_ptr<descriptor_publication_t>> _descriptor_publications;
-    std::map<std::string, std::shared_ptr<const mesh_sources_t>> _mesh_sources;
     offload_executor_t _lane_executor;
     mutable state_lane_t _lane{_lane_executor};
 };

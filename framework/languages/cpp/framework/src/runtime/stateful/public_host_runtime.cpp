@@ -1088,8 +1088,14 @@ public_host_runtime_t::accepted_record_authority (
     authority_t accepted;
     // Location §9.3: the first accepting owner resolves once; forwarded records keep it.
     if (!query.source_original && sources) {
-        auto descriptor = co_await sources->request_source (
-          local.mesh_name, query.source_node_routing_id, query.source_node_generation);
+        auto cached = sources->cached_request_source (local.mesh_name, query.source_node_routing_id,
+                                                      query.source_node_generation);
+        std::shared_ptr<const mesh_node_descriptor_t> descriptor;
+        if (cached)
+            descriptor = std::move (*cached);
+        else
+            descriptor = co_await sources->request_source (
+              local.mesh_name, query.source_node_routing_id, query.source_node_generation);
         if (descriptor)
             query.source_original = mesh::request_source_t{std::move (descriptor)};
     }

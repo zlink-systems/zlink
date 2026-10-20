@@ -1361,8 +1361,7 @@ void app_t::_apply_zlink_framework ()
         _state->services.add_factory<runtime::live_location_reader_t> (
           [location_options] (service_provider_t &provider) {
               return std::make_unique<runtime::live_location_reader_t> (
-                provider.get_required<location_repository_t> (), location_options,
-                &provider.get_required<runtime::location_runtime_t> ());
+                provider.get_required<location_repository_t> (), location_options);
           },
           service_lifetime_t::singleton);
     }
