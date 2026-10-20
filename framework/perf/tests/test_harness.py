@@ -70,11 +70,17 @@ class OwnedProcessCleanupTests(unittest.TestCase):
 
         crash = ("import os, resource, signal; resource.setrlimit(resource.RLIMIT_CORE, (0, 0)); "
                  "os.kill(os.getpid(), signal.SIGSEGV)")
-        normal = "import time; time.sleep(30)"
+        normal = "import pathlib, sys, time; pathlib.Path(sys.argv[1]).touch(); time.sleep(30)"
+        ignore_term = ("import pathlib, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                       "pathlib.Path(sys.argv[1]).touch(); time.sleep(30)")
+        terminated_143 = ("import pathlib, signal, sys, time; "
+                          "signal.signal(signal.SIGTERM, lambda *_: sys.exit(128 + signal.SIGTERM)); "
+                          "pathlib.Path(sys.argv[1]).touch(); time.sleep(30)")
         cases = (
             ("crash", crash, "invalid", "already-exited"),
-            ("ignore-term", None, "invalid", "wait-ready"),
-            ("term-exit", normal, "valid", "running"),
+            ("ignore-term", ignore_term, "invalid", "wait-ready"),
+            ("term-exit", normal, "valid", "wait-ready"),
+            ("term-exit-143", terminated_143, "valid", "wait-ready"),
             ("exit-zero", "pass", "valid", "already-exited"),
         )
         for name, script, expected_status, start_state in cases:
@@ -85,8 +91,6 @@ class OwnedProcessCleanupTests(unittest.TestCase):
                 owner = OwnedProcesses(cell, None)
                 if start_state == "wait-ready":
                     ready = cell / "tmp" / "ready"
-                    script = ("import pathlib, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-                              "pathlib.Path(sys.argv[1]).touch(); time.sleep(30)")
                     process = owner.start(name, [sys.executable, "-c", script, str(ready)])
                     deadline = time.monotonic() + 5
                     while not ready.exists() and time.monotonic() < deadline:
@@ -123,8 +127,9 @@ class OwnedProcessCleanupTests(unittest.TestCase):
                     self.assertEqual(entry["killed"], name == "ignore-term")
                     self.assertEqual(entry["terminationRequested"], name == "ignore-term")
                     self.assertEqual(entry["exitCode"], -signal.SIGSEGV if name == "crash" else -signal.SIGKILL)
-                elif name == "term-exit":
-                    self.assertEqual(entry["exitCode"], -signal.SIGTERM)
+                elif name in ("term-exit", "term-exit-143"):
+                    expected_exit = -signal.SIGTERM if name == "term-exit" else 128 + signal.SIGTERM
+                    self.assertEqual(entry["exitCode"], expected_exit)
                     self.assertTrue(entry["terminationRequested"])
                     self.assertFalse(entry["killed"])
                     self.assertFalse(issues)

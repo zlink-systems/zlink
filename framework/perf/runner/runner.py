@@ -205,7 +205,7 @@ class OwnedProcesses:
                 killed.add(process)
                 process.wait(timeout=5)
 
-        expected_terminate_exit = -signal.SIGTERM if os.name == "posix" else 1
+        expected_terminate_exits = (0, -signal.SIGTERM, 128 + signal.SIGTERM) if os.name == "posix" else (0, 1)
         process_results = []
         issues = []
         for name, process in self.processes:
@@ -216,7 +216,7 @@ class OwnedProcesses:
                                     "terminated": process.poll() is not None,
                                     "terminationRequested": was_terminated, "killed": was_killed})
             abnormal = (was_killed or
-                        (was_terminated and exit_code not in (0, expected_terminate_exit)) or
+                        (was_terminated and exit_code not in expected_terminate_exits) or
                         (not was_terminated and exit_code != 0))
             if abnormal:
                 if was_killed:
