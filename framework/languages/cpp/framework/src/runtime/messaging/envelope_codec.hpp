@@ -5,6 +5,7 @@
 #include <zlink/framework/contracts/codecs/serializer.hpp>
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
+#include <zlink/json_profile.hpp>
 
 #include <chrono>
 #include <map>
@@ -31,7 +32,7 @@ struct envelope_header_t
     message_kind_t kind = message_kind_t::request;
     std::string channel_name;
     std::string message_name;
-    std::string content_type = "application/json";
+    std::string content_type = zlink::detail::json_profile::content_type;
     std::string correlation_id;
     std::optional<std::string> deadline;
     std::optional<std::string> topic;
@@ -65,7 +66,7 @@ class message_parts_t
 class envelope_codec_t
 {
   public:
-    static constexpr const char *default_content_type = "application/json";
+    static constexpr const char *default_content_type = zlink::detail::json_profile::content_type;
 
     message_parts_t encode_raw_body_parts (const envelope_header_t &header,
                                            zlink::message_t body) const;
