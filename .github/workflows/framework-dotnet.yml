@@ -44,6 +44,12 @@ on:
 #       - "bindings/dotnet/src/Zlink/**"
 #       - "bindings/dotnet/native/**"
   workflow_dispatch:
+  # Mergify merge-queue batches and backports run CI on their own branches only;
+  # ordinary PRs and main pushes still start CI by hand.
+  push:
+    branches:
+      - "mergify/merge-queue/**"
+      - "mergify/bp/**"
 
 env:
   DOTNET_NOLOGO: true
@@ -253,7 +259,7 @@ jobs:
           if-no-files-found: warn
 
   framework-dotnet-gate:
-    name: release-gate
+    name: dotnet-release-gate
     runs-on: ubuntu-24.04
     needs:
       - framework-dotnet
