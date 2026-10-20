@@ -14898,6 +14898,12 @@ public sealed partial class EntrySpotActorDispatchTests
 
         private sealed class UnusedMeshNodeMonitor : IMeshNodeMonitor
         {
+            public async ValueTask<bool> WaitAsync(CancellationToken token)
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
+                return false;
+            }
+
             public MeshMonitorEvent? Recv(RecvFlags flags = RecvFlags.None) =>
                 throw new NotSupportedException();
 

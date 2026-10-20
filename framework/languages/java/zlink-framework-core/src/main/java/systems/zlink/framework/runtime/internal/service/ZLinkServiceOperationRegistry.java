@@ -104,6 +104,10 @@ public final class ZLinkServiceOperationRegistry implements AutoCloseable {
         growSlots();
     }
 
+    Object deadlineGateForTest() {
+        return gate;
+    }
+
     public <T> Operation<T> register(Duration timeout) {
         return register(timeout, null);
     }
