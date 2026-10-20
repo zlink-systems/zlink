@@ -2430,21 +2430,24 @@ int main (int argc, char **argv)
         lifecycle_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
         auto lifecycle_connector =
           zlink::stream_connector::connector_factory_t::create (lifecycle_options);
-        std::atomic_size_t lifecycle_state_count{0};
-        callback_latch_t initial_states_delivered;
+        struct lifecycle_states_t
+        {
+            std::atomic_size_t count{0};
+            callback_latch_t initial_states_delivered;
+        };
+        auto lifecycle_states = std::make_shared<lifecycle_states_t> ();
         auto lifecycle_state_subscription = lifecycle_connector.on_connection_state_changed (
-          [&lifecycle_state_count, &initial_states_delivered] (
-            const zlink::stream_connector::connection_state_changed_t &) {
-              if (lifecycle_state_count.fetch_add (1) + 1 == 2) {
-                  initial_states_delivered.signal ();
+          [lifecycle_states] (const zlink::stream_connector::connection_state_changed_t &) {
+              if (lifecycle_states->count.fetch_add (1) + 1 == 2) {
+                  lifecycle_states->initial_states_delivered.signal ();
               }
           });
         const auto first_connect = lifecycle_connector.connect ();
         const auto initial_states_completed =
-          initial_states_delivered.wait_for (std::chrono::seconds (1));
-        const auto first_state_count = lifecycle_state_count.load ();
+          lifecycle_states->initial_states_delivered.wait_for (std::chrono::seconds (1));
+        const auto first_state_count = lifecycle_states->count.load ();
         const auto repeated_connect = lifecycle_connector.connect ();
-        const auto repeated_state_count = lifecycle_state_count.load ();
+        const auto repeated_state_count = lifecycle_states->count.load ();
         callback_latch_t repeated_async_latch;
         std::atomic_bool repeated_async_succeeded{false};
         lifecycle_connector.connect ([&repeated_async_latch, &repeated_async_succeeded] (
@@ -2454,7 +2457,7 @@ int main (int argc, char **argv)
         });
         const auto repeated_async_completed =
           repeated_async_latch.wait_for (std::chrono::seconds (1));
-        const auto repeated_async_state_count = lifecycle_state_count.load ();
+        const auto repeated_async_state_count = lifecycle_states->count.load ();
         const auto closed = lifecycle_connector.close ();
         const auto connect_after_close = lifecycle_connector.connect ();
         if (connect_after_close) {
@@ -7259,7 +7262,10 @@ int main (int argc, char **argv)
         const auto actor_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
         while (!(actor_handle = actor_connector.actor ("actor"))
                && std::chrono::steady_clock::now () < actor_deadline) {
-            (void) actor_connector.dispatch ();
+            // Spec 32 §5.6: receive updates the Actor list before it queues the
+            // bound callbacks. Dispatching here could run the callback that is
+            // unsubscribed below; §7 stops it only for later dispatches.
+            std::this_thread::yield ();
         }
         if (!actor_handle || actor_connector.actors ().size () != 1 || !actor_handle->is_bound ()) {
             actor_packets_allowed.signal ();
