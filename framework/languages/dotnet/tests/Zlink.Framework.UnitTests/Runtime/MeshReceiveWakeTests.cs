@@ -211,6 +211,8 @@ public sealed class MeshReceiveWakeTests
         private readonly IPoller _inner = Systems.Zlink.Zlink.CreatePoller();
         private readonly IZlinkTimer _control = Systems.Zlink.Zlink.CreateTimer();
         private readonly ManualResetEventSlim _allowWait = new(false);
+        private readonly object _lifetime = new();
+        private bool _disposed;
         private int _waitCount;
 
         internal readonly TaskCompletionSource FirstWait = new(
@@ -228,10 +230,17 @@ public sealed class MeshReceiveWakeTests
 
         internal void AllowWait() => _allowWait.Set();
 
+        // Node disposal can wake the owner, which then disposes this poller before
+        // the test's fallback release runs. A disposed poller has no Wait to release.
         internal void ReleaseWait()
         {
-            AllowWait();
-            _control.Start(TimeSpan.FromTicks(1), 1);
+            lock (_lifetime)
+            {
+                if (_disposed)
+                    return;
+                AllowWait();
+                _control.Start(TimeSpan.FromTicks(1), 1);
+            }
         }
 
         public int Wait(Span<PollEvent> destination, TimeSpan timeout)
@@ -309,10 +318,16 @@ public sealed class MeshReceiveWakeTests
 
         public void Dispose()
         {
-            _inner.Remove(_control);
-            _control.Dispose();
-            _inner.Dispose();
-            _allowWait.Dispose();
+            lock (_lifetime)
+            {
+                if (_disposed)
+                    return;
+                _disposed = true;
+                _inner.Remove(_control);
+                _control.Dispose();
+                _inner.Dispose();
+                _allowWait.Dispose();
+            }
         }
     }
 }
