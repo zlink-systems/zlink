@@ -16,7 +16,6 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 
 final class ZLinkJavaPeerLifecycleNotificationTest {
@@ -62,37 +61,38 @@ final class ZLinkJavaPeerLifecycleNotificationTest {
                 var source = new ZLinkJavaRawMeshNode(context, "snapshot")) {
             start(source);
             var target = RoutingId.from("snapshot-target");
-            var initial = new CompletableFuture<Void>();
             var oldEnded = new CompletableFuture<Void>();
             var removedEnded = new CompletableFuture<Void>();
             var lateEnded = new CompletableFuture<Void>();
-            var old =
-                    source.onPeerStateChanged(
-                            target, () -> initial.complete(null), () -> oldEnded.complete(null));
+            var old = source.onPeerStateChanged(target, () -> {}, () -> oldEnded.complete(null));
             var removed =
                     source.onPeerStateChanged(target, () -> {}, () -> removedEnded.complete(null));
-            initial.get(3, TimeUnit.SECONDS);
             var laneField = ZLinkJavaRawMeshNode.class.getDeclaredField("descriptorStateLane");
             laneField.setAccessible(true);
             var lane = (ZLinkStateLane) laneField.get(source);
-            var executorField = ZLinkStateLane.class.getDeclaredField("executor");
-            executorField.setAccessible(true);
-            var originalExecutor = executorField.get(lane);
-            var turns = new LinkedBlockingQueue<Runnable>();
-            executorField.set(lane, (java.util.concurrent.Executor) turns::add);
+            var deliveryBoundary = new CompletableFuture<Void>();
+            var resumeDelivery = new CompletableFuture<Void>();
             AutoCloseable late = null;
             try {
+                // Hold a lane turn until the observer set changes. An existing drain may
+                // consume later work without submitting another task to its executor.
+                assertTrue(
+                        lane.tryPost(
+                                () -> {
+                                    deliveryBoundary.complete(null);
+                                    return resumeDelivery;
+                                }));
+                deliveryBoundary.get(3, TimeUnit.SECONDS);
                 var signal =
                         ZLinkJavaRawMeshNode.class.getDeclaredMethod(
                                 "signalLifecycleEnded", RoutingId.class);
                 signal.setAccessible(true);
                 @SuppressWarnings("unchecked")
                 var delivered = (CompletionStage<Void>) signal.invoke(source, target);
-                var deliveryBoundary = turns.poll(3, TimeUnit.SECONDS);
-                assertNotNull(deliveryBoundary);
                 removed.close();
                 late = source.onPeerStateChanged(target, () -> {}, () -> lateEnded.complete(null));
-                deliveryBoundary.run();
+                assertFalse(oldEnded.isDone(), "Terminal delivery must follow the publishing turn");
+                resumeDelivery.complete(null);
                 delivered.toCompletableFuture().get(3, TimeUnit.SECONDS);
                 assertTrue(oldEnded.isDone());
                 assertFalse(
@@ -100,11 +100,10 @@ final class ZLinkJavaPeerLifecycleNotificationTest {
                 assertFalse(
                         lateEnded.isDone(), "A later observer cannot consume an earlier removal");
             } finally {
+                resumeDelivery.complete(null);
                 old.close();
                 removed.close();
                 if (late != null) late.close();
-                executorField.set(lane, originalExecutor);
-                for (Runnable turn; (turn = turns.poll()) != null; ) turn.run();
             }
         }
     }
