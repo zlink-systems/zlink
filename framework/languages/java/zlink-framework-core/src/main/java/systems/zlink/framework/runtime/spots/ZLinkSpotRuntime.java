@@ -4469,17 +4469,21 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                                                 spotSurface,
                                                                 actor,
                                                                 payload,
-                                                                actorPacketContentType(
-                                                                        packetHeader, headerPart),
+                                                                contentTypeFor(
+                                                                        ZLinkStreamCodec.fromValue(
+                                                                                packetHeader
+                                                                                        .codec())),
                                                                 packetHeader.metadata())
                                                         : invokeActorSendHandler(
                                                                         handler,
                                                                         spotSurface,
                                                                         actor,
                                                                         payload,
-                                                                        actorPacketContentType(
-                                                                                packetHeader,
-                                                                                headerPart),
+                                                                        contentTypeFor(
+                                                                                ZLinkStreamCodec
+                                                                                        .fromValue(
+                                                                                                packetHeader
+                                                                                                        .codec())),
                                                                         packetHeader.metadata())
                                                                 .thenApply(
                                                                         ignored ->
@@ -4572,13 +4576,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                         }
                                     });
                         });
-    }
-
-    private String actorPacketContentType(
-            ActorPacketFrames.Header packetHeader, ZLinkBackendActorReceived headerPart) {
-        return packetHeader.streamHeader()
-                ? contentTypeFor(ZLinkStreamCodec.fromValue(packetHeader.codec()))
-                : headerPart.contentType();
     }
 
     private CompletionStage<Void> deliverRelocatedActorReply(

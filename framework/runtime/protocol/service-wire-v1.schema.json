@@ -1461,6 +1461,26 @@
     "applicationInterpretation": "framework-only-message-part-storage",
     "goldenFixture": "golden/framework-multipart-v1.json"
   },
+  "actorTypedMessageV1Profile": {
+    "name": "actor-typed-message-v1",
+    "consumers": [
+      "cpp",
+      "dotnet",
+      "jvm",
+      "node"
+    ],
+    "commands": [
+      24,
+      25
+    ],
+    "outerProfile": "framework-multipart-v1",
+    "messageParts": "part0-stream-header-send-or-request-with-packet-name-then-part1-codec-payload",
+    "replyCommand": 20,
+    "replyParts": "one-part-complete-stream-frame-response-or-error-with-empty-packet-name",
+    "errorPayload": "stream-connector-error-payload",
+    "headerDecodeFailure": "invalid-frame-without-reinterpretation",
+    "replyCorrelation": "command-25-correlation-not-stream-request-seq"
+  },
   "maintenanceAdmissionProfile": {
     "preflight": "validate-capability-eligibility-and-bounded-headroom-without-final-reservation",
     "reversibleSeal": "hold-new-submissions-without-admission-result",
