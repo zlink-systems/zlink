@@ -1788,6 +1788,20 @@ TEST (FrameworkRelocationSealContract, unavailable_source_read_keeps_unavailable
     host->close ();
 }
 
+TEST (FrameworkRelocationSealContract, relocation_callbacks_are_immutable_after_transport_start)
+{
+    auto host = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("startup-relocation-callbacks"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    EXPECT_NO_THROW (host->configure_relocation_gate ({}));
+    host->start ();
+    // Force the former write/read overlap boundary: transport is already running.
+    // Even clearing callbacks must be rejected before mutating the published set.
+    EXPECT_THROW (host->configure_relocation_gate ({}), std::logic_error);
+    host->close ();
+}
+
 TEST (FrameworkRelocationSealContract, aggregate_cut_uses_spot_gate_after_actor)
 {
     zlink::framework::test::manual_internal_scheduler_t worker;
@@ -2977,6 +2991,7 @@ TEST (FrameworkRelocationSealContract, native_public_requester_terminal_uses_reg
           co_return gate;
       });
     host->start ();
+    EXPECT_THROW (host->configure_relocation_gate ({}), std::logic_error);
     messaging::envelope_header_t header;
     header.kind = messaging::message_kind_t::request;
     header.channel_name = "mesh";

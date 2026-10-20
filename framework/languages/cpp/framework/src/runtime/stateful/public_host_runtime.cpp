@@ -7192,7 +7192,8 @@ task_t<bool> public_host_runtime_t::dispatch_native_spot (
     if (error != stateful::stateful_error_t::none)
         co_return false; // Existing ingress owns the exact rejection and reply mapping.
     header.target.owner_lease_generation = authority->target_owner_lease_generation;
-    // Host startup configures these callbacks before publishing application dispatch.
+    // Configured before transport start; the lifecycle lane rejects later writes
+    // while the host is running or closing.
     const auto &locate = _relocation_gate;
     const auto &prepare = _native_spot_target;
     std::shared_ptr<runtime::serial_execution_queue_t> gate;
@@ -8177,6 +8178,8 @@ void public_host_runtime_t::configure_relocation_gate (
 {
     _lifecycle_configuration_lane
       .run ([&] {
+          if (_started || _closing)
+              throw std::logic_error ("relocation gate must be configured before start");
           _relocation_gate = std::move (gate);
           _native_spot_target = std::move (target);
           _relocation_resume = std::move (resume);

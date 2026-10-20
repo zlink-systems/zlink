@@ -656,7 +656,10 @@ admit_wire_actor_join (const std::shared_ptr<spot_node_builder_state_t> &spot_st
     }
 }
 
-void mesh_node_runtime_t::start ()
+void mesh_node_runtime_t::start (
+  host::public_host_runtime_t::relocation_gate_t relocation_gate,
+  host::public_host_runtime_t::native_spot_target_t native_spot_target,
+  runtime::mesh::service_mailbox_t::application_dispatch_t relocation_resume)
 {
     if (_node) {
         return;
@@ -879,6 +882,8 @@ void mesh_node_runtime_t::start ()
     if (_relocation_authority && _relocation_store)
         node->configure_relocation (_relocation_authority, _relocation_store,
                                     _aggregate_relocation_authority, _relocation_limits);
+    node->configure_relocation_gate (std::move (relocation_gate), std::move (native_spot_target),
+                                     std::move (relocation_resume));
     node->start ();
     if (_instance_spot_materializer)
         (void) node->recover_instance_spot_activations ();
