@@ -113,6 +113,27 @@ test('correlation validation accepts the full ASCII contract without per-call Re
   assert.equal(counts.get('isValidChannelCorrelationId:regexp') ?? 0, 0);
 });
 
+test('reply decode borrows its body once for JSON, registered codecs and raw bytes', () => {
+  const codec = require('../../packages/framework/dist/runtime/channels/channel-envelope');
+  for (const contentType of ['application/json', 'application/x-test', 'application/octet-stream']) {
+    const body = Buffer.from(contentType === 'application/json' ? '{"body":"reply"}' : 'reply');
+    const header = Buffer.from(JSON.stringify({
+      formatMarker: 242, kind: 2, channelName: 'codec', messageName: 'Packet',
+      contentType, correlationId: 'request', deadline: null, topic: null, metadata: {}
+    }));
+    let reads = 0;
+    const serializer = { deserialize: payload => payload.getString() };
+    const result = codec.decodeChannelReply([
+      ZLinkBufferMessage.fromOwned(header),
+      { data() { reads++; return body; } }
+    ], { serializers: new Map([['application/x-test', serializer]]) });
+    assert.equal(reads, 1);
+    if (contentType === 'application/json') assert.deepEqual(result, { body: 'reply' });
+    else if (contentType === 'application/octet-stream') assert.equal(result, body);
+    else assert.equal(result, 'reply');
+  }
+});
+
 async function trackedCodecAllocations(filename, action) {
   const inspector = require('node:inspector');
   const session = new inspector.Session();

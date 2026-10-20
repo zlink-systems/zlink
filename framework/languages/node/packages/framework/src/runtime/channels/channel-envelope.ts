@@ -1,5 +1,4 @@
 import type { Message } from '../../contracts/Common/Message';
-import { ZLinkBufferMessage } from '../backend/runtime-message';
 import type { ZLinkBackendMessageLike as MessageLike } from '../backend/runtime-values';
 import { randomBytes } from 'node:crypto';
 import { isUtf8 } from 'node:buffer';
@@ -332,20 +331,18 @@ export function decodeChannelReply<TReply>(
   ) {
     throw unsupportedChannelContentType(header.contentType);
   }
-  if (parts.length < 2 || parts[1].data().length === 0) {
+  const body = parts.length < 2 ? undefined : parts[1].data();
+  if (body === undefined || body.length === 0) {
     return undefined as TReply;
   }
   if (header.contentType === BINARY_CONTENT_TYPE) {
-    return ZLinkBufferMessage.retainPayload(parts[1]) as TReply;
+    return body as TReply;
   }
   if (serializer !== undefined) {
-    return serializer.deserialize<TReply>(
-      encodedPayloadFromOwned(parts[1].data()),
-      Object as never
-    );
+    return serializer.deserialize<TReply>(encodedPayloadFromOwned(body), Object as never);
   }
   return parseWireJson(
-    parts[1].data().toString(),
+    body.toString(),
     readZLinkPacketJsonContract(header.messageName)?.reply
   ) as TReply;
 }
