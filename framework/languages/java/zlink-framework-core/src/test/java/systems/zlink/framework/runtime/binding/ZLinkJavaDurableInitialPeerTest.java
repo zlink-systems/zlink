@@ -76,17 +76,8 @@ final class ZLinkJavaDurableInitialPeerTest {
         }
     }
 
-    @SuppressWarnings("unchecked")
     static java.util.concurrent.CompletionStage<Void> runOwner(
             ZLinkJavaRawMeshNode source, Runnable action) {
-        try {
-            var owner =
-                    ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                            "runDescriptorTurn", Runnable.class);
-            owner.setAccessible(true);
-            return (java.util.concurrent.CompletionStage<Void>) owner.invoke(source, action);
-        } catch (ReflectiveOperationException failure) {
-            throw new java.util.concurrent.CompletionException(failure);
-        }
+        return source.runDescriptorTurn(action);
     }
 }

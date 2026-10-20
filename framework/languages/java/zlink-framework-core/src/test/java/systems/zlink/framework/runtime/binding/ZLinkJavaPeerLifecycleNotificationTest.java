@@ -9,13 +9,11 @@ import systems.zlink.contracts.core.Zlink;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.locations.ZLinkMeshNodeObjectRole;
-import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 
 import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 
 final class ZLinkJavaPeerLifecycleNotificationTest {
@@ -67,9 +65,7 @@ final class ZLinkJavaPeerLifecycleNotificationTest {
             var old = source.onPeerStateChanged(target, () -> {}, () -> oldEnded.complete(null));
             var removed =
                     source.onPeerStateChanged(target, () -> {}, () -> removedEnded.complete(null));
-            var laneField = ZLinkJavaRawMeshNode.class.getDeclaredField("descriptorStateLane");
-            laneField.setAccessible(true);
-            var lane = (ZLinkStateLane) laneField.get(source);
+            var lane = source.descriptorStateLaneForTest();
             var deliveryBoundary = new CompletableFuture<Void>();
             var resumeDelivery = new CompletableFuture<Void>();
             AutoCloseable late = null;
@@ -83,12 +79,7 @@ final class ZLinkJavaPeerLifecycleNotificationTest {
                                     return resumeDelivery;
                                 }));
                 deliveryBoundary.get(3, TimeUnit.SECONDS);
-                var signal =
-                        ZLinkJavaRawMeshNode.class.getDeclaredMethod(
-                                "signalLifecycleEnded", RoutingId.class);
-                signal.setAccessible(true);
-                @SuppressWarnings("unchecked")
-                var delivered = (CompletionStage<Void>) signal.invoke(source, target);
+                var delivered = source.signalLifecycleEnded(target);
                 removed.close();
                 late = source.onPeerStateChanged(target, () -> {}, () -> lateEnded.complete(null));
                 assertFalse(oldEnded.isDone(), "Terminal delivery must follow the publishing turn");
