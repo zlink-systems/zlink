@@ -2341,8 +2341,9 @@ test('target commit then Missing authority ends source through the expired-owner
   harness.location.liveLeases.set('target-owner', 14n);
   harness.releaseAccepted();
   try {
+    const handoff = await harness.relocate(undefined, false);
     await assert.rejects(
-      harness.relocate(),
+      handoff.sourceCleanup!(),
       (error: unknown) =>
         error instanceof Error &&
         error.name === 'ServiceRelocationAuthorityError' &&
@@ -3583,7 +3584,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       });
     }
   }
-  const relocate = async (advertisedReceiveChunkLimitBytes?: number) => {
+  const relocate = async (advertisedReceiveChunkLimitBytes?: number, settleSource = true) => {
     sourceSignal = new AbortController();
     if (options.canonicalRecovery === true && canonicalHandoffId === undefined) {
       const admission = sourceCanonicalRuntime.joinActorCanonical(
@@ -3655,6 +3656,7 @@ function createActorJoinHostHarness(options: ActorJoinHarnessOptions = {}) {
       advertisedReceiveChunkLimitBytes,
       signal: sourceSignal.signal
     });
+    if (settleSource) await result.sourceCleanup?.();
     // The public Join owner installs the target ref before the one-way source
     // cleanup terminal arrives. Source cleanup must retain its original ref.
     (sourceState as any).nativeActorRef = result.actorRef;

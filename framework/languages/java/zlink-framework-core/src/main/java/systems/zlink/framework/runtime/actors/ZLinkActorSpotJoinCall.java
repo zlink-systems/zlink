@@ -60,7 +60,6 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
     private final String explicitRouterChannelId;
     private final boolean entryTarget;
     private AtomicBoolean deferred = new AtomicBoolean();
-    private final AtomicBoolean acceptedCallbackDeliveredOnTarget = new AtomicBoolean();
     //  Set only on the bounded call executing a deferred Join: the handle to
     //  the mailbox-barrier turn that is active while the Join runs.
     private ZLinkSerialExecutionQueue.ActiveTurnSealHandle deferredActiveTurnSeal;
@@ -258,7 +257,6 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
             return manage(
                     joinRemoteRoutedSpot(requestPart, operationId, deadlineNanos)
                             .whenComplete((ignored, error) -> requestPart.close())
-                            .thenCompose(this::decodeCanonicalJoinResult)
                             .whenComplete((r, e) -> traceJoinReplyReceived(e)));
         }
         CompletionStage<SpotTransportAddress> target = resolveRemoteAddress(spotId);
@@ -333,6 +331,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                     return (ZLinkActorJoinCompletion)
                                             new ZLinkActorJoinCompletion.Failed(operationId, kind);
                                 }
+                                if (result instanceof ZLinkActorJoinOutcome.Relayed) return result;
                                 if (result instanceof ZLinkActorJoinOutcome.Accepted accepted) {
                                     return new ZLinkActorJoinCompletion.Accepted(
                                             operationId, accepted.actor(), accepted.reply());
@@ -343,12 +342,12 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                         operationId, rejected.reply());
                             })
                     .thenCompose(
-                            completion ->
-                                    completion instanceof ZLinkActorJoinCompletion.Accepted
-                                                    && bounded.acceptedCallbackDeliveredOnTarget
-                                                            .get()
-                                            ? CompletableFuture.completedFuture(null)
-                                            : notifyCompletion(completion));
+                            terminal ->
+                                    terminal instanceof ZLinkActorJoinOutcome.Relayed relayed
+                                            ? ZLinkSerialExecutionQueue.yieldCurrent(
+                                                    relayed.sourceCleanup())
+                                            : notifyCompletion(
+                                                    (ZLinkActorJoinCompletion) terminal));
         }
     }
 
@@ -576,7 +575,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         return joinedSpotId == null || joinedSpotId.toString().isBlank() ? spotId : joinedSpotId;
     }
 
-    private CompletionStage<ZLinkBackendActorJoinResult> joinRemoteRoutedSpot(
+    private CompletionStage<ZLinkActorJoinOutcome> joinRemoteRoutedSpot(
             Message requestPart, ZLinkActorJoinOperationId operationId, long deadlineNanos) {
         CompletionStage<SpotTransportAddress> resolved =
                 internalRouteChannel == null
@@ -687,7 +686,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 });
     }
 
-    private CompletionStage<ZLinkBackendActorJoinResult> requestCanonicalActorJoin(
+    private CompletionStage<ZLinkActorJoinOutcome> requestCanonicalActorJoin(
             ZLinkInternalMeshNode meshNode,
             SpotTransportAddress target,
             ZLinkBackendActorRef sourceActor,
@@ -716,7 +715,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                             : Message.from(reply.applicationReply().getFirst());
                             reply.applicationReply().forEach(Message::close);
                             if (!reply.accepted()) {
-                                return CompletableFuture.completedFuture(
+                                return decodeCanonicalJoinResult(
                                         rejectedRemoteJoin(sourceActor, applicationReply));
                             }
                             return submitCanonicalRelocation(
@@ -757,7 +756,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                 payload);
     }
 
-    private CompletionStage<ZLinkBackendActorJoinResult> submitCanonicalRelocation(
+    private CompletionStage<ZLinkActorJoinOutcome> submitCanonicalRelocation(
             SpotTransportAddress address,
             String transferId,
             String actorType,
@@ -801,18 +800,8 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         return services.actors()
                 .relocateActorJoin(goal, remaining)
                 .thenApply(
-                        submission -> {
-                            acceptedCallbackDeliveredOnTarget.set(true);
-                            ZLinkBackendActorRef targetActor = submission.targetActor();
-                            return new ZLinkBackendActorJoinResult(
-                                    ZLinkBackendRequestResult.OK,
-                                    0,
-                                    targetActor,
-                                    address.spotId(),
-                                    address.spotGeneration(),
-                                    0,
-                                    List.of(Message.from(rawReply)));
-                        });
+                        submission ->
+                                new ZLinkActorJoinOutcome.Relayed(submission.sourceCleanup()));
     }
 
     private CompletionStage<ZLinkActorJoinOutcome> decodeCanonicalJoinResult(
