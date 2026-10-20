@@ -4895,7 +4895,9 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
         }
         deliver_terminal (std::move (result));
     };
-    if (!admission->task ().await_ready ()) {
+    // Only the cold route carries a source deadline; Ready joins its pending admission.
+    if (owned_command->activation.target.authority_owner_generation == 0
+        && !admission->task ().await_ready ()) {
         detail::deadline_scheduler_t::instance ().schedule (
           messaging::request_deadline_from_unix_ms (
             owned_command->activation.target.deadline_unix_ms),

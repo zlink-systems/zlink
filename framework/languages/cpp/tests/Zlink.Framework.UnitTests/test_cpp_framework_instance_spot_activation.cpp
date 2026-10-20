@@ -327,6 +327,8 @@ static void verify_same_target_activation_order (
     pump ();
     EXPECT_EQ (1, store->reserves);
     EXPECT_TRUE (queued.empty ());
+    if (ready_request)
+        EXPECT_EQ (std::future_status::timeout, result.wait_for (100ms));
     store->release.complete (fw::result_t<void>::success ());
     if (read_after_delete) {
         while (!blob_store->read_entered.load ()
