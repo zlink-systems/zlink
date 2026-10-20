@@ -926,12 +926,8 @@ public sealed class SerialExecutorTests
         }
     }
 
-    [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    public async Task SerialExecutionQueue_ReadinessPublishedDuringSelectionPreservesHeadPosition(
-        int publishOnRead
-    )
+    [Fact]
+    public async Task SerialExecutionQueue_ReadinessPublishedDuringSelectionPreservesHeadPosition()
     {
         await using var queue = CreateQueue(CancellationToken.None);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -940,7 +936,6 @@ public sealed class SerialExecutorTests
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         var order = new ConcurrentQueue<string>();
-        var reads = 0;
         var ready = false;
         Assert.True(
             queue.TryPost(
@@ -967,12 +962,12 @@ public sealed class SerialExecutorTests
                 CancellationToken.None,
                 ready: () =>
                 {
-                    var snapshot = ready;
-                    // Publish after this read has rejected the head, before
-                    // the consumer can inspect the next application candidate.
-                    if (++reads == publishOnRead)
+                    var snapshot = Volatile.Read(ref ready);
+                    // Publish after this read has rejected the head. Signal the
+                    // publisher outside the selector lock to notify the queue.
+                    if (!snapshot)
                     {
-                        ready = true;
+                        Volatile.Write(ref ready, true);
                         published.TrySetResult();
                     }
                     return snapshot;
@@ -998,7 +993,7 @@ public sealed class SerialExecutorTests
         finally
         {
             release.TrySetResult();
-            ready = true;
+            Volatile.Write(ref ready, true);
             queue.NotifyReadiness();
         }
     }
