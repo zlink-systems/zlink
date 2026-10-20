@@ -692,7 +692,7 @@ internal static class ZLinkEnvelopeCodec
 
         try
         {
-            _ = DecodeHeader(message);
+            _ = DecodeHeader(bytes, validateFlow: true);
             return true;
         }
         catch (ZLinkEnvelopeProtocolException)
@@ -752,16 +752,14 @@ internal static class ZLinkEnvelopeCodec
         if (bodyType == typeof(ReadOnlyMemory<byte>))
             return bodyMessage.AsReadOnlyMemory();
 
-        if (bodyMessage.Size == 0)
+        var body = bodyMessage.AsReadOnlySpan();
+        if (body.IsEmpty)
             return bodyType.IsValueType ? Activator.CreateInstance(bodyType) : null;
 
         if (serializer is IZLinkMessageSpanDeserializer spanDeserializer)
-            return spanDeserializer.Deserialize(bodyMessage.AsReadOnlySpan(), bodyType);
+            return spanDeserializer.Deserialize(body, bodyType);
 
-        return serializer.Deserialize(
-            ZLinkEncodedPayload.FromOwned(bodyMessage.AsReadOnlyMemory()),
-            bodyType
-        );
+        return serializer.Deserialize(ZLinkEncodedPayload.FromOwned(body.ToArray()), bodyType);
     }
 
     internal static object? DecodeBody(
@@ -780,18 +778,18 @@ internal static class ZLinkEnvelopeCodec
         if (bodyType == typeof(ZLinkMessage))
             return ZLinkMessage.FromEncoded(
                 contentType,
-                parts.GetMemory(1),
+                body.ToArray(),
                 codecs ?? new ZLinkCodecRegistryBuilder()
             );
         if (bodyType == typeof(ReadOnlyMemory<byte>))
-            return parts.GetMemory(1);
+            return (ReadOnlyMemory<byte>)body.ToArray();
         if (body.IsEmpty)
             return bodyType.IsValueType ? Activator.CreateInstance(bodyType) : null;
 
         if (serializer is IZLinkMessageSpanDeserializer spanDeserializer)
             return spanDeserializer.Deserialize(body, bodyType);
 
-        return serializer.Deserialize(ZLinkEncodedPayload.FromOwned(parts.GetMemory(1)), bodyType);
+        return serializer.Deserialize(ZLinkEncodedPayload.FromOwned(body.ToArray()), bodyType);
     }
 
     internal static IZLinkMessageSerializer ResolveReceivedSerializer(
