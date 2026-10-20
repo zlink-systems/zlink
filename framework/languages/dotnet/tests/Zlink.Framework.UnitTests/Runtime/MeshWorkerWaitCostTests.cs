@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Diagnostics.Tracing;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 using Xunit.Abstractions;
 using Zlink.Framework.Runtime.Backend.DotNet;
@@ -129,6 +130,71 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
         );
         Assert.Equal(iterations * workerCount, waits.ReadinessWaits);
         Assert.Equal(0, waits.CancellationWrappers);
+    }
+
+    [Fact]
+    public async Task WorkerCompletionDoesNotCountInlineCallerWaitAsReadiness()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "worker-completion-wait");
+        await using var pump = new ZLinkMeshDispatchPump(node, new ZLinkMeshCompletionTable());
+        using var waits = new WorkerWaitListener();
+        waits.Start();
+        pump.EnsureStarted();
+        for (var worker = 0; worker < ZLinkMeshDispatchPump.ApplicationWorkerCount; worker++)
+            await waits.NextWaitAsync().WaitAsync(TestGuard);
+        waits.Stop();
+        var workers = (Task)
+            typeof(ZLinkMeshDispatchPump)
+                .GetField("_loop", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(pump)!;
+        var resumeCaller = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        Task? callerWait = null;
+        var continuation = workers.ContinueWith(
+            _ =>
+            {
+                // Force the next await to run inline under the completing worker,
+                // just as the repeated-stop test can resume after DisposeAsync.
+                Assert.Contains(
+                    new StackTrace().GetFrames(),
+                    frame =>
+                    {
+                        var type = frame.GetMethod()?.DeclaringType;
+                        return type?.DeclaringType == typeof(ZLinkMeshDispatchPump)
+                            && type.Name.StartsWith("<RunAsync>", StringComparison.Ordinal);
+                    }
+                );
+                waits.Start();
+                try
+                {
+                    callerWait = AwaitCallerAsync(resumeCaller.Task);
+                }
+                finally
+                {
+                    waits.Stop();
+                }
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default
+        );
+        try
+        {
+            await pump.DisposeAsync().AsTask().WaitAsync(TestGuard);
+            await continuation.WaitAsync(TestGuard);
+            Assert.Equal(ZLinkMeshDispatchPump.ApplicationWorkerCount, waits.ReadinessWaits);
+            Assert.Equal(0, waits.CancellationWrappers);
+        }
+        finally
+        {
+            resumeCaller.TrySetResult();
+            if (callerWait is not null)
+                await callerWait.WaitAsync(TestGuard);
+        }
+
+        static async Task AwaitCallerAsync(Task resume) => await resume;
     }
 
     [Fact]
@@ -262,13 +328,20 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
             if (data.EventName != "TaskWaitBegin")
                 return;
             var frames = new StackTrace().GetFrames();
+            // A worker completing can inline DisposeAsync and then the test's
+            // next await. Attribute the event to the innermost async method,
+            // not a completed RunAsync still present farther down the stack.
+            // SemaphoreSlim's cancellation wrapper belongs to its caller's wait.
+            var waiter = frames
+                .Select(frame => frame.GetMethod()?.DeclaringType)
+                .FirstOrDefault(type =>
+                    type is not null
+                    && typeof(IAsyncStateMachine).IsAssignableFrom(type)
+                    && type.DeclaringType != typeof(SemaphoreSlim)
+                );
             if (
-                !frames.Any(frame =>
-                {
-                    var type = frame.GetMethod()?.DeclaringType;
-                    return type?.DeclaringType == typeof(ZLinkMeshDispatchPump)
-                        && type.Name.StartsWith("<RunAsync>", StringComparison.Ordinal);
-                })
+                waiter?.DeclaringType != typeof(ZLinkMeshDispatchPump)
+                || !waiter.Name.StartsWith("<RunAsync>", StringComparison.Ordinal)
             )
                 return;
             if (
