@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <fstream>
 #include <functional>
 #include <future>
@@ -474,8 +475,7 @@ struct observation_t
     std::promise<void> cross_b_reserved;
     std::promise<void> cross_a_initial;
     std::promise<void> cross_b_initial;
-    std::promise<void> cross_a_completed;
-    std::promise<void> cross_b_completed;
+    std::condition_variable cross_progress;
     std::promise<void> cross_sources_released;
     std::shared_future<void> cross_sources_release = cross_sources_released.get_future ().share ();
     std::string handler_mode;
@@ -493,6 +493,7 @@ struct observation_t
     {
         std::lock_guard lock (mutex);
         order.push_back (std::move (event));
+        cross_progress.notify_all ();
     }
 };
 
@@ -607,8 +608,7 @@ class member_actor_t final : public zf::actor_t
         const auto id = _context.actor_id ().value ();
         if (current ().cross_join_active.load ()) {
             current ().order.push_back ("joinReply:" + std::string (id));
-            (id == "cross-a" ? current ().cross_a_completed : current ().cross_b_completed)
-              .set_value ();
+            current ().cross_progress.notify_all ();
         } else if (id == "cross-a" || id == "cross-b") {
             (id == "cross-a" ? current ().cross_a_initial : current ().cross_b_initial)
               .set_value ();
@@ -1368,13 +1368,8 @@ class scenario_client_t final : public zf::hosted_service_t
             const auto room_a = spot_id;
             const auto room_b = spot_id + "-b";
             (void) create_room (services, room_b);
-            // A member learns its Join result after the whole Join, including
-            // the leave from its previous room, completes.
-            const auto joins_completed = [&] {
-                std::lock_guard lock (current ().mutex);
-                return std::count (current ().notes.begin (), current ().notes.end (),
-                                   "actorJoin:accepted");
-            };
+            // Membership §4.2 sends source Leave one-way before Join completion.
+            // Observe both callbacks within the same deadline before checking order.
             auto initial_a = current ().cross_a_initial.get_future ();
             auto initial_b = current ().cross_b_initial.get_future ();
             join_member (services, room_a, "cross-a");
@@ -1383,8 +1378,6 @@ class scenario_client_t final : public zf::hosted_service_t
             join_member (services, room_b, "cross-b");
             if (initial_b.wait_for (3s) != std::future_status::ready)
                 throw std::runtime_error ("member cross-b did not join room B");
-            auto completed_a = current ().cross_a_completed.get_future ();
-            auto completed_b = current ().cross_b_completed.get_future ();
             auto source_a_reserved = current ().cross_a_reserved.get_future ();
             auto source_b_reserved = current ().cross_b_reserved.get_future ();
             current ().cross_join_active.store (true);
@@ -1408,15 +1401,28 @@ class scenario_client_t final : public zf::hosted_service_t
             (void) to_a.get ();
             if (!both_reserved)
                 throw std::runtime_error ("both source handlers must register their Join barrier");
-            const bool completed =
-              completed_a.wait_until (registration_deadline) == std::future_status::ready
-              && completed_b.wait_until (registration_deadline) == std::future_status::ready
-              && joins_completed () >= 4;
+            bool completed = false;
             bool replies_after_joined = true;
             int checked_replies = 0;
             int checked_leaves = 0;
             {
-                std::lock_guard lock (current ().mutex);
+                std::unique_lock lock (current ().mutex);
+                completed = current ().cross_progress.wait_until (lock, registration_deadline, [&] {
+                    return std::count (current ().notes.begin (), current ().notes.end (),
+                                       "actorJoin:accepted")
+                             >= 4
+                           && std::count (current ().order.begin (), current ().order.end (),
+                                          "joinReply:cross-a")
+                                == 1
+                           && std::count (current ().order.begin (), current ().order.end (),
+                                          "joinReply:cross-b")
+                                == 1
+                           && std::count_if (current ().order.begin (), current ().order.end (),
+                                             [] (const auto &event) {
+                                                 return event.starts_with ("leaveCompleted:");
+                                             })
+                                == 2;
+                });
                 std::set<std::string> joined;
                 for (const auto &event : current ().order) {
                     if (event.starts_with ("leaveCompleted:"))

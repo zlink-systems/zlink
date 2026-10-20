@@ -2854,9 +2854,8 @@ record_bound_session_route_on_lane (const std::shared_ptr<actor_gateway_state_t>
             route.binding_generation = found->second.source_binding_generation;
         if (!publish && found->second.bound_session_route && route.binding_generation != 0
             && found->second.bound_session_route->binding_generation > route.binding_generation) {
-            actor_bound_session_transition_t transition;
-            transition.current = *found->second.bound_session_route;
-            return result_t<actor_bound_session_transition_t>::success (std::move (transition));
+            return result_t<actor_bound_session_transition_t>::failure (
+              framework_error_kind_t::unavailable, "bound Session registration is stale");
         }
     }
     if (publish && (!route.session_rid || route.binding_generation == 0))

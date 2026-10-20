@@ -1553,6 +1553,57 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
     return 0;
 }
 
+int stale_binding_registration_and_relocation_prepare_preserve_current_tenure ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace protocol = zlink::framework::runtime::protocol;
+
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    const auto actor = test_actor_ref ("source-node", "player", "stale-binding", 7);
+    const auto session_owner = zlink::routing_id_t::from (std::string ("session-owner"));
+    const auto session_rid = zlink::routing_id_t::from (std::string ("session-rid"));
+    if (!gateway.record_bound_session_route (actor, session_owner, session_rid, 11, 17, 19, 24, 0,
+                                             1, false, "session-owner-id", 13))
+        return 1;
+
+    auto stale = *gateway.bound_session_route_async (actor).result ().value ();
+    stale.binding_generation = 23;
+    stale.authority_owner_generation = 29;
+    stale.owner_lease_generation = 37;
+    const auto registered = gateway.record_bound_session_route_transition (actor, stale);
+    const protocol::session_relocation_route_t route{
+      .sender_role = protocol::relocation_role_t::target,
+      .actor = {"stale-binding", 7},
+      .session_owner_node_routing_id = session_owner.to_bytes (),
+      .session_owner_node_generation = 11,
+      .session_owner_id = "session-owner-id",
+      .session_owner_lease_generation = 13,
+      .session_routing_id = session_rid.to_bytes (),
+      .binding_generation = 23,
+      .route = {protocol::session_relocation_route_action_t::commit, 17, 29,
+                zlink::routing_id_t::from (std::string ("target-node")).to_bytes (), 31, 0, 37}};
+    const bool prepared = gateway.prepare_session_relocation_target_route (route, 37);
+    const bool unchanged = state->sync ([&] {
+        const auto &record = state->actors_by_id.at ("stale-binding");
+        const auto &current = *record.bound_session_route;
+        return record.ref.node_rid ().value () == "source-node" && current.binding_generation == 24
+               && current.authority_owner_generation == 17 && current.owner_lease_generation == 19
+               && current.session_sequence == 1
+               && current.node_rid.to_bytes () == session_owner.to_bytes ()
+               && current.session_rid == session_rid;
+    });
+    if (registered || !registered.error ()
+        || registered.error_kind () != framework_error_kind_t::unavailable || prepared
+        || !unchanged) {
+        std::cerr << "stale binding: registered=" << static_cast<bool> (registered)
+                  << " prepared=" << prepared << " current_unchanged=" << unchanged << '\n';
+        return 2;
+    }
+    return 0;
+}
+
 int bound_session_ref_normalization_preserves_type_and_rejects_conflicts ()
 {
     using namespace zlink::framework;
@@ -5952,7 +6003,7 @@ int local_bound_session_refreshes_cached_route_before_fast_path ()
              : 2;
 }
 
-int late_lower_generation_bind_and_publish_are_ignored ()
+int late_lower_generation_bind_preserves_current_and_record_is_rejected ()
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -6007,9 +6058,8 @@ int late_lower_generation_bind_and_publish_are_ignored ()
                                                                 stream_codec_t::message_pack,
                                                                 zlink::message_t::from ("payload"));
     return stale_publish && !stale_publish.value ().changed && stale_publish.value ().current
-               && stale_publish.value ().current->binding_generation == 22 && stale_record
-               && !stale_record.value ().changed && stale_record.value ().current
-               && stale_record.value ().current->binding_generation == 22 && route
+               && stale_publish.value ().current->binding_generation == 22 && !stale_record
+               && stale_record.error_kind () == framework_error_kind_t::unavailable && route
                && route->session_rid == current_rid && route->binding_generation == 22 && delivered
                && current_stream_received.load () == 1 && stale_stream_received.load () == 0
              ? 0
@@ -7835,7 +7885,8 @@ int main (int argc, char **argv)
         command_38 != 0) {
         return 270 + command_38;
     }
-    if (const auto monotonic = late_lower_generation_bind_and_publish_are_ignored ();
+    if (const auto monotonic =
+          late_lower_generation_bind_preserves_current_and_record_is_rejected ();
         monotonic != 0) {
         return 265 + monotonic;
     }
@@ -7996,6 +8047,11 @@ int main (int argc, char **argv)
           relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_atomically ();
         relocation_prewarm != 0) {
         return 370 + relocation_prewarm;
+    }
+    if (const auto stale_binding =
+          stale_binding_registration_and_relocation_prepare_preserve_current_tenure ();
+        stale_binding != 0) {
+        return 380 + stale_binding;
     }
     if (const auto normalized =
           bound_session_ref_normalization_preserves_type_and_rejects_conflicts ();
