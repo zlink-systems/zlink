@@ -73,7 +73,7 @@ export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRe
     const actorTypeName = descriptor.actorType.name;
     let packets = this.packets.get(descriptor.kind);
     let actors = packets?.get(descriptor.packetName);
-    if (actors?.has(actorTypeName)) {
+    if (actors?.has(actorTypeName) === true) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.InvalidOperation,
         `Actor packet '${descriptor.packetName}' for '${descriptor.actorType.name}' is already registered.`
