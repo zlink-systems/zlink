@@ -240,14 +240,14 @@ requires.
 
 | Request compared with the current binding | Result |
 |---|---|
-| The binding identity (§4) is the same. | The current binding stays and the bind succeeds. |
-| The Session owner Node RID and lifecycle generation are the same, and the requested binding generation is smaller than the current one. | The current binding stays and the bind ends with the binding fence stale result of [§12](#12-failure-and-errors) (`Unavailable`). |
+| Both the binding identity (§4) and SessionRid are the same. | The current binding stays and the bind succeeds. |
+| The first row does not apply, the Session owner Node RID and lifecycle generation are the same, and the requested binding generation is less than or equal to the current one. | The current binding stays and the bind ends with the binding fence stale result of [§12](#12-failure-and-errors) (`Unavailable`). |
 | Any other case (no current binding, a larger generation in the same Session owner lifecycle, a different Session owner lifecycle) | The requested identity is registered as current ([§6](#6-rebind-and-replacing-the-previous-connection)). |
 
 The tail of a successful `boundSessionBind(38)` reply carries the binding
-generation and `AuthorityOwnerGeneration` of the binding that is current after
-this comparison. A bind succeeds only for the same identity or when the
-requested identity is registered, so both values equal the requested values.
+generation and `AuthorityOwnerGeneration` of the binding accepted by this
+comparison. A bind succeeds only in the first row or when the requested
+identity is registered, so both values equal the requested values.
 The Session owner commits the binding with these two values.
 
 Payload going from session to Actor is delivered to the Actor owner as an

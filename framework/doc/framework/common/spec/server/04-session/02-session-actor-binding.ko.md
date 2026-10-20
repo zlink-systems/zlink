@@ -203,12 +203,12 @@ caller 측 lookup·projection이 실어 온 lease 사본과 Actor owner의 curre
 
 | 요청과 current binding의 관계 | 결과 |
 |---|---|
-| Binding identity(§4)가 같다. | current를 유지하고 성공한다. |
-| Session owner Node RID·lifecycle generation이 같고, 요청 binding generation이 current보다 작다. | current를 유지하고 [§12](#12-실패와-오류)의 binding fence stale(`Unavailable`)로 끝난다. |
+| Binding identity(§4)와 SessionRid가 모두 같다. | current를 유지하고 성공한다. |
+| 첫 행에 해당하지 않고, Session owner Node RID·lifecycle generation이 같으며 요청 binding generation이 current 이하다. | current를 유지하고 [§12](#12-실패와-오류)의 binding fence stale(`Unavailable`)로 끝난다. |
 | 그 밖의 경우(current 없음, 같은 Session owner lifecycle의 더 큰 generation, 다른 Session owner lifecycle) | 요청 identity를 current로 등록한다([§6](#6-rebind와-이전-연결-교체)). |
 
-`boundSessionBind(38)` 성공 reply의 tail은 이 비교로 current가 된 binding의 binding generation과
-`AuthorityOwnerGeneration`이다. 성공은 같은 identity이거나 요청 identity를 등록한 경우뿐이므로 두 값은
+`boundSessionBind(38)` 성공 reply의 tail은 이 비교에서 수락한 binding의 binding generation과
+`AuthorityOwnerGeneration`이다. 성공은 첫 행이거나 요청 identity를 등록한 경우뿐이므로 두 값은
 요청 값과 같다. Session owner는 이 두 값으로 binding을 commit한다.
 
 Session에서 Actor로 들어가는 payload는 등록된 binding generation과
