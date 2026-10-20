@@ -3768,7 +3768,9 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
         stateful_object_runtime_t objects;
         objects.configure_relocation_state (
           [] (const object_ref_t &, const std::string &, std::stop_token) {
-              return std::vector<std::uint8_t>{0x41};
+              frozen_object_state_t captured;
+              captured.application_state = std::vector<std::uint8_t>{0x41};
+              return captured;
           },
           [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
               return true;
@@ -3914,7 +3916,9 @@ void test_relocation_metric_starts_only_after_unit_admission (test_context_t &te
         stateful_object_runtime_t objects;
         objects.configure_relocation_state (
           [] (const object_ref_t &, const std::string &, std::stop_token) {
-              return std::vector<std::uint8_t>{0x41};
+              frozen_object_state_t captured;
+              captured.application_state = std::vector<std::uint8_t>{0x41};
+              return captured;
           },
           [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
               return true;
