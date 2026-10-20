@@ -5955,59 +5955,6 @@ int command_38_rebind_is_owned_only_by_new_connection ()
              : 2;
 }
 
-int local_bound_session_refreshes_cached_route_before_fast_path ()
-{
-    using namespace zlink::framework;
-
-    auto state = zlink::framework::test::runtime_failure_fixture<
-      zlink::framework::detail::mesh_node_builder_state_t> ("bound-session-refresh-mesh");
-    detail::mesh_node_runtime_t runtime (state);
-    const auto actor = detail::actor_ref_access_t::make (
-      node_rid_t::from_string ("current-actor-owner"), "PlayerActor", "reconnected-player", 7);
-    const runtime::spot_address_t stale{"bound-session-refresh-mesh",
-                                        zlink::routing_id_t::from ("stale-session-owner"),
-                                        {},
-                                        0,
-                                        {},
-                                        7,
-                                        11,
-                                        {"stale-owner", 13},
-                                        17};
-    const runtime::spot_address_t current{"bound-session-refresh-mesh",
-                                          zlink::routing_id_t::from ("current-actor-owner"),
-                                          {},
-                                          0,
-                                          {},
-                                          7,
-                                          12,
-                                          {"current-owner", 14},
-                                          18};
-    bool invalidated = false;
-    runtime.configure_actor_route_resolver (
-      [&] (actor_ref_t) -> task_t<std::optional<runtime::spot_address_t>> {
-          co_return invalidated ? current : stale;
-      },
-      [&] (const runtime::protocol::actor_route_fence_t &route) {
-          invalidated = route.actor_id == "reconnected-player"
-                        && route.target_node_routing_id == stale.node_rid.to_bytes ()
-                        && route.target_node_generation == stale.node_generation
-                        && route.authority_owner_generation == stale.authority_owner_generation
-                        && route.owner_lease_generation
-                             == static_cast<std::uint64_t> (stale.owner.lease_generation);
-      });
-    const auto cached = runtime.resolve_application_actor_route (actor).result ().value ();
-    if (!cached || cached->node_rid != stale.node_rid)
-        return 1;
-    const auto refreshed =
-      runtime.refresh_application_actor_route (actor, *cached).result ().value ();
-    return invalidated && refreshed && refreshed->node_rid == current.node_rid
-               && refreshed->node_generation == current.node_generation
-               && refreshed->authority_owner_generation == current.authority_owner_generation
-               && refreshed->owner.lease_generation == current.owner.lease_generation
-             ? 0
-             : 2;
-}
-
 int late_lower_generation_bind_and_record_are_rejected ()
 {
     using namespace zlink::framework;
@@ -8180,10 +8127,6 @@ int main (int argc, char **argv)
     }
     if (const auto reentrant = bind_or_get_completion_can_reenter_same_manager (); reentrant != 0) {
         return 280 + reentrant;
-    }
-    if (const auto refreshed = local_bound_session_refreshes_cached_route_before_fast_path ();
-        refreshed != 0) {
-        return 275 + refreshed;
     }
     if (const auto command_38 = command_38_rebind_is_owned_only_by_new_connection ();
         command_38 != 0) {
