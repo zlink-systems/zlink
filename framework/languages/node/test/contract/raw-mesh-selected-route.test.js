@@ -15,6 +15,14 @@ const {
 const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const zlink = require('@zlink-systems/zlink');
 const {
+  createServiceWireCodec
+} = require('../../packages/framework/dist/runtime/foundation/service-wire-codec');
+const livenessCodec = createServiceWireCodec({
+  magic: wire.M6A_SERVICE_WIRE_MAGIC,
+  major: wire.M6A_SERVICE_WIRE_MAJOR,
+  commands: wire.M6aServiceWireCommand
+});
+const {
   ZLinkNodeRawBindingPort
 } = require('../../packages/framework/dist/runtime/backend/node/node-raw-binding-port');
 const { setImmediate: turn } = require('node:timers/promises');
@@ -43,7 +51,7 @@ function descriptor(nodeRoutingId) {
   };
 }
 
-function selectedRouteRuntime(routes, submit) {
+function selectedRouteRuntime(routes, submit, options = {}) {
   const sent = [];
   const requested = [];
   const disconnected = [];
@@ -85,6 +93,7 @@ function selectedRouteRuntime(routes, submit) {
     close() {}
   };
   const runtime = new RawServiceMeshRuntime({
+    ...options,
     descriptor: descriptor('local'),
     onPeerDisconnected: (rid) => admissionsEnded.push(rid),
     applicationJobQueue: new ApplicationJobQueue(resolveApplicationJobQueueConfiguration()),
@@ -93,6 +102,7 @@ function selectedRouteRuntime(routes, submit) {
   runtime.start();
   return {
     runtime,
+    router,
     sent,
     requested,
     disconnected,
@@ -108,7 +118,8 @@ function selectedRouteRuntime(routes, submit) {
 }
 
 for (const deferred of [false, true]) {
-  test(`HELLO retains its first bytes until ADMIT and then publishes UPDATE (deferred=${deferred})`, async () => {
+  test(`HELLO retains its first bytes until ADMIT and then publishes UPDATE (deferred=${deferred})`, async (t) => {
+    t.mock.method(performance, 'now', () => 0);
     let complete;
     const h = selectedRouteRuntime(
       new Map([['peer', 11n]]),
@@ -146,7 +157,7 @@ for (const deferred of [false, true]) {
         complete();
         await turn();
       }
-      h.runtime.tickLiveness(0);
+      h.runtime.tickLiveness(5000);
       await turn();
       const hellos = h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello);
       assert.equal(hellos.length, 2);
@@ -553,7 +564,7 @@ test('inbound selected route sends HELLO without an outbound intent', async () =
 // MeshNode §7.1 and hot-path §4.2: an inbound-only route must retain its
 // management wake until ADMIT, even after a crossed HELLO admits its descriptor.
 for (const crossedHello of [false, true]) {
-  test(`maintenance stays due until inbound selected route receives ADMIT (crossedHello=${crossedHello})`, async (t) => {
+  test(`maintenance follows the probe cadence until inbound selected route receives ADMIT (crossedHello=${crossedHello})`, async (t) => {
     const now = 1000;
     t.mock.method(performance, 'now', () => now);
     const h = selectedRouteRuntime(new Map([['peer', 11n]]));
@@ -566,10 +577,10 @@ for (const crossedHello of [false, true]) {
       await h.runtime.observeSelectedRoutes();
       if (crossedHello) await receive(wire.M6aServiceWireCommand.hello);
       h.runtime.liveness.tick(now);
-      assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), now);
+      assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), now + 5000);
       const hellos = () => h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length;
       const initial = hellos();
-      h.runtime.tickLiveness(now);
+      h.runtime.tickLiveness(now + 5000);
       assert.equal(hellos(), initial + 1);
       await receive(wire.M6aServiceWireCommand.admit);
       h.runtime.liveness.tick(now);
@@ -582,20 +593,23 @@ for (const crossedHello of [false, true]) {
   });
 }
 
-test('liveness maintenance resends HELLO until the selected route receives ADMIT', async () => {
+test('liveness maintenance resends HELLO until the selected route receives ADMIT', async (t) => {
+  t.mock.method(performance, 'now', () => 0);
   const h = selectedRouteRuntime(new Map([['peer', 11n]]));
   try {
     h.runtime.connectPeerByRoutingId(descriptor('peer').advertisedEndpoint, 'peer');
     await h.runtime.observeSelectedRoutes();
     const initial = h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length;
-    h.runtime.tickLiveness(0);
+    h.runtime.tickLiveness(5000);
     await turn();
     assert.equal(h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello).length, initial + 1);
   } finally { h.runtime.close(); }
 });
 
 for (const beforeSnapshot of [false, true]) {
-  test(`remote ADMIT stops HELLO and resets only on route replacement (beforeSnapshot=${beforeSnapshot})`, async () => {
+  test(`remote ADMIT stops HELLO and resets only on route replacement (beforeSnapshot=${beforeSnapshot})`, async (t) => {
+    let now = 0;
+    t.mock.method(performance, 'now', () => now);
     const routes = new Map([['peer', 11n]]);
     const h = selectedRouteRuntime(routes);
     const receive = (command, routeGeneration) => h.processReceived({
@@ -620,6 +634,7 @@ for (const beforeSnapshot of [false, true]) {
       assert.equal(hellos(), accepted + (beforeSnapshot ? 0 : 1));
       if (!beforeSnapshot) {
         await receive(wire.M6aServiceWireCommand.hello, 12n);
+        now += 5000;
         h.runtime.tickLiveness();
         await turn();
         assert.equal(hellos(), accepted + 2, 'receiving HELLO alone must not stop HELLO submission');
@@ -672,3 +687,231 @@ for (const terminal of ['deadline', 'cancel', 'close']) {
     } finally { h.runtime.close(); }
   });
 }
+
+// Hot-path §4.2: the registry owns the deadline; an admitted route has no
+// HELLO exchange to maintain between probe/timeout deadlines.
+test('idle liveness maintenance does not enumerate routes or control sends', async (t) => {
+  t.mock.method(performance, 'now', () => 0);
+  const h = selectedRouteRuntime(new Map([['peer', 11n]]));
+  try {
+    await h.runtime.observeSelectedRoutes();
+    await h.processReceived({
+      sourceRid: 'peer',
+      routeGeneration: 11n,
+      parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.admit, descriptor('peer'))]
+    });
+    assert.equal(h.runtime.tickLiveness(0).probes.length, 1);
+    assert.equal(h.runtime.liveness.nextDeadlineMs(), 5000);
+    assert.equal(h.runtime.controlSends.size, 0);
+    const routes = t.mock.method(h.runtime.selectedRoutes, 'keys');
+    const controls = t.mock.method(h.runtime.controlSends, 'values');
+    const peers = t.mock.method(h.runtime.liveness.peers, Symbol.iterator);
+    for (const now of [1, 1000, 4999]) {
+      assert.deepEqual(h.runtime.tickLiveness(now), { probes: [], timedOutNodes: [] });
+      assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), 5000);
+    }
+    assert.equal(routes.mock.callCount(), 0);
+    assert.equal(controls.mock.callCount(), 0);
+    assert.equal(peers.mock.callCount(), 0);
+  } finally {
+    h.runtime.close();
+  }
+});
+
+for (const requestCount of [1, 64]) {
+  test(`a receive rotation maintains liveness once for ${requestCount} requests and once when idle`, async (t) => {
+    t.mock.method(performance, 'now', () => 0);
+    const h = selectedRouteRuntime(new Map([['peer', 11n]]));
+    let received = 0;
+    let closedRecords = 0;
+    try {
+      await h.runtime.observeSelectedRoutes();
+      await h.processReceived({
+        sourceRid: 'peer',
+        routeGeneration: 11n,
+        parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.admit, descriptor('peer'))]
+      });
+      h.runtime.tickLiveness(0);
+      t.mock.method(performance, 'now', () => 1000);
+      h.runtime.serviceIngress = () => {
+        received++;
+        return 'infrastructure';
+      };
+      t.mock.method(h.router, 'receive', () =>
+        received < requestCount
+          ? {
+              sourceRid: 'peer',
+              sourceRoute: Buffer.from('peer'),
+              routeGeneration: 11n,
+              requestSeq: BigInt(received + 1),
+              parts: [wire.encodeNodeRequestHeader(BigInt(received + 1)), Buffer.from([0])],
+              close() {
+                closedRecords++;
+              }
+            }
+          : undefined
+      );
+      const ticks = t.mock.method(h.runtime, 'tickLiveness');
+      const routes = t.mock.method(h.runtime.selectedRoutes, 'keys');
+      assert.equal(await h.runtime.pumpBatch(true), requestCount === 64);
+      assert.equal(received, requestCount);
+      assert.equal(closedRecords, requestCount);
+      assert.equal(ticks.mock.callCount(), 1);
+      assert.equal(await h.runtime.pumpBatch(true), false);
+      assert.equal(ticks.mock.callCount(), 2);
+      assert.equal(await h.runtime.pumpBatch(false), false);
+      assert.equal(ticks.mock.callCount(), 3);
+      assert.equal(routes.mock.callCount(), 0);
+      h.runtime.close();
+      await h.runtime.pumpBatch(false);
+      assert.equal(ticks.mock.callCount(), 3);
+    } finally {
+      h.runtime.close();
+    }
+  });
+}
+
+test('maintenance preserves probe boundaries, ACK expiry and replacement admission', async (t) => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
+  const routes = new Map([['peer', 11n]]);
+  const h = selectedRouteRuntime(routes);
+  const admit = (generation) =>
+    h.processReceived({
+      sourceRid: 'peer',
+      routeGeneration: generation,
+      parts: [wire.encodeRouteMeshAdmission(wire.M6aServiceWireCommand.admit, descriptor('peer'))]
+    });
+  try {
+    await h.runtime.observeSelectedRoutes();
+    await admit(11n);
+    const probesSent = () =>
+      h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.livenessProbe).length;
+    const first = h.runtime.tickLiveness(0).probes[0];
+    assert.equal(probesSent(), 1);
+    assert.equal(h.runtime.tickLiveness(4999).probes.length, 0);
+    assert.equal(probesSent(), 1);
+    assert.equal(h.runtime.tickLiveness(5000).probes[0].probeId, first.probeId);
+    assert.equal(probesSent(), 2);
+    now = 6000;
+    await h.processReceived({
+      sourceRid: 'peer',
+      routeGeneration: 11n,
+      parts: [
+        livenessCodec.encodeLivenessRecord({
+          command: wire.M6aServiceWireCommand.livenessAck,
+          probeId: first.probeId
+        })
+      ]
+    });
+    assert.equal(h.runtime.tickLiveness(9999).probes.length, 0);
+    assert.notEqual(h.runtime.tickLiveness(10000).probes[0].probeId, first.probeId);
+    assert.equal(probesSent(), 3);
+    assert.deepEqual(h.runtime.tickLiveness(20999).timedOutNodes, []);
+    assert.deepEqual(h.runtime.tickLiveness(21000).timedOutNodes, ['peer']);
+    h.runtime.tickLiveness(21001);
+    assert.deepEqual(h.disconnected, ['peer']);
+    assert.deepEqual(h.admissionsEnded, ['peer']);
+    now = 22000;
+    routes.set('peer', 12n);
+    await h.runtime.observeSelectedRoutes();
+    await admit(12n);
+    assert.equal(h.runtime.tickLiveness(now).probes[0].connectionId, 12n);
+    assert.deepEqual(h.runtime.tickLiveness(36999).timedOutNodes, []);
+    assert.deepEqual(h.runtime.tickLiveness(37000).timedOutNodes, ['peer']);
+    assert.deepEqual(h.disconnected, ['peer', 'peer']);
+  } finally {
+    h.runtime.close();
+  }
+});
+
+for (const initiallySealed of [false, true]) {
+  test(`HELLO maintenance resumes after admission reopens (initiallySealed=${initiallySealed})`, async (t) => {
+    t.mock.method(performance, 'now', () => 0);
+    let sealed = initiallySealed;
+    const h = selectedRouteRuntime(new Map([['peer', 11n]]), undefined, {
+      peerAdmissionSealed: () => sealed
+    });
+    const hellos = () =>
+      h.sent.filter(([, command]) => command === wire.M6aServiceWireCommand.hello);
+    try {
+      await h.runtime.observeSelectedRoutes();
+      const before = hellos().length;
+      sealed = true;
+      await h.runtime.updateLocalDescriptor({ channelName: 'alpha', channelWeight: 42 });
+      h.runtime.tickLiveness(0);
+      assert.equal(hellos().length, before);
+      assert.equal(h.runtime.nextMaintenanceDeadlineMs(0), Infinity);
+      sealed = false;
+      assert.equal(h.runtime.nextMaintenanceDeadlineMs(1000), 6000);
+      h.runtime.tickLiveness(5999);
+      assert.equal(hellos().length, before);
+      h.runtime.tickLiveness(6000);
+      assert.equal(hellos().length, before + 1);
+      if (before !== 0) assert.deepEqual(hellos()[1][2], hellos()[0][2]);
+    } finally {
+      h.runtime.close();
+    }
+  });
+}
+
+test('a HELLO submission completed while admission is sealed remains resumable', async (t) => {
+  t.mock.method(performance, 'now', () => 0);
+  let sealed = false;
+  let complete;
+  const h = selectedRouteRuntime(
+    new Map([['peer', 11n]]),
+    () => ({
+      result: SubmitResult.Backpressured,
+      admitted: new Promise((resolve) => {
+        complete = resolve;
+      })
+    }),
+    { peerAdmissionSealed: () => sealed }
+  );
+  try {
+    await h.runtime.observeSelectedRoutes();
+    sealed = true;
+    const pending = [...h.runtime.controlSends.values()][0].task;
+    h.runtime.tickLiveness(0);
+    assert.equal([...h.runtime.controlSends.values()][0]?.task, pending);
+    assert.equal(h.sent.length, 1);
+    complete();
+    await Promise.resolve();
+    await Promise.resolve();
+    sealed = false;
+    assert.equal(h.runtime.nextMaintenanceDeadlineMs(1000), 6000);
+    h.runtime.tickLiveness(6000);
+    assert.equal(h.sent.length, 2);
+  } finally {
+    h.runtime.close();
+    complete?.();
+    await Promise.resolve();
+  }
+});
+
+test('a pending non-HELLO control with a current route waits for completion readiness', async (t) => {
+  const now = 1000;
+  t.mock.method(performance, 'now', () => now);
+  const h = selectedRouteRuntime(new Map());
+  let complete;
+  let attempts = 0;
+  try {
+    h.runtime.startControlSend('peer', wire.M6aServiceWireCommand.livenessProbe, () => {
+      attempts++;
+      return new Promise(resolve => { complete = resolve; });
+    }, () => true);
+    const pending = [...h.runtime.controlSends.values()][0].task;
+    assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), Infinity,
+      'a current route is not readiness for an outstanding Core submission');
+    h.runtime.tickLiveness(now);
+    assert.equal(attempts, 1);
+    complete(true);
+    await pending;
+    assert.equal(h.runtime.controlSends.size, 0);
+    assert.equal(h.runtime.nextMaintenanceDeadlineMs(now), Infinity);
+  } finally {
+    complete?.(true);
+    h.runtime.close();
+  }
+});
