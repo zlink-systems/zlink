@@ -69,9 +69,9 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         Assert.Equal(TimeSpan.FromMilliseconds(9), expire.Invoke(node, null));
         Assert.Equal(1, count.GetValue(operations));
         clock.Timestamp = 20 * TimeSpan.TicksPerMillisecond;
-        Assert.Equal(TimeSpan.FromMilliseconds(100), expire.Invoke(node, null));
+        Assert.Equal(Timeout.InfiniteTimeSpan, expire.Invoke(node, null));
         Assert.Equal(0, count.GetValue(operations));
-        Assert.Equal(TimeSpan.FromMilliseconds(100), expire.Invoke(node, null));
+        Assert.Equal(Timeout.InfiniteTimeSpan, expire.Invoke(node, null));
         Assert.Equal(0, count.GetValue(operations));
     }
 
@@ -88,13 +88,13 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         var deadline = OperationDeadlineAccess.For(node);
 
         // The reply takes the operation first: its deadline leaves the index, the
-        // expiry turn finds nothing and the bound falls back to the poll interval.
+        // expiry turn finds nothing. I0 waits for readiness without a periodic deadline.
         var replied = deadline.Begin(TimeSpan.FromMilliseconds(10));
         clock.Timestamp = 5 * TimeSpan.TicksPerMillisecond;
         Assert.Equal(TimeSpan.FromMilliseconds(5), deadline.Expire());
         Assert.True(deadline.TakeForReply(replied));
         clock.Timestamp = 10 * TimeSpan.TicksPerMillisecond;
-        Assert.Equal(TimeSpan.FromMilliseconds(100), deadline.Expire());
+        Assert.Equal(Timeout.InfiniteTimeSpan, deadline.Expire());
         Assert.False(deadline.Token(replied).IsCancellationRequested);
         Assert.Equal(0, deadline.Count);
 
@@ -103,7 +103,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         var timedOut = deadline.Begin(TimeSpan.FromMilliseconds(10));
         Assert.Equal(TimeSpan.FromMilliseconds(10), deadline.Expire());
         clock.Timestamp = 20 * TimeSpan.TicksPerMillisecond;
-        Assert.Equal(TimeSpan.FromMilliseconds(100), deadline.Expire());
+        Assert.Equal(Timeout.InfiniteTimeSpan, deadline.Expire());
         Assert.True(deadline.Token(timedOut).IsCancellationRequested);
         Assert.False(deadline.TakeForReply(timedOut));
         Assert.Equal(0, deadline.Count);
@@ -166,7 +166,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         );
         Assert.Equal(0, deadline.Count);
         clock.Timestamp = 600 * TimeSpan.TicksPerMillisecond;
-        Assert.Equal(TimeSpan.FromMilliseconds(100), deadline.Expire());
+        Assert.Equal(Timeout.InfiniteTimeSpan, deadline.Expire());
     }
 
     [Fact]
@@ -196,7 +196,7 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
         // that remained before that completion was delivered.
         Assert.Equal(TimeSpan.Zero, deadline.Expire());
         Assert.Equal(1, deadline.Count);
-        Assert.Equal(TimeSpan.FromMilliseconds(100), deadline.Expire());
+        Assert.Equal(Timeout.InfiniteTimeSpan, deadline.Expire());
         Assert.Equal(0, deadline.Count);
     }
 
@@ -1098,6 +1098,9 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
             var pending = Assert.Single(node.Peers());
             await transportMonitor!.ReadyCaptured;
             transportMonitor.ReleaseReady();
+            // Releasing the fixture's retained event must notify the owner;
+            // the real monitor source was drained when the event was captured.
+            node.SignalReceiveOwner();
             await transportMonitor.ReadyApplied;
             var afterReady = Assert.Single(node.Peers());
             Assert.Equal(pending.LifecycleGeneration, afterReady.LifecycleGeneration);
@@ -1476,6 +1479,11 @@ public sealed class MeshNodeShutdownSealTests(Xunit.Abstractions.ITestOutputHelp
                 {
                     _ready.Enqueue(value);
                     _captured.TrySetResult();
+                    if (Volatile.Read(ref _release) != 0)
+                    {
+                        _delivered = true;
+                        return _ready.Dequeue();
+                    }
                     continue;
                 }
                 return value;

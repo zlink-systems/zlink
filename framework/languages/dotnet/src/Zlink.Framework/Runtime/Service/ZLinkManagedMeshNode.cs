@@ -35,7 +35,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private static readonly TimeSpan DefaultRemoteUserSpotTerminalRetention = TimeSpan.FromMinutes(
         5
     );
-    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(100);
     private const PollEventFlags InfrastructurePollEvents =
         PollEventFlags.PollErr
         | PollEventFlags.PollOut
@@ -43,7 +42,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         | PollEventFlags.PollRoute;
     private const nuint RawSocketPollerSlot = 1;
     private const nuint ReceiveWakePollerSlot = 2;
-    private const int ReceivePollSourceCount = 2;
+    private const nuint NativeMonitorPollerSlot = 3;
+    private const int ReceivePollSourceCount = 3;
     private const ulong WakeFireCount = 1;
 
     // TimeSpan's smallest positive unit. This one-shot notifies the owner;
@@ -448,6 +448,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 );
                 _receiveWakeTimer = Systems.Zlink.Zlink.CreateTimer();
                 poller.Add(_receiveWakeTimer, ReceiveWakePollerSlot);
+                poller.Add(nativeMonitor, PollEventFlags.PollIn, NativeMonitorPollerSlot);
                 _socket = socket;
                 _receiveFlowRegistration = receiveFlowRegistration;
                 receiveFlowRegistration = null;
@@ -3745,8 +3746,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             SignalReceiveOwner();
             return _receiveLoop;
         });
-        // The receive loop returns within one PollInterval after the stop and the
-        // wake above. The router, poller and monitor close only after it has
+        // The explicit wake above releases the receive wait. The router,
+        // poller and monitor close only after the receive loop has
         // returned: a close while the loop is inside a Core call is refused with
         // ZLINK_CLOSE_BUSY. The shutdown token bounds the inbound operations
         // below, not this wait.
@@ -5911,8 +5912,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         return;
                     if (receiveReady)
                         DrainRawSocket(cancellationToken);
-                    ProcessInfrastructure(now);
+                    var livenessDeadline = ProcessInfrastructure(now);
                     waitBound = ExpireOperations();
+                    if (livenessDeadline != TimeSpan.MaxValue)
+                    {
+                        var remaining = livenessDeadline - Stopwatch.GetElapsedTime(0);
+                        if (remaining < TimeSpan.Zero)
+                            remaining = TimeSpan.Zero;
+                        if (waitBound == Timeout.InfiniteTimeSpan || remaining < waitBound)
+                            waitBound = remaining;
+                    }
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
                 {
@@ -5939,7 +5948,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private void SignalReceiveOwner()
+    internal void SignalReceiveOwner()
     {
         lock (_socketGate)
             SignalReceiveOwnerUnderLock();
@@ -9913,7 +9922,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             : MeshPeerState.Admitted;
         peer.Admitted = true;
         // Admission starts liveness; descriptor updates retain that epoch.
-        peer.Liveness ??= new ZLinkServiceLiveness(Stopwatch.GetTimestamp());
+        if (peer.Liveness is null)
+        {
+            peer.Liveness = new ZLinkServiceLiveness(Stopwatch.GetTimestamp());
+            SignalReceiveOwner();
+        }
         peer.LastChangedMs = checked((ulong)Environment.TickCount64);
         SubmitAdmissionResponseUnderLock(peer, admissionResponse);
         TryTransitionStateUnderLock(MeshNodeState.Ready);
@@ -10011,7 +10024,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private void ProcessInfrastructure(long now)
+    private TimeSpan ProcessInfrastructure(long now)
     {
         (ControlSendKey Key, byte[] Head)[] CollectDueHelloRetries()
         {
@@ -10046,7 +10059,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         // Spec 08 §4.2: the management work of a receive rotation reads the
         // node state in one node turn — the intents that still need a Hello and
         // the liveness activity of every admitted peer.
-        var (intents, activities) = AwaitStateLane(
+        var (intents, activities, nextLiveness) = AwaitStateLane(
             _lane.RunAsync(
                 static state => state.Node.CollectInfrastructureUnderLock(state.Now),
                 (Node: this, Now: now)
@@ -10109,11 +10122,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 );
             }
         }
+        return nextLiveness == Timeout.InfiniteTimeSpan
+            ? TimeSpan.MaxValue
+            : Stopwatch.GetElapsedTime(0, now) + nextLiveness;
     }
 
     private (
         List<ZLinkMeshConnectionIntent>? Intents,
-        List<(RoutingId? Closed, RoutingId Target, ulong Generation, ulong ProbeId)>? Activities
+        List<(RoutingId? Closed, RoutingId Target, ulong Generation, ulong ProbeId)>? Activities,
+        TimeSpan NextLiveness
     ) CollectInfrastructureUnderLock(long now)
     {
         List<ZLinkMeshConnectionIntent>? intents = null;
@@ -10130,16 +10147,23 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         List<(RoutingId? Closed, RoutingId Target, ulong Generation, ulong ProbeId)>? activities =
             null;
         List<Peer>? expired = null;
+        var nextLiveness = Timeout.InfiniteTimeSpan;
         foreach (var peer in _peersByRid.Values)
         {
             if (!peer.Admitted || peer.Liveness is not { } liveness)
                 continue;
             if (liveness.IsExpired(now))
                 (expired ??= []).Add(peer);
-            else if (liveness.TryGetProbe(now, out var probeId))
-                (activities ??= []).Add(
-                    (null, peer.PhysicalRoutingId, peer.RouteGeneration, probeId)
-                );
+            else
+            {
+                if (liveness.TryGetProbe(now, out var probeId))
+                    (activities ??= []).Add(
+                        (null, peer.PhysicalRoutingId, peer.RouteGeneration, probeId)
+                    );
+                var remaining = liveness.TimeUntilNextActivity(now);
+                if (nextLiveness == Timeout.InfiniteTimeSpan || remaining < nextLiveness)
+                    nextLiveness = remaining;
+            }
         }
         foreach (var peer in expired ?? [])
         {
@@ -10155,7 +10179,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             DisconnectTransport(peer, physicalRid);
             (activities ??= []).Add((closed, default, 0, 0));
         }
-        return (intents, activities);
+        return (intents, activities, nextLiveness);
     }
 
     private bool HasIntentPeerUnderLock(ZLinkMeshConnectionIntent intent)
@@ -12127,7 +12151,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private TimeSpan ReadOperationWaitDeadline()
     {
-        var pollDeadline = _deadlineClock.Elapsed + PollInterval;
+        var pollDeadline = TimeSpan.MaxValue;
         var activity = Volatile.Read(ref _admissionActivityTicks);
         if (activity != NoAdmissionActivityTicks)
         {
@@ -12225,6 +12249,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     Array.Empty<Message>()
                 );
         } while (!DeadlineBudgetSpent());
+        if (waitUntil == TimeSpan.MaxValue)
+            return Timeout.InfiniteTimeSpan;
         var remaining = waitUntil - _deadlineClock.Elapsed;
         return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
     }
@@ -13025,7 +13051,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         command == ServiceWireConstants.Command.Hello
                         && _admissionActivityTicks == NoAdmissionActivityTicks
                     )
+                    {
                         Volatile.Write(ref _admissionActivityTicks, _deadlineClock.Elapsed.Ticks);
+                        SignalReceiveOwner();
+                    }
                     return (created, true);
                 });
             (state, start) =
