@@ -2,27 +2,69 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { createHook } = require('node:async_hooks');
+const { assertClaimState } = require('./fixtures/claim-state-snapshot');
 const { ZLinkMeshDispatchPump } = require('../../packages/framework/dist/runtime/backend/mesh-dispatch-pump');
 const { ReadyDomain } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 
+// Exercise the registered readiness callback, including worker scheduling and shutdown.
+function harness(domain, options, owner, claims) {
+  let ready;
+  let next = 0;
+  const receiveBatches = [];
+  const pump = new ZLinkMeshDispatchPump({
+    setReadyHandler(handler) { ready = handler; },
+    createReadyBatch() {
+      let claim;
+      return { reset() {}, close() {}, takeClaim() { return claim; },
+        setClaim(value) { claim = value; } };
+    },
+    createReceiveBatch() {
+      const batch = { reset() {}, close() { this.closed = true; } };
+      receiveBatches.push(batch);
+      return batch;
+    },
+    drainReady(requested, batch) {
+      if (requested !== domain || next === claims.length) return { ok: false, records: [] };
+      batch.setClaim(claims[next++]);
+      return { ok: true, hasResidue: false, records: [owner] };
+    }
+  }, { monotonicNowMs: () => 0, reportError(error) { throw error; }, ...options });
+  pump.start();
+  return { pump, receiveBatches, ready() { ready(domain); } };
+}
+
 for (const domain of [ReadyDomain.Application, ReadyDomain.Infrastructure]) {
-  test(`single synchronous claim returns no Promise: domain ${domain}`, () => {
+  test(`single synchronous claim creates no Promise: domain ${domain}`, async () => {
     const events = [];
-    const pump = new ZLinkMeshDispatchPump({}, {
-      applicationJobQueue: {},
-      dispatch() { events.push('dispatch'); }
-    });
+    let promises = 0;
+    const hook = createHook({ init(_id, type) {
+      if (type === 'PROMISE' && new Error().stack.includes('at ZLinkMeshDispatchPump.dispatchClaim ')) promises += 1;
+    } });
     const record = {
       parts: [{ close() { events.push('part'); } }],
       onTerminalCompletion() { events.push('terminal'); },
       releaseRetainedIngress() { events.push('retained'); }
     };
-    const pending = pump.dispatchClaim(domain, { terminalCompletion: true }, {
-      recvBatch() { return { ok: true, records: [record] }; },
+    const h = harness(domain, {
+      applicationJobQueue: {},
+      dispatch() { events.push('dispatch'); }
+    }, { terminalCompletion: true }, [{
+      recvBatch() {
+        queueMicrotask(() => {
+          assert.deepEqual(events, ['dispatch', 'terminal', 'part', 'retained', 'claim']);
+        });
+        return { ok: true, records: [record] };
+      },
       release() { events.push('claim'); }
-    }, pump.createClaimDrain({ reset() {} }));
-    assert.equal(pending, undefined);
-    assert.deepEqual(events, ['dispatch', 'terminal', 'part', 'retained', 'claim']);
+    }]);
+    hook.enable();
+    try {
+      h.ready();
+      await new Promise(setImmediate);
+      assert.equal(promises, 0);
+      assert.deepEqual(events, ['dispatch', 'terminal', 'part', 'retained', 'claim']);
+    } finally { hook.disable(); await h.pump.dispose(); }
   });
 }
 
@@ -32,78 +74,82 @@ test('single claim retains ownership through pending dispatch and terminal compl
   let terminalDone;
   const dispatch = new Promise((resolve) => { dispatchDone = resolve; });
   const terminal = new Promise((resolve) => { terminalDone = resolve; });
-  const pump = new ZLinkMeshDispatchPump({}, {
+  const h = harness(ReadyDomain.Infrastructure, {
     applicationJobQueue: {},
     dispatch() { events.push('dispatch'); return dispatch; }
-  });
-  const pending = pump.dispatchClaim(ReadyDomain.Infrastructure, {}, {
-    recvBatch() {
-      return { ok: true, records: [{
-        parts: [{ close() { events.push('part'); } }],
-        onTerminalCompletion() { events.push('terminal'); return terminal; }
-      }] };
-    },
+  }, {}, [{
+    recvBatch() { return { ok: true, records: [{
+      parts: [{ close() { events.push('part'); } }],
+      onTerminalCompletion() { events.push('terminal'); return terminal; }
+    }] }; },
     release() { events.push('claim'); }
-  }, pump.createClaimDrain({ reset() {} }));
-  assert.ok(pending instanceof Promise);
-  assert.deepEqual(events, ['dispatch']);
-  dispatchDone();
-  await new Promise(setImmediate);
-  assert.deepEqual(events, ['dispatch', 'terminal']);
-  terminalDone();
-  await pending;
-  assert.deepEqual(events, ['dispatch', 'terminal', 'part', 'claim']);
+  }]);
+  try {
+    h.ready();
+    await new Promise(setImmediate);
+    assert.deepEqual(events, ['dispatch']);
+    dispatchDone();
+    await new Promise(setImmediate);
+    assert.deepEqual(events, ['dispatch', 'terminal']);
+    terminalDone();
+    await new Promise(setImmediate);
+    assert.deepEqual(events, ['dispatch', 'terminal', 'part', 'claim']);
+  } finally { dispatchDone(); terminalDone(); await h.pump.dispose(); }
 });
 
 test('empty ordinary receive returns its unused permit before releasing the claim', async () => {
   const events = [];
-  const pump = new ZLinkMeshDispatchPump({}, {
-    applicationJobQueue: {
-      acquire() {
-        events.push('permit');
-        return Promise.resolve({ releaseAfterInternalProcessing() { events.push('permit-release'); } });
-      }
-    },
+  const h = harness(ReadyDomain.Application, {
+    applicationJobQueue: { acquire() {
+      events.push('permit');
+      return Promise.resolve({ releaseAfterInternalProcessing() { events.push('permit-release'); } });
+    } },
     dispatch() { assert.fail('empty receive must not dispatch'); }
-  });
-  const pending = pump.dispatchClaim(ReadyDomain.Application, {}, {
+  }, {}, [{
     recvBatch() { events.push('receive'); return { ok: false, records: [] }; },
     release() { events.push('claim'); }
-  }, pump.createClaimDrain({ reset() {} }));
-  assert.ok(pending instanceof Promise);
-  await pending;
-  assert.deepEqual(events, ['permit', 'receive', 'permit-release', 'claim']);
+  }]);
+  try {
+    h.ready();
+    await new Promise(setImmediate);
+    assert.deepEqual(events, ['permit', 'receive', 'permit-release', 'claim']);
+  } finally { await h.pump.dispose(); }
 });
 
 test('worker claim state releases suspended ownership before reuse and empty receive', async () => {
   const events = [];
   let resume;
+  let firstBatch;
   const suspended = new Promise((resolve) => { resume = resolve; });
-  const pump = new ZLinkMeshDispatchPump({}, {
-    applicationJobQueue: {},
-    dispatch() { return suspended; }
-  });
-  const batch = { reset() {}, close() { assert.fail('worker owns its receive batch'); } };
-  const state = pump.createClaimDrain(batch);
-  const owner = { ordinaryIngressPreAdmitted: true };
   const record = {
     parts: [{ close() { events.push('part'); } }],
     applicationJobPermit: { releaseAfterInternalProcessing() { events.push('permit'); } },
     onTerminalCompletion() { events.push('terminal'); }
   };
-  const first = pump.dispatchClaim(ReadyDomain.Application, owner, {
-    recvBatch() { return { ok: true, records: [record] }; },
+  const h = harness(ReadyDomain.Application, {
+    applicationJobQueue: {}, dispatch() { return suspended; }
+  }, { ordinaryIngressPreAdmitted: true }, [{
+    recvBatch(batch) { firstBatch = batch; return { ok: true, records: [record] }; },
     release() { events.push('first'); }
-  }, state);
-  assert.ok(first instanceof Promise);
-  assert.strictEqual(state.records[0], record);
-  resume();
-  await first;
-  for (const key of ['records', 'owner', 'claim', 'claimPermit']) assert.equal(state[key], undefined);
-  const second = pump.dispatchClaim(ReadyDomain.Application, owner, {
-    recvBatch() { return { ok: false, records: [] }; },
+  }, {
+    recvBatch(batch) {
+      assert.strictEqual(batch, firstBatch);
+      assert.equal(batch.closed, undefined, 'worker retains its receive batch between claims');
+      assert.deepEqual(events, ['terminal', 'permit', 'part', 'first']);
+      return { ok: false, records: [] };
+    },
     release() { events.push('second'); }
-  }, state);
-  assert.equal(second, undefined);
-  assert.deepEqual(events, ['terminal', 'permit', 'part', 'first', 'second']);
+  }]);
+  try {
+    h.ready();
+    await new Promise(setImmediate);
+    assert.deepEqual(events, []);
+    assert.equal(h.receiveBatches.length, 1);
+    await assertClaimState(firstBatch, record);
+    resume();
+    await new Promise(setImmediate);
+    assert.deepEqual(events, ['terminal', 'permit', 'part', 'first', 'second']);
+    await assertClaimState(firstBatch);
+    assert.equal(firstBatch.closed, undefined, 'worker retains its batch while idle');
+  } finally { resume(); await h.pump.dispose(); }
 });

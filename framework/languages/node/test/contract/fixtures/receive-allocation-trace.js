@@ -5,120 +5,107 @@ const { RawServiceMeshRuntime } = require('../../../packages/framework/dist/runt
 const { ReadyDomain } = require('../../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 const wire = require('../../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 
-function receiveFixture() {
-  const runtime = Object.create(RawServiceMeshRuntime.prototype);
-  const counts = { records: 0, iterators: 0, bytes: 0, closes: 0, releases: 0 };
-  const parts = [Buffer.alloc(32), Buffer.alloc(1024)];
+function rawFixture(mode) {
+  const counts = { records: 0, iterators: 0, bytes: 0, closes: 0, releases: 0, calls: 0 };
+  const parts = mode === 'dispatch'
+    ? [wire.encodeNodeRequestHeader(1n), Buffer.alloc(1024)]
+    : [Buffer.alloc(32), Buffer.alloc(1024)];
   const iterator = parts[Symbol.iterator];
-  parts[Symbol.iterator] = function () {
-    counts.iterators += 1;
-    return iterator.call(this);
+  parts[Symbol.iterator] = function () { counts.iterators += 1; return iterator.call(this); };
+  const record = { sourceRid: 'source', routeGeneration: 1, parts, close() { counts.closes += 1; } };
+  const permit = { origin: 'remote', markApplicationQueued() {},
+    releaseAfterInternalProcessing() { counts.releases += 1; } };
+  const descriptor = {
+    meshName: 'allocation', nodeRoutingId: 'local', lifecycleGeneration: 1n,
+    descriptorRevision: 1n, advertisedEndpoint: 'inproc://allocation', channels: [],
+    state: 'serving', securityIdentity: 'default', applicationVersion: 1n,
+    protocolCapabilities: [wire.M6A_SERVICE_WIRE_REQUIRED_CAPABILITY], objectRole: 'server',
+    placementWeight: 100, activeCapacityLimit: 100, pendingCapacityLimit: 16,
+    activeCapacityUsed: 0, pendingCapacityUsed: 0
   };
-  const record = { sourceRid: 'source', parts, close() { counts.closes += 1; } };
-  const permit = { origin: 'remote', releaseAfterInternalProcessing() { counts.releases += 1; } };
-  const router = { receive() { counts.records += 1; return record; } };
-  runtime.requireStarted = () => router;
-  runtime.observeInfrastructureFailure = () => {};
-  runtime.processReceived = () => 'application';
-  runtime.applicationJobQueue = {};
-  const rotation = { take() { return permit; } };
+  const router = {
+    setRoutingId() {}, bind() {}, localEndpoint() { return descriptor.advertisedEndpoint; },
+    receive() {
+      counts.calls += 1;
+      if (mode === 'route') return undefined;
+      counts.records += 1;
+      return record;
+    }, close() {}
+  };
+  const runtime = new RawServiceMeshRuntime({
+    descriptor,
+    applicationJobQueue: {
+      acquireOrResume() { return permit; },
+      createReceiveRotation() { return { reserve() {}, take() { return permit; }, releaseUnused() {} }; }
+    },
+    bindingPort: { createHost() { return { createRouter() { return router; }, close() {} }; } }
+  });
+  runtime.start();
+  if (mode === 'dispatch') {
+    runtime.topology.admittedPeer = () => ({
+      liveness: { connectionId: 1 }, descriptor: { lifecycleGeneration: 1n }
+    });
+    runtime.liveness.recordReceived = () => {};
+    runtime.mailbox.tryEnqueue = (entry) => { entry.applicationJob.close(); return true; };
+  }
   const observe = (_source, bytes) => { counts.bytes += bytes; };
-  return { runtime, counts, record, permit, router, rotation, observe };
+  return {
+    counts,
+    close() { runtime.close(); },
+    names: mode === 'route' ? ['pumpBatch'] : mode === 'dispatch'
+      ? ['processReceived', 'processApplicationReceived'] : ['receiveOne'],
+    async run() {
+      if (mode === 'route') assert.equal(runtime.pumpBatch(true, false), false);
+      else assert.equal(await runtime.pumpOne(0, observe), mode === 'dispatch' ? 'application' : 'dropped');
+    }
+  };
 }
 
-function claimWorkload() {
-  const counts = { dispatch: 0, terminal: 0, release: 0, permitRelease: 0, close: 0 };
+function claimWorkload(mode) {
+  const counts = mode === 'pump' ? { calls: 0, terminals: 0 }
+    : { dispatch: 0, terminal: 0, release: 0, permitRelease: 0, close: 0 };
   const owner = { ordinaryIngressPreAdmitted: true };
-  const permit = { releaseAfterInternalProcessing() { counts.permitRelease += 1; } };
+  const permit = { releaseAfterInternalProcessing() { if (mode !== 'pump') counts.permitRelease += 1; } };
   const record = {
     parts: [], applicationJobPermit: permit,
-    onTerminalCompletion() { counts.terminal += 1; }
+    onTerminalCompletion() { if (mode === 'pump') counts.terminals += 1; else counts.terminal += 1; }
   };
   const received = { ok: true, records: [record] };
   const drained = { ok: true, hasResidue: false, records: [owner] };
-  let remaining;
-  const claim = {
-    recvBatch() { return received; },
-    release() {
-      counts.release += 1;
-      remaining -= 1;
-      if (remaining === 0) pump.disposed = true;
-    }
-  };
-  const batch = { reset() {}, close() { counts.close += 1; }, takeClaim() { return claim; } };
-  const pump = new ZLinkMeshDispatchPump({
-    createReadyBatch(capacity) { assert.equal(capacity, 1); return batch; },
-    createReceiveBatch() { return batch; },
-    drainReady() { return drained; }
-  }, {
-    applicationJobQueue: { acquire() { assert.fail('pre-admitted ingress must reuse its permit'); } },
-    monotonicNowMs: () => 0,
-    dispatch() { counts.dispatch += 1; },
-    reportError(error) { throw error; }
-  });
+  const empty = { ok: false, records: [] };
   return {
-    counts, names: [],
+    counts, names: mode === 'pump' ? ['markReady', 'finishRecord'] : [],
     async run() {
-      remaining = 1000;
-      pump.disposed = false;
-      pump.pendingDomains = ReadyDomain.Application;
-      // Older revisions put the persistent worker in drainClaim itself.
-      if (pump.runApplicationWorker) await pump.runApplicationWorker();
-      else await pump.drainClaim(ReadyDomain.Application);
+      let ready;
+      let remaining = mode === 'pump' ? 1 : 1000;
+      let done;
+      const finished = new Promise((resolve) => { done = resolve; });
+      const claim = {
+        recvBatch() { return received; },
+        release() { if (mode !== 'pump') counts.release += 1; remaining -= 1; }
+      };
+      const batch = { reset() {}, close() { if (mode !== 'pump') counts.close += 1; }, takeClaim() { return claim; } };
+      const pump = new ZLinkMeshDispatchPump({
+        setReadyHandler(handler) { ready = handler; },
+        createReadyBatch(capacity) { assert.equal(capacity, 1); return batch; },
+        createReceiveBatch() { return batch; },
+        drainReady() { if (remaining !== 0) return drained; done(); return empty; }
+      }, {
+        applicationJobQueue: { acquire() { assert.fail('pre-admitted ingress must reuse its permit'); } },
+        monotonicNowMs: () => 0,
+        dispatch() { if (mode === 'pump') counts.calls += 1; else counts.dispatch += 1; },
+        reportError(error) { throw error; }
+      });
+      pump.start();
+      try { ready(ReadyDomain.Application); await finished; }
+      finally { await pump.dispose(); }
       assert.equal(remaining, 0);
     }
   };
 }
 
 function workload(mode) {
-  if (mode === 'claim') return claimWorkload();
-  const counts = { calls: 0 };
-  if (mode === 'pump') {
-    const pump = new ZLinkMeshDispatchPump({}, {});
-    pump.wakeApplicationWorker = () => { counts.calls += 1; };
-    const record = { parts: [], onTerminalCompletion() { counts.terminals += 1; } };
-    counts.terminals = 0;
-    return {
-      counts,
-      names: ['markReady', 'finishRecord'],
-      run() {
-        pump.pendingDomains = ReadyDomain.None;
-        pump.markReady(ReadyDomain.Application);
-        pump.finishRecord(record, undefined);
-      }
-    };
-  }
-  if (mode === 'receive') {
-    const f = receiveFixture();
-    return {
-      counts: f.counts,
-      names: ['receiveOne'],
-      run() { assert.equal(f.runtime.receiveOne(0, f.observe, f.rotation), 'application'); }
-    };
-  }
-  const runtime = Object.create(RawServiceMeshRuntime.prototype);
-  if (mode === 'route') {
-    runtime.observeInfrastructureFailure = () => {};
-    runtime.receiveBatch = (ready) => { counts.calls += 1; return ready; };
-    return { counts, names: ['pumpBatch'], run() { assert.equal(runtime.pumpBatch(true, false), true); } };
-  }
-  assert.equal(mode, 'dispatch');
-  const record = {
-    sourceRid: 'source', routeGeneration: 1,
-    parts: [wire.encodeNodeRequestHeader(1n), Buffer.alloc(1024)]
-  };
-  runtime.topology = { admittedPeer() {
-    return { liveness: { connectionId: 1 }, descriptor: { lifecycleGeneration: 1n } };
-  } };
-  runtime.liveness = { recordReceived() {} };
-  runtime.nodeMailboxOwner = 'node';
-  runtime.enqueueOrdinaryRecord = () => { counts.calls += 1; return 'application'; };
-  const lease = {};
-  const owner = { acquire() { return lease; } };
-  return {
-    counts, names: ['processReceived', 'processApplicationReceived'],
-    run() { assert.equal(runtime.processReceived(record, 0, owner), 'application'); }
-  };
+  return mode === 'claim' || mode === 'pump' ? claimWorkload(mode) : rawFixture(mode);
 }
 
 function allocationControl() { return () => undefined; }
@@ -129,9 +116,9 @@ async function trace(mode) {
   if (mode === 'claim') {
     await work.run();
     for (let index = 0; index < 10000; index += 1) allocationControl();
-  } else for (let index = 0; index < 10000; index += 1) { work.run(); allocationControl(); }
-  for (const name of Object.keys(work.counts)) work.counts[name] = 0;
+  } else for (let index = 0; index < 10000; index += 1) { await work.run(); allocationControl(); }
   global.gc();
+  for (const name of Object.keys(work.counts)) work.counts[name] = 0;
   const session = new Session();
   session.connect();
   const post = (method, params = {}) => new Promise((resolve, reject) => {
@@ -144,7 +131,7 @@ async function trace(mode) {
     await post('HeapProfiler.startTrackingHeapObjects', { trackAllocations: true });
     if (mode === 'claim') await work.run();
     for (let index = 0; index < 1000; index += 1) {
-      if (mode !== 'claim') work.run();
+      if (mode !== 'claim') await work.run();
       allocationControl();
     }
     await post('HeapProfiler.takeHeapSnapshot');
@@ -189,10 +176,10 @@ async function trace(mode) {
     return { counts: work.counts, allocations, controlAllocations, moduleAllocations, moduleFunctions };
   } finally {
     session.disconnect();
+    work.close?.();
   }
 }
 
-module.exports = { receiveFixture };
 if (require.main === module) {
   trace(process.argv[2]).then((result) => console.log(JSON.stringify(result)), (error) => {
     console.error(error);
