@@ -36,7 +36,7 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
         )!;
         try
         {
-            for (var index = 0; index < Math.Max(2, Environment.ProcessorCount); index++)
+            for (var index = 0; index < ZLinkMeshDispatchPump.ApplicationWorkerCount; index++)
                 await waits.NextWaitAsync().WaitAsync(TestGuard);
             for (var index = 0; index < SignalCount; index++)
             {
@@ -53,7 +53,10 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
             await runner.StopAsync().AsTask().WaitAsync(TestGuard);
         }
 
-        Assert.Equal(SignalCount + Math.Max(2, Environment.ProcessorCount), waits.ReadinessWaits);
+        Assert.Equal(
+            SignalCount + ZLinkMeshDispatchPump.ApplicationWorkerCount,
+            waits.ReadinessWaits
+        );
         Assert.Equal(0, waits.CancellationWrappers);
     }
 
@@ -72,7 +75,7 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
         using var waits = new WorkerWaitListener();
         waits.Start();
         pump.EnsureStarted();
-        for (var index = 0; index < Math.Max(2, Environment.ProcessorCount); index++)
+        for (var index = 0; index < ZLinkMeshDispatchPump.ApplicationWorkerCount; index++)
             await waits.NextWaitAsync().WaitAsync(TestGuard);
         waits.Stop();
         try
@@ -101,40 +104,24 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
     {
         const int iterations = 3000;
         var elapsed = Stopwatch.StartNew();
-        var workerCount = Math.Max(2, Environment.ProcessorCount);
+        var workerCount = ZLinkMeshDispatchPump.ApplicationWorkerCount;
         await using var context = Systems.Zlink.Zlink.CreateContext();
         using var waits = new WorkerWaitListener();
         for (var iteration = 0; iteration < iterations; iteration++)
         {
             await using var node = new ZLinkManagedMeshNode(context, "worker-stop-race");
             var pump = new ZLinkMeshDispatchPump(node, new ZLinkMeshCompletionTable());
-            Task? stopped = null;
             try
             {
                 waits.Start();
                 pump.EnsureStarted();
                 for (var worker = 0; worker < workerCount; worker++)
                     await waits.NextWaitAsync().WaitAsync(TestGuard);
-                waits.Stop();
-                stopped = pump.DisposeAsync().AsTask();
-                await stopped.WaitAsync(TestGuard);
             }
             finally
             {
                 waits.Stop();
-                stopped ??= pump.DisposeAsync().AsTask();
-                if (!stopped.IsCompleted)
-                {
-                    output.WriteLine($"Stop did not complete at iteration {iteration}.");
-                    // Recover only after the test has already failed its stop guard,
-                    // so the failed worker cannot leak into later measurements.
-                    var signal = (SemaphoreSlim)
-                        typeof(ZLinkMeshDispatchPump)
-                            .GetField("_signal", BindingFlags.Instance | BindingFlags.NonPublic)!
-                            .GetValue(pump)!;
-                    signal.Release(workerCount);
-                    await stopped.WaitAsync(TestGuard);
-                }
+                await pump.DisposeAsync().AsTask().WaitAsync(TestGuard);
             }
         }
         output.WriteLine(
@@ -142,6 +129,90 @@ public sealed class MeshWorkerWaitCostTests(ITestOutputHelper output)
         );
         Assert.Equal(iterations * workerCount, waits.ReadinessWaits);
         Assert.Equal(0, waits.CancellationWrappers);
+    }
+
+    [Fact]
+    public async Task DisposeUnregistersPendingStopWakeBeforeDisposingSignal()
+    {
+        var node = DispatchProxy.Create<IMeshNode, PausedDrainNode>();
+        var drains = (PausedDrainNode)(object)node;
+        var pump = new ZLinkMeshDispatchPump(node, new ZLinkMeshCompletionTable());
+        pump.EnsureStarted();
+        var stop = (CancellationTokenSource)
+            typeof(ZLinkMeshDispatchPump)
+                .GetField("_stop", BindingFlags.Instance | BindingFlags.NonPublic)!
+                .GetValue(pump)!;
+        var cancellationEntered = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var resumeCancellation = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        Task? cancelling = null;
+        CancellationTokenRegistration checkpoint = default;
+        try
+        {
+            for (var worker = 0; worker < ZLinkMeshDispatchPump.ApplicationWorkerCount; worker++)
+            {
+                drains.Ready!(MeshReadyDomains.Application);
+                await drains.NextDrainAsync().WaitAsync(TestGuard);
+            }
+            // Cancellation registrations run newest first. Hold cancellation after
+            // its flag is set but before the pump's stop-wake callback can run.
+            checkpoint = stop.Token.Register(() =>
+            {
+                cancellationEntered.SetResult();
+                resumeCancellation.Task.GetAwaiter().GetResult();
+            });
+            cancelling = Task.Run(stop.Cancel);
+            await cancellationEntered.Task.WaitAsync(TestGuard);
+            drains.Resume();
+            // Every worker leaves its drain and observes cancellation without a
+            // semaphore wake. Disposal must retire the pending wake registration.
+            await pump.DisposeAsync().AsTask().WaitAsync(TestGuard);
+            resumeCancellation.SetResult();
+            await cancelling.WaitAsync(TestGuard);
+        }
+        finally
+        {
+            drains.Resume();
+            resumeCancellation.TrySetResult();
+            if (cancelling is not null)
+                await cancelling.WaitAsync(TestGuard);
+            checkpoint.Dispose();
+            await pump.DisposeAsync().AsTask().WaitAsync(TestGuard);
+        }
+    }
+
+    private class PausedDrainNode : DispatchProxy
+    {
+        private readonly Channel<bool> _entered = Channel.CreateUnbounded<bool>();
+        private readonly TaskCompletionSource<bool> _resume = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        internal Func<MeshReadyDomains, MeshReadyDomains>? Ready { get; private set; }
+
+        internal Task NextDrainAsync() => _entered.Reader.ReadAsync().AsTask();
+
+        internal void Resume() => _resume.TrySetResult(false);
+
+        protected override object? Invoke(MethodInfo? method, object?[]? arguments)
+        {
+            switch (method!.Name)
+            {
+                case nameof(IMeshNode.SetReadyHandler):
+                    Ready = (Func<MeshReadyDomains, MeshReadyDomains>)arguments![0]!;
+                    return null;
+                case nameof(IMeshNode.DrainReadyAsync):
+                    _entered.Writer.TryWrite(true);
+                    return new ValueTask<bool>(_resume.Task);
+                case nameof(IMeshNode.CloseSubmissions):
+                    return null;
+                default:
+                    throw new NotSupportedException(method.Name);
+            }
+        }
     }
 
     private sealed class WorkerWaitListener : EventListener
