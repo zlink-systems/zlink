@@ -3882,6 +3882,65 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
     }
 }
 
+void test_relocation_metric_starts_only_after_unit_admission (test_context_t &test)
+{
+    namespace fw = zlink::framework;
+    for (const bool aggregate : {false, true}) {
+        metric_test::provider_t provider;
+        stateful_object_runtime_t objects;
+        objects.configure_relocation_state (
+          [] (const object_ref_t &, const std::string &, std::stop_token) {
+              return std::vector<std::uint8_t>{0x41};
+          },
+          [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
+              return true;
+          });
+        const auto actor = create_actor (objects, "metric-admission-a");
+        const auto other = create_actor (objects, "metric-admission-b");
+        auto authority = std::make_shared<memory_authority_store_t> ();
+        maintenance_runtime_t relocation (
+          objects, authority, std::make_shared<memory_relocation_repository_t> (),
+          relocation_limits_t{.outbound_units = 1}, {},
+          std::make_shared<memory_aggregate_authority_t> (authority));
+        fw::task_completion_source_t<relocation_reason_t> prepared;
+        eligible_relocation_unit_t::canonical_wire_context_t first_wire{
+          .relocation = {0x2278, 2},
+          .target_attempt_generation = 1,
+          .coordinator = {"source-owner", 1, {'s'}, 1, "1"},
+          .target_node_routing_id = {'t'},
+          .target_node_generation = 1,
+          .application_version = 1,
+          .prepare_target =
+            [&] (const std::vector<frozen_object_state_t> &,
+                 const relocation_payload_manifest_t &) { return prepared.task (); },
+          .send_state_chunk = [] (const fw::runtime::protocol::relocation_state_t &)
+            -> fw::task_t<bool> { co_return true; }};
+        auto occupied = relocation.relocate_to_ready (
+          actor, "target", {"target-owner", 1}, 1024 * 1024, digest_with (1), first_wire, {}, 0);
+        test.require (!occupied.await_ready (),
+                      "fixture must hold an admitted preparation pending");
+        eligible_relocation_unit_t::canonical_wire_context_t wire{
+          .monitoring = std::make_shared<fw::detail::monitoring_runtime_state_t> (),
+          .mesh_name = "admission-contract",
+          .policy = fw::detail::factory_relocation_kind_t::recreate};
+        const auto reason =
+          aggregate ? await_task (relocation.relocate_aggregate ({actor, other}, "target",
+                                                                 {"target-owner", 1}, 1024,
+                                                                 digest_with (1), wire))
+                        .reason
+                    : await_task (relocation.relocate (actor, "target", {"target-owner", 1}, 1024,
+                                                       digest_with (1), wire))
+                        .reason;
+        test.require (reason == relocation_reason_t::permit_unavailable,
+                      "fixture must reject the unit before preparation starts");
+        test.require (provider.collect ().empty (),
+                      "a unit not admitted to preparation must emit no relocation metrics");
+        prepared.complete (
+          fw::result_t<relocation_reason_t>::success (relocation_reason_t::restore_failed));
+        (void) await_task (std::move (occupied));
+    }
+}
+
 void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context_t &test)
 {
     namespace framework = zlink::framework;
@@ -8118,6 +8177,7 @@ int main (int argc, char **argv)
     test_context_t test;
     if (argc == 2 && std::string_view (argv[1]) == "--source-outcomes") {
         test_source_relocation_metric_outcomes (test);
+        test_relocation_metric_starts_only_after_unit_admission (test);
         return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--spot-restore-staging") {
@@ -8265,6 +8325,7 @@ int main (int argc, char **argv)
     test_public_relocation_store_adapter (test);
     test_public_authority_store_adapter (test);
     test_source_relocation_metric_outcomes (test);
+    test_relocation_metric_starts_only_after_unit_admission (test);
     test_source_relocation_failure_stops_state_chunks_and_unseals (test);
     test_boundary_application_preserves_original_reply (test);
     test_boundary_application_preserves_original_reply (test, true);

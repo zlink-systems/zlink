@@ -239,7 +239,9 @@ class relocation_metric_operation_t
                 case relocation_authority_t::source_preserved:
                     outcome = "aborted";
                     break;
-                // An unsettled result leaves the source loop only at its host teardown deadline.
+                // Only the host-stop deadline return at maintenance_runtime.cpp:687 reaches
+                // this case; ordinary unsettled observations stay in settle_relocation.
+                // Host stop installs that deadline at host/app.cpp:3959,4261.
                 case relocation_authority_t::unsettled:
                     outcome = "shutdown";
                     break;
@@ -799,13 +801,13 @@ task_t<relocation_preparation_t> maintenance_runtime_t::relocate_to_ready (
                                   encoded_upper_bound, inventory_digest, *canonical_wire,
                                   cancellation, std::make_shared<permit_t> (try_acquire ())});
     state->advertised_receive_chunk_limit_bytes = advertised_receive_chunk_limit_bytes;
-    state->metric.emplace (*canonical_wire, source.kind);
     if (!*state->permit) {
         return task_t<relocation_preparation_t> (
           result_t<relocation_preparation_t>::success (relocation_preparation_t{
             finish ({relocation_terminal_t::blocked, relocation_reason_t::permit_unavailable,
                      std::nullopt})}));
     }
+    state->metric.emplace (*canonical_wire, source.kind);
     return relocate_prepare_ready (std::move (state));
 }
 
@@ -1166,13 +1168,13 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
           relocation_terminal_t::blocked, relocation_reason_t::restore_failed, {}};
     }
     auto persisted_context = *canonical_wire;
-    auto state = std::make_shared<relocation_terminal_state_t> ();
-    state->metric.emplace (persisted_context, relocation_primary (sources).kind);
     auto permit = std::make_shared<permit_t> (try_acquire ());
     if (!*permit) {
         co_return aggregate_relocation_result_t{
           relocation_terminal_t::blocked, relocation_reason_t::permit_unavailable, {}};
     }
+    auto state = std::make_shared<relocation_terminal_state_t> ();
+    state->metric.emplace (persisted_context, relocation_primary (sources).kind);
     const auto seal_attempt = co_await _objects.try_seal_relocation_aggregate (
       sources, cancellation, [this, &persisted_context] {
           return capture_relocation_session_bindings (persisted_context);
