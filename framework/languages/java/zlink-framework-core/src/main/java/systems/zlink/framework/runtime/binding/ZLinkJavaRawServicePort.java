@@ -496,20 +496,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                                                     "service ROUTER receive has no routing id"));
             // Control decoders request individual headers. Application decoders
             // borrow received.parts() directly while this owner is retained.
-            List<byte[]> frames =
-                    new AbstractList<>() {
-                        @Override
-                        public byte[] get(int index) {
-                            return received.parts().get(index).toByteArray();
-                        }
-
-                        @Override
-                        public int size() {
-                            return received.parts().size();
-                        }
-                    };
-            Inbound inbound =
-                    new Inbound(source, received.replyToken().orElse(null), frames, received);
+            Inbound inbound = new Inbound(source, received.replyToken().orElse(null), received);
             transferred = true;
             return Optional.of(inbound);
         } finally {
@@ -579,18 +566,60 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         }
     }
 
-    record Inbound(
-            RoutingId source, ReplyToken requestSequence, List<byte[]> frames, Received received)
-            implements AutoCloseable {
-        Inbound {
-            Objects.requireNonNull(source, "source");
-            Objects.requireNonNull(frames, "frames");
-            Objects.requireNonNull(received, "received");
+    /**
+     * A received record. For a native record it is also its own header-frame view, so no separate
+     * adapter is allocated per record; a synthetic record keeps its supplied frames. The list view
+     * always matches {@link #frames()}.
+     */
+    static final class Inbound extends AbstractList<byte[]> implements AutoCloseable {
+        private final RoutingId source;
+        private final ReplyToken requestSequence;
+        private final List<byte[]> frames;
+        private final Received received;
+
+        Inbound(RoutingId source, ReplyToken requestSequence, Received received) {
+            this.source = Objects.requireNonNull(source, "source");
+            this.requestSequence = requestSequence;
+            this.received = Objects.requireNonNull(received, "received");
+            frames = this;
+        }
+
+        // Synthetic records can supply their existing frame representation without a native owner.
+        Inbound(
+                RoutingId source,
+                ReplyToken requestSequence,
+                List<byte[]> frames,
+                Received received) {
+            this.source = Objects.requireNonNull(source, "source");
+            this.requestSequence = requestSequence;
+            this.frames = Objects.requireNonNull(frames, "frames");
+            this.received = Objects.requireNonNull(received, "received");
+        }
+
+        RoutingId source() {
+            return source;
+        }
+
+        ReplyToken requestSequence() {
+            return requestSequence;
+        }
+
+        List<byte[]> frames() {
+            return frames;
+        }
+
+        Received received() {
+            return received;
         }
 
         @Override
-        public List<byte[]> frames() {
-            return frames;
+        public byte[] get(int index) {
+            return frames == this ? received.parts().get(index).toByteArray() : frames.get(index);
+        }
+
+        @Override
+        public int size() {
+            return frames == this ? received.parts().size() : frames.size();
         }
 
         /** The Core route generation that delivered this record (Core ROUTER §10.1). */
