@@ -251,3 +251,21 @@ test('correlation IDs use the fixed zero prefix without constructing padStart in
   assert.equal(ids.size, 1000);
   assert.equal(padStart.mock.callCount(), 0);
 });
+
+test('creation payload decode borrows the encoded body without intermediate byte copies', t => {
+  const codec = require('../../packages/framework/dist/runtime/messaging/creation-payload-codec');
+  const wire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
+  const value = { body: 'x'.repeat(1024) };
+  const frame = codec.encodeFrameworkCreationPayload(value);
+  const bodyBytes = wire.decodeApplicationPayloadView(frame).payload.byteLength;
+  const from = Buffer.from;
+  let copiedBytes = 0;
+  t.mock.method(Buffer, 'from', function (input, ...args) {
+    if (ArrayBuffer.isView(input)) copiedBytes += input.byteLength;
+    return from.call(Buffer, input, ...args);
+  });
+  for (let index = 0; index < 1000; index++) {
+    assert.deepEqual(codec.decodeFrameworkCreationPayload(frame), value);
+  }
+  assert.equal(copiedBytes, 0, `Avoid copying the ${bodyBytes}-byte encoded body twice per decode.`);
+});
