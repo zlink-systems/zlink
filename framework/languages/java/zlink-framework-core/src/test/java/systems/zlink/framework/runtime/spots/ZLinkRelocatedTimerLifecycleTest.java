@@ -460,6 +460,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
                             assertFalse(spot.closeRequested.toCompletableFuture().isDone());
                         publication.complete(null);
                         published.toCompletableFuture().join();
+                        spot.ticked.get(3, java.util.concurrent.TimeUnit.SECONDS);
                         assertEquals(
                                 1, spot.ticks, "Ready publication must release the pending tick");
                     }
@@ -846,6 +847,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
         private static CompletableFuture<Void> initialization;
         private static boolean requestClose;
         private final ZLinkSpotContext context;
+        final CompletableFuture<Void> ticked = new CompletableFuture<>();
         CompletionStage<Boolean> closeRequested;
         int ticks;
 
@@ -890,6 +892,7 @@ final class ZLinkRelocatedTimerLifecycleTest {
         public CompletionStage<Void> handle(
                 ReadyTimerSpot spot, systems.zlink.framework.spots.ZLinkTimerTick tick) {
             spot.ticks++;
+            spot.ticked.complete(null);
             return CompletableFuture.completedFuture(null);
         }
     }
