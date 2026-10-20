@@ -180,8 +180,14 @@ public interface ZLinkActorJoinRelocationPort {
         }
     }
 
-    record Submission(ZLinkBackendActorRef targetActor) {
+    /** Relay readiness and the separate source-only terminal; neither claims target commit. */
+    record Submission(ZLinkBackendActorRef targetActor, CompletionStage<Void> sourceCleanup) {
+        public Submission(ZLinkBackendActorRef targetActor) {
+            this(targetActor, java.util.concurrent.CompletableFuture.completedFuture(null));
+        }
+
         public Submission {
+            Objects.requireNonNull(sourceCleanup, "sourceCleanup");
             Objects.requireNonNull(targetActor, "targetActor");
         }
     }

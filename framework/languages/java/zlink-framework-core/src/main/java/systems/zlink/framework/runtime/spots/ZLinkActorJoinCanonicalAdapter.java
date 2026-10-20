@@ -115,7 +115,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                                                     "canonical Actor Join source is already"
                                                             + " active")));
         }
-        return ZLinkRelocationHandOff.run(
+        return ZLinkRelocationHandOff.runToReady(
                         lane.client(),
                         prepared.stageRequest(),
                         settlement ->
@@ -123,10 +123,20 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                         timeout,
                         restoreDeadline)
                 .handle(
-                        (settlement, failure) ->
-                                failure == null
-                                        ? settleSource(attempt, settlement)
-                                        : abortSource(attempt, unwrap(failure)))
+                        (settlement, failure) -> {
+                            if (failure != null) return abortSource(attempt, unwrap(failure));
+                            CompletionStage<Void> cleanup =
+                                    settlement
+                                            .thenCompose(outcome -> settleSource(attempt, outcome))
+                                            .thenApply(ignored -> null);
+                            return CompletableFuture.completedFuture(
+                                    new Submission(
+                                            new ZLinkBackendActorRef(
+                                                    goal.targetNodeRid(),
+                                                    goal.sourceActor().actorId(),
+                                                    goal.sourceActor().generation()),
+                                            cleanup));
+                        })
                 .thenCompose(outcome -> outcome);
     }
 

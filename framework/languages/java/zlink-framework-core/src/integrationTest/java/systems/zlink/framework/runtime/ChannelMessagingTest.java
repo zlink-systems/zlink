@@ -663,15 +663,27 @@ final class ChannelMessagingTest {
     @Test
     @DisplayName(
             "DERR-007 manual client-server handler exception replies error and records diagnostics")
-    void manualClientServer_handlerExceptionRepliesErrorAndRecordsDiagnostics()
-            throws InterruptedException {
+    void manualClientServer_handlerExceptionRepliesErrorAndRecordsDiagnostics() throws Exception {
+        CompletableFuture<Void> releaseDispatchLog = new CompletableFuture<>();
+        CompletableFuture<Void> dispatchLogWritten = new CompletableFuture<>();
         CopyOnWriteArrayList<String> logMessages = new CopyOnWriteArrayList<>();
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
         Handler logHandler =
                 new Handler() {
                     @Override
                     public void publish(LogRecord record) {
-                        logMessages.add(record.getMessage());
+                        String message = record.getMessage();
+                        if (message.contains("event_id=zlink.dispatch_error")
+                                && message.contains("packet=ThrowReq")) {
+                            // A buffered sink may deliver diagnostics after the reply is observed.
+                            releaseDispatchLog.thenRun(
+                                    () -> {
+                                        logMessages.add(message);
+                                        dispatchLogWritten.complete(null);
+                                    });
+                        } else {
+                            logMessages.add(message);
+                        }
                     }
 
                     @Override
@@ -722,6 +734,10 @@ final class ChannelMessagingTest {
                 assertTrue(failure.getCause() instanceof ZLinkFrameworkException);
                 assertTrue(failure.getCause().getMessage().contains("DERR-007 handler exception"));
 
+                assertFalse(dispatchLogWritten.isDone(), "dispatch log sink must remain buffered");
+                releaseDispatchLog.complete(null);
+                dispatchLogWritten.get(ASYNC_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+
                 assertTrue(
                         logMessages.stream()
                                 .anyMatch(
@@ -741,6 +757,7 @@ final class ChannelMessagingTest {
                 assertEquals("after-handler-error", after);
             }
         } finally {
+            releaseDispatchLog.complete(null);
             logger.removeHandler(logHandler);
         }
     }

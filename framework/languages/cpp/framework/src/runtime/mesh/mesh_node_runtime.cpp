@@ -3321,14 +3321,53 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       .abort_target_before_cutover = [] { return true; }};
     const auto inventory_digest =
       runtime::stateful::maintenance_runtime_t::compute_inventory_digest ({s->source_actor});
-    const auto relocated = co_await maintenance->relocate (
+    auto preparation = co_await maintenance->relocate_to_ready (
       s->source_actor, s->target.node_rid.to_string (),
       {s->target.owner.owner_id, s->target.owner.lease_generation}, 256u * 1024u * 1024u,
       inventory_digest, wire, {},
       negotiated_receive_chunk_limit_bytes (s->actor).value_or (
         detail::spot_actor_join_advertised_receive_chunk_limit_bytes));
-    /* The unit completes only after the source confirmed the target commit
-     * with this RelocationId (28 §4.4); every other terminal is settled. */
+    const auto target_actor = ::zlink::framework::detail::actor_ref_access_t::make (
+      node_rid_t::from_string (s->target.node_rid.to_string ()),
+      std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (s->actor)),
+      std::string (s->actor.actor_id ().value ()), s->actor.object_generation ());
+    if (const auto *failed = std::get_if<runtime::stateful::relocation_result_t> (&preparation)) {
+        const auto cleanup = co_await runtime::await_result (
+          settle_remote_application_actor_join_source (s, *failed, target_actor));
+        co_return co_await fail_remote_actor_join (
+          *s,
+          detail::propagate_failure<actor_join_reply_t> (cleanup, "Actor Join preparation failed"),
+          "Actor Join preparation failed");
+    }
+    const auto cleanup =
+      std::get<runtime::stateful::relocation_source_cleanup_t> (std::move (preparation));
+    co_return actor_join_reply_t{
+      actor_join_reply_t::relayed, target_actor, zlink::message_t::from (s->admission_payload),
+      [this, s, cleanup, target_actor] {
+          auto pending = [] (mesh_node_runtime_t *self,
+                             std::shared_ptr<remote_actor_join_state_t> source,
+                             runtime::stateful::relocation_source_cleanup_t settle,
+                             actor_ref_t target) -> task_t<void> {
+              auto relocated = co_await settle ();
+              co_await self->settle_remote_application_actor_join_source (
+                std::move (source), std::move (relocated), std::move (target));
+          }(this, s, cleanup, target_actor);
+          detail::observe_task_completion (
+            pending,
+            [failures = _state->spot_state->runtime_failures ()] (const result_t<void> &result) {
+                if (!result)
+                    failures->report (result.exception ());
+            });
+          return pending;
+      }};
+}
+
+task_t<void> mesh_node_runtime_t::settle_remote_application_actor_join_source (
+  std::shared_ptr<remote_actor_join_state_t> s,
+  runtime::stateful::relocation_result_t relocated,
+  actor_ref_t target_actor)
+{
+    spot_node_runtime_t spot (_state->spot_state);
     if (relocated.terminal != runtime::stateful::relocation_terminal_t::completed) {
         const auto data_lost =
           relocated.terminal == runtime::stateful::relocation_terminal_t::data_lost
@@ -3352,16 +3391,13 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
         } else
             spot.fail_remote_actor_transfer (s->actor, false);
         (void) co_await abort_remote_actor_join_seal (s);
-        co_return co_await fail_remote_actor_join (
-          *s,
-          result_t<actor_join_reply_t>::failure (
-            data_lost        ? framework_error_kind_t::data_lost
-            : authority_lost ? framework_error_kind_t::unavailable
-                             : framework_error_kind_t::internal_failure,
-            "canonical Actor Join relocation did not complete (terminal="
-              + std::to_string (static_cast<int> (relocated.terminal))
-              + ", reason=" + std::to_string (static_cast<int> (relocated.reason)) + ")"),
-          "canonical Actor Join relocation did not complete");
+        throw framework_exception_t (
+          data_lost        ? framework_error_kind_t::data_lost
+          : authority_lost ? framework_error_kind_t::unavailable
+                           : framework_error_kind_t::internal_failure,
+          "canonical Actor Join relocation did not complete (terminal="
+            + std::to_string (static_cast<int> (relocated.terminal))
+            + ", reason=" + std::to_string (static_cast<int> (relocated.reason)) + ")");
     }
     const auto followed = relocated.settlement.follow_generations.find (
       std::pair{s->source_actor.kind, s->source_actor.key});
@@ -3369,20 +3405,14 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
       followed == relocated.settlement.follow_generations.end ()
         ? std::nullopt
         : std::optional<std::uint64_t>{followed->second};
-    co_return co_await finalize_remote_application_actor_join (std::move (s));
+    co_await finalize_remote_application_actor_join (std::move (s), std::move (target_actor));
+    co_return;
 }
 
-task_t<actor_join_reply_t> mesh_node_runtime_t::finalize_remote_application_actor_join (
-  std::shared_ptr<remote_actor_join_state_t> s)
+task_t<void> mesh_node_runtime_t::finalize_remote_application_actor_join (
+  std::shared_ptr<remote_actor_join_state_t> s, actor_ref_t target_actor)
 {
     spot_node_runtime_t spot (_state->spot_state);
-    const auto joined = actor_join_reply_t{
-      0,
-      ::zlink::framework::detail::actor_ref_access_t::make (
-        node_rid_t::from_string (s->target.node_rid.to_string ()),
-        std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (s->actor)),
-        std::string (s->actor.actor_id ().value ()), s->actor.object_generation ()),
-      zlink::message_t{}};
     const auto source =
       runtime::protocol::actor_route_fence_t{std::string (s->actor.actor_id ().value ()),
                                              s->actor.object_generation (),
@@ -3393,27 +3423,13 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::finalize_remote_application_acto
     const auto target = runtime::protocol::relocation_target_fence_t{
       s->target.node_rid.to_bytes (), s->target.node_generation, s->target.owner.owner_id,
       static_cast<std::uint64_t> (s->target.owner.lease_generation)};
-    std::optional<result_t<actor_join_reply_t>> publication_failure;
-    try {
-        co_await spot.complete_remote_actor_transfer (
-          s->actor, joined.actor,
-          {node_rid_t::from_string (s->target.node_rid.to_string ()),
-           spot_id_t (s->target.spot_id),
-           {}},
-          source, target, s->committed_actor_authority_owner_generation, s->transfer_id);
-    }
-    catch (const framework_exception_t &error) {
-        publication_failure.emplace (detail::result_access_t::failure<actor_join_reply_t> (error));
-    }
-    catch (const std::exception &error) {
-        publication_failure.emplace (result_t<actor_join_reply_t>::failure (
-          framework_error_kind_t::internal_failure, error.what ()));
-    }
-    if (publication_failure)
-        co_return co_await fail_remote_actor_join (
-          *s, *publication_failure, "committed target Actor route publication failed");
-    co_return result_t<actor_join_reply_t>::success (actor_join_reply_t{
-      joined.result_code, joined.actor, zlink::message_t::from (s->admission_payload)});
+    co_await spot.complete_remote_actor_transfer (
+      s->actor, target_actor,
+      {node_rid_t::from_string (s->target.node_rid.to_string ()),
+       spot_id_t (s->target.spot_id),
+       {}},
+      source, target, s->committed_actor_authority_owner_generation, s->transfer_id);
+    co_return;
 }
 
 result_t<std::shared_ptr<deferred_barrier_t>>

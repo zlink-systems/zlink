@@ -217,6 +217,7 @@ internal sealed class ZLinkDeferredActorJoin(
             );
             using var dispatch = actorState.EnterDeferredJoinExecution();
             ZLinkActorJoinCompletion? completion = null;
+            ZLinkActorJoinResult.Relayed? relayed = null;
             if (failure is null && RemainingTimeout() <= TimeSpan.Zero)
                 failure = ZLinkFrameworkErrorKind.DeadlineExceeded;
             if (failure is { } failed)
@@ -249,6 +250,9 @@ internal sealed class ZLinkDeferredActorJoin(
 
                     switch (result)
                     {
+                        case ZLinkActorJoinResult.Relayed transferred:
+                            relayed = transferred;
+                            break;
                         case ZLinkActorJoinResult.Accepted accepted
                             when sourceNodeRid is null
                                 || accepted.Actor.NodeRid == sourceNodeRid.Value:
@@ -259,9 +263,7 @@ internal sealed class ZLinkDeferredActorJoin(
                             );
                             break;
                         case ZLinkActorJoinResult.Accepted:
-                            // The target runtime delivers durable cross-node Accepted
-                            // after replay and source cleanup through the handoff
-                            // completion request.
+                            // The remote target owns its public completion.
                             break;
                         case ZLinkActorJoinResult.Rejected rejected:
                             completion = new ZLinkActorJoinCompletion.Rejected(
@@ -299,6 +301,10 @@ internal sealed class ZLinkDeferredActorJoin(
                     completion = new ZLinkActorJoinCompletion.Failed(_operationId, kind);
                 }
 
+            // Source cleanup failures belong to the infrastructure task owner,
+            // outside the public completion conversion above.
+            if (relayed is not null)
+                await relayed.SourceCleanup().ConfigureAwait(false);
             if (completion is not null)
                 await NotifySourceAsync(completion, cancellationToken).ConfigureAwait(false);
         }
