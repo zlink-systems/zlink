@@ -353,7 +353,7 @@ export class ZLinkSpotActorDispatcher {
     );
   }
 
-  private async invokeHandler<THandler, TResult>(
+  private invokeHandler<THandler, TResult>(
     actor: ZLinkActor,
     descriptor: Pick<ZLinkActorPacketDescriptor, 'handlerType' | 'methodName'>,
     callback: (
@@ -361,7 +361,7 @@ export class ZLinkSpotActorDispatcher {
       method: THandler extends { handle: infer TMethod } ? TMethod : never
     ) => Promise<TResult>
   ): Promise<TResult> {
-    return await runWithLifecycleHandler(
+    return runWithLifecycleHandler(
       actor,
       descriptor.handlerType,
       this.options.providerResolver,

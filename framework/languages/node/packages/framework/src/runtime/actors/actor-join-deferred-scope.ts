@@ -31,8 +31,8 @@ class ActorJoinRegistrationScope {
     this.open = false;
   }
 
-  async prepareSealedJoins(): Promise<void> {
-    await this.prepareSealedJoinsCore();
+  prepareSealedJoins(): Promise<void> {
+    return this.prepareSealedJoinsCore();
   }
 
   private async prepareSealedJoinsCore(): Promise<void> {
