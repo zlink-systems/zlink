@@ -318,6 +318,21 @@ final class ZLinkCommittedActorLocalIngressTest {
                     .toCompletableFuture()
                     .get(WAIT_SECONDS, TimeUnit.SECONDS);
             var targetNode = node(target);
+            var targetCleanup = new CompletableFuture<CompletionStage<Void>>();
+            @SuppressWarnings("unchecked")
+            var targetMachines =
+                    (List<ZLinkCanonicalRelocationStateMachine>)
+                            field(field(target, "spotRetire"), "stateMachines");
+            Runnable observeTargetCleanup =
+                    () ->
+                            targetCleanup.complete(
+                                    CompletableFuture.allOf(
+                                            targetMachines.stream()
+                                                    .map(
+                                                            ZLinkCanonicalRelocationStateMachine
+                                                                    ::awaitAcceptedTargetRelocations)
+                                                    .map(CompletionStage::toCompletableFuture)
+                                                    .toArray(CompletableFuture[]::new)));
             if (conflict) {
                 BiFunction<ZLinkLocationRepository, Object[], CompletionStage<?>> abortCommit =
                         (repository, arguments) -> {
@@ -335,10 +350,16 @@ final class ZLinkCommittedActorLocalIngressTest {
                                                             .STALE);
                         };
                 interceptCommit(node(source), abortCommit);
-                interceptCommit(targetNode, abortCommit);
+                interceptCommit(
+                        targetNode,
+                        (repository, arguments) -> {
+                            observeTargetCleanup.run();
+                            return abortCommit.apply(repository, arguments);
+                        });
             } else {
                 targetFactory =
                         context -> {
+                            observeTargetCleanup.run();
                             observedRaw.complete(targetNode.actorLookup(ACTOR));
                             return CompletableFuture.failedFuture(
                                     new IllegalStateException("injected target factory failure"));
@@ -380,6 +401,11 @@ final class ZLinkCommittedActorLocalIngressTest {
                             joined.get(WAIT_SECONDS, TimeUnit.SECONDS));
                     assertEquals(1, sourceCompletions.get());
                 }
+                // Relocation §4.4 lets source Preserve resume independently of target cleanup.
+                targetCleanup
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS)
+                        .toCompletableFuture()
+                        .get(WAIT_SECONDS, TimeUnit.SECONDS);
                 assertNull(
                         targetNode.actorLookup(ACTOR), "failed target must release the raw Actor");
                 var actors = (ZLinkActorRuntime) target.actorManager();
