@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "runtime/streams/stream_host_service.hpp"
+#include "runtime/diagnostics/session_binding_diagnostics.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/streams/session_liveness.hpp"
 #include "runtime/transport/listener_identity.hpp"
@@ -878,6 +879,7 @@ class stream_host_service_t::listener_t
         std::function<void ()> close_connection;
         detail::stream_runtime_t::actor_binding_replaced_dispatch_t dispatch_replacement;
         detail::actor_gateway_runtime_t actor_gateway;
+        std::shared_ptr<runtime_failure_collector_t> failures;
         std::shared_ptr<detail::bound_session_replacement_handler_t> handler;
 
         replacement_session_state_t (
@@ -885,12 +887,14 @@ class stream_host_service_t::listener_t
           stream_t stream_,
           std::function<void ()> close_connection_,
           detail::stream_runtime_t::actor_binding_replaced_dispatch_t dispatch_replacement_,
-          detail::actor_gateway_runtime_t actor_gateway_) :
+          detail::actor_gateway_runtime_t actor_gateway_,
+          std::shared_ptr<runtime_failure_collector_t> failures_) :
             session_rid (std::move (session_rid_)),
             stream (std::move (stream_)),
             close_connection (std::move (close_connection_)),
             dispatch_replacement (std::move (dispatch_replacement_)),
-            actor_gateway (std::move (actor_gateway_))
+            actor_gateway (std::move (actor_gateway_)),
+            failures (std::move (failures_))
         {
         }
 
@@ -911,6 +915,7 @@ class stream_host_service_t::listener_t
                                                                             registered);
             }
             catch (...) {
+                failures->report (std::current_exception ());
             }
         }
 
@@ -1651,8 +1656,15 @@ class stream_host_service_t::listener_t
         const auto local = _mesh_node->native_node ().status ();
         const auto owner = _mesh_node->session_route_owner ();
         const auto &retired = replacement.retired_session;
+        if (!owner) {
+            detail::trace_session_binding_control_drop (
+              _runtime.dispatch_options_ref (), replacement.actor_authority.target_node_routing_id,
+              replacement.actor_authority.actor_id, "boundSessionReplaced",
+              message_flow_reason_t::location_unavailable);
+            return false;
+        }
         // Session-Actor binding §4: compare with this host's current descriptor identity.
-        if (!owner || owner->lease_generation <= 0
+        if (owner->lease_generation <= 0
             || !runtime::protocol::same_session_owner_identity (
               retired, {local.routing_id ().to_bytes (),
                         local.lifecycle_generation (),
@@ -1663,6 +1675,11 @@ class stream_host_service_t::listener_t
             || retired.session_routing_id != state->session_rid.to_bytes ()) {
             trace_stream_host ("actor-binding-replacement-rejected", _stream, std::nullopt,
                                "reason=session-fence-mismatch");
+            detail::trace_session_binding_control_drop (
+              _runtime.dispatch_options_ref (), replacement.actor_authority.target_node_routing_id,
+              replacement.actor_authority.actor_id, "boundSessionReplaced",
+              owner->lease_generation <= 0 ? message_flow_reason_t::location_unavailable
+                                           : message_flow_reason_t::stale_target);
             return false;
         }
         if (!state->exact (replacement)) {
@@ -1749,7 +1766,7 @@ class stream_host_service_t::listener_t
         auto actor_gateway = _services->get_required<detail::actor_gateway_runtime_t> ();
         auto state = std::make_shared<replacement_session_state_t> (
           session_rid, stream, std::move (close_connection), std::move (dispatch_replacement),
-          actor_gateway);
+          actor_gateway, _runtime_failures);
         auto registered = actor_gateway.register_bound_session_replacement_handler (
           session_rid, [this, weak = std::weak_ptr<replacement_session_state_t> (state)] (
                          const runtime::protocol::bound_session_replaced_t &replacement) {
@@ -2334,6 +2351,7 @@ class stream_host_service_t::listener_t
                     current->scope.close ();
                 }
                 catch (...) {
+                    _runtime_failures->report (std::current_exception ());
                 }
             }
         }
