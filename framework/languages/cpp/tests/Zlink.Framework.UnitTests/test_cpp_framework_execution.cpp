@@ -10232,8 +10232,131 @@ bool verify_idle_mailbox_terminal (bool shared, mailbox_shutdown_t shutdown)
     return passed;
 }
 
+bool verify_cancelled_barrier_settles_running_phase (bool shared,
+                                                     bool cancel_queue,
+                                                     bool reached_first)
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    fw::test::manual_internal_scheduler_t worker;
+    auto queue = std::make_shared<rt::serial_execution_queue_t> (
+      worker, rt::serial_execution_queue_options_t{},
+      rt::serial_execution_queue_t::error_handler_t{},
+      shared ? rt::serial_lane_policy_t::spot_wide ()
+             : rt::serial_lane_policy_t::per_actor_spot ());
+    auto reserved = queue->reserve_barrier_next ("cancel-running-phase");
+    if (!reserved)
+        return false;
+    const auto barrier = reserved.value ();
+    if (reached_first)
+        worker.run_all ();
+    fw::task_completion_source_t<void> release;
+    bool entered = false;
+    auto phase = barrier->run ([&] {
+        entered = true;
+        return release.task ();
+    });
+    int phase_completions = 0;
+    fw::detail::observe_task_terminal (phase,
+                                       [&] (const fw::result_t<void> &) { ++phase_completions; });
+    worker.run_all ();
+    const bool phase_started = entered && !phase.await_ready ();
+    if (cancel_queue)
+        queue->cancel_pending ();
+    else
+        barrier->cancel ();
+    worker.run_all ();
+    auto terminal = barrier->terminal ();
+    const bool terminal_ready = terminal.await_ready ();
+    const bool phase_ready = phase.await_ready ();
+    const bool phase_failed =
+      phase_ready && !phase.result ()
+      && phase.result ().error_kind () == fw::framework_error_kind_t::shutting_down;
+    const bool terminal_failed = terminal_ready && !terminal.result ();
+    release.complete (fw::result_t<void>::success ());
+    worker.run_all ();
+    queue->close ();
+    queue->drain ();
+    worker.retire ();
+    const bool passed = phase_started && terminal_ready && phase_failed && phase_completions == 1;
+    std::cout << "cancel-running-barrier-phase shared=" << shared
+              << " cancel_queue=" << cancel_queue << " reached_first=" << reached_first
+              << " entered=" << entered << " terminal_ready=" << terminal_ready
+              << " terminal_failed=" << terminal_failed << " phase_ready=" << phase_ready
+              << " phase_failed=" << phase_failed << " phase_completions=" << phase_completions
+              << " passed=" << passed << '\n';
+    return passed;
+}
+
+bool verify_barrier_phase_completion_allows_reentrant_phase (bool shared)
+{
+    namespace fw = zlink::framework;
+    namespace rt = fw::runtime;
+    fw::test::manual_internal_scheduler_t worker;
+    auto queue = std::make_shared<rt::serial_execution_queue_t> (
+      worker, rt::serial_execution_queue_options_t{},
+      rt::serial_execution_queue_t::error_handler_t{},
+      shared ? rt::serial_lane_policy_t::spot_wide ()
+             : rt::serial_lane_policy_t::per_actor_spot ());
+    auto reserved = queue->reserve_barrier_next ("reentrant-running-phase");
+    if (!reserved)
+        return false;
+    const auto barrier = reserved.value ();
+    worker.run_all ();
+    fw::task_completion_source_t<void> release;
+    int phase_runs = 0;
+    bool activated = false;
+    std::optional<fw::task_t<void>> second;
+    auto first = barrier->run ([&] {
+        ++phase_runs;
+        return release.task ();
+    });
+    fw::detail::observe_task_terminal (first, [&] (const fw::result_t<void> &result) {
+        if (!result)
+            return;
+        second = barrier->run ([&] {
+            ++phase_runs;
+            return fw::task_t<void> (fw::result_t<void>::success ());
+        });
+        fw::detail::observe_task_terminal (*second, [&] (const fw::result_t<void> &result) {
+            if (result)
+                (void) barrier->activate ([&] { activated = true; });
+        });
+    });
+    worker.run_all ();
+    const bool held = phase_runs == 1 && !first.await_ready ();
+    release.complete (fw::result_t<void>::success ());
+    worker.run_all ();
+    const bool passed = held && first.await_ready () && first.result () && second
+                        && second->await_ready () && second->result () && phase_runs == 2
+                        && activated && barrier->terminal ().await_ready ()
+                        && barrier->terminal ().result ();
+    barrier->cancel ();
+    worker.run_all ();
+    queue->close ();
+    queue->drain ();
+    worker.retire ();
+    std::cout << "reentrant-barrier-phase shared=" << shared << " runs=" << phase_runs
+              << " activated=" << activated << " passed=" << passed << '\n';
+    return passed;
+}
+
 int main (int argc, char **argv)
 {
+    bool phases_passed = true;
+    for (const bool shared : {false, true}) {
+        for (const bool cancel_queue : {false, true})
+            for (const bool reached_first : {false, true})
+                phases_passed = verify_cancelled_barrier_settles_running_phase (
+                                  shared, cancel_queue, reached_first)
+                                && phases_passed;
+        phases_passed =
+          verify_barrier_phase_completion_allows_reentrant_phase (shared) && phases_passed;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--cancel-running-barrier-phase")
+        return phases_passed ? EXIT_SUCCESS : EXIT_FAILURE;
+    if (!phases_passed)
+        return EXIT_FAILURE;
     bool mailbox_passed = verify_inactive_barrier_and_cancel_reentry (false);
     mailbox_passed = verify_inactive_barrier_and_cancel_reentry (true) && mailbox_passed;
     mailbox_passed = verify_fifo_indexes_across_shutdown (false) && mailbox_passed;

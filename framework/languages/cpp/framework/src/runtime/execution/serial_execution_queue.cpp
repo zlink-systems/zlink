@@ -103,6 +103,7 @@ class serial_deferred_barrier_t final
       public std::enable_shared_from_this<serial_deferred_barrier_t>
 {
     using phase_t = std::function<void (result_t<void>)>;
+    static constexpr auto cancelled_message = "Lifecycle barrier was cancelled";
 
   public:
     serial_deferred_barrier_t (std::function<void ()> cancel = {},
@@ -238,41 +239,61 @@ class serial_deferred_barrier_t final
                                                           "Lifecycle barrier phase is empty"));
         auto source = std::make_shared<task_completion_source_t<void>> ();
         auto owned_work = std::make_shared<std::function<task_t<void> ()>> (std::move (work));
-        const auto invoke = [self = shared_from_this (), source,
+        const auto settle = [self = shared_from_this (), source] (result_t<void> result) {
+            {
+                std::lock_guard lock (self->_mutex);
+                self->_work = {};
+                if (self->_state == state_t::cancelled)
+                    result = result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                      cancelled_message);
+            }
+            source->complete (std::move (result));
+        };
+        const auto invoke = [self = shared_from_this (), settle,
                              owned_work] (result_t<void> admission) {
             if (!admission) {
-                source->complete (std::move (admission));
+                settle (std::move (admission));
                 return;
             }
             std::shared_ptr<task_t<void>> acquisition;
             {
                 std::lock_guard lock (self->_mutex);
-                acquisition = self->_acquisition;
+                if (self->_state == state_t::cancelled)
+                    admission = result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                         cancelled_message);
+                else {
+                    self->_work = settle;
+                    acquisition = self->_acquisition;
+                }
+            }
+            if (!admission) {
+                settle (std::move (admission));
+                return;
             }
             if (acquisition) {
                 const auto &acquired = acquisition->result ();
                 if (!acquired) {
-                    source->complete (acquired);
+                    settle (acquired);
                     return;
                 }
             }
             if (const auto failure = detail::take_serial_resume_failure ()) {
-                source->complete (result_t<void>::failure (failure->kind, failure->message));
+                settle (result_t<void>::failure (failure->kind, failure->message));
                 return;
             }
             try {
                 auto pending = std::make_shared<task_t<void>> ((*owned_work) ());
                 detail::observe_task_terminal (
-                  *pending, [source, pending, owned_work] (const result_t<void> &result) {
-                      source->complete (result);
+                  *pending, [settle, pending, owned_work] (const result_t<void> &result) {
+                      settle (result);
                   });
             }
             catch (const framework_exception_t &error) {
-                source->complete (detail::result_access_t::failure<void> (error));
+                settle (detail::result_access_t::failure<void> (error));
             }
             catch (const std::exception &error) {
-                source->complete (result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                                           error.what ()));
+                settle (result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                                 error.what ()));
             }
         };
         detail::task_scheduler_t resume;
@@ -283,10 +304,9 @@ class serial_deferred_barrier_t final
                 return task_t<void> (
                   result_t<void>::failure (framework_error_kind_t::invalid_operation,
                                            "Lifecycle barrier phase is unavailable"));
-            if (!_reached) {
-                _work = invoke;
+            _work = invoke;
+            if (!_reached)
                 return source->task ();
-            }
             resume = _resume;
             turn = _turn;
         }
@@ -299,8 +319,8 @@ class serial_deferred_barrier_t final
                                                      "Lifecycle barrier lost its retained turn"));
             });
         else
-            source->complete (result_t<void>::failure (framework_error_kind_t::shutting_down,
-                                                       "Lifecycle barrier has no retained turn"));
+            settle (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                             "Lifecycle barrier has no retained turn"));
         return source->task ();
     }
 
@@ -403,8 +423,8 @@ class serial_deferred_barrier_t final
         if (_notify)
             _notify ();
         if (phase)
-            phase (result_t<void>::failure (framework_error_kind_t::shutting_down,
-                                            "Lifecycle barrier was cancelled"));
+            phase (
+              result_t<void>::failure (framework_error_kind_t::shutting_down, cancelled_message));
         finish (std::move (complete), {}, {});
     }
 
@@ -444,8 +464,8 @@ class serial_deferred_barrier_t final
         }
         if (!complete) {
             release_participants ();
-            _terminal.complete (result_t<void>::failure (framework_error_kind_t::shutting_down,
-                                                         "Lifecycle barrier was cancelled"));
+            _terminal.complete (
+              result_t<void>::failure (framework_error_kind_t::shutting_down, cancelled_message));
             return;
         }
         // The readiness holder owns every acquired Actor boundary through the

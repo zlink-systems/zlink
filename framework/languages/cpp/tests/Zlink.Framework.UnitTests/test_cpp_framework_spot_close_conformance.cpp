@@ -351,8 +351,13 @@ TEST (ZLinkFrameworkSpotCloseConformance, FailedPreparationDrainsYieldedTimerAnd
     std::shared_ptr<void> first_record_claim (nullptr,
                                               [state] (void *) { state->leave_callback (); });
     task_completion_source_t<void> resume;
-    const std::shared_ptr<void> release_on_exit (
-      nullptr, [&] (void *) { resume.complete (result_t<void>::success ()); });
+    task_completion_source_t<void> proceed;
+    std::promise<void> entered;
+    auto callback_entered = entered.get_future ();
+    const std::shared_ptr<void> release_on_exit (nullptr, [&] (void *) {
+        proceed.complete (result_t<void>::success ());
+        resume.complete (result_t<void>::success ());
+    });
     std::promise<void> cancelling;
     auto cancellation_started = cancelling.get_future ();
     struct observed_timer_resource_t final : timer_resource_t
@@ -375,6 +380,8 @@ TEST (ZLinkFrameworkSpotCloseConformance, FailedPreparationDrainsYieldedTimerAnd
     running->native_timer = std::make_unique<observed_timer_resource_t> (cancelling);
     running->handler_invoker = [&] (void *, void *, serializer_registry_t &,
                                     const timer_tick_t &) -> task_t<zlink::message_t> {
+        entered.set_value ();
+        co_await proceed.task ();
         terminal (false);
         co_await detail::yield_call<void> ([&] { return resume.task (); });
         resumed_with_instance = bool (state->spot_instance);
@@ -393,6 +400,7 @@ TEST (ZLinkFrameworkSpotCloseConformance, FailedPreparationDrainsYieldedTimerAnd
     auto marker = std::make_shared<std::promise<void>> ();
     auto application_drained = marker->get_future ();
     std::shared_ptr<void> cleanup_on_exit (nullptr, [&] (void *) {
+        proceed.complete (result_t<void>::success ());
         resume.complete (result_t<void>::success ());
         terminal (false);
         first_record_claim.reset ();
@@ -404,6 +412,9 @@ TEST (ZLinkFrameworkSpotCloseConformance, FailedPreparationDrainsYieldedTimerAnd
     timer_runtime_t::post_fire_count (state, running, {}, 1);
     timer_runtime_t::post_fire_count (state, pending, {}, 1);
     state->spot_serial_executor->open_preparation_admission ();
+    callback_entered.get ();
+    state->spot_serial_executor->close_preparation_admission ();
+    proceed.complete (result_t<void>::success ());
     cancellation_started.get ();
     auto drained = node->lane.run ([&] { return state->preparation_callback_terminal; }).get ();
     ASSERT_TRUE (drained);

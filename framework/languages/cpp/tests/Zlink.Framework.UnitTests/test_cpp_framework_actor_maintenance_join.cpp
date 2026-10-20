@@ -251,6 +251,7 @@ struct observations_t
     std::vector<std::string> handled_nodes;
     std::vector<std::size_t> handled_completion_counts;
     bool hold_replay_prefix = false;
+    bool queue_replay_failure_before_join = false;
     bool replay_prefix_entered = false;
     bool release_replay_prefix = false;
     std::shared_ptr<native_handoff_hold_t> native_handoff_hold;
@@ -433,9 +434,23 @@ class entry_t final : public fw::entry_spot_t<actor_t>
         observations->changed.notify_all ();
         return request.value == instance_probe ? probe_t{actor.instance} : request;
     }
-    void move (actor_t &actor, fw::message_context_t &, const move_t &request)
+    fw::task_t<void> move (actor_t &actor, fw::message_context_t &, const move_t &request)
     {
         actor.context ().join_spot (fw::spot_id_t (request.target)).defer ();
+        // Keep the failure payload in the source suffix before the deferred
+        // Join activates at this handler's terminal.
+        if (observations->queue_replay_failure_before_join) {
+            co_await observations->joined_sender.load ()
+              ->send (actor.context ().actor_id (), probe_t{-1})
+              .async ();
+            {
+                std::lock_guard lock (observations->mutex);
+                observations->probe_admission_observed = true;
+            }
+            observations->changed.notify_all ();
+            co_await observations->joined_send_captured.task ();
+        }
+        co_return;
     }
     fw::task_t<fw::actor_create_response_t> on_create_actor (actor_t &,
                                                              const fw::message_t &) override
@@ -636,7 +651,8 @@ class room_t final : public fw::spot_t<actor_t>
     }
     fw::task_t<void> on_actor_joined (actor_t &actor) override
     {
-        if (observations->joined_sender && _context.spot_id () == local_spot) {
+        if (observations->joined_sender && _context.spot_id () == local_spot
+            && !observations->queue_replay_failure_before_join) {
             {
                 std::lock_guard lock (observations->mutex);
                 auto *source = &observations->joined_send_captured;
@@ -1371,6 +1387,7 @@ void local_join_backlog (backlog_case_t scenario)
     evidence.joined_payloads =
       scenario == backlog_case_t::replay_failure ? std::vector<int>{-1} : std::vector<int>{1, 2};
     evidence.fail_completion = scenario == backlog_case_t::completion_failure;
+    evidence.queue_replay_failure_before_join = scenario == backlog_case_t::replay_failure;
     observations = &evidence;
     host_t host;
     release_callbacks_t release{evidence};
@@ -1411,10 +1428,35 @@ void local_join_backlog (backlog_case_t scenario)
     const auto source = state->lane.run ([&] { return state->actor_spot_ids.at (key); }).get ();
     auto source_queue = actor_queue (source);
     ASSERT_TRUE (client.send (fw::actor_id_t (actor_id), move_t{local_spot}).async ().result ());
+    const auto completion_deadline = std::chrono::steady_clock::now () + wait_budget;
+    if (scenario == backlog_case_t::replay_failure) {
+        {
+            std::unique_lock lock (evidence.mutex);
+            ASSERT_TRUE (evidence.changed.wait_until (
+              lock, completion_deadline, [&] { return evidence.probe_admission_observed; }));
+        }
+        // The count includes the running move and the queued failure probe.
+        constexpr auto running_and_queued = 2u;
+        const auto queued = [&] {
+            return source_queue->pending_count (fw::runtime::serial_work_lane_t::application);
+        };
+        while (queued () != running_and_queued
+               && std::chrono::steady_clock::now () < completion_deadline)
+            std::this_thread::yield ();
+        ASSERT_EQ (queued (), running_and_queued);
+        const auto published = source_queue->pending_messages ().result_for (
+          std::chrono::duration_cast<std::chrono::milliseconds> (
+            completion_deadline - std::chrono::steady_clock::now ()));
+        ASSERT_TRUE (published);
+        published->value ();
+        evidence.joined_send_captured.complete (fw::result_t<void>::success ());
+    }
     {
         std::unique_lock lock (evidence.mutex);
-        ASSERT_TRUE (evidence.changed.wait_for (lock, wait_budget,
-                                                [&] { return !evidence.completions.empty (); }));
+        const auto completed = [&] { return !evidence.completions.empty (); };
+        ASSERT_TRUE (scenario == backlog_case_t::replay_failure
+                       ? evidence.changed.wait_until (lock, completion_deadline, completed)
+                       : evidence.changed.wait_for (lock, wait_budget, completed));
     }
     if (scenario == backlog_case_t::ordinary_order) {
         std::unique_lock lock (evidence.mutex);
@@ -1628,10 +1670,16 @@ void next_join_suffix (bool remote,
         ASSERT_TRUE (ready (initiator));
         ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), third_rid));
         initiator_services.emplace (initiator.app.advanced ().services ().build_provider ());
+        ASSERT_TRUE (
+          peer_ready (initiator_services->get_required<fw::route_mesh_runtime_t> (), first_rid));
         initial_sender = &initiator_services->get_required<fw::actor_client_t> ();
     }
-    ASSERT_TRUE (
-      initial_sender->send (fw::actor_id_t (actor_id), move_t{local_spot}).async ().result ());
+    const auto initial_send =
+      initial_sender->send (fw::actor_id_t (actor_id), move_t{local_spot}).async ().result ();
+    ASSERT_TRUE (initial_send) << "kind=" << static_cast<int> (initial_send.error_kind ())
+                               << " error="
+                               << (initial_send.error () ? initial_send.error ()->what ()
+                                                         : "no error");
     if (const auto hold = evidence.native_handoff_hold) {
         std::unique_lock lock (evidence.mutex);
         ASSERT_TRUE (evidence.changed.wait_for (lock, wait_budget, [&] {
@@ -2410,6 +2458,7 @@ TEST_P (NativeIntakePendingStore, KeepsInfrastructureOutsideAcceptanceTurn)
     ASSERT_TRUE (ready (peer));
     ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
     auto peer_services = peer.app.advanced ().services ().build_provider ();
+    ASSERT_TRUE (peer_ready (peer_services.get_required<fw::route_mesh_runtime_t> (), first_rid));
     auto &local = services.get_required<fw::actor_client_t> ();
     auto &native = peer_services.get_required<fw::actor_client_t> ();
     auto registration =
@@ -2434,7 +2483,14 @@ TEST_P (NativeIntakePendingStore, KeepsInfrastructureOutsideAcceptanceTurn)
     });
     for (int index = 0; index != 3; ++index) {
         entered[index].result ().value ();
-        EXPECT_TRUE (store->reached[index].load ()) << "Store step=" << index;
+        const bool reached = store->reached[index].load ();
+        EXPECT_TRUE (reached) << "Store step=" << index;
+        if (!reached) {
+            const auto terminal = pending.result ();
+            std::fprintf (stderr, "intake request failed before Store step=%d: kind=%d error=%s\n",
+                          index, static_cast<int> (terminal.error_kind ()),
+                          terminal.error () ? terminal.error ()->what () : "no error");
+        }
         if (!store->reached[index].load ())
             break;
         EXPECT_FALSE (pending.await_ready ());
