@@ -4,9 +4,6 @@ import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.JsonToken;
-import com.fasterxml.jackson.core.ObjectCodec;
-import com.fasterxml.jackson.core.async.ByteBufferFeeder;
-import com.fasterxml.jackson.core.util.JsonParserDelegate;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonMappingException;
@@ -92,38 +89,27 @@ public final class ZLinkJsonMessageSerializer
         if (type == Message.class) {
             return type.cast(Message.from(bytes));
         }
-        if (type == byte[].class) {
-            if (bytes.hasArray()
-                    && bytes.arrayOffset() == 0
-                    && bytes.position() == 0
-                    && bytes.remaining() == bytes.array().length) {
-                return type.cast(bytes.array());
-            }
-            byte[] owned = new byte[bytes.remaining()];
+        byte[] owned;
+        if (bytes.hasArray()
+                && bytes.arrayOffset() == 0
+                && bytes.position() == 0
+                && bytes.remaining() == bytes.array().length) {
+            owned = bytes.array();
+        } else {
+            owned = new byte[bytes.remaining()];
             bytes.get(owned);
+        }
+        if (type == byte[].class) {
             return type.cast(owned);
         }
-        try (JsonParser parser = mapper.getFactory().createNonBlockingByteBufferParser()) {
-            ZLinkFrameworkJsonProfile.validateInput(bytes);
-            ByteBufferFeeder input = (ByteBufferFeeder) parser.getNonBlockingInputFeeder();
-            input.feedInput(bytes);
-            input.endOfInput();
-            // A scalar ending at EOF needs the async parser's final token transition.
-            while (parser.nextToken() == JsonToken.NOT_AVAILABLE) {}
-            return mapper.readValue(
-                    new JsonParserDelegate(parser) {
-                        @Override
-                        public ObjectCodec getCodec() {
-                            return mapper;
-                        }
-                    },
-                    type);
+        try {
+            return mapper.readValue(owned, type);
         } catch (IOException ex) {
             throw new IllegalArgumentException(
                     "failed to deserialize JSON message as "
                             + type.getName()
                             + " payload="
-                            + StandardCharsets.UTF_8.decode(bytes),
+                            + new String(owned, StandardCharsets.UTF_8),
                     ex);
         }
     }

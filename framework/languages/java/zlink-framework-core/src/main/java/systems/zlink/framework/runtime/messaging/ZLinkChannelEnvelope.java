@@ -3,7 +3,6 @@ package systems.zlink.framework.runtime.messaging;
 import com.fasterxml.jackson.core.JsonFactory;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonToken;
-import com.fasterxml.jackson.core.async.ByteBufferFeeder;
 import com.fasterxml.jackson.core.util.JsonRecyclerPools;
 
 import systems.zlink.contracts.messaging.Message;
@@ -15,10 +14,12 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
 import java.io.IOException;
+import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -384,10 +385,7 @@ public final class ZLinkChannelEnvelope {
      * captureFlow} is set (spec 27 §4).
      */
     public static Header decodeHeader(Message headerPart, boolean captureFlow) {
-        try (JsonParser json = JSON.createNonBlockingByteBufferParser()) {
-            ByteBufferFeeder input = (ByteBufferFeeder) json.getNonBlockingInputFeeder();
-            input.feedInput(headerPart.dataBuffer());
-            input.endOfInput();
+        try (JsonParser json = JSON.createParser(new MessageInputStream(headerPart))) {
             return decodeHeader(json, captureFlow);
         } catch (Exception ex) {
             if (ex instanceof ZLinkFrameworkException frameworkError) {
@@ -815,6 +813,38 @@ public final class ZLinkChannelEnvelope {
         }
         if (flowId != null && !ZLinkFlowContext.isValidFlowId(flowId)) {
             throw protocolError("ZLink envelope flow id must be UUIDv7", null);
+        }
+    }
+
+    private static final class MessageInputStream extends InputStream {
+        private final Message message;
+        private final int size;
+        private int position;
+
+        MessageInputStream(Message message) {
+            this.message = message;
+            size = message.size();
+        }
+
+        @Override
+        public int read() {
+            return position == size ? -1 : message.readByte(position++) & 0xff;
+        }
+
+        @Override
+        public int read(byte[] target, int offset, int length) {
+            Objects.checkFromIndexSize(offset, length, target.length);
+            if (length == 0) {
+                return 0;
+            }
+            int remaining = size - position;
+            if (remaining == 0) {
+                return -1;
+            }
+            int count = Math.min(length, remaining);
+            message.copyTo(target, position, offset, count);
+            position += count;
+            return count;
         }
     }
 

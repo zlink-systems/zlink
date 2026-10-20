@@ -31,7 +31,6 @@ import java.io.InputStream;
 import java.io.PushbackInputStream;
 import java.io.Reader;
 import java.lang.annotation.Annotation;
-import java.nio.ByteBuffer;
 import java.util.Base64;
 
 /** Owns the framework-json-v1 mapper decisions shared by JVM transports. */
@@ -88,15 +87,6 @@ public final class ZLinkFrameworkJsonProfile {
             builder.addModule(module);
         }
         return builder.build();
-    }
-
-    /** Validates the native JSON input without changing its cursor or copying its bytes. */
-    public static void validateInput(ByteBuffer input) throws IOException {
-        int prefix = 0;
-        for (int index = 0; index < Math.min(input.remaining(), UTF8_BOM_LENGTH); index++) {
-            prefix = (prefix << Byte.SIZE) | (input.get(input.position() + index) & 0xff);
-        }
-        rejectBomPrefix(prefix);
     }
 
     private static void rejectBomPrefix(int prefix) throws IOException {

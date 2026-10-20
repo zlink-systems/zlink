@@ -53,18 +53,6 @@ final class ZLinkJsonMessageSerializerTest {
     }
 
     @Test
-    void borrowedTypedJsonDoesNotMaterializeAnEncodedArray() {
-        CountingMapper mapper = new CountingMapper();
-        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer(mapper);
-        ProfileReply decoded;
-        try (Message payload = Message.from("{\"value\":\"profile:42\"}")) {
-            decoded = serializer.deserializeBorrowed(payload, ProfileReply.class);
-        }
-        assertEquals(new ProfileReply("profile:42"), decoded);
-        assertEquals(0, mapper.arrayReads, "typed decode must read the native view directly");
-    }
-
-    @Test
     void borrowedTypedJsonPreservesTheArrayDecoderResultsAndErrors() throws Exception {
         ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
         for (String json : List.of("{\"value\":\"한글😀\"}", "null", "{\"value\":\"first\"} {}")) {
@@ -159,16 +147,6 @@ final class ZLinkJsonMessageSerializerTest {
         public CodecAwareRecord deserialize(JsonParser parser, DeserializationContext context)
                 throws IOException {
             return new CodecAwareRecord(parser.readValueAs(ProfileReply.class).value());
-        }
-    }
-
-    private static final class CountingMapper extends ObjectMapper {
-        private int arrayReads;
-
-        @Override
-        public <T> T readValue(byte[] source, Class<T> type) throws IOException {
-            arrayReads++;
-            return super.readValue(source, type);
         }
     }
 
