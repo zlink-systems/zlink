@@ -2304,7 +2304,6 @@ public final class ZLinkSerialExecutionQueue {
     private CompletionStage<Void> invokeInline(Entry entry) {
         completeAdmission(entry);
         CompletableFuture<Void> gate = new CompletableFuture<>();
-        CompletableFuture<Void> invocationReturned = new CompletableFuture<>();
         boolean releaseGateOnIncompleteStage =
                 lanePolicy.releasesGateOnIncompleteStage() && entry.relocationBoundary == null;
         ZLinkSerialExecutionQueue previous = CURRENT.get();
@@ -2359,13 +2358,9 @@ public final class ZLinkSerialExecutionQueue {
             } else {
                 CURRENT_RELEASE_DEFERRED.set(previousDeferred);
             }
-            invocationReturned.complete(null);
         }
-        // A Yield may release the logical turn while operation.get() is still
-        // assembling dependent stages. Keep the physical drain entry until
-        // that invocation has returned, otherwise a completed managed stage
-        // can run a late dependent inline outside its continuation turn.
-        return CompletableFuture.allOf(gate, invocationReturned);
+        // The drain observes this gate only after operation.get() and context restoration return.
+        return gate;
     }
 
     /**
