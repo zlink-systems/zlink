@@ -13,14 +13,13 @@ import java.util.List;
  */
 public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
         implements AutoCloseable {
-    private final List<ByteBuffer> parts;
-    private final Message[] materialized;
+    private final Object[] parts;
     private boolean detached;
     private boolean closed;
 
-    ZLinkFrameworkMultipartView(List<ByteBuffer> parts) {
-        this.parts = List.copyOf(parts);
-        this.materialized = new Message[parts.size()];
+    /** Takes exclusive ownership of the codec's part slots. */
+    ZLinkFrameworkMultipartView(Object[] parts) {
+        this.parts = parts;
     }
 
     @Override
@@ -28,26 +27,30 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
         if (closed) {
             throw new IllegalStateException("multipart view is closed");
         }
-        Message value = materialized[index];
-        if (value == null) {
-            value = Message.from(parts.get(index));
-            materialized[index] = value;
+        Object value = parts[index];
+        if (value instanceof ByteBuffer bytes) {
+            Message materialized = Message.from(bytes);
+            parts[index] = materialized;
+            return materialized;
         }
-        return value;
+        return (Message) value;
     }
 
     @Override
     public int size() {
-        return parts.size();
+        return parts.length;
     }
 
+    @SuppressWarnings("unchecked")
     List<Message> detachAll() {
         try {
-            for (int index = 0; index < materialized.length; index++) {
+            for (int index = 0; index < parts.length; index++) {
                 get(index);
             }
+            // Every slot now owns a Message; List.of publishes an immutable list of them.
+            List<Message> result = (List<Message>) (List<?>) List.of(parts);
             detached = true;
-            return List.of(materialized);
+            return result;
         } catch (RuntimeException failure) {
             close();
             throw failure;
@@ -60,9 +63,9 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
             return;
         }
         closed = true;
-        for (Message part : materialized) {
-            if (part != null) {
-                part.close();
+        for (Object part : parts) {
+            if (part instanceof Message message) {
+                message.close();
             }
         }
     }

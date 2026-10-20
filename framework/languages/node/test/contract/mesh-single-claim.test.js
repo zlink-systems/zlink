@@ -34,6 +34,71 @@ function harness(domain, options, owner, claims) {
   return { pump, receiveBatches, ready() { ready(domain); } };
 }
 
+for (const preparation of ['true', 'false', 'throw', 'async-true', 'async-false', 'reject', 'abort']) {
+  test(`claim preparation preserves record completion and ownership: ${preparation}`, async () => {
+    const events = [];
+    const errors = [];
+    const failure = new Error('source preparation failed');
+    let resume;
+    let signal;
+    const records = [0, 1].map((index) => ({
+      parts: [{ data() { return Buffer.alloc(0); }, close() { events.push(`part-${index}`); } }],
+      applicationJobPermit: {
+        releaseAfterInternalProcessing() { events.push(`permit-${index}`); }
+      },
+      onTerminalCompletion() { events.push(`terminal-${index}`); },
+      releaseRetainedIngress() { events.push(`retained-${index}`); }
+    }));
+    records[0].prepareDispatch = (stop) => {
+      signal = stop;
+      events.push('prepare');
+      if (preparation === 'throw') throw failure;
+      if (preparation === 'reject') return Promise.reject(failure);
+      if (preparation === 'abort') return new Promise((resolve) => { resume = resolve; });
+      const accepted = preparation.endsWith('true');
+      return preparation.startsWith('async-') ? Promise.resolve(accepted) : accepted;
+    };
+    const h = harness(ReadyDomain.Application, {
+      applicationJobQueue: {},
+      dispatch(_owner, record) {
+        events.push(`dispatch-${records.indexOf(record)}`);
+        return Promise.resolve();
+      },
+      reportError(error) { errors.push(error); }
+    }, { ordinaryIngressPreAdmitted: true }, [{
+      recvBatch() { return { ok: true, records }; },
+      release() { events.push('claim'); }
+    }]);
+    try {
+      h.ready();
+      await new Promise(setImmediate);
+      if (preparation === 'abort') {
+        assert.deepEqual(events, ['prepare']);
+        const closing = h.pump.dispose();
+        assert.equal(signal.aborted, true);
+        resume(true);
+        await closing;
+      }
+      const accepted = preparation === 'true' || preparation === 'async-true';
+      assert.equal(events.includes('dispatch-0'), accepted);
+      assert.equal(events.includes('terminal-0'), accepted);
+      assert.equal(events.includes('dispatch-1'), preparation !== 'abort');
+      assert.equal(events.includes('terminal-1'), preparation !== 'abort');
+      assert.deepEqual(errors, ['throw', 'reject'].includes(preparation) ? [failure] : []);
+      for (const index of [0, 1]) {
+        assert.equal(events.filter((event) => event === `part-${index}`).length, 1);
+        assert.equal(events.filter((event) => event === `retained-${index}`).length, 1);
+        if (preparation !== 'abort' || index === 0)
+          assert.equal(events.filter((event) => event === `permit-${index}`).length, 1);
+      }
+      assert.equal(events.filter((event) => event === 'claim').length, 1);
+    } finally {
+      resume?.(true);
+      await h.pump.dispose();
+    }
+  });
+}
+
 for (const domain of [ReadyDomain.Application, ReadyDomain.Infrastructure]) {
   test(`single synchronous claim creates no Promise: domain ${domain}`, async () => {
     const events = [];

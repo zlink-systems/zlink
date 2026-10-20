@@ -37,6 +37,7 @@ const { NestFactory } = require('@nestjs/core');
 const framework = require('../../packages/framework/dist');
 const nestjs = require('../../packages/nestjs/dist');
 const connector = require('../../packages/stream-connector/dist');
+const { createBrowserSafeStreamApp } = require('./helpers/browser-safe-stream-app');
 const {
   ZLinkInMemoryProviderLocationStore
 } = require('../../packages/framework/dist/runtime/locations/in-memory-provider-location-store');
@@ -382,10 +383,15 @@ for (const variant of [
           imports: [nestjs.ZLinkModule.forRoot(builder.build())],
           providers: node === 'session' ? [SessionFactory] : [MoveHandler, PlayerState, TableState]
         })(TestModule);
-        const app = await NestFactory.createApplicationContext(TestModule, {
-          logger: false,
-          abortOnError: false
-        });
+        const createApp = () =>
+          NestFactory.createApplicationContext(TestModule, {
+            logger: false,
+            abortOnError: false
+          });
+        const app =
+          variant.startsWith('Session') && node === 'session'
+            ? await createBrowserSafeStreamApp(createApp, 'sessions')
+            : await createApp();
         apps.push(app);
         return app;
       }

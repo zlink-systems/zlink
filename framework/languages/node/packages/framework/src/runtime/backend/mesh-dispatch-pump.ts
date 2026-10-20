@@ -184,16 +184,50 @@ export class ZLinkMeshDispatchPump {
 
   /**
    * Starts one record in this worker's turn; a permit's scope covers the
-   * synchronous dispatch. Returns `false` when the dispatch threw (already
-   * reported), `true` when it returned synchronously, or the handler's pending
-   * completion, which the draining turn awaits itself before
+   * synchronous dispatch. Returns `false` when preparation rejects the record,
+   * shutdown starts, or dispatch throws (already reported), `true` when dispatch
+   * returns synchronously, or the pending preparation/handler completion,
+   * which the draining turn awaits itself before
    * {@link finishRecord}.
    */
   private dispatchRecord(
     owner: ReadyRecord,
     record: ReceiveRecord,
     permit: ApplicationJobPermitPort | undefined
+  ): boolean | PromiseLike<void | boolean> {
+    if (record.prepareDispatch === undefined) return this.invokeRecord(owner, record, permit);
+    try {
+      const preparation = record.prepareDispatch(this.capacityStop.signal);
+      return preparation instanceof Promise
+        ? this.continuePreparingRecord(owner, record, permit, preparation)
+        : this.invokeRecord(owner, record, permit, preparation);
+    } catch (error) {
+      this.failRecord(error, record, permit);
+      return false;
+    }
+  }
+
+  private continuePreparingRecord(
+    owner: ReadyRecord,
+    record: ReceiveRecord,
+    permit: ApplicationJobPermitPort | undefined,
+    preparation: Promise<boolean>
+  ): Promise<void | boolean> {
+    return preparation.then<void | boolean>((accepted) =>
+      this.invokeRecord(owner, record, permit, accepted)
+    );
+  }
+
+  private invokeRecord(
+    owner: ReadyRecord,
+    record: ReceiveRecord,
+    permit: ApplicationJobPermitPort | undefined,
+    accepted = true
   ): boolean | PromiseLike<void> {
+    if (!accepted || this.capacityStop.signal.aborted) {
+      releaseApplicationJobPermitTurn(permit);
+      return false;
+    }
     const previous = permit === undefined ? undefined : enterApplicationJobPermitScope(permit);
     let result: void | PromiseLike<void>;
     try {
@@ -526,12 +560,13 @@ export class ZLinkMeshDispatchPump {
 
   private continuePendingClaim(
     state: MeshClaimDrainState,
-    dispatched: PromiseLike<void>,
+    dispatched: PromiseLike<void | boolean>,
     record: ReceiveRecord,
     permit: ApplicationJobPermitPort | undefined
   ): Promise<void> {
     return Promise.resolve(dispatched).then(
-      () => {
+      (accepted) => {
+        if (accepted === false) return state.dispatchRecords();
         const finished = this.finishRecord(record, permit);
         return finished === undefined
           ? state.dispatchRecords()

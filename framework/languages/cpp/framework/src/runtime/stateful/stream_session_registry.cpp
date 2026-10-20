@@ -64,29 +64,28 @@ task_t<void>
 stream_session_registry_t::close_current (protocol::bound_session_close_t request,
                                           protocol::retired_bound_session_route_fence_t owner)
 {
-    auto terminal =
-      co_await _lane.run_task ([this, request = std::move (request), owner = std::move (owner)] {
+    auto close =
+      co_await _lane.run_task ([this, request = std::move (request),
+                                owner = std::move (owner)] () -> std::shared_ptr<task_t<void>> {
           const auto &session = request.session;
-          const auto found =
-            _connections.find (zlink::routing_id_t::from (session.session_routing_id).to_hex ());
+          const auto found = _connections.find (
+            connection_key (zlink::routing_id_t::from (session.session_routing_id)));
           const auto indexed = _actor_bindings.find (request.actor_id);
           if (!protocol::same_session_owner_identity (session, owner)
               || found == _connections.end () || indexed == _actor_bindings.end ()
               || indexed->second.connection != found->second.connection
               || indexed->second.binding_generation != session.retired_binding_generation
               || !found->second.physical_close)
-              return result_t<void>::failure (framework_error_kind_t::unavailable,
-                                              "Session binding is no longer current");
+              throw framework_exception_t (framework_error_kind_t::unavailable,
+                                           "Session binding is no longer current");
           const auto aggregate = found->second.bindings.find (request.actor_id);
           if (aggregate == found->second.bindings.end ()
               || aggregate->second.binding.actor.object_generation != request.object_generation)
-              return result_t<void>::failure (framework_error_kind_t::unavailable,
-                                              "Session binding is no longer current");
-          found->second.physical_close ();
-          return result_t<void>::success ();
+              throw framework_exception_t (framework_error_kind_t::unavailable,
+                                           "Session binding is no longer current");
+          return std::make_shared<task_t<void>> (found->second.physical_close ());
       });
-    if (!terminal)
-        throw *terminal.error ();
+    co_await *close;
     co_return;
 }
 
@@ -95,7 +94,7 @@ stream_session_registry_t::open (std::string connection_id,
                                  std::function<void ()> close_connection,
                                  std::optional<zlink::routing_id_t> owner_node_rid,
                                  std::uint64_t owner_node_generation,
-                                 std::function<void ()> physical_close)
+                                 std::function<task_t<void> ()> physical_close)
 {
     if (connection_id.empty ()) {
         throw std::invalid_argument ("stream connection id is empty");
@@ -615,14 +614,21 @@ stream_route_seal_admission_t
 stream_session_registry_t::seal_remote_route (const std::string &connection_id,
                                               std::uint64_t binding_generation,
                                               const std::string &actor_id,
-                                              std::uint64_t object_generation)
+                                              std::uint64_t object_generation,
+                                              std::uint64_t expected_owner_lease_generation)
 {
     return _lane
-      .run ([this, &connection_id, binding_generation, &actor_id,
-             object_generation] () -> stream_route_seal_admission_t {
-          const auto connection = _connections.find (connection_id);
+      .run ([this, &connection_id, binding_generation, &actor_id, object_generation,
+             expected_owner_lease_generation] () -> stream_route_seal_admission_t {
           auto *aggregate = current_aggregate_unlocked (actor_id);
-          if (connection == _connections.end () || aggregate == nullptr
+          if (aggregate == nullptr)
+              return {stateful_error_t::none,
+                      std::nullopt,
+                      {},
+                      0,
+                      protocol::session_relocation_seal_result_t::binding_absent};
+          const auto connection = _connections.find (connection_id);
+          if (connection == _connections.end ()
               || aggregate->binding.connection != connection->second.connection
               || aggregate->binding.binding_generation != binding_generation) {
               return {stateful_error_t::not_found, std::nullopt, {}, 0};
@@ -635,6 +641,7 @@ stream_session_registry_t::seal_remote_route (const std::string &connection_id,
           if (aggregate->binding.actor.kind != object_kind_t::actor
               || aggregate->binding.actor.key != actor_id
               || aggregate->binding.actor.object_generation != object_generation
+              || expected_owner_lease_generation < aggregate->binding.owner_lease_generation
               || aggregate->barrier_token || _next_barrier_token == 0) {
               return {stateful_error_t::conflict, aggregate->binding, {}, last_sequence};
           }

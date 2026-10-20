@@ -4348,46 +4348,24 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         CompletableFuture<T> result = new CompletableFuture<>();
         ZLinkSerialExecutionQueue.deferCurrentReleaseUntil(result);
         var flow = ZLinkFlowContext.current();
-        Object entryDispatchContext =
-                systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                        .currentEntrySpotDispatch();
         try {
-            ZLinkSerialExecutionQueue.propagateCurrent(handlerExecutor)
-                    .execute(
-                            () -> {
-                                outboundScope.run(
-                                        outbound,
-                                        () -> {
-                                            try (systems.zlink.framework.runtime.internal.handlers
-                                                            .ZLinkSuspendInvocationContext.Scope
-                                                    ignored =
-                                                            systems.zlink.framework.runtime.internal
-                                                                    .handlers
-                                                                    .ZLinkSuspendInvocationContext
-                                                                    .enterEntrySpotDispatch(
-                                                                            entryDispatchContext)) {
-                                                action.get()
-                                                        .whenComplete(
-                                                                (value, error) -> {
-                                                                    ZLinkFlowContext.run(
-                                                                            flow,
-                                                                            () -> {
-                                                                                if (error != null) {
-                                                                                    result
-                                                                                            .completeExceptionally(
-                                                                                                    error);
-                                                                                } else {
-                                                                                    result.complete(
-                                                                                            value);
-                                                                                }
-                                                                            });
-                                                                });
-                                            } catch (RuntimeException ex) {
-                                                result.completeExceptionally(ex);
-                                            }
-                                            return null;
-                                        });
-                            });
+            outboundScope.run(
+                    outbound,
+                    () -> {
+                        action.get()
+                                .whenComplete(
+                                        (value, error) ->
+                                                ZLinkFlowContext.run(
+                                                        flow,
+                                                        () -> {
+                                                            if (error != null) {
+                                                                result.completeExceptionally(error);
+                                                            } else {
+                                                                result.complete(value);
+                                                            }
+                                                        }));
+                        return null;
+                    });
         } catch (RuntimeException ex) {
             result.completeExceptionally(ex);
         }
@@ -7090,6 +7068,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return dispatchErrors.flow().captureEnabled();
     }
 
+    boolean dispatchErrorsEnabled() {
+        return dispatchErrors.errorsEnabled();
+    }
+
     /** Spec 26 §4 spot-actor trace: strings are built only after the gate. */
     private void traceActorFlow(
             ZLinkMessageFlowOutcome outcome,
@@ -7158,35 +7140,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 failure.sourceRid,
                 failure.correlationId,
                 failure.error);
-    }
-
-    void reportAcceptedActorReplayFailure(
-            String spotId, ZLinkActorAcceptedJournal.Record record, Throwable failure) {
-        if (!dispatchErrors.errorsEnabled()) return;
-        boolean request = record.header().requestSequence().isPresent();
-        reportDispatchError(
-                DispatchFailureReport.of(
-                                ZLinkDispatchErrorSurface.SPOT_ACTOR,
-                                request
-                                        ? ZLinkDispatchMessageKind.ACTOR_REQUEST
-                                        : ZLinkDispatchMessageKind.ACTOR_SEND,
-                                ZLinkDispatchErrorReporter.reasonFrom(
-                                        failure,
-                                        systems.zlink.framework.runtime.internal.backend
-                                                .ZLinkRequestFailureMapping.causeCode(failure)),
-                                request
-                                        ? ZLinkDispatchErrorAction.REPLY_ERROR
-                                        : ZLinkDispatchErrorAction.DROP)
-                        .packetName(record.header().packetName())
-                        .spotId(spotId)
-                        .actorId(record.actorId())
-                        .sourceRid(record.sourceNodeRid())
-                        .correlationId(
-                                record.header()
-                                        .requestSequence()
-                                        .map(Long::toUnsignedString)
-                                        .orElse(null))
-                        .error(failure));
     }
 
     void reportSpotLifecycleFailure(String spotId, Throwable failure) {

@@ -13,7 +13,7 @@ export function encodeActorReply(
   kind: ZLinkStreamMessageKind.Response | ZLinkStreamMessageKind.Error,
   payload: unknown,
   serializers: Parameters<typeof encodeFrameworkPayload>[1],
-  flowEnabled = true
+  flowEnabled: boolean
 ): readonly Buffer[] {
   const requestHeader = decodeStreamHeader(requestHeaderBytes, flowEnabled);
   const encoded = encodeFrameworkPayload(payload, serializers);

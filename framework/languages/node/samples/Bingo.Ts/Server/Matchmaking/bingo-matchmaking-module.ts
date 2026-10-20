@@ -29,7 +29,7 @@ function createBingoMatchmakingModule() {
         inject: [BINGO_SAMPLE_CONFIG],
         useFactory: (config: BingoSampleConfig) => {
           const builder = zlinkFramework();
-          builder.configureDispatch().messageFlow('normal');
+          builder.configureDispatch().messageFlow(config.diagnosticsLevel);
           builder.addLocationStore(createBingoLocationStore(config));
           builder.addRelocationStore(createBingoRelocationStore(config));
           bingoLocationOptions(builder.configureLocations());

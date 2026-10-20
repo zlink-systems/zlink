@@ -463,7 +463,8 @@ export class ZLinkStreamBindingRuntime {
     );
     registerActorSessionBindingRuntimeOwner(this, {
       prepareSessionRelocationSeal: (...args) => this.routes.prepareSessionRelocationSeal(...args),
-      acceptSessionRelocationRoute: (value) => this.routes.acceptSessionRelocationRoute(value),
+      acceptSessionRelocationRoute: (value, apply) =>
+        this.routes.acceptSessionRelocationRoute(value, apply),
       clearSessionRelocationResults: () => this.routes.clearSessionRelocationResults(),
       actorSlot: async (actorId, sessionRid) =>
         (await this.routes.routeForSessionBinding(actorId, sessionRid))?.actorSlot,

@@ -150,9 +150,9 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
                                                      binding.binding_generation));
     ASSERT_TRUE (
       gateway.record_session_relay_source (actor, session_rid, binding.binding_generation));
-    const auto seal =
-      sessions.seal_remote_route (connection.connection_id, binding.binding_generation,
-                                  actor_object.key, actor_object.object_generation);
+    const auto seal = sessions.seal_remote_route (
+      connection.connection_id, binding.binding_generation, actor_object.key,
+      actor_object.object_generation, binding.owner_lease_generation);
     ASSERT_EQ (seal.error, stateful::stateful_error_t::none);
 
     std::optional<session_actor_t> other_bound;
@@ -172,9 +172,9 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
                                                          17, other_binding.binding_generation));
         ASSERT_TRUE (gateway.record_session_relay_source (other_actor, session_rid,
                                                           other_binding.binding_generation));
-        const auto other_seal =
-          sessions.seal_remote_route (connection.connection_id, other_binding.binding_generation,
-                                      other_object.key, other_object.object_generation);
+        const auto other_seal = sessions.seal_remote_route (
+          connection.connection_id, other_binding.binding_generation, other_object.key,
+          other_object.object_generation, other_binding.owner_lease_generation);
         ASSERT_EQ (other_seal.error, stateful::stateful_error_t::none);
         other_barrier = other_seal.barrier;
         ASSERT_TRUE (

@@ -5426,8 +5426,9 @@ int rebound_session_keeps_prior_ingress_exact_fence ()
         || rebound.binding_generation == first.binding_generation) {
         return 3;
     }
-    const auto seal = sessions.seal_remote_route (
-      connection.connection_id, rebound.binding_generation, actor.key, actor.object_generation);
+    const auto seal =
+      sessions.seal_remote_route (connection.connection_id, rebound.binding_generation, actor.key,
+                                  actor.object_generation, rebound.owner_lease_generation);
     if (seal.error != stateful_error_t::backpressured
         || sessions.remote_route_seal_ready (seal.barrier)) {
         return 4;
@@ -7299,7 +7300,10 @@ int close_exact_session_binding_uses_physical_terminal ()
     const auto rid = zlink::routing_id_t::from ("session-rid");
     const auto owner = zlink::routing_id_t::from ("session-owner");
     unsigned closes = 0;
-    const auto connection = sessions.open (rid.to_hex (), {}, owner, 13, [&] { ++closes; });
+    const auto connection = sessions.open (rid.to_hex (), {}, owner, 13, [&] () -> task_t<void> {
+        ++closes;
+        co_return;
+    });
     const auto [error, binding] = sessions.bind (connection, actor, 17, 19);
     if (error != sf::stateful_error_t::none)
         return 1;
@@ -7331,7 +7335,10 @@ int close_exact_session_binding_uses_physical_terminal ()
     const auto replacement_rid = zlink::routing_id_t::from ("replacement-session");
     unsigned replacement_closes = 0;
     const auto replacement =
-      sessions.open (replacement_rid.to_hex (), {}, owner, 13, [&] { ++replacement_closes; });
+      sessions.open (replacement_rid.to_hex (), {}, owner, 13, [&] () -> task_t<void> {
+          ++replacement_closes;
+          co_return;
+      });
     const auto [replacement_error, current] = sessions.bind (replacement, actor, 17, 19);
     if (replacement_error != sf::stateful_error_t::none)
         return 7;
