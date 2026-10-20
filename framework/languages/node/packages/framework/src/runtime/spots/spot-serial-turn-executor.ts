@@ -164,9 +164,9 @@ export class ZLinkSpotSerialTurnExecutor {
     operation: () => Promise<unknown> | unknown,
     onError: (error: unknown) => void,
     workOptions?: ZLinkSerialWorkOptions,
-    admission: {
+    admission?: {
       readonly signal?: AbortSignal;
-    } = {},
+    },
     replay?: (failure?: unknown) => Promise<unknown>
   ): Promise<void> {
     this.lastActivityAtMs = performance.now();
@@ -179,7 +179,7 @@ export class ZLinkSpotSerialTurnExecutor {
       if (barrierClaim !== undefined && replay !== undefined) {
         Object.assign(barrierClaim, { replay: bindApplicationJobPermit(replay) });
       }
-      if (admission.signal?.aborted === true) {
+      if (admission?.signal?.aborted === true) {
         throw new DOMException('The operation was aborted.', 'AbortError');
       }
       const boundOperation = bindApplicationJobPermit(operation);
@@ -328,13 +328,7 @@ export class ZLinkSpotSerialTurnExecutor {
     if (context?.replay !== undefined && record.operation === context.replay) {
       context.release();
       return Promise.resolve(this.executionBarrier?.enter()).then((claim) =>
-        this.runTurn(
-          record.operation,
-          record.resolve,
-          record.reject,
-          claim,
-          record.release
-        )
+        this.runTurn(record.operation, record.resolve, record.reject, claim, record.release)
       );
     }
     return this.runTurn(
@@ -391,10 +385,7 @@ export class ZLinkSpotSerialTurnExecutor {
         release?.();
       }
     );
-    return Promise.race([
-      owner.then(resolve, reject),
-      turn.suspended
-    ]);
+    return Promise.race([owner.then(resolve, reject), turn.suspended]);
   }
 
   private postResume(
