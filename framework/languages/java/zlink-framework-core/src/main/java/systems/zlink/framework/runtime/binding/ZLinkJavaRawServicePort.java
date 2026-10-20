@@ -566,6 +566,11 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         }
     }
 
+    /**
+     * A received record. For a native record it is also its own header-frame view, so no separate
+     * adapter is allocated per record; a synthetic record keeps its supplied frames. The list view
+     * always matches {@link #frames()}.
+     */
     static final class Inbound extends AbstractList<byte[]> implements AutoCloseable {
         private final RoutingId source;
         private final ReplyToken requestSequence;
@@ -609,12 +614,12 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
 
         @Override
         public byte[] get(int index) {
-            return received.parts().get(index).toByteArray();
+            return frames == this ? received.parts().get(index).toByteArray() : frames.get(index);
         }
 
         @Override
         public int size() {
-            return received.parts().size();
+            return frames == this ? received.parts().size() : frames.size();
         }
 
         /** The Core route generation that delivered this record (Core ROUTER §10.1). */
