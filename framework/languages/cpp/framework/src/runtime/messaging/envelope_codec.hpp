@@ -80,10 +80,9 @@ class envelope_codec_t
                                   const serializer_registry_t &serializers) const
     {
         const auto serializer = serializers.get<TBody> ();
-        auto typed_header = header;
-        typed_header.content_type = serializer.content_type ();
-        return encode_raw_body_parts (typed_header,
-                                      detail::encoded_payload_to_raw (serializer.serialize (body)));
+        auto encoded = detail::encoded_payload_to_raw (serializer.serialize (body));
+        return message_parts_t (encode_header (header, serializer.content_type ()),
+                                std::move (encoded));
     }
 
     zlink::message_t encode_header (const envelope_header_t &header) const;
@@ -103,6 +102,10 @@ class envelope_codec_t
                    bool capture_flow = true,
                    std::optional<envelope_header_t> *rejection_context = nullptr) const;
     result_t<zlink::message_t> decode_body (const message_parts_t &parts) const;
+
+  private:
+    zlink::message_t encode_header (const envelope_header_t &header,
+                                    const std::string &content_type) const;
 };
 
 } // namespace zlink::framework::runtime::messaging

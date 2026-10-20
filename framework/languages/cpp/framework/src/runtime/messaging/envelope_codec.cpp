@@ -55,10 +55,9 @@ message_parts_t envelope_codec_t::encode_parts (const envelope_header_t &header,
     if (body == nullptr) {
         return encode_raw_body_parts (header, zlink::message_t::from (""));
     }
-    auto typed_header = header;
-    typed_header.content_type = serializers.content_type (body_type);
-    return encode_raw_body_parts (
-      typed_header, detail::encoded_payload_to_raw (serializers.serialize (body_type, body)));
+    const auto content_type = serializers.content_type (body_type);
+    auto encoded = detail::encoded_payload_to_raw (serializers.serialize (body_type, body));
+    return message_parts_t (encode_header (header, content_type), std::move (encoded));
 }
 
 namespace
@@ -264,13 +263,14 @@ struct header_plan_t
     std::string prefix;
     std::string middle;
 
-    bool matches (const envelope_header_t &header) const noexcept
+    bool matches (const envelope_header_t &header,
+                  const std::string &selected_content_type) const noexcept
     {
         return kind && *kind == header.kind && channel_name == header.channel_name
-               && message_name == header.message_name && content_type == header.content_type;
+               && message_name == header.message_name && content_type == selected_content_type;
     }
 
-    void rebuild (const envelope_header_t &header)
+    void rebuild (const envelope_header_t &header, const std::string &selected_content_type)
     {
         // Keep the one-entry backing storage on this thread.  `kind` is the
         // validity marker and is published only after every escaped segment
@@ -284,7 +284,7 @@ struct header_plan_t
 
         channel_name = header.channel_name;
         message_name = header.message_name;
-        content_type = header.content_type;
+        content_type = selected_content_type;
 
         header_writer_t prefix_writer (prefix);
         prefix_writer.append ("{\"channelName\":");
@@ -351,6 +351,12 @@ void write_header (header_writer_t &writer,
 
 zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &header) const
 {
+    return encode_header (header, header.content_type);
+}
+
+zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &header,
+                                                  const std::string &content_type) const
+{
     const auto &flow = flow_context_t::current ();
     const bool stamp_flow = !header.flow_id && flow && !flow->flow_id.empty ();
     const auto *flow_id = stamp_flow ? &flow->flow_id : header.flow_id ? &*header.flow_id : nullptr;
@@ -362,8 +368,8 @@ zlink::message_t envelope_codec_t::encode_header (const envelope_header_t &heade
         throw framework_exception_t (valid.error_kind (), valid.error ()->what ());
     }
     auto &plan = header_plan ();
-    if (!plan.matches (header))
-        plan.rebuild (header);
+    if (!plan.matches (header, content_type))
+        plan.rebuild (header, content_type);
     header_writer_t measure;
     write_header (measure, header, flow_id, flow_origin, plan);
     auto message = zlink::message_t::allocate (measure.size ());
