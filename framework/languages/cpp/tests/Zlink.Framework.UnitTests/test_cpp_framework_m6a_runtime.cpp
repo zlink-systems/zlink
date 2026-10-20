@@ -186,7 +186,12 @@ void complete_bound_session_bind (
       protocol::decode_bound_session_bind (protocol::message_bytes (record.parts.front ()));
     assert (decoded.actor.actor_id == expected_actor);
     assert (record.correlation && decoded.correlation == *record.correlation);
-    assert (target.reply_bound_session_bind (record, 0, 0));
+    const auto accepted =
+      decoded.binding.state == protocol::bound_session_binding_state_t::active
+        ? std::make_optional (protocol::stream_bind_reply_tail_t{
+            decoded.binding.generation, decoded.actor.authority_owner_generation})
+        : std::nullopt;
+    assert (target.reply_bound_session_bind (record, 0, 0, accepted));
     assert (target.mailbox ().release (*claim));
 
     const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
@@ -201,6 +206,8 @@ void complete_bound_session_bind (
     assert (settled.first == foundation::operation_terminal_t::completed);
     const auto reply = protocol::decode_reply_header (settled.second);
     assert (reply.terminal_result == 0 && reply.failure_code == 0);
+    if (accepted)
+        assert (protocol::decode_stream_bind_reply (settled.second).binding == accepted);
 }
 
 void verify_bound_session_close_reply_grammar ()
