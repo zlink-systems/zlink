@@ -12,22 +12,39 @@ import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorCreateResult;
 import systems.zlink.framework.actors.ZLinkActorFactory;
+import systems.zlink.framework.locations.ZLinkLocationOptions;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntime;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendSpot;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
+import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
+import systems.zlink.framework.runtime.internal.spots.SpotTransportAddress;
+import systems.zlink.framework.runtime.internal.spots.SpotTransportAddressResolver;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
+import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
+import systems.zlink.framework.spots.SpotHandle;
+import systems.zlink.framework.spots.SpotHandleResolver;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
+import systems.zlink.framework.spots.ZLinkSpot;
+import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
+import systems.zlink.framework.spots.ZLinkSpotContext;
+import systems.zlink.framework.spots.ZLinkStoreSpotHandleResolver;
 
 import java.lang.reflect.Proxy;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -105,6 +122,160 @@ final class ZLinkEntrySpotJoinPayloadOwnershipTest {
             assertThrows(
                     Exception.class, () -> outcome.toCompletableFuture().get(5, TimeUnit.SECONDS));
             assertEquals("entry-join-payload", submitted.get());
+        }
+    }
+
+    @Test
+    void sameNodeJoinSelectsLocalAfterTargetAppearsDuringResolution() throws Exception {
+        PLAYER_CONTEXT.set(null);
+        resolvedRoom = null;
+        DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
+        var store = new ZLinkInMemoryLocationStore();
+        options.addLocationStore(store);
+        var node = options.addRouteMesh("entry-join");
+        node.listen("inproc://resolved-join-" + UUID.randomUUID())
+                .setRoutingId(RoutingId.from("resolved-join"));
+        var objects = node.objects().server();
+        objects.addEntrySpot(EntrySpot.class);
+        objects.addActorFactory(
+                "player",
+                Player.class,
+                PlayerFactory.class,
+                factory -> factory.disableRelocation());
+        objects.addSpotFactory(
+                "resolved-room", ResolvedRoom.class, factory -> factory.disableRelocation());
+        try (ZLinkFrameworkRuntime runtime =
+                ZLinkFrameworkRuntimeTestAccess.start(
+                        options, new ZLinkJavaBackendAdapterFactory())) {
+            runtime.actorManager()
+                    .create(ACTOR_ID, "player")
+                    .submit()
+                    .toCompletableFuture()
+                    .get(5, TimeUnit.SECONDS);
+            var context =
+                    assertInstanceOf(
+                            ZLinkActorRuntime.DefaultActorContext.class, PLAYER_CONTEXT.get());
+            var actors = (ZLinkActorRuntime) runtime.actorManager();
+            var routes =
+                    new ZLinkStoreLocationResolvers(
+                            ZLinkRegisteredLocationStores.fromUnified(
+                                    new ZLinkProviderLocationRepository(store)),
+                            new ZLinkLocationOptions());
+            var handles =
+                    new ZLinkStoreSpotHandleResolver(
+                            new ZLinkStoreLocationResolvers.AddressResolvers(
+                                    List.of("entry-join"), routes));
+            var resolutions = new AtomicInteger();
+            class Resolver implements SpotHandleResolver, SpotTransportAddressResolver {
+                public CompletionStage<Optional<SpotHandle>> resolveSpotHandle(String spotId) {
+                    resolutions.incrementAndGet();
+                    return runtime.spotManager()
+                            .getOrCreate(spotId, "resolved-room")
+                            .submit()
+                            .thenCompose(ignored -> handles.resolveSpotHandle(spotId));
+                }
+
+                public CompletionStage<Optional<SpotHandle>> resolveSpotHandle(
+                        String mesh, String spotId) {
+                    return resolveSpotHandle(spotId);
+                }
+
+                public CompletionStage<Optional<SpotTransportAddress>> resolve(String spotId) {
+                    return handles.resolve(spotId);
+                }
+            }
+            var transports = new AtomicInteger();
+            var canonical =
+                    (ZLinkInternalMeshNode)
+                            Proxy.newProxyInstance(
+                                    ZLinkInternalMeshNode.class.getClassLoader(),
+                                    new Class<?>[] {ZLinkInternalMeshNode.class},
+                                    (proxy, method, args) -> {
+                                        transports.incrementAndGet();
+                                        throw new AssertionError(
+                                                "Same-node Join reached " + method.getName());
+                                    });
+            var entry =
+                    (ZLinkBackendSpot)
+                            Proxy.newProxyInstance(
+                                    ZLinkBackendSpot.class.getClassLoader(),
+                                    new Class<?>[] {ZLinkBackendSpot.class},
+                                    (proxy, method, args) -> {
+                                        if (method.getName().equals("rememberSpotAuthority"))
+                                            return null;
+                                        throw new UnsupportedOperationException(method.getName());
+                                    });
+            var sourceNode =
+                    (ZLinkInternalSpotNode)
+                            Proxy.newProxyInstance(
+                                    ZLinkInternalSpotNode.class.getClassLoader(),
+                                    new Class<?>[] {ZLinkInternalSpotNode.class},
+                                    (proxy, method, args) -> {
+                                        if (method.getName().equals("entrySpot")) return entry;
+                                        if (method.getName().equals("routingId"))
+                                            return context.actorRef().nodeRid();
+                                        throw new UnsupportedOperationException(method.getName());
+                                    });
+            var services =
+                    new ZLinkActorSpotJoinCall.Services(
+                            sourceNode,
+                            ignored -> resolvedRoom,
+                            new Resolver(),
+                            null,
+                            (address, parts, timeout, internal) -> {
+                                transports.incrementAndGet();
+                                return CompletableFuture.failedFuture(
+                                        new AssertionError("Fallback transport"));
+                            },
+                            canonical,
+                            ignored -> "player",
+                            null,
+                            null,
+                            actors,
+                            null);
+            var result =
+                    new ZLinkActorSpotJoinCall(
+                                    context,
+                                    "resolved-room",
+                                    Message.from(new byte[0]),
+                                    Duration.ofSeconds(3),
+                                    services)
+                            .execute()
+                            .toCompletableFuture()
+                            .get(5, TimeUnit.SECONDS);
+            assertInstanceOf(ZLinkActorJoinOutcome.Accepted.class, result);
+            assertEquals("resolved-room", context.spotId().orElseThrow());
+            assertEquals(1, resolutions.get());
+            assertEquals(0, transports.get());
+            routes.close();
+        }
+    }
+
+    private static volatile ResolvedRoom resolvedRoom;
+
+    public static final class ResolvedRoom implements ZLinkSpot<Player> {
+        private final ZLinkSpotContext context;
+
+        public ResolvedRoom(ZLinkSpotContext context) {
+            this.context = context;
+            resolvedRoom = this;
+        }
+
+        public ZLinkSpotContext context() {
+            return context;
+        }
+
+        public CompletionStage<ZLinkSpotActorJoinResult> onActorJoin(
+                String actorId, systems.zlink.framework.messaging.ZLinkMessage request) {
+            return CompletableFuture.completedFuture(ZLinkSpotActorJoinResult.accept());
+        }
+
+        public CompletionStage<Void> onJoinedActor(Player actor) {
+            return CompletableFuture.completedFuture(null);
+        }
+
+        public CompletionStage<Void> onLeaveActor(Player actor) {
+            return CompletableFuture.completedFuture(null);
         }
     }
 

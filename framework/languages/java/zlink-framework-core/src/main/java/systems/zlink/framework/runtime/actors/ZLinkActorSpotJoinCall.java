@@ -240,57 +240,47 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         }
         traceJoinSent();
         Message requestPart = Message.from(request);
-        ZLinkSpot<?> localSpot = services.spotResolver().apply(spotId);
-        if (localSpot != null) {
-            return manage(
-                    services.actors()
-                            .joinLocalActor(context.actor(), spotId, requestPart)
-                            .thenApply(
-                                    result ->
-                                            ZLinkActorJoinResults.decode(
-                                                    result, context.actorRef(), context.meshName()))
-                            .whenComplete((result, failure) -> requestPart.close())
-                            .whenComplete((result, failure) -> traceJoinReplyReceived(failure)));
-        }
-        if ((services.routedTransport() != null || services.transferTransport() != null)
-                && (internalRouteChannel != null || services.remoteAddressResolver() != null)) {
-            return manage(
-                    joinRemoteRoutedSpot(requestPart, operationId, deadlineNanos)
-                            .whenComplete((ignored, error) -> requestPart.close())
-                            .whenComplete((r, e) -> traceJoinReplyReceived(e)));
-        }
-        CompletionStage<SpotTransportAddress> target = resolveRemoteAddress(spotId);
         return manage(
-                target.handle(
-                                (address, error) -> {
-                                    if (error != null) {
-                                        requestPart.close();
-                                        throw new CompletionException(error);
-                                    }
-                                    try {
-                                        return services.spotNode()
-                                                .joinActor(
-                                                        context.actorRef(),
-                                                        address.targetNodeRid(),
-                                                        spotId,
-                                                        address.spotGeneration(),
-                                                        List.of(requestPart),
-                                                        remaining)
-                                                .whenComplete(
-                                                        (ignored, joinError) ->
-                                                                requestPart.close());
-                                    } catch (RuntimeException dispatchError) {
-                                        requestPart.close();
-                                        throw dispatchError;
-                                    }
-                                })
-                        .thenCompose(stage -> stage)
+                resolveJoinTarget()
                         .thenCompose(
-                                result ->
-                                        applyRemoteActorMigration(result)
-                                                .thenCompose(
-                                                        ignored -> decodeJoinResultAsync(result)))
-                        .whenComplete((r, e) -> traceJoinReplyReceived(e)));
+                                target -> {
+                                    if (target.targetNodeRid()
+                                            .equals(context.actorRef().nodeRid())) {
+                                        return services.actors()
+                                                .joinLocalActor(
+                                                        context.actor(), spotId, requestPart)
+                                                .thenApply(
+                                                        result ->
+                                                                ZLinkActorJoinResults.decode(
+                                                                        result,
+                                                                        context.actorRef(),
+                                                                        context.meshName()));
+                                    }
+                                    if ((services.routedTransport() != null
+                                                    || services.transferTransport() != null)
+                                            && (internalRouteChannel != null
+                                                    || services.remoteAddressResolver() != null)) {
+                                        return joinRemoteRoutedSpot(
+                                                target, requestPart, operationId, deadlineNanos);
+                                    }
+                                    return services.spotNode()
+                                            .joinActor(
+                                                    context.actorRef(),
+                                                    target.targetNodeRid(),
+                                                    spotId,
+                                                    target.spotGeneration(),
+                                                    List.of(requestPart),
+                                                    remaining)
+                                            .thenCompose(
+                                                    result ->
+                                                            applyRemoteActorMigration(result)
+                                                                    .thenCompose(
+                                                                            ignored ->
+                                                                                    decodeJoinResultAsync(
+                                                                                            result)));
+                                })
+                        .whenComplete((result, failure) -> requestPart.close())
+                        .whenComplete((result, failure) -> traceJoinReplyReceived(failure)));
     }
 
     private CompletionStage<Void> executeDeferred(
@@ -575,8 +565,7 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
         return joinedSpotId == null || joinedSpotId.toString().isBlank() ? spotId : joinedSpotId;
     }
 
-    private CompletionStage<ZLinkActorJoinOutcome> joinRemoteRoutedSpot(
-            Message requestPart, ZLinkActorJoinOperationId operationId, long deadlineNanos) {
+    private CompletionStage<SpotTransportAddress> resolveJoinTarget() {
         CompletionStage<SpotTransportAddress> resolved =
                 internalRouteChannel == null
                         ? explicitRouterChannelId != null && !explicitRouterChannelId.isBlank()
@@ -642,48 +631,51 @@ final class ZLinkActorSpotJoinCall implements ZLinkActorJoinCall {
                                                     address.ownerLeaseGeneration(),
                                                     address.spotKind());
                                         });
-        return resolved.thenCompose(
-                target -> {
-                    rememberResolvedSpotAuthority(target);
-                    ZLinkBackendActorRef currentActorRef = context.actorRef();
-                    return services.actors()
-                            .readActorJoinAuthority(currentActorRef.actorId())
-                            .thenCompose(
-                                    authority -> {
-                                        if (authority.objectGeneration()
-                                                        != currentActorRef.generation()
-                                                || !authority
-                                                        .ownerNodeRid()
-                                                        .equals(currentActorRef.nodeRid())) {
-                                            return CompletableFuture.failedFuture(
-                                                    new ZLinkFrameworkException(
-                                                            ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                                            "Actor Join Authority row does not"
-                                                                    + " match the source Actor fence"));
-                                        }
-                                        String actorType = authority.stableType();
-                                        String transferId = newRelocationId(operationId).toString();
-                                        ZLinkInternalMeshNode meshNode =
-                                                services.canonicalMeshNode();
-                                        if (meshNode == null) {
-                                            return CompletableFuture.failedFuture(
-                                                    new ZLinkFrameworkException(
-                                                            ZLinkFrameworkErrorKind.UNAVAILABLE,
-                                                            "canonical actor Join mesh transport is"
-                                                                    + " unavailable"));
-                                        }
-                                        return requestCanonicalActorJoin(
-                                                meshNode,
-                                                target,
-                                                currentActorRef,
-                                                authority,
-                                                requestPart,
-                                                transferId,
-                                                actorType,
-                                                operationId,
-                                                deadlineNanos);
-                                    });
-                });
+        return resolved;
+    }
+
+    private CompletionStage<ZLinkActorJoinOutcome> joinRemoteRoutedSpot(
+            SpotTransportAddress target,
+            Message requestPart,
+            ZLinkActorJoinOperationId operationId,
+            long deadlineNanos) {
+        rememberResolvedSpotAuthority(target);
+        ZLinkBackendActorRef currentActorRef = context.actorRef();
+        return services.actors()
+                .readActorJoinAuthority(currentActorRef.actorId())
+                .thenCompose(
+                        authority -> {
+                            if (authority.objectGeneration() != currentActorRef.generation()
+                                    || !authority
+                                            .ownerNodeRid()
+                                            .equals(currentActorRef.nodeRid())) {
+                                return CompletableFuture.failedFuture(
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                                                "Actor Join Authority row does not"
+                                                        + " match the source Actor fence"));
+                            }
+                            String actorType = authority.stableType();
+                            String transferId = newRelocationId(operationId).toString();
+                            ZLinkInternalMeshNode meshNode = services.canonicalMeshNode();
+                            if (meshNode == null) {
+                                return CompletableFuture.failedFuture(
+                                        new ZLinkFrameworkException(
+                                                ZLinkFrameworkErrorKind.UNAVAILABLE,
+                                                "canonical actor Join mesh transport is"
+                                                        + " unavailable"));
+                            }
+                            return requestCanonicalActorJoin(
+                                    meshNode,
+                                    target,
+                                    currentActorRef,
+                                    authority,
+                                    requestPart,
+                                    transferId,
+                                    actorType,
+                                    operationId,
+                                    deadlineNanos);
+                        });
     }
 
     private CompletionStage<ZLinkActorJoinOutcome> requestCanonicalActorJoin(
