@@ -105,7 +105,7 @@ export class ZLinkSerialExecutionQueue {
 
   submit<T>(
     operation: () => Promise<T> | T,
-    options: ZLinkSerialWorkOptions = {},
+    options?: ZLinkSerialWorkOptions,
     context?: unknown
   ): Promise<T> {
     try {
@@ -118,7 +118,7 @@ export class ZLinkSerialExecutionQueue {
   submitDetached<T>(
     operation: () => Promise<T> | T,
     onError: (error: unknown) => void,
-    options: ZLinkSerialWorkOptions = {},
+    options?: ZLinkSerialWorkOptions,
     context?: unknown
   ): void {
     void this.submit(operation, options, context).catch(onError);
@@ -129,7 +129,7 @@ export class ZLinkSerialExecutionQueue {
    */
   submitContinuation<T>(operation: () => Promise<T> | T, context?: unknown): Promise<T> {
     try {
-      return this.admit(operation, { lane: 'application' }, context);
+      return this.admit(operation, undefined, context);
     } catch (error) {
       return Promise.reject(error);
     }
@@ -143,7 +143,7 @@ export class ZLinkSerialExecutionQueue {
    */
   admitDurablePrefix<T>(
     operation: () => Promise<T> | T,
-    options: ZLinkSerialWorkOptions = {},
+    options?: ZLinkSerialWorkOptions,
     context?: unknown,
     preparation?: ZLinkSerialWorkPreparation
   ): Promise<T> {
@@ -156,7 +156,7 @@ export class ZLinkSerialExecutionQueue {
    */
   submitPreAdmitted<T>(
     operation: () => Promise<T> | T,
-    options: ZLinkSerialWorkOptions = {},
+    options?: ZLinkSerialWorkOptions,
     context?: unknown
   ): Promise<T> {
     return this.admit(operation, options, context);
@@ -175,7 +175,8 @@ export class ZLinkSerialExecutionQueue {
   }
 
   visitPendingApplication(visitor: (record: ZLinkSerialWorkRecord<unknown>) => void): void {
-    for (const record of this.application.records) {
+    for (let index = 0; index < this.application.records.length; index++) {
+      const record = this.application.records[index]!;
       if (record.mailbox === undefined) visitor(record);
     }
   }
@@ -218,15 +219,14 @@ export class ZLinkSerialExecutionQueue {
 
   private admit<T>(
     operation: () => Promise<T> | T,
-    options: ZLinkSerialWorkOptions,
+    options: ZLinkSerialWorkOptions | undefined,
     context?: unknown,
     preparation?: ZLinkSerialWorkPreparation,
     operationEnvelope = false
   ): Promise<T> {
     if (this.closed) throw new Error('The serial execution queue is closed.');
-    const lane = options.lane ?? 'application';
+    const lane = options?.lane ?? 'application';
     const target = lane === 'application' ? this.application : this.lifecycle;
-    let settled = false;
     let released = false;
     let resolveResult!: (value: T | PromiseLike<T>) => void;
     let rejectResult!: (reason?: unknown) => void;
@@ -246,16 +246,6 @@ export class ZLinkSerialExecutionQueue {
         }
       }
     };
-    const resolve = (value: T): void => {
-      if (settled) return;
-      settled = true;
-      resolveResult(value);
-    };
-    const reject = (reason: unknown): void => {
-      if (settled) return;
-      settled = true;
-      rejectResult(reason);
-    };
     const record: SerialWorkRecord<T> = {
       acceptedSequence: 0n,
       lane,
@@ -264,11 +254,11 @@ export class ZLinkSerialExecutionQueue {
       context,
       preparation,
       preparationState: preparation === undefined ? 'ready' : 'idle',
-      resolve,
-      reject,
+      resolve: resolveResult,
+      reject: rejectResult,
       release,
       fail: (reason) => {
-        reject(reason);
+        rejectResult(reason);
         release();
       }
     };
@@ -283,16 +273,17 @@ export class ZLinkSerialExecutionQueue {
       release();
       throw error;
     }
-    options.onAdmitted?.();
-    options.onWithdrawable?.(() => {
+    options?.onAdmitted?.();
+    options?.onWithdrawable?.(() => {
       const index = target.records.indexOf(record as SerialWorkRecord<unknown>);
       if (index < 0) return false;
-      target.records.splice(index, 1);
+      target.records.copyWithin(index, index + 1);
+      target.records.length -= 1;
       record.preparationController?.abort(
         new Error('Durable record transferred to another handoff.')
       );
       record.preparation?.cancel();
-      resolve(undefined as T);
+      resolveResult(undefined as T);
       release();
       return true;
     });
@@ -305,18 +296,27 @@ export class ZLinkSerialExecutionQueue {
       if (this.activeRecord !== undefined) return;
       // Ready membership in the existing owner queue is the only notification state.
       if (this.ownerMembership !== undefined) return;
-      this.enqueueMailboxTurn(() => this.consumeMailbox());
+      {
+        // Block-scoped captures keep early returns free of a V8 function context.
+        const mailbox = this;
+        mailbox.enqueueMailboxTurn(() => mailbox.consumeMailbox());
+      }
       return;
     }
     const consumer = this.consumer!;
     if (consumer.scheduled || consumer.running) return;
-    consumer.scheduled = true;
-    startOutsideStateLane(() =>
-      queueMicrotask(() => {
-        consumer.scheduled = false;
-        void this.drain();
-      })
-    );
+    {
+      // Same block-scoped capture as the mailbox branch above.
+      const queue = this;
+      const scheduledConsumer = consumer;
+      scheduledConsumer.scheduled = true;
+      startOutsideStateLane(() =>
+        queueMicrotask(() => {
+          scheduledConsumer.scheduled = false;
+          void queue.drain();
+        })
+      );
+    }
   }
 
   /** Notifications carry no payload, admission sequence, result Promise, or host permit. */
@@ -341,14 +341,13 @@ export class ZLinkSerialExecutionQueue {
 
   /** Called only by the shared scheduler's consumer, never by a producer. */
   private consumeMailbox(): void {
-    const selection = this.selectNext();
-    if (selection === undefined) {
+    const record = this.selectNext();
+    if (record === undefined) {
       if (!this.hasPendingWork) this.resolveIdleWaiters();
       return;
     }
-    const record = selection.record;
-    if (!this.prepareSelected(selection)) return;
-    this.takeSelected(selection);
+    if (!this.prepareSelected(record)) return;
+    this.takeSelected(record);
     if (record.preparationState === 'failed') {
       record.preparation?.cancel();
       record.fail(record.preparationError);
@@ -365,14 +364,18 @@ export class ZLinkSerialExecutionQueue {
       terminal = Promise.reject(error);
     }
     void terminal.then(
-      (value) => this.finishMailbox(record, () => record.resolve(value)),
-      (error) => this.finishMailbox(record, () => record.reject(error))
+      (value) => this.finishMailbox(record, record.resolve, value),
+      (error) => this.finishMailbox(record, record.reject, error)
     );
   }
 
-  private finishMailbox(record: SerialWorkRecord<unknown>, settle: () => void): void {
+  private finishMailbox(
+    record: SerialWorkRecord<unknown>,
+    settle: (value: unknown) => void,
+    value: unknown
+  ): void {
     this.enqueueMailboxTurn(() => {
-      settle();
+      settle(value);
       record.release();
       record.preparation?.cancel();
       this.activeRecord = undefined;
@@ -388,14 +391,13 @@ export class ZLinkSerialExecutionQueue {
     let waitingForPreparation = false;
     try {
       for (;;) {
-        const selection = this.selectNext();
-        if (selection === undefined) break;
-        const record = selection.record;
-        if (!this.prepareSelected(selection)) {
+        const record = this.selectNext();
+        if (record === undefined) break;
+        if (!this.prepareSelected(record)) {
           waitingForPreparation = true;
           break;
         }
-        this.takeSelected(selection);
+        this.takeSelected(record);
         if (record.preparationState === 'failed') {
           record.preparation?.cancel();
           record.fail(record.preparationError);
@@ -448,60 +450,51 @@ export class ZLinkSerialExecutionQueue {
     }
   }
 
-  private prepareSelected(selection: {
-    readonly lane: ZLinkSerialWorkLane;
-    readonly record: SerialWorkRecord<unknown>;
-  }): boolean {
+  private prepareSelected(record: SerialWorkRecord<unknown>): boolean {
     if (
-      selection.lane === 'lifecycle' &&
+      record.lane === 'lifecycle' &&
       this.application.records.length > 0 &&
       !this.cancelPreparationForRearbitration(this.application.records[0]!)
     )
       return false;
-    const record = selection.record;
     if (record.preparationState === 'idle') this.startPreparation(record);
     return record.preparationState !== 'pending' && record.preparationState !== 'canceling';
   }
 
-  private selectNext():
-    | {
-        readonly lane: ZLinkSerialWorkLane;
-        readonly record: SerialWorkRecord<unknown>;
-      }
-    | undefined {
+  private selectNext(): SerialWorkRecord<unknown> | undefined {
     const lifecycleOwner = this.activeLifecycle?.context as ZLinkSerialLifecycleContext | undefined;
-    const applicationRecord =
-      lifecycleOwner === undefined
-        ? this.application.records[0]
-        : this.application.records.find((record) => lifecycleOwner.canExecuteApplication(record));
+    let applicationRecord: SerialWorkRecord<unknown> | undefined;
+    if (lifecycleOwner === undefined) {
+      applicationRecord = this.application.records[0];
+    } else {
+      // Capture only inside the lifecycle branch; the common path allocates no context.
+      const owner = lifecycleOwner;
+      applicationRecord = this.application.records.find((record) =>
+        owner.canExecuteApplication(record)
+      );
+    }
     const applicationReady = applicationRecord !== undefined;
     const lifecycleReady = this.activeLifecycle === undefined && this.lifecycle.records.length > 0;
     if (!applicationReady && !lifecycleReady) return undefined;
     if (!applicationReady) {
-      return { lane: 'lifecycle', record: this.lifecycle.records[0]! };
+      return this.lifecycle.records[0]!;
     }
     if (!lifecycleReady) {
-      return { lane: 'application', record: applicationRecord! };
+      return applicationRecord!;
     }
     if (!this.lifecycleDebt && this.lifecycleStreak < this.lifecycleBurstLimit) {
-      return { lane: 'lifecycle', record: this.lifecycle.records[0]! };
+      return this.lifecycle.records[0]!;
     }
-    return { lane: 'application', record: applicationRecord! };
+    return applicationRecord!;
   }
 
-  private takeSelected(selection: {
-    readonly lane: ZLinkSerialWorkLane;
-    readonly record: SerialWorkRecord<unknown>;
-  }): ZLinkSerialWorkRecord<unknown> {
+  private takeSelected(selected: SerialWorkRecord<unknown>): ZLinkSerialWorkRecord<unknown> {
     const record =
-      selection.lane === 'lifecycle'
-        ? this.takeLifecycle()
-        : this.takeApplication(selection.record);
-    if (record !== selection.record) {
+      selected.lane === 'lifecycle' ? this.takeLifecycle() : this.takeApplication(selected);
+    if (record !== selected) {
       throw new Error('The selected serial work record changed before owner claim.');
     }
-    if (selection.record.mailbox !== undefined)
-      selection.record.mailbox.ownerMembership = undefined;
+    if (selected.mailbox !== undefined) selected.mailbox.ownerMembership = undefined;
     return record;
   }
 
@@ -520,7 +513,11 @@ export class ZLinkSerialExecutionQueue {
     this.lifecycleDebt = false;
     if (this.application.records[0] === selected) return this.application.records.shift()!;
     const index = this.application.records.indexOf(selected);
-    return this.application.records.splice(index, 1)[0]!;
+    // A missing record (index -1) still reaches the owner-claim fence in takeSelected.
+    const record = this.application.records.at(index)!;
+    this.application.records.copyWithin(index, index + 1);
+    this.application.records.length = Math.max(0, this.application.records.length - 1);
+    return record;
   }
 
   private startPreparation(record: SerialWorkRecord<unknown>): void {
@@ -581,7 +578,8 @@ export class ZLinkSerialExecutionQueue {
   }
 
   private resolveIdleWaiters(): void {
-    for (const resolve of this.idleWaiters.splice(0)) resolve();
+    for (let index = 0; index < this.idleWaiters.length; index++) this.idleWaiters[index]!();
+    this.idleWaiters.length = 0;
   }
 }
 
@@ -590,13 +588,13 @@ if (isStructuralGuardEnabled()) {
   ZLinkSerialExecutionQueue.prototype.submit = function <T>(
     this: ZLinkSerialExecutionQueue,
     operation: () => Promise<T> | T,
-    options: ZLinkSerialWorkOptions = {},
+    options?: ZLinkSerialWorkOptions,
     context?: unknown
   ): Promise<T> {
     return guardStateLaneCompletion(
       trackDiagnosticCompletion(
         submit.call(this, operation, options, context) as Promise<T>,
-        `serial ${options.lane ?? 'application'} ${diagnosticWorkName(operation)}`
+        `serial ${options?.lane ?? 'application'} ${diagnosticWorkName(operation)}`
       ),
       'serial completion'
     );
@@ -606,13 +604,13 @@ if (isStructuralGuardEnabled()) {
   ZLinkSerialExecutionQueue.prototype.submitPreAdmitted = function <T>(
     this: ZLinkSerialExecutionQueue,
     operation: () => Promise<T> | T,
-    options: ZLinkSerialWorkOptions = {},
+    options?: ZLinkSerialWorkOptions,
     context?: unknown
   ): Promise<T> {
     return guardStateLaneCompletion(
       trackDiagnosticCompletion(
         submitPreAdmitted.call(this, operation, options, context) as Promise<T>,
-        `serial ${options.lane ?? 'application'} ${diagnosticWorkName(operation)}`
+        `serial ${options?.lane ?? 'application'} ${diagnosticWorkName(operation)}`
       ),
       'serial completion'
     );
@@ -637,7 +635,7 @@ if (isStructuralGuardEnabled()) {
   ZLinkSerialExecutionQueue.prototype.admitDurablePrefix = function <T>(
     this: ZLinkSerialExecutionQueue,
     operation: () => Promise<T> | T,
-    options: ZLinkSerialWorkOptions = {},
+    options?: ZLinkSerialWorkOptions,
     context?: unknown,
     preparation?: ZLinkSerialWorkPreparation
   ): Promise<T> {
