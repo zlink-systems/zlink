@@ -32,7 +32,7 @@ export { ZLinkSpotActorAdmissionCoordinator } from './spot-actor-admission-coord
 import type { ZLinkSpotRouteResolver, ZLinkSpotRouteTarget } from './spot-routing-internal';
 import type { Message } from '../../contracts/Common/Message';
 import type { ZLinkMessageFollowOrigin } from '../foundation/service-runtime-contracts';
-import { awaitWithAbort, isAbortError, throwIfAborted } from '../abort';
+import { awaitWithAbort, throwIfAborted } from '../abort';
 import {
   ZLinkMessage,
   ZLinkFrameworkException,
@@ -690,19 +690,16 @@ export class DefaultZLinkSpotManager {
         }
       }
       if (pending === undefined) {
-        const metric = this.options.metrics?.startInstanceSpotActivation(meshName, instanceType);
         if (completion === 'first-terminal') this.activations.stage(meshName, spotId);
         pending = this.activationLifecycle
           .materializeInstance(meshName, instanceType, factory, spotId, objectGeneration, signal)
           .then(
             async (activation) => {
               if (completion === 'publication') await activation.serialExecutor.finishPreparation();
-              metric?.complete('ready');
               return activation;
             },
             (error) => {
               this.activations.abandonStage(meshName, spotId);
-              metric?.complete(instanceActivationOutcome(error));
               throw error;
             }
           );
@@ -3684,18 +3681,4 @@ function isAbortSignal(value: unknown): value is AbortSignal {
     typeof (value as { aborted?: unknown }).aborted === 'boolean' &&
     typeof (value as { addEventListener?: unknown }).addEventListener === 'function'
   );
-}
-
-function instanceActivationOutcome(error: unknown): string {
-  if (isAbortError(error)) return 'shutdown';
-  if (error instanceof ZLinkFrameworkException) {
-    if (error.kind === ZLinkFrameworkErrorKind.DeadlineExceeded) return 'timed_out';
-    if (error.kind === ZLinkFrameworkErrorKind.AlreadyExists) return 'conflict';
-    if (
-      error.kind === ZLinkFrameworkErrorKind.InvalidOperation ||
-      error.kind === ZLinkFrameworkErrorKind.Unavailable
-    )
-      return 'fenced';
-  }
-  return 'failed';
 }
