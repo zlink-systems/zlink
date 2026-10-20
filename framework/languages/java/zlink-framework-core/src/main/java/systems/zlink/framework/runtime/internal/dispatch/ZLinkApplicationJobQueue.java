@@ -21,7 +21,6 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ThreadPoolExecutor;
-import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
@@ -259,17 +258,6 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
             Consumer<Permit> resume,
             java.util.concurrent.atomic.AtomicReference<CompletableFuture<Permit>> pending,
             Origin origin) {
-        Objects.requireNonNull(resume, "resume");
-        return acquireOrResume(executor, resume, Consumer::accept, pending, origin);
-    }
-
-    /** Passes the receive owner separately so an immediate grant needs no capturing callback. */
-    public <T> Permit acquireOrResume(
-            Executor executor,
-            T context,
-            BiConsumer<T, Permit> resume,
-            java.util.concurrent.atomic.AtomicReference<CompletableFuture<Permit>> pending,
-            Origin origin) {
         Objects.requireNonNull(executor, "executor");
         Objects.requireNonNull(resume, "resume");
         Objects.requireNonNull(pending, "pending");
@@ -292,7 +280,7 @@ public final class ZLinkApplicationJobQueue implements AutoCloseable {
                         executor.execute(
                                 () -> {
                                     if (pending.compareAndSet(acquisition, null)) {
-                                        resume.accept(context, permit);
+                                        resume.accept(permit);
                                     }
                                 });
                     } catch (java.util.concurrent.RejectedExecutionException stopped) {

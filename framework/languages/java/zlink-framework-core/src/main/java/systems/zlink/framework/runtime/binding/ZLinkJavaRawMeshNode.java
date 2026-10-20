@@ -4843,10 +4843,9 @@ final class ZLinkJavaRawMeshNode
         long startedAt = System.nanoTime();
         long receivedBytes = 0;
         int count = 0;
-        // Spec 08 §4.1 I1/I2: the rotation's first permit observes the FIFO. After the first
-        // record, the rest of the rotation's budget is what is free now, reserved in one lock,
-        // and the rotation claims records until the socket has none (one readiness wait per
-        // rotation, no poll per record) or a budget, count, byte or time limit is reached.
+        // Spec 08 §4.1 I1/I2: reserve the rotation's currently free budget in one FIFO-aware
+        // lock before its first claim. Only a source with no free budget needs a resumption
+        // callback. Convert budget units to permit objects only for records that exist.
         var budgetQueue = applicationJobQueue;
         int budget = 0;
         boolean budgetReserved = false;
@@ -4855,7 +4854,7 @@ final class ZLinkJavaRawMeshNode
             while (count < MAX_INGRESS_BATCH && !closed.get()) {
                 var queue = applicationJobQueue;
                 boolean budgeted = false;
-                if (grant == null && queue != null && queue == budgetQueue && count > 0) {
+                if (grant == null && queue != null && queue == budgetQueue) {
                     if (!budgetReserved) {
                         budgetReserved = true;
                         budget = queue.reserveRotationBudget(MAX_INGRESS_BATCH - count);
@@ -4866,9 +4865,7 @@ final class ZLinkJavaRawMeshNode
                     grant =
                             queue.acquireOrResume(
                                     pump,
-                                    this,
-                                    (node, permit) ->
-                                            node.drainIngressBatch(node.requireStarted(), permit),
+                                    permit -> drainIngressBatch(pumpSocket, permit),
                                     pendingReceiveAcquire,
                                     ZLinkApplicationJobQueue.Origin.REMOTE);
                     if (closed.get()) {
