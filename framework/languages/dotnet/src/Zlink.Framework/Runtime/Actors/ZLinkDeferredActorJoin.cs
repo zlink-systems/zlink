@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Diagnostics;
 using System.Security.Cryptography;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
@@ -107,8 +106,9 @@ internal sealed class ZLinkDeferredActorJoin(
     TimeSpan timeout
 )
 {
-    private readonly long _registeredTimestamp = Stopwatch.GetTimestamp();
-    private readonly DateTimeOffset _absoluteDeadline = DateTimeOffset.UtcNow + timeout;
+    private readonly long _registeredTimestamp = runtime.Registration.TimeProvider.GetTimestamp();
+    private readonly DateTimeOffset _absoluteDeadline =
+        runtime.Registration.TimeProvider.GetUtcNow() + timeout;
     private readonly ZLinkActorJoinOperationId _operationId = CreateOperationId();
 
     // The deferred Join runs after the submitting callback, so the causal flow of
@@ -182,7 +182,11 @@ internal sealed class ZLinkDeferredActorJoin(
                         failure = ZLinkFrameworkErrorKind.DeadlineExceeded;
                     else
                         await targetCompletion
-                            .WaitAsync(remaining, cancellationToken)
+                            .WaitAsync(
+                                remaining,
+                                runtime.Registration.TimeProvider,
+                                cancellationToken
+                            )
                             .ConfigureAwait(false);
                 }
                 catch (Exception exception)
@@ -341,7 +345,8 @@ internal sealed class ZLinkDeferredActorJoin(
             batch.Dispose();
     }
 
-    private TimeSpan RemainingTimeout() => timeout - Stopwatch.GetElapsedTime(_registeredTimestamp);
+    private TimeSpan RemainingTimeout() =>
+        timeout - runtime.Registration.TimeProvider.GetElapsedTime(_registeredTimestamp);
 
     private ValueTask NotifySourceAsync(
         ZLinkActorJoinCompletion completion,

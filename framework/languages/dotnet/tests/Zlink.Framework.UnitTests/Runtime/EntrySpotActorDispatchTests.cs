@@ -9813,20 +9813,47 @@ public sealed partial class EntrySpotActorDispatchTests
     [Fact]
     public async Task ActorRemoteJoiner_InternalDeadline_MapsToTypedDeadlineExceeded()
     {
-        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-            await ZLinkActorRemoteJoiner.ExecuteWithDeadlineAsync(
-                async cancellationToken =>
-                {
-                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
-                    return 0;
-                },
-                TimeSpan.FromMilliseconds(20),
-                CancellationToken.None
-            )
-        );
+        var time = new ControllableTimeProvider();
+        var timeout = TimeSpan.FromMilliseconds(20);
+        var operation = ZLinkActorRemoteJoiner.ExecuteWithDeadlineAsync(
+            async cancellationToken =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return 0;
+            },
+            timeout,
+            CancellationToken.None,
+            time
+        ).AsTask();
+        Assert.Equal(1, time.ActiveTimerCount);
+        Assert.False(operation.IsCompleted);
+        time.AdvanceMonotonic(timeout);
+        var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => operation);
 
         Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
         Assert.IsAssignableFrom<OperationCanceledException>(error.InnerException);
+        Assert.Equal(0, time.ActiveTimerCount);
+    }
+
+    [Fact]
+    public async Task ActorRemoteJoiner_CallerCancellation_RemainsCancellation()
+    {
+        var time = new ControllableTimeProvider();
+        using var caller = new CancellationTokenSource();
+        var operation = ZLinkActorRemoteJoiner.ExecuteWithDeadlineAsync(
+            async cancellationToken =>
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                return 0;
+            },
+            TimeSpan.FromMilliseconds(20),
+            caller.Token,
+            time
+        ).AsTask();
+        Assert.Equal(1, time.ActiveTimerCount);
+        caller.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => operation);
+        Assert.Equal(0, time.ActiveTimerCount);
     }
 
     [Fact]
@@ -10293,6 +10320,7 @@ public sealed partial class EntrySpotActorDispatchTests
         ZLinkFrameworkErrorKind expected
     )
     {
+        var time = new ControllableTimeProvider();
         var admission = new TaskCompletionSource<(ActorJoinCallback Callback, TimeSpan Timeout)>(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -10301,7 +10329,11 @@ public sealed partial class EntrySpotActorDispatchTests
             CanonicalActorJoinHandler = (callback, timeout) =>
                 admission.SetResult((callback, timeout)),
         };
-        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, includeSpotRoute: true);
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            includeSpotRoute: true,
+            joinTimeProvider: time
+        );
         try
         {
             var actor = RegisterProbeActor(runtime, actorRef);
@@ -10318,26 +10350,32 @@ public sealed partial class EntrySpotActorDispatchTests
             join.ReserveBarrier();
             join.Activate();
             var submitted = await admission.Task.WaitAsync(TimeSpan.FromSeconds(2));
-            Assert.InRange(submitted.Timeout, TimeSpan.Zero, timeout);
-            // Native terminal draining can resume after the deadline instant.
-            // Only the sender can classify its admission/exhaustion history.
-            await Task.Delay(submitted.Timeout + TimeSpan.FromMilliseconds(50));
-            Assert.False(actor.JoinCompletion.Task.IsCompleted);
-            submitted.Callback(
-                new ZLinkBackendActorJoinResult(
-                    terminal,
-                    1,
-                    actorRef with
-                    {
-                        NodeRid = node.CanonicalRequest.TargetNodeRid,
-                    },
-                    "spot-ready",
-                    0,
-                    0,
-                    JoinedSpotGeneration: node.CanonicalRequest.TargetSpotGeneration
-                ),
-                Array.Empty<Message>()
-            );
+            try
+            {
+                Assert.Equal(timeout, submitted.Timeout);
+                // Native terminal draining can resume after the deadline instant.
+                // Only the sender can classify its admission/exhaustion history.
+                time.Advance(timeout);
+                Assert.False(actor.JoinCompletion.Task.IsCompleted);
+            }
+            finally
+            {
+                submitted.Callback(
+                    new ZLinkBackendActorJoinResult(
+                        terminal,
+                        1,
+                        actorRef with
+                        {
+                            NodeRid = node.CanonicalRequest.TargetNodeRid,
+                        },
+                        "spot-ready",
+                        0,
+                        0,
+                        JoinedSpotGeneration: node.CanonicalRequest.TargetSpotGeneration
+                    ),
+                    Array.Empty<Message>()
+                );
+            }
             var completion = await actor.JoinCompletion.Task.WaitAsync(TimeSpan.FromSeconds(2));
             if (terminal == RequestResult.Ok)
                 Assert.IsType<ZLinkActorJoinCompletion.Rejected>(completion);
@@ -11526,7 +11564,8 @@ public sealed partial class EntrySpotActorDispatchTests
         Func<IZLinkMeshNodeLocationResolver, IZLinkMeshNodeLocationResolver>? meshResolverWrapper =
             null,
         AcceptedSendProbe? acceptedSendProbe = null,
-        ILoggerFactory? loggerFactory = null
+        ILoggerFactory? loggerFactory = null,
+        TimeProvider? joinTimeProvider = null
     )
     {
         const string locationOwnerId = "entry-spot-dispatch-owner";
@@ -11614,6 +11653,7 @@ public sealed partial class EntrySpotActorDispatchTests
         var services = serviceCollection.BuildServiceProvider();
         var registration = new ZLinkFrameworkRegistration
         {
+            TimeProvider = joinTimeProvider ?? TimeProvider.System,
             DefaultRequestTimeout = defaultRequestTimeout ?? TimeSpan.FromSeconds(1),
             ImplicitHandlerAutoRegistrationEnabled = false,
         };
