@@ -31,12 +31,15 @@ import java.io.InputStream;
 import java.io.PushbackInputStream;
 import java.io.Reader;
 import java.lang.annotation.Annotation;
+import java.nio.ByteBuffer;
 import java.util.Base64;
 
 /** Owns the framework-json-v1 mapper decisions shared by JVM transports. */
 public final class ZLinkFrameworkJsonProfile {
     public static final String CONTENT_TYPE = "application/json";
     private static final String KOTLIN_METADATA_CLASS_NAME = "kotlin.Metadata";
+    private static final int UTF8_BOM_LENGTH = 3;
+    private static final int UTF8_BOM_PREFIX = 0xefbbbf;
 
     private static boolean isCanonicalDecimalInteger(String value) {
         if (value.isEmpty()) {
@@ -87,9 +90,22 @@ public final class ZLinkFrameworkJsonProfile {
         return builder.build();
     }
 
-    private static final class ProfileInputDecorator extends InputDecorator {
-        private static final int UTF8_BOM_LENGTH = 3;
+    /** Validates the native JSON input without changing its cursor or copying its bytes. */
+    public static void validateInput(ByteBuffer input) throws IOException {
+        int prefix = 0;
+        for (int index = 0; index < Math.min(input.remaining(), UTF8_BOM_LENGTH); index++) {
+            prefix = (prefix << Byte.SIZE) | (input.get(input.position() + index) & 0xff);
+        }
+        rejectBomPrefix(prefix);
+    }
 
+    private static void rejectBomPrefix(int prefix) throws IOException {
+        if (prefix == UTF8_BOM_PREFIX) {
+            throw new IOException("framework-json-v1 does not allow a UTF-8 BOM");
+        }
+    }
+
+    private static final class ProfileInputDecorator extends InputDecorator {
         @Override
         public InputStream decorate(IOContext context, byte[] input, int offset, int length)
                 throws IOException {
@@ -112,12 +128,11 @@ public final class ZLinkFrameworkJsonProfile {
         }
 
         private static void rejectBom(byte[] input, int offset, int length) throws IOException {
-            if (length >= UTF8_BOM_LENGTH
-                    && (input[offset] & 0xff) == 0xef
-                    && (input[offset + 1] & 0xff) == 0xbb
-                    && (input[offset + 2] & 0xff) == 0xbf) {
-                throw new IOException("framework-json-v1 does not allow a UTF-8 BOM");
+            int prefix = 0;
+            for (int index = 0; index < Math.min(length, UTF8_BOM_LENGTH); index++) {
+                prefix = (prefix << Byte.SIZE) | (input[offset + index] & 0xff);
             }
+            rejectBomPrefix(prefix);
         }
     }
 

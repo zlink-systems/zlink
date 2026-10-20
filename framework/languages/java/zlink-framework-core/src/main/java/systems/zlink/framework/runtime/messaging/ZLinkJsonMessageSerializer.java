@@ -4,6 +4,9 @@ import com.fasterxml.jackson.core.JsonGenerator;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.core.JsonToken;
+import com.fasterxml.jackson.core.ObjectCodec;
+import com.fasterxml.jackson.core.async.ByteBufferFeeder;
+import com.fasterxml.jackson.core.util.JsonParserDelegate;
 import com.fasterxml.jackson.databind.DeserializationContext;
 import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonMappingException;
@@ -22,6 +25,7 @@ import systems.zlink.framework.runtime.internal.messaging.ZLinkOwnedMessageSeria
 import systems.zlink.framework.spots.SpotRef;
 
 import java.io.IOException;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.HashSet;
 import java.util.Set;
@@ -76,29 +80,47 @@ public final class ZLinkJsonMessageSerializer
 
     @Override
     public <T> T deserialize(ZLinkEncodedPayload payload, Class<T> type) {
-        return decodeJson(payload.bytes(), type);
+        return decodeJson(ByteBuffer.wrap(payload.bytes()), type);
     }
 
     @Override
     public <T> T deserializeBorrowed(Message message, Class<T> type) {
-        return decodeJson(message.toByteArray(), type);
+        return decodeJson(message.dataBuffer(), type);
     }
 
-    private <T> T decodeJson(byte[] bytes, Class<T> type) {
+    private <T> T decodeJson(ByteBuffer bytes, Class<T> type) {
         if (type == Message.class) {
             return type.cast(Message.from(bytes));
         }
         if (type == byte[].class) {
-            return type.cast(bytes);
+            if (bytes.hasArray()) {
+                return type.cast(bytes.array());
+            }
+            byte[] owned = new byte[bytes.remaining()];
+            bytes.get(owned);
+            return type.cast(owned);
         }
-        try {
-            return mapper.readValue(bytes, type);
+        try (JsonParser parser = mapper.getFactory().createNonBlockingByteBufferParser()) {
+            ZLinkFrameworkJsonProfile.validateInput(bytes);
+            ByteBufferFeeder input = (ByteBufferFeeder) parser.getNonBlockingInputFeeder();
+            input.feedInput(bytes);
+            input.endOfInput();
+            // A scalar ending at EOF needs the async parser's final token transition.
+            while (parser.nextToken() == JsonToken.NOT_AVAILABLE) {}
+            return mapper.readValue(
+                    new JsonParserDelegate(parser) {
+                        @Override
+                        public ObjectCodec getCodec() {
+                            return mapper;
+                        }
+                    },
+                    type);
         } catch (IOException ex) {
             throw new IllegalArgumentException(
                     "failed to deserialize JSON message as "
                             + type.getName()
                             + " payload="
-                            + new String(bytes, StandardCharsets.UTF_8),
+                            + StandardCharsets.UTF_8.decode(bytes),
                     ex);
         }
     }

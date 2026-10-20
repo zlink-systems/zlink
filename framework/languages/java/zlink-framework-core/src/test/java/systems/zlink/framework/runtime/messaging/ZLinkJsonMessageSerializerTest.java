@@ -1,23 +1,31 @@
 package systems.zlink.framework.runtime.messaging;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.core.JsonParser;
+import com.fasterxml.jackson.databind.DeserializationContext;
+import com.fasterxml.jackson.databind.JsonDeserializer;
 import com.fasterxml.jackson.databind.JsonMappingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.exc.InvalidFormatException;
 
 import org.junit.jupiter.api.Test;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.framework.actors.ActorRef;
 import systems.zlink.framework.actors.ActorRefSnapshot;
 import systems.zlink.framework.runtime.internal.json.ZLinkFrameworkJsonProfile;
 import systems.zlink.framework.spots.SpotRef;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
@@ -25,6 +33,126 @@ import java.util.Map;
 import java.util.stream.IntStream;
 
 final class ZLinkJsonMessageSerializerTest {
+    @Test
+    void borrowedTypedJsonDoesNotMaterializeAnEncodedArray() {
+        CountingMapper mapper = new CountingMapper();
+        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer(mapper);
+        ProfileReply decoded;
+        try (Message payload = Message.from("{\"value\":\"profile:42\"}")) {
+            decoded = serializer.deserializeBorrowed(payload, ProfileReply.class);
+        }
+        assertEquals(new ProfileReply("profile:42"), decoded);
+        assertEquals(0, mapper.arrayReads, "typed decode must read the native view directly");
+    }
+
+    @Test
+    void borrowedTypedJsonPreservesTheArrayDecoderResultsAndErrors() throws Exception {
+        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
+        for (String json : List.of("{\"value\":\"한글😀\"}", "null", "{\"value\":\"first\"} {}")) {
+            try (Message payload = Message.from(json)) {
+                assertEquals(
+                        ZLinkFrameworkJsonProfile.mapper()
+                                .readValue(
+                                        json.getBytes(StandardCharsets.UTF_8), ProfileReply.class),
+                        serializer.deserializeBorrowed(payload, ProfileReply.class));
+            }
+        }
+        for (String json : List.of("", "{", "{\"value\":", "{\"value\":[]}")) {
+            try (Message payload = Message.from(json)) {
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> serializer.deserializeBorrowed(payload, ProfileReply.class));
+            }
+        }
+        ActorRef expected = new ActorRef("actor", 7, "mesh", RoutingId.from(new byte[] {1}));
+        try (Message payload = serializer.serializeOwned(expected)) {
+            assertEquals(expected, serializer.deserializeBorrowed(payload, ActorRef.class));
+        }
+        SpotRef spot = new SpotRef("spot", 9, "mesh", RoutingId.from(new byte[] {2}));
+        try (Message payload = serializer.serializeOwned(spot)) {
+            assertEquals(spot, serializer.deserializeBorrowed(payload, SpotRef.class));
+        }
+    }
+
+    @Test
+    void nativeAndOwnedJsonKeepTheProfilesBomRejection() {
+        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
+        byte[] bomJson = "\uFEFF{\"value\":\"blocked\"}".getBytes(StandardCharsets.UTF_8);
+        assertThrows(
+                IllegalArgumentException.class,
+                () ->
+                        serializer.deserialize(
+                                ZLinkEncodedPayload.from(bomJson), ProfileReply.class));
+        try (Message payload = Message.from(bomJson)) {
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () -> serializer.deserializeBorrowed(payload, ProfileReply.class));
+            assertArrayEquals(bomJson, serializer.deserializeBorrowed(payload, byte[].class));
+        }
+    }
+
+    @Test
+    void borrowedRawValuesOwnTheirStorageAfterTheInputCloses() {
+        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
+        byte[] bytes;
+        Message copied;
+        try (Message payload = Message.from("raw-value")) {
+            bytes = serializer.deserializeBorrowed(payload, byte[].class);
+            copied = serializer.deserializeBorrowed(payload, Message.class);
+        }
+        try (copied) {
+            assertEquals("raw-value", copied.toUtf8String());
+            assertEquals("raw-value", new String(bytes, StandardCharsets.UTF_8));
+        }
+    }
+
+    @Test
+    void borrowedTypedJsonPreservesParserCodecForAnnotatedDeserializers() {
+        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
+        try (Message payload = Message.from("{\"value\":\"custom\"}")) {
+            assertEquals(
+                    new CodecAwareValue("custom"),
+                    serializer.deserializeBorrowed(payload, CodecAwareValue.class));
+            assertEquals(
+                    new CodecAwareRecord("custom"),
+                    serializer.deserializeBorrowed(payload, CodecAwareRecord.class));
+        }
+    }
+
+    @JsonDeserialize(using = CodecAwareDeserializer.class)
+    record CodecAwareValue(String value) {}
+
+    public static final class CodecAwareDeserializer extends JsonDeserializer<CodecAwareValue> {
+        @Override
+        public CodecAwareValue deserialize(JsonParser parser, DeserializationContext context)
+                throws IOException {
+            JsonNode node = parser.readValueAsTree();
+            return new CodecAwareValue(node.get("value").textValue());
+        }
+    }
+
+    @JsonDeserialize(using = CodecAwareRecordDeserializer.class)
+    record CodecAwareRecord(String value) {}
+
+    public static final class CodecAwareRecordDeserializer
+            extends JsonDeserializer<CodecAwareRecord> {
+        @Override
+        public CodecAwareRecord deserialize(JsonParser parser, DeserializationContext context)
+                throws IOException {
+            return new CodecAwareRecord(parser.readValueAs(ProfileReply.class).value());
+        }
+    }
+
+    private static final class CountingMapper extends ObjectMapper {
+        private int arrayReads;
+
+        @Override
+        public <T> T readValue(byte[] source, Class<T> type) throws IOException {
+            arrayReads++;
+            return super.readValue(source, type);
+        }
+    }
+
     @Test
     void signed64AcceptsCanonicalBoundariesAndEscapedAscii() throws Exception {
         ObjectMapper mapper = ZLinkFrameworkJsonProfile.mapper();
