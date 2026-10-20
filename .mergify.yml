@@ -1,0 +1,34 @@
+# Merge queue: PRs labelled `merge-queue` are tested together in batches; a failing
+# batch is split to find the failing PR. Failed checks are never retried: one failure
+# is a defect to fix (AGENTS.md section 4.1).
+queue_rules:
+  - name: default
+    batch_size: 4
+    merge_method: merge
+    queue_conditions:
+      - base=main
+      - label=merge-queue
+      - -draft
+    merge_conditions:
+      - check-success=dotnet-release-gate
+      - check-success=node-release-gate
+      - check-success=Compare Linux and Windows Java results
+      - check-success=Framework C++ unit and contract tests
+      - check-success=win-x64 / Framework C++ unit and contract tests
+
+pull_request_rules:
+  - name: queue labelled pull requests
+    conditions:
+      - base=main
+      - label=merge-queue
+    actions:
+      queue:
+        name: default
+  - name: backport merged fixes to the 0.30.2 release branch
+    conditions:
+      - merged
+      - label=backport-0.30.2
+    actions:
+      backport:
+        branches:
+          - release/framework-0.30.2
