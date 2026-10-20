@@ -8,6 +8,61 @@ public sealed class MeshReceiveWakeTests
 {
     private static readonly TimeSpan CompletionBound = TimeSpan.FromSeconds(5);
 
+    [Fact]
+    public async Task NewManagedDeadlineWakesAnIdleReceiveOwner()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 1, 1, 1)
+        );
+        using var held = await queue.AcquireAsync(
+            CancellationToken.None,
+            ZLinkApplicationJobOrigin.Remote
+        );
+        var poller = new ControlledReceivePoller { RespectTimeoutAfterWake = true };
+        var node = new ZLinkManagedMeshNode(
+            context,
+            "deadline-wake",
+            applicationJobQueue: queue,
+            receivePollerFactory: () => poller
+        );
+        node.SetRoutingId(RoutingId.From("deadline-wake"));
+        node.Start();
+        try
+        {
+            await poller.FirstWait.Task.WaitAsync(CompletionBound);
+            var begin = typeof(ZLinkManagedMeshNode)
+                .GetMethods(BindingFlags.Instance | BindingFlags.NonPublic)
+                .Single(method =>
+                    method.Name == "TryBeginOperation" && method.GetParameters().Length == 3
+                );
+            object?[] args = [MeshOperationKind.NodeRequest, TimeSpan.FromMilliseconds(10), null];
+            Assert.True((bool)begin.Invoke(node, args)!);
+            var operation = args[2]!;
+            var token = (CancellationToken)
+                operation
+                    .GetType()
+                    .GetProperty("Token", BindingFlags.Instance | BindingFlags.NonPublic)!
+                    .GetValue(operation)!;
+            var expired = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            using var registration = token.Register(() => expired.TrySetResult());
+            poller.AllowWait();
+            // The first wait cannot time out. A deadline registration must wake
+            // the owner, which then uses the 10 ms bound on its next rotation.
+            await expired.Task.WaitAsync(CompletionBound);
+            Assert.True(poller.SecondWait.Task.IsCompleted);
+            Assert.Equal(0UL, queue.GetStatus().CapacityWaiters);
+        }
+        finally
+        {
+            Field<CancellationTokenSource>(node, "_stop").Cancel();
+            poller.ReleaseWait();
+            await node.DisposeAsync();
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -139,6 +194,7 @@ public sealed class MeshReceiveWakeTests
         internal int OwnerThread { get; private set; }
         internal int ResumeThread { get; private set; }
         internal bool FailRearm { get; init; }
+        internal bool RespectTimeoutAfterWake { get; init; }
 
         internal ControlledReceivePoller() => _inner.Add(_control, ControlSlot);
 
@@ -160,7 +216,10 @@ public sealed class MeshReceiveWakeTests
             }
             else
                 SecondWait.TrySetResult();
-            var count = _inner.Wait(destination, Timeout.InfiniteTimeSpan);
+            var count = _inner.Wait(
+                destination,
+                RespectTimeoutAfterWake && _waitCount > 1 ? timeout : Timeout.InfiniteTimeSpan
+            );
             var written = 0;
             for (var index = 0; index < count; index++)
             {

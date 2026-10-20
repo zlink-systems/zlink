@@ -5402,48 +5402,55 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         operation = result.Operation;
     }
 
-    private ValueTask<(ulong Correlation, PendingOperation Operation)> CreateOperationAsync(
+    private async ValueTask<(ulong Correlation, PendingOperation Operation)> CreateOperationAsync(
         MeshOperationKind kind,
         MeshOperationId operationId,
         bool awaitCompletion = false,
         TimeSpan? managedTimeout = null
-    ) =>
-        _operationLane.RunAsync(() =>
-        {
-            RemoveExpiredRelocationReplyTerminalsUnderLock(_deadlineClock.Elapsed);
-            if (operationId.High != _lifecycleGeneration || operationId.Low == 0)
-                throw new ArgumentException(
-                    "The operation id must be allocated by this MeshNode lifecycle.",
-                    nameof(operationId)
-                );
-            var operation = new PendingOperation(
-                operationId,
-                kind,
-                _localRequestSourceFence,
-                awaitCompletion
-            );
-            if (!_operations.TryAdd(operationId.Low, operation))
-                throw new InvalidOperationException("The operation id was reused.");
-            if (IsRelocatableRequest(kind))
+    )
+    {
+        var registered = await _operationLane
+            .RunAsync(() =>
             {
-                var relocationKey = new RelocationReplyTerminalKey(
-                    operationId.Low,
-                    operation.OperationId
-                );
-                if (!_relocationReplyOperations.TryAdd(relocationKey, operation))
-                {
-                    _operations.TryRemove(operationId.Low, out _);
-                    throw new InvalidOperationException(
-                        "The relocation reply operation id was reused."
+                RemoveExpiredRelocationReplyTerminalsUnderLock(_deadlineClock.Elapsed);
+                if (operationId.High != _lifecycleGeneration || operationId.Low == 0)
+                    throw new ArgumentException(
+                        "The operation id must be allocated by this MeshNode lifecycle.",
+                        nameof(operationId)
                     );
+                var operation = new PendingOperation(
+                    operationId,
+                    kind,
+                    _localRequestSourceFence,
+                    awaitCompletion
+                );
+                if (!_operations.TryAdd(operationId.Low, operation))
+                    throw new InvalidOperationException("The operation id was reused.");
+                if (IsRelocatableRequest(kind))
+                {
+                    var relocationKey = new RelocationReplyTerminalKey(
+                        operationId.Low,
+                        operation.OperationId
+                    );
+                    if (!_relocationReplyOperations.TryAdd(relocationKey, operation))
+                    {
+                        _operations.TryRemove(operationId.Low, out _);
+                        throw new InvalidOperationException(
+                            "The relocation reply operation id was reused."
+                        );
+                    }
                 }
-            }
-            if (managedTimeout is { } timeout)
-            {
-                IndexOperationDeadline(operation, _deadlineClock.Elapsed + timeout);
-            }
-            return (Correlation: operationId.Low, Operation: operation);
-        });
+                if (managedTimeout is { } timeout)
+                {
+                    IndexOperationDeadline(operation, _deadlineClock.Elapsed + timeout);
+                }
+                return (Correlation: operationId.Low, Operation: operation);
+            })
+            .ConfigureAwait(false);
+        if (managedTimeout is not null)
+            SignalReceiveOwner();
+        return registered;
+    }
 
     public MeshOperationId AllocateOperationId() => NextStandaloneOperationId();
 
@@ -5853,7 +5860,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         {
                             lock (_socketGate)
                                 _receiveWakeTimer!.Recv();
-                            receiveReady = true;
+                            receiveReady |=
+                                Volatile.Read(ref _reservedRawApplicationAdmission) is not null;
                         }
                         else if (
                             ready.SourceKind == PollSourceKind.Socket
