@@ -16,14 +16,14 @@ queue_rules:
       - check-success=Framework C++ unit and contract tests
       - check-success=win-x64 / Framework C++ unit and contract tests
 
+# A PR labelled `merge-queue` enters the queue by itself. Commenting
+# `@mergifyio queue` also queues it. Requires Merge Protections enabled for the repo.
+merge_protections_settings:
+  auto_merge_conditions:
+    - base=main
+    - label=merge-queue
+
 pull_request_rules:
-  - name: queue labelled pull requests
-    conditions:
-      - base=main
-      - label=merge-queue
-    actions:
-      queue:
-        name: default
   - name: backport merged fixes to the 0.30.2 release branch
     conditions:
       - merged
