@@ -3093,7 +3093,8 @@ export class ZLinkFrameworkRuntimeHost
     };
     const replyBindingSuccess = (): void => {
       if (record.reply(Buffer.alloc(0)) !== SubmitResult.Ok) {
-        throw new ZLinkConfigurationException(
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.ActorLocationStale,
           `MeshNode Actor binding target '${binding.actor.actorId}' acknowledgement failed.`
         );
       }
@@ -3158,7 +3159,8 @@ export class ZLinkFrameworkRuntimeHost
       replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
       return;
     }
-    const installed = state.installBoundSessionBinding({
+    replyBindingSuccess();
+    state.installBoundSessionBinding({
       ...target,
       sessionNodeRid: binding.sessionNodeRid,
       sessionRid: binding.sessionRid,
@@ -3167,11 +3169,6 @@ export class ZLinkFrameworkRuntimeHost
       sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
       bindingGeneration: binding.bindingGeneration
     });
-    if (!installed) {
-      replyBindingFailure(ZLinkFrameworkInternalErrorKind.ActorLocationStale);
-      return;
-    }
-    replyBindingSuccess();
     return Promise.resolve();
   }
 
