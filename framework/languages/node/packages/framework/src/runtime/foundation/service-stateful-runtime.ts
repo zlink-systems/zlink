@@ -4272,6 +4272,9 @@ export class ServiceStatefulRuntime {
           actorNodeGeneration: actorAuthority.targetNodeGeneration,
           authorityOwnerGeneration: actorAuthority.authorityOwnerGeneration,
           ownerLeaseGeneration: actorAuthority.ownerLeaseGeneration,
+          // The Host reads only Session identity fields before `reply` installs the
+          // binding; installation keeps that identity. Generation and owner fields
+          // are read after `reply`, so they always come from the accepted binding.
           get bindingGeneration() {
             return acceptedBinding().bindingGeneration;
           },
