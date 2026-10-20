@@ -7090,6 +7090,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return dispatchErrors.flow().captureEnabled();
     }
 
+    boolean dispatchErrorsEnabled() {
+        return dispatchErrors.errorsEnabled();
+    }
+
     /** Spec 26 §4 spot-actor trace: strings are built only after the gate. */
     private void traceActorFlow(
             ZLinkMessageFlowOutcome outcome,

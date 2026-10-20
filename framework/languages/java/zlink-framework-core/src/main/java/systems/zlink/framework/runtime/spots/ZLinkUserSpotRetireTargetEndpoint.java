@@ -562,7 +562,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
                                 record.sourceNodeGeneration(),
                                 payload,
                                 failure,
-                                record.parts().isEmpty()
+                                sourceReplies == null
+                                                || !sourceReplies.dispatchErrorsEnabled()
+                                                || record.parts().isEmpty()
                                         ? null
                                         : new String(
                                                 record.parts().getFirst(), StandardCharsets.UTF_8));
@@ -625,7 +627,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                             "canonical request replay produced no terminal payload"));
         }
         boolean actor = participant.fence().objectKind() == ZLinkPlacementObjectKind.ACTOR.value();
-        if (failure != null && sourceReplies != null) {
+        if (failure != null && sourceReplies != null && sourceReplies.dispatchErrorsEnabled()) {
             sourceReplies.reportDispatchError(
                     DispatchFailureReport.of(
                                     actor
@@ -677,7 +679,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
         return relayCanonicalOnce(request, participant, completion)
                 .whenComplete(
                         (ignored, relayFailure) -> {
-                            if (relayFailure != null && sourceReplies != null) {
+                            if (relayFailure != null
+                                    && sourceReplies != null
+                                    && sourceReplies.dispatchErrorsEnabled()) {
                                 sourceReplies.reportDispatchError(
                                         DispatchFailureReport.of(
                                                         ZLinkDispatchErrorSurface.SPOT_ROUTE,
