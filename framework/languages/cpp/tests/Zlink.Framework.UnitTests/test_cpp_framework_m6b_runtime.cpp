@@ -8219,10 +8219,16 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
         assert (await_task (source->transport ().send_relocation_control (
           target_status.routing_id ().to_bytes (), chunk)));
     }
-    while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline) {
+    // Messaging hot path §4.1: a reply completes in a receive rotation, which
+    // this test drives with dispatch_ready. Both replies can arrive in
+    // different rotations, so keep rotating until both requests complete.
+    while ((!pending.await_ready () || (initial && !initial->await_ready ()))
+           && std::chrono::steady_clock::now () < deadline) {
         (void) target->dispatch_ready (dispatch);
         (void) source->dispatch_ready (dispatch);
     }
+    assert (pending.await_ready ());
+    assert (!initial || initial->await_ready ());
     const auto response = await_task (std::move (pending));
     assert (!response.ready);
     if (already_accepted) {
