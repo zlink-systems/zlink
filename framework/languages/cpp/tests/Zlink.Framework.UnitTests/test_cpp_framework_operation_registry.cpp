@@ -22,6 +22,7 @@
 #include <barrier>
 #include <latch>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <stdexcept>
 #include <thread>
@@ -233,6 +234,93 @@ void verify_idle_completion_precedes_handoff ()
     assert (handoffs == 1 && registry.shutdown () == 0);
 }
 
+namespace
+{
+constexpr std::size_t shutdown_round_trips = 64;
+std::atomic_size_t shutdown_delivered{0};
+std::atomic_bool shutdown_release{false};
+}
+
+void verify_dispatcher_shutdown_drains ()
+{
+    namespace detail = zlink::framework::detail;
+    // Register before construction so verification runs after dispatcher teardown.
+    assert (std::atexit ([] { assert (shutdown_delivered == shutdown_round_trips * 2); }) == 0);
+    detail::dispatch_completion ([] {});
+    const auto workers = detail::completion_dispatcher_worker_count ();
+    auto occupied = std::make_shared<std::latch> (workers);
+    for (std::size_t index = 0; index < workers; ++index)
+        detail::dispatch_completion ([occupied] {
+            occupied->count_down ();
+            shutdown_release.wait (false);
+        });
+    occupied->wait ();
+    for (std::size_t index = 0; index < shutdown_round_trips; ++index)
+        detail::dispatch_completion ([] {
+            ++shutdown_delivered;
+            detail::dispatch_completion ([] { ++shutdown_delivered; }, false, &shutdown_delivered);
+        });
+    assert (shutdown_delivered == 0);
+    // Release only at process exit. All queued and subsequently posted turns
+    // must drain before the earlier verification handler can run.
+    assert (std::atexit ([] {
+                shutdown_release = true;
+                shutdown_release.notify_all ();
+            })
+            == 0);
+}
+
+void verify_handoff_excludes_application_system_handlers ()
+{
+    namespace detail = zlink::framework::detail;
+    assert (detail::completion_dispatcher_worker_count () == 0);
+    assert (detail::dispatch_completion_receive_handoff ([] { return true; }));
+    assert (detail::completion_dispatcher_worker_count () == 0);
+    detail::dispatch_completion ([] {});
+    const auto framework_workers = detail::completion_dispatcher_worker_count ();
+    std::latch framework_occupied (framework_workers), framework_release (1),
+      framework_exited (framework_workers);
+    for (std::size_t index = 0; index < framework_workers; ++index)
+        detail::dispatch_completion ([&] {
+            framework_occupied.count_down ();
+            framework_release.wait ();
+            framework_exited.count_down ();
+        });
+    framework_occupied.wait ();
+    const auto receiver = std::this_thread::get_id ();
+    bool framework_on_receiver = false;
+    detail::dispatch_completion (
+      [&] { framework_on_receiver = std::this_thread::get_id () == receiver; });
+    const auto workers =
+      boost::asio::query (boost::asio::system_executor{}, boost::asio::execution::occupancy);
+    std::latch occupied (workers), release (1), exited (workers);
+    for (std::size_t index = 0; index < workers; ++index)
+        boost::asio::post (boost::asio::system_executor{}, [&] {
+            occupied.count_down ();
+            release.wait ();
+            exited.count_down ();
+        });
+    occupied.wait ();
+    std::atomic_bool external_on_receiver{false};
+    std::promise<void> external;
+    auto done = external.get_future ();
+    boost::asio::post (boost::asio::system_executor{}, [&] {
+        external_on_receiver = std::this_thread::get_id () == receiver;
+        external.set_value ();
+    });
+    // Every system worker is occupied, so only the handoff resource could
+    // consume the external handler before the release below.
+    assert (detail::dispatch_completion_receive_handoff ([] { return true; }));
+    assert (done.wait_for (std::chrono::seconds (0)) == std::future_status::timeout);
+    assert (framework_on_receiver);
+    framework_release.count_down ();
+    framework_exited.wait ();
+    release.count_down ();
+    exited.wait ();
+    assert (done.wait_for (std::chrono::seconds (5)) == std::future_status::ready);
+    assert (!external_on_receiver);
+}
+
 void verify_completion_resource_transitions ()
 {
     namespace detail = zlink::framework::detail;
@@ -258,13 +346,12 @@ void verify_completion_resource_transitions ()
 
     // Occupy the dispatcher's existing workers so the joining resource wins
     // dequeue deterministically. This neither stops nor replaces its queue.
-    const auto workers =
-      boost::asio::query (boost::asio::system_executor{}, boost::asio::execution::occupancy);
+    const auto workers = detail::completion_dispatcher_worker_count ();
     auto occupied = std::make_shared<std::latch> (workers);
     auto release = std::make_shared<std::latch> (1);
     auto exited = std::make_shared<std::latch> (workers);
     for (std::size_t index = 0; index < workers; ++index)
-        boost::asio::post (boost::asio::system_executor{}, [occupied, release, exited] {
+        detail::dispatch_completion ([occupied, release, exited] {
             occupied->count_down ();
             release->wait ();
             exited->count_down ();
@@ -330,6 +417,15 @@ void verify_completion_resource_transitions ()
 
 int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view (argv[1]) == "--dispatcher-shutdown") {
+        verify_dispatcher_shutdown_drains ();
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--isolation-only") {
+        verify_handoff_excludes_application_system_handlers ();
+        return 0;
+    }
+    verify_handoff_excludes_application_system_handlers ();
     if (argc == 2 && std::string_view (argv[1]) == "--handoff-counts") {
         verify_completion_resource_transitions ();
         return 0;

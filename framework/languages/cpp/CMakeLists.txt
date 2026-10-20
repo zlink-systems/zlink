@@ -1187,6 +1187,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     COMMAND test_cpp_framework_operation_registry
     LABELS "framework-unit;framework-foundation;operation;resource"
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_completion_dispatcher_shutdown
+    COMMAND test_cpp_framework_operation_registry --dispatcher-shutdown
+    LABELS "framework-unit;framework-foundation;operation;resource"
+    TIMEOUT 30)
 
   add_executable(test_cpp_framework_m6a_runtime
     tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp)

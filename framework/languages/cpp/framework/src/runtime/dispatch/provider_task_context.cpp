@@ -4,14 +4,16 @@
 
 #include "completion_turn.hpp"
 
-#include <boost/asio/detail/scheduler.hpp>
+#include <boost/asio/executor_work_guard.hpp>
+#include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
-#include <boost/asio/system_context.hpp>
-#include <boost/asio/system_executor.hpp>
 
+#include <algorithm>
 #include <atomic>
 #include <optional>
+#include <thread>
 #include <utility>
+#include <vector>
 
 namespace zlink::framework::detail
 {
@@ -31,6 +33,55 @@ struct completion_turn_scope_t
     const void *previous;
     ~completion_turn_scope_t () { completion_owner = previous; }
 };
+class completion_dispatcher_t;
+std::atomic<completion_dispatcher_t *> active_completion_dispatcher{nullptr};
+
+class completion_dispatcher_t
+{
+  public:
+    completion_dispatcher_t ()
+    {
+        // A blocked callback must leave another worker available for independent turns.
+        constexpr unsigned minimum_worker_count = 2;
+        const auto count = std::max (minimum_worker_count, std::thread::hardware_concurrency ());
+        _workers.reserve (count);
+        for (unsigned index = 0; index < count; ++index)
+            _workers.emplace_back ([this] { _context.run (); });
+        active_completion_dispatcher.store (this, std::memory_order_release);
+    }
+
+    ~completion_dispatcher_t ()
+    {
+        // Let run() drain accepted turns, including work posted by those turns.
+        // stop() would abandon queued callbacks and their registry reservations.
+        active_completion_dispatcher.store (nullptr, std::memory_order_release);
+        _work.reset ();
+        _workers.clear ();
+    }
+
+    template <typename Work> void post (Work &&work)
+    {
+        boost::asio::post (_context, std::forward<Work> (work));
+    }
+    void poll_one () { _context.poll_one (); }
+    std::size_t worker_count () const noexcept { return _workers.size (); }
+
+  private:
+    boost::asio::io_context _context;
+    std::vector<std::jthread> _workers;
+    // Declared last so construction failure releases work before joining started workers.
+    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> _work{
+      _context.get_executor ()};
+};
+
+completion_dispatcher_t &completion_dispatcher ()
+{
+    // Submit/completion §11 requires one process dispatcher. Provider tasks and
+    // registries also exist without a host and outlive an individual host stop.
+    static completion_dispatcher_t dispatcher;
+    return dispatcher;
+}
+
 std::atomic<const ambient_context_hooks_t *> ambient_context_hooks{nullptr};
 std::atomic<const runtime_execution_hooks_t *> runtime_execution_hooks{nullptr};
 }
@@ -60,7 +111,7 @@ void dispatch_completion (std::function<void ()> work, bool inline_allowed, cons
         work ();
         return;
     }
-    boost::asio::post (boost::asio::system_executor{}, [work = std::move (work), owner] {
+    completion_dispatcher ().post ([work = std::move (work), owner] {
         const completion_turn_scope_t scope{
           std::exchange (completion_owner, owner != nullptr ? owner : &process_completion_owner)};
         work ();
@@ -73,15 +124,18 @@ bool dispatch_completion_receive_handoff (const std::function<bool ()> &handoff)
     // Only the executor can reserve an idle resource for the next receive turn.
     if (!handoff ())
         return false;
-    // Join the existing process dispatcher for one nonblocking turn. Its queue
-    // determines the next callback; idle workers may already have consumed it.
-    auto &context = boost::asio::system_executor{}.context ();
-    auto &scheduler = boost::asio::use_service<boost::asio::detail::scheduler> (context);
-    boost::system::error_code error;
-    scheduler.poll_one (error);
-    if (error)
-        throw boost::system::system_error (error);
+    // Only Framework completions enter this context. Application system-executor
+    // handlers cannot be consumed by the resource that just handed off receive.
+    // An empty first rotation must not create workers just to attempt a dequeue.
+    if (auto *dispatcher = active_completion_dispatcher.load (std::memory_order_acquire))
+        dispatcher->poll_one ();
     return true;
+}
+
+std::size_t completion_dispatcher_worker_count () noexcept
+{
+    const auto *dispatcher = active_completion_dispatcher.load (std::memory_order_acquire);
+    return dispatcher != nullptr ? dispatcher->worker_count () : 0;
 }
 
 task_scheduler_t capture_runtime_native_continuation_scheduler ()
