@@ -9,7 +9,6 @@ internal sealed class ZLinkFrameworkHostRuntimeCoordinator(
     ZLinkRouteMeshRuntimeService routeMeshRuntime,
     ZLinkLocationRuntime? locationRuntime,
     ZLinkAutoConnectLifecycleCoordinator autoConnectLifecycle,
-    ZLinkLocationLifecycle? locationLifecycle,
     ZLinkFrameworkMaintenanceRuntime maintenance
 )
 {
@@ -55,7 +54,8 @@ internal sealed class ZLinkFrameworkHostRuntimeCoordinator(
                             )
                             : maintenance.ShutdownAsync()
                     ).ConfigureAwait(false);
-                await CloseResourcesAsync().ConfigureAwait(false);
+                else
+                    await CloseResourcesAsync().ConfigureAwait(false);
             }
             catch (Exception cleanupFailure)
             {
@@ -80,7 +80,6 @@ internal sealed class ZLinkFrameworkHostRuntimeCoordinator(
                 .ShutdownAsync(cancellationToken: CancellationToken.None)
                 .ConfigureAwait(false);
         }
-        await CloseResourcesAsync().ConfigureAwait(false);
     }
 
     private async Task CloseResourcesAsync()
@@ -102,7 +101,6 @@ internal sealed class ZLinkFrameworkHostRuntimeCoordinator(
                 locationRuntime?.StopAsync(CancellationToken.None).AsTask() ?? Task.CompletedTask
             )
             .ConfigureAwait(false);
-        locationLifecycle?.ResetGeneration();
 
         if (failures is { Count: 1 })
             throw failures[0];

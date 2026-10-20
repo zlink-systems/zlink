@@ -1433,11 +1433,7 @@ final class ZLinkProviderAuthorityRepository {
 
     CompletionStage<ZLinkObjectCommitResult> commit(
             ZLinkObjectReservation reservation, byte[] readyPayload, long deadlineUnixMs) {
-        return commit(
-                reservation,
-                readyPayload,
-                null,
-                () -> System.currentTimeMillis() >= deadlineUnixMs);
+        return commit(reservation, readyPayload, null, deadlineUnixMs);
     }
 
     CompletionStage<ZLinkObjectCommitResult> commit(
@@ -1449,7 +1445,13 @@ final class ZLinkProviderAuthorityRepository {
                 reservation,
                 readyPayload,
                 terminal,
-                () -> System.currentTimeMillis() >= deadlineUnixMs);
+                () -> {
+                    if (System.currentTimeMillis() >= deadlineUnixMs)
+                        throw new ZLinkFrameworkException(
+                                ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                "Instance activation deadline expired");
+                    return false;
+                });
     }
 
     CompletionStage<ZLinkObjectCommitResult> commit(

@@ -312,6 +312,94 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
+    [Fact]
+    public async Task Disconnect_cleanup_settles_when_runtime_stops_before_remote_reply()
+    {
+        using var flow = new CapturingMessageFlowObserver();
+        var node = new CapturingSpotNode();
+        var (runtime, actor) = await CreateStartedRuntimeAsync(
+            node,
+            messageFlowObserver: flow,
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal,
+            includeActorFactory: false,
+            defaultRequestTimeout: TimeSpan.FromSeconds(30)
+        );
+        try
+        {
+            var sessionRid = RoutingId.From("cleanup-failed-session");
+            var context = new ZLinkSessionContext(
+                runtime,
+                new ZLinkManagedStream(
+                    new RelayStreamSocket(),
+                    sessionRid,
+                    runtime.Registration.Codecs,
+                    "test"
+                ),
+                new RelaySessionHandlerRegistry(),
+                static () => ValueTask.CompletedTask,
+                static _ => ValueTask.CompletedTask
+            );
+            var bound = new ZLinkSessionActor(
+                context,
+                actor.ActorId,
+                sessionRid,
+                "cleanup-failed-binding"
+            );
+            runtime.BindSessionActor(
+                actor.ActorId,
+                context,
+                bound.BindingToken,
+                bound,
+                7,
+                ZLinkSessionBindingRoute.Create(
+                    new ActorRef(actor.ActorId, actor.Generation, "entry", actor.NodeRid),
+                    "entry",
+                    1,
+                    1,
+                    1
+                ),
+                11,
+                sessionOwnerNodeRid: node.RoutingId,
+                sessionOwnerId: "session-owner",
+                sessionOwnerLeaseGeneration: 1
+            );
+            var coordinator = (ZLinkActorBoundSessionCoordinator)
+                typeof(ZLinkFrameworkRuntime)
+                    .GetField(
+                        "_actorBoundSessionCoordinator",
+                        System.Reflection.BindingFlags.Instance
+                            | System.Reflection.BindingFlags.NonPublic
+                    )!
+                    .GetValue(runtime)!;
+            var submitted = 0;
+            // Admission succeeds, but the remote owner never supplies a callback reply.
+            coordinator.RemoteFrameRelayAsync = (_, _, _, _, _, _, _, _, _, _, _, _, _, _) =>
+            {
+                submitted++;
+                return ValueTask.CompletedTask;
+            };
+            var cleanup = coordinator
+                .NotifyDisconnectedAsync(
+                    coordinator.GetSessionBinding(actor.ActorId, bound.BindingToken)!,
+                    node,
+                    runtime.GetSpotNodeRuntime("entry").LocalRequestSource,
+                    CancellationToken.None
+                )
+                .AsTask();
+            Assert.False(cleanup.IsCompleted);
+            await runtime.ForceStopAsync(CancellationToken.None);
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                cleanup.WaitAsync(TimeSpan.FromSeconds(5))
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.ShuttingDown, failure.Kind);
+            Assert.Equal(1, submitted);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
     private sealed class FailedSessionStream(Exception failure) : IZLinkStream
     {
         public int Attempts { get; private set; }

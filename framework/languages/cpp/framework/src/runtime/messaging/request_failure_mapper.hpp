@@ -56,6 +56,8 @@ class request_failure_mapper_t
     {
         return target_failure_reply (error.kind (), detail::failure_code (error));
     }
+    std::optional<request_wire_failure_t>
+    target_failure_reply (const std::exception_ptr &error) const;
     std::uint32_t target_failure_code (framework_error_kind_t kind,
                                        std::uint32_t cause_code = 0) const noexcept;
     framework_error_kind_t failure_code_kind (std::uint32_t failure_code) const noexcept;

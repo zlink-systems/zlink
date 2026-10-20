@@ -23,7 +23,6 @@ import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Host relocation §13: applied descriptor writes require confirmed Serving rollback. */
@@ -164,9 +163,9 @@ final class ZLinkRelocationPublicationFailureTest {
             assertEquals(ZLinkTerminationReason.TEARDOWN_FAILED, terminal.reason());
             assertEquals(ZLinkFrameworkRuntimeState.STOPPED, runtime.status().state());
         } finally {
-            var cleanupFailure = assertThrows(ZLinkFrameworkShutdown.Failure.class, runtime::close);
-            assertEquals("channel_close", cleanupFailure.stage());
-            assertInstanceOf(TimeoutException.class, cleanupFailure.getCause());
+            var terminal = runtime.status().terminationResult().orElseThrow();
+            assertDoesNotThrow(runtime::close);
+            assertEquals(terminal, runtime.status().terminationResult().orElseThrow());
         }
     }
 

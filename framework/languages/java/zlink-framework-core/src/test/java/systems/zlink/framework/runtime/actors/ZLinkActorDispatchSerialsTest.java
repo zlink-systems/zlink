@@ -295,6 +295,128 @@ final class ZLinkActorDispatchSerialsTest {
     }
 
     @Test
+    void lateHostCloseAfterRelocationRetirementDoesNotResolveAnAbsentActor() {
+        var owner = actorTarget();
+        var incarnation = new Object();
+        var snapshot =
+                new AtomicReference<>(
+                        new ZLinkActorDispatchTarget.ActivationSnapshot(owner, incarnation));
+        var dispatches =
+                new ZLinkActorDispatchSerials(
+                        new Object(),
+                        Runnable::run,
+                        actorId -> CompletableFuture.completedFuture(snapshot.get()));
+        dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        var disposed = new AtomicInteger();
+        dispatches
+                .registerTeardown(
+                        "actor-1",
+                        () -> {
+                            snapshot.set(null);
+                            return CompletableFuture.completedFuture(null);
+                        },
+                        () -> {
+                            disposed.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        })
+                .thenCompose(terminal -> terminal)
+                .toCompletableFuture()
+                .join();
+
+        dispatches
+                .beginTeardown(
+                        "actor-1",
+                        incarnation,
+                        () -> {
+                            disposed.incrementAndGet();
+                            return CompletableFuture.completedFuture(null);
+                        })
+                .toCompletableFuture()
+                .join();
+        assertEquals(1, disposed.get());
+        var rejected = dispatches.prepareAsync("actor-1").toCompletableFuture();
+        assertThrows(CompletionException.class, rejected::join);
+    }
+
+    @Test
+    void teardownJoinsTheReservedIncarnationWhileTargetResolutionWaits() {
+        var incarnation = new Object();
+        var resolution = new CompletableFuture<ZLinkActorDispatchTarget.ActivationSnapshot>();
+        var lookups = new AtomicInteger();
+        var dispatches =
+                new ZLinkActorDispatchSerials(
+                        new Object(),
+                        Runnable::run,
+                        actorId -> {
+                            lookups.incrementAndGet();
+                            return resolution;
+                        });
+        var cleanup = new AtomicInteger();
+        java.util.function.Supplier<CompletionStage<Void>> dispose =
+                () -> {
+                    cleanup.incrementAndGet();
+                    return CompletableFuture.completedFuture(null);
+                };
+        var first = dispatches.beginTeardown("actor-1", incarnation, dispose).toCompletableFuture();
+        var second =
+                dispatches.beginTeardown("actor-1", incarnation, dispose).toCompletableFuture();
+        assertFalse(first.isDone());
+        assertFalse(second.isDone());
+        var replacement =
+                dispatches.beginTeardown("actor-1", new Object(), dispose).toCompletableFuture();
+        assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                ((systems.zlink.framework.errors.ZLinkFrameworkException)
+                                assertThrows(CompletionException.class, replacement::join)
+                                        .getCause())
+                        .kind());
+        resolution.complete(
+                new ZLinkActorDispatchTarget.ActivationSnapshot(actorTarget(), incarnation));
+        first.join();
+        second.join();
+        assertEquals(1, lookups.get());
+        assertEquals(1, cleanup.get());
+    }
+
+    @Test
+    void staleTeardownCannotClaimTheReplacementIncarnation() {
+        var incarnation = new Object();
+        var target = actorTarget();
+        var replacement = new Object();
+        var dispatches =
+                new ZLinkActorDispatchSerials(
+                        new Object(),
+                        Runnable::run,
+                        actorId ->
+                                CompletableFuture.completedFuture(
+                                        new ZLinkActorDispatchTarget.ActivationSnapshot(
+                                                target, replacement)));
+        var closed = new AtomicInteger();
+        var terminal =
+                dispatches
+                        .beginTeardown(
+                                "actor-1",
+                                incarnation,
+                                () -> {
+                                    closed.incrementAndGet();
+                                    return CompletableFuture.completedFuture(null);
+                                })
+                        .toCompletableFuture();
+        assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.INVALID_OPERATION,
+                ((systems.zlink.framework.errors.ZLinkFrameworkException)
+                                assertThrows(CompletionException.class, terminal::join).getCause())
+                        .kind());
+        assertEquals(0, closed.get());
+        var turn = dispatches.prepareAsync("actor-1").toCompletableFuture().join();
+        assertSame(replacement, turn.incarnation());
+        dispatches
+                .enqueue(turn, () -> CompletableFuture.completedFuture(null))
+                .toCompletableFuture()
+                .join();
+    }
+
+    @Test
     void idleSourceRegistersTeardownBeforeLogicalRetirementAndDisposesAfterIt() {
         ZLinkActorDispatchSerials dispatches = dispatches(new AtomicReference<>(actorTarget()));
         dispatches.prepareAsync("actor-1").toCompletableFuture().join();
