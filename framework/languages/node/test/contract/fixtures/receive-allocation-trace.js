@@ -26,7 +26,52 @@ function receiveFixture() {
   return { runtime, counts, record, permit, router, rotation, observe };
 }
 
+function claimWorkload() {
+  const counts = { dispatch: 0, terminal: 0, release: 0, permitRelease: 0, close: 0 };
+  const owner = { ordinaryIngressPreAdmitted: true };
+  const permit = { releaseAfterInternalProcessing() { counts.permitRelease += 1; } };
+  const record = {
+    parts: [], applicationJobPermit: permit,
+    onTerminalCompletion() { counts.terminal += 1; }
+  };
+  const received = { ok: true, records: [record] };
+  const drained = { ok: true, hasResidue: false, records: [owner] };
+  let remaining;
+  const claim = {
+    recvBatch() { return received; },
+    release() {
+      counts.release += 1;
+      remaining -= 1;
+      if (remaining === 0) pump.disposed = true;
+    }
+  };
+  const batch = { reset() {}, close() { counts.close += 1; }, takeClaim() { return claim; } };
+  const pump = new ZLinkMeshDispatchPump({
+    createReadyBatch(capacity) { assert.equal(capacity, 1); return batch; },
+    createReceiveBatch() { return batch; },
+    drainReady() { return drained; }
+  }, {
+    applicationJobQueue: { acquire() { assert.fail('pre-admitted ingress must reuse its permit'); } },
+    monotonicNowMs: () => 0,
+    dispatch() { counts.dispatch += 1; },
+    reportError(error) { throw error; }
+  });
+  return {
+    counts, names: [],
+    async run() {
+      remaining = 1000;
+      pump.disposed = false;
+      pump.pendingDomains = ReadyDomain.Application;
+      // Older revisions put the persistent worker in drainClaim itself.
+      if (pump.runApplicationWorker) await pump.runApplicationWorker();
+      else await pump.drainClaim(ReadyDomain.Application);
+      assert.equal(remaining, 0);
+    }
+  };
+}
+
 function workload(mode) {
+  if (mode === 'claim') return claimWorkload();
   const counts = { calls: 0 };
   if (mode === 'pump') {
     const pump = new ZLinkMeshDispatchPump({}, {});
@@ -81,7 +126,10 @@ function allocationControl() { return () => undefined; }
 async function trace(mode) {
   const work = workload(mode);
   // Disable optimizing compilation in the child so escape analysis cannot hide allocations.
-  for (let index = 0; index < 10000; index += 1) { work.run(); allocationControl(); }
+  if (mode === 'claim') {
+    await work.run();
+    for (let index = 0; index < 10000; index += 1) allocationControl();
+  } else for (let index = 0; index < 10000; index += 1) { work.run(); allocationControl(); }
   for (const name of Object.keys(work.counts)) work.counts[name] = 0;
   global.gc();
   const session = new Session();
@@ -94,7 +142,11 @@ async function trace(mode) {
   try {
     // Allocation tracking counts every allocation, including objects collected before the snapshot.
     await post('HeapProfiler.startTrackingHeapObjects', { trackAllocations: true });
-    for (let index = 0; index < 1000; index += 1) { work.run(); allocationControl(); }
+    if (mode === 'claim') await work.run();
+    for (let index = 0; index < 1000; index += 1) {
+      if (mode !== 'claim') work.run();
+      allocationControl();
+    }
     await post('HeapProfiler.takeHeapSnapshot');
     const snapshot = JSON.parse(chunks.join(''));
     session.removeAllListeners('HeapProfiler.addHeapSnapshotChunk');
@@ -110,12 +162,21 @@ async function trace(mode) {
     }
     const allocations = Object.fromEntries(work.names.map((name) => [name, 0]));
     let controlAllocations = 0;
+    const moduleAllocations = { count: 0, bytes: 0 };
+    const moduleFunctions = {};
     function visit(tree) {
       const traceFields = snapshot.snapshot.meta.trace_node_fields;
       for (let index = 0; index < tree.length; index += traceFields.length) {
         const info = names[tree[index + traceFields.indexOf('function_info_index')]];
         if (info.name === 'allocationControl' && info.script === __filename) {
           controlAllocations += tree[index + traceFields.indexOf('count')];
+        }
+        if (info.script.endsWith('/runtime/backend/mesh-dispatch-pump.js')) {
+          const count = tree[index + traceFields.indexOf('count')];
+          const bytes = tree[index + traceFields.indexOf('size')];
+          moduleAllocations.count += count;
+          moduleAllocations.bytes += bytes;
+          moduleFunctions[info.name] = (moduleFunctions[info.name] ?? 0) + count;
         }
         if (Object.hasOwn(allocations, info.name) && info.script.includes('/packages/framework/dist/')) {
           allocations[info.name] += tree[index + traceFields.indexOf('count')];
@@ -125,7 +186,7 @@ async function trace(mode) {
     }
     visit(snapshot.trace_tree);
     assert.equal(controlAllocations, 1000, 'allocation tracker must count discarded closures');
-    return { counts: work.counts, allocations, controlAllocations };
+    return { counts: work.counts, allocations, controlAllocations, moduleAllocations, moduleFunctions };
   } finally {
     session.disconnect();
   }
