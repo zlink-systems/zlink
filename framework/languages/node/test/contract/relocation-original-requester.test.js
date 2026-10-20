@@ -400,7 +400,10 @@ for (const local of [false, true]) {
         );
         await admission;
         assert.equal(reads, 0);
-        assert.equal(await queued.prepareDispatch(new AbortController().signal), true);
+        assert.equal(
+          await queued.sourcePreparationOwner.prepareDispatch(queued, new AbortController().signal),
+          true
+        );
         assert.strictEqual(queued.requestSource, source);
         assert.strictEqual(queued.stateful.messageFollowOrigin.requestSource, source);
         assert.equal(queued.stateful.messageFollowOrigin.originalReplyRouteId, pending.id);
@@ -431,7 +434,10 @@ for (const local of [false, true]) {
         };
         assert.equal(await runtime.ingress(ingress), 'application');
         assert.equal(reads, 0);
-        assert.equal(await queued.prepareDispatch(new AbortController().signal), true);
+        assert.equal(
+          await queued.sourcePreparationOwner.prepareDispatch(queued, new AbortController().signal),
+          true
+        );
         assert.strictEqual(queued.requestSource, source);
         assert.strictEqual(queued.stateful.messageFollowOrigin.requestSource, source);
         assert.equal(queued.stateful.messageFollowOrigin.originalReplyRouteId, 91n);

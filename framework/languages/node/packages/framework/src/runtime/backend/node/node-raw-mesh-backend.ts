@@ -2511,7 +2511,9 @@ function decodeStatefulRecord(
     get requestSource() {
       return record.requestSource;
     },
-    ...(record.prepareDispatch === undefined ? {} : { prepareDispatch: record.prepareDispatch }),
+    prepareDispatch:
+      record.sourcePreparationOwner === undefined ? undefined : prepareStatefulMailboxDispatch,
+    statefulMailboxRecord: record,
     domain: readyDomain(record.domain),
     sourceNodeRid: (record.sourceRoutingId as RoutingId | undefined) ?? null,
     sourceSpotId: (stateful.sourceSpotId as RoutingId | undefined) ?? null,
@@ -2608,6 +2610,17 @@ function receiveIngressLifecycle(record: ServiceMailboxRecord): {
         applicationJobPermit: applicationJob,
         releaseRetainedIngress: () => applicationJob.close()
       };
+}
+
+function prepareStatefulMailboxDispatch(
+  this: import('../../foundation/service-runtime-contracts').ReceiveRecord,
+  signal: AbortSignal
+): boolean | Promise<boolean> {
+  const mailboxRecord = this.statefulMailboxRecord;
+  const owner = mailboxRecord?.sourcePreparationOwner;
+  return mailboxRecord === undefined || owner === undefined
+    ? true
+    : owner.prepareDispatch(mailboxRecord, signal);
 }
 
 function readyOwner(

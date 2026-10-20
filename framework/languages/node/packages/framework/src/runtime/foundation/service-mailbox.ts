@@ -1,10 +1,16 @@
 import type { ApplicationJobRecordLease } from '../application-jobs/application-ingress-record-owner';
 import type { ReceiveRecord } from './service-runtime-contracts';
+import type { RawServiceIngressRecord } from './raw-service-mesh-runtime';
 
 export type ServiceMailboxDomain = 'application' | 'infrastructure';
 
+export interface ServiceMailboxDispatchOwner {
+  prepareDispatch(record: ServiceMailboxRecord, signal: AbortSignal): boolean | Promise<boolean>;
+}
+
 export interface ServiceMailboxRecord {
-  readonly prepareDispatch?: (signal: AbortSignal) => boolean | Promise<boolean>;
+  readonly sourcePreparationOwner?: ServiceMailboxDispatchOwner;
+  readonly ingress?: RawServiceIngressRecord;
   readonly owner: string;
   readonly domain: ServiceMailboxDomain;
   parts: readonly Uint8Array[];

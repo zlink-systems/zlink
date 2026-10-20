@@ -1256,14 +1256,23 @@ export class ServiceStatefulRuntime {
     if (acceptance === undefined) return undefined;
     const generation =
       ingress.sourceNodeGeneration ?? this.tryPeerGeneration(ingress.sourceRoutingId);
-    const sourceRid =
+    const sourceRouteHex =
       ingress.sourceRoute === undefined || ingress.sourceRoute.length === 0
+        ? undefined
+        : Buffer.from(ingress.sourceRoute).toString('hex');
+    const sourceRid =
+      sourceRouteHex === undefined
         ? ingress.sourceRoutingId
-        : decodeRoutingId(
-            ingress.sourceRoutingId,
-            Buffer.from(ingress.sourceRoute).toString('hex')
+        : decodeRoutingId(ingress.sourceRoutingId, sourceRouteHex);
+    const source =
+      generation === undefined
+        ? undefined
+        : acceptance(
+            sourceRid,
+            generation,
+            sourceRouteHex ?? encodeRoutingIdStorageHex(sourceRid),
+            signal
           );
-    const source = generation === undefined ? undefined : acceptance(sourceRid, generation, signal);
     if (source instanceof Promise) {
       return source.then(
         (read) => this.recordRequestSource(ingress, read),
@@ -4096,6 +4105,14 @@ export class ServiceStatefulRuntime {
     }
   }
 
+  prepareDispatch(record: ServiceMailboxRecord, signal: AbortSignal): boolean | Promise<boolean> {
+    return this.prepareRequestSource(
+      record.ingress!,
+      record.stateful as ServiceStatefulMailboxData,
+      signal
+    );
+  }
+
   private enqueueApplicationFrame(
     ingress: RawServiceIngressRecord,
     owner: string,
@@ -4127,6 +4144,7 @@ export class ServiceStatefulRuntime {
       domain,
       parts: [ingress.parts[0]!, payloadFrame],
       sourceRoutingId: ingress.sourceRoutingId,
+      ingress,
       get requestSource() {
         return ingress.requestSource;
       },
@@ -4137,17 +4155,15 @@ export class ServiceStatefulRuntime {
         : { requestSequence: ingress.requestSequence }),
       ...(stateful.correlation === undefined ? {} : { correlation: stateful.correlation }),
       stateful,
-      ...(domain === 'application' &&
-      this.requestSourceAcceptance !== undefined &&
-      (stateful.receiveKind === ReceiveKind.SpotSend ||
-        stateful.receiveKind === ReceiveKind.SpotRequest ||
-        stateful.receiveKind === ReceiveKind.ActorSend ||
-        stateful.receiveKind === ReceiveKind.ActorRequest)
-        ? {
-            prepareDispatch: (signal: AbortSignal) =>
-              this.prepareRequestSource(ingress, stateful, signal)
-          }
-        : {}),
+      sourcePreparationOwner:
+        domain === 'application' &&
+        this.requestSourceAcceptance !== undefined &&
+        (stateful.receiveKind === ReceiveKind.SpotSend ||
+          stateful.receiveKind === ReceiveKind.SpotRequest ||
+          stateful.receiveKind === ReceiveKind.ActorSend ||
+          stateful.receiveKind === ReceiveKind.ActorRequest)
+          ? this
+          : undefined,
       applicationJob
     });
     if (accepted) {

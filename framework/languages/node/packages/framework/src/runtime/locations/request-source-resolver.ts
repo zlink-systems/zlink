@@ -66,20 +66,22 @@ export class ZLinkRequestSourceResolver {
     meshName: string,
     nodeRid: RoutingId,
     nodeGeneration: bigint,
+    nodeRidStorageHex: string,
     signal?: AbortSignal
   ): ZLinkRequestSourceFence | undefined | Promise<ZLinkRequestSourceFence | undefined> {
     throwIfAborted(signal);
-    const known = this.polled.get(meshName)?.get(encodeRoutingIdStorageHex(nodeRid));
+    const known = this.polled.get(meshName)?.get(nodeRidStorageHex);
     if (known !== undefined && known.fence.nodeGeneration === nodeGeneration) {
       return this.monotonicNowMs() < known.leaseDeadlineMs ? known.fence : undefined;
     }
-    return this.readOnce(meshName, nodeRid, nodeGeneration, signal);
+    return this.readOnce(meshName, nodeRid, nodeGeneration, nodeRidStorageHex, signal);
   }
 
   private async readOnce(
     meshName: string,
     nodeRid: RoutingId,
     nodeGeneration: bigint,
+    nodeRidStorageHex: string,
     signal?: AbortSignal
   ): Promise<ZLinkRequestSourceFence | undefined> {
     // The Store boundary already classifies provider failures as Unavailable. Preserve their
@@ -100,7 +102,7 @@ export class ZLinkRequestSourceResolver {
       sources = new Map();
       this.polled.set(meshName, sources);
     }
-    sources.set(encodeRoutingIdStorageHex(nodeRid), source);
+    sources.set(nodeRidStorageHex, source);
     return source.fence;
   }
 

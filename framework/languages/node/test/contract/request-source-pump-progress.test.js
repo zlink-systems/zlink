@@ -31,8 +31,8 @@ for (const complete of [false, true]) {
         },
         remainingOwnerTokenLeaseMs: async () => 1000
       });
-      f.backend.setRequestSourceAcceptance((rid, generation, stop) =>
-        resolver.accept('close-mesh', rid, generation, stop)
+      f.backend.setRequestSourceAcceptance((rid, generation, storageKey, stop) =>
+        resolver.accept('close-mesh', rid, generation, storageKey, stop)
       );
       const actor = f.backend.stateful.createActor('source-probe');
       const localGeneration = f.backend.stateful.nodeGeneration;

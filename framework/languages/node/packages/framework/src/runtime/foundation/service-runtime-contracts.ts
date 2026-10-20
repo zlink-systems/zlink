@@ -253,7 +253,11 @@ export interface ZLinkMessageFollowOrigin {
 
 export interface ReceiveRecord {
   /** Resolve record prerequisites in owner order, outside an application handler turn. */
-  readonly prepareDispatch?: (signal: AbortSignal) => boolean | Promise<boolean>;
+  readonly prepareDispatch?: (
+    this: ReceiveRecord,
+    signal: AbortSignal
+  ) => boolean | Promise<boolean>;
+  readonly statefulMailboxRecord?: import('./service-mailbox').ServiceMailboxRecord;
   readonly requestSource?: import('../locations/request-source-resolver').ZLinkRequestSourceFence;
   readonly kind: number;
   readonly domain: number;
