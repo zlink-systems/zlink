@@ -4,7 +4,6 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.MapperFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.json.JsonMapper;
-import com.google.protobuf.MessageLite;
 
 import systems.zlink.contracts.messaging.Message;
 
@@ -27,9 +26,6 @@ final class ZLinkProtobufPayloads {
         }
         if (value instanceof Message message) {
             return message.toByteArray();
-        }
-        if (value instanceof MessageLite protobuf) {
-            return protobuf.toByteArray();
         }
         if (value instanceof String text) {
             return text.getBytes(StandardCharsets.UTF_8);

@@ -1,7 +1,8 @@
 package systems.zlink.framework.codecs.protobuf;
 
+import com.google.protobuf.MessageLite;
+
 import systems.zlink.contracts.messaging.Message;
-import systems.zlink.framework.ZLinkEncodedPayload;
 import systems.zlink.stream.connector.ZLinkStreamCodec;
 import systems.zlink.stream.connector.ZLinkStreamEncodedPayload;
 import systems.zlink.stream.connector.ZLinkStreamTypedCodec;
@@ -15,7 +16,9 @@ enum ZLinkProtobufStreamCodec implements ZLinkStreamTypedCodec {
     public <T> ZLinkStreamEncodedPayload encode(String packetName, T value) {
         return new ZLinkStreamEncodedPayload(
                 packetName,
-                Message.from(ZLinkProtobufPayloads.encodeStream(value)),
+                value instanceof MessageLite
+                        ? ZLinkProtobufMessageSerializer.INSTANCE.serializeOwned(value)
+                        : Message.from(ZLinkProtobufPayloads.encodeStream(value)),
                 Map.of(),
                 ZLinkStreamCodec.PROTOBUF);
     }
@@ -27,8 +30,8 @@ enum ZLinkProtobufStreamCodec implements ZLinkStreamTypedCodec {
                     "stream payload codec is " + payload.codec() + ", not PROTOBUF");
         }
         if (ZLinkProtobufMessageSerializer.canSerialize(type)) {
-            return ZLinkProtobufMessageSerializer.INSTANCE.deserialize(
-                    ZLinkEncodedPayload.from(payload.payload().toByteArray()), type);
+            return ZLinkProtobufMessageSerializer.INSTANCE.deserializeBorrowed(
+                    payload.payload(), type);
         }
         return ZLinkProtobufPayloads.decodeStreamFallback(payload.payload().toByteArray(), type);
     }
