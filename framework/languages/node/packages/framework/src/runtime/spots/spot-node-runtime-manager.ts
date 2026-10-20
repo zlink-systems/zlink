@@ -515,9 +515,8 @@ export class ZLinkSpotNodeRuntimeManager {
         // The raw MeshNode resolves port zero and applies AdvertiseHost once.
         // Discovery and RouteMesh hello must publish that same public identity.
         endpoint: status.localEndpoint,
-        objectRole: effectiveObjectRole(registration),
+        ...this.localDescriptorFields(meshName, registration, state),
         entrySpotId: this.entrySpotId(meshName, registration),
-        placementWeight: this.placementWeight(meshName),
         populationCapacity: {
           actors: {
             active: current?.populationCapacity.actors.active ?? 0,
@@ -550,19 +549,6 @@ export class ZLinkSpotNodeRuntimeManager {
           active: 0,
           limit: registration.activationConcurrencyLimit ?? DEFAULT_ACTIVATION_CONCURRENCY_LIMIT
         },
-        channelWeights: Object.fromEntries(
-          this.serverChannels(meshName).map(([channelName, channel]) => [
-            channelName,
-            state === ZLinkFrameworkRuntimeState.Draining
-              ? 0
-              : this.effectiveChannelWeight(
-                  meshName,
-                  channelName,
-                  channel.weight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT
-                )
-          ])
-        ),
-        applicationVersion: this.options.registration.applicationVersion,
         maintenanceWave: this.options.registration.maintenanceWave,
         spotTypes: [
           ...userSpots.map(([stableType]) => stableType),
@@ -598,6 +584,33 @@ export class ZLinkSpotNodeRuntimeManager {
     this.publishedOwnerToken = owner;
   }
 
+  private localDescriptorFields(
+    meshName: string,
+    registration: ZLinkSpotNodeOptions,
+    state: ZLinkFrameworkRuntimeState
+  ): Pick<
+    ZLinkMeshNodeDescriptor,
+    'objectRole' | 'placementWeight' | 'channelWeights' | 'applicationVersion'
+  > {
+    return {
+      objectRole: effectiveObjectRole(registration),
+      placementWeight: this.placementWeight(meshName),
+      channelWeights: Object.fromEntries(
+        this.serverChannels(meshName).map(([channelName, channel]) => [
+          channelName,
+          state === ZLinkFrameworkRuntimeState.Draining
+            ? 0
+            : this.effectiveChannelWeight(
+                meshName,
+                channelName,
+                channel.weight ?? ZLINK_DEFAULT_PUBLIC_WEIGHT
+              )
+        ])
+      ),
+      applicationVersion: this.options.registration.applicationVersion
+    };
+  }
+
   async reconcileAndPublishMeshNodeState(
     state: ZLinkFrameworkRuntimeState,
     meshName: string,
@@ -617,7 +630,14 @@ export class ZLinkSpotNodeRuntimeManager {
         descriptor.leaseGeneration === owner.leaseGeneration
     );
     if (current !== undefined) {
-      this.publishedMeshNodeDescriptors.set(meshName, current);
+      this.publishedMeshNodeDescriptors.set(meshName, {
+        ...current,
+        ...this.localDescriptorFields(
+          meshName,
+          this.options.registration.spotNodes.get(meshName)!,
+          state
+        )
+      });
       this.descriptorRevisionByMesh.set(
         meshName,
         maxBigInt(this.descriptorRevisionByMesh.get(meshName) ?? 0n, current.descriptorRevision)
