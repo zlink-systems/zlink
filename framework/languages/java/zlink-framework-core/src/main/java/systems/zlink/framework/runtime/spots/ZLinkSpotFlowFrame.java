@@ -7,7 +7,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 
 import java.util.List;
 
-final class ZLinkSpotFlowFrame {
+public final class ZLinkSpotFlowFrame {
     private static final int MAX_SEARCHED_HEADER_PARTS = 4;
     //  A well-formed flow frame is prefix(13) + UUIDv7(36) + '\n' + origin
     //  name; larger route parts are payload frames and are never stringified.
@@ -38,7 +38,7 @@ final class ZLinkSpotFlowFrame {
      * envelope header or a frame with the flow prefix but not a valid UUIDv7 pair is a protocol
      * error (spec 27 §3).
      */
-    static ZLinkFlowContext.State decode(List<Message> parts) {
+    public static ZLinkFlowContext.State decode(List<Message> parts) {
         if (systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.looksLikeEnvelope(
                 parts)) {
             var header =
