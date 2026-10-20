@@ -57,7 +57,7 @@ public sealed partial class ZLinkMessage
     {
         var encoded = Encode(codecs);
         return new ZLinkMessage(
-            encoded.Payload.Bytes.ToArray(),
+            encoded.Payload.Bytes,
             encoded.ContentType,
             null,
             codecs.Snapshot()
