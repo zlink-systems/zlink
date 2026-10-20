@@ -30,6 +30,7 @@ public final class MatchmakingServerApplication {
     @Bean
     ZLinkFrameworkConfigurer matchmakingFramework(SampleTopology topology) {
         return options -> {
+            options.configureDispatch().messageFlow(topology.diagnosticsLevel());
             options.codecs().use(ZLinkProtobufCodec.defaultCodec());
             options.configureLocations();
             options.addLocationStore(SampleLocationStore.create(topology));

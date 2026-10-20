@@ -20,7 +20,7 @@ function fixture(taskRunner) {
   let closed = false;
   let routes = [];
   let readable;
-  const f = { events, onSubmit() {} };
+  const f = { events, records: [], onSubmit() {} };
   const guard = (method) => {
     if (closed) throw new Error(`router.${method} after close`);
   };
@@ -43,7 +43,7 @@ function fixture(taskRunner) {
     },
     receive() {
       guard('receive');
-      return undefined;
+      return f.records.shift();
     }
   };
   const backend = new ZLinkNodeRawMeshBackend(

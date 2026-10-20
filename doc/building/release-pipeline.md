@@ -78,8 +78,8 @@ so the order never inverts.
    Opening PRs in the upstream repositories (`microsoft/vcpkg`, `conan-io/conan-center-index`) is
    still done by a person. Draft bodies are in `doc/building/pr-drafts/`.
 5. Node lockfiles: after Framework Node is published, run `npm install --package-lock-only` in
-   `tutorial`, `tutorial/StreamClient`, `tutorial/HttpClient`, and `quickstart` under
-   `framework/languages/node`, and commit the lockfiles to `main`. The release bump updates only
+   `framework/languages/node/perf` and in `tutorial`, `tutorial/StreamClient`, `tutorial/HttpClient`,
+   and `quickstart` under `framework/languages/node`, and commit the lockfiles to `main`. The release bump updates only
    `package.json`; a lockfile that points to the new version can be created only after publishing (#1002).
 
 ```bash

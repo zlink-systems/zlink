@@ -446,6 +446,20 @@ export class ZLinkMeshDispatchPump {
               }
               // The record's terminal and the permit turn release follow the
               // handler in this turn's own continuation.
+              if (record.prepareDispatch !== undefined) {
+                try {
+                  const stopSignal = this.capacityStop.signal;
+                  const preparation = record.prepareDispatch(stopSignal);
+                  const accepted = preparation instanceof Promise ? await preparation : preparation;
+                  if (!accepted || stopSignal.aborted) {
+                    releaseApplicationJobPermitTurn(permit);
+                    continue;
+                  }
+                } catch (error) {
+                  this.failRecord(error, record, permit);
+                  continue;
+                }
+              }
               const dispatched = this.dispatchRecord(owner, record, permit);
               if (dispatched === false) continue;
               if (dispatched !== true) {

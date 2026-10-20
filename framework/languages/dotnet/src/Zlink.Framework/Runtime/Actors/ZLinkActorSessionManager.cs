@@ -400,11 +400,12 @@ internal sealed partial class ZLinkActorSessionManager(
 
     public async ValueTask NotifyDisconnectedByIdAsync(
         string actorId,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        bool callerOwnsDispatchTurn = false
     )
     {
         await DispatchRouter
-            .NotifyDisconnectedByIdAsync(actorId, cancellationToken)
+            .NotifyDisconnectedByIdAsync(actorId, cancellationToken, callerOwnsDispatchTurn)
             .ConfigureAwait(false);
     }
 

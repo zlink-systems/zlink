@@ -35,7 +35,7 @@ function createBingoSessionModule() {
           builder.options({
             metrics: { meterProvider: bingoMeterProvider }
           });
-          builder.configureDispatch().messageFlow('normal');
+          builder.configureDispatch().messageFlow(endpoints.diagnosticsLevel);
           builder.addLocationStore(createBingoLocationStore(endpoints));
           builder.addRelocationStore(createBingoRelocationStore(endpoints));
           bingoLocationOptions(builder.configureLocations());

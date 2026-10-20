@@ -5,6 +5,53 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class SerialExecutorTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SerialWorkItem_CancellationStillObservesCallbackSuspension(bool lifecycle)
+    {
+        var timeout = TimeSpan.FromSeconds(5);
+        using var cancellation = new CancellationTokenSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var yield = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var item = new ZLinkSerialWorkItem(
+            async _ =>
+            {
+                entered.TrySetResult();
+                await yield.Task;
+                ZLinkSerialTurn.Current!.SignalSuspended();
+                await release.Task;
+            },
+            lane: lifecycle ? ZLinkSerialWorkLane.Lifecycle : ZLinkSerialWorkLane.Application
+        );
+        item.BindTerminalRelease(static () => { });
+        var turn = new ZLinkSerialTurn(
+            static (_, _) => ZLinkSerialPostAdmission.Closed,
+            static _ => false,
+            static _ => { },
+            cancellation.Token,
+            item
+        );
+        var invocation = item.InvokeAsync(static _ => { }, cancellation.Token, turn).AsTask();
+        try
+        {
+            await entered.Task.WaitAsync(timeout);
+            cancellation.Cancel();
+            yield.TrySetResult();
+            Assert.Equal(ZLinkSerialWorkItemResult.Suspended, await invocation.WaitAsync(timeout));
+            Assert.False(item.Completion.IsCompleted);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await invocation.WaitAsync(timeout);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                item.Completion.WaitAsync(timeout)
+            );
+        }
+    }
+
     [Fact]
     public async Task SerialExecutionQueue_BusyActorDoesNotStartDurablePreparation()
     {

@@ -88,6 +88,8 @@ struct stream_route_seal_admission_t
     std::optional<stream_binding_t> binding;
     stream_barrier_t barrier;
     std::uint64_t last_accepted_sequence = 0;
+    protocol::session_relocation_seal_result_t seal_result =
+      protocol::session_relocation_seal_result_t::sealed;
 };
 
 struct stream_close_result_t
@@ -106,11 +108,13 @@ class stream_session_registry_t
     explicit stream_session_registry_t (authority_resolver_t resolver,
                                         std::function<void ()> activity_handler = {});
 
+    static std::string connection_key (const zlink::routing_id_t &rid) { return rid.to_hex (); }
+
     stream_connection_t open (std::string connection_id,
                               std::function<void ()> close_connection = {},
                               std::optional<zlink::routing_id_t> owner_node_rid = {},
                               std::uint64_t owner_node_generation = 0,
-                              std::function<void ()> physical_close = {});
+                              std::function<task_t<void> ()> physical_close = {});
     stream_close_result_t close (const stream_connection_t &connection);
     task_t<void> close_current (protocol::bound_session_close_t request,
                                 protocol::retired_bound_session_route_fence_t owner);
@@ -149,7 +153,8 @@ class stream_session_registry_t
     stream_route_seal_admission_t seal_remote_route (const std::string &connection_id,
                                                      std::uint64_t binding_generation,
                                                      const std::string &actor_id,
-                                                     std::uint64_t object_generation);
+                                                     std::uint64_t object_generation,
+                                                     std::uint64_t expected_owner_lease_generation);
     bool remote_route_seal_ready (const stream_barrier_t &barrier) const;
     bool close_remote_route_seal (const stream_barrier_t &barrier);
     bool remote_route_sealed (const std::string &actor_id) const;
@@ -201,7 +206,7 @@ class stream_session_registry_t
         stream_connection_t connection;
         std::map<std::string, session_binding_aggregate_t> bindings;
         std::function<void ()> close_connection;
-        std::function<void ()> physical_close;
+        std::function<task_t<void> ()> physical_close;
     };
 
     struct actor_binding_locator_t

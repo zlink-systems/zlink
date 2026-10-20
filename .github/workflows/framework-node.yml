@@ -99,6 +99,9 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
 
+      - name: Verify Node perf package.json pins
+        run: node --test framework/languages/node/perf/tests/package-version.test.cjs
+
       - name: Setup MSVC environment
         if: startsWith(matrix.target.name, 'win-')
         uses: ./.github/actions/msvc-env
