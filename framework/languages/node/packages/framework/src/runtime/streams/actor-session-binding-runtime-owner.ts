@@ -15,7 +15,10 @@ export interface ZLinkActorSessionBindingRuntimeOwner {
     value: ServiceSessionRelocationSeal,
     signal?: AbortSignal
   ): Promise<ZLinkPreparedSessionRelocationSeal | undefined>;
-  acceptSessionRelocationRoute(value: ServiceSessionRelocationRoute): Promise<boolean>;
+  acceptSessionRelocationRoute(
+    value: ServiceSessionRelocationRoute,
+    apply: () => Promise<void>
+  ): Promise<boolean>;
   clearSessionRelocationResults(): Promise<void>;
   actorSlot(actorId: string, sessionRid: RoutingId): Promise<number | undefined>;
   relocationSnapshot(
