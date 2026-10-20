@@ -1670,30 +1670,75 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
       complete = resolve;
       fail = reject;
     });
-    void this.runPump(runtime, complete, fail);
+    this.runPump(runtime, complete, fail);
   }
 
-  private async runPump(
+  private runPump(
     runtime: RawServiceMeshRuntime,
+    complete: () => void,
+    fail: (error: unknown) => void
+  ): void {
+    try {
+      do {
+        const batch = this.pumpReceiveBatch(runtime);
+        if (batch !== false) {
+          // Only suspended work needs an async continuation. A completed receive
+          // rotation uses the published join without allocating another Promise.
+          void this.resumePump(runtime, batch, complete, fail);
+          return;
+        }
+      } while (this.hasPumpReadiness());
+    } catch (error) {
+      this.finishPump(complete, fail, runtime, error);
+      return;
+    }
+    this.finishPump(complete, fail);
+  }
+
+  private async resumePump(
+    runtime: RawServiceMeshRuntime,
+    batch: boolean | Promise<boolean>,
     complete: () => void,
     fail: (error: unknown) => void
   ): Promise<void> {
     try {
+      for (;;) {
+        const more = batch instanceof Promise ? await batch : batch;
+        if (more) {
+          // Yield only after actual progress, retaining readiness across the
+          // existing batch limits until receive reports no data.
+          this.readable |= 1;
+          await yieldToIO();
+        }
+        if (!this.hasPumpReadiness()) break;
+        batch = this.pumpReceiveBatch(runtime);
+      }
+    } catch (error) {
+      this.finishPump(complete, fail, runtime, error);
+      return;
+    }
+    this.finishPump(complete, fail);
+  }
+
+  private pumpReceiveBatch(runtime: RawServiceMeshRuntime): boolean | Promise<boolean> {
+    const ready = this.readable;
+    this.readable = 0;
+    return runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
+  }
+
+  private hasPumpReadiness(): boolean {
+    return !this.closed && this.readable !== 0;
+  }
+
+  private finishPump(
+    complete: () => void,
+    fail: (error: unknown) => void,
+    failedRuntime?: RawServiceMeshRuntime,
+    error?: unknown
+  ): void {
+    try {
       try {
-        do {
-          const ready = this.readable;
-          this.readable = 0;
-          const batch = runtime.pumpBatch((ready & 1) !== 0, (ready & 2) !== 0);
-          const more = batch instanceof Promise ? await batch : batch;
-          if (more) {
-            // Yield only after actual progress, retaining readiness across the
-            // existing batch limits until receive reports no data.
-            this.readable |= 1;
-            await yieldToIO();
-          }
-        } while (!this.closed && this.readable !== 0);
-      } catch (error) {
-        runtime.reportInfrastructureFailure(error);
+        if (failedRuntime !== undefined) failedRuntime.reportInfrastructureFailure(error);
       } finally {
         this.pumpTask = undefined;
         this.scheduleMaintenance();
