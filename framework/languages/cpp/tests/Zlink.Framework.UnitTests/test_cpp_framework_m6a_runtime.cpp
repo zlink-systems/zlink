@@ -1329,7 +1329,7 @@ void verify_application_owner_drain_transitions ()
     assert (manual.try_enqueue (mesh::service_mailbox_record_t{
       "manual", mesh::service_mailbox_domain_t::application,
       zlink::framework::detail::backend::materialize_binding_parts ({{1}})}));
-    assert (!manual.end_application_receive_turn ());
+    manual.end_application_receive_turn ();
     auto manual_claim = manual.try_claim (mesh::service_mailbox_domain_t::application, 1, 4096);
     assert (manual_claim && manual_claim->records.size () == 1);
     assert (manual.release (*manual_claim));
@@ -1358,9 +1358,7 @@ void verify_application_owner_drain_transitions ()
                                        ready_observer_t{ready, ready_copies});
     const auto registered_copies = ready_copies;
     mailbox.begin_application_receive_turn ();
-    if (auto owners = mailbox.end_application_receive_turn ())
-        for (const auto &owner : *owners)
-            ready.push_back (owner);
+    mailbox.end_application_receive_turn ();
     assert (ready_copies == registered_copies); // An idle ingress turn has no callback work.
     const auto enqueue = [&] (std::string owner, std::uint8_t value) {
         return mailbox.try_enqueue (mesh::service_mailbox_record_t{
@@ -1373,9 +1371,7 @@ void verify_application_owner_drain_transitions ()
     assert (enqueue ("a", 2));
     assert (enqueue ("b", 3));
     assert (ready.empty ());
-    if (auto owners = mailbox.end_application_receive_turn ())
-        for (const auto &owner : *owners)
-            ready.push_back (owner);
+    mailbox.end_application_receive_turn ();
     assert (prepared == 3);
     assert ((ready == std::vector<std::string>{"a", "b"}));
     const auto delivered_copies = ready_copies;
@@ -1401,9 +1397,7 @@ void verify_application_owner_drain_transitions ()
     mailbox.begin_application_receive_turn ();
     assert (mailbox.release (*second));
     assert (ready.size () == 2);
-    if (auto owners = mailbox.end_application_receive_turn ())
-        for (const auto &owner : *owners)
-            ready.push_back (owner);
+    mailbox.end_application_receive_turn ();
     assert (ready.size () == 3 && ready.back () == "a");
     assert (!mailbox.release (*second));
     assert (mailbox.begin_application_drain ("a"));

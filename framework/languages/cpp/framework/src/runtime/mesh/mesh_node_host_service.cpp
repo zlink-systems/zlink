@@ -1894,13 +1894,11 @@ struct mesh_node_host_service_t::node_receive_role_t final
       mesh_node_host_service_t &host,
       std::shared_ptr<detail::mesh_node_runtime_t> node,
       std::shared_ptr<detail::mesh_node_builder_state_t> registration,
-      std::shared_ptr<std::optional<application_job_queue_t::permit_t>> receive_permit,
-      mesh::service_mailbox_t::application_ready_t submit_owner) :
+      std::shared_ptr<std::optional<application_job_queue_t::permit_t>> receive_permit) :
         host (host),
         node (std::move (node)),
         registration (std::move (registration)),
         receive_permit (std::move (receive_permit)),
-        submit_owner (std::move (submit_owner)),
         supply (host._application_jobs, [node = this->node] { node->signal_dispatch_activity (); })
     {
     }
@@ -1908,20 +1906,14 @@ struct mesh_node_host_service_t::node_receive_role_t final
     bool run_until_handoff () override
     {
         while (!host._stop.load (std::memory_order_acquire)) {
-            auto ready = rotate ();
-            if (ready)
-                for (const auto &owner : *ready)
-                    submit_owner (owner);
-            if (detail::dispatch_completion_receive_handoff ([&] {
-                  return host._application_dispatch->try_assign_role (shared_from_this ());
-                }))
+            if (rotate ())
                 return true;
         }
         supply.close ();
         return false;
     }
 
-    std::optional<std::deque<std::string>> rotate ()
+    bool rotate ()
     {
         auto &application_permit = *receive_permit;
         auto &mailbox = node->native_node ().transport ().mailbox ();
@@ -2089,7 +2081,7 @@ struct mesh_node_host_service_t::node_receive_role_t final
               accept_application_receive, next_application_receive))
             .result ()
             .value ();
-        auto ready = mailbox.end_application_receive_turn ();
+        mailbox.end_application_receive_turn ();
         receive_turn.dismiss ();
         application_permit.reset ();
         application_permit_budget.release_without_handler ();
@@ -2104,8 +2096,9 @@ struct mesh_node_host_service_t::node_receive_role_t final
         }
         if (!pending_management)
             start_management (count == 0);
+        bool local_pending = count != 0;
+        std::optional<std::chrono::steady_clock::time_point> next_activity;
         if (count == 0) {
-            std::optional<std::chrono::steady_clock::time_point> next_activity;
             if (pending_management->stale && pending_management->activity.await_ready ()) {
                 (void) pending_management->activity.result ().value ();
                 pending_management.reset ();
@@ -2118,22 +2111,23 @@ struct mesh_node_host_service_t::node_receive_role_t final
             }
             if (pending_management->activity.await_ready ()) {
                 pending_management->armed->store (false, std::memory_order_release);
-                const auto [local_pending, next] = pending_management->activity.result ().value ();
+                const auto activity = pending_management->activity.result ().value ();
                 pending_management.reset ();
-                if (local_pending && accept_application_receive)
-                    return ready;
-                next_activity = next;
-            }
-            // A pump may consume the wake for supply delivered after
-            // this turn's take. Recheck its owner state before waiting.
-            if (!ready && !host._stop.load (std::memory_order_acquire)
-                && !supply.has_supply ()) {
-                (void) node->native_node ().wait_for_dispatch_activity (
-                  std::chrono::milliseconds (-1), accept_application_receive, next_activity);
+                local_pending = activity.first && accept_application_receive;
+                next_activity = activity.second;
             }
         }
-
-        return ready;
+        if (detail::dispatch_completion_receive_handoff (
+              [&] { return host._application_dispatch->try_assign_role (shared_from_this ()); }))
+            return true;
+        // A pump may consume the wake for supply delivered after this turn's
+        // take. Recheck its owner state before waiting for the next rotation.
+        if (!local_pending && !host._stop.load (std::memory_order_acquire)
+            && !supply.has_supply ()) {
+            (void) node->native_node ().wait_for_dispatch_activity (
+              std::chrono::milliseconds (-1), accept_application_receive, next_activity);
+        }
+        return false;
     }
 
     struct pending_management_t
@@ -2146,7 +2140,6 @@ struct mesh_node_host_service_t::node_receive_role_t final
     const std::shared_ptr<detail::mesh_node_runtime_t> node;
     const std::shared_ptr<detail::mesh_node_builder_state_t> registration;
     const std::shared_ptr<std::optional<application_job_queue_t::permit_t>> receive_permit;
-    const mesh::service_mailbox_t::application_ready_t submit_owner;
     application_supply_slot_t supply;
     std::optional<pending_management_t> pending_management;
 };
@@ -2965,8 +2958,8 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                                serializers, filters, options);
                   }
               };
-            auto role = std::make_shared<node_receive_role_t> (*this, node, registration,
-                                                               receive_permit, submit_owner);
+            auto role =
+              std::make_shared<node_receive_role_t> (*this, node, registration, receive_permit);
             auto &mailbox = node->native_node ().transport ().mailbox ();
             mailbox.bind_application_dispatch (
               [this, node, receive_permit] (mesh::service_mailbox_record_t &record) {

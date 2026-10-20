@@ -24,7 +24,7 @@ class offload_executor_t
     {
       public:
         virtual ~role_t () = default;
-        // Returns true after transferring the role and finishing one application turn.
+        // Returns true after transferring the receive role.
         // Exceptions preserve the dedicated receive thread's terminate policy.
         virtual bool run_until_handoff () = 0;
     };

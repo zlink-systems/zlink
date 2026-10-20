@@ -2,7 +2,7 @@
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
-#include "runtime/dispatch/completion_turn.hpp"
+#include "completion_turn.hpp"
 
 #include <boost/asio/detail/scheduler.hpp>
 #include <boost/asio/post.hpp>
@@ -69,7 +69,7 @@ void dispatch_completion (std::function<void ()> work, bool inline_allowed, cons
 
 bool dispatch_completion_receive_handoff (const std::function<bool ()> &handoff)
 {
-    // The receive stack and lane-current scopes have returned before entry.
+    // Completion publication and lane-current scopes have returned before entry.
     // Only the executor can reserve an idle resource for the next receive turn.
     if (!handoff ())
         return false;

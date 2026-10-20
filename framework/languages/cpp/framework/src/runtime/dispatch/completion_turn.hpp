@@ -6,7 +6,8 @@
 namespace zlink::framework::detail
 {
 
-// Called once after a receive rotation has returned. The dispatch owner decides
+// Called once after receive-turn publication and lane scopes have returned.
+// The dispatch owner decides
 // whether this resource can join the existing completion dispatcher as a worker.
 bool dispatch_completion_receive_handoff (const std::function<bool ()> &handoff);
 
