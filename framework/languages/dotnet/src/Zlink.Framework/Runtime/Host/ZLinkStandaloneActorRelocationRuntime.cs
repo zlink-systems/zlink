@@ -446,12 +446,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                                 ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorState.ActorId),
                                 relocationId,
                                 CancellationToken.None,
-                                ReferenceEquals(
-                                    relocationMetric,
-                                    ZLinkRuntimeMetrics.ZLinkRelocationMetricOperation.Disabled
-                                )
-                                    ? null
-                                    : () => settled = ZLinkSourceSettlement.SourcePreserved
+                                () => settled = ZLinkSourceSettlement.SourcePreserved
                             )
                             .ConfigureAwait(false);
                         authority = new ZLinkAuthorityReadResult.Found(restored);
