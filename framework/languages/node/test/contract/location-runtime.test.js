@@ -381,6 +381,48 @@ test('location runtime fails startup for terminal owner lease claim results', as
   }
 });
 
+test('location runtime preserves claim conflict when confirmation fails', async () => {
+  for (const claimFails of [false, true]) {
+    const store = new internal.ZLinkInMemoryLocationStore();
+    const failure = new Error('claim unavailable');
+    const confirmationFailure = new DOMException('confirmation deadline exceeded', 'TimeoutError');
+    const timers = [];
+    let reads = 0;
+    const leaseStore = {
+      async claimOwnerLease() {
+        if (claimFails) throw failure;
+        return { kind: 'conflict' };
+      },
+      async readOwnerLease() {
+        reads += 1;
+        throw confirmationFailure;
+      },
+      renewOwnerLease: store.renewOwnerLease.bind(store),
+      releaseOwnerLease: store.releaseOwnerLease.bind(store)
+    };
+    const runtime = runtimeFor(store, { ownerLeaseStore: leaseStore, timers });
+    try {
+      if (claimFails) {
+        await runtime.start(rid('node-claim-unavailable'));
+        assert.equal(runtime.ownerLeaseUsable, false);
+      } else {
+        await assert.rejects(
+          runtime.start(rid('node-conflict-confirmation-failed')),
+          error => error instanceof internal.ZLinkOwnerLeaseClaimError
+            && error.kind === 'conflict'
+        );
+        assert.equal(runtime.isStarted, false);
+        assert.equal(timers.length, 0);
+      }
+      assert.equal(reads, 1);
+      assert.equal(runtime.currentOwnerToken, undefined);
+    } finally {
+      leaseStore.readOwnerLease = store.readOwnerLease.bind(store);
+      if (runtime.isStarted) await runtime.stop();
+    }
+  }
+});
+
 test('location runtime releases a claim confirmed after startup cancellation without starting heartbeat', async () => {
   const store = new internal.ZLinkInMemoryLocationStore();
   const timers = [];
