@@ -44,6 +44,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorRe
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchFailure;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkFlowContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobContext;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
@@ -72,6 +73,7 @@ import systems.zlink.framework.runtime.mesh.MeshNodeRegistration.RouterSocketCon
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 import systems.zlink.framework.runtime.protocol.ServiceWirePilotCodec;
+import systems.zlink.framework.runtime.spots.ZLinkSpotFlowFrame;
 import systems.zlink.framework.streams.ZLinkStreamCodec;
 
 import java.io.ByteArrayOutputStream;
@@ -3081,9 +3083,11 @@ final class ZLinkJavaRawMeshNode
         long correlation = allocateCorrelation();
         List<Message> messages = new ArrayList<>(parts.size());
         String contentType;
+        ZLinkFlowContext.State activationFlow;
         try {
             for (Message part : parts) messages.add(Message.from(part.toByteArray()));
             contentType = applicationContentType(messages);
+            activationFlow = request ? null : captureInstanceActivationFlow(messages);
         } catch (RuntimeException | Error failure) {
             messages.forEach(Message::close);
             throw failure;
@@ -3147,7 +3151,8 @@ final class ZLinkJavaRawMeshNode
                                                 header.replyRouteId(),
                                                 request
                                                         ? ZLinkDispatchErrorAction.FAIL_CALLER
-                                                        : ZLinkDispatchErrorAction.DROP);
+                                                        : ZLinkDispatchErrorAction.DROP,
+                                                activationFlow);
                                         if (operation != null)
                                             operations.completeExceptionally(
                                                     operation.id(), unwrap(failure));
@@ -3169,7 +3174,8 @@ final class ZLinkJavaRawMeshNode
                     failure,
                     request,
                     header.replyRouteId(),
-                    request ? ZLinkDispatchErrorAction.FAIL_CALLER : ZLinkDispatchErrorAction.DROP);
+                    request ? ZLinkDispatchErrorAction.FAIL_CALLER : ZLinkDispatchErrorAction.DROP,
+                    activationFlow);
             if (operation != null) operations.completeExceptionally(operation.id(), failure);
             return CompletableFuture.failedFuture(failure);
         }
@@ -4260,6 +4266,19 @@ final class ZLinkJavaRawMeshNode
                             .RecoveryEnvelope
                     envelope,
             ZLinkServiceM6BWireCodec.InstanceRouteFence route) {
+        ZLinkFlowContext.State activationFlow = null;
+        ZLinkDispatchErrorReporter flowReporter = dispatchErrorReporter;
+        if (!envelope.request() && flowReporter != null && flowReporter.flow().captureEnabled()) {
+            var parts =
+                    ZLinkServiceM6AWireCodec.decodeFrameworkMultipartFrame(
+                            ByteBuffer.wrap(envelope.applicationPayloadFrame()));
+            try {
+                activationFlow = captureInstanceActivationFlow(parts);
+            } finally {
+                parts.forEach(Message::close);
+            }
+        }
+        var capturedFlow = activationFlow;
         CompletionStage<Void> recovery =
                 ((ZLinkJavaRawSpotNode) spotNode()).recoverInstanceSpot(envelope, route);
         ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
@@ -4276,7 +4295,8 @@ final class ZLinkJavaRawMeshNode
                                 envelope.replyRouteId(),
                                 envelope.request()
                                         ? ZLinkDispatchErrorAction.FAIL_CALLER
-                                        : ZLinkDispatchErrorAction.DROP);
+                                        : ZLinkDispatchErrorAction.DROP,
+                                capturedFlow);
                     }
                 });
     }
@@ -5390,13 +5410,21 @@ final class ZLinkJavaRawMeshNode
         }
     }
 
+    private ZLinkFlowContext.State captureInstanceActivationFlow(List<Message> parts) {
+        var reporter = dispatchErrorReporter;
+        return reporter != null && reporter.flow().captureEnabled()
+                ? ZLinkSpotFlowFrame.decode(parts)
+                : null;
+    }
+
     private int[] recordInstanceActivationFailure(
             String spotId,
             RoutingId sourceRid,
             Throwable failure,
             boolean request,
             Long correlation,
-            ZLinkDispatchErrorAction action) {
+            ZLinkDispatchErrorAction action,
+            ZLinkFlowContext.State activationFlow) {
         Throwable cause = unwrap(failure);
         ZLinkDispatchErrorReporter reporter = dispatchErrorReporter;
         boolean captureEnabled = reporter != null && reporter.errorsEnabled();
@@ -5413,6 +5441,30 @@ final class ZLinkJavaRawMeshNode
                     OneWayFailureContext.INSTANCE_ACTIVATION);
         }
         if (captureEnabled) {
+            if (!request) {
+                reporter.flow()
+                        .traceInstanceActivationDrop(
+                                spotId,
+                                sourceRid,
+                                cause,
+                                (cause instanceof ZLinkFrameworkException typed
+                                                        && typed.kind()
+                                                                == ZLinkFrameworkErrorKind
+                                                                        .DEADLINE_EXCEEDED)
+                                                || cause instanceof TimeoutException
+                                        ? ZLinkDispatchErrorReason.ACTIVATION_TIMEOUT
+                                        : (cause instanceof ZLinkFrameworkException typed
+                                                                && typed.kind()
+                                                                        == ZLinkFrameworkErrorKind
+                                                                                .SHUTTING_DOWN)
+                                                        || cause
+                                                                instanceof
+                                                                java.util.concurrent
+                                                                        .CancellationException
+                                                ? ZLinkDispatchErrorReason.SHUTDOWN
+                                                : ZLinkDispatchErrorReason.ACTIVATION_REJECTED,
+                                activationFlow);
+            }
             reporter.report(
                     ZLinkDispatchErrorSurface.INSTANCE_SPOT,
                     request ? ZLinkDispatchMessageKind.REQUEST : ZLinkDispatchMessageKind.SEND,
@@ -6138,8 +6190,10 @@ final class ZLinkJavaRawMeshNode
             return;
         }
         String contentType;
+        ZLinkFlowContext.State activationFlow;
         try {
             contentType = applicationContentType(messages);
+            activationFlow = header.request() ? null : captureInstanceActivationFlow(messages);
         } catch (RuntimeException budgetFailure) {
             messages.forEach(Message::close);
             replyInstanceFailure(inbound, header, 104, 12);
@@ -6189,7 +6243,8 @@ final class ZLinkJavaRawMeshNode
                                                         header.request()
                                                                 ? ZLinkDispatchErrorAction
                                                                         .REPLY_ERROR
-                                                                : ZLinkDispatchErrorAction.DROP);
+                                                                : ZLinkDispatchErrorAction.DROP,
+                                                        activationFlow);
                                         if (header.request()) {
                                             replyInstanceFailure(inbound, header, pair[0], pair[1]);
                                         }
@@ -6213,7 +6268,8 @@ final class ZLinkJavaRawMeshNode
                                 header.replyRouteId(),
                                 header.request()
                                         ? ZLinkDispatchErrorAction.REPLY_ERROR
-                                        : ZLinkDispatchErrorAction.DROP);
+                                        : ZLinkDispatchErrorAction.DROP,
+                                activationFlow);
                 if (header.request()) replyInstanceFailure(inbound, header, pair[0], pair[1]);
             }
         }

@@ -38,7 +38,7 @@ export class ZLinkDispatchErrorReporter {
     _providerResolver: unknown,
     errorSink: ZLinkDispatchErrorSink,
     ctx?: ZLinkDiagnosticsContext,
-    private readonly metrics?: ZLinkRuntimeMetrics
+    readonly metrics?: ZLinkRuntimeMetrics
   ) {
     const flowCtx: ZLinkDiagnosticsContext = ctx ?? {
       diagnostics: DEFAULT_ZLINK_DIAGNOSTICS,

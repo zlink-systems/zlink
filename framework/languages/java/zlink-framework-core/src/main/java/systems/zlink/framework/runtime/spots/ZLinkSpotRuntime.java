@@ -3759,6 +3759,40 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
             java.util.function.BiFunction<
                             ZLinkBackendSpot, CompletableFuture<Void>, CompletionStage<Void>>
                     restoreFirst) {
+        long remaining = deadlineUnixMs - System.currentTimeMillis();
+        if (remaining <= 0)
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                            "Instance activation deadline expired"));
+        return activateInstanceSpotTargetCore(
+                        meshName, factory, route, backendSpot, deadlineUnixMs, restoreFirst)
+                .toCompletableFuture()
+                .orTimeout(remaining, TimeUnit.MILLISECONDS)
+                .exceptionallyCompose(
+                        failure ->
+                                CompletableFuture.failedFuture(
+                                        failure instanceof java.util.concurrent.TimeoutException
+                                                ? new ZLinkFrameworkException(
+                                                        ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                                                        "Instance activation deadline expired")
+                                                : failure));
+    }
+
+    private CompletionStage<Void> activateInstanceSpotTargetCore(
+            String meshName,
+            systems.zlink.framework.runtime.internal.configuration.ZLinkObjectFactoryRegistration
+                                    .RelocatableInstanceSpotFactory<
+                            ?>
+                    factory,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .InstanceRouteFence
+                    route,
+            ZLinkBackendSpot backendSpot,
+            long deadlineUnixMs,
+            java.util.function.BiFunction<
+                            ZLinkBackendSpot, CompletableFuture<Void>, CompletionStage<Void>>
+                    restoreFirst) {
         var store = requireUserSpotLocationStore();
         String key =
                 systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec.spot(
@@ -3877,13 +3911,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             return CompletableFuture.<Void>completedFuture(null)
                                     .thenCompose(
                                             ignored -> {
-                                                if (System.currentTimeMillis() >= deadlineUnixMs)
-                                                    return CompletableFuture.failedFuture(
-                                                            new ZLinkFrameworkException(
-                                                                    ZLinkFrameworkErrorKind
-                                                                            .DEADLINE_EXCEEDED,
-                                                                    "Instance activation deadline"
-                                                                            + " expired"));
                                                 return activationFactory.activateInstance(
                                                         meshName,
                                                         route.targetNodeRid(),
