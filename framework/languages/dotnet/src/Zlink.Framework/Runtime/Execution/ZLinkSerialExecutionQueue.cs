@@ -1716,6 +1716,11 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         {
             if (TryDequeueInfrastructureUnderLock(out item))
                 return true;
+            if (application is null)
+                return false;
+            item = application;
+            _applicationQueue.Remove(item, previous);
+            return true;
         }
         var lifecycleReady =
             _activeLifecycle?.ReadyContinuation is not null || HasRunnableLifecycle();
@@ -1741,11 +1746,8 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
 
         item = application!;
         _applicationQueue.Remove(item, previous);
-        if (headRunnable)
-        {
-            _consecutiveLifecycleTurns = 0;
-            _lifecycleYieldDebt = false;
-        }
+        _consecutiveLifecycleTurns = 0;
+        _lifecycleYieldDebt = false;
         return true;
     }
 
