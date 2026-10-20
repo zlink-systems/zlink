@@ -62,7 +62,7 @@ TEST (MaintenanceFailure, CompletionSnapshotFailureReleasesSourceSeal)
     // state_lane maps std::exception to the existing InternalFailure contract.
     EXPECT_EQ (result.error_kind (), framework_error_kind_t::internal_failure);
     ASSERT_NE (result.error (), nullptr);
-    EXPECT_STREQ (result.error ()->what (), "std::bad_alloc");
+    EXPECT_STREQ (result.error ()->what (), std::bad_alloc ().what ());
     EXPECT_TRUE (transfers.try_reserve_source ("after-failure"));
     for (std::size_t index = 0; index < inventory_count; ++index)
         transfers.cancel_move (std::to_string (index));
@@ -89,7 +89,7 @@ TEST (MaintenanceFailure, NativeInventoryFailureReleasesSourceSeal)
     // state_lane maps std::exception to the existing InternalFailure contract.
     EXPECT_EQ (result.error_kind (), framework_error_kind_t::internal_failure);
     ASSERT_NE (result.error (), nullptr);
-    EXPECT_STREQ (result.error ()->what (), "std::bad_alloc");
+    EXPECT_STREQ (result.error ()->what (), std::bad_alloc ().what ());
     EXPECT_TRUE (objects.actor_transfers ()->try_reserve_source ("after-failure"));
     objects.actor_transfers ()->cancel_move ("after-failure");
     const auto next = objects.try_begin_maintenance_inventory ().result ();
