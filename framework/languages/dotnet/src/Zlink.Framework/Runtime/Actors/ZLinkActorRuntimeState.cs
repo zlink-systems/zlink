@@ -537,13 +537,31 @@ internal sealed class ZLinkActorRuntimeState(
             );
 
             PurgeExpiredSessionBindingTombstones();
-            EnsureBindingTokenCanBeUsed(replacement);
-            if (_boundSession is { } current && SameBindingToken(current, replacement))
+            if (_boundSession is { } current)
             {
-                EnsureExactBindingIdentity(current, replacement);
-                beforePublish?.Invoke();
-                return new ZLinkActorSessionBindingTransition(replacement, null, Changed: false);
+                if (
+                    current.SessionNodeRid == replacement.SessionNodeRid
+                    && current.SessionOwnerNodeGeneration == replacement.SessionOwnerNodeGeneration
+                    && current.SessionRid == replacement.SessionRid
+                    && current.BindingGeneration == replacement.BindingGeneration
+                )
+                {
+                    beforePublish?.Invoke();
+                    return new ZLinkActorSessionBindingTransition(current, null, Changed: false);
+                }
             }
+            if (
+                _boundSession is { } registered
+                && registered.SessionNodeRid == replacement.SessionNodeRid
+                && registered.SessionOwnerNodeGeneration == replacement.SessionOwnerNodeGeneration
+                && replacement.BindingGeneration <= registered.BindingGeneration
+            )
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    $"Actor '{ActorId}' session binding generation is stale.",
+                    ZLinkRetryAdvice.DoNotRetry
+                );
+            EnsureBindingTokenCanBeUsed(replacement);
             var previous = _boundSession;
             if (previous is { } retired)
                 RememberRetiredSessionBinding(retired, beforePublish);
