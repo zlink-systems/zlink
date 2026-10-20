@@ -42,6 +42,136 @@ final class ZLinkActorDisconnectIngressTest {
     private static final String ACTOR_TYPE = "player";
     private static final int TIMEOUT_SECONDS = 3;
 
+    @Test
+    void malformedHeaderDropsOnlyItsMessageAndDispatchesTheNextMessage() throws Exception {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        var objects =
+                options.addRouteMesh("mesh")
+                        .listen("inproc://invalid-actor-batch-" + UUID.randomUUID())
+                        .objects()
+                        .server();
+        objects.addEntrySpot(Entry.class);
+        objects.addActorFactory(
+                ACTOR_TYPE, Player.class, Factory.class, factory -> factory.disableRelocation());
+        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            runtime.actorManager()
+                    .create(ACTOR_ID, ACTOR_TYPE)
+                    .submit()
+                    .toCompletableFuture()
+                    .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            var spots = (ZLinkSpotRuntime) runtime.spotManager();
+            var actor = spots.actorSessions().localActor(ACTOR_ID).orElseThrow();
+            var entry = (Entry) spots.localActorSpotSurface(actor);
+            entry.release.complete(null);
+            var activationMethod =
+                    ZLinkSpotRuntime.class.getDeclaredMethod(
+                            "entrySpotActivationFor", String.class);
+            activationMethod.setAccessible(true);
+            var activation =
+                    (SpotActivationBase<?>)
+                            activationMethod.invoke(spots, entry.context().spotId());
+            var ref = spots.actorSessions().runtime().currentRef(actor);
+            var records =
+                    new java.util.concurrent.CopyOnWriteArrayList<java.util.logging.LogRecord>();
+            var logger =
+                    java.util.logging.Logger.getLogger(
+                            systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer.class
+                                    .getName());
+            var handler =
+                    new java.util.logging.Handler() {
+                        @Override
+                        public void publish(java.util.logging.LogRecord record) {
+                            records.add(record);
+                        }
+
+                        @Override
+                        public void flush() {}
+
+                        @Override
+                        public void close() {}
+                    };
+            var headerClosed = new AtomicInteger();
+            var bodyClosed = new AtomicInteger();
+            logger.addHandler(handler);
+            try (var invalidHeader =
+                            new ZLinkBackendActorReceived(
+                                    ref,
+                                    ref.nodeRid(),
+                                    null,
+                                    Optional.empty(),
+                                    0,
+                                    0,
+                                    Message.from("invalid-header"),
+                                    true,
+                                    null,
+                                    null,
+                                    headerClosed::incrementAndGet);
+                    var invalidBody =
+                            new ZLinkBackendActorReceived(
+                                    ref,
+                                    ref.nodeRid(),
+                                    null,
+                                    Optional.empty(),
+                                    0,
+                                    0,
+                                    Message.from("invalid-body"),
+                                    false,
+                                    null,
+                                    null,
+                                    bodyClosed::incrementAndGet);
+                    var validHeader =
+                            new ZLinkBackendActorReceived(
+                                    ref,
+                                    ref.nodeRid(),
+                                    null,
+                                    Optional.empty(),
+                                    0,
+                                    0,
+                                    Message.from(
+                                            ZLinkStreamHeaderCodec.encode(
+                                                    new ZLinkStreamHeader(
+                                                            ZLinkActorSpotRoutePackets
+                                                                    .SESSION_DISCONNECTED_PACKET_NAME,
+                                                            Map.of(),
+                                                            Optional.empty()))),
+                                    true);
+                    var validBody =
+                            new ZLinkBackendActorReceived(
+                                    ref,
+                                    ref.nodeRid(),
+                                    null,
+                                    Optional.empty(),
+                                    0,
+                                    0,
+                                    Message.from(identity(ref.nodeRid(), 2L, 7L)),
+                                    false)) {
+                activation
+                        .dispatchActorMessages(
+                                List.of(invalidHeader, invalidBody, validHeader, validBody))
+                        .toCompletableFuture()
+                        .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                assertEquals(1, entry.callbacks.get());
+                assertEquals(1, headerClosed.get());
+                assertEquals(1, bodyClosed.get());
+                var invalidFrames =
+                        records.stream()
+                                .filter(
+                                        record ->
+                                                record.getMessage()
+                                                        .contains("reason=invalid_frame"))
+                                .toList();
+                assertEquals(1, invalidFrames.size());
+                org.junit.jupiter.api.Assertions.assertTrue(
+                        invalidFrames.getFirst().getMessage().contains("action=drop"));
+                org.junit.jupiter.api.Assertions.assertTrue(
+                        invalidFrames.getFirst().getMessage().contains("surface=actor"));
+            } finally {
+                logger.removeHandler(handler);
+            }
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void ingressRemainsOwnedUntilDisconnectCallbackTerminal(boolean failCallback) throws Exception {
