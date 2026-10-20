@@ -551,16 +551,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                         node.requestPeerReconcile(
                                 command.targetNodeRid(), command.targetNodeGeneration());
                     }
-                    CompletionStage<Void> recorded =
-                            reply.sealed()
-                                    ? CompletableFuture.completedFuture(null)
-                                    : stateLane.runAsync(
-                                            () -> {
-                                                recordBindingAbsent(key, command);
-                                                return null;
-                                            });
-                    return recorded.thenApply(
-                            ignored -> codec.encodeSessionRelocationSealed(reply));
+                    return CompletableFuture.completedFuture(
+                            codec.encodeSessionRelocationSealed(reply));
                 });
     }
 
@@ -570,17 +562,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         expireAbsentSealRecords();
         AbsentSealRecord absent = absentSealRecords.get(key);
         if (absent != null) {
-            if (!absent.command().equals(command)) {
-                return CompletableFuture.failedFuture(
-                        new ZLinkConfigurationException(
-                                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                "Session relocation seal changed fields of the recorded"
-                                        + " command 42: "
-                                        + key.actorId()));
-            }
-            return CompletableFuture.completedFuture(
-                    ZLinkServiceM6BWireCodec.SessionRelocationSealed.replyTo(
-                            command, ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT));
+            return CompletableFuture.completedFuture(recordBindingAbsent(key, command));
         }
         //  The current binding is the one with the largest node-wide binding generation;
         //  the command's SessionRid does not narrow the search (§8.3 step 2).
@@ -598,11 +580,19 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             }
         }
         if (current == null) {
-            return CompletableFuture.completedFuture(
-                    ZLinkServiceM6BWireCodec.SessionRelocationSealed.replyTo(
-                            command, ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT));
+            return CompletableFuture.completedFuture(recordBindingAbsent(key, command));
         }
-        return current.actorRuntime().applyRelocationSealCommand(command);
+        return current.actorRuntime()
+                .applyRelocationSealCommand(command)
+                .thenCompose(
+                        reply ->
+                                reply == null || reply.sealed()
+                                        ? CompletableFuture.completedFuture(reply)
+                                        : stateLane.isOnLane()
+                                                ? CompletableFuture.completedFuture(
+                                                        recordBindingAbsent(key, command))
+                                                : stateLane.runAsync(
+                                                        () -> recordBindingAbsent(key, command)));
     }
 
     private void expireAbsentSealRecords() {
@@ -610,12 +600,24 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         absentSealRecords.values().removeIf(record -> now - record.expiresAtNanos() >= 0);
     }
 
-    private void recordBindingAbsent(
+    private ZLinkServiceM6BWireCodec.SessionRelocationSealed recordBindingAbsent(
             SealRecordKey key, ZLinkServiceM6BWireCodec.SessionRelocationSeal command) {
-        absentSealRecords.putIfAbsent(
-                key,
-                new AbsentSealRecord(
-                        command, nanoTime.getAsLong() + sessionRelocationSealTimeout.toNanos()));
+        AbsentSealRecord recorded = absentSealRecords.get(key);
+        if (recorded != null && !recorded.command().equals(command)) {
+            throw new ZLinkConfigurationException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "Session relocation seal changed fields of the recorded command 42: "
+                            + key.actorId());
+        }
+        if (recorded == null) {
+            absentSealRecords.put(
+                    key,
+                    new AbsentSealRecord(
+                            command,
+                            nanoTime.getAsLong() + sessionRelocationSealTimeout.toNanos()));
+        }
+        return ZLinkServiceM6BWireCodec.SessionRelocationSealed.replyTo(
+                command, ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT);
     }
 
     private record SealRecordKey(

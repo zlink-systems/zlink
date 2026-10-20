@@ -1508,6 +1508,56 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
+    void concurrentAbsentSealsRejectChangedFieldsBeforePublishingTheFirstReply() throws Exception {
+        ReplacementFixture fixture = startReplacement(new FakeStream());
+        runtimes.add(fixture.runtime());
+        var actor = new ZLinkBackendActorRef(RoutingId.from("actor-node"), "absent-actor", 7);
+        var relocation = new ZLinkServiceM6BWireCodec.RelocationIdentity(19, 1);
+        var first = sessionSeal(relocation, actor, PEER_A, 1);
+        var changed = sessionSeal(relocation, actor, PEER_A, 2);
+        var pending = new java.util.concurrent.ConcurrentLinkedQueue<Runnable>();
+        var executor =
+                new java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Executor>(
+                        pending::add);
+        var laneField = ZLinkStreamRuntime.class.getDeclaredField("stateLane");
+        laneField.setAccessible(true);
+        laneField.set(
+                fixture.runtime(),
+                new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(
+                        work -> executor.get().execute(work)));
+        var codec = new ZLinkServiceM6BWireCodec();
+        var accepted =
+                fixture.runtime()
+                        .handleSessionRelocationSeal(
+                                actor.nodeRid(), codec.encodeSessionRelocationSeal(first))
+                        .toCompletableFuture();
+        var rejected =
+                fixture.runtime()
+                        .handleSessionRelocationSeal(
+                                actor.nodeRid(), codec.encodeSessionRelocationSeal(changed))
+                        .toCompletableFuture();
+        executor.set(Runnable::run);
+        Runnable work;
+        while ((work = pending.poll()) != null) work.run();
+
+        assertEquals(
+                ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT,
+                ServiceWirePilotCodec.decodeSessionRelocationSealed43(
+                                accepted.get(5, TimeUnit.SECONDS))
+                        .sealResult());
+        var failure =
+                assertThrows(
+                        java.util.concurrent.ExecutionException.class,
+                        () -> rejected.get(5, TimeUnit.SECONDS));
+        assertEquals(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                ((ZLinkFrameworkException) failure.getCause()).kind());
+        assertEquals(
+                ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT,
+                sealResult(fixture.runtime(), actor, first));
+    }
+
+    @Test
     void command42NamingAnotherSessionOwnerIdentityIsRejected() throws Exception {
         FakeStream stream = new FakeStream();
         ReplacementFixture fixture = startReplacement(stream);
