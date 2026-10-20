@@ -1,5 +1,26 @@
 package systems.zlink.framework.runtime.spots;
 
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.OptionalLong;
+import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongSupplier;
+import java.util.logging.Logger;
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -36,28 +57,6 @@ import systems.zlink.framework.runtime.locations.ZLinkAuthorityKeyCodec;
 import systems.zlink.framework.runtime.locations.ZLinkServiceAuthorityPayloadCodec;
 import systems.zlink.framework.runtime.protocol.ServiceWireConstants;
 
-import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
-import java.util.Optional;
-import java.util.OptionalLong;
-import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.TimeoutException;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicReference;
-import java.util.function.LongSupplier;
-import java.util.logging.Logger;
-
 /** Owns the exact prepare/ready/state/data/cutover relocation attempt state. */
 final class ZLinkCanonicalRelocationStateMachine
         implements ZLinkCanonicalRelocationTransitionOwner.StateMachine,
@@ -89,6 +88,11 @@ final class ZLinkCanonicalRelocationStateMachine
     private final AtomicInteger openSourceQuiescenceWindows = new AtomicInteger();
     private Runnable sourceQuiescenceChanged = () -> {};
     private final java.util.function.BooleanSupplier targetAdmissionSealed;
+
+    @Override
+    public boolean sourceStopped() {
+        return node.status().state() == MeshNodeState.STOPPED;
+    }
 
     void onSourceQuiescenceChanged(Runnable listener) {
         sourceQuiescenceChanged = Objects.requireNonNull(listener, "listener");
@@ -577,12 +581,7 @@ final class ZLinkCanonicalRelocationStateMachine
                         });
     }
 
-    /**
-     * Classifies one read of the primary authority record against the source fence: target owner
-     * means the target commit is confirmed; Missing ends the expired owner without Preserve. Any
-     * other StoreVersion means the target commit can no longer succeed, so the source keeps
-     * authority.
-     */
+    /** Classifies the existing source fence, including later owners of the same object (§10). */
     private static Optional<AuthoritySettlement> settlementOf(
             ZLinkAuthorityReadResult read,
             ZLinkSpotRetireControl.StageRequest request,
@@ -590,10 +589,25 @@ final class ZLinkCanonicalRelocationStateMachine
         if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
             return Optional.of(new AuthoritySettlement(Settlement.SOURCE_LEASE_EXPIRED, null));
         }
-        if (snapshot.ownerId().equals(request.targetOwnerId())
-                && snapshot.ownerLeaseGeneration() == request.targetOwnerLeaseGeneration()) {
-            return Optional.of(new AuthoritySettlement(Settlement.TARGET_COMMITTED, snapshot));
+        var source = primary(request.participants());
+        boolean sourceOwner =
+                snapshot.ownerId().equals(request.sourceOwnerId())
+                        && snapshot.ownerLeaseGeneration() == request.sourceOwnerLeaseGeneration();
+        if (snapshot.objectGeneration() == source.objectGeneration()
+                && snapshot.authorityOwnerGeneration() > source.sourceAuthorityOwnerGeneration()
+                && !sourceOwner) {
+            boolean firstTarget =
+                    snapshot.ownerId().equals(request.targetOwnerId())
+                            && snapshot.ownerLeaseGeneration()
+                                    == request.targetOwnerLeaseGeneration();
+            return Optional.of(
+                    new AuthoritySettlement(
+                            Settlement.TARGET_COMMITTED, firstTarget ? snapshot : null));
         }
+        if (!sourceOwner
+                || snapshot.objectGeneration() != source.objectGeneration()
+                || snapshot.authorityOwnerGeneration() != source.sourceAuthorityOwnerGeneration())
+            return Optional.of(new AuthoritySettlement(Settlement.SOURCE_LEASE_EXPIRED, null));
         return snapshot.storeVersion().equals(expectedStoreVersion)
                 ? Optional.empty()
                 : Optional.of(new AuthoritySettlement(Settlement.SOURCE_PRESERVED, null));

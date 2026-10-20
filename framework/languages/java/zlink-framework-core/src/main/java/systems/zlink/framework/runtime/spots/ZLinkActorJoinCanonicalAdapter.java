@@ -1,22 +1,5 @@
 package systems.zlink.framework.runtime.spots;
 
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.ZLinkEncodedPayload;
-import systems.zlink.framework.actors.ActorRef;
-import systems.zlink.framework.actors.ZLinkActor;
-import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
-import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
-import systems.zlink.framework.errors.ZLinkFrameworkException;
-import systems.zlink.framework.messaging.ZLinkMessage;
-import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
-import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
-import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
-import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
-import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
-import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
-import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
-import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
-
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Arrays;
@@ -34,6 +17,22 @@ import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.ZLinkEncodedPayload;
+import systems.zlink.framework.actors.ActorRef;
+import systems.zlink.framework.actors.ZLinkActor;
+import systems.zlink.framework.actors.ZLinkActorJoinCompletion;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
+import systems.zlink.framework.messaging.ZLinkMessage;
+import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
+import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
+import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
+import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec;
 
 /** Direct-Join goal/profile adapter owned by the canonical relocation host. */
 final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPort {
@@ -108,6 +107,7 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                                         : current);
         if (claimed != attempt) {
             return prepared.abort()
+                    .whenComplete((ignored, failure) -> prepared.metrics.complete(null, false))
                     .thenCompose(
                             ignored ->
                                     CompletableFuture.failedFuture(
@@ -121,10 +121,11 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                         settlement ->
                                 prepared.relayCapturedIngress(lane.client(), timeout, settlement),
                         timeout,
-                        restoreDeadline)
+                        restoreDeadline,
+                        prepared.metrics)
                 .handle(
                         (settlement, failure) -> {
-                            if (failure != null) return abortSource(attempt, unwrap(failure));
+                            if (failure != null) return abortSource(attempt, unwrap(failure), null);
                             CompletionStage<Void> cleanup =
                                     settlement
                                             .thenCompose(outcome -> settleSource(attempt, outcome))
@@ -176,7 +177,8 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                             new ZLinkFrameworkException(
                                     ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
                                     "Actor Join target commit was not confirmed before its"
-                                            + " deadline; the source Preserve fence won"));
+                                            + " deadline; the source Preserve fence won"),
+                            settlement);
             case SOURCE_LEASE_EXPIRED -> {
                 sources.remove(goal.sourceActor().actorId(), attempt);
                 var expired =
@@ -213,7 +215,10 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
     }
 
     /** Restores the source: a failure before relay readiness or a won Preserve fence. */
-    private CompletionStage<Submission> abortSource(SourceAttempt attempt, Throwable cause) {
+    private CompletionStage<Submission> abortSource(
+            SourceAttempt attempt,
+            Throwable cause,
+            ZLinkRelocationTransitionClient.Settlement settlement) {
         sources.remove(attempt.goal().sourceActor().actorId(), attempt);
         attempt.committed().completeExceptionally(cause);
         return attempt.prepared()
@@ -223,6 +228,10 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                             if (abortFailure != null) {
                                 cause.addSuppressed(unwrap(abortFailure));
                             }
+                            if (settlement != null)
+                                attempt.prepared()
+                                        .metrics
+                                        .complete(abortFailure == null ? settlement : null, false);
                             throw new CompletionException(cause);
                         });
     }
