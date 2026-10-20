@@ -1,5 +1,8 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -11,8 +14,6 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Supplier;
 import java.util.logging.Level;
 import java.util.logging.Logger;
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 
 /**
  * The one source-side hand-off order every relocation unit uses (spec 28 §4.4): Restore until relay
