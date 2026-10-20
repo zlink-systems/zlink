@@ -163,10 +163,10 @@ export class ZLinkSpotSerialTurnExecutor {
   async postOneWay(
     operation: () => Promise<unknown> | unknown,
     onError: (error: unknown) => void,
-    workOptions: ZLinkSerialWorkOptions = {},
-    admission: {
+    workOptions?: ZLinkSerialWorkOptions,
+    admission?: {
       readonly signal?: AbortSignal;
-    } = {},
+    },
     replay?: (failure?: unknown) => Promise<unknown>
   ): Promise<void> {
     this.lastActivityAtMs = performance.now();
@@ -179,17 +179,13 @@ export class ZLinkSpotSerialTurnExecutor {
       if (barrierClaim !== undefined && replay !== undefined) {
         Object.assign(barrierClaim, { replay: bindApplicationJobPermit(replay) });
       }
-      if (admission.signal?.aborted === true) {
+      if (admission?.signal?.aborted === true) {
         throw new DOMException('The operation was aborted.', 'AbortError');
       }
-      const options = {
-        ...workOptions,
-        lane: workOptions.lane ?? 'application'
-      };
       const boundOperation = bindApplicationJobPermit(operation);
       const submitted = hasApplicationJobPermit()
-        ? this.scheduler.submitPreAdmitted(boundOperation, options, barrierClaim)
-        : this.scheduler.submit(boundOperation, options, barrierClaim);
+        ? this.scheduler.submitPreAdmitted(boundOperation, workOptions, barrierClaim)
+        : this.scheduler.submit(boundOperation, workOptions, barrierClaim);
       void submitted.catch((error) => {
         barrierClaim?.release();
         onError(error);
@@ -259,7 +255,7 @@ export class ZLinkSpotSerialTurnExecutor {
 
   private async enqueueApplicationTurn<T>(
     operation: () => Promise<T> | T,
-    workOptions: ZLinkSerialWorkOptions = {},
+    workOptions?: ZLinkSerialWorkOptions,
     replay?: (failure?: unknown) => Promise<T>,
     retainWhilePreparing = false
   ): Promise<T> {
@@ -294,7 +290,7 @@ export class ZLinkSpotSerialTurnExecutor {
 
   private async enqueueFrameworkTurn<T>(
     operation: () => Promise<T> | T,
-    workOptions: ZLinkSerialWorkOptions = {}
+    workOptions?: ZLinkSerialWorkOptions
   ): Promise<T> {
     this.lastActivityAtMs = performance.now();
     // Application admission crosses the async barrier boundary before it
@@ -312,43 +308,39 @@ export class ZLinkSpotSerialTurnExecutor {
 
   private submitQueuedTurn<T>(
     operation: () => Promise<T> | T,
-    workOptions: ZLinkSerialWorkOptions,
+    workOptions: ZLinkSerialWorkOptions | undefined,
     barrierClaim?: ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim>
   ): Promise<T> {
-    const options = {
-      ...workOptions,
-      lane: workOptions.lane ?? 'application'
-    };
     const boundOperation = bindApplicationJobPermit(operation);
     return hasApplicationJobPermit()
-      ? this.scheduler.submitPreAdmitted(boundOperation, options, barrierClaim)
-      : this.scheduler.submit(boundOperation, options, barrierClaim);
+      ? this.scheduler.submitPreAdmitted(boundOperation, workOptions, barrierClaim)
+      : this.scheduler.submit(boundOperation, workOptions, barrierClaim);
   }
 
   private runQueuedRecord(record: ZLinkSerialWorkRecord<unknown>): Promise<void> {
     if (record.context instanceof Promise) {
-      return record.context.then((claim: ZLinkExecutionBarrierClaim) => {
-        Object.assign(record, { context: claim });
-        return this.runQueuedRecord(record);
+      // Branch-local captures keep the synchronous path free of a V8 function context.
+      const executor = this;
+      const work = record;
+      const pending = record.context;
+      return pending.then((claim: ZLinkExecutionBarrierClaim) => {
+        Object.assign(work, { context: claim });
+        return executor.runQueuedRecord(work);
       });
     }
     const context = record.context as ZLinkSpotApplicationTurnContext | undefined;
     if (context?.replay !== undefined && record.operation === context.replay) {
       context.release();
-      return Promise.resolve(this.executionBarrier?.enter()).then((claim) =>
-        this.runTurn(
-          record.operation,
-          (value) => record.resolve(value),
-          (error) => record.reject(error),
-          claim,
-          record.release
-        )
+      const executor = this;
+      const work = record;
+      return Promise.resolve(executor.executionBarrier?.enter()).then((claim) =>
+        executor.runTurn(work.operation, work.resolve, work.reject, claim, work.release)
       );
     }
     return this.runTurn(
       record.operation,
-      (value) => record.resolve(value),
-      (error) => record.reject(error),
+      record.resolve,
+      record.reject,
       record.context as ZLinkExecutionBarrierClaim | undefined,
       record.release
     );
@@ -399,14 +391,7 @@ export class ZLinkSpotSerialTurnExecutor {
         release?.();
       }
     );
-    owner.then(resolve, reject);
-    return Promise.race([
-      owner.then(
-        () => undefined,
-        () => undefined
-      ),
-      turn.suspended
-    ]);
+    return Promise.race([owner.then(resolve, reject), turn.suspended]);
   }
 
   private postResume(

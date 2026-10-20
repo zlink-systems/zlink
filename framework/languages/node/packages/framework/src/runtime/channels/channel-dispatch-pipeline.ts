@@ -109,10 +109,15 @@ export class ZLinkChannelDispatchPipeline {
       this.completeOneWay(dispatch.fields, invocation);
       return;
     }
-    return Promise.resolve(invocation).then(
-      (value) => this.completeOneWay(dispatch.fields, value),
-      (error: unknown) => this.failOneWay(dispatch.fields, error)
-    );
+    {
+      // Keep captures block-scoped so synchronous dispatch allocates no V8 context.
+      const pipeline = this;
+      const record = dispatch;
+      return Promise.resolve(invocation).then(
+        (value) => pipeline.completeOneWay(record.fields, value),
+        (error: unknown) => pipeline.failOneWay(record.fields, error)
+      );
+    }
   }
 
   private async dispatchMissingOneWay(fields: ZLinkChannelDispatchFields): Promise<void> {
@@ -152,10 +157,14 @@ export class ZLinkChannelDispatchPipeline {
       return this.failRequest(dispatch, error);
     }
     if (!isPromiseLike(invocation)) return this.completeRequest(dispatch, invocation);
-    return Promise.resolve(invocation).then(
-      (value) => this.completeRequest(dispatch, value),
-      (error: unknown) => this.failRequest(dispatch, error)
-    );
+    {
+      const pipeline = this;
+      const record = dispatch;
+      return Promise.resolve(invocation).then(
+        (value) => pipeline.completeRequest(record, value),
+        (error: unknown) => pipeline.failRequest(record, error)
+      );
+    }
   }
 
   private async dispatchMissingRequest<TContext extends ZLinkMessageContext>(
@@ -191,24 +200,8 @@ export class ZLinkChannelDispatchPipeline {
       undefined
     );
     return flow === undefined
-      ? this.invoke(
-          dispatch.envelope,
-          dispatch.codecs,
-          handler,
-          dispatch.context,
-          dispatch.fields,
-          dispatch.signal
-        )
-      : runWithFlow(flow, () =>
-          this.invoke(
-            dispatch.envelope,
-            dispatch.codecs,
-            handler,
-            dispatch.context,
-            dispatch.fields,
-            dispatch.signal
-          )
-        );
+      ? this.invoke(dispatch, handler)
+      : runWithFlow(flow, this.invoke.bind(this, dispatch, handler));
   }
 
   private completeRequest<TContext extends ZLinkMessageContext>(
@@ -235,10 +228,14 @@ export class ZLinkChannelDispatchPipeline {
       this.trace(ZLinkMessageFlowOutcome.Replied, dispatch.fields);
       return;
     }
-    return written.then(
-      () => this.trace(ZLinkMessageFlowOutcome.Replied, dispatch.fields),
-      (error: unknown) => this.replyPathMissing(dispatch.fields, error)
-    );
+    {
+      const pipeline = this;
+      const record = dispatch;
+      return written.then(
+        () => pipeline.trace(ZLinkMessageFlowOutcome.Replied, record.fields),
+        (error: unknown) => pipeline.replyPathMissing(record.fields, error)
+      );
+    }
   }
 
   private replyPathMissing(fields: ZLinkChannelDispatchFields, error: unknown): void {
@@ -320,17 +317,18 @@ export class ZLinkChannelDispatchPipeline {
   }
 
   private invoke<TContext extends ZLinkMessageContext, TResult>(
-    envelope: ZLinkChannelEnvelope,
-    codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
-    handler: ZLinkChannelDispatchHandler<TContext, TResult>,
-    context: TContext,
-    fields: ZLinkChannelDispatchFields,
-    signal?: AbortSignal
+    dispatch: ZLinkOneWayDispatch<TContext> | ZLinkRequestDispatch<TContext>,
+    handler: ZLinkChannelDispatchHandler<TContext, TResult>
   ):
     | TResult
     | undefined
     | typeof HANDLER_FILTER_REJECTED
     | Promise<TResult | undefined | typeof HANDLER_FILTER_REJECTED> {
+    const envelope = dispatch.envelope;
+    const codecs = dispatch.codecs;
+    const context = dispatch.context;
+    const fields = dispatch.fields;
+    const signal = dispatch.signal;
     releaseApplicationJobPermitBeforeHandler();
     if (this.filters.length === 0) {
       //  Fast path for the dominant unfiltered dispatch: skip the filter
