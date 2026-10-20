@@ -19,7 +19,9 @@ internal sealed class ZLinkSerialTurn
         Item.LifecycleOwner ?? (Item.Lane == ZLinkSerialWorkLane.Lifecycle ? Item : null);
     private Task? _ownerTask;
 
-    private TaskCompletionSource? _suspended;
+    private TaskCompletionSource _suspended = new(
+        TaskCreationOptions.RunContinuationsAsynchronously
+    );
 
     private int _suspendSignaled;
     private int _yieldUsed;
@@ -47,26 +49,7 @@ internal sealed class ZLinkSerialTurn
 
     public static ZLinkSerialTurn? Current => CurrentTurn.Value;
 
-    public Task Suspended
-    {
-        get
-        {
-            var signal = Volatile.Read(ref _suspended);
-            if (signal is null)
-            {
-                signal = new TaskCompletionSource(
-                    TaskCreationOptions.RunContinuationsAsynchronously
-                );
-                signal = Interlocked.CompareExchange(ref _suspended, signal, null) ?? signal;
-            }
-            // A yield can precede observation of the suspension task.
-            if (IsSuspended)
-                signal.TrySetResult();
-            return signal.Task;
-        }
-    }
-
-    internal bool IsSuspended => Volatile.Read(ref _suspendSignaled) != 0;
+    public Task Suspended => Volatile.Read(ref _suspended).Task;
 
     public Task? OwnerTask => Volatile.Read(ref _ownerTask);
 
@@ -78,7 +61,10 @@ internal sealed class ZLinkSerialTurn
     public void ResetSuspension()
     {
         Volatile.Write(ref _yieldUsed, 0);
-        Volatile.Write(ref _suspended, null);
+        Volatile.Write(
+            ref _suspended,
+            new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+        );
         Volatile.Write(ref _suspendSignaled, 0);
     }
 
@@ -175,7 +161,7 @@ internal sealed class ZLinkSerialTurn
     internal void SignalSuspended()
     {
         if (Interlocked.Exchange(ref _suspendSignaled, 1) == 0)
-            Volatile.Read(ref _suspended)?.TrySetResult();
+            Volatile.Read(ref _suspended).TrySetResult();
     }
 
     private Task AwaitResumePermitAsync()

@@ -325,6 +325,62 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
+    public void SerialTurnConcurrentObserversShareTheSuspensionSignal()
+    {
+        const int iterations = 1000;
+        var item = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
+        var turn = new ZLinkSerialTurn(
+            static (_, _) => ZLinkSerialPostAdmission.Closed,
+            static _ => false,
+            static _ => { },
+            CancellationToken.None,
+            item
+        );
+        using var phases = new Barrier(4);
+        var observed = new Task?[2];
+        var workers = new Thread[3];
+        for (var worker = 0; worker < workers.Length; worker++)
+        {
+            var index = worker;
+            workers[worker] = new Thread(() =>
+            {
+                for (var i = 0; i < iterations; i++)
+                {
+                    phases.SignalAndWait();
+                    if (index < observed.Length)
+                        observed[index] = turn.Suspended;
+                    else
+                        turn.SignalSuspended();
+                    phases.SignalAndWait();
+                }
+            });
+            workers[worker].Start();
+        }
+        var completed = 0;
+        var shared = 0;
+        try
+        {
+            for (var i = 0; i < iterations; i++)
+            {
+                turn.ResetSuspension();
+                phases.SignalAndWait();
+                phases.SignalAndWait();
+                if (observed[0]!.IsCompletedSuccessfully && observed[1]!.IsCompletedSuccessfully)
+                    completed++;
+                if (ReferenceEquals(observed[0], observed[1]))
+                    shared++;
+            }
+        }
+        finally
+        {
+            foreach (var worker in workers)
+                worker.Join();
+        }
+        Assert.Equal(iterations, completed);
+        Assert.Equal(iterations, shared);
+    }
+
+    [Fact]
     public async Task ApplicationDrainWaitersAreIsolatedAcrossPendingGenerations()
     {
         using var errors = new ZLinkRuntimeErrorSink();
@@ -477,38 +533,6 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
-    public void SerialTurnConstructionAllocatesOnlyItsOwnStorage()
-    {
-        var item = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
-        ZLinkSerialTurn Create() =>
-            new(
-                static (_, _) => ZLinkSerialPostAdmission.Closed,
-                static _ => false,
-                static _ => { },
-                CancellationToken.None,
-                item
-            );
-        GC.KeepAlive(Create());
-        GC.KeepAlive(
-            System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
-                typeof(ZLinkSerialTurn)
-            )
-        );
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 1000; i++)
-            GC.KeepAlive(
-                System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(
-                    typeof(ZLinkSerialTurn)
-                )
-            );
-        var storage = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 1000; i++)
-            GC.KeepAlive(Create());
-        Assert.Equal(storage, GC.GetAllocatedBytesForCurrentThread() - before);
-    }
-
-    [Fact]
     public async Task ApplicationDrainSignalIsAllocatedOnlyWhenObserved()
     {
         using var errors = new ZLinkRuntimeErrorSink();
@@ -557,25 +581,6 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
-    public void SerialTurnWithoutYieldDoesNotAllocateSuspensionSignals()
-    {
-        var item = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
-        var turn = new ZLinkSerialTurn(
-            static (_, _) => ZLinkSerialPostAdmission.Closed,
-            static _ => false,
-            static _ => { },
-            CancellationToken.None,
-            item
-        );
-        for (var i = 0; i < 1000; i++)
-            turn.ResetSuspension();
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < 1000; i++)
-            turn.ResetSuspension();
-        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
-    }
-
-    [Fact]
     public void SerialTurnSuspensionSignalPreservesObservationAndReset()
     {
         var item = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
@@ -591,6 +596,8 @@ public sealed class SerialExecutorTests
         Assert.False(first.IsCompleted);
         turn.SignalSuspended();
         Assert.True(first.IsCompletedSuccessfully);
+        turn.SignalSuspended();
+        Assert.Same(first, turn.Suspended);
         turn.ResetSuspension();
         turn.SignalSuspended();
         var second = turn.Suspended;
