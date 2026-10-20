@@ -27,12 +27,31 @@ import systems.zlink.framework.spots.SpotRef;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.IntStream;
 
 final class ZLinkJsonMessageSerializerTest {
+    @Test
+    void rawArrayDecodeRespectsHeapBufferRange() throws Exception {
+        ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
+        var decode =
+                ZLinkJsonMessageSerializer.class.getDeclaredMethod(
+                        "decodeJson", ByteBuffer.class, Class.class);
+        decode.setAccessible(true);
+        byte[] backing = {9, 1, 2, 3, 8};
+        ByteBuffer range = ByteBuffer.wrap(backing, 1, 3);
+        for (ByteBuffer input : List.of(range, range.slice(), range.asReadOnlyBuffer())) {
+            assertArrayEquals(
+                    new byte[] {1, 2, 3}, (byte[]) decode.invoke(serializer, input, byte[].class));
+        }
+        assertArrayEquals(
+                backing,
+                (byte[]) decode.invoke(serializer, ByteBuffer.wrap(backing), byte[].class));
+    }
+
     @Test
     void borrowedTypedJsonDoesNotMaterializeAnEncodedArray() {
         CountingMapper mapper = new CountingMapper();

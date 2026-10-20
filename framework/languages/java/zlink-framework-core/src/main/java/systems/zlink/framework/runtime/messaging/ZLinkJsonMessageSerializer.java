@@ -93,7 +93,10 @@ public final class ZLinkJsonMessageSerializer
             return type.cast(Message.from(bytes));
         }
         if (type == byte[].class) {
-            if (bytes.hasArray()) {
+            if (bytes.hasArray()
+                    && bytes.arrayOffset() == 0
+                    && bytes.position() == 0
+                    && bytes.remaining() == bytes.array().length) {
                 return type.cast(bytes.array());
             }
             byte[] owned = new byte[bytes.remaining()];
