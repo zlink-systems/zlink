@@ -636,7 +636,10 @@ test('owner claim confirmation is a read and is counted once', async () => {
     }, write: provider.write.bind(provider), scan: provider.scan.bind(provider)
   }, undefined, metrics);
   const runtime = new framework.ZLinkLocationRuntime({ stores: { locationStore: repository, ownerLeaseStore: repository }, metrics, ownerId: 'owner', setTimer: () => 0, clearTimer() {} });
-  await runtime.start('node');
+  await assert.rejects(
+    runtime.start('node'),
+    error => error instanceof framework.ZLinkOwnerLeaseClaimError && error.kind === 'conflict'
+  );
   assertStoreOperations(sink, ['read']);
 });
 
