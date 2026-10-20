@@ -20,10 +20,13 @@ import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationC
 import systems.zlink.framework.runtime.messaging.ZLinkStringMessageSerializer;
 
 import java.util.ArrayDeque;
+import java.util.List;
 import java.util.Map;
+import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -67,7 +70,7 @@ final class ZLinkSpotOutboundFailureTest {
                     var callbackResult = new AtomicReference<CompletionStage<Void>>();
                     var queue =
                             new ZLinkSerialExecutionQueue(
-                                    executor::execute, ZLinkExecutionLanePolicy.spot());
+                                    executor, ZLinkExecutionLanePolicy.spot());
                     try {
                         CompletionStage<Void> failedTurn =
                                 queue.enqueue(
@@ -137,7 +140,7 @@ final class ZLinkSpotOutboundFailureTest {
     private static void withRuntime(Scenario scenario) {
         var executor = new ManualExecutor();
         var options = new DefaultZLinkFrameworkOptions();
-        options.useHandlerExecutor(executor::execute);
+        options.useHandlerExecutor(executor);
         options.addRouteMesh("mesh");
         var backend = new ZLinkJavaBackendAdapterFactory();
         var adapterOptions =
@@ -185,11 +188,38 @@ final class ZLinkSpotOutboundFailureTest {
         void run(ZLinkSpotRuntime runtime, DefaultSpotOutbound outbound, ManualExecutor executor);
     }
 
-    private static final class ManualExecutor {
+    // ExecutorService lets the serial queue submit directly; drain controls when each turn runs.
+    private static final class ManualExecutor extends AbstractExecutorService {
         private final ArrayDeque<Runnable> tasks = new ArrayDeque<>();
 
-        void execute(Runnable task) {
+        @Override
+        public void execute(Runnable task) {
             tasks.addLast(task);
+        }
+
+        @Override
+        public void shutdown() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public List<Runnable> shutdownNow() {
+            throw new UnsupportedOperationException();
+        }
+
+        @Override
+        public boolean isShutdown() {
+            return false;
+        }
+
+        @Override
+        public boolean isTerminated() {
+            return false;
+        }
+
+        @Override
+        public boolean awaitTermination(long timeout, TimeUnit unit) {
+            throw new UnsupportedOperationException();
         }
 
         void drain() {
