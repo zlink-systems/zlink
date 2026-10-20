@@ -5405,54 +5405,74 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         operation = result.Operation;
     }
 
-    private async ValueTask<(ulong Correlation, PendingOperation Operation)> CreateOperationAsync(
+    private ValueTask<(ulong Correlation, PendingOperation Operation)> CreateOperationAsync(
         MeshOperationKind kind,
         MeshOperationId operationId,
         bool awaitCompletion = false,
         TimeSpan? managedTimeout = null
     )
     {
-        var registered = await _operationLane
-            .RunAsync(() =>
+        var registering = _operationLane.RunAsync(() =>
+        {
+            RemoveExpiredRelocationReplyTerminalsUnderLock(_deadlineClock.Elapsed);
+            if (operationId.High != _lifecycleGeneration || operationId.Low == 0)
+                throw new ArgumentException(
+                    "The operation id must be allocated by this MeshNode lifecycle.",
+                    nameof(operationId)
+                );
+            var operation = new PendingOperation(
+                operationId,
+                kind,
+                _localRequestSourceFence,
+                awaitCompletion
+            );
+            if (!_operations.TryAdd(operationId.Low, operation))
+                throw new InvalidOperationException("The operation id was reused.");
+            if (IsRelocatableRequest(kind))
             {
-                RemoveExpiredRelocationReplyTerminalsUnderLock(_deadlineClock.Elapsed);
-                if (operationId.High != _lifecycleGeneration || operationId.Low == 0)
-                    throw new ArgumentException(
-                        "The operation id must be allocated by this MeshNode lifecycle.",
-                        nameof(operationId)
-                    );
-                var operation = new PendingOperation(
-                    operationId,
-                    kind,
-                    _localRequestSourceFence,
-                    awaitCompletion
+                var relocationKey = new RelocationReplyTerminalKey(
+                    operationId.Low,
+                    operation.OperationId
                 );
-                if (!_operations.TryAdd(operationId.Low, operation))
-                    throw new InvalidOperationException("The operation id was reused.");
-                if (IsRelocatableRequest(kind))
+                if (!_relocationReplyOperations.TryAdd(relocationKey, operation))
                 {
-                    var relocationKey = new RelocationReplyTerminalKey(
-                        operationId.Low,
-                        operation.OperationId
+                    _operations.TryRemove(operationId.Low, out _);
+                    throw new InvalidOperationException(
+                        "The relocation reply operation id was reused."
                     );
-                    if (!_relocationReplyOperations.TryAdd(relocationKey, operation))
-                    {
-                        _operations.TryRemove(operationId.Low, out _);
-                        throw new InvalidOperationException(
-                            "The relocation reply operation id was reused."
-                        );
-                    }
                 }
-                var wakeReceiveOwner =
-                    managedTimeout is { } timeout
-                    && IndexOperationDeadline(operation, _deadlineClock.Elapsed + timeout);
-                return (
-                    Correlation: operationId.Low,
-                    Operation: operation,
-                    WakeReceiveOwner: wakeReceiveOwner
-                );
-            })
-            .ConfigureAwait(false);
+            }
+            var wakeReceiveOwner =
+                managedTimeout is { } timeout
+                && IndexOperationDeadline(operation, _deadlineClock.Elapsed + timeout);
+            return (
+                Correlation: operationId.Low,
+                Operation: operation,
+                WakeReceiveOwner: wakeReceiveOwner
+            );
+        });
+        // An uncontended lane completes synchronously; only a contended one pays for
+        // an async state machine.
+        return registering.IsCompletedSuccessfully
+            ? new(CompleteOperationRegistration(registering.Result))
+            : AwaitOperationRegistrationAsync(registering);
+    }
+
+    private async ValueTask<(
+        ulong Correlation,
+        PendingOperation Operation
+    )> AwaitOperationRegistrationAsync(
+        ValueTask<(
+            ulong Correlation,
+            PendingOperation Operation,
+            bool WakeReceiveOwner
+        )> registering
+    ) => CompleteOperationRegistration(await registering.ConfigureAwait(false));
+
+    private (ulong Correlation, PendingOperation Operation) CompleteOperationRegistration(
+        (ulong Correlation, PendingOperation Operation, bool WakeReceiveOwner) registered
+    )
+    {
         if (registered.WakeReceiveOwner)
             SignalReceiveOwner();
         return (registered.Correlation, registered.Operation);
