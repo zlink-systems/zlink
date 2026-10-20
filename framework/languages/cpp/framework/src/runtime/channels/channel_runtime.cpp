@@ -727,9 +727,9 @@ void channel_runtime_t::bind_spot_mesh_transport (
 }
 
 void channel_runtime_t::bind_spot_address_resolver (
-  runtime::spot_address_resolver_t &resolver) noexcept
+  std::shared_ptr<runtime::spot_address_resolver_t> resolver) noexcept
 {
-    _state->lane.run_checked ([&] { _state->spot_resolver = &resolver; }).get ();
+    _state->lane.run_checked ([&] { _state->spot_resolver = std::move (resolver); }).get ();
 }
 
 void channel_runtime_t::bind_instance_spot_activator (
@@ -2250,12 +2250,8 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
           address->spot_generation, packet_name, message_type, std::move (encode_payload),
           metadata);
     }
-    if (!submitted
-        && (submitted.error_kind () == framework_error_kind_t::not_found
-            || submitted.error_kind () == framework_error_kind_t::unavailable
-            || submitted.error_kind () == framework_error_kind_t::shutting_down)) {
-        state->runtime->spot_resolver->invalidate_spot_address (target);
-    }
+    if (!submitted)
+        state->runtime->spot_resolver->observe_terminal (target, submitted.error ());
     co_return submitted;
 }
 
@@ -2322,7 +2318,7 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_me
              * Instance intent message cold-activates. One authority read decides:
              * Missing continues as cold activation within the operation deadline;
              * any other authority keeps the refusal. */
-            state->runtime->spot_resolver->invalidate_spot_address (target);
+            state->runtime->spot_resolver->observe_terminal (target, &*refused);
             if (co_await state->runtime->spot_resolver->resolve_spot_address ({}, target))
                 throw *refused;
             const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
@@ -2344,15 +2340,7 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_me
           std::move (encode_payload), timeout, std::move (metadata)));
     }
     catch (const framework_exception_t &error) {
-        /* Framework의 NotFound/Unavailable/ShuttingDown terminal은 기존 주소를 무효화한다.
-         * 현재 operation은 terminal로 끝나고 다음 호출이 global SpotId를 조회한다.
-         * application-origin 실패의 주소는 기존 규칙대로 유지한다. */
-        if ((error.kind () == framework_error_kind_t::not_found
-             || error.kind () == framework_error_kind_t::unavailable
-             || error.kind () == framework_error_kind_t::shutting_down)
-            && detail::error_origin (error) != detail::error_origin_t::application) {
-            state->runtime->spot_resolver->invalidate_spot_address (target);
-        }
+        state->runtime->spot_resolver->observe_terminal (target, &error);
         throw;
     }
 }

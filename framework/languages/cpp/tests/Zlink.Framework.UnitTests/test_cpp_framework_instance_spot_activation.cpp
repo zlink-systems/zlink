@@ -613,7 +613,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
-    resolver_t resolver;
+    auto resolver = std::make_shared<resolver_t> ();
     runtime.bind_spot_address_resolver (resolver);
 
     std::atomic_int activations{0};
@@ -634,7 +634,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
           ++activations;
           auto address = zlink::framework::runtime::spot_address_t{
             "commerce", zlink::routing_id_t::from ("cart-node"), "cart-17", 1};
-          resolver.addresses.insert_or_assign ("cart-17", address);
+          resolver->addresses.insert_or_assign ("cart-17", address);
           co_return zlink::framework::result_t<void>::success ();
       },
       [&] (const auto &, const auto &, const auto &cached_route, std::string, std::type_index, auto,
@@ -720,7 +720,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, StoreReadFailureHasUnavailablePublic
         int reads = 0;
     } store;
     fw::runtime::provider_location_repository_t repository (store);
-    fw::runtime::store_location_resolvers_t resolver (repository);
+    auto resolver = std::make_shared<fw::runtime::store_location_resolvers_t> (repository);
     fw::serializer_registry_t serializers;
     auto builder = fw::test::runtime_failure_builder ();
     auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
@@ -860,7 +860,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, MissingWithoutIntentDoesNotActivate)
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
-    resolver_t resolver;
+    auto resolver = std::make_shared<resolver_t> ();
     runtime.bind_spot_address_resolver (resolver);
     std::atomic_int activations{0};
     runtime.bind_instance_spot_activator (
@@ -892,8 +892,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ActivationKeepsSubmissionStartAcross
     auto builder = fw::test::runtime_failure_builder ();
     auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
-    resolver_t resolver;
-    resolver.lookup_gate = std::make_shared<fw::task_completion_source_t<void>> ();
+    auto resolver = std::make_shared<resolver_t> ();
+    resolver->lookup_gate = std::make_shared<fw::task_completion_source_t<void>> ();
     runtime.bind_spot_address_resolver (resolver);
     std::optional<std::chrono::system_clock::time_point> observed_start;
     runtime.bind_instance_spot_activator (
@@ -912,10 +912,10 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ActivationKeepsSubmissionStartAcross
                   .instance_spot ("traced-player")
                   .async ();
     const auto lookup_started = std::chrono::system_clock::now ();
-    EXPECT_EQ (1, resolver.reads.load ());
+    EXPECT_EQ (1, resolver->reads.load ());
     EXPECT_FALSE (send.await_ready ());
     EXPECT_FALSE (observed_start);
-    resolver.lookup_gate->complete (fw::result_t<void>::success ());
+    resolver->lookup_gate->complete (fw::result_t<void>::success ());
     ASSERT_TRUE (send.result ());
     ASSERT_TRUE (observed_start);
     EXPECT_GE (*observed_start, before);
@@ -1021,7 +1021,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, MissingRequestUsesDefaultTimeoutForC
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
-    resolver_t resolver;
+    auto resolver = std::make_shared<resolver_t> ();
     runtime.bind_spot_address_resolver (resolver);
 
     std::chrono::milliseconds observed_timeout{0};
@@ -1388,7 +1388,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
-    resolver_t resolver;
+    auto resolver = std::make_shared<resolver_t> ();
     runtime.bind_spot_address_resolver (resolver);
     std::atomic_int activations{0};
     runtime.bind_instance_spot_activator (
@@ -1412,7 +1412,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     EXPECT_FALSE (
       client.send_to_spot ("missing", event_t{1}).instance_spot ("quest").async ().result ());
 
-    EXPECT_EQ (2, resolver.reads.load ());
+    EXPECT_EQ (2, resolver->reads.load ());
     EXPECT_EQ (2, activations.load ());
 }
 
@@ -1424,8 +1424,8 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
-    resolver_t resolver;
-    resolver.addresses.insert_or_assign (
+    auto resolver = std::make_shared<resolver_t> ();
+    resolver->addresses.insert_or_assign (
       "player-alice",
       zlink::framework::runtime::spot_address_t{
         "gamequest", zlink::routing_id_t::from ("quest-mission"), "player-alice", 7});
@@ -1509,7 +1509,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
     EXPECT_EQ (0, direct_requests.load ());
     EXPECT_EQ (1, ready_failures.load ());
     EXPECT_EQ (0, cold_activations.load ());
-    EXPECT_FALSE (resolver.addresses.contains ("player-alice"));
+    EXPECT_FALSE (resolver->addresses.contains ("player-alice"));
 
     const auto rehydrated = client.request_to_spot ("player-alice", request_t{2})
                               .instance_spot ("player-quest")
@@ -1521,7 +1521,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
     EXPECT_EQ (0, direct_requests.load ());
     EXPECT_EQ (1, ready_failures.load ());
     EXPECT_EQ (1, cold_activations.load ());
-    EXPECT_EQ (2, resolver.reads.load ());
+    EXPECT_EQ (2, resolver->reads.load ());
 }
 
 // Failover policy §4.4: an Instance intent request whose cached Ready route the
@@ -1580,10 +1580,10 @@ TEST (ZLinkFrameworkInstanceSpotActivation, CachedRouteFenceRefusalReadsAuthorit
         runtime.bind_serializers (serializers);
         const spot_address_t route{"gamequest", zlink::routing_id_t::from ("quest-mission"),
                                    "player-alice", 7};
-        authority_resolver_t resolver;
-        resolver.cached = route;
+        auto resolver = std::make_shared<authority_resolver_t> ();
+        resolver->cached = route;
         if (scenario.authority_present)
-            resolver.authority = route;
+            resolver->authority = route;
         runtime.bind_spot_address_resolver (resolver);
         std::vector<bool> cached_routes;
         runtime.bind_instance_spot_activator (
@@ -1623,7 +1623,7 @@ TEST (ZLinkFrameworkInstanceSpotActivation, CachedRouteFenceRefusalReadsAuthorit
                        zlink::framework::detail::failure_code (*reply.error ()));
         }
         EXPECT_EQ (scenario.cached_routes, cached_routes);
-        EXPECT_EQ (scenario.authority_reads, resolver.authority_reads);
+        EXPECT_EQ (scenario.authority_reads, resolver->authority_reads);
     }
 }
 

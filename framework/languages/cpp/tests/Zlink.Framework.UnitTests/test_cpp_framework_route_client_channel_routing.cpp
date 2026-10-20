@@ -450,9 +450,50 @@ class admitted_spot_resolver_t final : public zlink::framework::runtime::spot_ad
         return task_t<std::optional<runtime::spot_address_t>> (
           result_t<std::optional<runtime::spot_address_t>>::success (std::move (address)));
     }
-    void invalidate_spot_address (std::string_view) override {}
+    void invalidate_spot_address (std::string_view) override { ++invalidations; }
+    int invalidations = 0;
     void invalidate_all_routes_after_store_recovery () override {}
 };
+
+TEST (ZLinkFrameworkRouteClientChannelRouting, RuntimeOwnsSpotResolverUntilReleased)
+{
+    using namespace zlink::framework;
+    std::weak_ptr<runtime::spot_address_resolver_t> lifetime;
+    {
+        auto builder = test::runtime_failure_builder ();
+        auto channel = detail::channel_runtime_t::from (builder.message_bus ());
+        auto resolver = std::make_shared<admitted_spot_resolver_t> ();
+        lifetime = resolver;
+        channel.bind_spot_address_resolver (resolver);
+        resolver.reset ();
+        EXPECT_FALSE (lifetime.expired ());
+    }
+    EXPECT_TRUE (lifetime.expired ());
+}
+
+TEST (ZLinkFrameworkRouteClientChannelRouting, SpotResolverObservesOnlyStaleFrameworkTerminals)
+{
+    using namespace zlink::framework;
+    admitted_spot_resolver_t resolver;
+    for (const auto kind : {framework_error_kind_t::not_found, framework_error_kind_t::unavailable,
+                            framework_error_kind_t::shutting_down}) {
+        const auto before = resolver.invalidations;
+        const auto application_error = detail::with_error_origin (
+          framework_exception_t (kind, "application"), detail::error_origin_t::application);
+        resolver.observe_terminal ("spot", &application_error);
+        EXPECT_EQ (resolver.invalidations, before);
+        const auto framework_error = detail::with_error_origin (
+          framework_exception_t (kind, "framework"), detail::error_origin_t::framework);
+        resolver.observe_terminal ("spot", &framework_error);
+        EXPECT_EQ (resolver.invalidations, before + 1);
+    }
+    const auto before = resolver.invalidations;
+    const framework_exception_t deadline_error (framework_error_kind_t::deadline_exceeded,
+                                                "deadline");
+    resolver.observe_terminal ("spot", &deadline_error);
+    EXPECT_EQ (resolver.invalidations, before);
+    EXPECT_THROW (resolver.observe_terminal ("spot", nullptr), framework_exception_t);
+}
 
 void verify_mesh_request_admission (bool to_spot)
 {
@@ -497,7 +538,7 @@ void verify_mesh_request_admission (bool to_spot)
                                           EXPECT_EQ (generation, 1);
                                           return submit (std::move (parts));
                                       });
-    admitted_spot_resolver_t resolver;
+    auto resolver = std::make_shared<admitted_spot_resolver_t> ();
     runtime.bind_spot_address_resolver (resolver);
     auto client = builder.route_client (serializers);
     auto pending = to_spot
@@ -558,7 +599,7 @@ TEST (CppFrameworkRouteClientChannelRouting, SpotSenderLookupDoesNotEnterStateLa
     auto builder = test::runtime_failure_builder ();
     auto channel = detail::channel_runtime_t::from (builder.message_bus ());
     channel.bind_serializers (serializers);
-    admitted_spot_resolver_t resolver;
+    auto resolver = std::make_shared<admitted_spot_resolver_t> ();
     channel.bind_spot_address_resolver (resolver);
     runtime::offload_executor_t target_executor{1, "spot-target-admission"};
     runtime::state_lane_t target_lane{target_executor};
@@ -599,7 +640,7 @@ TEST (CppFrameworkRouteClientChannelRouting, PendingSpotSendRetainsTransportThro
     auto builder = test::runtime_failure_builder ();
     auto channel = detail::channel_runtime_t::from (builder.message_bus ());
     channel.bind_serializers (serializers);
-    admitted_spot_resolver_t resolver;
+    auto resolver = std::make_shared<admitted_spot_resolver_t> ();
     channel.bind_spot_address_resolver (resolver);
     auto lifetime = std::make_shared<int> (7);
     std::weak_ptr<int> retained = lifetime;
@@ -650,7 +691,7 @@ TEST (CppFrameworkRouteClientChannelRouting, MissingSpotTransportRemainsUnavaila
     auto builder = test::runtime_failure_builder ();
     auto channel = detail::channel_runtime_t::from (builder.message_bus ());
     channel.bind_serializers (serializers);
-    admitted_spot_resolver_t resolver;
+    auto resolver = std::make_shared<admitted_spot_resolver_t> ();
     channel.bind_spot_address_resolver (resolver);
     const auto result = builder.route_client (serializers)
                           .send_to_spot ("admission-spot", route_event_t{7})
@@ -839,7 +880,7 @@ TEST (CppFrameworkRouteClientChannelRouting, RoutePresenceKeepsPriorityOverRebou
     auto builder = test::runtime_failure_builder ();
     auto channel = detail::channel_runtime_t::from (builder.message_bus ());
     channel.bind_serializers (serializers);
-    admitted_spot_resolver_t resolver;
+    auto resolver = std::make_shared<admitted_spot_resolver_t> ();
     channel.bind_spot_address_resolver (resolver);
     auto manager = detail::channel_runtime_manager_t::from (builder);
     manager.initialize_route_channels (std::vector<std::string>{"admission-mesh"});

@@ -41,6 +41,16 @@ class spot_address_resolver_t
     {
         return resolve_spot_address (std::move (mesh_name), std::move (spot_id));
     }
+    void observe_terminal (std::string_view spot_id, const framework_exception_t *error)
+    {
+        const auto kind = detail::result_error_kind (error);
+        if ((kind == framework_error_kind_t::not_found
+             || kind == framework_error_kind_t::unavailable
+             || kind == framework_error_kind_t::shutting_down)
+            && detail::error_origin (*error) != detail::error_origin_t::application)
+            invalidate_spot_address (spot_id);
+    }
+
     virtual void invalidate_spot_address (std::string_view spot_id) = 0;
     virtual bool invalidate_spot_address_if_matches (std::string_view spot_id,
                                                      const spot_address_t &expected)

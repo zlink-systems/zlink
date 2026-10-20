@@ -7246,7 +7246,8 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
     // Ready route it resolved before Close, and the source host as the activator.
     location_options_t route_cache_options;
     route_cache_options.route_cache_max_age = 30s;
-    runtime::store_location_resolvers_t route_resolver (*store, route_cache_options);
+    auto route_resolver =
+      std::make_shared<runtime::store_location_resolvers_t> (*store, route_cache_options);
     serializer_registry_t serializers;
     zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto channels = detail::channel_runtime_t::from (builder.message_bus ());
@@ -7684,7 +7685,7 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
     assert (released);
     // The source resolves the Ready route now; its route cache keeps it across the Close.
     const auto cached_ready_route =
-      route_resolver.resolve_spot_address ({}, replay_instance_request.target.spot_id)
+      route_resolver->resolve_spot_address ({}, replay_instance_request.target.spot_id)
         .result ()
         .value ();
     assert (cached_ready_route
