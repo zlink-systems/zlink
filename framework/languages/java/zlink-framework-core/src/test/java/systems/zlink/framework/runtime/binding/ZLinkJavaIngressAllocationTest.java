@@ -88,6 +88,7 @@ public final class ZLinkJavaIngressAllocationTest {
             long managementIterators = 0;
             long managementCallbacks = 0;
             long managementDurations = 0;
+            long closeIterators = 0;
             try (var events = new RecordingFile(recordingPath)) {
                 while (events.hasMoreEvents()) {
                     var event = events.readEvent();
@@ -101,7 +102,8 @@ public final class ZLinkJavaIngressAllocationTest {
                             || allocated.equals("systems.zlink.contracts.messaging.Received")
                             || allocated.equals("java.time.Duration")
                             || allocated.endsWith("$Itr")
-                            || allocated.endsWith("$ListItr"))) continue;
+                            || allocated.endsWith("$ListItr")
+                            || allocated.endsWith("$KeyIterator"))) continue;
                     var stack = event.getStackTrace();
                     if (stack == null) continue;
                     boolean receive = false;
@@ -137,10 +139,12 @@ public final class ZLinkJavaIngressAllocationTest {
                             && allocated.contains("$$Lambda")) managementCallbacks++;
                     if ("managementWaitTimeout".equals(firstFrameworkMethod)
                             && allocated.equals("java.time.Duration")) managementDurations++;
+                    if ("finishRequestedIntentCloses".equals(firstFrameworkMethod)
+                            && allocated.endsWith("$KeyIterator")) closeIterators++;
                 }
             }
             System.out.printf(
-                    "records=%d attempts=%d portObjects=%d resumeCallbacks=%d byteIterators=%d managementIterators=%d managementCallbacks=%d managementDurations=%d%n",
+                    "records=%d attempts=%d portObjects=%d resumeCallbacks=%d byteIterators=%d managementIterators=%d managementCallbacks=%d managementDurations=%d closeIterators=%d%n",
                     records,
                     attempts,
                     portObjects,
@@ -148,7 +152,8 @@ public final class ZLinkJavaIngressAllocationTest {
                     byteIterators,
                     managementIterators,
                     managementCallbacks,
-                    managementDurations);
+                    managementDurations,
+                    closeIterators);
             assertTrue(
                     records >= REQUESTS,
                     "include all requests and any ordinary management records");
@@ -162,6 +167,8 @@ public final class ZLinkJavaIngressAllocationTest {
             assertEquals(0, managementIterators, "management lists need no cursor object");
             assertEquals(0, managementCallbacks, "timeout iteration needs no capturing callback");
             assertEquals(0, managementDurations, "the bounded wait reuses its existing Duration");
+            assertEquals(
+                    0, closeIterators, "peer close work needs a close request or route change");
         } finally {
             Files.deleteIfExists(recordingPath);
         }

@@ -1070,8 +1070,9 @@ final class ZLinkJavaRawMeshNode
     }
 
     private void drainPeerCloseRequests() {
-        PeerCloseRequest request;
-        while ((request = pendingPeerCloseRequests.poll()) != null) {
+        PeerCloseRequest request = pendingPeerCloseRequests.poll();
+        if (request == null) return;
+        do {
             PeerIntent intent = peerIntents.get(request.connectionIntentId());
             RouterSocket current = router;
             if (intent == null
@@ -1090,7 +1091,9 @@ final class ZLinkJavaRawMeshNode
                 // route for the intent's peer. A non-inproc transport retries
                 // from a later descriptor observation.
             }
-        }
+        } while ((request = pendingPeerCloseRequests.poll()) != null);
+        // Selected-route changes already settle outstanding closes in observeSelectedRoutes.
+        // Without a new close request or route snapshot, that decision has no new input.
         finishRequestedIntentCloses();
     }
 
