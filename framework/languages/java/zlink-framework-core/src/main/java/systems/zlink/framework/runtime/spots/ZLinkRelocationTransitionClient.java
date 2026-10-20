@@ -1,13 +1,17 @@
 package systems.zlink.framework.runtime.spots;
 
-import systems.zlink.contracts.core.RoutingId;
-
 import java.time.Duration;
 import java.time.Instant;
 import java.util.concurrent.CompletionStage;
+import systems.zlink.contracts.core.RoutingId;
 
 /** Framework-private relocation transition boundary used by source schedulers. */
 interface ZLinkRelocationTransitionClient {
+    /** The source transport's terminal lifecycle, independent of remote failure replies. */
+    default boolean sourceStopped() {
+        return false;
+    }
+
     /**
      * Stages one attempt. {@code deadline} is the absolute deadline of the operation that started
      * the relocation; command 40 carries it so the target bounds its relay-ready preparation
@@ -37,7 +41,7 @@ interface ZLinkRelocationTransitionClient {
     CompletionStage<Settlement> settle(
             RoutingId targetNodeRid, ZLinkSpotRetireControl.Fence fence, Instant preserveAt);
 
-    /** Carries the exact authority read that confirmed target ownership. */
+    /** Carries the current first-target Follow fence; absent after a subsequent owner commits. */
     default CompletionStage<AuthoritySettlement> settleAuthority(
             RoutingId targetNodeRid, ZLinkSpotRetireControl.Fence fence, Instant preserveAt) {
         return settle(targetNodeRid, fence, preserveAt)

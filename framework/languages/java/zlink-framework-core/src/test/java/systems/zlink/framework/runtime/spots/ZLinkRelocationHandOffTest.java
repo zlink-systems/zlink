@@ -2,10 +2,6 @@ package systems.zlink.framework.runtime.spots;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-import org.junit.jupiter.api.Test;
-
-import systems.zlink.contracts.core.RoutingId;
-
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -13,6 +9,8 @@ import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.atomic.AtomicInteger;
+import org.junit.jupiter.api.Test;
+import systems.zlink.contracts.core.RoutingId;
 
 final class ZLinkRelocationHandOffTest {
     @Test
@@ -123,6 +121,31 @@ final class ZLinkRelocationHandOffTest {
             assertEquals(1, metrics.count("zlink.relocation.bytes"));
             assertTrue(metrics.only("zlink.relocation.interruption").value() >= 0);
             metrics.assertContractLabels();
+        }
+    }
+
+    @Test
+    void cleanupFailureAfterConfirmedCommitCannotReplaceCompleted() throws Exception {
+        try (var metrics =
+                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                        .install()) {
+            var result =
+                    ZLinkRelocationHandOff.run(
+                            client(
+                                    new AtomicInteger(),
+                                    ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                                    CompletableFuture.failedFuture(
+                                            new IllegalStateException("cutover cleanup failed"))),
+                            request(),
+                            () -> CompletableFuture.completedFuture(null),
+                            Duration.ofSeconds(1),
+                            Instant.now());
+            assertEquals(
+                    ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                    result.toCompletableFuture().join());
+            assertEquals(
+                    "completed", metrics.only("zlink.relocation.completed").tags().get("outcome"));
+            assertEquals(1, metrics.count("zlink.relocation.duration"));
         }
     }
 
