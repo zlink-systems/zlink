@@ -410,7 +410,8 @@ public final class ZLinkServiceM6AWireCodec {
             throw protocol("framework multipart requires at least one part");
         }
         long encodedSize = Integer.BYTES;
-        for (Message part : parts) {
+        for (int index = 0; index < parts.size(); index++) {
+            Message part = parts.get(index);
             encodedSize += Integer.BYTES + (long) Objects.requireNonNull(part, "part").size();
             if (encodedSize > Integer.MAX_VALUE) {
                 throw protocol("framework multipart payload is too large");
@@ -421,7 +422,8 @@ public final class ZLinkServiceM6AWireCodec {
 
     private static void writeMultipart(ByteBuffer target, List<Message> parts) {
         target.putInt(parts.size());
-        for (Message part : parts) {
+        for (int index = 0; index < parts.size(); index++) {
+            Message part = parts.get(index);
             target.putInt(part.size());
             target.put(part.dataBuffer());
         }
