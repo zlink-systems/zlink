@@ -1744,10 +1744,15 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         return true;
     }
 
-    private bool HasRunnableLifecycle() =>
-        _relocation?.PreparationOwner is { } owner
-            ? _lifecycleQueue.Any(item => ReferenceEquals(item.LifecycleOwner, owner))
-            : _activeLifecycle is null && _lifecycleQueue.Count != 0;
+    private bool HasRunnableLifecycle()
+    {
+        if (_relocation?.PreparationOwner is not { } owner)
+            return _activeLifecycle is null && _lifecycleQueue.Count != 0;
+        foreach (var item in _lifecycleQueue)
+            if (ReferenceEquals(item.LifecycleOwner, owner))
+                return true;
+        return false;
+    }
 
     private bool HasRunnableApplicationUnderLock() =>
         SelectApplicationUnderLock(out _, out _) is not null;

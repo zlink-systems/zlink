@@ -22,6 +22,22 @@ public sealed class SerialExecutorTests
     }
 
     [Fact]
+    public async Task IdleQueueReadinessDoesNotAllocate()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
+        queue.SchedulePendingWork();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+            queue.SchedulePendingWork();
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
     public async Task BusyQueueAdmissionAllocatesOnlyWorkItemStorage()
     {
         using var errors = new ZLinkRuntimeErrorSink();
