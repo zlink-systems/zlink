@@ -1741,13 +1741,22 @@ public sealed class SessionActorCoordinatorTests
                 "new-token",
                 "new-session",
                 2,
-                () => throw new IOException("Terminal submission failed.")
+                () => throw new IOException("Terminal submission failed."),
+                bindingGeneration: 2
             )
         );
         Assert.True(state.TryGetBoundSession(out var current));
         Assert.Equal("old-token", current.BindingToken);
         Assert.Equal(0, state.SessionBindingTombstoneCount);
-        Assert.True(ReplaceActorSessionBinding(state, "new-token", "new-session", 2).Changed);
+        Assert.True(
+            ReplaceActorSessionBinding(
+                state,
+                "new-token",
+                "new-session",
+                2,
+                bindingGeneration: 2
+            ).Changed
+        );
     }
 
     [Fact]
@@ -1755,7 +1764,13 @@ public sealed class SessionActorCoordinatorTests
     {
         var state = new ZLinkActorRuntimeState("actor-order");
         _ = BindActorSession(state, "old-token", "old-session", 1);
-        var replacement = ReplaceActorSessionBinding(state, "new-token", "new-session", 2);
+        var replacement = ReplaceActorSessionBinding(
+            state,
+            "new-token",
+            "new-session",
+            2,
+            bindingGeneration: 2
+        );
         var cleanupAck = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -1772,7 +1787,13 @@ public sealed class SessionActorCoordinatorTests
     {
         var state = new ZLinkActorRuntimeState("actor-cleanup-gap");
         _ = BindActorSession(state, "old-token", "old-session", 1);
-        var replacement = ReplaceActorSessionBinding(state, "new-token", "new-session", 2);
+        var replacement = ReplaceActorSessionBinding(
+            state,
+            "new-token",
+            "new-session",
+            2,
+            bindingGeneration: 2
+        );
 
         Assert.True(replacement.Changed);
         Assert.True(state.TryGetBoundSession(out var current));
@@ -1788,10 +1809,22 @@ public sealed class SessionActorCoordinatorTests
     {
         var state = new ZLinkActorRuntimeState("actor-same-session");
         _ = BindActorSession(state, "same-token", "same-session", 1);
-        var first = ReplaceActorSessionBinding(state, "next-token", "next-session", 2);
+        var first = ReplaceActorSessionBinding(
+            state,
+            "next-token",
+            "next-session",
+            2,
+            bindingGeneration: 2
+        );
 
         Assert.True(first.Changed);
-        var replay = ReplaceActorSessionBinding(state, "next-token", "next-session", 2);
+        var replay = ReplaceActorSessionBinding(
+            state,
+            "next-token",
+            "next-session",
+            2,
+            bindingGeneration: 2
+        );
         Assert.False(replay.Changed);
         Assert.Null(replay.Previous);
     }
@@ -3141,13 +3174,14 @@ public sealed class SessionActorCoordinatorTests
         string bindingToken,
         string sessionRid,
         ulong authorityOwnerGeneration,
-        Action? beforePublish = null
+        Action? beforePublish = null,
+        ulong bindingGeneration = 1
     ) =>
         state.ReplaceSessionBinding(
             RoutingId.From("session-owner"),
             RoutingId.From(sessionRid),
             bindingToken,
-            bindingGeneration: 1,
+            bindingGeneration: bindingGeneration,
             objectGeneration: 1,
             authorityOwnerGeneration: authorityOwnerGeneration,
             meshName: ZLinkMeshName.FromBoundary("actors", "meshName"),
