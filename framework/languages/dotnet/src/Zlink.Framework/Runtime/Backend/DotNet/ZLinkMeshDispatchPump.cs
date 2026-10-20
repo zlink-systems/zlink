@@ -629,12 +629,11 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         var state = ResolveSpotState(
             string.IsNullOrEmpty(ownerSpotId) ? record.SourceSpotId : ownerSpotId
         );
-        var replyRecord = record;
         var reply = record.Kind
             is MeshRecordKind.NodeRequest
                 or MeshRecordKind.ChannelRequest
                 or MeshRecordKind.SpotRequest
-            ? new Func<IReadOnlyList<Message>, SubmitResult>(parts => replyRecord.Reply(parts))
+            ? record.CaptureReplyRoute()
             : null;
         var parts = RetainParts(batch, index);
         var payloadOwner = batch.TakePayloadOwner(index);
@@ -678,9 +677,8 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         if (!TryDecodeMetadata(record, out var metadata))
             return;
 
-        var replyRecord = record;
         var reply = record.Kind is MeshRecordKind.NodeRequest or MeshRecordKind.ChannelRequest
-            ? new Func<IReadOnlyList<Message>, SubmitResult>(parts => replyRecord.Reply(parts))
+            ? record.CaptureReplyRoute()
             : null;
         var parts = record.ApplicationPayloadView is null
             ? RetainParts(batch, index)
