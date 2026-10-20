@@ -83,3 +83,20 @@ test('JSON decode returns the value without a success or failure carrier', () =>
     error => error === configurationFailure
   );
 });
+
+test('channel request and reply encode allocate only the final parts representation', () => {
+  const { codec, counts } = countedCodec('channels/channel-envelope');
+  const codecs = { serializers: new Map() };
+  const data = { body: 'x'.repeat(1024) };
+  for (let index = 0; index < 1000; index++) {
+    const parts = codec.encodeChannelEnvelopePartsAtDeadline(
+      1, 'codec', 'Packet', data, 2000000000000, undefined, codecs,
+      '00112233445566778899aabbccddeeff', false
+    );
+    const request = codec.decodeChannelHeader(parts.map(part => ZLinkBufferMessage.fromOwned(part)), false);
+    const reply = codec.encodeChannelReplyParts(request, data, codecs);
+    const response = codec.decodeChannelEnvelope(reply.map(part => ZLinkBufferMessage.fromOwned(part)), undefined, false);
+    assert.deepEqual(codec.decodeChannelPayload(response), data);
+  }
+  assert.equal(counts.get('encodePayload:object:contentType,message') ?? 0, 0);
+});

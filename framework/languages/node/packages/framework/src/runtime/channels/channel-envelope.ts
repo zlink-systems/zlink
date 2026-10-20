@@ -166,33 +166,21 @@ export function encodeChannelEnvelopePartsAtDeadline(
     throw new RangeError('deadlineUnixMs must be a positive safe integer.');
   }
   const messageName = resolveFrameworkPacketName(payload, packetName, 'Channel');
-  const encoded = encodePayload(
+  return encodePayload(
     payload,
     codecsForFrameworkPacket(messageName, codecs),
     messageName,
-    'payload'
+    'payload',
+    kind,
+    channelName,
+    correlationId,
+    deadlineUnixMs,
+    topic,
+    createFlow,
+    metadata,
+    undefined,
+    codecs
   );
-  const flow = createFlow ? currentOrCreateFlow('Application') : undefined;
-  const envelopeCorrelationId = correlationIdForOutboundKind(kind, correlationId);
-  return [
-    encodeChannelHeader(
-      kind,
-      channelName,
-      messageName,
-      encoded.contentType,
-      envelopeCorrelationId,
-      deadlineUnixMs === undefined ? null : new Date(deadlineUnixMs).toISOString(),
-      topic ?? null,
-      null,
-      null,
-      undefined,
-      applicationMetadataRecord(metadata),
-      flow?.flowId,
-      flow?.flowOrigin,
-      codecs
-    ),
-    encoded.message
-  ];
 }
 
 export function encodeChannelPublishEnvelopeParts(
@@ -205,31 +193,19 @@ export function encodeChannelPublishEnvelopeParts(
   metadata: ReadonlyMap<string, string> = EMPTY_OUTBOUND_METADATA
 ): readonly MessageLike[] {
   const messageName = resolveFrameworkPacketName(payload, packetName, 'Channel');
-  const encoded = encodePayload(
+  return encodePayload(
     payload,
     codecsForFrameworkPacket(messageName, codecs),
     messageName,
-    'payload'
+    'payload',
+    ZLinkChannelMessageKind.Publish,
+    channelName,
+    undefined,
+    undefined,
+    topic,
+    createFlow,
+    metadata
   );
-  const flow = createFlow ? currentOrCreateFlow('Application') : undefined;
-  return [
-    encodeChannelHeader(
-      ZLinkChannelMessageKind.Publish,
-      channelName,
-      messageName,
-      encoded.contentType,
-      null,
-      null,
-      topic,
-      null,
-      null,
-      undefined,
-      applicationMetadataRecord(metadata),
-      flow?.flowId,
-      flow?.flowOrigin
-    ),
-    encoded.message
-  ];
 }
 
 export function encodeChannelReplyParts(
@@ -237,31 +213,21 @@ export function encodeChannelReplyParts(
   payload: unknown,
   codecs?: ZLinkChannelEnvelopeCodecRegistry
 ): readonly MessageLike[] {
-  const encoded = encodePayload(
+  return encodePayload(
     payload ?? Buffer.alloc(0),
     codecsForFrameworkPacket(request.messageName, codecs),
     request.messageName,
-    'reply'
+    'reply',
+    ZLinkChannelMessageKind.Response,
+    request.channelName,
+    request.correlationId ?? undefined,
+    undefined,
+    undefined,
+    false,
+    EMPTY_OUTBOUND_METADATA,
+    request,
+    codecs
   );
-  return [
-    encodeChannelHeader(
-      ZLinkChannelMessageKind.Response,
-      request.channelName,
-      request.messageName,
-      encoded.contentType,
-      request.correlationId,
-      null,
-      null,
-      undefined,
-      undefined,
-      undefined,
-      EMPTY_APPLICATION_METADATA,
-      request.flowId,
-      request.flowOrigin,
-      codecs
-    ),
-    encoded.message
-  ];
 }
 
 /**
@@ -491,35 +457,64 @@ function encodePayload(
   value: unknown,
   codecs: ZLinkChannelEnvelopeCodecRegistry | undefined,
   packetName: string,
-  contractPart: 'payload' | 'reply'
-): {
-  readonly contentType: string;
-  readonly message: MessageLike;
-} {
+  contractPart: 'payload' | 'reply',
+  kind: ZLinkChannelMessageKind,
+  channelName: string,
+  correlationId: string | undefined,
+  deadlineUnixMs: number | undefined,
+  topic: string | undefined,
+  createFlow: boolean,
+  metadata: ReadonlyMap<string, string>,
+  request?: ZLinkChannelEnvelopeHeader,
+  headerCodecs?: ZLinkChannelEnvelopeCodecRegistry
+): readonly MessageLike[] {
+  let declaredType;
+  let contentType: string;
+  let message: MessageLike;
   if (isZLinkMessage(value) && value.isEncoded()) {
     const payload = value.toEncodedPayload();
-    return {
-      contentType: BINARY_CONTENT_TYPE,
-      message: borrowEncodedPayload(payload) ?? payload.data()
-    };
+    contentType = BINARY_CONTENT_TYPE;
+    message = borrowEncodedPayload(payload) ?? payload.data();
+  } else {
+    if (isZLinkMessage(value)) {
+      declaredType = readZLinkMessageDeclaredType(value);
+      value = value.decode();
+    }
+    const selected = selectSerializerWithContentType(value, codecs, declaredType);
+    if (
+      selected !== undefined &&
+      !(Buffer.isBuffer(value) || value instanceof Uint8Array || isMessage(value))
+    ) {
+      const payload = selected.serializer.serialize(value);
+      contentType = selected.contentType;
+      message = borrowEncodedPayload(payload) ?? payload.data();
+    } else {
+      contentType = contentTypeOf(value);
+      message = toMessageLike(value, readZLinkPacketJsonContract(packetName)?.[contractPart]);
+    }
   }
-  const declaredType = isZLinkMessage(value) ? readZLinkMessageDeclaredType(value) : undefined;
-  if (isZLinkMessage(value)) value = value.decode();
-  const selected = selectSerializerWithContentType(value, codecs, declaredType);
-  if (
-    selected !== undefined &&
-    !(Buffer.isBuffer(value) || value instanceof Uint8Array || isMessage(value))
-  ) {
-    const payload = selected.serializer.serialize(value);
-    return {
-      contentType: selected.contentType,
-      message: borrowEncodedPayload(payload) ?? payload.data()
-    };
-  }
-  return {
-    contentType: contentTypeOf(value),
-    message: toMessageLike(value, readZLinkPacketJsonContract(packetName)?.[contractPart])
-  };
+  const flow = request ?? (createFlow ? currentOrCreateFlow('Application') : undefined);
+  return [
+    encodeChannelHeader(
+      kind,
+      channelName,
+      packetName,
+      contentType,
+      request === undefined
+        ? correlationIdForOutboundKind(kind, correlationId)
+        : request.correlationId,
+      deadlineUnixMs === undefined ? null : new Date(deadlineUnixMs).toISOString(),
+      topic ?? null,
+      contractPart === 'reply' ? undefined : null,
+      contractPart === 'reply' ? undefined : null,
+      undefined,
+      applicationMetadataRecord(metadata),
+      flow?.flowId,
+      flow?.flowOrigin,
+      headerCodecs
+    ),
+    message
+  ];
 }
 
 function toMessageLike(value: unknown, schema?: ZLinkJsonSchema): MessageLike {
