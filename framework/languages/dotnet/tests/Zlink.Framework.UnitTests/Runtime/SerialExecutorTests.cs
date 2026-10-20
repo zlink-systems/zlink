@@ -6,6 +6,152 @@ namespace Zlink.Framework.UnitTests;
 public sealed class SerialExecutorTests
 {
     [Fact]
+    public async Task SerialExecutionQueue_BusyActorDoesNotStartDurablePreparation()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var owner = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: true
+        );
+        await using var mailbox = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedOwner: owner
+        );
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var external = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var prepared = false;
+        var first = mailbox
+            .RunAsync(
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await ZLinkSerialTurn.Current!.YieldFrameworkCallAsync(
+                        _ => new ValueTask(external.Task),
+                        CancellationToken.None
+                    );
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(
+                ZLinkSerialPostAdmission.Accepted,
+                mailbox.TryPostDurableApplication(
+                    static _ => ValueTask.CompletedTask,
+                    _ =>
+                    {
+                        prepared = true;
+                        return ValueTask.CompletedTask;
+                    },
+                    static () => { },
+                    out var durable
+                )
+            );
+            // Publication is ahead of this owner turn, so its scheduling
+            // probe has run while the Actor still retains its FIFO claim.
+            await owner
+                .RunAsync(static _ => ValueTask.CompletedTask, CancellationToken.None)
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(prepared);
+            external.TrySetResult();
+            await Task.WhenAll(first, durable.Completion).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(prepared);
+        }
+        finally
+        {
+            external.TrySetResult();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    public async Task SerialExecutionQueue_ReadinessPublishedDuringSelectionPreservesHeadPosition(
+        int publishOnRead
+    )
+    {
+        await using var queue = CreateQueue(CancellationToken.None);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var published = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var order = new ConcurrentQueue<string>();
+        var reads = 0;
+        var ready = false;
+        Assert.True(
+            queue.TryPost(
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await release.Task.ConfigureAwait(false);
+                },
+                out var blocker
+            )
+        );
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var head = await queue.PostAsync(
+                _ =>
+                {
+                    order.Enqueue("head");
+                    return ValueTask.CompletedTask;
+                },
+                0,
+                0,
+                false,
+                CancellationToken.None,
+                ready: () =>
+                {
+                    var snapshot = ready;
+                    // Publish after this read has rejected the head, before
+                    // the consumer can inspect the next application candidate.
+                    if (++reads == publishOnRead)
+                    {
+                        ready = true;
+                        published.TrySetResult();
+                    }
+                    return snapshot;
+                }
+            );
+            Assert.True(
+                queue.TryPost(
+                    _ =>
+                    {
+                        order.Enqueue("following");
+                        return ValueTask.CompletedTask;
+                    },
+                    out var following
+                )
+            );
+            release.TrySetResult();
+            await published.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            queue.NotifyReadiness();
+            await Task.WhenAll(blocker.Completion, head.Completion, following.Completion)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(new[] { "head", "following" }, order.ToArray());
+        }
+        finally
+        {
+            release.TrySetResult();
+            ready = true;
+            queue.NotifyReadiness();
+        }
+    }
+
+    [Fact]
     public async Task RelocationTimerReservationsShareAcceptedSequenceDomain()
     {
         await using var queue = CreateQueue(CancellationToken.None);
