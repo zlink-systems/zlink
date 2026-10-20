@@ -319,16 +319,21 @@ export class ZLinkSpotSerialTurnExecutor {
 
   private runQueuedRecord(record: ZLinkSerialWorkRecord<unknown>): Promise<void> {
     if (record.context instanceof Promise) {
-      return record.context.then((claim: ZLinkExecutionBarrierClaim) => {
-        Object.assign(record, { context: claim });
-        return this.runQueuedRecord(record);
+      const executor = this;
+      const work = record;
+      const pending = record.context;
+      return pending.then((claim: ZLinkExecutionBarrierClaim) => {
+        Object.assign(work, { context: claim });
+        return executor.runQueuedRecord(work);
       });
     }
     const context = record.context as ZLinkSpotApplicationTurnContext | undefined;
     if (context?.replay !== undefined && record.operation === context.replay) {
       context.release();
-      return Promise.resolve(this.executionBarrier?.enter()).then((claim) =>
-        this.runTurn(record.operation, record.resolve, record.reject, claim, record.release)
+      const executor = this;
+      const work = record;
+      return Promise.resolve(executor.executionBarrier?.enter()).then((claim) =>
+        executor.runTurn(work.operation, work.resolve, work.reject, claim, work.release)
       );
     }
     return this.runTurn(

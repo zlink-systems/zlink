@@ -296,18 +296,25 @@ export class ZLinkSerialExecutionQueue {
       if (this.activeRecord !== undefined) return;
       // Ready membership in the existing owner queue is the only notification state.
       if (this.ownerMembership !== undefined) return;
-      this.enqueueMailboxTurn(() => this.consumeMailbox());
+      {
+        const mailbox = this;
+        mailbox.enqueueMailboxTurn(() => mailbox.consumeMailbox());
+      }
       return;
     }
     const consumer = this.consumer!;
     if (consumer.scheduled || consumer.running) return;
-    consumer.scheduled = true;
-    startOutsideStateLane(() =>
-      queueMicrotask(() => {
-        consumer.scheduled = false;
-        void this.drain();
-      })
-    );
+    {
+      const queue = this;
+      const scheduledConsumer = consumer;
+      scheduledConsumer.scheduled = true;
+      startOutsideStateLane(() =>
+        queueMicrotask(() => {
+          scheduledConsumer.scheduled = false;
+          void queue.drain();
+        })
+      );
+    }
   }
 
   /** Notifications carry no payload, admission sequence, result Promise, or host permit. */
