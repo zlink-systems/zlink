@@ -16,6 +16,7 @@ import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshApplicationReceiver;
 import systems.zlink.framework.runtime.internal.backend.ZLinkMeshDispatchRecord;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
 
 import java.net.URLClassLoader;
 import java.nio.charset.StandardCharsets;
@@ -33,6 +34,7 @@ import java.util.concurrent.TimeUnit;
 /** Counts actual ingress allocations, independently of object layout and TLAB sampling. */
 public final class ZLinkJavaIngressAllocationTest {
     private static final int REQUESTS = 1000;
+    private static final int PAYLOAD_BYTES = 1024;
     private static final int WARMUP = 200;
     private static final Duration REQUEST_TIMEOUT = Duration.ofSeconds(5);
 
@@ -85,21 +87,25 @@ public final class ZLinkJavaIngressAllocationTest {
             long byteIterators = 0;
             long managementIterators = 0;
             long managementCallbacks = 0;
+            long managementDurations = 0;
             try (var events = new RecordingFile(recordingPath)) {
                 while (events.hasMoreEvents()) {
                     var event = events.readEvent();
+                    assertTrue(
+                            !event.getEventType().getName().equals("jdk.DataLoss"),
+                            "allocation recording must not lose events");
                     if (!event.getEventType().getName().equals("jdk.ObjectAllocationOutsideTLAB"))
                         continue;
                     String allocated = event.getClass("objectClass").getName();
                     if (!(allocated.startsWith("systems.zlink.framework.runtime.binding.")
                             || allocated.equals("systems.zlink.contracts.messaging.Received")
+                            || allocated.equals("java.time.Duration")
                             || allocated.endsWith("$Itr")
                             || allocated.endsWith("$ListItr"))) continue;
                     var stack = event.getStackTrace();
                     if (stack == null) continue;
                     boolean receive = false;
                     boolean bytes = false;
-
                     String firstFrameworkMethod = null;
                     for (var frame : stack.getFrames()) {
                         var method = frame.getMethod();
@@ -129,17 +135,20 @@ public final class ZLinkJavaIngressAllocationTest {
                             && allocated.endsWith("$ListItr")) managementIterators++;
                     if ("tickLiveness".equals(firstFrameworkMethod)
                             && allocated.contains("$$Lambda")) managementCallbacks++;
+                    if ("managementWaitTimeout".equals(firstFrameworkMethod)
+                            && allocated.equals("java.time.Duration")) managementDurations++;
                 }
             }
             System.out.printf(
-                    "records=%d attempts=%d portObjects=%d resumeCallbacks=%d byteIterators=%d managementIterators=%d managementCallbacks=%d%n",
+                    "records=%d attempts=%d portObjects=%d resumeCallbacks=%d byteIterators=%d managementIterators=%d managementCallbacks=%d managementDurations=%d%n",
                     records,
                     attempts,
                     portObjects,
                     resumeCallbacks,
                     byteIterators,
                     managementIterators,
-                    managementCallbacks);
+                    managementCallbacks,
+                    managementDurations);
             assertTrue(
                     records >= REQUESTS,
                     "include all requests and any ordinary management records");
@@ -152,12 +161,14 @@ public final class ZLinkJavaIngressAllocationTest {
             assertEquals(0, byteIterators, "byte accounting indexes the existing message list");
             assertEquals(0, managementIterators, "management lists need no cursor object");
             assertEquals(0, managementCallbacks, "timeout iteration needs no capturing callback");
+            assertEquals(0, managementDurations, "the bounded wait reuses its existing Duration");
         } finally {
             Files.deleteIfExists(recordingPath);
         }
     }
 
     private static void exercise(Path recordingPath) throws Exception {
+        long now = System.nanoTime();
         try (var queue =
                         new ZLinkApplicationJobQueue(
                                 ZLinkApplicationJobQueueProfile.BALANCED,
@@ -167,8 +178,22 @@ public final class ZLinkJavaIngressAllocationTest {
                                 100,
                                 0);
                 var context = Zlink.createContext();
-                var source = new ZLinkJavaRawMeshNode(context, "ingress-cost");
-                var target = new ZLinkJavaRawMeshNode(context, "ingress-cost")) {
+                var source =
+                        new ZLinkJavaRawMeshNode(
+                                context,
+                                "ingress-cost",
+                                System::currentTimeMillis,
+                                () -> now,
+                                ZLinkServiceLivenessRegistry.DEFAULT_PROBE_INTERVAL,
+                                ZLinkServiceLivenessRegistry.DEFAULT_PEER_TIMEOUT);
+                var target =
+                        new ZLinkJavaRawMeshNode(
+                                context,
+                                "ingress-cost",
+                                System::currentTimeMillis,
+                                () -> now,
+                                ZLinkServiceLivenessRegistry.DEFAULT_PROBE_INTERVAL,
+                                ZLinkServiceLivenessRegistry.DEFAULT_PEER_TIMEOUT)) {
             var sourceId = RoutingId.from("ingress-cost-source");
             var targetId = RoutingId.from("ingress-cost-target");
             String endpoint = "inproc://ingress-cost-target-" + UUID.randomUUID();
@@ -178,7 +203,7 @@ public final class ZLinkJavaIngressAllocationTest {
                         @Override
                         public void accept(ZLinkMeshDispatchRecord record) {
                             try (record;
-                                    var reply = Message.from(new byte[1024])) {
+                                    var reply = Message.from(new byte[PAYLOAD_BYTES])) {
                                 record.reply(List.of(reply));
                             }
                         }
@@ -209,6 +234,7 @@ public final class ZLinkJavaIngressAllocationTest {
             requests(source, targetId, WARMUP);
             try (var recording = new Recording()) {
                 recording.enable("jdk.ObjectAllocationOutsideTLAB").withStackTrace();
+                recording.enable("jdk.DataLoss");
                 recording.start();
                 requests(source, targetId, REQUESTS);
                 recording.stop();
@@ -221,7 +247,7 @@ public final class ZLinkJavaIngressAllocationTest {
             throws Exception {
         for (int i = 0; i < count; i++) {
             try (var packet = Message.from("allocation.packet");
-                    var body = Message.from(new byte[1024])) {
+                    var body = Message.from(new byte[PAYLOAD_BYTES])) {
                 try (var reply =
                         source.requestNode(
                                         target,
@@ -234,7 +260,7 @@ public final class ZLinkJavaIngressAllocationTest {
                                 .toCompletableFuture()
                                 .get(5, TimeUnit.SECONDS)) {
                     assertNotNull(reply);
-                    assertEquals(1024, reply.parts().getFirst().size());
+                    assertEquals(PAYLOAD_BYTES, reply.parts().getFirst().size());
                 }
             }
         }

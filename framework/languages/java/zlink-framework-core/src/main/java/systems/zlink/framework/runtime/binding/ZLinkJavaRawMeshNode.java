@@ -7649,9 +7649,10 @@ final class ZLinkJavaRawMeshNode
 
     private Duration managementWaitTimeout(long nowNanos) {
         long remaining = liveness.nextDeadlineNanos(nowNanos) - nowNanos;
-        return remaining <= 0
-                ? Duration.ZERO
-                : Duration.ofNanos(Math.min(remaining, ingressWaitTimeout.toNanos()));
+        if (remaining <= 0) return Duration.ZERO;
+        return remaining >= ingressWaitTimeout.toNanos()
+                ? ingressWaitTimeout
+                : Duration.ofNanos(remaining);
     }
 
     private void tickLiveness(long nowNanos) {
