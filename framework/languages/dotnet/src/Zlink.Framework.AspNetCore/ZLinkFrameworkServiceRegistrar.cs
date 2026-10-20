@@ -193,7 +193,6 @@ internal static class ZLinkFrameworkServiceRegistrar
                 provider.GetRequiredService<ZLinkRouteMeshRuntimeService>(),
                 provider.GetService<ZLinkLocationRuntime>(),
                 provider.GetRequiredService<ZLinkAutoConnectLifecycleCoordinator>(),
-                provider.GetService<ZLinkLocationLifecycle>(),
                 provider.GetRequiredService<ZLinkFrameworkMaintenanceRuntime>()
             )
         );
