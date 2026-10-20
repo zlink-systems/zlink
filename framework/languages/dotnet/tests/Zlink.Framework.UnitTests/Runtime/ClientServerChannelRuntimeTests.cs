@@ -2162,11 +2162,24 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     [Fact]
     public async Task AutomaticClient_IncludesSameProcessServerWithoutLocalPreferenceOrBypass()
     {
+        using var flowListener = new TestHostMessageFlowListener(
+            Path.Combine(
+                Environment.GetEnvironmentVariable("ZLINK_TEST_FLOW_DIRECTORY")
+                    ?? Zlink.Framework.Tests.Common.FrameworkTestEnvironment.CreateTestLogDirectory(
+                        "same-process-server"
+                    ),
+                "same-process-server.flow"
+            )
+        );
         var locationProvider = new ZLinkInMemoryProviderLocationStore();
-        var store = new ZLinkProviderLocationRepository(locationProvider);
         await using var local = CreateAutomaticClientAndServer(locationProvider, "local");
         await using var remote = CreateAutomaticServer(locationProvider, "remote");
         var providers = new[] { local, remote };
+
+        foreach (var provider in providers)
+            provider
+                .GetRequiredService<ZLinkFrameworkRegistration>()
+                .DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
 
         foreach (var provider in providers)
             await provider
@@ -2220,11 +2233,14 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             );
             await WaitUntilAsync(
                 transport,
-                () => transport.ReadyCount == 1,
+                // Connection readiness is published before the client lane
+                // finishes rebuilding its selection plan. Observe both changes.
+                () =>
+                    transport.ReadyCount == 1
+                    && transport.ReadySelectionPlanBuildCount > buildsBeforeCalls,
                 TimeSpan.FromSeconds(5)
             );
             var buildsAfterCandidateChange = transport.ReadySelectionPlanBuildCount;
-            Assert.True(buildsAfterCandidateChange > buildsBeforeCalls);
             var afterDrain = await route
                 .RequestToChannel("work", new EchoRequest("after-drain"))
                 .Timeout(TimeSpan.FromSeconds(5))
