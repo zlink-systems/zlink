@@ -21,6 +21,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvi
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
@@ -509,8 +510,57 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
      */
     public CompletionStage<byte[]> handleSessionRelocationSeal(
             RoutingId transportSource, byte[] command42) {
+        var traceEnabled = flow.begin(ZLinkMessageFlowOutcome.DROPPED) != null;
         var codec = new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec();
-        var command = codec.decodeSessionRelocationSeal(command42);
+        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                        .SessionRelocationSeal
+                command;
+        try {
+            command = codec.decodeSessionRelocationSeal(command42);
+        } catch (RuntimeException failure) {
+            flow.reportFailure(
+                    ZLinkDispatchErrorSurface.STREAM_SESSION,
+                    ZLinkDispatchMessageKind.CONTROL,
+                    ZLinkDispatchErrorReason.INVALID_FRAME,
+                    ZLinkDispatchErrorAction.DROP,
+                    null,
+                    failure);
+            throw failure;
+        }
+        var received = receiveSessionRelocationSeal(transportSource, command, codec);
+        if (!traceEnabled) return received;
+        return received.whenComplete(
+                (reply, failure) -> {
+                    if (failure != null || reply == null) {
+                        traceSessionRelocationSealDrop(
+                                transportSource, command.actor().actor().actorId(), failure);
+                    }
+                });
+    }
+
+    private void traceSessionRelocationSealDrop(
+            RoutingId transportSource, String actorId, Throwable failure) {
+        Throwable cause =
+                failure instanceof java.util.concurrent.CompletionException
+                        ? failure.getCause()
+                        : failure;
+        flow.traceBindingControlDrop(
+                transportSource,
+                actorId,
+                "sessionRelocationSeal",
+                cause instanceof ZLinkFrameworkException error
+                                && error.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE
+                        ? ZLinkDispatchErrorReason.LOCATION_UNAVAILABLE
+                        : ZLinkDispatchErrorReason.STALE_TARGET,
+                cause);
+    }
+
+    private CompletionStage<byte[]> receiveSessionRelocationSeal(
+            RoutingId transportSource,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .SessionRelocationSeal
+                    command,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec codec) {
         RoutingId expectedSource =
                 command.senderRole()
                                 == systems.zlink.framework.runtime.internal.service
@@ -799,6 +849,28 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             return;
         }
         SessionState state = findSessionForReplacement(retired);
+        if (state != null) {
+            var owner =
+                    state.ownerNode == null
+                            ? null
+                            : state.ownerNode.localSessionOwner().orElse(null);
+            if (owner == null
+                    || !owner.identifies(
+                            retired.sessionOwnerNodeRid(),
+                            retired.sessionOwnerNodeGeneration(),
+                            retired.sessionOwnerId(),
+                            retired.sessionOwnerLeaseGeneration())) {
+                flow.traceBindingControlDrop(
+                        transportSource,
+                        actor.actorId(),
+                        "boundSessionReplaced",
+                        owner == null
+                                ? ZLinkDispatchErrorReason.LOCATION_UNAVAILABLE
+                                : ZLinkDispatchErrorReason.STALE_TARGET,
+                        null);
+                return;
+            }
+        }
         if (state == null
                 || state.actorRuntime() == null
                 || state.actorRuntime()
@@ -877,11 +949,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         return inStateLane(
                 () ->
                         sessions.values().stream()
-                                .filter(
-                                        state ->
-                                                state.matchesOwner(retired)
-                                                        && state.routingId()
-                                                                .equals(retired.sessionRid()))
+                                .filter(state -> state.routingId().equals(retired.sessionRid()))
                                 .findFirst()
                                 .orElse(null));
     }

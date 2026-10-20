@@ -12,19 +12,19 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.actors.ZLinkActor;
 import systems.zlink.framework.actors.ZLinkActorContext;
 import systems.zlink.framework.actors.ZLinkActorFactory;
-import systems.zlink.framework.actors.ZLinkBoundSession;
-import systems.zlink.framework.actors.ZLinkBoundSessionSendCall;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.actors.ZLinkActorSpotRoutePackets;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
+import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.spots.ZLinkEntrySpot;
 import systems.zlink.framework.spots.ZLinkEntrySpotContext;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -32,6 +32,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkActorDisconnectIngressTest {
     private static final String ACTOR_ID = "player-1";
@@ -267,28 +268,35 @@ final class ZLinkActorDisconnectIngressTest {
                             activationMethod.invoke(spots, entry.context().spotId());
             RoutingId sessionOwner = RoutingId.from("session-owner-node");
             RoutingId currentSession = RoutingId.from("current-session");
-            Method bindSession =
-                    ZLinkActorRuntime.class.getDeclaredMethod(
-                            "bindSession",
-                            ZLinkActor.class,
-                            ZLinkBoundSession.class,
-                            RoutingId.class,
-                            RoutingId.class,
-                            long.class,
-                            long.class);
-            bindSession.setAccessible(true);
-            ((CompletionStage<?>)
-                            bindSession.invoke(
-                                    actors,
-                                    actor,
-                                    new IdleBoundSession(),
-                                    sessionOwner,
-                                    currentSession,
-                                    7L,
-                                    -1L))
+            var ref = actors.currentRef(actor);
+            var binding =
+                    new AtomicReference<>(
+                            new ZLinkInternalSpotNode.BoundSessionRoute(
+                                    sessionOwner, -1L, "session-owner", 1L, currentSession, 7L));
+            var node =
+                    (ZLinkInternalSpotNode)
+                            Proxy.newProxyInstance(
+                                    getClass().getClassLoader(),
+                                    new Class<?>[] {ZLinkInternalSpotNode.class},
+                                    (proxy, method, arguments) ->
+                                            switch (method.getName()) {
+                                                case "boundSessionRoute" ->
+                                                        Optional.ofNullable(binding.get());
+                                                case "routingId" -> ref.nodeRid();
+                                                case "hashCode" -> System.identityHashCode(proxy);
+                                                case "equals" -> proxy == arguments[0];
+                                                case "toString" -> "disconnect-binding-node";
+                                                case "closeActorBoundSessionAsync" -> {
+                                                    binding.set(null);
+                                                    yield CompletableFuture.completedFuture(null);
+                                                }
+                                                default ->
+                                                        throw new UnsupportedOperationException(
+                                                                method.getName());
+                                            });
+            actors.bindNativeSession(actor, node, ref, sessionOwner, currentSession)
                     .toCompletableFuture()
                     .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
-            var ref = actors.currentRef(actor);
 
             dispatchDisconnect(activation, ref, identity(RoutingId.from("other-owner"), -1L, 7L));
             dispatchDisconnect(activation, ref, identity(sessionOwner, 2L, 7L));
@@ -297,29 +305,14 @@ final class ZLinkActorDisconnectIngressTest {
             dispatchDisconnect(activation, ref, identity(sessionOwner, -1L, 7L));
             assertEquals(1, entry.callbacks.get());
             long oldToken =
-                    ((Number)
-                                    ((CompletionStage<?>)
-                                                    bindSession.invoke(
-                                                            actors,
-                                                            actor,
-                                                            new IdleBoundSession(),
-                                                            sessionOwner,
-                                                            currentSession,
-                                                            7L,
-                                                            -1L))
-                                            .toCompletableFuture()
-                                            .join())
-                            .longValue();
+                    actors.bindNativeSession(actor, node, ref, sessionOwner, currentSession)
+                            .toCompletableFuture()
+                            .join();
             actors.clearSessionBinding(actor, oldToken).toCompletableFuture().join();
-            ((CompletionStage<?>)
-                            bindSession.invoke(
-                                    actors,
-                                    actor,
-                                    new IdleBoundSession(),
-                                    sessionOwner,
-                                    currentSession,
-                                    9L,
-                                    2L))
+            binding.set(
+                    new ZLinkInternalSpotNode.BoundSessionRoute(
+                            sessionOwner, 2L, "session-owner", 1L, currentSession, 9L));
+            actors.bindNativeSession(actor, node, ref, sessionOwner, currentSession)
                     .toCompletableFuture()
                     .join();
             Method localNotify =
@@ -389,18 +382,6 @@ final class ZLinkActorDisconnectIngressTest {
                 .putLong(lifecycle)
                 .putLong(binding)
                 .array();
-    }
-
-    private static final class IdleBoundSession implements ZLinkBoundSession {
-        @Override
-        public ZLinkBoundSessionSendCall send(Object message) {
-            throw new UnsupportedOperationException("not used");
-        }
-
-        @Override
-        public CompletionStage<Void> disconnect() {
-            return CompletableFuture.completedFuture(null);
-        }
     }
 
     public static final class Entry implements ZLinkEntrySpot<ZLinkActor> {
