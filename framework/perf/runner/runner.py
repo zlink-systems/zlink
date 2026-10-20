@@ -189,24 +189,53 @@ class OwnedProcesses:
             if process.poll() is not None:
                 raise RuntimeError(f"Owned process {name} PID {process.pid} exited {process.returncode}; logs/{name}.log")
 
-    def cleanup(self) -> None:
+    def cleanup(self) -> list[dict]:
         # Popen handles are the only process authority. Never search by process name or prefix.
+        termination_requested = set()
+        killed = set()
         for _, process in reversed(self.processes):
             if process.poll() is None:
+                termination_requested.add(process)
                 process.terminate()
         for _, process in reversed(self.processes):
             try:
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 process.kill()
+                killed.add(process)
                 process.wait(timeout=5)
-        write_json(self.cell / "cleanup.json", {"ownedProcesses": [{"name": name, "pid": process.pid,
-                    "exitCode": process.returncode, "terminated": process.poll() is not None} for name, process in self.processes],
+
+        expected_terminate_exits = (0, -signal.SIGTERM, 128 + signal.SIGTERM) if os.name == "posix" else (0, 1)
+        process_results = []
+        issues = []
+        for name, process in self.processes:
+            exit_code = process.returncode
+            was_terminated = process in termination_requested
+            was_killed = process in killed
+            process_results.append({"name": name, "pid": process.pid, "exitCode": exit_code,
+                                    "terminated": process.poll() is not None,
+                                    "terminationRequested": was_terminated, "killed": was_killed})
+            abnormal = (was_killed or
+                        (was_terminated and exit_code not in expected_terminate_exits) or
+                        (not was_terminated and exit_code != 0))
+            if abnormal:
+                if was_killed:
+                    detail = "required kill after terminate timed out"
+                elif was_terminated:
+                    detail = f"exited with unexpected code {exit_code} after terminate"
+                else:
+                    detail = f"exited before cleanup with code {exit_code}"
+                issues.append({"code": "OwnedProcessFailure",
+                               "message": f"Owned process {name} PID {process.pid} {detail}.",
+                               "sourceFile": "cleanup.json"})
+
+        write_json(self.cell / "cleanup.json", {"ownedProcesses": process_results,
                     "redisContainerId": self.redis_container_id,
                     "redisReason": "Run-owned Docker Redis; removed by this container ID when the run ends (store.json)."
                     if self.redis_container_id else "This scenario needs no Store."})
         for log in self.logs:
             log.close()
+        return issues
 
 
 class ClientControl:
@@ -687,7 +716,7 @@ def cell_run(args: argparse.Namespace, cell_spec: Cell, env: dict, store: RunSto
                 client.close()
             except (BrokenPipeError, OSError, subprocess.TimeoutExpired) as cleanup_error:
                 issues.append({"code": "CollectionFailure", "message": "Client shutdown: " + str(cleanup_error), "sourceFile": "cleanup.json"})
-        owned.cleanup()
+        issues.extend(owned.cleanup())
     result = aggregate(cell, config, client_files, server_files, issues, owners, scenario.aggregation)
     print(f"cell={cell_id} status={result['status']} result={cell / 'result.json'}", flush=True)
     if interrupted:
