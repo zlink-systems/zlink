@@ -33,7 +33,7 @@ class session_server_host_factory_t
         app.logging ().use_file (
           flow_log_path (topology.log_dir, "session-" + topology.session_node));
         auto &options = app.add_zlink_framework ();
-        options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
+        options.configure_dispatch ().message_flow (topology.diagnostics_level);
         options.codecs ().use (zlink::framework_codecs::protobuf ());
         options.services ().add_scoped<authenticate_session_handler_t, channel_client_t> ();
         options.add_location_store<redis::redis_location_store_t> ()
