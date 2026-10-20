@@ -129,9 +129,10 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
 - The release comparison of §7 runs during release preparation (the per-change obligation is
   `hotpath_gate` alone — [`10-hot-path.en.md` §5](core/doc/spec/core/systems/10-hot-path.en.md)).
 - Run the full binding/framework scope with `scripts/gate/{bindings-gate,framework-gate,cross-language-e2e}.sh <tag>`
-  and read `zlink-work/gates/<tag>/results.txt`. One gate at a time, started below load average 10
-  (timing asserts are load-sensitive). A test broken by load is judged by a solo rerun; tolerances
-  are never widened.
+  and read `zlink-work/gates/<tag>/results.txt`. Run one gate at a time, regardless of machine load.
+  The system must work under load, so a test that breaks under load is a defect in the test or the
+  product and its cause is fixed. A passing solo rerun is not a verdict, and timeouts, tolerances
+  and assertions are never relaxed.
 - The framework's default builds, solutions and CI include only the `cross-language` e2e. The seven
   samples (`samples/*`) run only through the per-sample `run_sample.sh` and Node
   `npm run test:samples`, and are never added to the CI solution filter (`Zlink.Framework.ci.slnf`),

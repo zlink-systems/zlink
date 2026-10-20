@@ -8,6 +8,7 @@
 #include <zlink/framework/contracts/locations/runtime_query.hpp>
 #include <zlink/framework/contracts/locations/stores.hpp>
 #include <zlink/framework/contracts/monitoring/route_mesh_runtime.hpp>
+#include <zlink/framework/contracts/configuration/lifecycle.hpp>
 
 #include <atomic>
 #include <functional>
@@ -36,7 +37,8 @@ class route_mesh_runtime_service_t final : public route_mesh_runtime_t
       std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> nodes,
       location_runtime_query_t *location_runtime,
       location_repository_t *location_store = nullptr,
-      std::shared_ptr<zlink::framework::detail::monitoring_runtime_state_t> monitoring = {});
+      std::shared_ptr<zlink::framework::detail::monitoring_runtime_state_t> monitoring = {},
+      std::function<framework_runtime_state_t ()> host_state = {});
     ~route_mesh_runtime_service_t ();
 
     mesh_node_snapshot_t snapshot (std::string mesh_name) const override;

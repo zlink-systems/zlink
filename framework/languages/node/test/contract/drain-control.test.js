@@ -687,26 +687,61 @@ test('Retire descriptor publication does not report a reversible block when roll
 
 test('Retire rollback reconciles a committed descriptor when only the Store response was lost', async () => {
   const manager = Object.create(framework.ZLinkSpotNodeRuntimeManager.prototype);
+  manager.options = {
+    registration: framework.createFrameworkRegistration({
+      applicationVersion: 2n,
+      spotNodes: {
+        game: {
+          router: { bind: 'inproc://retire-rollback-local-placement' },
+          objectRole: framework.ZLinkObjectRole.Server
+        }
+      }
+    })
+  };
+  manager.runtimePlacementWeights = new Map([['game', 0]]);
+  manager.runtimeChannelWeights = new Map();
   const committed = {
     rid: 'node-old',
     lifecycleGeneration: 3n,
     descriptorRevision: 8n,
     ownerId: 'owner-old',
-    leaseGeneration: 5n
+    leaseGeneration: 5n,
+    objectRole: framework.ZLinkObjectRole.None,
+    placementWeight: 100,
+    applicationVersion: 1n,
+    populationCapacity: {
+      actors: { active: 1, reserved: 2, limit: 4 },
+      spots: { active: 1, reserved: 1, limit: 3 },
+      spotTypes: []
+    }
   };
   manager.locationAutoConnect = {
     runtime: {
       currentOwnerToken: { ownerId: 'owner-old', leaseGeneration: 5n },
-      async listLiveMeshNodes() { return [committed]; }
+      async listLiveMeshNodes() {
+        return [committed];
+      }
     }
   };
-  manager.meshNodes = new Map([['game', {
-    status() { return { routingId: 'node-old', lifecycleGeneration: 3n }; }
-  }]]);
-  manager.publishedMeshNodeDescriptors = new Map([['game', {
-    ...committed,
-    descriptorRevision: 7n
-  }]]);
+  manager.meshNodes = new Map([
+    [
+      'game',
+      {
+        status() {
+          return { routingId: 'node-old', lifecycleGeneration: 3n };
+        }
+      }
+    ]
+  ]);
+  manager.publishedMeshNodeDescriptors = new Map([
+    [
+      'game',
+      {
+        ...committed,
+        descriptorRevision: 7n
+      }
+    ]
+  ]);
   manager.descriptorRevisionByMesh = new Map([['game', 7n]]);
   let republished;
   manager.publishMeshNodeState = async (state, _signal, meshName) => {
@@ -727,6 +762,11 @@ test('Retire rollback reconciles a committed descriptor when only the Store resp
     meshName: 'game',
     revision: 8n
   });
+  const reconciled = manager.meshNodeDescriptor('game');
+  assert.equal(reconciled.objectRole, framework.ZLinkObjectRole.Server);
+  assert.equal(reconciled.placementWeight, 0);
+  assert.equal(reconciled.applicationVersion, 2n);
+  assert.deepEqual(reconciled.populationCapacity, committed.populationCapacity);
 });
 
 test('Retire readiness requires exact RID and lifecycle generation in the admitted Core peer table', () => {

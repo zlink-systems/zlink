@@ -1916,12 +1916,99 @@ final class ZLinkStreamRuntimeIngressTest {
 
     private static ReplacementFixture startReplacement(FakeStream stream) {
         return startReplacement(
-                stream, new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane());
+                stream,
+                new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(),
+                () -> true);
     }
 
     private static ReplacementFixture startReplacement(
             FakeStream stream,
             systems.zlink.framework.runtime.internal.execution.ZLinkStateLane stateLane) {
+        return startReplacement(stream, stateLane, () -> true);
+    }
+
+    @Test
+    void descriptorUnavailableAndMalformedCommandRecordDropOutcome() throws Exception {
+        var available = new java.util.concurrent.atomic.AtomicBoolean(true);
+        var fixture =
+                startReplacement(
+                        new FakeStream(),
+                        new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(),
+                        available::get);
+        runtimes.add(fixture.runtime());
+        var session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+        var actorRef = new ZLinkBackendActorRef(RoutingId.from("actor-node"), REPLACEMENT_ACTOR, 7);
+        List<String> lines = new CopyOnWriteArrayList<>();
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        Handler handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        lines.add(record.getMessage());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(handler);
+        try {
+            available.set(false);
+            fixture.runtime().handleBoundSessionReplaced(actorRef.nodeRid(), replacement(actorRef));
+            var seal =
+                    sessionSeal(
+                            new ZLinkServiceM6BWireCodec.RelocationIdentity(1, 2),
+                            actorRef,
+                            PEER_A,
+                            1);
+            assertThrows(
+                    CompletionException.class,
+                    () ->
+                            fixture.runtime()
+                                    .handleSessionRelocationSeal(
+                                            actorRef.nodeRid(),
+                                            new ZLinkServiceM6BWireCodec()
+                                                    .encodeSessionRelocationSeal(seal))
+                                    .toCompletableFuture()
+                                    .join());
+            assertThrows(
+                    RuntimeException.class,
+                    () ->
+                            fixture.runtime()
+                                    .handleSessionRelocationSeal(actorRef.nodeRid(), new byte[0])
+                                    .toCompletableFuture()
+                                    .join());
+            var drops =
+                    lines.stream()
+                            .filter(line -> line.contains("reason=location_unavailable"))
+                            .toList();
+            assertEquals(2, drops.size());
+            assertTrue(
+                    drops.stream()
+                            .allMatch(
+                                    line ->
+                                            line.contains("phase=dropped")
+                                                    && line.contains("outcome=dropped")));
+            var decodeErrors =
+                    lines.stream()
+                            .filter(line -> line.contains("event_id=zlink.dispatch_error"))
+                            .toList();
+            assertEquals(1, decodeErrors.size());
+            assertTrue(decodeErrors.get(0).contains("outcome=failed"));
+            assertTrue(decodeErrors.get(0).contains("reason=invalid_frame"));
+            assertTrue(decodeErrors.get(0).contains("action=drop"));
+        } finally {
+            logger.removeHandler(handler);
+        }
+    }
+
+    private static ReplacementFixture startReplacement(
+            FakeStream stream,
+            systems.zlink.framework.runtime.internal.execution.ZLinkStateLane stateLane,
+            java.util.function.BooleanSupplier ownerAvailable) {
         stream.enqueue(PEER_A, frame("initial", "{}"));
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setSessionReplacementCallbackTimeout(Duration.ofMillis(100));
@@ -1975,14 +2062,16 @@ final class ZLinkStreamRuntimeIngressTest {
                                             case "lifecycleGeneration" -> 3L;
                                             case "localAuthorityLeaseGeneration" -> 5L;
                                             case "localSessionOwner" ->
-                                                    java.util.Optional.of(
-                                                            new ZLinkInternalMeshNode
-                                                                    .PeerAuthorityFence(
-                                                                    RoutingId.from(
-                                                                            "session-owner-node"),
-                                                                    3,
-                                                                    "session-owner",
-                                                                    5));
+                                                    ownerAvailable.getAsBoolean()
+                                                            ? java.util.Optional.of(
+                                                                    new ZLinkInternalMeshNode
+                                                                            .PeerAuthorityFence(
+                                                                            RoutingId.from(
+                                                                                    "session-owner-node"),
+                                                                            3,
+                                                                            "session-owner",
+                                                                            5))
+                                                            : java.util.Optional.empty();
                                             case "requestPeerReconcile" -> {
                                                 requestedPeer.set((RoutingId) arguments[0]);
                                                 requestedGeneration.set((Long) arguments[1]);
