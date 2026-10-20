@@ -210,14 +210,14 @@ dequeue되는 시점에 끝나며, decode된 payload는 Framework의 일반 소�
 
 Actor에게 보내는 typed message인 `actorSend`(24)와 `actorRequest`(25)는 application payload에
 [Framework multipart application profile](#framework-multipart-application-profile)을 쓰고, 그 안의 part를
-다음과 같이 구성한다. Header 형식은 [STREAM header](../../../stream-connector/32-stream-connector.ko.md#42-header)
+다음과 같이 구성한다. Header 형식은 [STREAM header](../../stream-connector/32-stream-connector.ko.md#42-header)
 하나다. Session에서 Actor로 relay되는 message도 같은 header를 쓰므로, Actor가 받는 message의 header 형식은
 경로와 관계없이 하나다.
 
 | Message | Part 구성 |
 |---|---|
-| `actorSend`·`actorRequest` | part 0은 STREAM header다. kind는 `Send` 또는 `Request`이고 packet name을 담는다. part 1은 header의 codec으로 만든 payload다. |
-| `actorRequest`에 대한 command 20 reply의 payload | part는 하나이며 [STREAM frame](../../../stream-connector/32-stream-connector.ko.md#41-frame) 전체다. Header kind는 `Response` 또는 `Error`이고 packet name은 비어 있다. `Error`의 payload는 [error payload](../../../stream-connector/32-stream-connector.ko.md#53-error-payload)다. |
+| `actorSend`·`actorRequest` | part 0은 STREAM header이며 packet name을 담는다. kind는 `actorSend`에서 `Send`, `actorRequest`에서 `Request`다. part 1은 header의 codec으로 만든 payload다. |
+| `actorRequest`에 대한 command 20 reply의 payload | part는 하나이며 [STREAM frame](../../stream-connector/32-stream-connector.ko.md#41-frame) 전체다. Header kind는 `Response` 또는 `Error`이고 packet name은 비어 있다. `Error`의 payload와 codec은 [error payload](../../stream-connector/32-stream-connector.ko.md#53-error-payload)를 따른다. |
 
 - 받는 쪽은 part 0을 STREAM header로만 decode한다. Decode에 실패한 message는 invalid frame으로 처리하며,
   header bytes를 packet name이나 다른 header 형식으로 다시 해석하지 않는다.
