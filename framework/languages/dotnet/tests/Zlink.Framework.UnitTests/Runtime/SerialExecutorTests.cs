@@ -6,6 +6,135 @@ namespace Zlink.Framework.UnitTests;
 public sealed class SerialExecutorTests
 {
     [Fact]
+    public async Task CanceledActorAdmissionReturnsCanceledTaskAndAllowsLaterWork()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var executor = new ZLinkSpotSerialExecutor(
+            null!,
+            static () => false,
+            CancellationToken.None,
+            errors
+        );
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var calls = new int[1];
+        static ValueTask Operation(ZLinkSpotActivation _, int[] calls, CancellationToken token)
+        {
+            Interlocked.Increment(ref calls[0]);
+            return ValueTask.CompletedTask;
+        }
+        var canceled = executor.ExecuteActorAsync(
+            "canceled-actor",
+            Operation,
+            calls,
+            cancellation.Token
+        );
+        Assert.True(canceled.IsCanceled);
+        var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            canceled.AsTask()
+        );
+        Assert.Equal(cancellation.Token, error.CancellationToken);
+        Assert.Equal(0, calls[0]);
+        await executor.ExecuteActorAsync(
+            "canceled-actor",
+            Operation,
+            calls,
+            CancellationToken.None
+        );
+        Assert.Equal(1, calls[0]);
+    }
+
+    [Fact]
+    public async Task QueuedActorExecutionAllocatesOnlyAdmissionAndClaimStorage()
+    {
+        const int count = 1000;
+        using var errors = new ZLinkRuntimeErrorSink();
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var selected = 0;
+        await using var executor = new ZLinkSpotSerialExecutor(
+            null!,
+            static () => false,
+            CancellationToken.None,
+            errors,
+            actorConsumerSelected: () =>
+            {
+                if (Interlocked.Exchange(ref selected, 1) == 0)
+                {
+                    entered.Set();
+                    release.Wait();
+                }
+            }
+        );
+        await using var baselineLane = new ZLinkStateLane();
+        object state = new int[1];
+        Func<ZLinkSpotActivation, object, CancellationToken, ValueTask> operation = static (
+            _,
+            state,
+            _
+        ) =>
+        {
+            Interlocked.Increment(ref ((int[])state)[0]);
+            return ValueTask.CompletedTask;
+        };
+        Func<CancellationToken, ValueTask> callback = static _ => ValueTask.CompletedTask;
+        Func<bool> stateCallback = static () => false;
+        var pending = new Task[count + 2];
+        pending[0] = executor
+            .ExecuteActorAsync("actor-cost", operation, state, CancellationToken.None)
+            .AsTask();
+        try
+        {
+            entered.Wait();
+            pending[1] = executor
+                .ExecuteActorAsync("actor-cost", operation, state, CancellationToken.None)
+                .AsTask();
+            void Baseline()
+            {
+                baselineLane
+                    .RunAsync(
+                        static work => ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(work),
+                        stateCallback
+                    )
+                    .GetAwaiter()
+                    .GetResult();
+                _ = executor
+                    .ActorIngressOwner!.PostAsync(callback, CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+                // Child publication adds a mailbox marker that parent admission does not create.
+                GC.KeepAlive(new ZLinkSerialWorkItem(executor.ActorIngressOwner));
+                // Reference slots model the two callback captures and the claim storage.
+                GC.KeepAlive(
+                    Tuple.Create<object, object, object, object>(state, state, state, state)
+                );
+                GC.KeepAlive(Tuple.Create<object, object, object>(state, state, state));
+                GC.KeepAlive(Tuple.Create<object, bool, int>(state, true, 0));
+                GC.KeepAlive(new Func<CancellationToken, ValueTask>(callback.Invoke));
+                GC.KeepAlive(new Func<CancellationToken, ValueTask>(callback.Invoke));
+            }
+            Baseline();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < count; i++)
+                Baseline();
+            var admissionStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+            before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < count; i++)
+                pending[i + 2] = executor
+                    .ExecuteActorAsync("actor-cost", operation, state, CancellationToken.None)
+                    .AsTask();
+            var actual = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Equal(admissionStorage, actual);
+        }
+        finally
+        {
+            release.Set();
+            await Task.WhenAll(pending.Where(static task => task is not null));
+        }
+        Assert.Equal(count + 2, ((int[])state)[0]);
+    }
+
+    [Fact]
     public async Task RelocationSnapshotsShareTheAdmissionOwnedPayloadMaterialization()
     {
         await using var queue = CreateQueue(CancellationToken.None);

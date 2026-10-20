@@ -1785,7 +1785,7 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         return lanes;
     }
 
-    private async ValueTask RunClaimedAsync(
+    private ValueTask RunClaimedAsync(
         ZLinkSerialExecutionQueue lane,
         Func<CancellationToken, ValueTask> operation,
         ZLinkExecutionClaim claim,
@@ -1796,40 +1796,51 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         Func<bool>? ready = null
     )
     {
-        ZLinkSerialWorkItem item;
         try
         {
-            item = await lane.PostAsync(
-                    async ct =>
-                    {
-                        try
+            ZLinkSerialWorkItem item;
+            try
+            {
+                // PostAsync completes admission synchronously and returns the admitted item.
+                item = lane.PostAsync(
+                        async ct =>
                         {
-                            if (!TrySkipClosingApplication(null))
-                                await operation(ct).ConfigureAwait(false);
-                        }
-                        finally
-                        {
-                            await claim.ReleaseAsync().ConfigureAwait(false);
-                        }
-                    },
-                    payloadBytes,
-                    metadataBytes,
-                    transferred,
-                    cancellationToken,
-                    ready
-                )
-                .ConfigureAwait(false);
-        }
-        catch
-        {
-            claim.Release();
-            throw;
-        }
+                            try
+                            {
+                                if (!TrySkipClosingApplication(null))
+                                    await operation(ct).ConfigureAwait(false);
+                            }
+                            finally
+                            {
+                                await claim.ReleaseAsync().ConfigureAwait(false);
+                            }
+                        },
+                        payloadBytes,
+                        metadataBytes,
+                        transferred,
+                        cancellationToken,
+                        ready
+                    )
+                    .GetAwaiter()
+                    .GetResult();
+            }
+            catch
+            {
+                claim.Release();
+                throw;
+            }
 
-        // Caller cancellation stops only the wait. The admitted callback and a
-        // yielded continuation retain the application claim until their actual
-        // terminal completion, so relocation cannot capture overlapping state.
-        await item.Completion.WaitAsync(cancellationToken).ConfigureAwait(false);
+            // Caller cancellation stops only the wait. The admitted callback and a
+            // yielded continuation retain the application claim until their actual
+            // terminal completion, so relocation cannot capture overlapping state.
+            return new ValueTask(item.Completion.WaitAsync(cancellationToken));
+        }
+        catch (Exception error)
+        {
+            var completion = System.Runtime.CompilerServices.AsyncValueTaskMethodBuilder.Create();
+            completion.SetException(error);
+            return completion.Task;
+        }
     }
 
     private bool TrySkipClosingApplication(Action? onSkipped)
