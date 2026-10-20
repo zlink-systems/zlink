@@ -12,6 +12,39 @@ public sealed class MeshNodeHelloSubmissionTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public async Task ManagementBeforeAdmissionDue_DoesNotEnterInboundOperationLane(bool pending)
+    {
+        var time = new ControllableTimeProvider();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: time
+        );
+        var lane = Field<ZLinkStateLane>(node, "_inboundOperationLane");
+        await lane.RunAsync(() =>
+        {
+            if (pending)
+                typeof(ZLinkManagedMeshNode)
+                    .GetField(
+                        "_admissionActivityTicks",
+                        BindingFlags.Instance | BindingFlags.NonPublic
+                    )!
+                    .SetValue(node, time.GetTimestamp());
+            time.AdvanceMonotonic(ZLinkServiceLiveness.ProbeInterval - TimeSpan.FromTicks(1));
+            // Re-entering this lane throws. Every completed rotation therefore
+            // proves that management made zero inbound-operation lane calls.
+            const int rotations = 64;
+            var completed = 0;
+            for (; completed < rotations; completed++)
+                ManagementTurn(node);
+            Assert.Equal(rotations, completed);
+        });
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public async Task CrossedHello_AdmitUsesOriginalHelloDescriptor(bool changeDescriptor)
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
@@ -232,6 +265,154 @@ public sealed class MeshNodeHelloSubmissionTests
         await CompleteSubmissions(node);
     }
 
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task UnansweredHello_RetriesOnlyOnLivenessPeriodsUntilAdmit(
+        bool receiveAdmit,
+        bool admitDuringManagement
+    )
+    {
+        var time = new ControllableTimeProvider();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var peer = context.CreateRouterSocket();
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: time
+        );
+        using var poller = Systems.Zlink.Zlink.CreatePoller();
+        var suffix = Guid.NewGuid().ToString("N");
+        var peerRid = RoutingId.From($"cadence-peer-{suffix}");
+        var endpoint = $"inproc://cadence-peer-{suffix}";
+        peer.SetRoutingId(peerRid);
+        peer.Bind(endpoint);
+        poller.Add(peer, PollEventFlags.PollIn, 1);
+        node.SetRoutingId(RoutingId.From($"cadence-local-{suffix}"));
+        node.Start();
+        var intent = node.ConnectPeer(endpoint, peerRid);
+        var first = ReceiveAdmission(peer, poller);
+        Assert.Equal(ServiceWireConstants.Command.Hello, first.Command);
+        await CompleteSubmissions(node);
+        node.PublishDraining();
+
+        const int periods = 3;
+        var submissions = 1;
+        for (var period = 0; period < periods; period++)
+        {
+            time.AdvanceMonotonic(ZLinkServiceLiveness.ProbeInterval - TimeSpan.FromTicks(1));
+            ManagementTurn(node);
+            await CompleteSubmissions(node);
+            AssertNoHello(peer);
+            Assert.Equal(TimeSpan.FromTicks(time.GetTimestamp() + 1), ReadWaitDeadline(node));
+            time.AdvanceMonotonic(TimeSpan.FromTicks(1));
+            ManagementTurn(node);
+            await CompleteSubmissions(node);
+            var retry = ReceiveAdmission(peer, poller);
+            Assert.Equal(ServiceWireConstants.Command.Hello, retry.Command);
+            Assert.Equal(first.Bytes, retry.Bytes);
+            submissions++;
+            ManagementTurn(node);
+            await CompleteSubmissions(node);
+            AssertNoHello(peer);
+            Assert.True(ReadWaitDeadline(node) > TimeSpan.FromTicks(time.GetTimestamp()));
+        }
+        Assert.Equal(periods + 1, submissions);
+
+        if (receiveAdmit)
+        {
+            var admitBytes = ZLinkServiceWireCodec.EncodeRouteAdmission(
+                ServiceWireConstants.Command.Admit,
+                MeshName,
+                endpoint,
+                17,
+                1,
+                new Dictionary<string, uint> { [MeshName] = 100 }
+            );
+            Assert.True(
+                ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                    admitBytes,
+                    out _,
+                    out var admit,
+                    out _
+                )
+            );
+            var generation = await Field<ZLinkStateLane>(node, "_lane")
+                .RunAsync(() =>
+                    Field<ZLinkMeshSelectedRoutes>(node, "_selectedRoutes").GenerationOf(peerRid)
+                );
+            void Admit() =>
+                Invoke(
+                    node,
+                    "ProcessAdmission",
+                    peerRid,
+                    generation,
+                    ServiceWireConstants.Command.Admit,
+                    admit,
+                    null
+                );
+            if (admitDuringManagement)
+            {
+                var admitted = 0;
+                node.SetPeerAdmissionSealGate(() =>
+                {
+                    // The gate is observed after the management turn collected its intents.
+                    if (Interlocked.Exchange(ref admitted, 1) == 0)
+                        Admit();
+                    return false;
+                });
+                time.AdvanceMonotonic(ZLinkServiceLiveness.ProbeInterval);
+                ManagementTurn(node);
+            }
+            else
+                Admit();
+            await CompleteSubmissions(node);
+            Assert.Equal(
+                ServiceWireConstants.Command.Update,
+                ReceiveAdmission(peer, poller).Command
+            );
+        }
+        else
+            node.RemovePeerConnection(intent);
+        Assert.Equal(-1, Field<long>(node, "_admissionActivityTicks"));
+        for (var period = 0; period < periods; period++)
+        {
+            time.AdvanceMonotonic(ZLinkServiceLiveness.ProbeInterval);
+            ManagementTurn(node);
+            await CompleteSubmissions(node);
+            AssertNoHello(peer);
+            Assert.True(ReadWaitDeadline(node) > TimeSpan.FromTicks(time.GetTimestamp()));
+        }
+        Assert.Equal(0, time.ActiveTimerCount);
+    }
+
+    private static TimeSpan ReadWaitDeadline(ZLinkManagedMeshNode node) =>
+        (TimeSpan)
+            typeof(ZLinkManagedMeshNode)
+                .GetMethod(
+                    "ReadOperationWaitDeadline",
+                    BindingFlags.Instance | BindingFlags.NonPublic
+                )!
+                .Invoke(node, null)!;
+
+    private static void AssertNoHello(IRouterSocket peer)
+    {
+        using var received = Received.Create();
+        while (peer.Recv(received, RecvFlags.DontWait))
+        {
+            if (
+                ZLinkServiceWireCodec.TryDecodeRouteAdmission(
+                    received.FirstPart().AsSpan(),
+                    out var command,
+                    out _,
+                    out _
+                )
+            )
+                Assert.NotEqual(ServiceWireConstants.Command.Hello, command);
+        }
+    }
+
     private static void ManagementTurn(ZLinkManagedMeshNode node) =>
         Invoke(node, "ProcessInfrastructure", Stopwatch.GetTimestamp());
 
@@ -290,12 +471,18 @@ public sealed class MeshNodeHelloSubmissionTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task UnansweredHello_IsSubmittedOnceOnTheSelectedRoute(bool knownRoutingId)
+    public async Task UnansweredHello_ReconnectPreservesObservedEpochCadence(bool knownRoutingId)
     {
+        var time = new ControllableTimeProvider();
         await using var context = Systems.Zlink.Zlink.CreateContext();
         await using var peer = context.CreateRouterSocket();
-        await using var node = new ZLinkManagedMeshNode(context, MeshName);
+        await using var node = new ZLinkManagedMeshNode(
+            context,
+            MeshName,
+            deadlineTimeProvider: time
+        );
         using var poller = Systems.Zlink.Zlink.CreatePoller();
+        using var releaseOwner = new ManualResetEventSlim();
         var suffix = Guid.NewGuid().ToString("N");
         var peerRid = RoutingId.From($"hello-peer-{suffix}");
         peer.SetRoutingId(peerRid);
@@ -307,46 +494,72 @@ public sealed class MeshNodeHelloSubmissionTests
         node.AddChannel(MeshName);
         node.Start();
         var intent = node.ConnectPeer(endpoint, knownRoutingId ? peerRid : null);
-
-        Assert.True(ReceiveHello(peer, poller));
+        var first = ReceiveAdmission(peer, poller);
+        Assert.Equal(ServiceWireConstants.Command.Hello, first.Command);
+        await CompleteSubmissions(node);
         var route = Assert.Single(peer.RoutesSnapshot());
-        var repeated = ReceiveHello(peer, poller);
+        var observed = node.ObservePeerRoute(peerRid).SelectedGeneration;
+        Assert.NotEqual(0UL, observed);
+        ManagementTurn(node);
+        await CompleteSubmissions(node);
+        AssertNoHello(peer);
 
-        Assert.Equal(route.RouteGeneration, Assert.Single(peer.RoutesSnapshot()).RouteGeneration);
-        Assert.False(repeated, "The same selected route must not receive a second HELLO.");
-
-        node.RemovePeerConnection(intent);
-        node.ConnectPeer(endpoint, knownRoutingId ? peerRid : null);
-        Assert.True(ReceiveHello(peer, poller));
-        Assert.NotEqual(
-            route.RouteGeneration,
-            Assert.Single(peer.RoutesSnapshot()).RouteGeneration
+        var ownerHeld = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
         );
-        Assert.False(ReceiveHello(peer, poller), "The replacement route must receive one HELLO.");
-    }
-
-    private static bool ReceiveHello(IRouterSocket peer, IPoller poller)
-    {
-        var started = Stopwatch.GetTimestamp();
-        var events = new PollEvent[1];
-        while (true)
+        var held = 0;
+        node.SetPeerAdmissionSealGate(() =>
         {
-            var remaining = ObservationTimeout - Stopwatch.GetElapsedTime(started);
-            if (remaining <= TimeSpan.Zero || poller.Wait(events, remaining) == 0)
-                return false;
-            using var received = Received.Create();
-            if (!peer.Recv(received, RecvFlags.DontWait))
-                continue;
-            if (
-                ZLinkServiceWireCodec.TryDecodeRouteAdmission(
-                    received.FirstPart().AsSpan(),
-                    out var command,
-                    out _,
-                    out _
-                )
-                && command == ServiceWireConstants.Command.Hello
-            )
-                return true;
+            if (Interlocked.Exchange(ref held, 1) == 0)
+            {
+                ownerHeld.TrySetResult();
+                releaseOwner.Wait();
+            }
+            return false;
+        });
+        Invoke(node, "SignalReceiveOwner");
+        try
+        {
+            await ownerHeld.Task.WaitAsync(ObservationTimeout);
+            node.RemovePeerConnection(intent);
+            node.ConnectPeer(endpoint, knownRoutingId ? peerRid : null);
+            // Core can select the replacement before its sole observer resumes.
+            // This HELLO belongs to the still-observed epoch, not the next one.
+            ManagementTurn(node);
+            await CompleteSubmissions(node);
+            var beforeObservation = ReceiveAdmission(peer, poller);
+            Assert.Equal(ServiceWireConstants.Command.Hello, beforeObservation.Command);
+            Assert.Equal(first.Bytes, beforeObservation.Bytes);
+            Assert.Equal(observed, node.ObservePeerRoute(peerRid).SelectedGeneration);
+            Assert.NotEqual(
+                route.RouteGeneration,
+                Assert.Single(peer.RoutesSnapshot()).RouteGeneration
+            );
+            node.PublishDraining();
         }
+        finally
+        {
+            releaseOwner.Set();
+        }
+        var replacement = ReceiveAdmission(peer, poller);
+        Assert.Equal(ServiceWireConstants.Command.Hello, replacement.Command);
+        Assert.NotEqual(observed, node.ObservePeerRoute(peerRid).SelectedGeneration);
+        Assert.Equal(first.Record.DescriptorRevision + 1, replacement.Record.DescriptorRevision);
+        await CompleteSubmissions(node);
+        for (var rotation = 0; rotation < 64; rotation++)
+            ManagementTurn(node);
+        await CompleteSubmissions(node);
+        AssertNoHello(peer);
+        time.AdvanceMonotonic(ZLinkServiceLiveness.ProbeInterval - TimeSpan.FromTicks(1));
+        ManagementTurn(node);
+        await CompleteSubmissions(node);
+        AssertNoHello(peer);
+        time.AdvanceMonotonic(TimeSpan.FromTicks(1));
+        ManagementTurn(node);
+        await CompleteSubmissions(node);
+        Assert.Equal(replacement.Bytes, ReceiveAdmission(peer, poller).Bytes);
+        ManagementTurn(node);
+        await CompleteSubmissions(node);
+        AssertNoHello(peer);
     }
 }
