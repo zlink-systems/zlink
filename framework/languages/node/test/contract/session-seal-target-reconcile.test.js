@@ -92,3 +92,25 @@ test('a fenced command 42 does not request target reconciliation', async () => {
     assert.deepEqual(f.requests, []);
   } finally { await f.close(); }
 });
+
+test('malformed command 42 records an invalid-frame dispatch error', async () => {
+  const f = await fixture();
+  const records = [];
+  f.host.serviceRelocation.options.messageFlow = () => ({
+    begin: () => ({ trace: event => records.push(event) })
+  });
+  const malformed = Buffer.from([0x5a, 0x4d, 0x01, 42, 0x00]);
+  const record = {
+    parts: [{ data: () => malformed }],
+    sourceNodeRid: 'source'
+  };
+  try {
+    await assert.rejects(f.host.serviceRelocation.tryHandleControl('mesh', record));
+    assert.equal(records.length, 1);
+    assert.equal(records[0].outcome, 'error');
+    assert.equal(records[0].surface, 'streamSession');
+    assert.equal(records[0].messageKind, 'control');
+    assert.equal(records[0].errorReason, 'invalid_frame');
+    assert.equal(records[0].errorAction, 'drop');
+  } finally { await f.close(); }
+});
