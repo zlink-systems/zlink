@@ -172,16 +172,19 @@ function decodeFrameworkPayload<T>(
 
   if (message.isEmpty()) return undefined as T;
 
-  const parsedPayload = parseJsonPayload(message, schemaForDecode(type, packetName, contractPart));
-  if (parsedPayload.valid) {
-    return materializeZLinkMessageValue(parsedPayload.value as T, type);
+  const schema = schemaForDecode(type, packetName, contractPart);
+  let value: unknown;
+  try {
+    value = parseFrameworkJsonV1(message.getString('utf8'), undefined, schema);
+  } catch (error) {
+    throw createInternalFrameworkException(
+      ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed,
+      'PayloadDecodeFailed: framework payload is not valid JSON.',
+      false,
+      error
+    );
   }
-  throw createInternalFrameworkException(
-    ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed,
-    'PayloadDecodeFailed: framework payload is not valid JSON.',
-    false,
-    parsedPayload.error
-  );
+  return materializeZLinkMessageValue(value as T, type);
 }
 
 export function wrapFrameworkPayloadMessage(
@@ -376,27 +379,6 @@ function unsupportedContentType(contentType: string): Error {
     ZLinkFrameworkInternalErrorKind.PayloadDecodeFailed,
     `PayloadDecodeFailed: unsupported framework content type '${contentType}'.`
   );
-}
-
-function parseJsonPayload(
-  message: Message,
-  schema?: ZLinkJsonSchema
-):
-  | {
-      readonly valid: true;
-      readonly value: unknown;
-      readonly error?: undefined;
-    }
-  | {
-      readonly valid: false;
-      readonly value?: undefined;
-      readonly error: unknown;
-    } {
-  try {
-    return { valid: true, value: parseFrameworkJsonV1(message.getString('utf8'), {}, schema) };
-  } catch (error) {
-    return { valid: false, error };
-  }
 }
 
 function serializerMapOf(

@@ -62,3 +62,24 @@ test('messaging returns the final Message without a discarded content-type descr
   assert.equal(encoded.contentType, 'application/json');
   encoded.message.close();
 });
+
+test('JSON decode returns the value without a success or failure carrier', () => {
+  const { codec, counts } = countedCodec('messaging/payload-codec');
+  const message = ZLinkBufferMessage.fromOwned(Buffer.from('{"body":"payload"}'));
+  for (let index = 0; index < 1000; index++) {
+    assert.deepEqual(codec.decodeFrameworkPayloadMessage(message), { body: 'payload' });
+  }
+  assert.equal(counts.get('parseJsonPayload:object:valid,value') ?? 0, 0);
+  assert.throws(
+    () => codec.decodeFrameworkPayloadMessage(ZLinkBufferMessage.fromOwned(Buffer.from('{'))),
+    error => error.message.includes('PayloadDecodeFailed') && error.cause instanceof SyntaxError
+  );
+  const configurationFailure = new Error('schema metadata unavailable');
+  const declaredType = new Proxy(class Payload {}, {
+    getOwnPropertyDescriptor() { throw configurationFailure; }
+  });
+  assert.throws(
+    () => codec.decodeFrameworkPayloadMessage(message, undefined, declaredType),
+    error => error === configurationFailure
+  );
+});
