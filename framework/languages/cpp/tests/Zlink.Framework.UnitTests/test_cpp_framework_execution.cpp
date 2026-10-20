@@ -1038,10 +1038,9 @@ class serial_test_signal_t
   public:
     void set ()
     {
-        {
-            std::lock_guard lock (_mutex);
-            _set = true;
-        }
+        // Notify under the lock so a waiter cannot destroy this object mid-notify.
+        std::lock_guard lock (_mutex);
+        _set = true;
         _changed.notify_all ();
     }
 
@@ -3225,6 +3224,8 @@ bool verify_relocation_ready_keeps_registering_turn_across_state_lane ()
         keep_lane_claimed.store (false, std::memory_order_release);
         producer.join ();
         other_queue.drain ();
+        // Drain queued copies of keep_draining before its captures go out of scope.
+        node->lane.run ([] {}).get ();
         return false;
     }
 
@@ -3251,6 +3252,8 @@ bool verify_relocation_ready_keeps_registering_turn_across_state_lane ()
     keep_lane_claimed.store (false, std::memory_order_release);
     producer.join ();
     other_queue.drain ();
+    // Drain queued copies of keep_draining before its captures go out of scope.
+    node->lane.run ([] {}).get ();
     owner->complete_relocation_ready (spot_relocation_ready_outcome_t::continued);
     owner->serial_queue->drain ();
 
@@ -5978,10 +5981,10 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     serializer_registry_t serializers;
     auto node = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::spot_node_builder_state_t> ("actor-finalize-node");
-    std::atomic_int leave_submit_unavailable_events{0};
+    auto leave_submit_unavailable_events = std::make_shared<std::atomic_int> (0);
     node->dispatch.message_flow (message_flow_log_mode_t::errors);
     dispatch_options_access_t::set_observer_for_tests (
-      node->dispatch, [&leave_submit_unavailable_events] (const message_flow_event_t &event) {
+      node->dispatch, [leave_submit_unavailable_events] (const message_flow_event_t &event) {
           if (event.packet_name != "spot_actor_leave_submit"
               || event.result != message_flow_result_t::failed || !event.exception)
               return;
@@ -5990,7 +5993,7 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
           }
           catch (const framework_exception_t &error) {
               if (error.kind () == framework_error_kind_t::unavailable)
-                  leave_submit_unavailable_events.fetch_add (1, std::memory_order_release);
+                  leave_submit_unavailable_events->fetch_add (1, std::memory_order_release);
           }
       });
     node->worker_executor = std::make_shared<runtime::offload_executor_t> (1, "actor-finalize");
@@ -6319,10 +6322,10 @@ bool verify_actor_join_finalize_replies_after_target_activation ()
     }
     const auto leave_submit_observation_deadline =
       std::chrono::steady_clock::now () + std::chrono::seconds (1);
-    while (leave_submit_unavailable_events.load (std::memory_order_acquire) == 0
+    while (leave_submit_unavailable_events->load (std::memory_order_acquire) == 0
            && std::chrono::steady_clock::now () < leave_submit_observation_deadline)
         std::this_thread::yield ();
-    if (leave_submit_unavailable_events.load (std::memory_order_acquire) != 1)
+    if (leave_submit_unavailable_events->load (std::memory_order_acquire) != 1)
         return false;
     {
         std::lock_guard lock (authority->mutex);
@@ -9248,13 +9251,25 @@ int main (int argc, char **argv)
 
         auto completion_state = zlink::framework::test::runtime_failure_fixture<
           zlink::framework::detail::spot_node_builder_state_t> ("completion-node");
-        std::vector<zlink::framework::message_flow_event_t> completion_failure_events;
+        // Shared with the observer, which may outlive this scope on a worker thread.
+        struct completion_failure_log_t
+        {
+            std::mutex mutex;
+            std::vector<zlink::framework::message_flow_event_t> events;
+        };
+        auto completion_failure_log = std::make_shared<completion_failure_log_t> ();
+        // Reads copy the events under the mutex.
+        const auto completion_failure_events = [&completion_failure_log] {
+            std::lock_guard lock (completion_failure_log->mutex);
+            return completion_failure_log->events;
+        };
         completion_state->dispatch.message_flow (zlink::framework::message_flow_log_mode_t::errors);
         zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
           completion_state->dispatch,
-          [&completion_failure_events] (const zlink::framework::message_flow_event_t &event) {
+          [completion_failure_log] (const zlink::framework::message_flow_event_t &event) {
               if (event.packet_name == "JoinSpot" && event.error_reason.has_value ()) {
-                  completion_failure_events.push_back (event);
+                  std::lock_guard lock (completion_failure_log->mutex);
+                  completion_failure_log->events.push_back (event);
               }
           });
         zlink::framework::detail::spot_node_runtime_t completion_runtime (completion_state);
@@ -9374,15 +9389,15 @@ int main (int argc, char **argv)
             || completion_outcomes.back ()
                  != zlink::framework::detail::actor_join_completion_outcome_t::failed
             || completion_error_kind != zlink::framework::framework_error_kind_t::internal_failure
-            || completion_retryable || completion_failure_events.size () != 2
-            || completion_failure_events.back ().actor_id != "completion-actor"
-            || completion_failure_events.back ().error_reason
+            || completion_retryable || completion_failure_events ().size () != 2
+            || completion_failure_events ().back ().actor_id != "completion-actor"
+            || completion_failure_events ().back ().error_reason
                  != zlink::framework::dispatch_error_reason_t::handler_exception
-            || !completion_failure_events.back ().exception) {
+            || !completion_failure_events ().back ().exception) {
             return 72;
         }
         try {
-            std::rethrow_exception (completion_failure_events.back ().exception);
+            std::rethrow_exception (completion_failure_events ().back ().exception);
             return 73;
         }
         catch (const zlink::framework::framework_exception_t &error) {

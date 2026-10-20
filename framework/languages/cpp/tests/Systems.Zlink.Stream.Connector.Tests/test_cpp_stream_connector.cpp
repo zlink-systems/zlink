@@ -635,10 +635,9 @@ class callback_latch_t
   public:
     void signal ()
     {
-        {
-            std::lock_guard<std::mutex> lock (_mutex);
-            _ready = true;
-        }
+        // Notify under the lock so a waiter cannot destroy this object mid-notify.
+        std::lock_guard<std::mutex> lock (_mutex);
+        _ready = true;
         _changed.notify_all ();
     }
 
@@ -652,6 +651,13 @@ class callback_latch_t
     std::mutex _mutex;
     std::condition_variable _changed;
     bool _ready = false;
+};
+
+// A callback owns its flag and latch, so a late callback never touches freed stack state.
+struct callback_outcome_t
+{
+    std::atomic_bool seen{false};
+    callback_latch_t latch;
 };
 
 class joining_thread_t
@@ -4572,34 +4578,33 @@ int main (int argc, char **argv)
               request_hook_order.push_back ("invalid-reply-context");
           }
       });
-    bool reply_hook_error_seen = false;
-    callback_latch_t reply_hook_error_latch;
-    auto reply_hook_error_subscription =
-      callback_response_connector.on_error ([&] (const zlink::stream_connector::error_t &error) {
-          reply_hook_error_seen =
+    auto reply_hook_error = std::make_shared<callback_outcome_t> ();
+    auto reply_hook_error_subscription = callback_response_connector.on_error (
+      [reply_hook_error] (const zlink::stream_connector::error_t &error) {
+          reply_hook_error->seen =
             error.code == zlink::stream_connector::error_code_t::user_callback_failed;
-          reply_hook_error_latch.signal ();
+          reply_hook_error->latch.signal ();
       });
     auto reply_second = callback_response_connector.on_reply_received (
       [&] (const zlink::stream_connector::reply_received_context_t &) {
           request_hook_order.push_back ("reply-second");
           throw std::runtime_error ("expected reply hook failure");
       });
-    bool request_callback_response_seen = false;
-    callback_latch_t request_callback_response_latch;
+    auto request_callback_response = std::make_shared<callback_outcome_t> ();
     callback_response_connector.request (login_request_t{})
       .packet_name ("callback.response.request")
       .timeout (std::chrono::milliseconds (100))
-      .submit<login_reply_t> ([&] (zlink::stream_connector::result_t<login_reply_t> result) {
-          request_callback_response_seen = static_cast<bool> (result);
-          request_callback_response_latch.signal ();
-      });
+      .submit<login_reply_t> (
+        [request_callback_response] (zlink::stream_connector::result_t<login_reply_t> result) {
+            request_callback_response->seen = static_cast<bool> (result);
+            request_callback_response->latch.signal ();
+        });
     callback_response_thread.join ();
-    request_callback_response_latch.wait_for (std::chrono::milliseconds (100));
-    reply_hook_error_latch.wait_for (std::chrono::milliseconds (100));
+    request_callback_response->latch.wait_for (std::chrono::milliseconds (100));
+    reply_hook_error->latch.wait_for (std::chrono::milliseconds (100));
     const std::vector<std::string> expected_request_hook_order{"sending-first", "sending-second",
                                                                "reply-first", "reply-second"};
-    if (!request_callback_response_seen || !request_hook_metadata_seen || !reply_hook_error_seen
+    if (!request_callback_response->seen || !request_hook_metadata_seen || !reply_hook_error->seen
         || request_hook_order != expected_request_hook_order) {
         return fail (61);
     }
@@ -4650,20 +4655,20 @@ int main (int argc, char **argv)
             && ctx.error
             && ctx.error->code == zlink::stream_connector::error_code_t::frame_decode_failed;
       });
-    callback_latch_t invalid_reply_latch;
-    bool invalid_reply_result_failed = false;
+    auto invalid_reply = std::make_shared<callback_outcome_t> ();
     invalid_reply_connector.request (login_request_t{})
       .packet_name ("invalid.typed.reply")
       .timeout (std::chrono::milliseconds (100))
-      .submit<auto_payload_t> ([&] (zlink::stream_connector::result_t<auto_payload_t> result) {
-          invalid_reply_result_failed =
-            !result
-            && result.error_code () == zlink::stream_connector::error_code_t::frame_decode_failed;
-          invalid_reply_latch.signal ();
-      });
+      .submit<auto_payload_t> (
+        [invalid_reply] (zlink::stream_connector::result_t<auto_payload_t> result) {
+            invalid_reply->seen =
+              !result
+              && result.error_code () == zlink::stream_connector::error_code_t::frame_decode_failed;
+            invalid_reply->latch.signal ();
+        });
     invalid_reply_thread.join ();
-    invalid_reply_latch.wait_for (std::chrono::milliseconds (100));
-    if (!invalid_reply_result_failed || !invalid_reply_hook_seen) {
+    invalid_reply->latch.wait_for (std::chrono::milliseconds (100));
+    if (!invalid_reply->seen || !invalid_reply_hook_seen) {
         return fail (284);
     }
     invalid_reply_connector.close ();
@@ -4701,20 +4706,20 @@ int main (int argc, char **argv)
             && ctx.error->code == zlink::stream_connector::error_code_t::request_timeout
             && ctx.elapsed.count () >= 0;
       });
-    bool request_callback_timeout_seen = false;
-    callback_latch_t request_callback_timeout_latch;
+    auto request_callback_timeout = std::make_shared<callback_outcome_t> ();
     callback_timeout_connector.request (login_request_t{})
       .packet_name ("callback.timeout.request")
       .timeout (std::chrono::milliseconds (5))
-      .submit<login_reply_t> ([&] (zlink::stream_connector::result_t<login_reply_t> result) {
-          request_callback_timeout_seen =
-            !result
-            && result.error_code () == zlink::stream_connector::error_code_t::request_timeout;
-          request_callback_timeout_latch.signal ();
-      });
+      .submit<login_reply_t> (
+        [request_callback_timeout] (zlink::stream_connector::result_t<login_reply_t> result) {
+            request_callback_timeout->seen =
+              !result
+              && result.error_code () == zlink::stream_connector::error_code_t::request_timeout;
+            request_callback_timeout->latch.signal ();
+        });
     callback_timeout_thread.join ();
-    request_callback_timeout_latch.wait_for (std::chrono::milliseconds (100));
-    if (!request_callback_timeout_seen || !callback_timeout_request_seen || !timeout_hook_seen) {
+    request_callback_timeout->latch.wait_for (std::chrono::milliseconds (100));
+    if (!request_callback_timeout->seen || !callback_timeout_request_seen || !timeout_hook_seen) {
         return fail (63);
     }
     callback_timeout_connector.close ();
@@ -4752,22 +4757,21 @@ int main (int argc, char **argv)
         async_pump_thread.join ();
         return fail (156);
     }
-    bool async_pump_wait_seen = false;
-    callback_latch_t async_pump_wait_latch;
+    auto async_pump_wait = std::make_shared<callback_outcome_t> ();
     async_pump_connector.wait_for<zlink::stream_connector::packet_t> ("async.pump.push")
       .timeout (std::chrono::milliseconds (100))
-      .submit ([&] (zlink::stream_connector::result_t<packet_message_t> result) {
-          async_pump_wait_seen = result && as_string (result.value ().payload.payload) == "push";
-          async_pump_wait_latch.signal ();
+      .submit ([async_pump_wait] (zlink::stream_connector::result_t<packet_message_t> result) {
+          async_pump_wait->seen = result && as_string (result.value ().payload.payload) == "push";
+          async_pump_wait->latch.signal ();
       });
     auto async_pump_reply = async_pump_connector.request (login_request_t{})
                               .packet_name ("async.pump.request")
                               .timeout (std::chrono::milliseconds (100))
                               .submit<login_reply_t> ();
-    async_pump_wait_latch.wait_for (std::chrono::milliseconds (100));
+    async_pump_wait->latch.wait_for (std::chrono::milliseconds (100));
     async_pump_thread.join ();
     async_pump_connector.close ();
-    if (!async_pump_reply || !async_pump_wait_seen) {
+    if (!async_pump_reply || !async_pump_wait->seen) {
         return fail (157);
     }
 
@@ -4799,16 +4803,16 @@ int main (int argc, char **argv)
         close_cleanup_thread.join ();
         return fail (80);
     }
-    bool close_cleanup_seen = false;
-    callback_latch_t close_cleanup_callback_latch;
+    auto close_cleanup = std::make_shared<callback_outcome_t> ();
     const auto close_cleanup_submit_started = std::chrono::steady_clock::now ();
     close_cleanup_connector.request (login_request_t{})
       .packet_name ("close.cleanup.request")
       .timeout (std::chrono::milliseconds (1000))
-      .submit<login_reply_t> ([&] (zlink::stream_connector::result_t<login_reply_t> result) {
-          close_cleanup_seen =
+      .submit<login_reply_t> ([close_cleanup] (
+                                zlink::stream_connector::result_t<login_reply_t> result) {
+          close_cleanup->seen =
             !result && result.error_code () == zlink::stream_connector::error_code_t::disconnected;
-          close_cleanup_callback_latch.signal ();
+          close_cleanup->latch.signal ();
       });
     const auto close_cleanup_submit_elapsed =
       std::chrono::steady_clock::now () - close_cleanup_submit_started;
@@ -4825,8 +4829,8 @@ int main (int argc, char **argv)
     close_cleanup_connector.close ();
     close_cleanup_release_latch.signal ();
     close_cleanup_thread.join ();
-    close_cleanup_callback_latch.wait_for (std::chrono::milliseconds (100));
-    if (!close_cleanup_seen) {
+    close_cleanup->latch.wait_for (std::chrono::milliseconds (100));
+    if (!close_cleanup->seen) {
         return fail (82);
     }
 
@@ -6080,19 +6084,19 @@ int main (int argc, char **argv)
     if (!async_oversized_receive_connector.connect ()) {
         return fail (122);
     }
-    bool async_oversized_receive_seen = false;
-    callback_latch_t async_oversized_receive_latch;
+    auto async_oversized_receive = std::make_shared<callback_outcome_t> ();
     async_oversized_receive_connector.request (login_request_t{})
       .packet_name ("async.oversized.receive.request")
       .timeout (std::chrono::milliseconds (100))
-      .submit<login_reply_t> ([&] (zlink::stream_connector::result_t<login_reply_t> result) {
-          async_oversized_receive_seen =
+      .submit<login_reply_t> ([async_oversized_receive] (
+                                zlink::stream_connector::result_t<login_reply_t> result) {
+          async_oversized_receive->seen =
             !result && result.error_code () == zlink::stream_connector::error_code_t::disconnected;
-          async_oversized_receive_latch.signal ();
+          async_oversized_receive->latch.signal ();
       });
     async_oversized_receive_server_thread.join ();
-    async_oversized_receive_latch.wait_for (std::chrono::milliseconds (100));
-    if (!async_oversized_receive_seen) {
+    async_oversized_receive->latch.wait_for (std::chrono::milliseconds (100));
+    if (!async_oversized_receive->seen) {
         return fail (123);
     }
     async_oversized_receive_connector.close ();

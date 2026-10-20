@@ -98,9 +98,17 @@ struct dispatch_loop_t
 
 void verify_relay_seal (bool close_owner, bool request_timeout = false)
 {
-    std::mutex events_mutex;
-    std::condition_variable events_changed;
-    std::vector<message_flow_event_t> events;
+    // Late observer events may outlive this scope, so the observer owns the state.
+    struct events_state_t
+    {
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::vector<message_flow_event_t> events;
+    };
+    const auto events_state = std::make_shared<events_state_t> ();
+    auto &events_mutex = events_state->mutex;
+    auto &events_changed = events_state->changed;
+    auto &events = events_state->events;
     const auto owner_rid = zlink::routing_id_t::from ("seal-relay-owner");
     auto app = app_t::create ();
     app.set_message_flow_mode (message_flow_log_mode_t::normal);
@@ -113,10 +121,10 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         // (04-flow-correlation section 4: Normal and Detailed).
         options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
         dispatch_options_access_t::set_observer_for_tests (
-          options.configure_dispatch (), [&] (const message_flow_event_t &event) {
-              const std::lock_guard lock (events_mutex);
-              events.push_back (event);
-              events_changed.notify_all ();
+          options.configure_dispatch (), [events_state] (const message_flow_event_t &event) {
+              const std::lock_guard lock (events_state->mutex);
+              events_state->events.push_back (event);
+              events_state->changed.notify_all ();
           });
     });
     auto provider = app.advanced ().services ().build_provider ();

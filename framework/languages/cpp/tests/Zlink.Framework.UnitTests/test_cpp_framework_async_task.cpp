@@ -23,6 +23,7 @@
 #include <functional>
 #include <iostream>
 #include <future>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -989,13 +990,15 @@ bool verify_void_completion_rejection_race (bool cancel_before_rejection)
     std::promise<void> submit_entered, allow_rejection;
     auto entered = submit_entered.get_future ();
     auto reject = allow_rejection.get_future ();
-    std::promise<void> producer_observed;
-    auto observed = producer_observed.get_future ();
-    bool producer_succeeded = false;
-    detail::observe_task_completion (producer, [&] (const result_t<void> &result) {
-        producer_succeeded = static_cast<bool> (result);
-        producer_observed.set_value ();
-    });
+    // The observer owns its state: it may run after an early return below.
+    auto producer_observed = std::make_shared<std::promise<void>> ();
+    auto observed = producer_observed->get_future ();
+    auto producer_succeeded = std::make_shared<std::atomic_bool> (false);
+    detail::observe_task_completion (
+      producer, [producer_observed, producer_succeeded] (const result_t<void> &result) {
+          *producer_succeeded = static_cast<bool> (result);
+          producer_observed->set_value ();
+      });
     auto rejected_view =
       detail::with_task_resume_scheduler (std::move (producer), [&] (std::function<void ()>) {
           submit_entered.set_value ();
@@ -1032,8 +1035,8 @@ bool verify_void_completion_rejection_race (bool cancel_before_rejection)
     const auto cancelled = owned.result ();
     observed.get ();
     return !failure && first && !duplicate && !cancelled
-           && cancelled.error_kind () == framework_error_kind_t::shutting_down && producer_succeeded
-           && outside.result ();
+           && cancelled.error_kind () == framework_error_kind_t::shutting_down
+           && *producer_succeeded && outside.result ();
 }
 
 bool verify_rejection_retain_cancellation_race ()
@@ -1554,20 +1557,30 @@ bool verify_yield_continuation_keeps_new_turn (yield_follow_up_t follow_up)
         return false;
     const char *name = follow_up == yield_follow_up_t::second_yield ? "second yield after resume"
                                                                     : "defer after yield resume";
+    // On an early return the handler and its observer still reference probe, so
+    // finish both replies and let the handler end before the locals go away.
+    const auto settle = [&] {
+        first_reply.complete (result_t<int>::success (1));
+        second_reply.complete (result_t<int>::success (2));
+        (void) wait_ready (done);
+        queue.drain ();
+    };
     if (!wait_ready (first_entered) || !sibling_runs (queue)) {
+        settle ();
         (void) report_yield_probe (name, probe);
         return false;
     }
     first_reply.complete (result_t<int>::success (1));
     if (follow_up == yield_follow_up_t::second_yield) {
         if (!wait_ready (second_entered) || !sibling_runs (queue)) {
-            (void) wait_ready (done);
+            settle ();
             (void) report_yield_probe (name, probe);
             return false;
         }
         second_reply.complete (result_t<int>::success (2));
     }
     if (!wait_ready (done)) {
+        settle ();
         (void) report_yield_probe (name, probe);
         return false;
     }

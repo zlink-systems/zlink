@@ -492,16 +492,28 @@ TEST (FrameworkRelocationSealContract, drain_failure_only_settles_failed_actor_w
 TEST (FrameworkRelocationSealContract,
       settlement_callback_failure_reports_once_without_second_settlement)
 {
-    dispatch_options_t options;
-    options.message_flow (message_flow_log_mode_t::normal);
-    std::vector<message_dispatch_error_event_t> errors;
-    std::promise<void> reported;
-    auto report = reported.get_future ();
-    dispatch_options_access_t::set_dispatch_error_observer_for_tests (options,
-                                                                      [&] (const auto &event) {
-                                                                          errors.push_back (event);
-                                                                          reported.set_value ();
-                                                                      });
+    // The settlement callback is held by `owner` and the error observer by `state->options`; each
+    // owns its state. The observer state is separate so state and options do not form a cycle.
+    struct report_state_t
+    {
+        std::vector<message_dispatch_error_event_t> errors;
+        std::promise<void> reported;
+    };
+    struct settlement_state_t
+    {
+        dispatch_options_t options;
+        int settlements = 0;
+    };
+    const auto reports = std::make_shared<report_state_t> ();
+    const auto state = std::make_shared<settlement_state_t> ();
+    state->options.message_flow (message_flow_log_mode_t::normal);
+    auto &errors = reports->errors;
+    auto report = reports->reported.get_future ();
+    dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      state->options, [reports] (const auto &event) {
+          reports->errors.push_back (event);
+          reports->reported.set_value ();
+      });
     auto owner = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{
         .descriptor = test_descriptor ("settlement-owner"),
@@ -516,15 +528,14 @@ TEST (FrameworkRelocationSealContract,
       owner->sessions ().seal_remote_route (connection.connection_id, binding.binding_generation,
                                             actor.key, 7, binding.owner_lease_generation);
     ASSERT_EQ (seal.error, stateful::stateful_error_t::none);
-    int settlements = 0;
     auto completion = std::make_shared<task_completion_source_t<void>> ();
     const auto retain = [&] {
-        return [owner, completion, &settlements,
-                &options] (std::optional<stateful::stream_dispatch_t> dispatch,
-                           message_flow_reason_t reason, auto... failures) -> task_t<void> {
+        return [owner, completion, state] (std::optional<stateful::stream_dispatch_t> dispatch,
+                                           message_flow_reason_t reason,
+                                           auto... failures) -> task_t<void> {
             if constexpr (sizeof...(failures) != 0) {
                 if (auto failed = std::get<0> (std::tuple{failures...})) {
-                    dispatch_error_reporter_t (options).report_lazy ([&] {
+                    dispatch_error_reporter_t (state->options).report_lazy ([&] {
                         message_dispatch_error_event_t event{};
                         event.surface = dispatch_error_surface_t::stream_session;
                         event.reason = dispatch_reason_from_error (failed->error ());
@@ -536,7 +547,7 @@ TEST (FrameworkRelocationSealContract,
             }
             EXPECT_FALSE (dispatch);
             EXPECT_EQ (reason, message_flow_reason_t::target_closed);
-            ++settlements;
+            ++state->settlements;
             co_await completion->task ();
         };
     };
@@ -553,7 +564,7 @@ TEST (FrameworkRelocationSealContract,
     }
     catch (const framework_exception_t &) {
     }
-    EXPECT_EQ (settlements, 1);
+    EXPECT_EQ (state->settlements, 1);
     ASSERT_EQ (report.wait_for (std::chrono::seconds{2}), std::future_status::ready);
     ASSERT_EQ (errors.size (), 1u);
     EXPECT_EQ (errors.front ().error_message, "settlement delivery failed");

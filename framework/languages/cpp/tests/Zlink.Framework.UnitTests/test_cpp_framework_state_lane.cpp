@@ -17,6 +17,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <map>
+#include <memory>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -173,8 +174,8 @@ TEST (ZLinkStateLane, CallerDrainedTaskDoesNotWaitForUnrelatedExecutorWork)
     state_lane_t lane (executor);
     std::promise<void> entered;
     std::promise<void> release;
-    auto released = release.get_future ();
-    executor.submit ([&] {
+    auto released = release.get_future ().share ();
+    executor.submit ([&entered, released] {
         entered.set_value ();
         released.wait ();
     });
@@ -329,19 +330,20 @@ TEST (ZLinkStateLane, StandaloneTaskCompletionAllowsLaneReentry)
     state_lane_t lane (executor);
     std::promise<void> entered;
     std::promise<void> release;
-    auto released = release.get_future ();
-    lane.try_post ([&] {
+    auto released = release.get_future ().share ();
+    lane.try_post ([&entered, released] {
         entered.set_value ();
         released.wait ();
     });
     entered.get_future ().wait ();
     auto task = lane.run_task ([] { return 42; });
-    std::promise<int> observed;
-    auto result = observed.get_future ();
+    // The observer owns the promise so a late delivery never touches a dead local.
+    auto observed = std::make_shared<std::promise<int>> ();
+    auto result = observed->get_future ();
     zlink::framework::detail::observe_task_completion (
-      task, [&] (const zlink::framework::result_t<int> &value) {
+      task, [&lane, observed] (const zlink::framework::result_t<int> &value) {
           EXPECT_EQ (nullptr, state_lane_t::current ());
-          observed.set_value (lane.run ([&] { return value.value (); }).get ());
+          observed->set_value (lane.run ([&] { return value.value (); }).get ());
       });
     release.set_value ();
     ASSERT_EQ (std::future_status::ready, result.wait_for (completion_timeout));
@@ -402,8 +404,8 @@ TEST (ZLinkStateLane, AnAvailableLaneDoesNotWaitForUnrelatedExecutorWork)
     state_lane_t lane (executor);
     std::promise<void> entered;
     std::promise<void> release;
-    auto released = release.get_future ();
-    executor.submit ([&] {
+    auto released = release.get_future ().share ();
+    executor.submit ([&entered, released] {
         entered.set_value ();
         released.wait ();
     });
@@ -456,8 +458,8 @@ TEST (ZLinkStateLane, TryPostKeepsItsNoWaitExecutionContract)
     state_lane_t lane (executor);
     std::promise<void> entered;
     std::promise<void> release;
-    auto released = release.get_future ();
-    executor.submit ([&] {
+    auto released = release.get_future ().share ();
+    executor.submit ([&entered, released] {
         entered.set_value ();
         released.wait ();
     });
