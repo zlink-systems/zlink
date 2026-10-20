@@ -86,6 +86,18 @@ TEST (EnvelopeAllocations, TypedAndErasedEncodingDoNotCloneTheHeader)
     EXPECT_EQ (empty[1].size (), 0u);
 }
 
+// Container members (std::map metadata) may allocate even when empty, and how
+// many allocations that costs differs by standard library (MSVC allocates a
+// sentinel node). Measure a header whose strings fit inline as the baseline.
+std::size_t header_container_baseline ()
+{
+    std::optional<msg::envelope_header_t> header;
+    return count_allocations ([&] {
+        header.emplace (
+          msg::envelope_header_t{.channel_name = "c", .message_name = "m", .content_type = "x/y"});
+    });
+}
+
 TEST (EnvelopeAllocations, ReplyInitializesOnlyItsFinalFields)
 {
     msg::envelope_header_t request;
@@ -96,11 +108,12 @@ TEST (EnvelopeAllocations, ReplyInitializesOnlyItsFinalFields)
     request.metadata.emplace ("key", "value");
     fw::detail::channel_reply_writer_t writer;
     std::optional<msg::envelope_header_t> reply;
+    const auto baseline = header_container_baseline ();
     EXPECT_EQ (count_allocations ([&] {
                    reply.emplace (
                      writer.create_reply_header (msg::message_kind_t::response, "c", request));
                }),
-               0u);
+               baseline);
     EXPECT_EQ (reply->kind, msg::message_kind_t::response);
     EXPECT_EQ (reply->channel_name, "c");
     EXPECT_EQ (reply->message_name, "m");
@@ -135,11 +148,12 @@ TEST (EnvelopeAllocations, ClientKeepsOneOwningJsonDefault)
     const std::string json (json_content_type);
     std::optional<std::string> copy;
     const auto final_string_allocations = count_allocations ([&] { copy.emplace (json); });
+    const auto baseline = header_container_baseline ();
     std::optional<msg::envelope_header_t> header;
     EXPECT_EQ (count_allocations ([&] {
                    header.emplace (codec.create_envelope (msg::message_kind_t::command, "c", "m"));
                }),
-               final_string_allocations);
+               baseline + final_string_allocations);
     EXPECT_EQ (header->content_type, json);
     EXPECT_EQ (header->kind, msg::message_kind_t::command);
     EXPECT_EQ (header->channel_name, "c");
