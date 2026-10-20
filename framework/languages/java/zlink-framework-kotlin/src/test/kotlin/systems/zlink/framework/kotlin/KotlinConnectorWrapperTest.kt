@@ -956,6 +956,10 @@ final class KotlinConnectorWrapperTest {
                     )
                 )
 
+                while (connector.receivedCount("Late") == 0) {
+                    yield()
+                }
+
                 val message = connector.waitFor<Map<String, String>>("Late").await()
                 assertEquals("after-timeout", message.payload()["value"])
             } finally {
@@ -986,6 +990,10 @@ final class KotlinConnectorWrapperTest {
                         payload = "{\"value\":\"after-cancel\"}".toByteArray(StandardCharsets.UTF_8),
                     )
                 )
+
+                while (connector.receivedCount("Cancelled") == 0) {
+                    yield()
+                }
 
                 val message = connector.waitFor<Map<String, String>>("Cancelled").await()
                 assertEquals("after-cancel", message.payload()["value"])
