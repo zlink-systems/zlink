@@ -946,19 +946,24 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         std::shared_ptr<replacement_session_state_t> replacement;
     };
 
-    /* The only place that closes the registry entry of a TCP, TLS or
-     * WebSocket connection. The reader calls it on every exit path before
-     * its thread ends, and stop () joins that thread before MeshNode stops.
-     * The retirement closes the entry before its first suspension. */
+    /* The only place that closes the registry entry of a TLS or WebSocket
+     * connection (with a MeshNode, tcp:// uses the Core path). The reader
+     * calls it on every exit path before its thread ends. Like a Core
+     * session, the retirement stays in _retiring_sessions until it
+     * completes, so stop () waits for it before MeshNode stops. */
     void retire_connection (const std::shared_ptr<stream_connection_state_t> &state)
     {
         if (!state->transport_connection)
             return;
+        auto retirement_id = state->stream.session_id ();
+        track_retiring_session (retirement_id, state, state->stream);
         const auto session_rid = state->stream.routing_id ().value_or (
           zlink::routing_id_t::from (state->stream.session_id ()));
-        retire_actor_session_bindings_async (*state->transport_connection, session_rid,
-                                             *state->actors,
-                                             [self = shared_from_this (), state] { (void) state; });
+        retire_actor_session_bindings_async (
+          *state->transport_connection, session_rid, *state->actors,
+          [self = shared_from_this (), retirement_id = std::move (retirement_id), state] {
+              self->forget_retiring_session (retirement_id, state.get ());
+          });
     }
 
     /* zlink.stream.connections.* (runtime-metrics §4.1): session accept and
@@ -1026,7 +1031,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         const auto active =
           _active_streams_lane.run ([this] { return _active_streams.size (); }).get ();
         const std::lock_guard lock (_core_sessions_mutex);
-        return active + _retired_core_sessions.size ();
+        return active + _retiring_sessions.size ();
     }
 
     void begin_drain_sessions ()
@@ -2239,11 +2244,29 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                 }
             }
         }
+        forget_retiring_session (retirement_id, current.get ());
+    }
+
+    void track_retiring_session (std::string retirement_id,
+                                 std::shared_ptr<const void> owner,
+                                 stream_t stream)
+    {
         {
             const std::lock_guard lock (_core_sessions_mutex);
-            const auto found = _retired_core_sessions.find (retirement_id);
-            if (found != _retired_core_sessions.end () && found->second == current) {
-                _retired_core_sessions.erase (found);
+            _retiring_sessions.emplace (std::move (retirement_id),
+                                        retiring_session_t{std::move (owner), std::move (stream)});
+            ++_core_sessions_revision;
+        }
+        _core_sessions_changed.notify_all ();
+    }
+
+    void forget_retiring_session (const std::string &retirement_id, const void *owner) noexcept
+    {
+        {
+            const std::lock_guard lock (_core_sessions_mutex);
+            const auto found = _retiring_sessions.find (retirement_id);
+            if (found != _retiring_sessions.end () && found->second.owner.get () == owner) {
+                _retiring_sessions.erase (found);
                 ++_core_sessions_revision;
             }
         }
@@ -2267,12 +2290,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                 current->replacement->deactivate ();
             }
         }
-        {
-            const std::lock_guard lock (_core_sessions_mutex);
-            _retired_core_sessions.emplace (retirement_id, current);
-            ++_core_sessions_revision;
-        }
-        _core_sessions_changed.notify_all ();
+        track_retiring_session (retirement_id, current, current->stream);
         auto complete_close = [this, retirement_id, current, close_reason] {
             bool dispatch_disconnected = false;
             {
@@ -2318,34 +2336,30 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         }
     }
 
-    void wait_for_retired_core_sessions () noexcept
+    void wait_for_retiring_sessions () noexcept
     {
         for (;;) {
-            std::vector<std::shared_ptr<core_session_t>> retired;
+            std::vector<stream_t> retiring;
             std::uint64_t observed_revision = 0;
             {
                 std::lock_guard lock (_core_sessions_mutex);
-                if (_retired_core_sessions.empty ()) {
+                if (_retiring_sessions.empty ()) {
                     return;
                 }
                 observed_revision = _core_sessions_revision;
-                retired.reserve (_retired_core_sessions.size ());
-                for (const auto &[_, session] : _retired_core_sessions) {
-                    if (session) {
-                        retired.push_back (session);
-                    }
-                }
+                retiring.reserve (_retiring_sessions.size ());
+                for (const auto &[_, session] : _retiring_sessions)
+                    retiring.push_back (session.stream);
             }
-            for (auto &session : retired) {
-                _runtime.drain_async_dispatch (session->stream);
+            for (auto &stream : retiring) {
+                _runtime.drain_async_dispatch (stream);
             }
             std::unique_lock lock (_core_sessions_mutex);
-            if (_retired_core_sessions.empty ()) {
+            if (_retiring_sessions.empty ()) {
                 return;
             }
             _core_sessions_changed.wait (lock, [this, observed_revision] {
-                return _retired_core_sessions.empty ()
-                       || _core_sessions_revision != observed_revision;
+                return _retiring_sessions.empty () || _core_sessions_revision != observed_revision;
             });
         }
     }
@@ -2622,7 +2636,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                                       std::move (retiring.session), close_reason, notify_reason,
                                       diagnostic);
         }
-        wait_for_retired_core_sessions ();
+        wait_for_retiring_sessions ();
     }
 
     using stream_write_completion_t =
@@ -3630,7 +3644,14 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
     std::vector<core_close_intent_t> _core_pending_disconnects;
     std::mutex _core_sessions_mutex;
     std::map<std::string, std::shared_ptr<core_session_t>> _core_sessions;
-    std::map<std::string, std::shared_ptr<core_session_t>> _retired_core_sessions;
+    /* Sessions whose retirement has not completed, Core and TLS/WebSocket
+     * alike. stop () waits until this is empty (wait_for_retiring_sessions). */
+    struct retiring_session_t
+    {
+        std::shared_ptr<const void> owner;
+        stream_t stream;
+    };
+    std::map<std::string, retiring_session_t> _retiring_sessions;
     std::condition_variable _core_sessions_changed;
     std::uint64_t _core_sessions_revision = 0;
     stream_receive_scheduler_t _receive_scheduler;
