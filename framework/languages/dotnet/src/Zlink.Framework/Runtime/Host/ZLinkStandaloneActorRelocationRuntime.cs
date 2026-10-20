@@ -352,7 +352,14 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     deadline,
                     () => IsOwnerLeaseValid(found.Snapshot),
                     token =>
-                        SubmitBoundaryAsync(boundaryCanonical, target.Rid, data, cutover, token),
+                        SubmitBoundaryAsync(
+                            boundaryCanonical,
+                            target.Rid,
+                            data,
+                            cutover,
+                            token,
+                            () => interruption.Complete()
+                        ),
                     registration.Locations.Options.PollingInterval,
                     cancellationToken,
                     () => sourceNode.Node.ObservePeerRoute(target.Rid)
@@ -398,7 +405,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     target,
                     acceptedCount,
                     settlement.Snapshot?.AuthorityOwnerGeneration,
-                    interruption,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -647,7 +653,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         RoutingId targetRid,
         IReadOnlyList<ZLinkServiceWireCodec.RelocationDataRecord> data,
         ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action? cutoverTerminal = null
     )
     {
         try
@@ -656,9 +663,16 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 await canonical
                     .SendCanonicalRelocationDataAsync(targetRid, record, cancellationToken)
                     .ConfigureAwait(false);
-            await canonical
-                .SendCanonicalRelocationCutoverAsync(targetRid, cutover, cancellationToken)
-                .ConfigureAwait(false);
+            try
+            {
+                await canonical
+                    .SendCanonicalRelocationCutoverAsync(targetRid, cutover, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                cutoverTerminal?.Invoke();
+            }
         }
         catch (ZLinkFrameworkException exception)
             when (exception.Kind == ZLinkFrameworkErrorKind.Unavailable)
@@ -680,7 +694,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         ZLinkMeshNodeDescriptor target,
         int acceptedCount,
         ulong? targetAuthorityOwnerGeneration,
-        ZLinkRelocationInterruptionOperation interruption,
         CancellationToken cancellationToken
     )
     {
@@ -717,7 +730,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             throw new ZLinkRelocationDataLostException(
                 $"Actor '{actorState.ActorId}' could not deliver its pre-cutover Message Follow backlog."
             );
-        interruption.Complete();
         await runtime
             .CompleteStandaloneActorRelocationSourceAsync(
                 actor,

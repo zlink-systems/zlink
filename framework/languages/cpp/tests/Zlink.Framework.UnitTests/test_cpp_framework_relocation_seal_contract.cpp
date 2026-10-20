@@ -840,3 +840,41 @@ TEST (FrameworkRelocationSealContract, bound_session_close_compares_the_current_
     close ("session-host-7f3a", 6);
     EXPECT_EQ (physical_closes, 1);
 }
+
+TEST (FrameworkRelocationSealContract, malformed_command_42_records_invalid_frame_dispatch_error)
+{
+    dispatch_options_t dispatch;
+    dispatch.message_flow (message_flow_log_mode_t::normal);
+    std::vector<message_dispatch_error_event_t> errors;
+    dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      dispatch, [&] (const auto &event) { errors.push_back (event); });
+
+    auto owner = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("malformed-session-seal-owner"),
+        .dispatch = dispatch,
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
+    const auto source_rid = zlink::routing_id_t::from ("malformed-command-42-source");
+    const std::vector<std::uint8_t> malformed{0x5a, 0x4d, 0x01, 0x2a, 0x00};
+    ASSERT_TRUE (owner->transport ().mailbox ().try_enqueue (mesh::service_mailbox_record_t{
+      "malformed-command-42", mesh::service_mailbox_domain_t::infrastructure,
+      zlink::framework::detail::backend::materialize_binding_parts ({malformed}),
+      source_rid.to_bytes (), std::nullopt, std::nullopt, 1}));
+
+    const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
+                                   std::vector<zlink::message_t>) {};
+    try {
+        (void) owner->dispatch_ready (noop_dispatch).result ();
+    }
+    catch (const protocol::service_wire_error_t &) {
+    }
+
+    ASSERT_EQ (errors.size (), 1u);
+    const auto &error = errors.front ();
+    EXPECT_EQ (error.surface, dispatch_error_surface_t::stream_session);
+    EXPECT_EQ (error.message_kind, dispatch_message_kind_t::control);
+    EXPECT_EQ (error.reason, dispatch_error_reason_t::invalid_frame);
+    EXPECT_EQ (error.action, dispatch_error_action_t::drop);
+    EXPECT_EQ (error.packet_name, "sessionRelocationSeal");
+}

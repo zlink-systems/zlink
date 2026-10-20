@@ -76,6 +76,10 @@ namespace zlink::framework::runtime::host
 // between two management passes without waiting for time to pass.
 struct public_host_runtime_test_access_t
 {
+    static void set_dispatch (public_host_runtime_t &host, dispatch_options_t options)
+    {
+        host._options.mesh.dispatch = std::move (options);
+    }
     using key_t = public_host_runtime_t::relocation_attempt_key_t;
 
     static void insert_unscheduled_target_attempt (public_host_runtime_t &host, const key_t &key)
@@ -1497,6 +1501,110 @@ void verify_bound_session_bind_uses_only_three_value_actor_fence ()
     ++wrong_authority.authority_owner_generation;
     assert (classify_same_node_bound_session_bind (requested, wrong_authority)
             == host::bound_session_bind_admission_t::actor_not_ready);
+}
+
+void verify_bind_handler_rejects_missing_session_owner_descriptor (bool test_seal_drop = true)
+{
+    using namespace zlink::framework;
+    auto source = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("descriptor-bind-source"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("descriptor-bind-target"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    std::size_t drops = 0;
+    dispatch_options_t options;
+    options.message_flow (message_flow_log_mode_t::normal);
+    detail::dispatch_options_access_t::set_observer_for_tests (
+      options, [&] (const message_flow_event_t &event) {
+          if (event.packet_name == std::optional<std::string> ("sessionRelocationSeal")
+              && event.outcome == message_flow_outcome_t::dropped
+              && event.reason == message_flow_reason_t::location_unavailable)
+              ++drops;
+      });
+    host::public_host_runtime_test_access_t::set_dispatch (*target, std::move (options));
+    const auto local = target->status ();
+    const stateful::object_ref_t actor{
+      stateful::object_kind_t::actor,  "descriptor-actor", 7, 11, "m6b-mesh",
+      local.routing_id ().to_string ()};
+    const auto creation = target->objects ().begin_reserved_object (actor, "descriptor.actor", {});
+    assert (creation.error == stateful::stateful_error_t::none);
+    assert (target->objects ().commit_create (creation.attempt)
+            == stateful::stateful_error_t::none);
+    int binds = 0;
+    target->configure_bound_session_operations (
+      {.session_owner = [] (const zlink::routing_id_t &, std::uint64_t)
+         -> task_t<std::optional<location_owner_token_t>> { co_return std::nullopt; },
+       .bind =
+         [&] (const auto &, const auto &, std::uint64_t, const auto &, auto) {
+             ++binds;
+             return host::bound_session_bind_operation_result_t{};
+         },
+       .send = [] (const auto &, auto) { return stateful::stateful_error_t::conflict; },
+       .replaced = [] (const auto &) {},
+       .commit_relocation_route = [] (const auto &, const auto &, const auto &) { return false; },
+       .prepare_relocation_target_route = [] (const auto &, std::uint64_t) { return false; }});
+    source->start ();
+    target->start ();
+    assert (source->connect_peer (target->transport ().endpoint (), local.routing_id ()));
+    const auto discard = [] (const host::ready_record_t &, const host::receive_record_t &, auto) {};
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    while ((!ready_peer (source->transport ().topology (), local.routing_id ().to_bytes ())
+            || !ready_peer (target->transport ().topology (),
+                            source->status ().routing_id ().to_bytes ()))
+           && std::chrono::steady_clock::now () < deadline) {
+        await_task (source->dispatch_ready (discard));
+        await_task (target->dispatch_ready (discard));
+    }
+    std::optional<protocol::reply_header_t> reply;
+    const protocol::bound_session_bind_t bind{
+      0,
+      {actor.key, 7, local.routing_id ().to_bytes (), local.lifecycle_generation (), 11, 13},
+      zlink::routing_id_t::from ("descriptor-session").to_bytes (),
+      {protocol::bound_session_binding_state_t::active, 17}};
+    assert (await_task (source->transport ().request_bound_session_bind (
+      local.routing_id ().to_bytes (), bind, 2s,
+      [&] (foundation::operation_terminal_t, zlink::message_t payload) {
+          reply = protocol::decode_reply_header (protocol::message_bytes (payload));
+      })));
+    while (!reply && std::chrono::steady_clock::now () < deadline) {
+        await_task (target->dispatch_ready (discard));
+        await_task (source->dispatch_ready (discard));
+    }
+    assert (reply
+            && reply->terminal_result
+                 == static_cast<std::uint32_t> (protocol::request_terminal_result::internalError)
+            && reply->failure_code
+                 == static_cast<std::uint32_t> (protocol::framework_error_code::routeNotConnected));
+    assert (binds == 0);
+    if (test_seal_drop) {
+        const protocol::session_relocation_seal_t seal{
+          .relocation = {1, 2},
+          .coordinator = {"coordinator", 3, source->status ().routing_id ().to_bytes (),
+                          source->status ().lifecycle_generation (), "store"},
+          .actor = {actor.key, 7, source->status ().routing_id ().to_bytes (),
+                    source->status ().lifecycle_generation (), 11, 13},
+          .session_owner_node_routing_id = local.routing_id ().to_bytes (),
+          .session_owner_node_generation = local.lifecycle_generation (),
+          .session_owner_id = "session-owner",
+          .session_owner_lease_generation = 19,
+          .session_routing_id = bind.session_routing_id,
+          .binding_generation = 17,
+          .target_node_routing_id = source->status ().routing_id ().to_bytes (),
+          .target_node_generation = source->status ().lifecycle_generation ()};
+        assert (target->transport ().mailbox ().try_enqueue (
+          {.owner = "seal",
+           .domain = mesh::service_mailbox_domain_t::infrastructure,
+           .parts = {zlink::message_t::from (protocol::encode_session_relocation_seal (seal))},
+           .source_routing_id = source->status ().routing_id ().to_bytes (),
+           .source_node_generation = source->status ().lifecycle_generation ()}));
+        await_task (target->dispatch_ready (discard));
+        assert (drops == 1);
+    }
+    source->close ();
+    target->close ();
 }
 
 void verify_bound_session_push_uses_session_registry_when_gateway_projection_rejects ()
@@ -7988,6 +8096,14 @@ int main (int argc, char **argv)
 {
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
+    if (argc == 2 && std::string_view (argv[1]) == "--descriptor-bind-handler") {
+        verify_bind_handler_rejects_missing_session_owner_descriptor (false);
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--descriptor-seal-drop") {
+        verify_bind_handler_rejects_missing_session_owner_descriptor ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--creating-subscription") {
         verify_creating_spot_subscription_uses_native_object_lifetime ();
         return 0;
@@ -8023,6 +8139,7 @@ int main (int argc, char **argv)
     verify_remote_bound_session_bind_classifies_retryable_outcomes ();
     verify_local_session_binding_uses_location_authority ();
     verify_bound_session_bind_uses_only_three_value_actor_fence ();
+    verify_bind_handler_rejects_missing_session_owner_descriptor ();
     verify_bound_session_push_uses_session_registry_when_gateway_projection_rejects ();
     verify_bound_session_push_admission_uses_only_session_owned_fields ();
     verify_bound_session_push_source_does_not_prejudge_current_binding ();
