@@ -5237,7 +5237,8 @@ void test_application_relocation_remote_production_path (test_context_t &test,
                                                          bool resolver_failure = false,
                                                          bool post_seal_lookup_failure = false,
                                                          bool missing_target_session_peer = false,
-                                                         bool command44_order = false)
+                                                         bool command44_order = false,
+                                                         bool binding_absent = false)
 {
     using namespace std::chrono_literals;
     namespace detail = zlink::framework::detail;
@@ -5335,6 +5336,9 @@ void test_application_relocation_remote_production_path (test_context_t &test,
         return accepted_record_authority_t{
           {"source-owner", 1, query.source_node_routing_id, query.source_node_generation}, 9};
     });
+    std::atomic_int late_routes{0};
+    if (binding_absent)
+        session_owner.configure_late_session_route_update ([&] (const auto &) { ++late_routes; });
     source.configure_session_route_owner (
       [] { return std::optional<framework::location_owner_token_t>{{"source-owner", 1}}; });
     target.configure_session_route_owner (
@@ -5539,6 +5543,11 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     test.require (initial_inbound_completed,
                   "the active Session ingress must complete before sealing");
 
+    if (binding_absent) {
+        test.require (session_owner.native_node ().sessions ().unbind (session_binding).first
+                        == stateful_error_t::none,
+                      "the Session binding must be absent before command 42");
+    }
     std::atomic<bool> stop_dispatch{false};
     const auto dispatch = [&] (detail::mesh_node_runtime_t &node) {
         while (!stop_dispatch.load (std::memory_order_acquire)) {
@@ -5715,7 +5724,7 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     }
     const auto source_relocation_gate = source.native_node ().maintenance ()->gate_snapshot ();
     const auto route_deadline = operation_deadline;
-    while (result.terminal == relocation_terminal_t::completed
+    while (!binding_absent && result.terminal == relocation_terminal_t::completed
            && std::chrono::steady_clock::now () < route_deadline) {
         const auto current =
           session_owner.native_node ().sessions ().current_binding ("production-remote-actor");
@@ -5732,6 +5741,39 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     target_dispatch.join ();
     session_owner_dispatch.join ();
 
+    object_ref_t expected_target{
+      object_kind_t::actor,         std::string (actor.actor_id ().value ()),
+      actor.object_generation (),   2,
+      "production-relocation-mesh", target.status ().routing_id ().to_string ()};
+    if (binding_absent) {
+        const auto restored = target.native_node ().objects ().find (
+          object_kind_t::actor, std::string (actor.actor_id ().value ()));
+        test.require (
+          result.terminal == relocation_terminal_t::completed
+            && restored == std::optional<object_ref_t>{expected_target} && result.target_handoff
+            && result.target_handoff->sources == std::vector<object_ref_t>{*bound_source_object}
+            && source_relocation_gate == relocation_gate_snapshot_t{},
+          "bindingAbsent must preserve the exact Actor handoff and release the source gate");
+        test.require (
+          !session_owner.native_node ().sessions ().current_binding ("production-remote-actor")
+            && late_routes.load () == 0,
+          "bindingAbsent must not send command 44 or recreate a Session binding");
+        const auto target_actor = detail::actor_ref_access_t::make (
+          framework::node_rid_t::from_string (target.status ().routing_id ().to_string ()),
+          "production.actor", std::string (actor.actor_id ().value ()), actor.object_generation ());
+        test.require (
+          !target_gateway.bound_session_route_async (target_actor).result ().value (),
+          "bindingAbsent must omit the target Session route from the relocation envelope");
+        {
+            const std::lock_guard lock (roots->mutex);
+            test.require (roots->roots.empty (),
+                          "bindingAbsent must not create a durable Session journal");
+        }
+        source.stop ();
+        target.stop ();
+        session_owner.stop ();
+        return;
+    }
     const auto committed_binding =
       session_owner.native_node ().sessions ().current_binding ("production-remote-actor");
     const auto [continued_inbound_error, continued_inbound] =
@@ -5751,10 +5793,6 @@ void test_application_relocation_remote_production_path (test_context_t &test,
         test.require (command44_observed_open_dispatch.load (std::memory_order_acquire),
                       "command 44 must observe restored target dispatch open");
 
-    object_ref_t expected_target{
-      object_kind_t::actor,         std::string (actor.actor_id ().value ()),
-      actor.object_generation (),   2,
-      "production-relocation-mesh", target.status ().routing_id ().to_string ()};
     const auto restored_target = target.native_node ().objects ().find (
       object_kind_t::actor, std::string (actor.actor_id ().value ()));
     const auto target_actor = detail::actor_ref_access_t::make (
@@ -7941,6 +7979,10 @@ int main (int argc, char **argv)
         test_application_user_spot_aggregate_remote_production_path (test);
         return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
+    if (argc == 2 && std::string_view (argv[1]) == "--binding-absent") {
+        test_application_relocation_remote_production_path (test, false, false, false, false, true);
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--route-command44-order") {
         test_application_relocation_remote_production_path (test, false, false, false, true);
         return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
@@ -8098,6 +8140,7 @@ int main (int argc, char **argv)
         test_relocation_ready_boundary (test, mode);
     test_application_relocation_remote_production_path (test, false, false, true);
     test_application_relocation_remote_production_path (test, false, false, false, true);
+    test_application_relocation_remote_production_path (test, false, false, false, false, true);
     test_application_relocation_remote_production_path (test);
     test_application_relocation_remote_production_path (test, false, true);
     test_application_relocation_remote_production_path (test, true);

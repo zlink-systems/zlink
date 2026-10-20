@@ -164,7 +164,12 @@ export class ZLinkActorNativeJoinCoordinator implements ZLinkActorJoinCoordinato
     result: ZLinkActorJoinRuntimeResult<Message>,
     operationId: import('../../contracts').ZLinkActorJoinOperationId | undefined
   ): ZLinkActorJoinRuntimeResult<Message> {
-    if (operationId === undefined || this.options.sourceTransfer === undefined) return result;
+    if (
+      result.sourceCleanup !== undefined ||
+      operationId === undefined ||
+      this.options.sourceTransfer === undefined
+    )
+      return result;
     return {
       ...result,
       finalizeDeferredJoin: async () => {

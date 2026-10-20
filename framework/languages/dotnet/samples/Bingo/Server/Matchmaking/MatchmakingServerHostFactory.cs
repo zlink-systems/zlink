@@ -47,7 +47,7 @@ public static class MatchmakingServerHostFactory
                     redis.KeyPrefix = $"{configuration.RedisKeyPrefix}relocation:";
                 })
             );
-            options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            options.ConfigureDispatch().Diagnostics.SetLevel(configuration.DiagnosticsLevel);
             options.AddHandlersFromAssemblyOf(typeof(MatchmakingServerHostFactory));
             options.Codecs.Use(ZLinkProtobufCodec.Default);
             options

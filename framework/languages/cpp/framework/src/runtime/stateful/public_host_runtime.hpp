@@ -986,7 +986,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     {
         protocol::session_relocation_seal_t seal;
         protocol::session_relocation_sealed_t sealed;
-        std::uint64_t last_accepted_sequence = 0;
         stateful::stream_barrier_t barrier;
         std::chrono::steady_clock::time_point expires_at{};
         bool consumed = false;
@@ -994,12 +993,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         std::vector<std::uint8_t> response_routing_id;
         std::vector<session_seal_local_completion_t> local_completions;
     };
-    using session_relocation_key_t = std::tuple<std::uint64_t,
-                                                std::uint64_t,
-                                                std::string,
-                                                std::uint64_t,
-                                                std::vector<std::uint8_t>,
-                                                std::uint64_t>;
+    using session_relocation_key_t = std::tuple<std::uint64_t, std::uint64_t, std::string>;
     std::map<session_relocation_key_t, session_seal_terminal_record_t> _session_seal_terminals;
     std::map<session_relocation_key_t,
              std::pair<protocol::session_relocation_seal_t, session_relocation_seal_result_t>>

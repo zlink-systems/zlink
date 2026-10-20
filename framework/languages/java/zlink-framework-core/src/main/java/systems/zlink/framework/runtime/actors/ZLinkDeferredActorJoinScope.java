@@ -199,6 +199,8 @@ final class ZLinkDeferredActorJoinScope {
             CompletableFuture<Boolean> activation = new CompletableFuture<>();
             CompletionStage<Void> barrier;
             try {
+                // Release the membership claim inside the mailbox turn, before the
+                // mailbox can admit the next Actor handler.
                 barrier =
                         actorMailbox.apply(
                                 () ->
@@ -206,7 +208,8 @@ final class ZLinkDeferredActorJoinScope {
                                                 .thenCompose(
                                                         active ->
                                                                 active
-                                                                        ? operation.get()
+                                                                        ? neutralize(
+                                                                                intent, operation)
                                                                         : CompletableFuture
                                                                                 .completedFuture(
                                                                                         null)));
@@ -217,7 +220,7 @@ final class ZLinkDeferredActorJoinScope {
             intent.operation =
                     () -> {
                         activation.complete(true);
-                        return barrier;
+                        return barrier.exceptionally(error -> intent.apply(null, error));
                     };
             intent.discard = () -> activation.complete(false);
         }
@@ -228,14 +231,15 @@ final class ZLinkDeferredActorJoinScope {
     }
 
     /**
-     * Runs one intent's own activation and absorbs its outcome so a single failing join can neither
-     * fail the handler's terminal reply nor stall the intents registered after it. The join's own
-     * completion -- accepted, rejected or failed -- still reaches the caller through {@code
-     * onJoinCompleted}; this only stops it from also becoming the dispatch stage's outcome.
+     * Runs one intent's membership operation and absorbs its outcome so a single failing join can
+     * neither fail the handler's terminal reply nor stall the intents registered after it. The
+     * join's own completion -- accepted, rejected or failed -- still reaches the caller through
+     * {@code onJoinCompleted}; this only stops it from also becoming the dispatch stage's outcome.
      */
-    private static CompletionStage<Void> neutralize(Intent intent) {
+    private static CompletionStage<Void> neutralize(
+            Intent intent, Supplier<CompletionStage<Void>> execute) {
         try {
-            CompletionStage<Void> operation = intent.operation.get();
+            CompletionStage<Void> operation = execute.get();
             if (operation != null) {
                 return operation.handle(intent);
             }
@@ -294,7 +298,7 @@ final class ZLinkDeferredActorJoinScope {
                                 CompletionStage<Void> tail =
                                         CompletableFuture.completedFuture(null);
                                 for (Intent intent : List.copyOf(state.intents)) {
-                                    tail = tail.thenCompose(nothing -> neutralize(intent));
+                                    tail = tail.thenCompose(nothing -> intent.operation.get());
                                 }
                                 // Handler completion and deferred membership completion
                                 // are separate terminals. Barrier-backed intents were
@@ -386,7 +390,7 @@ final class ZLinkDeferredActorJoinScope {
                 Runnable releaseClaim) {
             this.owner = owner;
             this.actorId = actorId;
-            this.operation = operation;
+            this.operation = () -> neutralize(this, operation);
             this.discard = discard;
             this.releaseClaim = releaseClaim;
         }

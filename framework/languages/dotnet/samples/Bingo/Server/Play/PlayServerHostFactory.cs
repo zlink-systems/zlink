@@ -58,7 +58,7 @@ public static class PlayServerHostFactory
                     redis.KeyPrefix = $"{configuration.RedisKeyPrefix}relocation:";
                 })
             );
-            options.ConfigureDispatch().Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
+            options.ConfigureDispatch().Diagnostics.SetLevel(configuration.DiagnosticsLevel);
             options.AddHandlersFromAssemblyOf(typeof(PlayServerHostFactory));
             options.Codecs.Use(ZLinkProtobufCodec.Default);
             var mesh = options

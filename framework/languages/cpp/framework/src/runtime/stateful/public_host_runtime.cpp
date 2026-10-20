@@ -3,6 +3,7 @@
 #include "runtime/execution/task_result.hpp"
 #include "runtime/diagnostics/mesh_trace.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
+#include "runtime/diagnostics/session_binding_diagnostics.hpp"
 
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/mesh/service_channel_membership.hpp"
@@ -212,16 +213,12 @@ bool same_relocation_source_fence (
 
 auto session_relocation_key (const protocol::session_relocation_seal_t &seal)
 {
-    return std::tuple{seal.relocation.high,    seal.relocation.low,
-                      seal.actor.actor_id,     seal.actor.object_generation,
-                      seal.session_routing_id, seal.binding_generation};
+    return std::tuple{seal.relocation.high, seal.relocation.low, seal.actor.actor_id};
 }
 
 auto session_relocation_key (const protocol::session_relocation_route_t &route)
 {
-    return std::tuple{route.relocation.high,    route.relocation.low,
-                      route.actor.actor_id,     route.actor.object_generation,
-                      route.session_routing_id, route.binding_generation};
+    return std::tuple{route.relocation.high, route.relocation.low, route.actor.actor_id};
 }
 
 void append_u32 (std::vector<std::uint8_t> &out, std::uint32_t value)
@@ -665,6 +662,7 @@ spot_handle_t::request_to_spot (const zlink::routing_id_t &target_node_rid,
                   completion (terminal, std::move (decoded));
               }
               catch (...) {
+                  host->_options.mesh.runtime_failures->report (std::current_exception ());
               }
           },
           protocol::wire_operation_id_t{operation.id.high, operation.id.low}, std::nullopt);
@@ -1055,6 +1053,7 @@ void public_host_runtime_t::close () noexcept
             maintenance_closing ();
         }
         catch (...) {
+            _options.mesh.runtime_failures->report (std::current_exception ());
         }
     }
     const auto already_sealed =
@@ -1849,19 +1848,24 @@ public_host_runtime_t::admit_session_relocation_seal (
         return {false, std::nullopt};
     }
 
+    flush_pending_session_relocation_seals ();
     const auto relocation_key = session_relocation_key (seal);
-    bool existing_terminal = false;
     const auto existing_result =
       _relocation_session_terminal_lane
         .run ([&] () -> std::optional<
                        std::pair<bool, std::optional<protocol::session_relocation_sealed_t>>> {
             const auto cached = _session_seal_terminals.find (relocation_key);
             if (cached != _session_seal_terminals.end ()) {
-                existing_terminal = true;
                 if (cached->second.seal != seal)
                     return {{false, std::nullopt}};
-                if (cached->second.consumed && !cached->second.ready)
-                    return {{false, std::nullopt}};
+                if (cached->second.consumed) {
+                    const auto &logger =
+                      detail::dispatch_options_access_t::logger (_options.mesh.dispatch);
+                    if (logger)
+                        detail::diagnostic_event_sink_t::log_if_configured (
+                          logger, log_level_t::warn, "late_session_relocation_seal", {});
+                    return {{true, std::nullopt}};
+                }
                 if (!response_routing_id.empty ())
                     cached->second.response_routing_id = std::move (response_routing_id);
                 if (cached->second.ready)
@@ -1873,15 +1877,16 @@ public_host_runtime_t::admit_session_relocation_seal (
             return std::nullopt;
         })
         .get ();
-    if (existing_terminal)
+    if (existing_result)
         return *existing_result;
 
-    const auto session_id = zlink::routing_id_t::from (seal.session_routing_id).to_hex ();
-    const auto admission = _sessions.seal_remote_route (
-      session_id, seal.binding_generation, seal.actor.actor_id, seal.actor.object_generation);
-    if ((admission.error != stateful::stateful_error_t::none
-         && admission.error != stateful::stateful_error_t::backpressured)
-        || !admission.binding || admission.barrier.token == 0) {
+    const auto session_id = stateful::stream_session_registry_t::connection_key (
+      zlink::routing_id_t::from (seal.session_routing_id));
+    const auto admission =
+      _sessions.seal_remote_route (session_id, seal.binding_generation, seal.actor.actor_id,
+                                   seal.actor.object_generation, seal.actor.owner_lease_generation);
+    if (admission.error != stateful::stateful_error_t::none
+        && admission.error != stateful::stateful_error_t::backpressured) {
         return {false, std::nullopt};
     }
 
@@ -1893,15 +1898,17 @@ public_host_runtime_t::admit_session_relocation_seal (
                                                     seal.session_owner_id,
                                                     seal.session_owner_lease_generation,
                                                     seal.session_routing_id,
-                                                    seal.binding_generation};
-    const auto ready = _sessions.remote_route_seal_ready (admission.barrier);
+                                                    seal.binding_generation,
+                                                    admission.seal_result};
+    const auto ready =
+      admission.seal_result == protocol::session_relocation_seal_result_t::binding_absent
+      || _sessions.remote_route_seal_ready (admission.barrier);
     bool inserted = false;
     std::optional<protocol::session_relocation_sealed_t> immediate;
     _relocation_session_terminal_lane
       .run ([&] {
           session_seal_terminal_record_t record{seal,
                                                 ack,
-                                                admission.last_accepted_sequence,
                                                 admission.barrier,
                                                 std::chrono::steady_clock::now ()
                                                   + _options.session_relocation_seal_timeout,
@@ -1911,6 +1918,13 @@ public_host_runtime_t::admit_session_relocation_seal (
                                                 {}};
           if (local_completion && !ready)
               record.local_completions.push_back (local_completion);
+          // A binding retains only its last closed record. The new seal owns its successor.
+          for (auto it = _session_seal_terminals.begin (); it != _session_seal_terminals.end ();) {
+              if (it->second.consumed && it->second.seal.actor.actor_id == seal.actor.actor_id)
+                  it = _session_seal_terminals.erase (it);
+              else
+                  ++it;
+          }
           const auto [stored, was_inserted] =
             _session_seal_terminals.emplace (relocation_key, std::move (record));
           lower_relocation_next_due_on_lane (relocation_due_now);
@@ -2018,6 +2032,11 @@ task_t<bool> public_host_runtime_t::seal_session_remote (
                     || sealed.session_routing_id != expected.session_routing_id
                     || sealed.binding_generation != expected.binding_generation) {
                     completion (foundation::operation_terminal_t::transport_failed, std::nullopt);
+                    return;
+                }
+                if (sealed.seal_result
+                    == protocol::session_relocation_seal_result_t::binding_absent) {
+                    completion (terminal, session_relocation_seal_result_t{sealed, {}});
                     return;
                 }
                 stateful::durable_session_journal_record_t record{
@@ -3054,6 +3073,7 @@ void public_host_runtime_t::discard_relocation_target_attempts (
                 _aggregate_relocation_authority->abort (*attempt.authority_fence);
             }
             catch (...) {
+                _options.mesh.runtime_failures->report (std::current_exception ());
             }
         }
         for (const auto &object : attempt.wire_objects) {
@@ -3062,6 +3082,7 @@ void public_host_runtime_t::discard_relocation_target_attempts (
                   attempt.prepare.relocation, attempt.prepare.target_attempt_generation, object);
             }
             catch (...) {
+                _options.mesh.runtime_failures->report (std::current_exception ());
             }
         }
         try {
@@ -3073,6 +3094,7 @@ void public_host_runtime_t::discard_relocation_target_attempts (
                                                                     attempt.restore_identity);
         }
         catch (...) {
+            _options.mesh.runtime_failures->report (std::current_exception ());
         }
         if (_stateful_dispatch)
             for (const auto &target : attempt.targets) {
@@ -3080,6 +3102,7 @@ void public_host_runtime_t::discard_relocation_target_attempts (
                     (void) _stateful_dispatch->discard_pending (target);
                 }
                 catch (...) {
+                    _options.mesh.runtime_failures->report (std::current_exception ());
                 }
             }
         const relocation_attempt_key_t key{attempt.prepare.relocation.high,
@@ -3201,13 +3224,53 @@ void public_host_runtime_t::flush_pending_session_relocation_seals ()
     std::vector<session_relocation_key_t> pending;
     std::vector<session_relocation_key_t> expired;
     const auto now = std::chrono::steady_clock::now ();
+    const auto consumed =
+      _relocation_session_terminal_lane
+        .run ([&] {
+            std::map<session_relocation_key_t, protocol::session_relocation_seal_t> records;
+            for (const auto &[key, record] : _session_seal_terminals)
+                if (record.consumed
+                    && record.sealed.seal_result
+                         == protocol::session_relocation_seal_result_t::sealed)
+                    records.emplace (key, record.seal);
+            return records;
+        })
+        .get ();
+    // Read each registry fact outside the terminal turn. Only the captured
+    // records may be pruned with it; a successor record needs its own observation.
+    std::map<std::string, std::optional<stateful::stream_binding_t>> current_bindings;
+    for (const auto &[key, seal] : consumed) {
+        const auto [current, inserted] = current_bindings.try_emplace (seal.actor.actor_id);
+        if (inserted)
+            current->second = _sessions.current_binding (seal.actor.actor_id);
+    }
     _relocation_session_terminal_lane
       .run ([&] {
-          for (const auto &[key, record] : _session_seal_terminals) {
-              if (!record.consumed && record.expires_at <= now)
+          for (auto it = _session_seal_terminals.begin (); it != _session_seal_terminals.end ();) {
+              const auto &[key, record] = *it;
+              if (record.sealed.seal_result
+                  == protocol::session_relocation_seal_result_t::binding_absent) {
+                  if (record.expires_at <= now) {
+                      it = _session_seal_terminals.erase (it);
+                      continue;
+                  }
+              } else if (record.consumed) {
+                  const auto captured = consumed.find (key);
+                  if (captured != consumed.end () && captured->second == record.seal) {
+                      const auto &current = current_bindings.at (record.seal.actor.actor_id);
+                      if (!current || current->binding_generation != record.seal.binding_generation
+                          || current->connection.connection_id
+                               != stateful::stream_session_registry_t::connection_key (
+                                 zlink::routing_id_t::from (record.seal.session_routing_id))) {
+                          it = _session_seal_terminals.erase (it);
+                          continue;
+                      }
+                  }
+              } else if (record.expires_at <= now)
                   expired.push_back (key);
-              else if (!record.consumed && !record.ready)
+              else if (!record.ready)
                   pending.push_back (key);
+              ++it;
           }
       })
       .get ();
@@ -3369,6 +3432,7 @@ task_t<void> public_host_runtime_t::submit_relocation_session_routes (relocation
                 journal_store.cleanup (*completed_journal);
             }
             catch (...) {
+                _options.mesh.runtime_failures->report (std::current_exception ());
             }
         }
     }
@@ -3547,6 +3611,7 @@ bool public_host_runtime_t::submit_relocation_target_authority (
         return true;
     }
     catch (...) {
+        _options.mesh.runtime_failures->report (std::current_exception ());
         return false;
     }
 }
@@ -3789,6 +3854,7 @@ void public_host_runtime_t::rollback_actor_join_recoveries (
             _actor_join_recovery_rollback (stable_type, target);
         }
         catch (...) {
+            _options.mesh.runtime_failures->report (std::current_exception ());
         }
     }
 }
@@ -3812,6 +3878,7 @@ void public_host_runtime_t::unregister_relocation_wire_targets (
                                                         wire_object);
         }
         catch (...) {
+            _options.mesh.runtime_failures->report (std::current_exception ());
         }
     }
 }
@@ -4464,6 +4531,7 @@ void public_host_runtime_t::complete_relocation_assembly (
                       wire_objects[index]);
                 }
                 catch (...) {
+                    _options.mesh.runtime_failures->report (std::current_exception ());
                 }
             }
             // Target relocation-wire registration failed (e.g. an existing
@@ -4547,6 +4615,7 @@ bool public_host_runtime_t::register_relocation_target_queue (
            [] (const protocol::relocation_data_t &) {}});
     }
     catch (...) {
+        _options.mesh.runtime_failures->report (std::current_exception ());
         return false;
     }
 }
@@ -5378,6 +5447,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                             message_follow_handler (notice);
                         }
                         catch (...) {
+                            _options.mesh.runtime_failures->report (std::current_exception ());
                         }
                     }
                     continue;
@@ -5766,19 +5836,52 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       "unsupported infrastructure mailbox command");
 
                 if (wire.kind == protocol::command::sessionRelocationSeal) {
-                    if (mailbox_record.parts.size () != 1 || !session_route_owner_resolver)
+                    if (mailbox_record.parts.size () != 1)
                         continue;
-                    const auto seal = protocol::decode_session_relocation_seal (
-                      protocol::message_bytes (mailbox_record.parts.front ()));
-                    const auto owner = session_route_owner_resolver ();
-                    if (!owner)
+                    const auto seal = [&] {
+                        try {
+                            return protocol::decode_session_relocation_seal (
+                              protocol::message_bytes (mailbox_record.parts.front ()));
+                        }
+                        catch (const protocol::service_wire_error_t &) {
+                            detail::dispatch_error_reporter_t (_options.mesh.dispatch)
+                              .report_lazy ([&] {
+                                  message_dispatch_error_event_t event{};
+                                  event.surface = dispatch_error_surface_t::stream_session;
+                                  event.message_kind = dispatch_message_kind_t::control;
+                                  event.reason = detail::dispatch_reason_from_error (
+                                    framework_error_kind_t::protocol_error);
+                                  event.action = dispatch_error_action_t::drop;
+                                  event.packet_name = "sessionRelocationSeal";
+                                  event.source_rid =
+                                    zlink::routing_id_t::from (mailbox_record.source_routing_id)
+                                      .to_hex ();
+                                  event.exception = std::current_exception ();
+                                  return event;
+                              });
+                            throw;
+                        }
+                    }();
+                    const auto owner =
+                      session_route_owner_resolver ? session_route_owner_resolver () : std::nullopt;
+                    if (!owner) {
+                        detail::trace_session_binding_control_drop (
+                          _options.mesh.dispatch, mailbox_record.source_routing_id,
+                          seal.actor.actor_id, "sessionRelocationSeal",
+                          message_flow_reason_t::location_unavailable);
                         continue;
+                    }
                     const auto reconcile = co_await _lifecycle_configuration_lane.run_task (
                       [this] { return _peer_reconcile; });
                     const auto [accepted, immediate] = admit_session_relocation_seal (
                       seal, *owner, mailbox_record.source_routing_id, {}, reconcile);
-                    if (!accepted)
+                    if (!accepted) {
+                        detail::trace_session_binding_control_drop (
+                          _options.mesh.dispatch, mailbox_record.source_routing_id,
+                          seal.actor.actor_id, "sessionRelocationSeal",
+                          message_flow_reason_t::stale_target);
                         continue;
+                    }
                     if (immediate)
                         (void) co_await _transport->send_session_relocation_sealed (
                           mailbox_record.source_routing_id, *immediate);
@@ -5823,8 +5926,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       _relocation_session_terminal_lane
                         .run ([&] {
                             const auto sealed = _session_seal_terminals.find (relocation_key);
-                            if (sealed == _session_seal_terminals.end ()
-                                || sealed->second.consumed) {
+                            if (sealed == _session_seal_terminals.end () || sealed->second.consumed
+                                || sealed->second.sealed.seal_result
+                                     == protocol::session_relocation_seal_result_t::
+                                       binding_absent) {
                                 late_session_route_update = true;
                                 return true;
                             }
@@ -5856,13 +5961,14 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                 late_session_route_update_reporter (route);
                             }
                             catch (...) {
+                                _options.mesh.runtime_failures->report (std::current_exception ());
                             }
                         }
                         continue;
                     }
 
-                    const auto session_id =
-                      zlink::routing_id_t::from (route.session_routing_id).to_hex ();
+                    const auto session_id = stateful::stream_session_registry_t::connection_key (
+                      zlink::routing_id_t::from (route.session_routing_id));
                     stateful::stream_route_admission_t admission;
                     if (route.route.action == protocol::session_relocation_route_action_t::commit) {
                         const auto current = _sessions.current_binding (route.actor.actor_id);
@@ -5941,6 +6047,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                                   std::move (result.application_reply));
                             }
                             catch (...) {
+                                host->_options.mesh.runtime_failures->report (
+                                  std::current_exception ());
                             }
                         };
                         try {
@@ -5992,6 +6100,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                               std::move (result.application_reply));
                         }
                         catch (...) {
+                            host->_options.mesh.runtime_failures->report (
+                              std::current_exception ());
                         }
                     };
                     try {
@@ -6721,6 +6831,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
                                   return true;
                               }
                               catch (...) {
+                                  host->_options.mesh.runtime_failures->report (
+                                    std::current_exception ());
                                   return false;
                               }
                           };
@@ -6738,6 +6850,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
                           *pending, [pending] (const result_t<stateful::stateful_error_t> &) {});
                     }
                     catch (...) {
+                        _options.mesh.runtime_failures->report (std::current_exception ());
                     }
                 }
                 catch (...) {
@@ -6748,6 +6861,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
                           *pending, [pending] (const result_t<stateful::stateful_error_t> &) {});
                     }
                     catch (...) {
+                        _options.mesh.runtime_failures->report (std::current_exception ());
                     }
                 }
             }
@@ -7016,6 +7130,7 @@ bool public_host_runtime_t::wait_for_dispatch_activity (
         return _transport->wait_for_activity (timeout, accept_application_receive);
     }
     catch (...) {
+        _options.mesh.runtime_failures->report (std::current_exception ());
         return false;
     }
 }

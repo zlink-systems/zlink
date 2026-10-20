@@ -18,7 +18,7 @@ const {
   OperationRegistry
 } = require('../../packages/framework/dist/runtime/foundation/operation-registry');
 
-function fixture(targetRid = 'C', expired = false, sourceRid = 'A') {
+function fixture(targetRid = 'C', expired = false, sourceRid = 'A', flowEnabled = false) {
   let submitted;
   const requester = new ServiceStatefulRuntime(
     {
@@ -109,6 +109,7 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A') {
   });
   const target = new ZLinkHostServiceRelocationRuntime({
     registration: { messageSerializers: undefined },
+    flowCreationEnabled: () => flowEnabled,
     locationStore: () => store,
     liveDescriptors: async () => descriptors
   });
@@ -172,6 +173,41 @@ function fixture(targetRid = 'C', expired = false, sourceRid = 'A') {
     acks,
     leaseReads
   };
+}
+
+for (const mode of ['off', 'errors', 'normal', 'detailed']) {
+  test(`relocated Actor reply respects current tracing mode ${mode}`, async () => {
+    const enabled = mode === 'normal' || mode === 'detailed';
+    const f = fixture('C', false, 'A', enabled);
+    const requestHeader = protocol.decodeStreamHeader(Buffer.from(f.packet.header, 'base64'));
+    f.packet.header = Buffer.from(
+      protocol.encodeStreamHeader({
+        ...requestHeader,
+        flowId: '01900000-0000-7000-8000-000000000001',
+        flowOrigin: 'Inbound'
+      })
+    ).toString('base64');
+    try {
+      await f.target.relayTerminalReply('mesh', f.stage, f.coordinator, 1n, f.packet, {
+        index: 0,
+        ok: true,
+        response: { answer: 42 }
+      });
+      const result = await f.pending.promise;
+      const parts = multipart.decodeMultipartParts(
+        result.payload.payload,
+        (bytes) => Buffer.from(bytes),
+        () => {}
+      );
+      const header = protocol.decodeStreamHeader(parts[0]);
+      assert.equal(header.flowId, enabled ? '01900000-0000-7000-8000-000000000001' : undefined);
+      assert.equal(header.flowOrigin, enabled ? 'Inbound' : undefined);
+      assert.equal(header.correlationId, 'original-A');
+      assert.equal(header.requestSeq, 55n);
+    } finally {
+      f.requester.close();
+    }
+  });
 }
 
 for (const targetRid of ['C', 'D']) {
@@ -363,6 +399,11 @@ for (const local of [false, true]) {
           1000
         );
         await admission;
+        assert.equal(reads, 0);
+        assert.equal(
+          await queued.sourcePreparationOwner.prepareDispatch(queued, new AbortController().signal),
+          true
+        );
         assert.strictEqual(queued.requestSource, source);
         assert.strictEqual(queued.stateful.messageFollowOrigin.requestSource, source);
         assert.equal(queued.stateful.messageFollowOrigin.originalReplyRouteId, pending.id);
@@ -392,6 +433,11 @@ for (const local of [false, true]) {
           ]
         };
         assert.equal(await runtime.ingress(ingress), 'application');
+        assert.equal(reads, 0);
+        assert.equal(
+          await queued.sourcePreparationOwner.prepareDispatch(queued, new AbortController().signal),
+          true
+        );
         assert.strictEqual(queued.requestSource, source);
         assert.strictEqual(queued.stateful.messageFollowOrigin.requestSource, source);
         assert.equal(queued.stateful.messageFollowOrigin.originalReplyRouteId, 91n);

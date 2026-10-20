@@ -13,6 +13,10 @@ const {
   ZLinkRequestSourceResolver
 } = require('../../packages/framework/dist/runtime/locations/request-source-resolver');
 const {
+  decodeRoutingId,
+  encodeRoutingIdStorageHex
+} = require('../../packages/framework/dist/runtime/routing-id');
+const {
   ZLinkFrameworkErrorKind,
   ZLinkFrameworkException
 } = require('../../packages/framework/dist');
@@ -38,6 +42,7 @@ for (const scenario of fixture.cases) {
   test(`SourceRequestOwner ${scenario.name}`, async () => {
     const meshName = fixture.meshName;
     const nodeRid = fixture.peer.nodeRid;
+    const nodeRidStorageHex = encodeRoutingIdStorageHex(nodeRid);
     const nodeGeneration = BigInt(fixture.peer.nodeGeneration);
     const ownerId = fixture.descriptor.ownerId;
     const leaseGeneration = BigInt(fixture.descriptor.leaseGeneration);
@@ -69,14 +74,17 @@ for (const scenario of fixture.cases) {
     }
     if (!scenario.leaseLive) nowMs += LEASE_TTL_MS * 2;
 
-    const recorded = await resolver.accept(meshName, nodeRid, nodeGeneration);
+    const recorded = await resolver.accept(meshName, nodeRid, nodeGeneration, nodeRidStorageHex);
 
     assert.equal(descriptorReads, scenario.storeDescriptorReads);
     if (scenario.result === 'accepted') {
       const expected = { ownerId, leaseGeneration, nodeRid, nodeGeneration };
       assert.deepEqual(recorded, expected);
       // The Store answer joins the polled descriptors; the next request does not read the Store.
-      assert.deepEqual(resolver.accept(meshName, nodeRid, nodeGeneration), expected);
+      assert.deepEqual(
+        resolver.accept(meshName, nodeRid, nodeGeneration, nodeRidStorageHex),
+        expected
+      );
       assert.equal(descriptorReads, scenario.storeDescriptorReads);
     } else {
       assert.equal(recorded, undefined);
@@ -111,6 +119,93 @@ function wireValue(name) {
   return found[0];
 }
 
+for (const polled of [false, true]) {
+  test(`SourceRequestOwner compares opaque RID bytes polled=${polled}`, async () => {
+    const descriptor = {
+      rid: decodeRoutingId('same display', 'ff00'),
+      lifecycleGeneration: 5n,
+      ownerId: 'owner',
+      leaseGeneration: 3n
+    };
+    let reads = 0;
+    const resolver = new ZLinkRequestSourceResolver({
+      listLiveMeshNodes: async () => {
+        reads++;
+        return [descriptor];
+      },
+      remainingOwnerTokenLeaseMs: async () => 1000
+    });
+    if (polled) await resolver.observeLiveDescriptors('mesh', [descriptor]);
+    const source = await resolver.accept(
+      'mesh',
+      decodeRoutingId('other display', 'ff00'),
+      5n,
+      'ff00'
+    );
+    assert.equal(source?.ownerId, 'owner');
+    assert.equal(reads, polled ? 0 : 1);
+    assert.strictEqual(resolver.accept('mesh', decodeRoutingId('', 'ff00'), 5n, 'ff00'), source);
+    assert.equal(reads, polled ? 0 : 1);
+    assert.equal(
+      await resolver.accept('mesh', decodeRoutingId('same display', 'ff01'), 5n, 'ff01'),
+      undefined
+    );
+    assert.equal(await resolver.accept('mesh', decodeRoutingId('', 'ff00'), 6n, 'ff00'), undefined);
+  });
+}
+
+test('SourceRequestOwner cache hit reuses the received RID storage key', async () => {
+  const storageKey = encodeRoutingIdStorageHex('sender');
+  const resolver = new ZLinkRequestSourceResolver({
+    listLiveMeshNodes: async () => [],
+    remainingOwnerTokenLeaseMs: async () => 1000
+  });
+  await resolver.observeLiveDescriptors('mesh', [
+    {
+      rid: 'sender',
+      lifecycleGeneration: 5n,
+      ownerId: 'owner',
+      leaseGeneration: 3n
+    }
+  ]);
+
+  const originalToString = Buffer.prototype.toString;
+  let hexStrings = 0;
+  Buffer.prototype.toString = function (encoding, ...args) {
+    if (encoding === 'hex') hexStrings += 1;
+    return Reflect.apply(originalToString, this, [encoding, ...args]);
+  };
+  try {
+    const source = resolver.accept('mesh', 'sender', 5n, storageKey);
+    assert.equal(source?.ownerId, 'owner');
+    assert.equal(hexStrings, 0, 'cache hits reuse the storage key from ingress');
+  } finally {
+    Buffer.prototype.toString = originalToString;
+  }
+});
+
+test('SourceRequestOwner uses received RID bytes instead of its display string', async () => {
+  const runtime = new ServiceStatefulRuntime(
+    {
+      setServiceIngress() {},
+      topology: { peer: () => ({ descriptor: { lifecycleGeneration: 5n } }) }
+    },
+    'local',
+    7n
+  );
+  runtime.setRequestSourceAcceptance((rid, generation, storageKey) => {
+    assert.equal(storageKey, 'ff00');
+    assert.equal(
+      require('../../packages/framework/dist/runtime/routing-id').encodeRoutingIdStorageHex(rid),
+      'ff00'
+    );
+    return { ownerId: 'owner', leaseGeneration: 3n, nodeRid: rid, nodeGeneration: generation };
+  });
+  const ingress = { sourceRoutingId: 'display', sourceRoute: Buffer.from('ff00', 'hex') };
+  await runtime.acceptRequestSource(ingress);
+  assert.equal(ingress.requestSource.ownerId, 'owner');
+});
+
 test('SourceRequestOwner propagates programming errors from Store reads', async () => {
   const error = new TypeError('broken descriptor reader');
   const resolver = new ZLinkRequestSourceResolver({
@@ -119,12 +214,18 @@ test('SourceRequestOwner propagates programming errors from Store reads', async 
     },
     remainingOwnerTokenLeaseMs: async () => 1000
   });
-  await assert.rejects(resolver.accept('mesh', 'sender', 1n), (actual) => actual === error);
+  await assert.rejects(
+    resolver.accept('mesh', 'sender', 1n, encodeRoutingIdStorageHex('sender')),
+    (actual) => actual === error
+  );
 });
 
 const {
   ServiceStatefulRuntime
 } = require('../../packages/framework/dist/runtime/foundation/service-stateful-runtime');
+const {
+  ReceiveKind
+} = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
 const {
   encodeActorHeader,
   M6bServiceWireCommand
@@ -132,6 +233,47 @@ const {
 const {
   encodeApplicationPayload
 } = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
+
+test('Spot and Actor source preparation adds no per-record dispatch closures', () => {
+  const records = [];
+  const runtime = new ServiceStatefulRuntime(
+    {
+      setServiceIngress() {},
+      mailbox: {
+        tryEnqueue(record) {
+          records.push(record);
+          return true;
+        }
+      }
+    },
+    'local',
+    7n
+  );
+  runtime.setRequestSourceAcceptance(() => undefined);
+
+  for (const receiveKind of [ReceiveKind.SpotSend, ReceiveKind.ActorSend]) {
+    runtime.enqueueApplicationFrame(
+      {
+        sourceRoutingId: 'sender',
+        parts: [Buffer.from('header')],
+        applicationJobOwner: { takeInitial: () => ({ close() {} }) }
+      },
+      'owner',
+      Buffer.from('payload'),
+      { receiveKind }
+    );
+  }
+
+  assert.equal(records.length, 2);
+  assert.equal(records[0].prepareDispatch, undefined);
+  assert.equal(records[1].prepareDispatch, undefined);
+  assert.strictEqual(records[0].sourcePreparationOwner, runtime);
+  assert.strictEqual(records[1].sourcePreparationOwner, runtime);
+  assert.strictEqual(
+    records[0].sourcePreparationOwner.prepareDispatch,
+    records[1].sourcePreparationOwner.prepareDispatch
+  );
+});
 
 test('SourceRequestOwner reports typed Store failure and retains its cause', async () => {
   const cause = new Error('connection closed');
@@ -146,26 +288,40 @@ test('SourceRequestOwner reports typed Store failure and retains its cause', asy
     },
     remainingOwnerTokenLeaseMs: async () => 1000
   });
-  await assert.rejects(resolver.accept('mesh', 'sender', 5n), (actual) => actual === error);
+  await assert.rejects(
+    resolver.accept('mesh', 'sender', 5n, encodeRoutingIdStorageHex('sender')),
+    (actual) => actual === error
+  );
   const events = [];
   const replies = [];
+  let queued;
   const raw = {
     setServiceIngress() {},
     topology: { peer: () => ({ descriptor: { lifecycleGeneration: 5n } }) },
+    mailbox: {
+      tryEnqueue(record) {
+        queued = record;
+        return true;
+      }
+    },
     replyService: (_record, parts) => replies.push(parts)
   };
   const runtime = new ServiceStatefulRuntime(raw, 'local', 7n);
+  runtime.createActor('actor');
   runtime.setDispatchErrorReporter(
     { captureEnabled: () => true, report: (event) => events.push(event) },
     'mesh'
   );
-  runtime.setRequestSourceAcceptance((rid, generation) => resolver.accept('mesh', rid, generation));
+  runtime.setRequestSourceAcceptance((rid, generation, storageKey, signal) =>
+    resolver.accept('mesh', rid, generation, storageKey, signal)
+  );
   assert.equal(
     await runtime.ingress({
       command: M6bServiceWireCommand.actorRequest,
       flags: 0,
       sourceRoutingId: 'sender',
       requestSequence: 1n,
+      applicationJobOwner: { takeInitial: () => ({ close() {} }) },
       parts: [
         encodeActorHeader(
           'actorRequest',
@@ -184,7 +340,12 @@ test('SourceRequestOwner reports typed Store failure and retains its cause', asy
         })
       ]
     }),
-    'infrastructure'
+    'application'
+  );
+  assert.equal(events.length, 0, 'source lookup belongs to the claimed record');
+  assert.equal(
+    await queued.sourcePreparationOwner.prepareDispatch(queued, new AbortController().signal),
+    false
   );
   assert.equal(replies.length, 1);
   assert.equal(events.length, 1);

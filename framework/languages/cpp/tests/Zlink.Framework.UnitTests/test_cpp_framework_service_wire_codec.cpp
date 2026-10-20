@@ -369,10 +369,7 @@ void verify_generated_adoption_goldens ()
         for (const auto &item : fixture.at ("canonical")) {
             const auto bytes = from_hex (item.at ("hex").get<std::string> ());
             verify_generated_service_roundtrip (bytes);
-            if (item.value ("name", "") == "sessionRelocationBindingAbsent")
-                assert (runtime_service_rejects (bytes));
-            else
-                verify_runtime_service_roundtrip (bytes);
+            verify_runtime_service_roundtrip (bytes);
         }
         if (fixture.contains ("malformed")) {
             for (const auto &item : fixture.at ("malformed")) {

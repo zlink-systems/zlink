@@ -1508,6 +1508,53 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
+    void concurrentAbsentSealsRejectChangedFieldsBeforePublishingTheFirstReply() throws Exception {
+        var pending = new java.util.concurrent.ConcurrentLinkedQueue<Runnable>();
+        var executor =
+                new java.util.concurrent.atomic.AtomicReference<java.util.concurrent.Executor>(
+                        pending::add);
+        var stateLane =
+                new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(
+                        work -> executor.get().execute(work));
+        ReplacementFixture fixture = startReplacement(new FakeStream(), stateLane);
+        runtimes.add(fixture.runtime());
+        var actor = new ZLinkBackendActorRef(RoutingId.from("actor-node"), "absent-actor", 7);
+        var relocation = new ZLinkServiceM6BWireCodec.RelocationIdentity(19, 1);
+        var first = sessionSeal(relocation, actor, PEER_A, 1);
+        var changed = sessionSeal(relocation, actor, PEER_A, 2);
+        var codec = new ZLinkServiceM6BWireCodec();
+        var accepted =
+                fixture.runtime()
+                        .handleSessionRelocationSeal(
+                                actor.nodeRid(), codec.encodeSessionRelocationSeal(first))
+                        .toCompletableFuture();
+        var rejected =
+                fixture.runtime()
+                        .handleSessionRelocationSeal(
+                                actor.nodeRid(), codec.encodeSessionRelocationSeal(changed))
+                        .toCompletableFuture();
+        executor.set(Runnable::run);
+        Runnable work;
+        while ((work = pending.poll()) != null) work.run();
+
+        assertEquals(
+                ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT,
+                ServiceWirePilotCodec.decodeSessionRelocationSealed43(
+                                accepted.get(5, TimeUnit.SECONDS))
+                        .sealResult());
+        var failure =
+                assertThrows(
+                        java.util.concurrent.ExecutionException.class,
+                        () -> rejected.get(5, TimeUnit.SECONDS));
+        assertEquals(
+                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                ((ZLinkFrameworkException) failure.getCause()).kind());
+        assertEquals(
+                ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT,
+                sealResult(fixture.runtime(), actor, first));
+    }
+
+    @Test
     void command42NamingAnotherSessionOwnerIdentityIsRejected() throws Exception {
         FakeStream stream = new FakeStream();
         ReplacementFixture fixture = startReplacement(stream);
@@ -1868,6 +1915,100 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     private static ReplacementFixture startReplacement(FakeStream stream) {
+        return startReplacement(
+                stream,
+                new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(),
+                () -> true);
+    }
+
+    private static ReplacementFixture startReplacement(
+            FakeStream stream,
+            systems.zlink.framework.runtime.internal.execution.ZLinkStateLane stateLane) {
+        return startReplacement(stream, stateLane, () -> true);
+    }
+
+    @Test
+    void descriptorUnavailableAndMalformedCommandRecordDropOutcome() throws Exception {
+        var available = new java.util.concurrent.atomic.AtomicBoolean(true);
+        var fixture =
+                startReplacement(
+                        new FakeStream(),
+                        new systems.zlink.framework.runtime.internal.execution.ZLinkStateLane(),
+                        available::get);
+        runtimes.add(fixture.runtime());
+        var session = awaitSession();
+        assertTrue(session.dispatchLatch.await(5, TimeUnit.SECONDS));
+        var actorRef = new ZLinkBackendActorRef(RoutingId.from("actor-node"), REPLACEMENT_ACTOR, 7);
+        List<String> lines = new CopyOnWriteArrayList<>();
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        Handler handler =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        lines.add(record.getMessage());
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.addHandler(handler);
+        try {
+            available.set(false);
+            fixture.runtime().handleBoundSessionReplaced(actorRef.nodeRid(), replacement(actorRef));
+            var seal =
+                    sessionSeal(
+                            new ZLinkServiceM6BWireCodec.RelocationIdentity(1, 2),
+                            actorRef,
+                            PEER_A,
+                            1);
+            assertThrows(
+                    CompletionException.class,
+                    () ->
+                            fixture.runtime()
+                                    .handleSessionRelocationSeal(
+                                            actorRef.nodeRid(),
+                                            new ZLinkServiceM6BWireCodec()
+                                                    .encodeSessionRelocationSeal(seal))
+                                    .toCompletableFuture()
+                                    .join());
+            assertThrows(
+                    RuntimeException.class,
+                    () ->
+                            fixture.runtime()
+                                    .handleSessionRelocationSeal(actorRef.nodeRid(), new byte[0])
+                                    .toCompletableFuture()
+                                    .join());
+            var drops =
+                    lines.stream()
+                            .filter(line -> line.contains("reason=location_unavailable"))
+                            .toList();
+            assertEquals(2, drops.size());
+            assertTrue(
+                    drops.stream()
+                            .allMatch(
+                                    line ->
+                                            line.contains("phase=dropped")
+                                                    && line.contains("outcome=dropped")));
+            var decodeErrors =
+                    lines.stream()
+                            .filter(line -> line.contains("event_id=zlink.dispatch_error"))
+                            .toList();
+            assertEquals(1, decodeErrors.size());
+            assertTrue(decodeErrors.get(0).contains("outcome=failed"));
+            assertTrue(decodeErrors.get(0).contains("reason=invalid_frame"));
+            assertTrue(decodeErrors.get(0).contains("action=drop"));
+        } finally {
+            logger.removeHandler(handler);
+        }
+    }
+
+    private static ReplacementFixture startReplacement(
+            FakeStream stream,
+            systems.zlink.framework.runtime.internal.execution.ZLinkStateLane stateLane,
+            java.util.function.BooleanSupplier ownerAvailable) {
         stream.enqueue(PEER_A, frame("initial", "{}"));
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
         options.setSessionReplacementCallbackTimeout(Duration.ofMillis(100));
@@ -1921,14 +2062,16 @@ final class ZLinkStreamRuntimeIngressTest {
                                             case "lifecycleGeneration" -> 3L;
                                             case "localAuthorityLeaseGeneration" -> 5L;
                                             case "localSessionOwner" ->
-                                                    java.util.Optional.of(
-                                                            new ZLinkInternalMeshNode
-                                                                    .PeerAuthorityFence(
-                                                                    RoutingId.from(
-                                                                            "session-owner-node"),
-                                                                    3,
-                                                                    "session-owner",
-                                                                    5));
+                                                    ownerAvailable.getAsBoolean()
+                                                            ? java.util.Optional.of(
+                                                                    new ZLinkInternalMeshNode
+                                                                            .PeerAuthorityFence(
+                                                                            RoutingId.from(
+                                                                                    "session-owner-node"),
+                                                                            3,
+                                                                            "session-owner",
+                                                                            5))
+                                                            : java.util.Optional.empty();
                                             case "requestPeerReconcile" -> {
                                                 requestedPeer.set((RoutingId) arguments[0]);
                                                 requestedGeneration.set((Long) arguments[1]);
@@ -1953,7 +2096,25 @@ final class ZLinkStreamRuntimeIngressTest {
                                 null,
                                 null,
                                 new FakeContext(),
-                                false)
+                                false,
+                                (ignoredBackend, ignoredKey) ->
+                                        (ignoredSubmission, ignoredCleanup) ->
+                                                CompletableFuture.failedFuture(
+                                                        new IllegalStateException(
+                                                                "one-way admission factory is required")),
+                                System::nanoTime,
+                                () ->
+                                        java.util.concurrent.Executors
+                                                .newSingleThreadScheduledExecutor(
+                                                        task -> {
+                                                            Thread thread =
+                                                                    new Thread(
+                                                                            task,
+                                                                            "zlink-stream-liveness");
+                                                            thread.setDaemon(true);
+                                                            return thread;
+                                                        }),
+                                stateLane)
                         .start();
         return new ReplacementFixture(runtime, actors, requestedPeer, requestedGeneration);
     }

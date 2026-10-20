@@ -41,6 +41,44 @@ import java.util.concurrent.atomic.AtomicReference;
 final class ZLinkSerialExecutionQueueTest {
     private static final long LIFECYCLE_GATE_WAIT_SECONDS = 3;
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void lifecycleTransitionCompletesAfterOrdinaryAwaitThenYield(boolean shared) throws Exception {
+        var executor = new CountingExecutor();
+        var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        if (shared) new ZLinkSerialExecutionQueue.SharedSpotGate(queue);
+        var ordinary = new CompletableFuture<Void>();
+        var infrastructure = new CompletableFuture<Void>();
+        try {
+            var transition =
+                    queue.enqueueLifecycleTransition(
+                                    () ->
+                                            ZLinkSerialExecutionQueue.manageCurrentInTurn(ordinary)
+                                                    .thenCompose(
+                                                            ignored ->
+                                                                    ZLinkSerialExecutionQueue
+                                                                            .yieldCurrent(
+                                                                                    infrastructure)),
+                                    ignored -> CompletableFuture.completedFuture(null),
+                                    () -> true,
+                                    ignored -> false)
+                            .toCompletableFuture();
+            executor.take().run();
+            assertFalse(transition.isDone());
+            ordinary.complete(null);
+            executor.take().run();
+            assertFalse(transition.isDone());
+            infrastructure.complete(null);
+            executor.runUntil(transition);
+            transition.get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+            executor.runUntil(queue.awaitQuiescence().toCompletableFuture());
+        } finally {
+            ordinary.complete(null);
+            infrastructure.complete(null);
+            queue.close();
+        }
+    }
+
     @Test
     void activationPreparationKeepsInitializationYieldOnItsSharedGate() throws Exception {
         try (var executor = Executors.newSingleThreadExecutor()) {

@@ -12,6 +12,7 @@
 #include "runtime/timers/timer_runtime.hpp"
 
 #include <gtest/gtest.h>
+#include <service_wire_pilot_codec.hpp>
 
 #include <atomic>
 #include <chrono>
@@ -75,7 +76,7 @@ TEST (FrameworkRelocationSealContract, public_actor_push_submits_while_session_r
     ASSERT_EQ (bind_error, stateful::stateful_error_t::none);
     const auto sealed = session_owner->sessions ().seal_remote_route (
       connection.connection_id, binding.binding_generation, session_actor.key,
-      session_actor.object_generation);
+      session_actor.object_generation, binding.owner_lease_generation);
     ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
 
     host::bound_session_operations_t operations;
@@ -278,7 +279,8 @@ TEST (FrameworkRelocationSealContract, relay_drain_keeps_seal_until_native_submi
     const auto [error, binding] = owner->sessions ().bind_remote (connection, actor, 1, 17);
     ASSERT_EQ (error, stateful::stateful_error_t::none);
     const auto seal = owner->sessions ().seal_remote_route (
-      connection.connection_id, binding.binding_generation, actor.key, actor.object_generation);
+      connection.connection_id, binding.binding_generation, actor.key, actor.object_generation,
+      binding.owner_lease_generation);
     ASSERT_EQ (seal.error, stateful::stateful_error_t::none);
     auto native_submission = std::make_shared<task_completion_source_t<void>> ();
     std::promise<void> first_started;
@@ -344,7 +346,8 @@ TEST (FrameworkRelocationSealContract, terminal_hook_failure_does_not_veto_commi
         const auto [error, binding] = owner->sessions ().bind_remote (connection, actor, 1, 17);
         ASSERT_EQ (error, stateful::stateful_error_t::none);
         const auto seal = owner->sessions ().seal_remote_route (
-          connection.connection_id, binding.binding_generation, actor.key, actor.object_generation);
+          connection.connection_id, binding.binding_generation, actor.key, actor.object_generation,
+          binding.owner_lease_generation);
         ASSERT_EQ (seal.error, stateful::stateful_error_t::none);
         std::promise<void> delivered;
         auto delivery = delivered.get_future ();
@@ -423,10 +426,12 @@ TEST (FrameworkRelocationSealContract, drain_failure_only_settles_failed_actor_w
       owner->sessions ().bind_remote (connection, other_actor, 1, 17);
     ASSERT_EQ (error, stateful::stateful_error_t::none);
     ASSERT_EQ (other_error, stateful::stateful_error_t::none);
-    const auto seal = owner->sessions ().seal_remote_route (
-      connection.connection_id, binding.binding_generation, actor.key, 7);
-    const auto other_seal = owner->sessions ().seal_remote_route (
-      connection.connection_id, other.binding_generation, other_actor.key, 7);
+    const auto seal =
+      owner->sessions ().seal_remote_route (connection.connection_id, binding.binding_generation,
+                                            actor.key, 7, binding.owner_lease_generation);
+    const auto other_seal =
+      owner->sessions ().seal_remote_route (connection.connection_id, other.binding_generation,
+                                            other_actor.key, 7, other.owner_lease_generation);
     auto failure = std::make_shared<task_completion_source_t<void>> ();
     std::promise<message_flow_reason_t> settled;
     auto settlement = settled.get_future ();
@@ -509,8 +514,9 @@ TEST (FrameworkRelocationSealContract,
       stateful::object_kind_t::actor, "settlement-actor", 7, 11, "mesh", "settlement-target"};
     const auto [error, binding] = owner->sessions ().bind_remote (connection, actor, 1, 17);
     ASSERT_EQ (error, stateful::stateful_error_t::none);
-    const auto seal = owner->sessions ().seal_remote_route (
-      connection.connection_id, binding.binding_generation, actor.key, 7);
+    const auto seal =
+      owner->sessions ().seal_remote_route (connection.connection_id, binding.binding_generation,
+                                            actor.key, 7, binding.owner_lease_generation);
     ASSERT_EQ (seal.error, stateful::stateful_error_t::none);
     int settlements = 0;
     auto completion = std::make_shared<task_completion_source_t<void>> ();
@@ -569,7 +575,8 @@ TEST (FrameworkRelocationSealContract, old_drain_failure_preserves_new_binding_s
       owner->sessions ().bind_remote (first_connection, actor, 1, 17);
     ASSERT_EQ (error, stateful::stateful_error_t::none);
     const auto first_seal = owner->sessions ().seal_remote_route (
-      first_connection.connection_id, first_binding.binding_generation, actor.key, 7);
+      first_connection.connection_id, first_binding.binding_generation, actor.key, 7,
+      first_binding.owner_lease_generation);
     auto failure = std::make_shared<task_completion_source_t<void>> ();
     std::promise<void> started, reported;
     auto start = started.get_future ();
@@ -605,7 +612,8 @@ TEST (FrameworkRelocationSealContract, old_drain_failure_preserves_new_binding_s
       owner->sessions ().bind_remote (next_connection, actor, 1, 17);
     ASSERT_EQ (next_error, stateful::stateful_error_t::none);
     const auto next_seal = owner->sessions ().seal_remote_route (
-      next_connection.connection_id, next_binding.binding_generation, actor.key, 7);
+      next_connection.connection_id, next_binding.binding_generation, actor.key, 7,
+      next_binding.owner_lease_generation);
     ASSERT_EQ (next_seal.error, stateful::stateful_error_t::none);
     std::promise<bool> delivered;
     auto delivery = delivered.get_future ();
@@ -809,8 +817,11 @@ TEST (FrameworkRelocationSealContract, bound_session_close_compares_the_current_
       [descriptor_owner] { return std::optional<location_owner_token_t> (descriptor_owner); });
     int physical_closes = 0;
     const auto session_rid = zlink::routing_id_t::from ("close-session-rid");
-    const auto connection = session_owner->sessions ().open (session_rid.to_hex (), {}, {}, 0,
-                                                             [&] { ++physical_closes; });
+    const auto connection =
+      session_owner->sessions ().open (session_rid.to_hex (), {}, {}, 0, [&] () -> task_t<void> {
+          ++physical_closes;
+          co_return;
+      });
     const stateful::object_ref_t session_actor{
       stateful::object_kind_t::actor, "close-actor", 7, 11, "player", "close-actor-owner"};
     const auto [bind_error, binding] =
@@ -841,4 +852,103 @@ TEST (FrameworkRelocationSealContract, bound_session_close_compares_the_current_
     EXPECT_EQ (physical_closes, 0);
     close ("session-host-7f3a", 6);
     EXPECT_EQ (physical_closes, 1);
+}
+
+TEST (FrameworkRelocationSealContract, malformed_command_42_records_invalid_frame_dispatch_error)
+{
+    dispatch_options_t dispatch;
+    dispatch.message_flow (message_flow_log_mode_t::normal);
+    std::vector<message_dispatch_error_event_t> errors;
+    dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      dispatch, [&] (const auto &event) { errors.push_back (event); });
+
+    auto owner = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = test_descriptor ("malformed-session-seal-owner"),
+        .dispatch = dispatch,
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
+    const auto source_rid = zlink::routing_id_t::from ("malformed-command-42-source");
+    const std::vector<std::uint8_t> malformed{0x5a, 0x4d, 0x01, 0x2a, 0x00};
+    ASSERT_TRUE (owner->transport ().mailbox ().try_enqueue (mesh::service_mailbox_record_t{
+      "malformed-command-42", mesh::service_mailbox_domain_t::infrastructure,
+      zlink::framework::detail::backend::materialize_binding_parts ({malformed}),
+      source_rid.to_bytes (), std::nullopt, std::nullopt, 1}));
+
+    const auto noop_dispatch = [] (const host::ready_record_t &, const host::receive_record_t &,
+                                   std::vector<zlink::message_t>) {};
+    try {
+        (void) owner->dispatch_ready (noop_dispatch).result ();
+    }
+    catch (const protocol::service_wire_error_t &) {
+    }
+
+    ASSERT_EQ (errors.size (), 1u);
+    const auto &error = errors.front ();
+    EXPECT_EQ (error.surface, dispatch_error_surface_t::stream_session);
+    EXPECT_EQ (error.message_kind, dispatch_message_kind_t::control);
+    EXPECT_EQ (error.reason, dispatch_error_reason_t::invalid_frame);
+    EXPECT_EQ (error.action, dispatch_error_action_t::drop);
+    EXPECT_EQ (error.packet_name, "sessionRelocationSeal");
+}
+
+TEST (FrameworkRelocationSealContract, binding_absent_wire_result_round_trips_through_runtime)
+{
+    protocol::session_relocation_sealed_t record{{81, 82},
+                                                 {"coordinator", 7, {'c'}, 1, "store-v1"},
+                                                 {"actor", 3, {'a'}, 1, 5, 9},
+                                                 {'s'},
+                                                 1,
+                                                 "session-owner",
+                                                 11,
+                                                 {'r'},
+                                                 13};
+    auto generated = protocol::decode_session_relocation_sealed_43 (
+      protocol::encode_session_relocation_sealed (record));
+    generated.seal_result = protocol::service_wire_pilot_session_seal_result::binding_absent;
+    const auto foreign_wire = protocol::encode_session_relocation_sealed_43 (generated);
+    EXPECT_EQ (protocol::encode_session_relocation_sealed (
+                 protocol::decode_session_relocation_sealed (foreign_wire)),
+               foreign_wire);
+}
+
+TEST (FrameworkRelocationSealContract, bound_close_preserves_transport_terminal_and_other_bindings)
+{
+    stateful::stream_session_registry_t sessions (
+      [] (const std::string &) -> std::optional<stateful::object_ref_t> { return std::nullopt; });
+    task_completion_source_t<void> transport;
+    int closes = 0;
+    const auto rid = zlink::routing_id_t::from ("terminal-session");
+    const auto connection = sessions.open (rid.to_hex (), {}, {}, 0, [&] {
+        ++closes;
+        return transport.task ();
+    });
+    const stateful::object_ref_t actor{
+      stateful::object_kind_t::actor, "terminal-actor", 7, 11, "player", "actor-owner"};
+    const auto [error, binding] = sessions.bind_remote (connection, actor, 1, 13);
+    ASSERT_EQ (error, stateful::stateful_error_t::none);
+    auto other_actor = actor;
+    other_actor.key = "other-actor";
+    const auto other_connection = sessions.open ("other-session");
+    const auto [other_error, other_binding] =
+      sessions.bind_remote (other_connection, other_actor, 1, 13);
+    ASSERT_EQ (other_error, stateful::stateful_error_t::none);
+    const protocol::retired_bound_session_route_fence_t owner{{'n'}, 1, "session-owner", 17, {}, 0};
+    const protocol::bound_session_close_t request{
+      1,
+      actor.key,
+      actor.object_generation,
+      {{'n'}, 1, "session-owner", 17, rid.to_bytes (), binding.binding_generation}};
+    auto pending = sessions.close_current (request, owner);
+    EXPECT_EQ (closes, 1);
+    EXPECT_FALSE (pending.await_ready ());
+    EXPECT_TRUE (sessions.is_current (binding));
+    EXPECT_TRUE (sessions.is_current (other_binding));
+    transport.complete (
+      result_t<void>::failure (framework_error_kind_t::unavailable, "transport close failed"));
+    const auto failed = pending.result ();
+    ASSERT_FALSE (failed);
+    EXPECT_EQ (failed.error_kind (), framework_error_kind_t::unavailable);
+    EXPECT_STREQ (failed.error ()->what (), "transport close failed");
+    EXPECT_TRUE (sessions.is_current (other_binding));
 }

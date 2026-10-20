@@ -7090,6 +7090,10 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         return dispatchErrors.flow().captureEnabled();
     }
 
+    boolean dispatchErrorsEnabled() {
+        return dispatchErrors.errorsEnabled();
+    }
+
     /** Spec 26 §4 spot-actor trace: strings are built only after the gate. */
     private void traceActorFlow(
             ZLinkMessageFlowOutcome outcome,
@@ -7158,35 +7162,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                 failure.sourceRid,
                 failure.correlationId,
                 failure.error);
-    }
-
-    void reportAcceptedActorReplayFailure(
-            String spotId, ZLinkActorAcceptedJournal.Record record, Throwable failure) {
-        if (!dispatchErrors.errorsEnabled()) return;
-        boolean request = record.header().requestSequence().isPresent();
-        reportDispatchError(
-                DispatchFailureReport.of(
-                                ZLinkDispatchErrorSurface.SPOT_ACTOR,
-                                request
-                                        ? ZLinkDispatchMessageKind.ACTOR_REQUEST
-                                        : ZLinkDispatchMessageKind.ACTOR_SEND,
-                                ZLinkDispatchErrorReporter.reasonFrom(
-                                        failure,
-                                        systems.zlink.framework.runtime.internal.backend
-                                                .ZLinkRequestFailureMapping.causeCode(failure)),
-                                request
-                                        ? ZLinkDispatchErrorAction.REPLY_ERROR
-                                        : ZLinkDispatchErrorAction.DROP)
-                        .packetName(record.header().packetName())
-                        .spotId(spotId)
-                        .actorId(record.actorId())
-                        .sourceRid(record.sourceNodeRid())
-                        .correlationId(
-                                record.header()
-                                        .requestSequence()
-                                        .map(Long::toUnsignedString)
-                                        .orElse(null))
-                        .error(failure));
     }
 
     void reportSpotLifecycleFailure(String spotId, Throwable failure) {

@@ -2,13 +2,17 @@ package systems.zlink.framework.runtime.host;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.framework.channels.ZLinkRouteMeshRuntimeOptions;
+import systems.zlink.framework.locations.ZLinkPageRequest;
 import systems.zlink.framework.monitoring.ZLinkListenerKind;
 import systems.zlink.framework.monitoring.ZLinkMeshNodeSnapshot;
 import systems.zlink.framework.monitoring.ZLinkMeshPeerSnapshot;
@@ -18,14 +22,17 @@ import systems.zlink.framework.monitoring.ZLinkTopologyReason;
 import systems.zlink.framework.monitoring.ZLinkTopologyState;
 import systems.zlink.framework.runtime.binding.ZLinkJavaBackendAdapterFactory;
 import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOptions;
+import systems.zlink.framework.runtime.internal.locations.ZLinkProviderLocationRepository;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryProviderLocationStore;
 
 import java.net.ServerSocket;
 import java.time.Duration;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Flow;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
@@ -432,6 +439,82 @@ final class ZLinkRouteMeshRuntimeViewTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(ints = {0, 100})
+    void localPlacementIgnoresStaleStoreResult(int weight) throws Exception {
+        var localRid = rid("stale-store");
+        var store = new HeldScanStore(new ZLinkInMemoryProviderLocationStore());
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(store);
+        options.addRouteMesh(MESH)
+                .listen("tcp://127.0.0.1:0")
+                .setRoutingId(localRid)
+                .setPlacementWeight(100)
+                .objects()
+                .server();
+        try (var runtime = start(options)) {
+            ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
+                    .toCompletableFuture()
+                    .get(WAIT.toMillis(), TimeUnit.MILLISECONDS);
+            assertEquals(ZLinkFrameworkRuntimeState.SERVING, runtime.status().state());
+            var observed = new LinkedBlockingQueue<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>>();
+            runtime.routeMeshRuntime()
+                    .observe(MESH, 8)
+                    .subscribe(subscriber(observed::add, Long.MAX_VALUE));
+            var initial = observed.poll(WAIT.toMillis(), TimeUnit.MILLISECONDS);
+            assertNotNull(initial);
+            assertTrue(initial.status().placement().isAvailable());
+
+            // Capture the initial descriptor before mutation; only its completion is delayed.
+            store.holdScansFrom(Thread.currentThread());
+            var query =
+                    new ZLinkProviderLocationRepository(store)
+                            .listMeshNodes(MESH, ZLinkPageRequest.firstPage())
+                            .toCompletableFuture();
+            try {
+                assertEquals(1, store.heldScanCount());
+                assertFalse(query.isDone());
+                ((ZLinkRouteMeshRuntimeOptions) runtime.routeMeshRuntime())
+                        .mesh(MESH)
+                        .setPlacementWeight(weight);
+                if (weight == 0) {
+                    var changed = observed.poll(WAIT.toMillis(), TimeUnit.MILLISECONDS);
+                    assertNotNull(changed);
+                    assertLocalPlacement(changed.status(), weight);
+                }
+                assertLocalPlacement(runtime.routeMeshRuntime().snapshot(MESH), weight);
+            } finally {
+                store.release();
+            }
+            var stale = query.get(WAIT.toMillis(), TimeUnit.MILLISECONDS).items();
+            assertEquals(1, stale.size());
+            assertEquals(localRid, stale.getFirst().rid());
+            assertEquals(100, stale.getFirst().placementWeight());
+            assertLocalPlacement(runtime.routeMeshRuntime().snapshot(MESH), weight);
+            for (var item : observed) {
+                assertLocalPlacement(item.status(), weight);
+            }
+
+            var first = new CompletableFuture<ZLinkObservedStatus<ZLinkMeshNodeSnapshot>>();
+            runtime.routeMeshRuntime().observe(MESH, 1).subscribe(subscriber(first::complete, 1));
+            var current = first.get(WAIT.toMillis(), TimeUnit.MILLISECONDS);
+            assertLocalPlacement(current.status(), weight);
+            assertEquals(0, current.loss().coalescedCount());
+            assertEquals(0, current.loss().discardedTerminalCount());
+        }
+    }
+
+    private static void assertLocalPlacement(ZLinkMeshNodeSnapshot status, int weight) {
+        assertEquals(weight > 0, status.placement().isAvailable(), status::toString);
+        if (weight == 0) {
+            assertEquals(
+                    ZLinkTopologyReason.CAPACITY_EXCEEDED,
+                    status.placement().unavailableReason().orElseThrow());
+        } else {
+            assertTrue(status.placement().unavailableReason().isEmpty());
+        }
+    }
+
     @Test
     void placementEventsProjectCapacityAndWeightChanges() throws Exception {
         var options = new DefaultZLinkFrameworkOptions();
@@ -560,7 +643,9 @@ final class ZLinkRouteMeshRuntimeViewTest {
         }
     }
 
-    /** Holds the scans one thread issues until the test releases them. */
+    /**
+     * Captures scans from one thread and withholds their completion until the test releases them.
+     */
     private static final class HeldScanStore
             implements systems.zlink.framework.locationprovider.ZLinkLocationStore {
         private final systems.zlink.framework.locationprovider.ZLinkLocationStore delegate;
@@ -617,14 +702,14 @@ final class ZLinkRouteMeshRuntimeViewTest {
             var result =
                     new java.util.concurrent.CompletableFuture<
                             systems.zlink.framework.locationprovider.ZLinkStoreScanResult>();
+            var captured = delegate.scan(request, cancellation);
             held.add(
                     () ->
-                            delegate.scan(request, cancellation)
-                                    .whenComplete(
-                                            (value, failure) -> {
-                                                if (failure == null) result.complete(value);
-                                                else result.completeExceptionally(failure);
-                                            }));
+                            captured.whenComplete(
+                                    (value, failure) -> {
+                                        if (failure == null) result.complete(value);
+                                        else result.completeExceptionally(failure);
+                                    }));
             return result;
         }
     }
