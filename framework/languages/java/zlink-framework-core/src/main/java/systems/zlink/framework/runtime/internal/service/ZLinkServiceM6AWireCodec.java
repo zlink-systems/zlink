@@ -97,8 +97,8 @@ public final class ZLinkServiceM6AWireCodec {
     public ZLinkServiceNodeDescriptor decodeAdmission(
             byte[] frame, int expectedCommand, RoutingId sourceRoutingId) {
         requireAdmissionCommand(expectedCommand);
-        Header header = decodeHeader(frame);
-        if (header.command() != expectedCommand || header.flags() != 0) {
+        int header = decodeHeaderFields(frame);
+        if ((header >>> Byte.SIZE) != expectedCommand || (header & 0xff) != 0) {
             throw protocol("unexpected admission header");
         }
         Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
@@ -129,7 +129,8 @@ public final class ZLinkServiceM6AWireCodec {
         for (int index = 0; index < channelCount; index++) {
             channels.add(
                     new ZLinkServiceNodeDescriptor.Channel(
-                            reader.text8("channelName"), reader.intU32("channelWeight")));
+                            reader.text8("channelName"),
+                            reader.intU32("channelWeight")));
         }
         long extensionLength = reader.u32("extensionLength");
         if (extensionLength != reader.remaining()) {
@@ -217,8 +218,8 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     public long decodeNodeRequestHeader(byte[] frame) {
-        Header header = decodeHeader(frame);
-        if (header.command() != ServiceWireConstants.COMMAND_NODE_REQUEST) {
+        int header = decodeHeaderFields(frame);
+        if ((header >>> Byte.SIZE) != ServiceWireConstants.COMMAND_NODE_REQUEST) {
             throw protocol("invalid nodeRequest header");
         }
         Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
@@ -236,8 +237,8 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     public String decodeChannelSendHeader(byte[] frame) {
-        Header header = decodeHeader(frame);
-        if (header.command() != ServiceWireConstants.COMMAND_CHANNEL_SEND) {
+        int header = decodeHeaderFields(frame);
+        if ((header >>> Byte.SIZE) != ServiceWireConstants.COMMAND_CHANNEL_SEND) {
             throw protocol("invalid channelSend header");
         }
         Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
@@ -260,8 +261,8 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     public ChannelRequest decodeChannelRequestHeader(byte[] frame) {
-        Header header = decodeHeader(frame);
-        if (header.command() != ServiceWireConstants.COMMAND_CHANNEL_REQUEST) {
+        int header = decodeHeaderFields(frame);
+        if ((header >>> Byte.SIZE) != ServiceWireConstants.COMMAND_CHANNEL_REQUEST) {
             throw protocol("invalid channelRequest header");
         }
         Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
@@ -281,8 +282,8 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     public Reply decodeReplyHeader(byte[] frame) {
-        Header header = decodeHeader(frame);
-        if (header.command() != ServiceWireConstants.COMMAND_REPLY || header.flags() != 0) {
+        int header = decodeHeaderFields(frame);
+        if ((header >>> Byte.SIZE) != ServiceWireConstants.COMMAND_REPLY || (header & 0xff) != 0) {
             throw protocol("invalid reply header");
         }
         //  service-wire-v1.schema.json: reply(20).tail -> `request-specific-tail`,
@@ -520,6 +521,11 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     public Header decodeHeader(byte[] frame) {
+        int header = decodeHeaderFields(frame);
+        return new Header(header >>> Byte.SIZE, header & 0xff);
+    }
+
+    private static int decodeHeaderFields(byte[] frame) {
         if (frame == null || frame.length < ZLinkServiceWireCodec.PREFIX_BYTES) {
             throw protocol("truncated service wire prefix");
         }
@@ -530,7 +536,7 @@ public final class ZLinkServiceM6AWireCodec {
         if (Byte.toUnsignedInt(frame[2]) != ServiceWireConstants.WIRE_MAJOR) {
             throw protocol("unsupported service wire major");
         }
-        return new Header(Byte.toUnsignedInt(frame[3]), Byte.toUnsignedInt(frame[4]));
+        return (Byte.toUnsignedInt(frame[3]) << Byte.SIZE) | Byte.toUnsignedInt(frame[4]);
     }
 
     public byte[] encodeReject(int reason) {
@@ -541,8 +547,8 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     public int decodeReject(byte[] frame) {
-        Header header = decodeHeader(frame);
-        if (header.command() != ServiceWireConstants.COMMAND_REJECT || header.flags() != 0) {
+        int header = decodeHeaderFields(frame);
+        if ((header >>> Byte.SIZE) != ServiceWireConstants.COMMAND_REJECT || (header & 0xff) != 0) {
             throw protocol("invalid reject record");
         }
         Reader reader = new Reader(frame, ZLinkServiceWireCodec.PREFIX_BYTES);
