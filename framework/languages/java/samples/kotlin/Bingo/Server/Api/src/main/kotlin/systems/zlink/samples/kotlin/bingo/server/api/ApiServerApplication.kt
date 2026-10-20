@@ -10,7 +10,6 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.core.env.StandardEnvironment
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec
-import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
@@ -35,7 +34,7 @@ class ApiServerApplication {
         ZLinkFrameworkConfigurer { options ->
             options.addHandlersFromPackageOf<ApiServerApplication>()
             options.useCoroutineHandlers(Dispatchers.Default)
-            options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
+            options.configureDispatch { messageFlow(topology.diagnosticsLevel) }
             // --8<-- [start:doc-codec-register]
             // Every payload this process sends is encoded with Protobuf instead of the default
             // codec.

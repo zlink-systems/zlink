@@ -88,7 +88,7 @@ class matchmaking_server_host_factory_t
         app.logging ().use_console ().set_min_level (log_level_t::info);
         app.logging ().use_file (flow_log_path (topology.log_dir, "matchmaking"));
         auto &options = app.add_zlink_framework ();
-        options.configure_dispatch ().message_flow (message_flow_log_mode_t::normal);
+        options.configure_dispatch ().message_flow (topology.diagnostics_level);
         options.codecs ().use (zlink::framework_codecs::protobuf ());
         options.add_location_store<redis::redis_location_store_t> ()
           .set_connection_string (topology.redis_endpoint)

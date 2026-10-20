@@ -24,6 +24,36 @@ import java.util.logging.Logger;
 
 /** Internal Spec 26 message-flow tracer. */
 public final class ZLinkMessageFlowTracer {
+    public void traceBindingControlDrop(
+            systems.zlink.contracts.core.RoutingId source,
+            String actorId,
+            String packetName,
+            ZLinkDispatchErrorReason reason,
+            Throwable failure) {
+        var point = begin(ZLinkMessageFlowOutcome.DROPPED);
+        if (point == null) return;
+        var details = ZLinkDispatchErrorReporter.errorDetails(failure);
+        point.trace(
+                new ZLinkMessageFlowEvent(
+                        ZLinkMessageFlowOutcome.DROPPED,
+                        ZLinkDispatchErrorSurface.STREAM_SESSION,
+                        ZLinkDispatchMessageKind.CONTROL,
+                        packetName,
+                        null,
+                        null,
+                        null,
+                        source.toString(),
+                        null,
+                        actorId,
+                        null,
+                        reason,
+                        null,
+                        details.type(),
+                        details.message(),
+                        null,
+                        null));
+    }
+
     public void reportFailure(
             ZLinkDispatchErrorSurface surface,
             ZLinkDispatchMessageKind messageKind,

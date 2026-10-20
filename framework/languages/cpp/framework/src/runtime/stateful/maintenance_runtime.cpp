@@ -777,9 +777,28 @@ task_t<relocation_result_t> maintenance_runtime_t::relocate (
   std::stop_token cancellation,
   std::uint64_t advertised_receive_chunk_limit_bytes)
 {
+    auto prepared = co_await relocate_to_ready (
+      source, std::move (target_node_id), std::move (target_owner), encoded_upper_bound,
+      inventory_digest, canonical_wire, cancellation, advertised_receive_chunk_limit_bytes);
+    if (const auto *failed = std::get_if<relocation_result_t> (&prepared))
+        co_return *failed;
+    co_return co_await std::get<relocation_source_cleanup_t> (prepared) ();
+}
+
+task_t<relocation_preparation_t> maintenance_runtime_t::relocate_to_ready (
+  const object_ref_t &source,
+  std::string target_node_id,
+  location_owner_token_t target_owner,
+  std::size_t encoded_upper_bound,
+  inventory_digest_t inventory_digest,
+  const std::optional<eligible_relocation_unit_t::canonical_wire_context_t> &canonical_wire,
+  std::stop_token cancellation,
+  std::uint64_t advertised_receive_chunk_limit_bytes)
+{
     if (!canonical_wire) {
-        return task_t<relocation_result_t> (result_t<relocation_result_t>::success (finish (
-          {relocation_terminal_t::blocked, relocation_reason_t::restore_failed, std::nullopt})));
+        return task_t<relocation_preparation_t> (
+          result_t<relocation_preparation_t>::success (relocation_preparation_t{finish (
+            {relocation_terminal_t::blocked, relocation_reason_t::restore_failed, std::nullopt})}));
     }
     auto state = std::make_shared<relocation_terminal_state_t> (
       relocation_terminal_state_t{source, std::move (target_node_id), std::move (target_owner),
@@ -787,15 +806,16 @@ task_t<relocation_result_t> maintenance_runtime_t::relocate (
                                   cancellation, std::make_shared<permit_t> (try_acquire ())});
     state->advertised_receive_chunk_limit_bytes = advertised_receive_chunk_limit_bytes;
     if (!*state->permit) {
-        return task_t<relocation_result_t> (result_t<relocation_result_t>::success (
-          finish ({relocation_terminal_t::blocked, relocation_reason_t::permit_unavailable,
-                   std::nullopt})));
+        return task_t<relocation_preparation_t> (
+          result_t<relocation_preparation_t>::success (relocation_preparation_t{
+            finish ({relocation_terminal_t::blocked, relocation_reason_t::permit_unavailable,
+                     std::nullopt})}));
     }
-    return relocate_terminal (std::move (state));
+    return relocate_prepare_ready (std::move (state));
 }
 
-task_t<relocation_result_t>
-maintenance_runtime_t::relocate_terminal (std::shared_ptr<relocation_terminal_state_t> state)
+task_t<relocation_preparation_t>
+maintenance_runtime_t::relocate_prepare_ready (std::shared_ptr<relocation_terminal_state_t> state)
 {
     /* The in-flight payload budget is acquired before the source admission
      * seal so a unit waiting on the budget keeps serving messages. Chunk
@@ -817,11 +837,11 @@ maintenance_runtime_t::relocate_terminal (std::shared_ptr<relocation_terminal_st
     };
     if (!co_await relocate_seal (state)) {
         release_reservation ();
-        co_return std::move (*state->result);
+        co_return relocation_preparation_t{std::move (*state->result)};
     }
     if (!relocate_encode (state)) {
         release_reservation ();
-        co_return std::move (*state->result);
+        co_return relocation_preparation_t{std::move (*state->result)};
     }
     /* Start the Restore request first: the eager task enqueues the request
      * frame on the ordered connection before its first suspension, so the
@@ -840,7 +860,7 @@ maintenance_runtime_t::relocate_terminal (std::shared_ptr<relocation_terminal_st
     release_reservation ();
     const auto target_ready = co_await prepared;
     if (!target_ready)
-        co_return std::move (*state->result);
+        co_return relocation_preparation_t{std::move (*state->result)};
     if (!chunks_sent) {
         /* The target replied ready without every chunk — treat it as an
          * exact target failure before cutover. */
@@ -849,8 +869,15 @@ maintenance_runtime_t::relocate_terminal (std::shared_ptr<relocation_terminal_st
                                                              state->context);
         state->result.emplace (finish (
           {relocation_terminal_t::blocked, relocation_reason_t::restore_failed, std::nullopt}));
-        co_return std::move (*state->result);
+        co_return relocation_preparation_t{std::move (*state->result)};
     }
+    co_return relocation_preparation_t{
+      relocation_source_cleanup_t{[this, state] { return relocate_source_cleanup (state); }}};
+}
+
+task_t<relocation_result_t>
+maintenance_runtime_t::relocate_source_cleanup (std::shared_ptr<relocation_terminal_state_t> state)
+{
     if (!co_await relocate_boundary_and_send (state))
         co_return std::move (*state->result);
     (void) co_await relocate_cutover (state);

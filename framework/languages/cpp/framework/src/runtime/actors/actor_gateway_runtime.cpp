@@ -34,6 +34,11 @@ namespace detail
 class bound_session_delivery_fence_t
 {
   public:
+    explicit bound_session_delivery_fence_t (std::shared_ptr<actor_gateway_state_t> state) :
+        _state (std::move (state))
+    {
+    }
+
     bool try_add ()
     {
         std::lock_guard lock (_mutex);
@@ -56,11 +61,7 @@ class bound_session_delivery_fence_t
             take_terminal_unlocked (settled, terminal);
         }
         if (settled) {
-            try {
-                settled (std::move (*terminal));
-            }
-            catch (...) {
-            }
+            invoke_settled (settled, std::move (*terminal));
         }
     }
 
@@ -77,15 +78,29 @@ class bound_session_delivery_fence_t
             take_terminal_unlocked (ready, terminal);
         }
         if (ready) {
-            try {
-                ready (std::move (*terminal));
-            }
-            catch (...) {
-            }
+            invoke_settled (ready, std::move (*terminal));
         }
     }
 
   private:
+    void invoke_settled (const std::function<void (result_t<void>)> &settled,
+                         result_t<void> terminal) noexcept
+    {
+        try {
+            settled (std::move (terminal));
+        }
+        catch (...) {
+            dispatch_error_reporter_t (_state->dispatch).report_lazy ([&] {
+                return message_dispatch_error_event_t{
+                  .surface = dispatch_error_surface_t::spot_actor,
+                  .message_kind = dispatch_message_kind_t::control,
+                  .reason = dispatch_error_reason_t::handler_exception,
+                  .action = dispatch_error_action_t::drop,
+                  .exception = std::current_exception ()};
+            });
+        }
+    }
+
     void take_terminal_unlocked (std::function<void (result_t<void>)> &settled,
                                  std::optional<result_t<void>> &terminal)
     {
@@ -95,6 +110,7 @@ class bound_session_delivery_fence_t
         terminal.emplace (_failure ? std::move (*_failure) : result_t<void>::success ());
     }
 
+    std::shared_ptr<actor_gateway_state_t> _state;
     std::mutex _mutex;
     std::size_t _pending = 0;
     bool _sealed = false;
@@ -991,7 +1007,14 @@ actor_context_t::join_spot_erased (spot_id_t spot_id,
                                       std::nullopt};
       });
 
-    if (joined.result_code == 0) {
+    if (joined.result_code == detail::actor_join_reply_t::relayed) {
+        auto cleanup = std::exchange (joined.source_cleanup, {});
+        const auto settled = co_await runtime::await_result (cleanup ());
+        if (!settled)
+            co_return joined;
+        joined.result_code = detail::actor_join_reply_t::accepted;
+    }
+    if (joined.result_code == detail::actor_join_reply_t::accepted) {
         state->sync ([&] {
             *actor_ref = joined.actor;
             auto found = state->actors_by_id.find (std::string (actor_ref->actor_id ().value ()));
@@ -3185,8 +3208,11 @@ bool actor_gateway_runtime_t::prepare_session_relocation_target_route (
 {
     if (route.route.action != runtime::protocol::session_relocation_route_action_t::commit
         || route.sender_role != runtime::protocol::relocation_role_t::target
-        || route.actor.actor_id.empty () || route.actor.object_generation == 0
+        || !is_valid_actor_id (route.actor.actor_id) || route.actor.object_generation == 0
         || route.session_owner_node_routing_id.empty () || route.session_routing_id.empty ()
+        || route.session_owner_node_routing_id.size () > runtime::protocol::ridBytes
+        || route.session_routing_id.size () > runtime::protocol::ridBytes
+        || route.route.target_node_routing_id.size () > runtime::protocol::ridBytes
         || route.session_owner_node_generation == 0 || route.binding_generation == 0
         || route.route.previous_authority_owner_generation == 0
         || route.route.target_authority_owner_generation
@@ -3196,49 +3222,44 @@ bool actor_gateway_runtime_t::prepare_session_relocation_target_route (
         return false;
     }
 
-    try {
-        const auto target_node = zlink::routing_id_t::from (route.route.target_node_routing_id);
-        const auto session_owner = zlink::routing_id_t::from (route.session_owner_node_routing_id);
-        const auto session_rid = zlink::routing_id_t::from (route.session_routing_id);
-        return _state->sync ([&] {
-            const auto found = _state->actors_by_id.find (route.actor.actor_id);
-            if (found != _state->actors_by_id.end ()) {
-                if (found->second.ref.object_generation () != route.actor.object_generation)
+    const auto target_node = zlink::routing_id_t::from (route.route.target_node_routing_id);
+    const auto session_owner = zlink::routing_id_t::from (route.session_owner_node_routing_id);
+    const auto session_rid = zlink::routing_id_t::from (route.session_routing_id);
+    return _state->sync ([&] {
+        const auto found = _state->actors_by_id.find (route.actor.actor_id);
+        if (found != _state->actors_by_id.end ()) {
+            if (found->second.ref.object_generation () != route.actor.object_generation)
+                return false;
+            if (found->second.bound_session_route) {
+                const auto &current = *found->second.bound_session_route;
+                const bool already_prepared =
+                  found->second.ref.node_rid ().value () == target_node.to_string ()
+                  && current.authority_owner_generation
+                       == route.route.target_authority_owner_generation
+                  && current.owner_lease_generation == target_owner_lease_generation;
+                // The Store-confirmed Actor tenure fences this cache update.
+                // Binding replacement belongs to the common installation path.
+                if (!already_prepared
+                    && current.authority_owner_generation
+                         > route.route.previous_authority_owner_generation)
                     return false;
-                if (found->second.bound_session_route) {
-                    const auto &current = *found->second.bound_session_route;
-                    const bool already_prepared =
-                      found->second.ref.node_rid ().value () == target_node.to_string ()
-                      && current.authority_owner_generation
-                           == route.route.target_authority_owner_generation
-                      && current.owner_lease_generation == target_owner_lease_generation;
-                    // The Store-confirmed Actor tenure fences this cache update.
-                    // Binding replacement belongs to the common installation path.
-                    if (!already_prepared
-                        && current.authority_owner_generation
-                             > route.route.previous_authority_owner_generation)
-                        return false;
-                }
             }
-            const auto target_actor = actor_ref_access_t::make (
-              node_rid_t::from_string (target_node.to_string ()),
-              found != _state->actors_by_id.end ()
-                ? std::string (actor_ref_access_t::actor_type (found->second.ref))
-                : std::string{},
-              route.actor.actor_id, route.actor.object_generation);
-            return static_cast<bool> (record_bound_session_route_on_lane (
-              _state, target_actor,
-              actor_bound_session_route_t{
-                session_owner, session_rid, route.actor.object_generation,
-                route.session_owner_node_generation, route.route.target_authority_owner_generation,
-                target_owner_lease_generation, route.binding_generation, 0, 0, true,
-                route.session_owner_id, route.session_owner_lease_generation},
-              {}));
-        });
-    }
-    catch (...) {
-        return false;
-    }
+        }
+        const auto target_actor = actor_ref_access_t::make (
+          node_rid_t::from_string (target_node.to_string ()),
+          found != _state->actors_by_id.end ()
+            ? std::string (actor_ref_access_t::actor_type (found->second.ref))
+            : std::string{},
+          route.actor.actor_id, route.actor.object_generation);
+        return static_cast<bool> (record_bound_session_route_on_lane (
+          _state, target_actor,
+          actor_bound_session_route_t{
+            session_owner, session_rid, route.actor.object_generation,
+            route.session_owner_node_generation, route.route.target_authority_owner_generation,
+            target_owner_lease_generation, route.binding_generation, 0, 0, true,
+            route.session_owner_id, route.session_owner_lease_generation},
+          {}));
+    });
 }
 
 void actor_gateway_runtime_t::unbind_session_stream (std::string actor_id,
@@ -3576,7 +3597,7 @@ void actor_gateway_runtime_t::on_bound_session_send (
 std::shared_ptr<detail::bound_session_delivery_fence_t>
 actor_gateway_runtime_t::begin_join_completion_delivery_fence (const actor_ref_t &actor_ref)
 {
-    auto fence = std::make_shared<detail::bound_session_delivery_fence_t> ();
+    auto fence = std::make_shared<detail::bound_session_delivery_fence_t> (_state);
     _state->sync ([&] {
         _state->join_completion_delivery_fences.insert_or_assign (
           join_completion_delivery_key (actor_ref), fence);

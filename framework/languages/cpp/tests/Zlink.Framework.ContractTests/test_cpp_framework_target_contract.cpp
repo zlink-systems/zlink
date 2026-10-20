@@ -685,7 +685,7 @@ int main ()
     const auto target_finalize =
       spot_route_dispatcher.find ("finalize_remote_actor_to_spot_async (");
     const auto source_finalizer_begin = mesh_node_runtime.find (
-      "task_t<actor_join_reply_t> mesh_node_runtime_t::finalize_remote_application_actor_join (");
+      "task_t<void> mesh_node_runtime_t::finalize_remote_application_actor_join (");
     const auto source_finalizer_end =
       source_finalizer_begin == std::string::npos
         ? std::string::npos
@@ -702,8 +702,15 @@ int main ()
       source_finalizer.find ("const auto target = runtime::protocol::relocation_target_fence_t{");
     const auto source_follow_publish =
       source_finalizer.find ("co_await spot.complete_remote_actor_transfer (");
-    const auto source_join_completion = source_finalizer.find (
-      "co_return result_t<actor_join_reply_t>::success (", source_follow_publish);
+    const auto source_cleanup_terminal =
+      source_finalizer.find ("co_return;", source_follow_publish);
+    const auto source_cleanup_begin =
+      mesh_node_runtime.find ("mesh_node_runtime_t::settle_remote_application_actor_join_source (");
+    const auto source_cleanup =
+      source_cleanup_begin == std::string::npos || source_finalizer_end == std::string::npos
+        ? std::string{}
+        : mesh_node_runtime.substr (source_cleanup_begin,
+                                    source_finalizer_end - source_cleanup_begin);
     const auto duplicate_source_follow_publish =
       source_follow_publish == std::string::npos
         ? std::string::npos
@@ -718,7 +725,13 @@ int main ()
         && target_backlog_stage < target_authority_commit && target_finalize != std::string::npos
         && target_finalize > target_authority_commit && source_fence != std::string::npos
         && target_fence > source_fence && source_follow_publish > target_fence
-        && source_join_completion > source_follow_publish
+        && source_cleanup_terminal != std::string::npos
+        && source_cleanup_terminal > source_follow_publish
+        && source_cleanup_begin != std::string::npos
+        && source_cleanup.find ("fail_remote_actor_join") == std::string::npos
+        && source_cleanup.find ("deliver_actor_join") == std::string::npos
+        && source_cleanup.find ("actor_join_accepted_t") == std::string::npos
+        && source_cleanup.find ("actor_join_failed_t") == std::string::npos
         && duplicate_source_follow_publish == std::string::npos
         && duplicate_target_finalize == std::string::npos
         && source_finalizer.find ("request_actor_join_spot_route") == std::string::npos

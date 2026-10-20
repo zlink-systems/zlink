@@ -559,8 +559,13 @@ class mesh_node_runtime_t
     seal_remote_application_actor_join_call (std::shared_ptr<remote_actor_join_state_t> state);
     task_t<actor_join_reply_t>
     prepare_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
-    task_t<actor_join_reply_t>
-    finalize_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
+    task_t<void>
+    settle_remote_application_actor_join_source (std::shared_ptr<remote_actor_join_state_t> state,
+                                                 runtime::stateful::relocation_result_t relocated,
+                                                 actor_ref_t target_actor);
+    task_t<void>
+    finalize_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state,
+                                            actor_ref_t target_actor);
     task_t<result_t<void>> deliver_actor_join (actor_ref_t actor,
                                                std::optional<spot_id_t> source_spot,
                                                std::uint64_t operation_high,
@@ -570,8 +575,6 @@ class mesh_node_runtime_t
                                                        const result_t<actor_join_reply_t> &failed,
                                                        std::string message);
     task_t<bool> abort_remote_actor_join_seal (std::shared_ptr<remote_actor_join_state_t> state);
-    task_t<actor_join_reply_t>
-    complete_remote_application_actor_join (std::shared_ptr<remote_actor_join_state_t> state);
     task_t<runtime::messaging::message_parts_t>
     request_actor_join_spot_route (const runtime::spot_address_t &target,
                                    runtime::messaging::message_parts_t encoded,

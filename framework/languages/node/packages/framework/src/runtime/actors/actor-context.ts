@@ -288,6 +288,19 @@ class DefaultZLinkActorJoinSpotCall implements ZLinkActorJoinSpotCall {
             deadline.close();
             requestMessage.close();
           }
+          if (result.sourceCleanup !== undefined) {
+            // Infrastructure cleanup has its own terminal, outside the public Failed conversion.
+            try {
+              const cleanup = result.sourceCleanup();
+              await (this.turn === undefined ? cleanup : this.turn.yieldFrameworkPromise(cleanup));
+            } catch (error) {
+              traceJoinError(this.actor, error, this.coordinator, ZLinkDispatchErrorAction.Drop);
+              throw error;
+            } finally {
+              this.state.endDeferredJoin();
+            }
+            return;
+          }
           if (
             !result.accepted ||
             sourceNodeRid === undefined ||
@@ -422,6 +435,19 @@ class DefaultZLinkActorJoinEntrySpotCall implements ZLinkActorJoinEntrySpotCall 
           } finally {
             deadline.close();
             requestMessage.close();
+          }
+          if (result.sourceCleanup !== undefined) {
+            // Infrastructure cleanup has its own terminal, outside the public Failed conversion.
+            try {
+              const cleanup = result.sourceCleanup();
+              await (this.turn === undefined ? cleanup : this.turn.yieldFrameworkPromise(cleanup));
+            } catch (error) {
+              traceJoinError(this.actor, error, this.coordinator, ZLinkDispatchErrorAction.Drop);
+              throw error;
+            } finally {
+              this.state.endDeferredJoin();
+            }
+            return;
           }
           if (
             !result.accepted ||
@@ -586,7 +612,6 @@ async function notifyJoinFailure(
   error: unknown,
   coordinator?: ZLinkActorJoinCoordinator
 ): Promise<void> {
-  console.error(`actor join failure actor=${actor.context.actorId}`, error);
   const frameworkError =
     error instanceof ZLinkFrameworkException
       ? error
@@ -596,6 +621,20 @@ async function notifyJoinFailure(
           false,
           error
         );
+  traceJoinError(actor, error, coordinator, ZLinkDispatchErrorAction.ReplyError);
+  await actor.onJoinCompleted?.({
+    status: 'failed',
+    operationId,
+    kind: frameworkError.kind
+  });
+}
+
+function traceJoinError(
+  actor: ZLinkActor,
+  error: unknown,
+  coordinator: ZLinkActorJoinCoordinator | undefined,
+  errorAction: ZLinkDispatchErrorAction
+): void {
   //  The completion carries only an error kind, so trace the cause on the
   //  message flow under the same flow id as the Join that produced it.
   const tracePoint = coordinator?.messageFlow?.()?.begin(ZLinkMessageFlowOutcome.Error);
@@ -607,13 +646,8 @@ async function notifyJoinFailure(
     packetName: 'JoinSpot',
     actorId: actor.context.actorId,
     errorReason: ZLinkDispatchErrorReason.HandlerException,
-    errorAction: ZLinkDispatchErrorAction.ReplyError,
+    errorAction,
     errorType: errorDetails?.errorType,
     errorMessage: errorDetails?.errorMessage
-  });
-  await actor.onJoinCompleted?.({
-    status: 'failed',
-    operationId,
-    kind: frameworkError.kind
   });
 }

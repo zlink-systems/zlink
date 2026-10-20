@@ -443,9 +443,12 @@ namespace detail
 struct actor_join_reply_t
 {
     static constexpr int accepted = 0;
+    static constexpr int relayed = -1;
     int result_code = accepted;
     actor_ref_t actor;
     zlink::message_t reply;
+    // Internal relay-ready return boundary; carries no public Join outcome.
+    std::function<task_t<void> ()> source_cleanup;
 };
 } // namespace detail
 
