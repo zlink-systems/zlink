@@ -371,7 +371,7 @@ final class ZLinkJavaRawMeshNode
                                                 () ->
                                                         new IllegalStateException(
                                                                 "local MeshNode authority"
-                                                                    + " descriptor is not live")));
+                                                                        + " descriptor is not live")));
     }
 
     ZLinkInternalMeshNode.PeerAuthorityFence localAuthorityFence() {
