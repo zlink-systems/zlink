@@ -195,6 +195,7 @@ export type ZLinkDispatchErrorReason =
   | 'unexpected_reply'
   | 'backpressure'
   | 'target_closed'
+  | 'location_unavailable'
   | 'stale_target'
   | 'shutdown';
 

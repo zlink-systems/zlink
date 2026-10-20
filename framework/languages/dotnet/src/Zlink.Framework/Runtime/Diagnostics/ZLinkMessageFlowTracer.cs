@@ -17,6 +17,34 @@ namespace Zlink.Framework.Runtime.Diagnostics;
 //     if (tracer.Enabled(outcome)) tracer.Trace(new ZLinkMessageFlowEvent(...));
 internal sealed class ZLinkMessageFlowTracer
 {
+    internal void TraceSessionBindingControlDrop(
+        RoutingId source,
+        string actorId,
+        string packetName,
+        ZLinkMessageFlowReason reason,
+        Exception? error = null
+    )
+    {
+        if (!Enabled(ZLinkMessageFlowOutcome.Dropped))
+            return;
+        var details = ZLinkTraceFormat.DispatchErrorDetails(error);
+        Trace(
+            new ZLinkMessageFlowEvent(
+                ZLinkMessageFlowOutcome.Dropped,
+                ZLinkDispatchErrorSurface.StreamSession,
+                ZLinkDispatchMessageKind.Control,
+                PacketName: packetName,
+                SourceRid: source.ToHex(),
+                ActorId: actorId,
+                Reason: reason
+            )
+            {
+                ErrorType = details.Type,
+                ErrorMessage = details.Message,
+            }
+        );
+    }
+
     internal const string LoggerCategory = "zlink.framework.dispatch";
 
     private readonly ILogger _logger;
