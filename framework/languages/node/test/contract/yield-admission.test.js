@@ -20,12 +20,14 @@ function deferred() {
 function fixture(ready = false) {
   const serial = new ZLinkSpotSerialTurnExecutor(true, 'hub');
   const calls = [];
+  const submitted = deferred();
   const outbound = new DefaultZLinkSpotOutbound({
     serial,
     addressTransport: {
       requestToSpotAddress(id) {
         const result = deferred();
         calls.push({ id, ...result });
+        submitted.resolve();
         return ready ? Promise.resolve(id) : result.promise;
       }
     }
@@ -33,6 +35,7 @@ function fixture(ready = false) {
   return {
     serial,
     calls,
+    submitted,
     leaf: (id) => outbound.requestToSpot(id, {}).instanceSpot('leaf').yield()
   };
 }
@@ -108,6 +111,7 @@ test('failed Yield reacquires the gate before its catch and next Yield', async (
   const blockerStarted = deferred();
   const releaseBlocker = deferred();
   const failure = new Error('transport failed');
+  const caughtEvent = deferred();
   let caught = false;
   const owner = f.serial.execute(async () => {
     try {
@@ -115,6 +119,7 @@ test('failed Yield reacquires the gate before its catch and next Yield', async (
     } catch (error) {
       assert.equal(error, failure);
       caught = true;
+      caughtEvent.resolve();
     }
     return await f.leaf('next');
   });
@@ -128,7 +133,8 @@ test('failed Yield reacquires the gate before its catch and next Yield', async (
   assert.equal(caught, false, 'failure continuation must wait for the gate');
   releaseBlocker.resolve();
   await blocker;
-  await tick();
+  await caughtEvent.promise;
+  await f.submitted.promise;
   assert.equal(caught, true);
   assert.equal(f.calls.length, 1);
   f.calls[0].resolve('next');
