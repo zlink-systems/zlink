@@ -125,6 +125,112 @@ public sealed class DirectRequestWaitCostTests
         Assert.Equal(0, waits.ForwardingWaits);
     }
 
+    [Fact]
+    public async Task Direct_request_preserves_synchronous_cancellation_status()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var client = context.CreateRouterSocket();
+        await using var node = new ZLinkManagedMeshNode(context, "direct-request-cancellation");
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        var nodeType = typeof(ZLinkManagedMeshNode);
+        var socketField = nodeType.GetField("_socket", flags)!;
+        socketField.SetValue(node, client);
+        nodeType
+            .GetField("_activeSocketGeneration", flags)!
+            .SetValue(node, nodeType.GetField("_lifecycleGeneration", flags)!.GetValue(node));
+        var signature = new[]
+        {
+            typeof(RoutingId),
+            typeof(IReadOnlyList<Message>),
+            typeof(TimeSpan),
+            typeof(CancellationToken),
+            typeof(ZLinkServiceLiveness),
+            typeof(ZLinkRequestAdmission),
+        };
+        var forwarding = nodeType.GetMethod("RequestDirectWireAsync", flags, signature)!;
+        var submitting = nodeType.GetMethod(
+            "RequestDirectWireAsync",
+            flags,
+            signature
+                .Take(3)
+                .Concat(new[] { typeof(Task).MakeByRefType() })
+                .Concat(signature.Skip(3))
+                .ToArray()
+        )!;
+        object?[] Arguments(bool includeAdmission)
+        {
+            var arguments = new List<object?>
+            {
+                RoutingId.From("direct-request-cancellation-target"),
+                new[] { Message.From("cancelled") },
+                TestGuard,
+            };
+            if (includeAdmission)
+                arguments.Add(null);
+            arguments.Add(cancellation.Token);
+            arguments.Add(null);
+            arguments.Add(null);
+            return arguments.ToArray();
+        }
+        try
+        {
+            // Prove submission throws synchronously, rather than returning a
+            // canceled reply that would bypass the forwarding catch entirely.
+            var synchronous = Assert.Throws<TargetInvocationException>(() =>
+                submitting.Invoke(node, Arguments(true))
+            );
+            Assert.IsAssignableFrom<OperationCanceledException>(synchronous.InnerException);
+            var pending =
+                (ValueTask<IReadOnlyList<Message>>)forwarding.Invoke(node, Arguments(false))!;
+            Assert.True(pending.IsCanceled);
+            var task = pending.AsTask();
+            Assert.Equal(TaskStatus.Canceled, task.Status);
+            var failure = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => task);
+            Assert.Equal(cancellation.Token, failure.CancellationToken);
+        }
+        finally
+        {
+            socketField.SetValue(node, null);
+        }
+    }
+
+    [Fact]
+    public async Task Direct_request_preserves_synchronous_disposal_failure_status()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "direct-request-disposed");
+        var forwarding = typeof(ZLinkManagedMeshNode).GetMethod(
+            "RequestDirectWireAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic,
+            [
+                typeof(RoutingId),
+                typeof(IReadOnlyList<Message>),
+                typeof(TimeSpan),
+                typeof(CancellationToken),
+                typeof(ZLinkServiceLiveness),
+                typeof(ZLinkRequestAdmission),
+            ]
+        )!;
+        var pending =
+            (ValueTask<IReadOnlyList<Message>>)
+                forwarding.Invoke(
+                    node,
+                    [
+                        RoutingId.From("direct-request-disposed-target"),
+                        new[] { Message.From("disposed") },
+                        TestGuard,
+                        CancellationToken.None,
+                        null,
+                        null,
+                    ]
+                )!;
+        var task = pending.AsTask();
+        Assert.Equal(TaskStatus.Faulted, task.Status);
+        await Assert.ThrowsAsync<ObjectDisposedException>(() => task);
+    }
+
     private sealed class SubmissionWaitListener : EventListener
     {
         private int _submissionThread;

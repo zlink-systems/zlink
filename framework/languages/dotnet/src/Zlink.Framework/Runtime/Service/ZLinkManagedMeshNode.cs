@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using Microsoft.Extensions.Logging;
@@ -10647,7 +10648,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
         catch (Exception failure)
         {
-            return ValueTask.FromException<IReadOnlyList<Message>>(failure);
+            // Use the same exception conversion as the former async method,
+            // including cancellation status and the original cancellation token.
+            var completion = AsyncValueTaskMethodBuilder<IReadOnlyList<Message>>.Create();
+            completion.SetException(failure);
+            return completion.Task;
         }
     }
 
