@@ -7,6 +7,38 @@ namespace Zlink.Framework.UnitTests;
 public sealed class MeshMonitorHotPathTests
 {
     [Fact]
+    public async Task EmptyMonitorWaitsForAnIncludedEventAndRetainsTheRecord()
+    {
+        using var monitor = new RawMeshMonitor(MeshMonitorEventMask.PeerAdmitted);
+        var waiting = monitor.WaitAsync(CancellationToken.None);
+        Assert.False(waiting.IsCompleted);
+        monitor.Publish(MeshMonitorEventKind.MessageSubmitted, MeshNodeState.Ready);
+        Assert.False(waiting.IsCompleted);
+        monitor.Publish(MeshMonitorEventKind.PeerAdmitted, MeshNodeState.Ready);
+        Assert.True(await waiting);
+        Assert.Equal(MeshMonitorEventKind.PeerAdmitted, monitor.Recv(RecvFlags.DontWait)!.Kind);
+        Assert.Null(monitor.Recv(RecvFlags.DontWait));
+    }
+
+    [Fact]
+    public async Task MonitorWaitObservesQueuedEventsCancellationAndDisposal()
+    {
+        using var monitor = new RawMeshMonitor();
+        monitor.Publish(MeshMonitorEventKind.StateChanged, MeshNodeState.Ready);
+        Assert.True(await monitor.WaitAsync(CancellationToken.None));
+        Assert.NotNull(monitor.Recv(RecvFlags.DontWait));
+        using var cancellation = new CancellationTokenSource();
+        var waiting = monitor.WaitAsync(cancellation.Token);
+        Assert.False(waiting.IsCompleted);
+        cancellation.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting.AsTask());
+        waiting = monitor.WaitAsync(CancellationToken.None);
+        Assert.False(waiting.IsCompleted);
+        monitor.Dispose();
+        Assert.False(await waiting);
+    }
+
+    [Fact]
     public async Task PublicationObservesCurrentMonitorsAndStateWithoutWaitingForAnotherTurn()
     {
         await using var context = Systems.Zlink.Zlink.CreateContext();
