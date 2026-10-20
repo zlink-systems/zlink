@@ -5,10 +5,13 @@ import errno
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
+import signal
+import sys
 import tempfile
 import time
-import sys
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -50,6 +53,91 @@ class DiagnosticEnvironmentTests(unittest.TestCase):
                 finally:
                     for log in owned.logs:
                         log.close()
+
+
+class OwnedProcessCleanupTests(unittest.TestCase):
+    @unittest.skipUnless(os.name == "posix", "The crash and SIGTERM cases require POSIX signals")
+    def test_cleanup_exit_codes_control_cell_validity(self):
+        config = {"language": "dotnet", "runId": "r", "cellId": "c", "configHash": "h",
+                  "scenario": "session-echo-only", "workload": {"payloadSize": 1}, "topology": None}
+        metrics = {"messages.sent": "1", "messages.completed": "1", "messages.failed": "0",
+                   "messages.timeout": "0", "messages.cancelled": "0", "messages.inflightAtEnd": "0",
+                   "errors.byKind": {}, "errors.harness": {}, "errors.language": {},
+                   "throughput.messagesPerSec": 1.0, "throughput.megabytesPerSec": 0.0}
+        for direction in ("request", "send", "reply", "event"):
+            metrics["applicationMessages." + direction] = "0"
+            metrics["applicationPayloadBytes." + direction] = "0"
+
+        crash = ("import os, resource, signal; resource.setrlimit(resource.RLIMIT_CORE, (0, 0)); "
+                 "os.kill(os.getpid(), signal.SIGSEGV)")
+        normal = "import pathlib, sys, time; pathlib.Path(sys.argv[1]).touch(); time.sleep(30)"
+        ignore_term = ("import pathlib, signal, sys, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                       "pathlib.Path(sys.argv[1]).touch(); time.sleep(30)")
+        terminated_143 = ("import pathlib, signal, sys, time; "
+                          "signal.signal(signal.SIGTERM, lambda *_: sys.exit(128 + signal.SIGTERM)); "
+                          "pathlib.Path(sys.argv[1]).touch(); time.sleep(30)")
+        cases = (
+            ("crash", crash, "invalid", "already-exited"),
+            ("ignore-term", ignore_term, "invalid", "wait-ready"),
+            ("term-exit", normal, "valid", "wait-ready"),
+            ("term-exit-143", terminated_143, "valid", "wait-ready"),
+            ("exit-zero", "pass", "valid", "already-exited"),
+        )
+        for name, script, expected_status, start_state in cases:
+            with self.subTest(process=name), tempfile.TemporaryDirectory() as directory:
+                cell = Path(directory)
+                (cell / "logs").mkdir()
+                (cell / "tmp").mkdir()
+                owner = OwnedProcesses(cell, None)
+                if start_state == "wait-ready":
+                    ready = cell / "tmp" / "ready"
+                    process = owner.start(name, [sys.executable, "-c", script, str(ready)])
+                    deadline = time.monotonic() + 5
+                    while not ready.exists() and time.monotonic() < deadline:
+                        if process.poll() is not None:
+                            self.fail("SIGTERM-ignore process exited before registering its handler")
+                        time.sleep(0.01)
+                    self.assertTrue(ready.exists(), "SIGTERM-ignore process did not become ready")
+                else:
+                    process = owner.start(name, [sys.executable, "-c", script])
+                    if start_state == "already-exited":
+                        process.wait(timeout=5)
+
+                cleanup_issues = owner.cleanup()
+                issues = list(cleanup_issues or [])
+                original = {"schemaVersion": 2, **{key: config[key] for key in ("runId", "cellId", "configHash")},
+                            "role": "session", "roleInstance": 0, "resetSeq": "1", "phase": "complete",
+                            "window": {"startTicks": "0", "endTicks": "1000000000", "measuredSeconds": 1.0},
+                            "metrics": metrics, "histograms": {"latencyMs": histogram({0: 1})},
+                            "nullReasons": {}, "provenance": {"pid": 1}, "clock": {}}
+                write_json(cell / "server-session-0.json", original)
+                result = aggregate(cell, config, [], ["server-session-0.json"], issues, ["server-session-0.json"])
+                self.assertEqual(result["status"], expected_status)
+                self.assertEqual(run_exit_code([result], SimpleNamespace(removal=None)),
+                                 0 if expected_status == "valid" else 1)
+
+                cleanup = json.loads((cell / "cleanup.json").read_text())
+                entry = cleanup["ownedProcesses"][0]
+                self.assertIn("exitCode", entry)
+                self.assertIn("terminated", entry)
+                self.assertTrue(entry["terminated"])
+                if name in ("crash", "ignore-term"):
+                    self.assertEqual([issue["code"] for issue in issues], ["OwnedProcessFailure"])
+                    self.assertIn(name, issues[0]["message"])
+                    self.assertEqual(entry["killed"], name == "ignore-term")
+                    self.assertEqual(entry["terminationRequested"], name == "ignore-term")
+                    self.assertEqual(entry["exitCode"], -signal.SIGSEGV if name == "crash" else -signal.SIGKILL)
+                elif name in ("term-exit", "term-exit-143"):
+                    expected_exit = -signal.SIGTERM if name == "term-exit" else 128 + signal.SIGTERM
+                    self.assertEqual(entry["exitCode"], expected_exit)
+                    self.assertTrue(entry["terminationRequested"])
+                    self.assertFalse(entry["killed"])
+                    self.assertFalse(issues)
+                else:
+                    self.assertEqual(entry["exitCode"], 0)
+                    self.assertFalse(entry["terminationRequested"])
+                    self.assertFalse(entry["killed"])
+                    self.assertFalse(issues)
 
 
 class ListenerOwnershipTests(unittest.TestCase):

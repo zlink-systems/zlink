@@ -2,7 +2,10 @@
 #pragma once
 
 #include <zlink/framework/contracts/configuration/configuration.hpp>
+#include <zlink/framework/contracts/dispatch/execution.hpp>
 
+#include <algorithm>
+#include <cctype>
 #include <stdexcept>
 #include <string>
 
@@ -86,7 +89,31 @@ struct sample_topology_t
         }
         topology.redis_key_prefix = section.get ("redisKeyPrefix")
                                       .value_or (topology.redis_key_prefix);
+        if (auto value = section.get ("diagnosticsLevel")) {
+            topology.diagnostics_level = parse_diagnostics_level (*value);
+        }
         return topology;
+    }
+
+    static message_flow_log_mode_t parse_diagnostics_level (std::string value)
+    {
+        std::transform (value.begin (), value.end (), value.begin (), [] (unsigned char c) {
+            return static_cast<char> (std::tolower (c));
+        });
+        if (value == "off") {
+            return message_flow_log_mode_t::off;
+        }
+        if (value == "errors") {
+            return message_flow_log_mode_t::errors;
+        }
+        if (value == "normal") {
+            return message_flow_log_mode_t::normal;
+        }
+        if (value == "detailed") {
+            return message_flow_log_mode_t::detailed;
+        }
+        throw std::runtime_error (
+          "diagnosticsLevel must be one of off, errors, normal or detailed.");
     }
 
     std::string api_channel_endpoint = "tcp://127.0.0.1:47103";
@@ -121,6 +148,7 @@ struct sample_topology_t
     std::string session_node = "a";
     std::string redis_endpoint;
     std::string redis_key_prefix = "bingo:";
+    message_flow_log_mode_t diagnostics_level = message_flow_log_mode_t::normal;
 
     std::string selected_api_channel_endpoint () const
     {

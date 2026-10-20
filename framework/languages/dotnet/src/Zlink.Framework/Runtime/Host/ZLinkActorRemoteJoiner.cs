@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.DotNet.Mappings;
 using Zlink.Framework.Runtime.Identifiers;
@@ -50,10 +49,12 @@ internal sealed class ZLinkActorRemoteJoiner(
             $"entry_target_resolved node={target.Rid} spot={target.EntrySpotId} spot_gen={snapshot.Generation} node_gen={snapshot.NodeGeneration} authority_gen={snapshot.AuthorityOwnerGeneration} lease_gen={snapshot.OwnerLeaseGeneration} descriptor_revision={target.DescriptorRevision}"
         );
         var effectiveDeadline =
-            absoluteDeadline ?? DateTimeOffset.UtcNow + registration.DefaultRequestTimeout;
+            absoluteDeadline
+            ?? registration.TimeProvider.GetUtcNow() + registration.DefaultRequestTimeout;
         var deadline = (
             Utc: effectiveDeadline,
-            Monotonic: Stopwatch.GetElapsedTime(0) + RemainingTimeout(effectiveDeadline)
+            Monotonic: registration.TimeProvider.GetElapsedTime(0)
+                + RemainingTimeout(effectiveDeadline)
         );
         return SubmitRoutedJoinActorAsync(
             actor,
@@ -84,12 +85,14 @@ internal sealed class ZLinkActorRemoteJoiner(
         );
         var deadline = (
             Utc: absoluteDeadline,
-            Monotonic: Stopwatch.GetElapsedTime(0) + RemainingTimeout(absoluteDeadline)
+            Monotonic: registration.TimeProvider.GetElapsedTime(0)
+                + RemainingTimeout(absoluteDeadline)
         );
         var remoteAddress = await ExecuteWithDeadlineAsync(
                 token => ResolveRemoteActorJoinTargetAsync(spotId, token),
                 RemainingTimeout(deadline.Monotonic),
-                cancellationToken
+                cancellationToken,
+                registration.TimeProvider
             )
             .ConfigureAwait(false);
         return await SubmitRoutedJoinActorAsync(
@@ -155,13 +158,18 @@ internal sealed class ZLinkActorRemoteJoiner(
     internal static async ValueTask<TResult> ExecuteWithDeadlineAsync<TResult>(
         Func<CancellationToken, ValueTask<TResult>> operation,
         TimeSpan timeout,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        TimeProvider? timeProvider = null
     )
     {
-        using var timeoutSource = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken
+        using var timeoutSource = new CancellationTokenSource(
+            timeout,
+            timeProvider ?? TimeProvider.System
         );
-        timeoutSource.CancelAfter(timeout);
+        using var callerCancellation = cancellationToken.UnsafeRegister(
+            static state => ((CancellationTokenSource)state!).Cancel(),
+            timeoutSource
+        );
         try
         {
             return await operation(timeoutSource.Token).ConfigureAwait(false);
@@ -179,12 +187,15 @@ internal sealed class ZLinkActorRemoteJoiner(
         }
     }
 
-    internal static TimeSpan RemainingTimeout(DateTimeOffset absoluteDeadline) =>
-        RemainingTimeout(Stopwatch.GetElapsedTime(0) + (absoluteDeadline - DateTimeOffset.UtcNow));
+    internal TimeSpan RemainingTimeout(DateTimeOffset absoluteDeadline) =>
+        RemainingTimeout(
+            registration.TimeProvider.GetElapsedTime(0)
+                + (absoluteDeadline - registration.TimeProvider.GetUtcNow())
+        );
 
-    internal static TimeSpan RemainingTimeout(TimeSpan deadline)
+    internal TimeSpan RemainingTimeout(TimeSpan deadline)
     {
-        var remaining = deadline - Stopwatch.GetElapsedTime(0);
+        var remaining = deadline - registration.TimeProvider.GetElapsedTime(0);
         if (remaining <= TimeSpan.Zero)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.DeadlineExceeded,
@@ -218,7 +229,8 @@ internal sealed class ZLinkActorRemoteJoiner(
                         token
                     ),
                 RemainingTimeout(deadline.Monotonic),
-                cancellationToken
+                cancellationToken,
+                registration.TimeProvider
             )
             .ConfigureAwait(false);
         if (
@@ -645,7 +657,8 @@ internal sealed class ZLinkActorRemoteJoiner(
         return await ExecuteWithDeadlineAsync(
                 CompleteRelocationAsync,
                 RemainingTimeout(deadline.Monotonic),
-                cancellationToken
+                cancellationToken,
+                registration.TimeProvider
             )
             .ConfigureAwait(false);
 
@@ -965,11 +978,12 @@ internal sealed class ZLinkActorRemoteJoiner(
             // The returned continuation owns source settlement and cleanup only.
             return new ZLinkActorJoinResult.Relayed(() =>
             {
-                var remaining = deadline.Monotonic - Stopwatch.GetElapsedTime(0);
+                var remaining = deadline.Monotonic - registration.TimeProvider.GetElapsedTime(0);
                 return ExecuteWithDeadlineAsync(
                     SettleSourceCleanupAsync,
                     remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero,
-                    sourceCancellationToken
+                    sourceCancellationToken,
+                    registration.TimeProvider
                 );
             });
 
@@ -1090,22 +1104,34 @@ internal sealed class ZLinkActorRemoteJoiner(
                         "actor-source-handoff-cleanup",
                         async shutdownToken =>
                         {
-                            using var sourceCleanupCancellation =
-                                CancellationTokenSource.CreateLinkedTokenSource(shutdownToken);
                             var sourceCleanupRemaining =
-                                deadline.Monotonic - Stopwatch.GetElapsedTime(0);
+                                deadline.Monotonic - registration.TimeProvider.GetElapsedTime(0);
+                            CancellationTokenSource sourceCleanupCancellation;
                             if (sourceCleanupRemaining <= TimeSpan.Zero)
+                            {
+                                sourceCleanupCancellation = new CancellationTokenSource();
                                 sourceCleanupCancellation.Cancel();
+                            }
                             else
-                                sourceCleanupCancellation.CancelAfter(sourceCleanupRemaining);
-                            await FinalizeCommittedSourceHandoffAsync(
-                                    actorState,
-                                    actorRef,
-                                    resultActorRef,
-                                    sourceAuthoritySnapshot,
-                                    sourceCleanupCancellation.Token
-                                )
-                                .ConfigureAwait(false);
+                                sourceCleanupCancellation = new CancellationTokenSource(
+                                    sourceCleanupRemaining,
+                                    registration.TimeProvider
+                                );
+                            using (sourceCleanupCancellation)
+                            {
+                                using var sourceCleanupShutdown = shutdownToken.UnsafeRegister(
+                                    static state => ((CancellationTokenSource)state!).Cancel(),
+                                    sourceCleanupCancellation
+                                );
+                                await FinalizeCommittedSourceHandoffAsync(
+                                        actorState,
+                                        actorRef,
+                                        resultActorRef,
+                                        sourceAuthoritySnapshot,
+                                        sourceCleanupCancellation.Token
+                                    )
+                                    .ConfigureAwait(false);
+                            }
                             runtime.LogActorHandoff(
                                 $"source_handoff_completed actor={actor.Context.ActorId}"
                             );

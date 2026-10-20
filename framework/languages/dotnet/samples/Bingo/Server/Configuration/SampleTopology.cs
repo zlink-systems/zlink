@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using Zlink.Framework.Contracts.Dispatch;
 
 namespace Bingo.Server.Configuration;
 
@@ -72,7 +73,8 @@ public sealed record SampleRuntimeConfiguration<TNode>(
     string NodeName,
     string LogDirectory,
     string RedisEndpoint,
-    string RedisKeyPrefix
+    string RedisKeyPrefix,
+    ZLinkDiagnosticsLevel DiagnosticsLevel
 );
 
 public sealed class SampleConfiguration
@@ -84,6 +86,7 @@ public sealed class SampleConfiguration
     public string MeshEndpoint { get; init; } = "";
     public string MatchmakingMeshEndpoint { get; init; } = "";
     public string StreamEndpoint { get; init; } = "";
+    public string DiagnosticsLevel { get; init; } = nameof(ZLinkDiagnosticsLevel.Normal);
 
     public void ValidateCommon(bool allowSingleNodeName = false)
     {
@@ -91,8 +94,21 @@ public sealed class SampleConfiguration
         Require(nameof(LogDirectory), LogDirectory);
         Require(nameof(RedisEndpoint), RedisEndpoint);
         Require(nameof(RedisKeyPrefix), RedisKeyPrefix);
+        ParseDiagnosticsLevel();
         if (!allowSingleNodeName && NodeName is not ("a" or "b"))
             throw new InvalidOperationException("Bingo Sample.NodeName must be 'a' or 'b'.");
+    }
+
+    public ZLinkDiagnosticsLevel ParseDiagnosticsLevel()
+    {
+        return
+            Enum.TryParse<ZLinkDiagnosticsLevel>(DiagnosticsLevel, ignoreCase: true, out var level)
+            && Enum.IsDefined(level)
+            && !int.TryParse(DiagnosticsLevel, out _)
+            ? level
+            : throw new InvalidOperationException(
+                "Bingo Sample.DiagnosticsLevel must be one of Off, Errors, Normal or Detailed."
+            );
     }
 
     public string Require(string name, string value)
@@ -109,7 +125,8 @@ public sealed class SampleConfiguration
             NodeName,
             LogDirectory,
             RedisEndpoint,
-            RedisKeyPrefix
+            RedisKeyPrefix,
+            ParseDiagnosticsLevel()
         );
     }
 }
