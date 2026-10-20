@@ -334,8 +334,7 @@ internal static class ZLinkEnvelopeCodec
 
     private static ZLinkEnvelopeHeader DecodeHeader(ReadOnlySpan<byte> bytes, bool validateFlow)
     {
-        var hash = HashBytes(bytes);
-        var cached = FindDecodedHeaderCacheEntry(bytes, hash);
+        var cached = FindDecodedHeaderCacheEntry(bytes);
         if (cached is not null)
             return ValidateDecodedFlow(cached, validateFlow);
 
@@ -366,7 +365,7 @@ internal static class ZLinkEnvelopeCodec
             && header.FlowId is null
             && header.Metadata is not { Count: > 0 }
         )
-            AddDecodedHeaderCacheEntry(bytes, hash, header);
+            AddDecodedHeaderCacheEntry(bytes, header);
         return ValidateDecodedFlow(header, validateFlow);
     }
 
@@ -1334,41 +1333,33 @@ internal static class ZLinkEnvelopeCodec
 
     private static void AddDecodedHeaderCacheEntry(
         ReadOnlySpan<byte> bytes,
-        ulong hash,
         ZLinkEnvelopeHeader header
     )
     {
         if (bytes.Length > 1024)
             return;
         var copy = bytes.ToArray();
-        AddDecodedHeaderCacheEntry(copy, hash, header);
+        AddDecodedHeaderCacheEntry(copy, header);
     }
 
-    private static ZLinkEnvelopeHeader? FindDecodedHeaderCacheEntry(
-        ReadOnlySpan<byte> bytes,
-        ulong hash
-    )
+    private static ZLinkEnvelopeHeader? FindDecodedHeaderCacheEntry(ReadOnlySpan<byte> bytes)
     {
         foreach (var entry in Volatile.Read(ref DecodedHeaderCache))
         {
-            if (entry.Hash == hash && entry.Bytes.AsSpan().SequenceEqual(bytes))
+            if (entry.Bytes.AsSpan().SequenceEqual(bytes))
                 return entry.Header;
         }
         return null;
     }
 
-    private static void AddDecodedHeaderCacheEntry(
-        byte[] copy,
-        ulong hash,
-        ZLinkEnvelopeHeader header
-    ) =>
+    private static void AddDecodedHeaderCacheEntry(byte[] copy, ZLinkEnvelopeHeader header) =>
         AwaitStateLane(
             CacheLane.RunAsync(() =>
             {
                 var cache = DecodedHeaderCache;
                 foreach (var entry in cache)
                 {
-                    if (entry.Hash == hash && entry.Bytes.AsSpan().SequenceEqual(copy))
+                    if (entry.Bytes.AsSpan().SequenceEqual(copy))
                         return;
                 }
 
@@ -1379,35 +1370,17 @@ internal static class ZLinkEnvelopeCodec
                 if (cache.Length == next.Length)
                 {
                     Array.Copy(cache, 1, next, 0, next.Length - 1);
-                    next[^1] = new HeaderCacheEntry(copy, hash, header);
+                    next[^1] = new HeaderCacheEntry(copy, header);
                 }
                 else
                 {
                     Array.Copy(cache, next, cache.Length);
-                    next[^1] = new HeaderCacheEntry(copy, hash, header);
+                    next[^1] = new HeaderCacheEntry(copy, header);
                 }
 
                 Volatile.Write(ref DecodedHeaderCache, next);
             })
         );
 
-    private static ulong HashBytes(ReadOnlySpan<byte> bytes)
-    {
-        const ulong offset = 14695981039346656037UL;
-        const ulong prime = 1099511628211UL;
-        var hash = offset;
-        foreach (var value in bytes)
-        {
-            hash ^= value;
-            hash *= prime;
-        }
-
-        return hash;
-    }
-
-    private readonly record struct HeaderCacheEntry(
-        byte[] Bytes,
-        ulong Hash,
-        ZLinkEnvelopeHeader Header
-    );
+    private readonly record struct HeaderCacheEntry(byte[] Bytes, ZLinkEnvelopeHeader Header);
 }
