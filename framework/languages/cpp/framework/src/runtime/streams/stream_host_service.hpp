@@ -122,7 +122,7 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     detail::delay_owner_t *_delay_owner = nullptr;
     service_provider_t *_services = nullptr;
     std::atomic_bool _stop{false};
-    std::vector<std::unique_ptr<listener_t>> _listeners;
+    std::vector<std::shared_ptr<listener_t>> _listeners;
     std::vector<std::thread> _threads;
     boost::asio::io_context _liveness_io;
     boost::asio::steady_timer _heartbeat_deadline{_liveness_io};

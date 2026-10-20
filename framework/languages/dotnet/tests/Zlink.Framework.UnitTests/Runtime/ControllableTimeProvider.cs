@@ -59,13 +59,19 @@ internal sealed class ControllableTimeProvider : TimeProvider
         return timer;
     }
 
-    internal void AdvanceMonotonic(TimeSpan delta)
+    internal void Advance(TimeSpan delta) => Advance(delta, advanceUtc: true);
+
+    internal void AdvanceMonotonic(TimeSpan delta) => Advance(delta, advanceUtc: false);
+
+    private void Advance(TimeSpan delta, bool advanceUtc)
     {
         if (delta < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(delta));
         List<(TimerCallback Callback, object? State)> due = [];
         lock (_gate)
         {
+            if (advanceUtc)
+                _utcNow = _utcNow.Add(delta);
             _timestamp = checked(_timestamp + delta.Ticks);
             foreach (var timer in _timers)
                 if (timer.TryTakeDue(_timestamp, out var callback))

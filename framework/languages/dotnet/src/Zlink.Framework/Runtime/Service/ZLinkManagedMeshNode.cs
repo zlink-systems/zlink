@@ -148,7 +148,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         PendingSessionRelocationKey,
         PendingSessionRelocationSeal
     > _pendingSessionRelocationSeals = new();
-    private readonly ConcurrentDictionary<
+    internal readonly ConcurrentDictionary<
         PendingSessionRelocationKey,
         PendingSessionRelocationSeal
     > _sessionRelocationSealReplyTerminals = new();
@@ -189,7 +189,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private IAsyncDisposable? _receiveFlowRegistration;
     private ISocketMonitor? _socketMonitor;
     private IPoller? _poller;
-    private IZlinkTimer? _receiveWakeTimer;
+    internal IZlinkTimer? _receiveWakeTimer;
     private CancellationTokenSource? _stop;
     private Task? _receiveLoop;
     private Task? _disposeTask;
@@ -293,6 +293,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     public RoutingId RoutingId => _routingId;
     internal string MeshName => _meshName;
+    internal CancellationToken ReceiveStopToken => _stop?.Token ?? CancellationToken.None;
+    internal bool HasReservedRawApplicationAdmission =>
+        Volatile.Read(ref _reservedRawApplicationAdmission) is not null;
     internal ZLinkSocketConfig RouterSocketConfig { get; set; } = new();
     public ulong RouterHighWaterMark
     {
@@ -5341,7 +5344,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return operation;
     }
 
-    private bool TryBeginOperation(
+    internal bool TryBeginOperation(
         MeshOperationKind kind,
         TimeSpan timeout,
         out PendingOperation operation
@@ -5415,8 +5418,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         MeshOperationId operationId,
         bool awaitCompletion = false,
         TimeSpan? managedTimeout = null
-    ) =>
-        _operationLane.RunAsync(() =>
+    )
+    {
+        var registering = _operationLane.RunAsync(() =>
         {
             RemoveExpiredRelocationReplyTerminalsUnderLock(_deadlineClock.Elapsed);
             if (operationId.High != _lifecycleGeneration || operationId.Low == 0)
@@ -5446,12 +5450,41 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     );
                 }
             }
-            if (managedTimeout is { } timeout)
-            {
-                IndexOperationDeadline(operation, _deadlineClock.Elapsed + timeout);
-            }
-            return (Correlation: operationId.Low, Operation: operation);
+            var wakeReceiveOwner =
+                managedTimeout is { } timeout
+                && IndexOperationDeadline(operation, _deadlineClock.Elapsed + timeout);
+            return (
+                Correlation: operationId.Low,
+                Operation: operation,
+                WakeReceiveOwner: wakeReceiveOwner
+            );
         });
+        // An uncontended lane completes synchronously; only a contended one pays for
+        // an async state machine.
+        return registering.IsCompletedSuccessfully
+            ? new(CompleteOperationRegistration(registering.Result))
+            : AwaitOperationRegistrationAsync(registering);
+    }
+
+    private async ValueTask<(
+        ulong Correlation,
+        PendingOperation Operation
+    )> AwaitOperationRegistrationAsync(
+        ValueTask<(
+            ulong Correlation,
+            PendingOperation Operation,
+            bool WakeReceiveOwner
+        )> registering
+    ) => CompleteOperationRegistration(await registering.ConfigureAwait(false));
+
+    private (ulong Correlation, PendingOperation Operation) CompleteOperationRegistration(
+        (ulong Correlation, PendingOperation Operation, bool WakeReceiveOwner) registered
+    )
+    {
+        if (registered.WakeReceiveOwner)
+            SignalReceiveOwner();
+        return (registered.Correlation, registered.Operation);
+    }
 
     public MeshOperationId AllocateOperationId() => NextStandaloneOperationId();
 
@@ -5861,7 +5894,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         {
                             lock (_socketGate)
                                 _receiveWakeTimer!.Recv();
-                            receiveReady = true;
+                            receiveReady |=
+                                Volatile.Read(ref _reservedRawApplicationAdmission) is not null;
                         }
                         else if (
                             ready.SourceKind == PollSourceKind.Socket
@@ -5940,7 +5974,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private void DrainRawSocket(CancellationToken cancellationToken)
+    internal void DrainRawSocket(CancellationToken cancellationToken)
     {
         var queue = _applicationJobQueue;
         if (queue is null)
@@ -6081,7 +6115,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return delivered;
     }
 
-    private async Task WaitForRawApplicationAdmissionAsync(
+    internal async Task WaitForRawApplicationAdmissionAsync(
         ZLinkApplicationJobQueue queue,
         CancellationToken cancellationToken
     )
@@ -12020,8 +12054,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         return -1;
     }
 
-    private void IndexOperationDeadline(PendingOperation operation, TimeSpan deadline)
+    private bool IndexOperationDeadline(PendingOperation operation, TimeSpan deadline)
     {
+        var previousWaitDeadline = ReadOperationWaitDeadline();
         var relative = deadline.Ticks - _deadlineOriginTicks;
         var tick = Math.Max(
             _deadlineTick,
@@ -12037,6 +12072,11 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             operation.DeadlinePrevious.DeadlineNext = operation;
         _deadlineTails[slot] = operation;
         _deadlineOccupied[slot / DeadlineBitmapWordBits] |= 1UL << (slot % DeadlineBitmapWordBits);
+        // The operation lane owns this comparison and the same index used by
+        // the receive owner's wait. Compare rounded ticks, so a deadline in
+        // the existing first slot does not restart the wake timer.
+        return TimeSpan.FromTicks(_deadlineOriginTicks + tick * DeadlineTickTicks)
+            < previousWaitDeadline;
     }
 
     private void UnlinkOperationDeadline(PendingOperation operation)
@@ -13734,7 +13774,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         ulong Generation
     );
 
-    private sealed class PendingOperation
+    internal sealed class PendingOperation
     {
         private readonly CancellationTokenSource _lifetime = new();
 
@@ -13791,7 +13831,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private readonly record struct ActorJoinOrigin(
+    internal readonly record struct ActorJoinOrigin(
         ActorRef Actor,
         RoutingId TargetNodeRid,
         ulong TargetNodeGeneration,
@@ -13800,7 +13840,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         string ReplyContentType
     );
 
-    private readonly record struct ManagedRequestCompletion(
+    internal readonly record struct ManagedRequestCompletion(
         RequestResult Result,
         IReadOnlyList<Message> Parts,
         int FailureErrno = 0
@@ -13870,7 +13910,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 _sessionRelocationSealReplyTerminals.TryRemove(entry);
     }
 
-    private readonly record struct PendingSessionRelocationKey(
+    internal readonly record struct PendingSessionRelocationKey(
         RoutingId SessionOwnerNodeRid,
         ZLinkServiceWireCodec.RelocationWireId RelocationId,
         string ActorId

@@ -10,7 +10,6 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.core.env.StandardEnvironment
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec
-import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode
 import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.configureDispatch
 import systems.zlink.framework.kotlin.useCoroutineHandlers
@@ -37,7 +36,7 @@ class SessionServerApplication {
         ZLinkFrameworkConfigurer { options ->
             options.addHandlersFromPackageOf<SessionServerApplication>()
             options.useCoroutineHandlers(Dispatchers.Default)
-            options.configureDispatch { messageFlow(ZLinkMessageFlowLogMode.NORMAL) }
+            options.configureDispatch { messageFlow(topology.diagnosticsLevel) }
             options.codecs().use(ZLinkProtobufCodec.defaultCodec())
             options.configureLocations()
             // --8<-- [start:doc-bingo-session-register]

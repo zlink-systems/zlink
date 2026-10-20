@@ -371,7 +371,7 @@ final class ZLinkJavaRawMeshNode
                                                 () ->
                                                         new IllegalStateException(
                                                                 "local MeshNode authority"
-                                                                    + " descriptor is not live")));
+                                                                        + " descriptor is not live")));
     }
 
     ZLinkInternalMeshNode.PeerAuthorityFence localAuthorityFence() {
@@ -1070,8 +1070,9 @@ final class ZLinkJavaRawMeshNode
     }
 
     private void drainPeerCloseRequests() {
-        PeerCloseRequest request;
-        while ((request = pendingPeerCloseRequests.poll()) != null) {
+        PeerCloseRequest request = pendingPeerCloseRequests.poll();
+        if (request == null) return;
+        do {
             PeerIntent intent = peerIntents.get(request.connectionIntentId());
             RouterSocket current = router;
             if (intent == null
@@ -1090,7 +1091,9 @@ final class ZLinkJavaRawMeshNode
                 // route for the intent's peer. A non-inproc transport retries
                 // from a later descriptor observation.
             }
-        }
+        } while ((request = pendingPeerCloseRequests.poll()) != null);
+        // Selected-route changes already settle outstanding closes in observeSelectedRoutes.
+        // Without a new close request or route snapshot, that decision has no new input.
         finishRequestedIntentCloses();
     }
 
@@ -1207,11 +1210,15 @@ final class ZLinkJavaRawMeshNode
                                 }));
     }
 
+    ZLinkStateLane descriptorStateLaneForTest() {
+        return descriptorStateLane;
+    }
+
     private void signalLifecycleEnded() {
         signalLifecycleEnded(null);
     }
 
-    private CompletionStage<Void> signalLifecycleEnded(RoutingId target) {
+    CompletionStage<Void> signalLifecycleEnded(RoutingId target) {
         var observers =
                 stateListeners.stream()
                         .filter(
@@ -4839,10 +4846,9 @@ final class ZLinkJavaRawMeshNode
         long startedAt = System.nanoTime();
         long receivedBytes = 0;
         int count = 0;
-        // Spec 08 §4.1 I1/I2: the rotation's first permit observes the FIFO. After the first
-        // record, the rest of the rotation's budget is what is free now, reserved in one lock,
-        // and the rotation claims records until the socket has none (one readiness wait per
-        // rotation, no poll per record) or a budget, count, byte or time limit is reached.
+        // Spec 08 §4.1 I1/I2: reserve the rotation's currently free budget in one FIFO-aware
+        // lock before its first claim. Only a source with no free budget needs a resumption
+        // callback. Convert budget units to permit objects only for records that exist.
         var budgetQueue = applicationJobQueue;
         int budget = 0;
         boolean budgetReserved = false;
@@ -4851,7 +4857,7 @@ final class ZLinkJavaRawMeshNode
             while (count < MAX_INGRESS_BATCH && !closed.get()) {
                 var queue = applicationJobQueue;
                 boolean budgeted = false;
-                if (grant == null && queue != null && queue == budgetQueue && count > 0) {
+                if (grant == null && queue != null && queue == budgetQueue) {
                     if (!budgetReserved) {
                         budgetReserved = true;
                         budget = queue.reserveRotationBudget(MAX_INGRESS_BATCH - count);
@@ -4942,8 +4948,8 @@ final class ZLinkJavaRawMeshNode
 
     private static long retainedBytes(List<Message> frames) {
         long bytes = 0;
-        for (Message frame : frames) {
-            bytes = Math.addExact(bytes, frame.size());
+        for (int index = 0; index < frames.size(); index++) {
+            bytes = Math.addExact(bytes, frames.get(index).size());
         }
         return bytes;
     }
@@ -7646,9 +7652,10 @@ final class ZLinkJavaRawMeshNode
 
     private Duration managementWaitTimeout(long nowNanos) {
         long remaining = liveness.nextDeadlineNanos(nowNanos) - nowNanos;
-        return remaining <= 0
-                ? Duration.ZERO
-                : Duration.ofNanos(Math.min(remaining, ingressWaitTimeout.toNanos()));
+        if (remaining <= 0) return Duration.ZERO;
+        return remaining >= ingressWaitTimeout.toNanos()
+                ? ingressWaitTimeout
+                : Duration.ofNanos(remaining);
     }
 
     private void tickLiveness(long nowNanos) {
@@ -7656,7 +7663,8 @@ final class ZLinkJavaRawMeshNode
         boolean admissionDue = liveness.tickAdmission(nowNanos);
         announceExpectedPeers(admissionDue);
         ZLinkServiceLivenessRegistry.Tick tick = liveness.tick(nowNanos);
-        for (ZLinkServiceLivenessRegistry.Probe probe : tick.probes()) {
+        for (int index = 0; index < tick.probes().size(); index++) {
+            ZLinkServiceLivenessRegistry.Probe probe = tick.probes().get(index);
             try {
                 sendLiveness(
                         probe.nodeRoutingId(),
@@ -7667,14 +7675,13 @@ final class ZLinkJavaRawMeshNode
                 // failure must not stop the service receive pump.
             }
         }
-        tick.timedOutNodes()
-                .forEach(
-                        peer -> {
-                            if (disconnectAdmitted(peer, admittedConnectionId(peer))) {
-                                requireStarted().disconnectRid(peer);
-                                signalStateChanged(peer);
-                            }
-                        });
+        for (int index = 0; index < tick.timedOutNodes().size(); index++) {
+            RoutingId peer = tick.timedOutNodes().get(index);
+            if (disconnectAdmitted(peer, admittedConnectionId(peer))) {
+                requireStarted().disconnectRid(peer);
+                signalStateChanged(peer);
+            }
+        }
     }
 
     private CompletionStage<Void> sendLiveness(RoutingId target, List<byte[]> frames) {
@@ -7793,7 +7800,7 @@ final class ZLinkJavaRawMeshNode
         return String.join(",", fields);
     }
 
-    private CompletionStage<Void> runDescriptorTurn(Runnable command) {
+    CompletionStage<Void> runDescriptorTurn(Runnable command) {
         if (!descriptorStateLane.isOnLane())
             return descriptorStateLane.runNowOrQueue(
                     () -> {

@@ -243,6 +243,7 @@ const SERVICE_CONTROL_TERMINAL_CAPACITY = 4096;
 const INITIAL_MEMBERSHIP_EPOCH = 1n;
 
 interface ZLinkHostRelocationOptions {
+  readonly flowCreationEnabled?: () => boolean;
   readonly messageFlow?: () => ZLinkMessageFlowTracer | undefined;
   readonly registration: ZLinkFrameworkRegistration;
   readonly providerResolver?: ZLinkProviderResolver;
@@ -378,6 +379,7 @@ interface SourceActorJoinProfile {
   readonly canonicalRecovery?: NonNullable<
     Parameters<ZLinkActorJoinRelocation['relocateActorJoin']>[0]['canonicalRecovery']
   >;
+  readonly relayReady: () => void;
   readonly ready: Promise<void>;
   readonly resolveReady: (failure?: ServiceRelocationPostCommitError) => void;
   retirement?: Promise<void>;
@@ -502,6 +504,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         else reject(failure.cause);
       };
     });
+    let acceptRelay!: () => void;
+    const relayReady = new Promise<void>((resolve) => {
+      acceptRelay = resolve;
+    });
     this.sourceActorJoinProfiles.set(input.relocationId, {
       actor: input.actor,
       state: input.state,
@@ -516,44 +522,53 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           : RECREATE_RELOCATION_CONTENT_TYPE,
       completionOperationId: input.completionOperationId,
       canonicalRecovery: input.canonicalRecovery,
+      relayReady: acceptRelay,
       ready,
       resolveReady
     });
     const membershipEpoch =
       input.state.spotMembershipEpoch > 0n ? input.state.spotMembershipEpoch : 1n;
     const spotGeneration = input.target.targetSpotGeneration ?? target.lifecycleGeneration;
-    try {
-      await this.relocateStandaloneActor(
-        input.meshName,
-        input.state,
-        target,
-        target.applicationVersion,
-        input.signal,
-        {
-          ...input.target,
-          spotKind:
-            input.target.spotKind === ZLinkSpotKind.Entry
-              ? ZLinkSpotKind.Entry
-              : ZLinkSpotKind.User,
-          spotObjectGeneration: spotGeneration
-        },
-        input.relocationId,
-        true,
-        input.advertisedReceiveChunkLimitBytes,
-        input.deadlineAtMs
-      );
-      resolveReady();
-    } catch (error) {
-      if (error instanceof ServiceRelocationPostCommitError) {
-        resolveReady(error);
-        this.completeActorJoinSourceCleanup(input.state.actorId);
-      } else {
-        this.sourceActorJoinProfiles.delete(input.relocationId);
+    const cleanup = (async () => {
+      try {
+        await this.relocateStandaloneActor(
+          input.meshName,
+          input.state,
+          target,
+          target.applicationVersion,
+          input.signal,
+          {
+            ...input.target,
+            spotKind:
+              input.target.spotKind === ZLinkSpotKind.Entry
+                ? ZLinkSpotKind.Entry
+                : ZLinkSpotKind.User,
+            spotObjectGeneration: spotGeneration
+          },
+          input.relocationId,
+          true,
+          input.advertisedReceiveChunkLimitBytes,
+          input.deadlineAtMs
+        );
         resolveReady();
-        throw error;
+      } catch (error) {
+        if (error instanceof ServiceRelocationPostCommitError) {
+          resolveReady(error);
+          this.completeActorJoinSourceCleanup(input.state.actorId);
+        } else {
+          this.sourceActorJoinProfiles.delete(input.relocationId);
+          resolveReady();
+          throw error;
+        }
       }
-    }
+    })();
+    const settledCleanup = Promise.allSettled([cleanup]);
+    await Promise.race([relayReady, cleanup]);
     return {
+      sourceCleanup: async () => {
+        const [outcome] = await settledCleanup;
+        if (outcome.status === 'rejected') throw outcome.reason;
+      },
       actorRef: {
         actorId: sourceRef.actorId,
         generation: sourceRef.generation,
@@ -2550,6 +2565,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       // forward the source can no longer reopen dispatch without risking two
       // owners.
       readyReceived = true;
+      actorJoinProfile?.relayReady();
 
       const boundaryBatch: Array<{
         readonly frame: Buffer;
@@ -3846,7 +3862,8 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         participantId,
         completion,
         packet,
-        this.options.registration.messageSerializers
+        this.options.registration.messageSerializers,
+        this.options.flowCreationEnabled?.() ?? false
       ),
       source,
       signal
@@ -5686,7 +5703,8 @@ function maintenanceReplyRelay(
   participantId: bigint,
   completion: RelocationTerminalCompletion,
   packet: ZLinkActorHandoffPacket,
-  serializers: Parameters<typeof encodeActorReply>[3]
+  serializers: Parameters<typeof encodeActorReply>[3],
+  flowEnabled: boolean
 ): ServiceMaintenanceReplyRelay {
   const value = completion.result.ok ? completion.result.response : undefined;
   const direct = packet.messageFollowOrigin?.requestSource !== undefined;
@@ -5698,7 +5716,8 @@ function maintenanceReplyRelay(
               Buffer.from(packet.header, 'base64'),
               ZLinkStreamMessageKind.Response,
               value,
-              serializers
+              serializers,
+              flowEnabled
             ),
             SERVICE_FRAMEWORK_MULTIPART_PACKET_NAME,
             SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE

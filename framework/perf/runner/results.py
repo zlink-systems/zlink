@@ -354,8 +354,13 @@ def aggregate(cell: Path, config: dict, client_files: list[str], server_files: l
                                                    "A single primary owner window is not available.")
     if not ps:
         reasons["/aggregation/fanoutDeliveryRateMethod"] = null_reason("NOT_APPLICABLE", "Request baseline has no fanout.")
-    status = ("unsupported" if any(issue["code"] == "PublicContractMismatch" for issue in issues) else
-              "invalid" if any(issue["code"] in ("InvalidSetup", "SchemaMismatch") for issue in issues) else "failed" if issues else "valid")
+    status = (
+        "unsupported" if any(issue["code"] == "PublicContractMismatch" for issue in issues) else
+        "invalid" if any(
+            issue["code"] in ("InvalidSetup", "SchemaMismatch", "OwnedProcessFailure")
+            for issue in issues
+        ) else "failed" if issues else "valid"
+    )
     if not issues and not u64(metrics.get("messages.publishedInWindow" if ps else "messages.completed", "0")):
         status = "invalid"
         issues.append({"code": "ZeroDenominator" if ps else "NoCompletedEcho",

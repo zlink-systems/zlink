@@ -12,7 +12,6 @@ import org.springframework.context.annotation.Bean;
 
 import systems.zlink.framework.codecs.protobuf.ZLinkProtobufCodec;
 import systems.zlink.framework.configuration.ZLinkMeshNodeBuilder;
-import systems.zlink.framework.configuration.ZLinkMessageFlowLogMode;
 import systems.zlink.framework.configuration.ZLinkSpotRelocationCoordinationMode;
 import systems.zlink.framework.configuration.ZLinkUserSpotExecutionMode;
 import systems.zlink.framework.locations.redis.ZLinkRedisLocationStore;
@@ -50,7 +49,7 @@ public final class PlayServerApplication {
     @Bean
     ZLinkFrameworkConfigurer playFramework(SampleTopology topology) {
         return options -> {
-            options.configureDispatch().messageFlow(ZLinkMessageFlowLogMode.NORMAL);
+            options.configureDispatch().messageFlow(topology.diagnosticsLevel());
             options.codecs().use(ZLinkProtobufCodec.defaultCodec());
             options.configureLocations();
             options.addRelocationStore(
