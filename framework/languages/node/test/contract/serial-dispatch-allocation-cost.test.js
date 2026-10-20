@@ -363,3 +363,145 @@ test('continuation admission reuses the existing default lane without an options
   assert.equal(await scheduler.submitContinuation(() => 42), 42);
   await scheduler.close();
 });
+
+const {
+  ZLinkSpotActorDispatcher,
+  ZLinkSpotActorHandlerRegistryRuntime,
+  ZLinkActorPacketKind
+} = require('../../packages/framework/dist/runtime/actors/spot-actor-dispatch');
+const {
+  ZLinkMessageMetadataEmpty
+} = require('../../packages/framework/dist/contracts/Common/ZLinkMessageMetadata');
+function dispatcher() {
+  class Actor {}
+  class Handler {
+    async handle(_spot, _actor, _context, message) {
+      return message;
+    }
+  }
+  const registry = new ZLinkSpotActorHandlerRegistryRuntime();
+  registry.addPacket({
+    kind: ZLinkActorPacketKind.Request,
+    actorType: Actor,
+    handlerType: Handler,
+    packetName: 'echo'
+  });
+  return { actor: new Actor(), dispatch: new ZLinkSpotActorDispatcher({ registry, spot: {} }) };
+}
+test('Actor reply phases reuse the existing empty read-only metadata owner', async () => {
+  const { actor, dispatch } = dispatcher();
+  let phases = 0;
+  const check = (reply, options) => {
+    phases++;
+    assert.strictEqual(options.metadata, ZLinkMessageMetadataEmpty.values);
+    assert.equal(options.metadata.size, 0);
+    assert.deepEqual([...options.metadata], []);
+    assert.equal(options.compressPayload, false);
+    return reply;
+  };
+  assert.equal(
+    await dispatch.dispatchRequestThenDecoded(actor, 'echo', () => 42, undefined, check, check),
+    42
+  );
+  assert.equal(phases, 2);
+});
+test('Actor dispatch omits the intermediate default partial context object', async () => {
+  const { actor, dispatch } = dispatcher();
+  const create = dispatch.createContext;
+  dispatch.createContext = function (packetName, context) {
+    assert.equal(context, undefined);
+    return create.call(this, packetName, context);
+  };
+  assert.equal(await dispatch.dispatchRequest(actor, 'echo', 42), 42);
+});
+test('deferred Join preparation and execution retain order without array iterators', async () => {
+  const {
+    runActorHandlerWithDeferredJoins,
+    deferActorJoin
+  } = require('../../packages/framework/dist/runtime/actors/actor-join-deferred-scope');
+  const original = Array.prototype[Symbol.iterator];
+  let iterations = 0;
+  Array.prototype[Symbol.iterator] = function () {
+    Array.prototype[Symbol.iterator] = original;
+    let stack;
+    try {
+      stack = new Error().stack;
+    } finally {
+      Array.prototype[Symbol.iterator] = replacement;
+    }
+    if (
+      stack.includes('ActorJoinRegistrationScope.prepareSealedJoinsCore') ||
+      stack.includes('ActorJoinRegistrationScope.execute')
+    )
+      iterations++;
+    return original.call(this);
+  };
+  const replacement = Array.prototype[Symbol.iterator];
+  const events = [];
+  try {
+    assert.equal(
+      await runActorHandlerWithDeferredJoins(
+        () => {
+          deferActorJoin({
+            prepare() {
+              events.push('prepare');
+            },
+            async execute() {
+              events.push('execute');
+            },
+            discard() {
+              events.push('discard');
+            }
+          });
+          return Promise.resolve(42);
+        },
+        (reply) => {
+          events.push('reply');
+          return reply;
+        }
+      ),
+      42
+    );
+  } finally {
+    Array.prototype[Symbol.iterator] = original;
+  }
+  assert.deepEqual(events, ['prepare', 'reply', 'execute']);
+  assert.equal(iterations, 0);
+});
+
+for (const remaining of [0, 1])
+  test(`selected-record fence preserves the original error with ${remaining} remaining records`, async () => {
+    const queue = new ZLinkSerialExecutionQueue(
+      async (record) => {
+        try {
+          record.resolve(await record.operation());
+        } catch (error) {
+          record.reject(error);
+        } finally {
+          record.release();
+        }
+      },
+      { ownerTimeBudget: 0 }
+    );
+    const pending = [queue.submit(() => 1)];
+    if (remaining) pending.push(queue.submit(() => 2));
+    const records = [...queue.application.records];
+    const selection = queue.selectNext();
+    queue.application.records.shift();
+    let failure;
+    try {
+      queue.takeSelected(selection);
+    } catch (error) {
+      failure = error;
+    }
+    for (let index = 0; index < records.length; index++) {
+      records[index].resolve(index + 1);
+      records[index].release();
+    }
+    await Promise.all(pending);
+    await queue.close();
+    assert.match(
+      failure?.message ?? '',
+      /The selected serial work record changed before owner claim\./
+    );
+  });
