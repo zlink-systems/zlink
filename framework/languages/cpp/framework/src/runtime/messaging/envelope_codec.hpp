@@ -5,6 +5,7 @@
 #include <zlink/framework/contracts/codecs/serializer.hpp>
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 #include <zlink/framework/contracts/errors/result.hpp>
+#include <zlink/json_profile.hpp>
 
 #include <chrono>
 #include <map>
@@ -31,7 +32,7 @@ struct envelope_header_t
     message_kind_t kind = message_kind_t::request;
     std::string channel_name;
     std::string message_name;
-    std::string content_type = "application/json";
+    std::string content_type = zlink::detail::json_profile::content_type;
     std::string correlation_id;
     std::optional<std::string> deadline;
     std::optional<std::string> topic;
@@ -65,7 +66,7 @@ class message_parts_t
 class envelope_codec_t
 {
   public:
-    static constexpr const char *default_content_type = "application/json";
+    static constexpr const char *default_content_type = zlink::detail::json_profile::content_type;
 
     message_parts_t encode_raw_body_parts (const envelope_header_t &header,
                                            zlink::message_t body) const;
@@ -80,10 +81,9 @@ class envelope_codec_t
                                   const serializer_registry_t &serializers) const
     {
         const auto serializer = serializers.get<TBody> ();
-        auto typed_header = header;
-        typed_header.content_type = serializer.content_type ();
-        return encode_raw_body_parts (typed_header,
-                                      detail::encoded_payload_to_raw (serializer.serialize (body)));
+        auto encoded = detail::encoded_payload_to_raw (serializer.serialize (body));
+        return message_parts_t (encode_header (header, serializer.content_type ()),
+                                std::move (encoded));
     }
 
     zlink::message_t encode_header (const envelope_header_t &header) const;
@@ -103,6 +103,10 @@ class envelope_codec_t
                    bool capture_flow = true,
                    std::optional<envelope_header_t> *rejection_context = nullptr) const;
     result_t<zlink::message_t> decode_body (const message_parts_t &parts) const;
+
+  private:
+    zlink::message_t encode_header (const envelope_header_t &header,
+                                    const std::string &content_type) const;
 };
 
 } // namespace zlink::framework::runtime::messaging
