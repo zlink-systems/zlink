@@ -121,11 +121,31 @@ public final class ZLinkSerialTurnAllocationTest {
             }
             long futures = 0;
             long baseline = 0;
+            long actions = 0;
             try (var events = new RecordingFile(recordingPath)) {
                 while (events.hasMoreEvents()) {
                     var event = events.readEvent();
                     if (!event.getEventType().getName().equals("jdk.ObjectAllocationOutsideTLAB"))
                         continue;
+                    if (event.getClass("objectClass")
+                                    .getName()
+                                    .startsWith(
+                                            ZLinkSerialExecutionQueue.class.getName() + "$$Lambda")
+                            && event.getStackTrace().getFrames().stream()
+                                    .anyMatch(
+                                            frame ->
+                                                    frame.getMethod()
+                                                                    .getType()
+                                                                    .getName()
+                                                                    .equals(
+                                                                            ZLinkSerialExecutionQueue
+                                                                                    .class
+                                                                                    .getName())
+                                                            && frame.getMethod()
+                                                                    .getName()
+                                                                    .equals(
+                                                                            "scheduleDrainIfNeeded")))
+                        actions++;
                     if (!event.getClass("objectClass")
                             .getName()
                             .equals(CompletableFuture.class.getName())) continue;
@@ -162,10 +182,20 @@ public final class ZLinkSerialTurnAllocationTest {
                             + futures
                             + "/1000; completion observer baseline="
                             + baseline);
-            assertEquals(
-                    1000,
-                    futures - baseline,
-                    "one execution gate per turn beyond the JDK observer baseline");
+            System.out.println("serial worker submission actions: " + actions + "/1000");
+            long submittedActions = actions;
+            long turnFutures = futures - baseline;
+            org.junit.jupiter.api.Assertions.assertAll(
+                    () ->
+                            assertEquals(
+                                    2000,
+                                    submittedActions,
+                                    "one drain and one rejection action per submission"),
+                    () ->
+                            assertEquals(
+                                    1000,
+                                    turnFutures,
+                                    "one execution gate per turn beyond the JDK observer baseline"));
         } finally {
             Files.deleteIfExists(recordingPath);
         }

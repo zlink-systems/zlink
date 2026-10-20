@@ -1744,22 +1744,22 @@ public final class ZLinkSerialExecutionQueue {
     }
 
     private void submitWorker(Runnable work, Consumer<RuntimeException> reject) {
-        Runnable submit =
-                () -> {
-                    try {
-                        executor.execute(work);
-                    } catch (RuntimeException rejected) {
-                        reject.accept(rejected);
-                    }
-                };
         if (executor instanceof ExecutorService) {
-            submit.run();
+            executeWorker(work, reject);
         } else {
             try {
-                DRAIN_EXECUTOR.execute(submit);
+                DRAIN_EXECUTOR.execute(() -> executeWorker(work, reject));
             } catch (RuntimeException rejected) {
                 reject.accept(rejected);
             }
+        }
+    }
+
+    private void executeWorker(Runnable work, Consumer<RuntimeException> reject) {
+        try {
+            executor.execute(work);
+        } catch (RuntimeException rejected) {
+            reject.accept(rejected);
         }
     }
 
