@@ -270,14 +270,14 @@ export class ZLinkSpotActorDispatcher {
             ),
           (reply) =>
             afterReply(reply, {
-              metadata: new Map<string, string>(),
+              metadata: ZLinkMessageMetadataEmpty.values,
               compressPayload: false
             }),
           beforeReply === undefined
             ? undefined
             : (reply) =>
                 beforeReply(reply, {
-                  metadata: new Map<string, string>(),
+                  metadata: ZLinkMessageMetadataEmpty.values,
                   compressPayload: false
                 })
         )
