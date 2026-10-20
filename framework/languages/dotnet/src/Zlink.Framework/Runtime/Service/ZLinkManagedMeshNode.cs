@@ -6053,10 +6053,17 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     return;
                 admission = reservation.Claim();
                 bytes = checked(bytes + ZLinkReceiveBatchBudget.MeasureParts(received.Parts));
-                using var ownership = new RawIngressOwnership(received, admission);
+                var ownership = new RawIngressOwnership(received, admission);
                 received = null;
                 admission = null;
-                ProcessReceived(ownership);
+                try
+                {
+                    ProcessReceived(ref ownership);
+                }
+                finally
+                {
+                    ownership.Dispose();
+                }
             }
             finally
             {
@@ -6188,47 +6195,51 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private sealed class RawIngressOwnership(
+    // Only this synchronous receive stack owns the temporary receipt and permit.
+    // A transferred owner outlives the stack through the existing record owner.
+    private ref struct RawIngressOwnership(
         Received received,
         ZLinkApplicationJobQueueLease? admission
-    ) : IDisposable
+    )
     {
         private Received? _received = received;
         private ZLinkApplicationJobQueueLease? _admission = admission;
 
-        internal Received Receipt =>
-            Volatile.Read(ref _received)
-            ?? throw new ObjectDisposedException(nameof(RawIngressOwnership));
+        internal readonly Received Receipt =>
+            _received ?? throw new ObjectDisposedException(nameof(RawIngressOwnership));
 
         internal ZLinkSharedEnvelopeOwner ShareEnvelope()
         {
-            var envelopeOwner =
-                Interlocked.Exchange(ref _received, null)
-                ?? throw new ObjectDisposedException(nameof(RawIngressOwnership));
+            var envelopeOwner = Receipt;
+            _received = null;
             return new ZLinkSharedEnvelopeOwner(envelopeOwner);
         }
 
-        internal ZLinkApplicationJobQueueLease? TakeAdmission() =>
-            Interlocked.Exchange(ref _admission, null);
+        internal ZLinkApplicationJobQueueLease? TakeAdmission()
+        {
+            var admission = _admission;
+            _admission = null;
+            return admission;
+        }
 
         internal IDisposable TakeApplicationOwner()
         {
-            var envelopeOwner =
-                Interlocked.Exchange(ref _received, null)
-                ?? throw new ObjectDisposedException(nameof(RawIngressOwnership));
-            var applicationAdmission = Interlocked.Exchange(ref _admission, null);
-            return AttachApplicationAdmission(envelopeOwner, applicationAdmission);
+            var envelopeOwner = Receipt;
+            _received = null;
+            return AttachApplicationAdmission(envelopeOwner, TakeAdmission());
         }
 
         public void Dispose()
         {
+            var received = _received;
+            _received = null;
             try
             {
-                Interlocked.Exchange(ref _received, null)?.Dispose();
+                received?.Dispose();
             }
             finally
             {
-                Interlocked.Exchange(ref _admission, null)?.Dispose();
+                TakeAdmission()?.Dispose();
             }
         }
     }
@@ -6730,7 +6741,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         });
     }
 
-    private bool ProcessReceived(RawIngressOwnership ownership)
+    private bool ProcessReceived(ref RawIngressOwnership ownership)
     {
         var received = ownership.Receipt;
         if (received.RoutingId is not { } sourceRid || received.Parts.Count == 0)
@@ -6806,7 +6817,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     )
                 )
                     break;
-                return ProcessStateful(sourceRid, stateful, ownership);
+                return ProcessStateful(sourceRid, stateful, ref ownership);
             }
             case ServiceWireConstants.Command.ActorJoin:
             {
@@ -6841,7 +6852,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     sourceRid,
                     nativeReply,
                     canonical.Request,
-                    ownership
+                    ref ownership
                 );
             }
             case ServiceWireConstants.Command.InstanceSpot:
@@ -6859,7 +6870,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         || ready.SourceNodeGeneration != ResolvePeerGeneration(sourceRid)
                     )
                         break;
-                    return ProcessStateful(sourceRid, ready, ownership, instanceReadyRoute: true);
+                    return ProcessStateful(
+                        sourceRid,
+                        ready,
+                        ref ownership,
+                        instanceReadyRoute: true
+                    );
                 }
                 if (
                     !ZLinkServiceWireCodec.TryDecodeInstanceSpotActivation(
@@ -7132,7 +7148,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         RoutingId sourceRid,
         ReplyOperation nativeReply,
         ZLinkServiceWireCodec.ActorJoinRequestRecord actorJoin,
-        RawIngressOwnership ownership
+        ref RawIngressOwnership ownership
     )
     {
         ZLinkSpotId targetSpotId;
@@ -8266,7 +8282,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
     private bool ProcessStateful(
         RoutingId sourceRid,
         ZLinkServiceWireCodec.StatefulRecord stateful,
-        RawIngressOwnership ownership,
+        ref RawIngressOwnership ownership,
         bool instanceReadyRoute = false
     )
     {
@@ -13428,8 +13444,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private ulong ResolvePeerGeneration(RoutingId sourceRid)
     {
-        return RunState(() =>
-            _peersByRid.TryGetValue(sourceRid, out var peer) ? peer.LifecycleGeneration : 0
+        return AwaitStateLane(
+            _lane.RunAsync(
+                static state =>
+                    state.Node._peersByRid.TryGetValue(state.SourceRid, out var peer)
+                        ? peer.LifecycleGeneration
+                        : 0,
+                (Node: this, SourceRid: sourceRid)
+            )
         );
     }
 
