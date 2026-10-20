@@ -69,37 +69,25 @@ internal sealed class ZLinkActorRemoteJoiner(
     }
 
     public async ValueTask<ZLinkActorJoinResult> JoinAsync(
-        string spotId,
+        ZLinkResolvedSpotHandle target,
         IZLinkActor actor,
         ZLinkActorRuntimeState actorState,
         ZLinkBackendActorRef actorRef,
         ZLinkMessage request,
         ZLinkActorJoinOperationId? operationId,
         CancellationToken cancellationToken,
-        DateTimeOffset absoluteDeadline
+        (DateTimeOffset Utc, TimeSpan Monotonic) deadline
     )
     {
         using var flow = ZLinkFlowContext.EnterCurrentOrCreate(
             ZLinkFlowOrigin.Application,
             runtime.Flow.CaptureEnabled
         );
-        var deadline = (
-            Utc: absoluteDeadline,
-            Monotonic: registration.TimeProvider.GetElapsedTime(0)
-                + RemainingTimeout(absoluteDeadline)
-        );
-        var remoteAddress = await ExecuteWithDeadlineAsync(
-                token => ResolveRemoteActorJoinTargetAsync(spotId, token),
-                RemainingTimeout(deadline.Monotonic),
-                cancellationToken,
-                registration.TimeProvider
-            )
-            .ConfigureAwait(false);
         return await SubmitRoutedJoinActorAsync(
                 actor,
                 actorRef,
                 actorState,
-                remoteAddress,
+                target,
                 request,
                 operationId,
                 cancellationToken,
@@ -1622,49 +1610,6 @@ internal sealed class ZLinkActorRemoteJoiner(
                 cancellationToken
             )
             .ConfigureAwait(false);
-    }
-
-    private async ValueTask<ZLinkResolvedSpotHandle> ResolveRemoteActorJoinTargetAsync(
-        string spotId,
-        CancellationToken cancellationToken
-    )
-    {
-        var resolver =
-            services.GetService(typeof(ZLinkLocationAddressResolvers))
-            as ZLinkLocationAddressResolvers;
-        if (resolver is null)
-            throw new InvalidOperationException($"SPOT '{spotId}' is not active.");
-
-        var handle = await resolver
-            .ResolveSpotHandleAsync(spotId, cancellationToken)
-            .ConfigureAwait(false);
-        if (handle is null)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"SPOT '{spotId}' has no live location row."
-            );
-        var snapshot = handle.Snapshot;
-        if (
-            services.GetService(typeof(IZLinkMeshNodeLocationResolver))
-            is IZLinkMeshNodeLocationResolver peerResolver
-        )
-        {
-            var peers = await peerResolver
-                .ListLiveMeshNodesAsync(snapshot.RouterChannelId, cancellationToken)
-                .ConfigureAwait(false);
-            if (
-                peers.Any(descriptor =>
-                    descriptor.Rid.Equals(snapshot.NodeRid)
-                    && descriptor.State == ZLinkFrameworkRuntimeState.Draining
-                )
-            )
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Rejected,
-                    $"SPOT '{spotId}' is hosted by a draining node.",
-                    ZLinkRetryAdvice.DoNotRetry
-                );
-        }
-        return handle;
     }
 }
 
