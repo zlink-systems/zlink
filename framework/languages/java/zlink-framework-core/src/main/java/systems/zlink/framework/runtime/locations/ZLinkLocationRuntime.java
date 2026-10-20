@@ -692,12 +692,19 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
 
     private <T> CompletionStage<T> withinDeadline(
             CompletionStage<T> operation, long deadlineNanos) {
+        CompletableFuture<T> completion = new CompletableFuture<>();
+        operation.whenComplete(
+                (result, failure) -> {
+                    if (failure == null) completion.complete(result);
+                    else completion.completeExceptionally(failure);
+                });
+        if (completion.isDone()) return completion;
         long remainingNanos = deadlineNanos - monotonicNow.getAsLong();
         if (remainingNanos <= 0L) {
-            return CompletableFuture.failedFuture(
+            completion.completeExceptionally(
                     new TimeoutException("owner lease operation timed out"));
+            return completion;
         }
-        CompletableFuture<T> completion = new CompletableFuture<>();
         ScheduledFuture<?> timeout =
                 heartbeatExecutor.schedule(
                         () ->
@@ -705,15 +712,7 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                         new TimeoutException("owner lease operation timed out")),
                         remainingNanos,
                         TimeUnit.NANOSECONDS);
-        operation.whenComplete(
-                (result, failure) -> {
-                    if (failure == null && completion.complete(result)) {
-                        timeout.cancel(false);
-                    } else if (failure != null) {
-                        completion.completeExceptionally(failure);
-                        timeout.cancel(false);
-                    }
-                });
+        completion.whenComplete((result, failure) -> timeout.cancel(false));
         return completion;
     }
 
@@ -882,16 +881,13 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                                 claimed,
                                                                 failure,
                                                                 operationStartedNanos))
-                                        .thenCompose(
-                                                cancelled ->
-                                                        finishStartupClaim(
-                                                                completion, cancelled, failure)));
+                                        .thenCompose(Supplier::get));
     }
 
     /**
-     * Applies the startup claim result to lane state; returns whether the startup was abandoned.
+     * Applies the startup claim result to lane state and selects its completion outside the lane.
      */
-    private boolean installStartupClaimCore(
+    private Supplier<CompletionStage<Void>> installStartupClaimCore(
             CompletableFuture<Void> completion,
             ZLinkOwnerLeaseClaimed claimed,
             Throwable failure,
@@ -902,30 +898,22 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                 ownerToken = null;
                 ownerAdmissionDeadlineNanos = 0L;
             }
-            return true;
+            return () -> CompletableFuture.completedFuture(null);
         }
         ownerLeaseOperationStartedNanos = operationStartedNanos;
         if (failure == null) {
             installOwnerLeaseCore(claimed, operationStartedNanos);
-            return false;
+        } else {
+            recordFailureCore(failureMessage(failure));
+            if (unwrap(failure) instanceof OwnerLeaseClaimRejectedException) {
+                started = false;
+                return () -> {
+                    completion.completeExceptionally(unwrap(failure));
+                    return CompletableFuture.completedFuture(null);
+                };
+            }
         }
-        recordFailureCore(failureMessage(failure));
-        if (unwrap(failure) instanceof OwnerLeaseClaimRejectedException) {
-            started = false;
-        }
-        return false;
-    }
-
-    private CompletionStage<Void> finishStartupClaim(
-            CompletableFuture<Void> completion, boolean cancelled, Throwable failure) {
-        if (cancelled) {
-            return CompletableFuture.completedFuture(null);
-        }
-        if (failure != null && unwrap(failure) instanceof OwnerLeaseClaimRejectedException) {
-            completion.completeExceptionally(unwrap(failure));
-            return CompletableFuture.completedFuture(null);
-        }
-        return completeInitialClaim(completion).thenApply(ignored -> null);
+        return () -> completeInitialClaim(completion).thenApply(ignored -> null);
     }
 
     private CompletionStage<Boolean> completeInitialClaim(CompletableFuture<Void> completion) {
