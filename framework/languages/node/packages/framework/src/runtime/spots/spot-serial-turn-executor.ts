@@ -163,7 +163,7 @@ export class ZLinkSpotSerialTurnExecutor {
   async postOneWay(
     operation: () => Promise<unknown> | unknown,
     onError: (error: unknown) => void,
-    workOptions: ZLinkSerialWorkOptions = {},
+    workOptions?: ZLinkSerialWorkOptions,
     admission: {
       readonly signal?: AbortSignal;
     } = {},
@@ -182,14 +182,10 @@ export class ZLinkSpotSerialTurnExecutor {
       if (admission.signal?.aborted === true) {
         throw new DOMException('The operation was aborted.', 'AbortError');
       }
-      const options = {
-        ...workOptions,
-        lane: workOptions.lane ?? 'application'
-      };
       const boundOperation = bindApplicationJobPermit(operation);
       const submitted = hasApplicationJobPermit()
-        ? this.scheduler.submitPreAdmitted(boundOperation, options, barrierClaim)
-        : this.scheduler.submit(boundOperation, options, barrierClaim);
+        ? this.scheduler.submitPreAdmitted(boundOperation, workOptions, barrierClaim)
+        : this.scheduler.submit(boundOperation, workOptions, barrierClaim);
       void submitted.catch((error) => {
         barrierClaim?.release();
         onError(error);
@@ -259,7 +255,7 @@ export class ZLinkSpotSerialTurnExecutor {
 
   private async enqueueApplicationTurn<T>(
     operation: () => Promise<T> | T,
-    workOptions: ZLinkSerialWorkOptions = {},
+    workOptions?: ZLinkSerialWorkOptions,
     replay?: (failure?: unknown) => Promise<T>,
     retainWhilePreparing = false
   ): Promise<T> {
@@ -294,7 +290,7 @@ export class ZLinkSpotSerialTurnExecutor {
 
   private async enqueueFrameworkTurn<T>(
     operation: () => Promise<T> | T,
-    workOptions: ZLinkSerialWorkOptions = {}
+    workOptions?: ZLinkSerialWorkOptions
   ): Promise<T> {
     this.lastActivityAtMs = performance.now();
     // Application admission crosses the async barrier boundary before it
@@ -312,17 +308,13 @@ export class ZLinkSpotSerialTurnExecutor {
 
   private submitQueuedTurn<T>(
     operation: () => Promise<T> | T,
-    workOptions: ZLinkSerialWorkOptions,
+    workOptions: ZLinkSerialWorkOptions | undefined,
     barrierClaim?: ZLinkExecutionBarrierClaim | Promise<ZLinkExecutionBarrierClaim>
   ): Promise<T> {
-    const options = {
-      ...workOptions,
-      lane: workOptions.lane ?? 'application'
-    };
     const boundOperation = bindApplicationJobPermit(operation);
     return hasApplicationJobPermit()
-      ? this.scheduler.submitPreAdmitted(boundOperation, options, barrierClaim)
-      : this.scheduler.submit(boundOperation, options, barrierClaim);
+      ? this.scheduler.submitPreAdmitted(boundOperation, workOptions, barrierClaim)
+      : this.scheduler.submit(boundOperation, workOptions, barrierClaim);
   }
 
   private runQueuedRecord(record: ZLinkSerialWorkRecord<unknown>): Promise<void> {

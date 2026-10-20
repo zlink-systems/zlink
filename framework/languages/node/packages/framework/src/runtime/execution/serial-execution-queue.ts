@@ -105,7 +105,7 @@ export class ZLinkSerialExecutionQueue {
 
   submit<T>(
     operation: () => Promise<T> | T,
-    options: ZLinkSerialWorkOptions = {},
+    options?: ZLinkSerialWorkOptions,
     context?: unknown
   ): Promise<T> {
     try {
@@ -118,7 +118,7 @@ export class ZLinkSerialExecutionQueue {
   submitDetached<T>(
     operation: () => Promise<T> | T,
     onError: (error: unknown) => void,
-    options: ZLinkSerialWorkOptions = {},
+    options?: ZLinkSerialWorkOptions,
     context?: unknown
   ): void {
     void this.submit(operation, options, context).catch(onError);
@@ -143,7 +143,7 @@ export class ZLinkSerialExecutionQueue {
    */
   admitDurablePrefix<T>(
     operation: () => Promise<T> | T,
-    options: ZLinkSerialWorkOptions = {},
+    options?: ZLinkSerialWorkOptions,
     context?: unknown,
     preparation?: ZLinkSerialWorkPreparation
   ): Promise<T> {
@@ -156,7 +156,7 @@ export class ZLinkSerialExecutionQueue {
    */
   submitPreAdmitted<T>(
     operation: () => Promise<T> | T,
-    options: ZLinkSerialWorkOptions = {},
+    options?: ZLinkSerialWorkOptions,
     context?: unknown
   ): Promise<T> {
     return this.admit(operation, options, context);
@@ -218,13 +218,13 @@ export class ZLinkSerialExecutionQueue {
 
   private admit<T>(
     operation: () => Promise<T> | T,
-    options: ZLinkSerialWorkOptions,
+    options: ZLinkSerialWorkOptions | undefined,
     context?: unknown,
     preparation?: ZLinkSerialWorkPreparation,
     operationEnvelope = false
   ): Promise<T> {
     if (this.closed) throw new Error('The serial execution queue is closed.');
-    const lane = options.lane ?? 'application';
+    const lane = options?.lane ?? 'application';
     const target = lane === 'application' ? this.application : this.lifecycle;
     let released = false;
     let resolveResult!: (value: T | PromiseLike<T>) => void;
@@ -272,8 +272,8 @@ export class ZLinkSerialExecutionQueue {
       release();
       throw error;
     }
-    options.onAdmitted?.();
-    options.onWithdrawable?.(() => {
+    options?.onAdmitted?.();
+    options?.onWithdrawable?.(() => {
       const index = target.records.indexOf(record as SerialWorkRecord<unknown>);
       if (index < 0) return false;
       target.records.splice(index, 1);
@@ -562,13 +562,13 @@ if (isStructuralGuardEnabled()) {
   ZLinkSerialExecutionQueue.prototype.submit = function <T>(
     this: ZLinkSerialExecutionQueue,
     operation: () => Promise<T> | T,
-    options: ZLinkSerialWorkOptions = {},
+    options?: ZLinkSerialWorkOptions,
     context?: unknown
   ): Promise<T> {
     return guardStateLaneCompletion(
       trackDiagnosticCompletion(
         submit.call(this, operation, options, context) as Promise<T>,
-        `serial ${options.lane ?? 'application'} ${diagnosticWorkName(operation)}`
+        `serial ${options?.lane ?? 'application'} ${diagnosticWorkName(operation)}`
       ),
       'serial completion'
     );
@@ -578,13 +578,13 @@ if (isStructuralGuardEnabled()) {
   ZLinkSerialExecutionQueue.prototype.submitPreAdmitted = function <T>(
     this: ZLinkSerialExecutionQueue,
     operation: () => Promise<T> | T,
-    options: ZLinkSerialWorkOptions = {},
+    options?: ZLinkSerialWorkOptions,
     context?: unknown
   ): Promise<T> {
     return guardStateLaneCompletion(
       trackDiagnosticCompletion(
         submitPreAdmitted.call(this, operation, options, context) as Promise<T>,
-        `serial ${options.lane ?? 'application'} ${diagnosticWorkName(operation)}`
+        `serial ${options?.lane ?? 'application'} ${diagnosticWorkName(operation)}`
       ),
       'serial completion'
     );
@@ -609,7 +609,7 @@ if (isStructuralGuardEnabled()) {
   ZLinkSerialExecutionQueue.prototype.admitDurablePrefix = function <T>(
     this: ZLinkSerialExecutionQueue,
     operation: () => Promise<T> | T,
-    options: ZLinkSerialWorkOptions = {},
+    options?: ZLinkSerialWorkOptions,
     context?: unknown,
     preparation?: ZLinkSerialWorkPreparation
   ): Promise<T> {
