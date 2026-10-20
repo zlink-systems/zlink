@@ -857,12 +857,16 @@ export class RawServiceMeshRuntime {
     try {
       this.observeInfrastructureFailure();
       if (routeReady) {
-        return this.observeSelectedRoutes().then(() => this.receiveBatch(receiveReady));
+        return this.receiveBatchAfterRoutes(receiveReady);
       }
       return this.receiveBatch(receiveReady);
     } catch (error) {
       return Promise.reject(error);
     }
+  }
+
+  private receiveBatchAfterRoutes(receiveReady: boolean): Promise<boolean> {
+    return this.observeSelectedRoutes().then(() => this.receiveBatch(receiveReady));
   }
 
   private receiveBatch(receiveReady: boolean): boolean | Promise<boolean> {
@@ -933,35 +937,7 @@ export class RawServiceMeshRuntime {
     this.receivePermit = undefined;
     permit ??= rotation?.take();
     if (permit === undefined && this.receiveAcquisition === undefined) {
-      let resolveAcquisition: ((permit: ApplicationJobPermitPort) => void) | undefined;
-      let rejectAcquisition: ((error: unknown) => void) | undefined;
-      permit = this.applicationJobQueue.acquireOrResume(
-        (permit) => {
-          this.receiveAcquisition = undefined;
-          if (this.closed) {
-            permit.releaseAfterInternalProcessing();
-            permit.releaseStorage?.();
-          } else {
-            this.receivePermit = permit;
-            this.onReceiveReady?.();
-          }
-          resolveAcquisition?.(permit);
-        },
-        (error) => rejectAcquisition?.(error),
-        this.applicationJobStop.signal,
-        'remote'
-      );
-      if (permit === undefined) {
-        const acquisition = new Promise<ApplicationJobPermitPort>((resolve, reject) => {
-          resolveAcquisition = resolve;
-          rejectAcquisition = reject;
-        });
-        this.receiveAcquisition = acquisition;
-        acquisition.catch((error) => {
-          this.receiveAcquisition = undefined;
-          if (!this.applicationJobStop.signal.aborted) this.reportInfrastructureFailure(error);
-        });
-      }
+      permit = this.acquireReceivePermit();
     }
     if (permit === undefined) return 'noData';
     if (this.closed) {
@@ -995,14 +971,56 @@ export class RawServiceMeshRuntime {
       throw error;
     }
     return result instanceof Promise
-      ? result.then(
-          (value) => this.finishReceive(received, applicationJobOwner, observe, value),
-          (error) => {
-            applicationJobOwner.close();
-            throw error;
-          }
-        )
+      ? this.finishPendingReceive(result, received, applicationJobOwner, observe)
       : this.finishReceive(received, applicationJobOwner, observe, result);
+  }
+
+  private acquireReceivePermit(): ApplicationJobPermitPort | undefined {
+    let resolveAcquisition: ((permit: ApplicationJobPermitPort) => void) | undefined;
+    let rejectAcquisition: ((error: unknown) => void) | undefined;
+    const permit = this.applicationJobQueue.acquireOrResume(
+      (permit) => {
+        this.receiveAcquisition = undefined;
+        if (this.closed) {
+          permit.releaseAfterInternalProcessing();
+          permit.releaseStorage?.();
+        } else {
+          this.receivePermit = permit;
+          this.onReceiveReady?.();
+        }
+        resolveAcquisition?.(permit);
+      },
+      (error) => rejectAcquisition?.(error),
+      this.applicationJobStop.signal,
+      'remote'
+    );
+    if (permit === undefined) {
+      const acquisition = new Promise<ApplicationJobPermitPort>((resolve, reject) => {
+        resolveAcquisition = resolve;
+        rejectAcquisition = reject;
+      });
+      this.receiveAcquisition = acquisition;
+      acquisition.catch((error) => {
+        this.receiveAcquisition = undefined;
+        if (!this.applicationJobStop.signal.aborted) this.reportInfrastructureFailure(error);
+      });
+    }
+    return permit;
+  }
+
+  private finishPendingReceive(
+    result: Promise<RawServicePumpResult>,
+    received: ZLinkRawReceivedRecord,
+    owner: ApplicationIngressRecordOwner,
+    observe: RawServicePumpObserver | undefined
+  ): Promise<RawServicePumpResult> {
+    return result.then(
+      (value) => this.finishReceive(received, owner, observe, value),
+      (error) => {
+        owner.close();
+        throw error;
+      }
+    );
   }
 
   private finishReceive(
@@ -1085,9 +1103,7 @@ export class RawServiceMeshRuntime {
         header.command === M6aServiceWireCommand.hello ||
         header.command === M6aServiceWireCommand.admit
       ) {
-        return this.processAdmission(received, header, nowMs).catch((error) =>
-          this.receiveProtocolFailure(error)
-        );
+        return this.finishPendingProtocolReceive(this.processAdmission(received, header, nowMs));
       }
       if (header.command === M6aServiceWireCommand.reject) {
         if (received.parts.length !== 1) return 'protocolError';
@@ -1097,17 +1113,13 @@ export class RawServiceMeshRuntime {
       if (!currentSource) return 'dropped';
       this.liveness.recordReceived(peer.liveness, nowMs);
       if (header.command === M6aServiceWireCommand.update) {
-        return this.processAdmission(received, header, nowMs).catch((error) =>
-          this.receiveProtocolFailure(error)
-        );
+        return this.finishPendingProtocolReceive(this.processAdmission(received, header, nowMs));
       }
       if (
         header.command === M6aServiceWireCommand.livenessProbe ||
         header.command === M6aServiceWireCommand.livenessAck
       ) {
-        return this.processLiveness(received, nowMs).catch((error) =>
-          this.receiveProtocolFailure(error)
-        );
+        return this.finishPendingProtocolReceive(this.processLiveness(received, nowMs));
       }
       const stateful =
         this.serviceIngress !== undefined && this.serviceIngressAccepts?.(header.command) !== false
@@ -1126,17 +1138,31 @@ export class RawServiceMeshRuntime {
             })
           : undefined;
       if (stateful instanceof Promise)
-        return stateful.then(
-          (result) =>
-            result ?? this.processApplicationReceived(received, header, applicationJobOwner),
-          (error) => this.receiveProtocolFailure(error)
-        );
+        return this.finishPendingStatefulReceive(stateful, received, header, applicationJobOwner);
       if (stateful !== undefined) return stateful;
       return this.processApplicationReceived(received, header, applicationJobOwner);
     } catch (error) {
       if (!currentSource && error instanceof ServiceWireProtocolError) return 'dropped';
       return this.receiveProtocolFailure(error);
     }
+  }
+
+  private finishPendingProtocolReceive(
+    pending: Promise<RawServicePumpResult>
+  ): Promise<RawServicePumpResult> {
+    return pending.catch((error) => this.receiveProtocolFailure(error));
+  }
+
+  private finishPendingStatefulReceive(
+    pending: Promise<RawServicePumpResult | undefined>,
+    received: ZLinkRawReceivedRecord,
+    header: ReturnType<typeof decodeHeader>,
+    owner: ApplicationIngressRecordOwner
+  ): Promise<RawServicePumpResult> {
+    return pending.then(
+      (result) => result ?? this.processApplicationReceived(received, header, owner),
+      (error) => this.receiveProtocolFailure(error)
+    );
   }
 
   private receiveProtocolFailure(error: unknown): RawServicePumpResult {
@@ -1314,11 +1340,24 @@ export class RawServiceMeshRuntime {
       }
       const job = applicationJobOwner.acquire('application');
       return job instanceof Promise
-        ? job.then((permit) => this.enqueueOrdinaryRecord(received, owner, correlation, permit))
+        ? this.enqueuePendingOrdinaryRecord(job, received, owner, correlation)
         : this.enqueueOrdinaryRecord(received, owner, correlation, job);
     } catch (error) {
       return this.receiveProtocolFailure(error);
     }
+  }
+
+  private enqueuePendingOrdinaryRecord(
+    pending: Promise<
+      import('../application-jobs/application-ingress-record-owner').ApplicationJobRecordLease
+    >,
+    received: ZLinkRawReceivedRecord,
+    owner: string,
+    correlation: bigint | undefined
+  ): Promise<RawServicePumpResult> {
+    return pending.then((permit) =>
+      this.enqueueOrdinaryRecord(received, owner, correlation, permit)
+    );
   }
 
   private enqueueOrdinaryRecord(
