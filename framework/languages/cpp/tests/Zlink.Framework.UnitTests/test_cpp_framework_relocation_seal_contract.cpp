@@ -241,19 +241,34 @@ TEST (FrameworkRelocationSealContract, failed_publication_keeps_owner_binding_an
       zlink::routing_id_t::from (old_connection.connection_id), 1, 11, 17, 29));
     auto authoritative =
       owner->sessions ().bind_remote (next_connection, object, 1, 17, publish_current, 23);
-    ASSERT_EQ (authoritative.first, stateful::stateful_error_t::none);
+    ASSERT_EQ (authoritative.first, stateful::stateful_error_t::conflict);
+    EXPECT_EQ (owner->sessions ().current_binding (object.key), old_binding);
     EXPECT_EQ (gateway.bound_session_route_async (actor).result ().value ()->binding_generation,
-               23u);
+               29u);
+    EXPECT_EQ (bound_frames, 0);
+    authoritative =
+      owner->sessions ().bind_remote (next_connection, object, 1, 17, publish_current, 31);
+    ASSERT_EQ (authoritative.first, stateful::stateful_error_t::none);
+    EXPECT_EQ (owner->sessions ().current_binding (object.key)->binding_generation, 31u);
+    EXPECT_EQ (gateway.bound_session_route_async (actor).result ().value ()->binding_generation,
+               31u);
     EXPECT_EQ (bound_frames, 1);
     ASSERT_TRUE (gateway.record_bound_session_route (
       actor, owner->status ().routing_id (),
       zlink::routing_id_t::from (next_connection.connection_id), 1, 11, 17, 45));
     authoritative =
-      owner->sessions ().bind_remote (next_connection, object, 1, 17, publish_current, 24);
-    ASSERT_EQ (authoritative.first, stateful::stateful_error_t::none);
-    EXPECT_EQ (owner->sessions ().current_binding (object.key)->binding_generation, 24u);
+      owner->sessions ().bind_remote (next_connection, object, 1, 17, publish_current, 37);
+    ASSERT_EQ (authoritative.first, stateful::stateful_error_t::conflict);
+    EXPECT_EQ (owner->sessions ().current_binding (object.key)->binding_generation, 31u);
     EXPECT_EQ (gateway.bound_session_route_async (actor).result ().value ()->binding_generation,
-               24u);
+               45u);
+    EXPECT_EQ (bound_frames, 1);
+    authoritative =
+      owner->sessions ().bind_remote (next_connection, object, 1, 17, publish_current, 47);
+    ASSERT_EQ (authoritative.first, stateful::stateful_error_t::none);
+    EXPECT_EQ (owner->sessions ().current_binding (object.key)->binding_generation, 47u);
+    EXPECT_EQ (gateway.bound_session_route_async (actor).result ().value ()->binding_generation,
+               47u);
     EXPECT_EQ (bound_frames, 2);
     const auto republished = gateway.record_bound_session_route_transition (
       actor, *gateway.bound_session_route_async (actor).result ().value (),
@@ -262,7 +277,7 @@ TEST (FrameworkRelocationSealContract, failed_publication_keeps_owner_binding_an
     EXPECT_FALSE (republished.value ().changed);
     EXPECT_FALSE (republished.value ().previous);
     EXPECT_EQ (gateway.bound_session_route_async (actor).result ().value ()->binding_generation,
-               24u);
+               47u);
     EXPECT_EQ (bound_frames, 3);
 }
 
