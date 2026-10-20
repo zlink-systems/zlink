@@ -264,7 +264,8 @@ void verify_worker_releases_last_dispatcher_reference ()
     const std::weak_ptr<detail::completion_dispatcher_t> observed (dispatcher);
     std::latch entered (1), release (1);
     detail::dispatch_completion (
-      [&] {
+      [&, dispatcher] {
+          assert (dispatcher);
           entered.count_down ();
           release.wait ();
       },
@@ -304,15 +305,17 @@ void verify_dispatcher_shutdown_drains ()
     const auto workers = detail::completion_dispatcher_worker_count ();
     auto occupied = std::make_shared<std::latch> (workers);
     for (std::size_t index = 0; index < workers; ++index)
-        detail::dispatch_completion ([occupied] {
+        detail::dispatch_completion ([occupied, dispatcher] {
+            assert (dispatcher);
             occupied->count_down ();
             shutdown_release.wait (false);
         });
     occupied->wait ();
     for (std::size_t index = 0; index < shutdown_round_trips; ++index)
-        detail::dispatch_completion ([] {
+        detail::dispatch_completion ([dispatcher] {
             ++shutdown_delivered;
-            detail::dispatch_completion ([] { ++shutdown_delivered; }, false, &shutdown_delivered);
+            detail::dispatch_completion ([] { ++shutdown_delivered; }, false, &shutdown_delivered,
+                                         dispatcher);
         });
     assert (shutdown_delivered == 0);
     dispatcher.reset ();

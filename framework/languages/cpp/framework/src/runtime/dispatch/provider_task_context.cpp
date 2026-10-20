@@ -42,6 +42,8 @@ std::binary_semaphore completion_lifetime{1};
 }
 
 
+// Only owners retaining a dispatcher reference publish turns. Published turns
+// borrow the context; destruction drains accepted work before joining workers.
 class completion_dispatcher_t
 {
   public:
@@ -57,8 +59,6 @@ class completion_dispatcher_t
 
     ~completion_dispatcher_t ()
     {
-        // Let run() drain accepted turns, including work posted by those turns.
-        // stop() would abandon queued callbacks and their registry reservations.
         _work.reset ();
         _workers.clear ();
     }
@@ -160,7 +160,7 @@ void dispatch_completion (std::function<void ()> work,
     if (!dispatcher)
         dispatcher = acquire_completion_dispatcher ();
     auto *target = dispatcher.get ();
-    target->post ([dispatcher = std::move (dispatcher), work = std::move (work), owner] {
+    target->post ([work = std::move (work), owner] {
         const completion_turn_scope_t scope{
           std::exchange (completion_owner, owner != nullptr ? owner : &process_completion_owner)};
         work ();

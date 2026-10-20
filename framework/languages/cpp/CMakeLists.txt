@@ -1565,6 +1565,16 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIER unit
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_completion_dispatcher_owner
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_completion_dispatcher_owner.cpp)
+  target_link_libraries(test_cpp_framework_completion_dispatcher_owner PRIVATE
+    zlink::framework_provider_abstractions Threads::Threads)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_completion_dispatcher_owner
+    COMMAND test_cpp_framework_completion_dispatcher_owner
+    LABELS "framework-unit;framework-regression;async"
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_provider_task
     tests/Zlink.Framework.ContractTests/test_cpp_framework_provider_task.cpp)
   target_link_libraries(test_cpp_framework_provider_task PRIVATE

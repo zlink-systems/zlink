@@ -435,6 +435,7 @@ operation_registry_t::next_deadline () const
 
 std::size_t operation_registry_t::shutdown ()
 {
+    detail::completion_dispatcher_ref_t dispatcher;
     operation_completion_chain_t completions;
     std::size_t stopped = 0;
     {
@@ -447,7 +448,7 @@ std::size_t operation_registry_t::shutdown ()
                 unindex_deadline (pending);
             }
             _pending.clear ();
-            _completion_dispatcher.reset ();
+            dispatcher = std::move (_completion_dispatcher);
             stopped = completions.size;
         }
     }
