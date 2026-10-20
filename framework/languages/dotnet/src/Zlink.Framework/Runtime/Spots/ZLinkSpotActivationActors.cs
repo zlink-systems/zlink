@@ -323,31 +323,59 @@ internal abstract partial class ZLinkSpotActivation
         RoutingId sourceSessionRid,
         CancellationToken cancellationToken
     ) =>
-        _dispatcher.ActorPackets.DispatchAsync(
-            actor,
-            state,
-            header,
-            body,
-            cancellationToken,
-            sourceSessionRid
+        _serial.ExecuteActorOperationAsync(
+            state.ActorId,
+            static (activation, packet, ct) =>
+                activation._dispatcher.ActorPackets.DispatchAsync(
+                    packet.Actor,
+                    packet.State,
+                    packet.Header,
+                    packet.Body,
+                    ct,
+                    packet.SourceSessionRid
+                ),
+            (
+                Actor: actor,
+                State: state,
+                Header: header,
+                Body: body,
+                SourceSessionRid: sourceSessionRid
+            ),
+            cancellationToken
         );
 
-    internal ValueTask<ZLinkActorReply?> InvokeOwnedActorPacketForReplyAsync(
+    internal async ValueTask<ZLinkActorReply?> InvokeOwnedActorPacketForReplyAsync(
         IZLinkActor actor,
         ZLinkActorRuntimeState state,
         ZlinkStreamHeader header,
         Message body,
         RoutingId sourceSessionRid,
         CancellationToken cancellationToken
-    ) =>
-        _dispatcher.ActorPackets.DispatchForReplyAsync(
-            actor,
-            state,
-            header,
-            body,
-            cancellationToken,
-            sourceSessionRid
-        );
+    )
+    {
+        ZLinkActorReply? reply = null;
+        await _serial
+            .ExecuteActorOperationAsync(
+                state.ActorId,
+                async (activation, _, ct) =>
+                {
+                    reply = await activation
+                        ._dispatcher.ActorPackets.DispatchForReplyAsync(
+                            actor,
+                            state,
+                            header,
+                            body,
+                            ct,
+                            sourceSessionRid
+                        )
+                        .ConfigureAwait(false);
+                },
+                state,
+                cancellationToken
+            )
+            .ConfigureAwait(false);
+        return reply;
+    }
 
     internal Task DispatchOwnedActorFrameAsync(
         ZLinkBackendActorRef actorRef,
@@ -425,10 +453,19 @@ internal abstract partial class ZLinkSpotActivation
 
     public ValueTask NotifyActorDisconnectedAsync(
         IZLinkActor actor,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool callerOwnsDispatchTurn = false
     )
     {
         ArgumentNullException.ThrowIfNull(actor);
+        if (callerOwnsDispatchTurn)
+            return _serial.ExecuteActorOperationAsync(
+                actor.Context.ActorId,
+                static (activation, actor, ct) =>
+                    activation.NotifyActorDisconnectedCoreAsync(actor, ct),
+                actor,
+                cancellationToken
+            );
         return ReferenceEquals(ZLinkSpotAmbientContext.CurrentOrDefault, this)
             ? NotifyActorDisconnectedCoreAsync(actor, cancellationToken)
             : ExecuteSerializedAsync(

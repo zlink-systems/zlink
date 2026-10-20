@@ -136,7 +136,8 @@ internal sealed class ZLinkActorDispatchRouter(
 
     public async ValueTask NotifyDisconnectedByIdAsync(
         string actorId,
-        CancellationToken cancellationToken = default
+        CancellationToken cancellationToken = default,
+        bool callerOwnsDispatchTurn = false
     )
     {
         using var flow = ZLinkFlowContext.Enter(
@@ -155,6 +156,17 @@ internal sealed class ZLinkActorDispatchRouter(
                 $"Actor '{actorId}' is not active."
             );
 
+        if (callerOwnsDispatchTurn)
+        {
+            await NotifyDisconnectedByCurrentLocationAsync(
+                    actor,
+                    state,
+                    cancellationToken,
+                    callerOwnsDispatchTurn: true
+                )
+                .ConfigureAwait(false);
+            return;
+        }
         await state
             .ExecuteLifecycleAsync(
                 ct => NotifyDisconnectedByCurrentLocationAsync(actor, state, ct),
@@ -364,7 +376,8 @@ internal sealed class ZLinkActorDispatchRouter(
     private async ValueTask NotifyDisconnectedByCurrentLocationAsync(
         IZLinkActor actor,
         ZLinkActorRuntimeState state,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool callerOwnsDispatchTurn = false
     )
     {
         var placement = await state
@@ -374,7 +387,11 @@ internal sealed class ZLinkActorDispatchRouter(
         if (placement.Activation is not null)
         {
             await placement
-                .Activation.NotifyActorDisconnectedAsync(actor, cancellationToken)
+                .Activation.NotifyActorDisconnectedAsync(
+                    actor,
+                    cancellationToken,
+                    callerOwnsDispatchTurn
+                )
                 .ConfigureAwait(false);
             return;
         }

@@ -922,23 +922,29 @@ export class ZLinkActorSessionBindingRegistry<
     return result;
   }
 
-  async acceptSessionRelocationRoute(value: ServiceSessionRelocationRoute): Promise<boolean> {
-    return await this.lane.run(() => {
-      const key = serviceSessionRelocationIdentityKey(value);
-      if (this.absentSessionRelocationResults.has(key)) return false;
+  async acceptSessionRelocationRoute(
+    value: ServiceSessionRelocationRoute,
+    apply: () => Promise<void>
+  ): Promise<boolean> {
+    const key = serviceSessionRelocationIdentityKey(value);
+    const fingerprint = encodeSessionRelocationRoute(value).toString('base64');
+    const prepared = await this.lane.run(() => {
+      if (this.absentSessionRelocationResults.has(key)) return undefined;
       const result = this.routes.get(value.actor.actorId)?.sessionRelocationResult;
-      if (
-        result?.seal?.phase === 'terminal' &&
-        result.key === key &&
-        result.seal.applyFingerprint !== undefined &&
-        result.seal.applyFingerprint !== encodeSessionRelocationRoute(value).toString('base64')
-      ) {
+      if (result?.key !== key || result.seal === undefined) return undefined;
+      const seal = result.seal;
+      if (seal.applyFingerprint !== undefined && seal.applyFingerprint !== fingerprint) {
         throw new ServiceWireProtocolError(
-          `Session relocation '${result.key}' repeated command 44 with different bytes.`
+          `Session relocation '${key}' repeated command 44 with different bytes.`
         );
       }
-      return result?.key === key && result.seal !== undefined && result.seal.phase !== 'terminal';
+      if (seal.phase === 'terminal') return undefined;
+      return this.prepareRelocationApply(value.actor.actorId, key, fingerprint);
     });
+    if (prepared === undefined) return false;
+    await this.runRelocationApply(prepared, apply);
+    await this.observeRelocationTerminal(value.actor.actorId, key, fingerprint);
+    return true;
   }
 
   async clearSessionRelocationResults(): Promise<void> {
@@ -1040,6 +1046,15 @@ export class ZLinkActorSessionBindingRegistry<
     const prepared = await this.lane.run(() =>
       this.prepareRelocationApply(actorId, sealId, applyFingerprint)
     );
+    await this.runRelocationApply(prepared, commitOwnerTransition);
+  }
+
+  private async runRelocationApply(
+    prepared: ReturnType<
+      ZLinkActorSessionBindingRegistry<TContext, TActor>['prepareRelocationApply']
+    >,
+    commitOwnerTransition: () => Promise<void>
+  ): Promise<void> {
     if (prepared.applyPromise !== undefined) {
       await prepared.applyPromise;
       return;

@@ -13,11 +13,13 @@ namespace Zlink.Framework.Runtime.Backend.DotNet;
 // Persistent application workers claim the existing node/owner mailboxes and
 // invoke node/channel handlers directly. The shared ready mask reserves wakeups;
 // no per-batch supervisor task or second application queue is involved. Claims
-// are released in finally, while suspended handler results remain worker-owned.
+// are released by their ready batch. Suspended preparation retains that batch, while the
+// worker continues consuming readiness, including infrastructure completions.
 // Spot pull consumers and completion callbacks retain their existing contracts.
 internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 {
     private const int MinimumApplicationWorkers = 2;
+    private const int ReadyOwnersPerBatch = 1;
 
     internal static int ApplicationWorkerCount =>
         Math.Max(MinimumApplicationWorkers, Environment.ProcessorCount);
@@ -289,10 +291,10 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
 
     private async ValueTask RunAsync(CancellationToken cancellationToken)
     {
-        using var readyBatch = new MeshReadyBatch { MaximumRecords = 1 };
-        using var receiveBatch = new MeshReceiveBatch();
-        // These are handler-returned asynchronous results, not another queue of
-        // records. Keep their lifetime inside the persistent worker.
+        var readyBatch = new MeshReadyBatch { MaximumRecords = ReadyOwnersPerBatch };
+        var receiveBatch = new MeshReceiveBatch();
+        // These are claim/handler asynchronous results, not another record queue.
+        // Their lifetime remains inside the persistent worker.
         var pending = new List<Task>();
         try
         {
@@ -307,13 +309,20 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                 }
                 await _signal.WaitAsync().ConfigureAwait(false);
                 cancellationToken.ThrowIfCancellationRequested();
-                await DrainResidueAsync(readyBatch, receiveBatch, pending, cancellationToken)
+                (readyBatch, receiveBatch, pending) = await DrainResidueAsync(
+                        readyBatch,
+                        receiveBatch,
+                        pending,
+                        cancellationToken
+                    )
                     .ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
         finally
         {
+            readyBatch.Dispose();
+            receiveBatch.Dispose();
             if (pending.Count != 0)
                 await Task.WhenAll(pending).ConfigureAwait(false);
         }
@@ -356,17 +365,16 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
         ObserveDispatchResult(result.Completion, pending);
     }
 
-    private async ValueTask DrainResidueAsync(
+    private async ValueTask<(MeshReadyBatch, MeshReceiveBatch, List<Task>)> DrainResidueAsync(
         MeshReadyBatch readyBatch,
         MeshReceiveBatch receiveBatch,
         List<Task> pending,
         CancellationToken cancellationToken
     )
     {
-        var requestedDomains = TakePendingReadyDomains();
-        while (requestedDomains != MeshReadyDomains.None)
+        var domains = TakePendingReadyDomains();
+        if (domains != MeshReadyDomains.None)
         {
-            var domains = requestedDomains;
             readyBatch.Reset();
             bool residue;
             try
@@ -381,23 +389,60 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             }
             catch (ObjectDisposedException)
             {
-                return;
+                return (readyBatch, receiveBatch, pending);
             }
             catch (ZlinkException)
             {
-                return;
+                return (readyBatch, receiveBatch, pending);
             }
 
             if (residue)
                 SignalReady(domains);
             for (var i = 0; i < readyBatch.Count; i++)
-                await DrainClaimAsync(readyBatch, i, receiveBatch, pending, cancellationToken)
-                    .ConfigureAwait(false);
+            {
+                var dispatch = DrainClaimAsync(
+                    readyBatch,
+                    i,
+                    receiveBatch,
+                    pending,
+                    cancellationToken
+                );
+                if (dispatch.IsCompletedSuccessfully)
+                    dispatch.GetAwaiter().GetResult();
+                else
+                {
+                    // Preparation may read the Store. Transfer its batches and results
+                    // together: its continuation must not mutate the worker's next
+                    // batch/list. The retained claim preserves this owner's order.
+                    var suspended = JoinClaimAsync(dispatch, readyBatch, receiveBatch, pending);
+                    readyBatch = new MeshReadyBatch { MaximumRecords = ReadyOwnersPerBatch };
+                    receiveBatch = new MeshReceiveBatch();
+                    pending = new List<Task>();
+                    ObserveDispatchResult(suspended, pending);
+                }
+            }
             readyBatch.Reset();
+        }
+        return (readyBatch, receiveBatch, pending);
+    }
 
-            // Re-enter through the shared ready signal so another waiting
-            // worker can acquire a different owner during a suspended handler.
-            requestedDomains = MeshReadyDomains.None;
+    private static async ValueTask JoinClaimAsync(
+        ValueTask dispatch,
+        MeshReadyBatch readyBatch,
+        MeshReceiveBatch receiveBatch,
+        List<Task> pending
+    )
+    {
+        try
+        {
+            await dispatch.ConfigureAwait(false);
+        }
+        finally
+        {
+            readyBatch.Dispose();
+            receiveBatch.Dispose();
+            if (pending.Count != 0)
+                await Task.WhenAll(pending).ConfigureAwait(false);
         }
     }
 
@@ -429,15 +474,7 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
                     ownerSpotId = ownerLocation.SpotId;
             }
             catch (ZlinkException) { }
-        MeshClaim claim;
-        try
-        {
-            claim = readyBatch.TakeClaim(index);
-        }
-        catch (ZlinkException)
-        {
-            return;
-        }
+        var claim = readyBatch.TakeClaim(index);
 
         List<ZLinkBackendRouteReceived>? nodeRoutes = null;
         SpotDispatchState? routeDispatch = null;
@@ -518,7 +555,6 @@ internal sealed class ZLinkMeshDispatchPump : IAsyncDisposable
             if (nodeRoutes is not null)
                 foreach (var received in nodeRoutes)
                     received.Dispose();
-            claim.Dispose();
         }
     }
 
