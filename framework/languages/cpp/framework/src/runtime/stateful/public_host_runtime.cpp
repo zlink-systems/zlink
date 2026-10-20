@@ -213,16 +213,12 @@ bool same_relocation_source_fence (
 
 auto session_relocation_key (const protocol::session_relocation_seal_t &seal)
 {
-    return std::tuple{seal.relocation.high,    seal.relocation.low,
-                      seal.actor.actor_id,     seal.actor.object_generation,
-                      seal.session_routing_id, seal.binding_generation};
+    return std::tuple{seal.relocation.high, seal.relocation.low, seal.actor.actor_id};
 }
 
 auto session_relocation_key (const protocol::session_relocation_route_t &route)
 {
-    return std::tuple{route.relocation.high,    route.relocation.low,
-                      route.actor.actor_id,     route.actor.object_generation,
-                      route.session_routing_id, route.binding_generation};
+    return std::tuple{route.relocation.high, route.relocation.low, route.actor.actor_id};
 }
 
 void append_u32 (std::vector<std::uint8_t> &out, std::uint32_t value)
@@ -1852,19 +1848,24 @@ public_host_runtime_t::admit_session_relocation_seal (
         return {false, std::nullopt};
     }
 
+    flush_pending_session_relocation_seals ();
     const auto relocation_key = session_relocation_key (seal);
-    bool existing_terminal = false;
     const auto existing_result =
       _relocation_session_terminal_lane
         .run ([&] () -> std::optional<
                        std::pair<bool, std::optional<protocol::session_relocation_sealed_t>>> {
             const auto cached = _session_seal_terminals.find (relocation_key);
             if (cached != _session_seal_terminals.end ()) {
-                existing_terminal = true;
                 if (cached->second.seal != seal)
                     return {{false, std::nullopt}};
-                if (cached->second.consumed && !cached->second.ready)
-                    return {{false, std::nullopt}};
+                if (cached->second.consumed) {
+                    const auto &logger =
+                      detail::dispatch_options_access_t::logger (_options.mesh.dispatch);
+                    if (logger)
+                        detail::diagnostic_event_sink_t::log_if_configured (
+                          logger, log_level_t::warn, "late_session_relocation_seal", {});
+                    return {{true, std::nullopt}};
+                }
                 if (!response_routing_id.empty ())
                     cached->second.response_routing_id = std::move (response_routing_id);
                 if (cached->second.ready)
@@ -1876,15 +1877,16 @@ public_host_runtime_t::admit_session_relocation_seal (
             return std::nullopt;
         })
         .get ();
-    if (existing_terminal)
+    if (existing_result)
         return *existing_result;
 
-    const auto session_id = zlink::routing_id_t::from (seal.session_routing_id).to_hex ();
-    const auto admission = _sessions.seal_remote_route (
-      session_id, seal.binding_generation, seal.actor.actor_id, seal.actor.object_generation);
-    if ((admission.error != stateful::stateful_error_t::none
-         && admission.error != stateful::stateful_error_t::backpressured)
-        || !admission.binding || admission.barrier.token == 0) {
+    const auto session_id = stateful::stream_session_registry_t::connection_key (
+      zlink::routing_id_t::from (seal.session_routing_id));
+    const auto admission =
+      _sessions.seal_remote_route (session_id, seal.binding_generation, seal.actor.actor_id,
+                                   seal.actor.object_generation, seal.actor.owner_lease_generation);
+    if (admission.error != stateful::stateful_error_t::none
+        && admission.error != stateful::stateful_error_t::backpressured) {
         return {false, std::nullopt};
     }
 
@@ -1896,15 +1898,17 @@ public_host_runtime_t::admit_session_relocation_seal (
                                                     seal.session_owner_id,
                                                     seal.session_owner_lease_generation,
                                                     seal.session_routing_id,
-                                                    seal.binding_generation};
-    const auto ready = _sessions.remote_route_seal_ready (admission.barrier);
+                                                    seal.binding_generation,
+                                                    admission.seal_result};
+    const auto ready =
+      admission.seal_result == protocol::session_relocation_seal_result_t::binding_absent
+      || _sessions.remote_route_seal_ready (admission.barrier);
     bool inserted = false;
     std::optional<protocol::session_relocation_sealed_t> immediate;
     _relocation_session_terminal_lane
       .run ([&] {
           session_seal_terminal_record_t record{seal,
                                                 ack,
-                                                admission.last_accepted_sequence,
                                                 admission.barrier,
                                                 std::chrono::steady_clock::now ()
                                                   + _options.session_relocation_seal_timeout,
@@ -1914,6 +1918,13 @@ public_host_runtime_t::admit_session_relocation_seal (
                                                 {}};
           if (local_completion && !ready)
               record.local_completions.push_back (local_completion);
+          // A binding retains only its last closed record. The new seal owns its successor.
+          for (auto it = _session_seal_terminals.begin (); it != _session_seal_terminals.end ();) {
+              if (it->second.consumed && it->second.seal.actor.actor_id == seal.actor.actor_id)
+                  it = _session_seal_terminals.erase (it);
+              else
+                  ++it;
+          }
           const auto [stored, was_inserted] =
             _session_seal_terminals.emplace (relocation_key, std::move (record));
           lower_relocation_next_due_on_lane (relocation_due_now);
@@ -2021,6 +2032,11 @@ task_t<bool> public_host_runtime_t::seal_session_remote (
                     || sealed.session_routing_id != expected.session_routing_id
                     || sealed.binding_generation != expected.binding_generation) {
                     completion (foundation::operation_terminal_t::transport_failed, std::nullopt);
+                    return;
+                }
+                if (sealed.seal_result
+                    == protocol::session_relocation_seal_result_t::binding_absent) {
+                    completion (terminal, session_relocation_seal_result_t{sealed, {}});
                     return;
                 }
                 stateful::durable_session_journal_record_t record{
@@ -3210,11 +3226,28 @@ void public_host_runtime_t::flush_pending_session_relocation_seals ()
     const auto now = std::chrono::steady_clock::now ();
     _relocation_session_terminal_lane
       .run ([&] {
-          for (const auto &[key, record] : _session_seal_terminals) {
-              if (!record.consumed && record.expires_at <= now)
+          for (auto it = _session_seal_terminals.begin (); it != _session_seal_terminals.end ();) {
+              const auto &[key, record] = *it;
+              if (record.sealed.seal_result
+                  == protocol::session_relocation_seal_result_t::binding_absent) {
+                  if (record.expires_at <= now) {
+                      it = _session_seal_terminals.erase (it);
+                      continue;
+                  }
+              } else if (record.consumed) {
+                  const auto current = _sessions.current_binding (record.seal.actor.actor_id);
+                  if (!current || current->binding_generation != record.seal.binding_generation
+                      || current->connection.connection_id
+                           != stateful::stream_session_registry_t::connection_key (
+                             zlink::routing_id_t::from (record.seal.session_routing_id))) {
+                      it = _session_seal_terminals.erase (it);
+                      continue;
+                  }
+              } else if (record.expires_at <= now)
                   expired.push_back (key);
-              else if (!record.consumed && !record.ready)
+              else if (!record.ready)
                   pending.push_back (key);
+              ++it;
           }
       })
       .get ();
@@ -5870,8 +5903,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                       _relocation_session_terminal_lane
                         .run ([&] {
                             const auto sealed = _session_seal_terminals.find (relocation_key);
-                            if (sealed == _session_seal_terminals.end ()
-                                || sealed->second.consumed) {
+                            if (sealed == _session_seal_terminals.end () || sealed->second.consumed
+                                || sealed->second.sealed.seal_result
+                                     == protocol::session_relocation_seal_result_t::
+                                       binding_absent) {
                                 late_session_route_update = true;
                                 return true;
                             }
@@ -5909,8 +5944,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                         continue;
                     }
 
-                    const auto session_id =
-                      zlink::routing_id_t::from (route.session_routing_id).to_hex ();
+                    const auto session_id = stateful::stream_session_registry_t::connection_key (
+                      zlink::routing_id_t::from (route.session_routing_id));
                     stateful::stream_route_admission_t admission;
                     if (route.route.action == protocol::session_relocation_route_action_t::commit) {
                         const auto current = _sessions.current_binding (route.actor.actor_id);

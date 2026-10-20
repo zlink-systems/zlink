@@ -1184,7 +1184,9 @@ mesh_node_runtime_t::seal_bound_sessions (
             co_return outcome;
         }
 
-        outcome.checkpoints.push_back ({source, *session, *completed.result});
+        if (completed.result->sealed.seal_result
+            == runtime::protocol::session_relocation_seal_result_t::sealed)
+            outcome.checkpoints.push_back ({source, *session, *completed.result});
     }
     outcome.completed = true;
     co_return outcome;
