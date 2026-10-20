@@ -94,14 +94,8 @@ function sameRemoteSessionOwnerLifecycle(
     right.sessionNodeRid !== undefined &&
     left.sessionOwnerNodeGeneration !== undefined &&
     right.sessionOwnerNodeGeneration !== undefined &&
-    left.sessionOwnerId !== undefined &&
-    right.sessionOwnerId !== undefined &&
-    left.sessionOwnerLeaseGeneration !== undefined &&
-    right.sessionOwnerLeaseGeneration !== undefined &&
     routingIdsEqual(left.sessionNodeRid, right.sessionNodeRid) &&
-    left.sessionOwnerNodeGeneration === right.sessionOwnerNodeGeneration &&
-    left.sessionOwnerId === right.sessionOwnerId &&
-    left.sessionOwnerLeaseGeneration === right.sessionOwnerLeaseGeneration
+    left.sessionOwnerNodeGeneration === right.sessionOwnerNodeGeneration
   );
 }
 
@@ -495,19 +489,7 @@ export class ZLinkActorRuntimeState {
     ) {
       throw new TypeError('An installed bound Session target requires its binding identity.');
     }
-    const current = this.boundSessionValue;
-    if (current !== undefined && sameRemoteSessionOwnerLifecycle(current, target)) {
-      // A duplicate or late older command for the exact physical Session
-      // leaves the current binding; a newer generation of the same Session
-      // replaces it. A different Session in the same owner lifecycle must
-      // advance that lifecycle's generation; a late equal/lower one is stale.
-      const advances =
-        current.bindingGeneration === undefined ||
-        target.bindingGeneration > current.bindingGeneration;
-      if (!advances) return sameRemoteSessionOwner(current, target);
-    }
-    // Binding generations are scoped to a Session-owner lifecycle. A restarted
-    // owner can legitimately reset its counter below the predecessor value.
+    // The service registry accepted this identity in the Actor owner turn.
     this.boundSessionValue = boundSessionIdentity(target);
     return true;
   }

@@ -1,4 +1,10 @@
-import { awaitWithAbort } from '../abort';
+import { awaitWithAbort, isAbortError } from '../abort';
+import { decodeChannelHeader } from '../channels/channel-envelope';
+import { ZLinkBufferMessage } from '../backend/runtime-message';
+import {
+  dispatchErrorDetails,
+  dispatchReasonFromError
+} from '../diagnostics/dispatch-error-details';
 import { encodeBoundSessionCloseCommand } from '../protocol/service_wire_codec.generated';
 import { decodeRoutingId, encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
@@ -108,11 +114,16 @@ import {
   SERVICE_WIRE_COMMAND_OFFSET,
   SERVICE_WIRE_FLAGS_OFFSET
 } from './service-wire-binary-primitives';
-import { SERVICE_WIRE_MAGIC, SERVICE_WIRE_MAJOR } from './service-wire-constants.generated';
+import {
+  SERVICE_WIRE_MAGIC,
+  SERVICE_WIRE_MAJOR,
+  SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
+} from './service-wire-constants.generated';
 import {
   ServiceWireProtocolError,
   decodeApplicationPayload,
   decodeApplicationPayloadView,
+  decodeMultipartApplicationParts,
   encodeApplicationPayload,
   type ServiceApplicationPayload
 } from './service-wire-m6a-codec';
@@ -1972,7 +1983,17 @@ export class ServiceStatefulRuntime {
       );
       return pending;
     }
-    const generation = this.nextSessionSequence++;
+    const deliveryKey = actorKey(actor);
+    const previousDelivery = this.sessionDeliveries.get(deliveryKey);
+    const previousBinding = previousDelivery?.binding;
+    const generation =
+      previousBinding !== undefined &&
+      sameActorRef(previousBinding.actor, actor) &&
+      previousBinding.sessionRid === sessionRid &&
+      previousBinding.sessionOwnerNodeRid === sessionOwner.nodeRid &&
+      previousBinding.sessionOwnerNodeGeneration === sessionOwner.nodeGeneration
+        ? previousBinding.bindingGeneration
+        : this.nextSessionSequence++;
     const localBinding: ServiceSessionBinding = {
       actor,
       sessionRid,
@@ -1989,7 +2010,6 @@ export class ServiceStatefulRuntime {
       ...(close === undefined ? {} : { close }),
       ...(onBindingReplaced === undefined ? {} : { onBindingReplaced })
     };
-    const deliveryKey = actorKey(actor);
     if (actor.nodeRid === this.nodeRid) {
       let installedDelivery: ServiceSessionDelivery | undefined;
       try {
@@ -2013,18 +2033,7 @@ export class ServiceStatefulRuntime {
           });
           return pending;
         }
-        const previousDelivery = this.sessionDeliveries.get(deliveryKey);
-        const binding = this.registry.bindSession(
-          actor,
-          sessionRid,
-          sessionOwner.nodeRid,
-          sessionOwner.nodeGeneration,
-          sessionOwner.ownerId,
-          sessionOwner.leaseGeneration
-        );
-        if (previousDelivery !== undefined && previous !== undefined) {
-          this.retiredSessionDeliveries.set(sessionDeliveryKey(previous), previousDelivery);
-        }
+        const binding = this.registry.installSessionBinding(localBinding);
         installedDelivery = { ...delivery, binding };
         this.sessionDeliveries.set(deliveryKey, installedDelivery);
         this.operations.reply(pending.id, {
@@ -2032,7 +2041,10 @@ export class ServiceStatefulRuntime {
           failureCode: 0,
           kindData: undefined
         });
-        if (previous !== undefined) {
+        if (previous !== undefined && previous !== binding) {
+          if (previousDelivery !== undefined) {
+            this.retiredSessionDeliveries.set(sessionDeliveryKey(previous), previousDelivery);
+          }
           this.sendBoundSessionReplacement(
             previous,
             actorAuthorityFromRoute(
@@ -2057,7 +2069,6 @@ export class ServiceStatefulRuntime {
       }
       return pending;
     }
-    const previousDelivery = this.sessionDeliveries.get(deliveryKey);
     let bindingActorFence: ServiceActorRouteFence;
     let header: Buffer;
     try {
@@ -2105,7 +2116,10 @@ export class ServiceStatefulRuntime {
             // Publish the exact Location authority used by command 38 in the
             // same Session-owner completion turn as the binding route. Actor
             // lookup only carries a peer-lifecycle fallback for owner lease.
-            this.rememberActorRoute(bindingActorFence);
+            this.rememberActorRoute({
+              ...bindingActorFence,
+              authorityOwnerGeneration: result.streamBinding.authorityOwnerGeneration
+            });
             this.sessionDeliveries.set(deliveryKey, committed);
           }
         }
@@ -2398,7 +2412,13 @@ export class ServiceStatefulRuntime {
           decoded.activation === 'missing' &&
           (error instanceof ZLinkFrameworkException || error instanceof ServiceStaleGenerationError)
         ) {
-          this.finishMissingInstanceActivationFailure(record, decoded, error);
+          this.finishMissingInstanceActivationFailure(
+            record,
+            decoded,
+            error,
+            undefined,
+            payloadFrame
+          );
           return 'infrastructure';
         }
         const correlation = statefulCorrelation(decoded);
@@ -2806,7 +2826,7 @@ export class ServiceStatefulRuntime {
         }
       });
     } catch (error) {
-      this.finishMissingInstanceActivationFailure(ingress, record, error, localReply);
+      this.finishMissingInstanceActivationFailure(ingress, record, error, localReply, payloadFrame);
     }
   }
 
@@ -2998,7 +3018,8 @@ export class ServiceStatefulRuntime {
       { readonly kind: 'instanceSpot'; readonly activation: 'missing' }
     >,
     error: unknown,
-    localReply?: NonNullable<ServiceStatefulMailboxData['reply']>
+    localReply?: NonNullable<ServiceStatefulMailboxData['reply']>,
+    payloadFrame?: Buffer
   ): void {
     if (record.operationKind === 'request') {
       if (record.deadlineUnixMs <= BigInt(Date.now())) return;
@@ -3011,17 +3032,51 @@ export class ServiceStatefulRuntime {
       return;
     }
     const reporter = this.dispatchErrors;
+    const tracePoint = flowIfEnabled(reporter?.flow, ZLinkMessageFlowOutcome.Dropped);
+    if (tracePoint === undefined && reporter?.captureEnabled() !== true) return;
+    const reason = isAbortError(error)
+      ? ZLinkDispatchErrorReason.Shutdown
+      : dispatchReasonFromError(error);
+    // Decode the retained first message only after diagnostics accepts the terminal.
+    // Detached local and remote activation share this owner and its explicit flow.
+    const payload =
+      payloadFrame === undefined ? undefined : decodeApplicationPayloadView(payloadFrame);
+    const header =
+      payload?.contentType === SERVICE_FRAMEWORK_MULTIPART_CONTENT_TYPE
+        ? decodeChannelHeader(
+            decodeMultipartApplicationParts(payloadFrame!, ZLinkBufferMessage.fromOwned),
+            reporter?.flow.flowCreationEnabled()
+          )
+        : undefined;
+    const context = {
+      surface: ZLinkDispatchErrorSurface.InstanceSpot,
+      messageKind: ZLinkDispatchMessageKind.Send,
+      meshName: this.dispatchErrorMeshName,
+      sourceRid: record.sourceNodeRid,
+      spotId: record.target.targetSpotId,
+      instanceSpotType: record.target.stableType,
+      activationState: 'activating' as const,
+      packetName: header?.messageName ?? payload?.packetName,
+      flowId: header?.flowId,
+      flowOrigin: header?.flowOrigin
+    };
+    tracePoint?.trace({
+      ...context,
+      outcome: ZLinkMessageFlowOutcome.Dropped,
+      errorReason:
+        reason === ZLinkDispatchErrorReason.Shutdown
+          ? reason
+          : error instanceof ZLinkFrameworkException &&
+              error.kind === ZLinkFrameworkErrorKind.DeadlineExceeded
+            ? 'activation_timeout'
+            : 'activation_rejected',
+      ...dispatchErrorDetails(error)
+    });
     if (reporter?.captureEnabled() === true) {
       reporter.report({
-        surface: ZLinkDispatchErrorSurface.InstanceSpot,
-        messageKind: ZLinkDispatchMessageKind.Send,
-        reason: ZLinkDispatchErrorReason.StaleTarget,
+        ...context,
+        reason,
         action: ZLinkDispatchErrorAction.Drop,
-        meshName: this.dispatchErrorMeshName,
-        sourceRid: record.sourceNodeRid,
-        spotId: record.target.targetSpotId,
-        instanceSpotType: record.target.stableType,
-        activationState: 'activating',
         error
       });
     }
@@ -3240,12 +3295,25 @@ export class ServiceStatefulRuntime {
   ): Promise<unknown> {
     const key = record.target.targetSpotId;
     const pending = this.pendingInstanceActivations.get(key);
+    const metric =
+      pending === undefined
+        ? this.dispatchErrors?.metrics?.startInstanceSpotActivation(
+            record.target.targetMeshName,
+            record.target.stableType
+          )
+        : undefined;
     const ready =
       pending ??
-      this.runMissingInstanceActivation(record, payloadFrame, metadataFrame).then((activation) => ({
-        ...activation,
-        stableType: record.target.stableType
-      }));
+      this.runMissingInstanceActivation(record, payloadFrame, metadataFrame).then(
+        (activation) => {
+          metric?.complete('ready');
+          return { ...activation, stableType: record.target.stableType };
+        },
+        (error) => {
+          metric?.complete(instanceActivationOutcome(error));
+          throw error;
+        }
+      );
     const operation = ready.then(async (value) => {
       if (pending !== undefined) {
         await this.asyncInstanceAuthority?.read(
@@ -3295,11 +3363,37 @@ export class ServiceStatefulRuntime {
     readonly spot: Pick<ServiceSpotState, 'ref'>;
     readonly route: ServiceInstanceRouteFence;
   }> {
+    const deadline = operationDeadline(record.deadlineUnixMs);
+    try {
+      deadline.signal.throwIfAborted();
+      return await awaitWithAbort(
+        this.runMissingInstanceActivationCore(record, payloadFrame, metadataFrame, deadline.signal),
+        deadline.signal
+      );
+    } catch (error) {
+      if (isAbortError(error) && deadline.signal.aborted) throw deadline.signal.reason;
+      throw error;
+    } finally {
+      deadline.close();
+    }
+  }
+
+  private async runMissingInstanceActivationCore(
+    record: Extract<
+      ServiceStatefulWireRecord,
+      { readonly kind: 'instanceSpot'; readonly activation: 'missing' }
+    >,
+    payloadFrame: Buffer,
+    metadataFrame: Buffer | undefined,
+    signal: AbortSignal
+  ): Promise<{
+    readonly spot: Pick<ServiceSpotState, 'ref'>;
+    readonly route: ServiceInstanceRouteFence;
+  }> {
     const target = record.target;
     if (
       target.targetNodeRid !== this.nodeRid ||
-      target.targetNodeGeneration !== this.nodeGeneration ||
-      record.deadlineUnixMs < BigInt(Date.now())
+      target.targetNodeGeneration !== this.nodeGeneration
     ) {
       throw new ServiceStaleGenerationError('spot', target.targetSpotId);
     }
@@ -3411,21 +3505,22 @@ export class ServiceStatefulRuntime {
         throw new ServiceStaleGenerationError('spot', target.targetSpotId);
       }
     }
-    const deadline = operationDeadline(record.deadlineUnixMs);
-    let reserved: ServiceInstanceAuthorityReserve;
-    try {
-      reserved = await authority.reserve(activationRequest, deadline.signal);
-    } finally {
-      deadline.close();
-    }
-    if (this.closed || record.deadlineUnixMs < BigInt(Date.now())) {
+    const reserved = await authority.reserve(activationRequest, signal);
+    if (this.closed || signal.aborted) {
+      const error = new ZLinkFrameworkException(
+        this.closed
+          ? ZLinkFrameworkErrorKind.ShuttingDown
+          : ZLinkFrameworkErrorKind.DeadlineExceeded,
+        this.closed ? 'Runtime stopped during Instance activation.' : 'Operation deadline exceeded.'
+      );
       await authority.abort(target, reserved.reservation);
-      throw new ServiceStaleGenerationError('spot', target.targetSpotId);
+      throw error;
     }
 
     let activation: { readonly spot: ServiceSpotState; readonly created: boolean };
     try {
       await this.instanceApplicationLifecycle?.materialize(target, reserved.reservation.attempt);
+      signal.throwIfAborted();
       activation = this.activateInstanceSpot(
         target.targetSpotId,
         target.stableType,
@@ -3691,7 +3786,6 @@ export class ServiceStatefulRuntime {
           ingress.sourceNodeGeneration ?? this.peerGeneration(ingress.sourceRoutingId)
         );
         const actor = this.validateActorFence(record.actor);
-        const previous = this.registry.binding(actor.ref);
         const binding = sessionBindingFromWire(
           actor.ref,
           record.sessionRid,
@@ -3702,35 +3796,31 @@ export class ServiceStatefulRuntime {
           sessionOwner.ownerId,
           sessionOwner.leaseGeneration
         );
-        if (previous !== undefined && sameSessionIdentity(previous, binding)) {
-          // Registry publication is the last step of the first binding owner
-          // turn, so an observable same-Session binding already has every
-          // Actor route projection installed and can complete idempotently.
-          this.replyWire(ingress, record.correlation, RequestResult.Ok, 0, undefined, {
-            kind: 'streamBind',
-            bindingGeneration: previous.bindingGeneration,
-            authorityOwnerGeneration: actor.authorityOwnerGeneration
-          });
-          return 'infrastructure';
-        }
+        let completedBinding = binding;
         const accepted = this.enqueueActorBindingControl(
           ingress,
           binding,
           record.actor,
           (terminalResult, failureCode) => {
-            let completedBinding = binding;
             let replacedBinding: ServiceSessionBinding | undefined;
             if (terminalResult === RequestResult.Ok) {
               // This callback runs inside the Actor binding control turn,
-              // after the Host has installed its Actor-to-session projection.
+              // before the Host copies the accepted Actor-to-session projection.
               // Publish the authority-owned registry view in that same turn
               // before making the terminal reply observable.
               const turnCurrent = this.registry.binding(actor.ref);
-              if (turnCurrent !== undefined && sameSessionIdentity(turnCurrent, binding)) {
-                completedBinding = turnCurrent;
-              } else {
-                replacedBinding = turnCurrent;
-                this.registry.installSessionBinding(binding);
+              try {
+                completedBinding = this.registry.installSessionBinding(binding);
+                if (turnCurrent !== completedBinding) replacedBinding = turnCurrent;
+              } catch (error) {
+                const result = failure(error);
+                this.replyWire(
+                  ingress,
+                  record.correlation,
+                  result.terminalResult,
+                  result.failureCode
+                );
+                return false;
               }
             }
             this.replyWire(
@@ -3761,7 +3851,8 @@ export class ServiceStatefulRuntime {
               );
             }
             return true;
-          }
+          },
+          () => completedBinding
         );
         if (!accepted) {
           const result = failure(
@@ -4319,10 +4410,11 @@ export class ServiceStatefulRuntime {
     ingress: RawServiceIngressRecord,
     binding: ServiceSessionBinding,
     actorAuthority: ServiceBoundSessionActorAuthority,
-    reply: NonNullable<ServiceStatefulMailboxData['reply']>
+    reply: NonNullable<ServiceStatefulMailboxData['reply']>,
+    acceptedBinding: () => ServiceSessionBinding
   ): boolean {
     const actor = binding.actor;
-    const sessionOwner = requireSessionOwnerIdentity(binding);
+    requireSessionOwnerIdentity(binding);
     const header = Buffer.from([
       SERVICE_WIRE_MAGIC[0],
       SERVICE_WIRE_MAGIC[1],
@@ -4347,12 +4439,27 @@ export class ServiceStatefulRuntime {
           actorNodeGeneration: actorAuthority.targetNodeGeneration,
           authorityOwnerGeneration: actorAuthority.authorityOwnerGeneration,
           ownerLeaseGeneration: actorAuthority.ownerLeaseGeneration,
-          bindingGeneration: binding.bindingGeneration,
-          sessionNodeRid: binding.sessionOwnerNodeRid as never,
-          sessionRid: binding.sessionRid as never,
-          sessionOwnerNodeGeneration: sessionOwner.nodeGeneration,
-          sessionOwnerId: sessionOwner.ownerId,
-          sessionOwnerLeaseGeneration: sessionOwner.leaseGeneration
+          // The Host reads only Session identity fields before `reply` installs the
+          // binding; installation keeps that identity. Generation and owner fields
+          // are read after `reply`, so they always come from the accepted binding.
+          get bindingGeneration() {
+            return acceptedBinding().bindingGeneration;
+          },
+          get sessionNodeRid() {
+            return acceptedBinding().sessionOwnerNodeRid as never;
+          },
+          get sessionRid() {
+            return acceptedBinding().sessionRid as never;
+          },
+          get sessionOwnerNodeGeneration() {
+            return acceptedBinding().sessionOwnerNodeGeneration!;
+          },
+          get sessionOwnerId() {
+            return acceptedBinding().sessionOwnerId!;
+          },
+          get sessionOwnerLeaseGeneration() {
+            return acceptedBinding().sessionOwnerLeaseGeneration!;
+          }
         },
         reply
       } satisfies ServiceStatefulMailboxData,
@@ -5716,6 +5823,25 @@ function isEntrySpotFence(fence: ServiceSpotRouteFence): boolean {
   );
 }
 
+function instanceActivationOutcome(error: unknown): string {
+  if (isAbortError(error)) return 'shutdown';
+  if (error instanceof ZLinkFrameworkException) {
+    switch (error.kind) {
+      case ZLinkFrameworkErrorKind.DeadlineExceeded:
+        return 'timed_out';
+      case ZLinkFrameworkErrorKind.ShuttingDown:
+        return 'shutdown';
+      case ZLinkFrameworkErrorKind.AlreadyExists:
+        return 'conflict';
+      case ZLinkFrameworkErrorKind.InvalidOperation:
+        return 'fenced';
+      case ZLinkFrameworkErrorKind.Unavailable:
+        return 'store_failure';
+    }
+  }
+  return 'rejected';
+}
+
 function operationDeadline(deadlineUnixMs: bigint): {
   readonly signal: AbortSignal;
   close(): void;
@@ -5843,9 +5969,7 @@ function sameSessionOwnerIdentity(
 ): boolean {
   return (
     left.sessionOwnerNodeRid === right.sessionOwnerNodeRid &&
-    left.sessionOwnerNodeGeneration === right.sessionOwnerNodeGeneration &&
-    left.sessionOwnerId === right.sessionOwnerId &&
-    left.sessionOwnerLeaseGeneration === right.sessionOwnerLeaseGeneration
+    left.sessionOwnerNodeGeneration === right.sessionOwnerNodeGeneration
   );
 }
 
