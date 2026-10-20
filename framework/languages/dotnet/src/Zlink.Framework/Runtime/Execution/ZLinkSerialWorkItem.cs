@@ -7,13 +7,11 @@ internal sealed class ZLinkSerialWorkItem
     private readonly Func<CancellationToken, ValueTask> _callback;
     private readonly ZLinkFrameworkRuntime.ZLinkRuntimeOperationLease? _operation;
     private readonly Action? _relocationRelease;
-    private readonly Func<ReadOnlyMemory<byte>>? _acceptedPayloadFactory;
-    private readonly object? _acceptedPayloadGate;
-    private bool _acceptedPayloadCreated;
+    private Func<ReadOnlyMemory<byte>>? _acceptedPayloadFactory;
     private ReadOnlyMemory<byte> _acceptedPayload;
 
     private readonly TaskCompletionSource? _completion;
-    private Action? _terminalRelease;
+    private object? _terminalRelease;
     private int _terminalReleased;
 
     public ZLinkSerialWorkItem(
@@ -37,8 +35,6 @@ internal sealed class ZLinkSerialWorkItem
         AcceptedSequence = acceptedSequence;
         _acceptedPayload = acceptedPayload;
         _acceptedPayloadFactory = acceptedPayloadFactory;
-        _acceptedPayloadGate = acceptedPayloadFactory is null ? null : new object();
-        _acceptedPayloadCreated = acceptedPayloadFactory is null;
         ReservationHeld = reservationHeld;
         Ready = ready;
     }
@@ -71,17 +67,12 @@ internal sealed class ZLinkSerialWorkItem
     {
         get
         {
-            if (_acceptedPayloadFactory is null)
-                return _acceptedPayload;
-            lock (_acceptedPayloadGate!)
+            if (_acceptedPayloadFactory is not null)
             {
-                if (!_acceptedPayloadCreated)
-                {
-                    _acceptedPayload = _acceptedPayloadFactory();
-                    _acceptedPayloadCreated = true;
-                }
-                return _acceptedPayload;
+                _acceptedPayload = _acceptedPayloadFactory();
+                _acceptedPayloadFactory = null;
             }
+            return _acceptedPayload;
         }
     }
     public bool IsAccepted => AcceptedSequence != 0;
@@ -94,7 +85,7 @@ internal sealed class ZLinkSerialWorkItem
     internal Action<Exception>? ErrorReporter { get; set; }
     internal bool IsReady => Ready?.Invoke() != false && Preparation?.IsReady != false;
 
-    internal void BindTerminalRelease(Action release)
+    internal void BindTerminalRelease(ZLinkSerialExecutionQueue release)
     {
         ArgumentNullException.ThrowIfNull(release);
         if (Interlocked.CompareExchange(ref _terminalRelease, release, null) is not null)
@@ -113,17 +104,19 @@ internal sealed class ZLinkSerialWorkItem
             Volatile.Read(ref _terminalReleased) != 0
             || Interlocked.CompareExchange(
                 ref _terminalRelease,
-                () =>
-                {
-                    try
+                (Action<ZLinkSerialWorkItem>)(
+                    item =>
                     {
-                        release();
+                        try
+                        {
+                            release();
+                        }
+                        finally
+                        {
+                            InvokeTerminalRelease(current, item);
+                        }
                     }
-                    finally
-                    {
-                        current();
-                    }
-                },
+                ),
                 current
             ) != current
         )
@@ -178,15 +171,21 @@ internal sealed class ZLinkSerialWorkItem
 
             callbackTask = operation.AsTask();
             turn.BindOwnerTask(callbackTask);
-            var bounded = callbackTask.WaitAsync(cancellationToken);
-            var completed = await Task.WhenAny(bounded, turn.Suspended).ConfigureAwait(false);
+            // Cancellation still joins the callback. Keep observing its suspension
+            // so that cleanup cannot retain a gate the yielded callback needs.
+            var completed = await Task.WhenAny(callbackTask, turn.Suspended).ConfigureAwait(false);
             if (ReferenceEquals(completed, turn.Suspended))
             {
-                _ = CompleteAfterSuspensionAsync(bounded, callbackTask, onUnhandledException);
+                _ = CompleteAfterSuspensionAsync(
+                    callbackTask.WaitAsync(cancellationToken),
+                    callbackTask,
+                    onUnhandledException
+                );
                 return ZLinkSerialWorkItemResult.Suspended;
             }
 
-            await bounded.ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            await callbackTask.ConfigureAwait(false);
             ReleaseTerminal();
             _completion!.TrySetResult();
             return ZLinkSerialWorkItemResult.Completed;
@@ -313,12 +312,21 @@ internal sealed class ZLinkSerialWorkItem
         if (Interlocked.Exchange(ref _terminalReleased, 1) != 0)
             return;
         Preparation?.Cancel();
-        (
+        InvokeTerminalRelease(
             Volatile.Read(ref _terminalRelease)
-            ?? throw new InvalidOperationException(
-                "ZLink serial work has no terminal release callback."
-            )
-        )();
+                ?? throw new InvalidOperationException(
+                    "ZLink serial work has no terminal release callback."
+                ),
+            this
+        );
+    }
+
+    private static void InvokeTerminalRelease(object release, ZLinkSerialWorkItem item)
+    {
+        if (release is ZLinkSerialExecutionQueue owner)
+            owner.CompletePendingItem(item);
+        else
+            ((Action<ZLinkSerialWorkItem>)release)(item);
     }
 
     private ValueTask ReleaseSuspendedTerminalAsync() =>

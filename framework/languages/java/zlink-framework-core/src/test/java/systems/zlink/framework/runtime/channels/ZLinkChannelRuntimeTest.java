@@ -914,11 +914,11 @@ final class ZLinkChannelRuntimeTest {
             assertEquals(1L, metrics.inflight("fake-node", "spot"));
             assertTrue(result.cancel(false));
             assertEquals(0L, metrics.inflight("fake-node", "spot"));
-            assertEquals(1L, metrics.durationCount("fake-node", "spot", "failed"));
+            assertEquals(1L, metrics.durationCount("fake-node", "spot", "cancelled"));
 
             resolution.complete(Optional.empty());
             assertEquals(0L, metrics.inflight("fake-node", "spot"));
-            assertEquals(1L, metrics.durationCount("fake-node", "spot", "failed"));
+            assertEquals(1L, metrics.durationCount("fake-node", "spot", "cancelled"));
         }
     }
 

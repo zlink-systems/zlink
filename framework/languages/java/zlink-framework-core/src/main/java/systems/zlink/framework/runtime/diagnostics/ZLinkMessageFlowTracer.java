@@ -24,6 +24,66 @@ import java.util.logging.Logger;
 
 /** Internal Spec 26 message-flow tracer. */
 public final class ZLinkMessageFlowTracer {
+    public void traceInstanceActivationDrop(
+            String spotId,
+            systems.zlink.contracts.core.RoutingId source,
+            Throwable failure,
+            ZLinkDispatchErrorReason reason,
+            ZLinkFlowContext.State flow) {
+        var point = begin(ZLinkMessageFlowOutcome.DROPPED);
+        if (point == null) return;
+        var details = ZLinkDispatchErrorReporter.errorDetails(failure);
+        point.trace(
+                new ZLinkMessageFlowEvent(
+                        ZLinkMessageFlowOutcome.DROPPED,
+                        ZLinkDispatchErrorSurface.INSTANCE_SPOT,
+                        ZLinkDispatchMessageKind.SEND,
+                        null,
+                        null,
+                        null,
+                        null,
+                        source == null ? null : source.toString(),
+                        spotId,
+                        null,
+                        null,
+                        reason,
+                        null,
+                        details.type(),
+                        details.message(),
+                        flow == null ? null : flow.flowId(),
+                        flow == null ? null : flow.origin()));
+    }
+
+    public void traceBindingControlDrop(
+            systems.zlink.contracts.core.RoutingId source,
+            String actorId,
+            String packetName,
+            ZLinkDispatchErrorReason reason,
+            Throwable failure) {
+        var point = begin(ZLinkMessageFlowOutcome.DROPPED);
+        if (point == null) return;
+        var details = ZLinkDispatchErrorReporter.errorDetails(failure);
+        point.trace(
+                new ZLinkMessageFlowEvent(
+                        ZLinkMessageFlowOutcome.DROPPED,
+                        ZLinkDispatchErrorSurface.STREAM_SESSION,
+                        ZLinkDispatchMessageKind.CONTROL,
+                        packetName,
+                        null,
+                        null,
+                        null,
+                        source.toString(),
+                        null,
+                        actorId,
+                        null,
+                        reason,
+                        null,
+                        details.type(),
+                        details.message(),
+                        null,
+                        null));
+    }
+
     public void reportFailure(
             ZLinkDispatchErrorSurface surface,
             ZLinkDispatchMessageKind messageKind,

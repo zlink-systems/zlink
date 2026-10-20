@@ -65,14 +65,79 @@ final class ZLinkRelocationHandOff {
                     relayCapturedIngress,
             Duration timeout,
             Instant restoreDeadline) {
+        return run(client, request, relayCapturedIngress, timeout, restoreDeadline, 0L);
+    }
+
+    static CompletionStage<ZLinkRelocationTransitionClient.Settlement> run(
+            ZLinkRelocationTransitionClient client,
+            ZLinkSpotRetireControl.StageRequest request,
+            java.util.function.Function<
+                            CompletionStage<ZLinkRelocationTransitionClient.AuthoritySettlement>,
+                            CompletionStage<Void>>
+                    relayCapturedIngress,
+            Duration timeout,
+            Instant restoreDeadline,
+            long sealedNanos) {
+        return run(
+                client,
+                request,
+                relayCapturedIngress,
+                timeout,
+                restoreDeadline,
+                new ZLinkRelocationMetricOperation(request, sealedNanos));
+    }
+
+    static CompletionStage<ZLinkRelocationTransitionClient.Settlement> run(
+            ZLinkRelocationTransitionClient client,
+            ZLinkSpotRetireControl.StageRequest request,
+            java.util.function.Function<
+                            CompletionStage<ZLinkRelocationTransitionClient.AuthoritySettlement>,
+                            CompletionStage<Void>>
+                    relayCapturedIngress,
+            Duration timeout,
+            Instant restoreDeadline,
+            ZLinkRelocationMetricOperation metrics) {
+        return runToReady(client, request, relayCapturedIngress, timeout, restoreDeadline, metrics)
+                .thenCompose(stage -> stage);
+    }
+
+    static CompletionStage<CompletionStage<ZLinkRelocationTransitionClient.Settlement>> runToReady(
+            ZLinkRelocationTransitionClient client,
+            ZLinkSpotRetireControl.StageRequest request,
+            java.util.function.Function<
+                            CompletionStage<ZLinkRelocationTransitionClient.AuthoritySettlement>,
+                            CompletionStage<Void>>
+                    relayCapturedIngress,
+            Duration timeout,
+            Instant restoreDeadline) {
+        return runToReady(
+                client,
+                request,
+                relayCapturedIngress,
+                timeout,
+                restoreDeadline,
+                new ZLinkRelocationMetricOperation(request, 0L));
+    }
+
+    static CompletionStage<CompletionStage<ZLinkRelocationTransitionClient.Settlement>> runToReady(
+            ZLinkRelocationTransitionClient client,
+            ZLinkSpotRetireControl.StageRequest request,
+            java.util.function.Function<
+                            CompletionStage<ZLinkRelocationTransitionClient.AuthoritySettlement>,
+                            CompletionStage<Void>>
+                    relayCapturedIngress,
+            Duration timeout,
+            Instant restoreDeadline,
+            ZLinkRelocationMetricOperation metrics) {
         Objects.requireNonNull(client, "client");
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(relayCapturedIngress, "relayCapturedIngress");
         Objects.requireNonNull(timeout, "timeout");
         Objects.requireNonNull(restoreDeadline, "restoreDeadline");
         RoutingId targetRid = request.targetNodeRid();
+        metrics.envelope(request);
         return client.stage(targetRid, request, timeout, restoreDeadline)
-                .thenCompose(
+                .thenApply(
                         ready -> {
                             var committed =
                                     new CompletableFuture<
@@ -85,8 +150,12 @@ final class ZLinkRelocationHandOff {
                             }
                             CompletionStage<Void> capturedRelay = relay;
                             CompletionStage<ZLinkRelocationTransitionClient.Settlement> settlement =
-                                    client.settleAuthority(
-                                                    targetRid, request.fence(), restoreDeadline)
+                                    ZLinkHandlerStages.fromStageSupplier(
+                                                    () ->
+                                                            client.settleAuthority(
+                                                                    targetRid,
+                                                                    request.fence(),
+                                                                    restoreDeadline))
                                             .whenComplete(
                                                     (result, failure) -> {
                                                         if (failure == null)
@@ -140,7 +209,9 @@ final class ZLinkRelocationHandOff {
                                                                         .cancel(false);
                                                             }
                                                         });
-                                                return submitted;
+                                                return submitted.whenComplete(
+                                                        (ignoredSubmit, submitFailure) ->
+                                                                metrics.cutoverTerminal());
                                             });
                             boundary.whenComplete(
                                     (ignored, failure) -> {
@@ -154,13 +225,35 @@ final class ZLinkRelocationHandOff {
                                                             + unwrap(failure));
                                         }
                                     });
-                            return settlement.thenCompose(
-                                    result ->
-                                            result
-                                                            == ZLinkRelocationTransitionClient
-                                                                    .Settlement.TARGET_COMMITTED
-                                                    ? boundary.handle((ignored, failure) -> result)
-                                                    : CompletableFuture.completedFuture(result));
+                            return settlement
+                                    .thenCompose(
+                                            result ->
+                                                    result
+                                                                    == ZLinkRelocationTransitionClient
+                                                                            .Settlement
+                                                                            .TARGET_COMMITTED
+                                                            ? boundary.handle(
+                                                                    (ignored, failure) -> result)
+                                                            : CompletableFuture.completedFuture(
+                                                                    result))
+                                    .whenComplete(
+                                            (result, failure) -> {
+                                                // Preserve is recorded by the source owner after
+                                                // its
+                                                // retained work has resumed, not at the Store
+                                                // fence.
+                                                if (result
+                                                        != ZLinkRelocationTransitionClient
+                                                                .Settlement.SOURCE_PRESERVED)
+                                                    metrics.complete(
+                                                            result,
+                                                            failure != null
+                                                                    && client.sourceStopped());
+                                            });
+                        })
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure != null) metrics.complete(null, client.sourceStopped());
                         });
     }
 

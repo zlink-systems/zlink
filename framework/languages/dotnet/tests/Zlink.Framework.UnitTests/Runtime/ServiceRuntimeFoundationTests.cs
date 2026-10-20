@@ -2769,6 +2769,7 @@ public sealed class ServiceRuntimeFoundationTests
     [Fact]
     public async Task Managed_mesh_pump_defers_application_dispatch_while_shared_capacity_is_saturated()
     {
+        var completionBound = TimeSpan.FromSeconds(5);
         await using var context = Systems.Zlink.Zlink.CreateContext();
         using var applicationJobQueue = new ZLinkApplicationJobQueue(
             new ZLinkApplicationJobQueueCapacity(
@@ -2779,10 +2780,12 @@ public sealed class ServiceRuntimeFoundationTests
             )
         );
         await using var source = new ZLinkManagedMeshNode(context, "orders");
+        using var receivePoller = new PausedReceivePoller();
         await using var target = new ZLinkManagedMeshNode(
             context,
             "orders",
-            applicationJobQueue: applicationJobQueue
+            applicationJobQueue: applicationJobQueue,
+            receivePollerFactory: () => receivePoller
         );
         await using var pump = new ZLinkMeshDispatchPump(
             target,
@@ -2792,9 +2795,11 @@ public sealed class ServiceRuntimeFoundationTests
         var dispatched = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        var receivedRecords = 0;
         pump.SetNodeRouteHandler(
             (records, _) =>
             {
+                Interlocked.Add(ref receivedRecords, records.Count);
                 foreach (var record in records)
                     record.Dispose();
                 dispatched.TrySetResult();
@@ -2812,39 +2817,70 @@ public sealed class ServiceRuntimeFoundationTests
         source.ConnectPeer(targetEndpoint, targetRid);
         target.SetRoutingId(targetRid);
         target.SetBind(targetEndpoint);
-        target.Start();
-        pump.EnsureStarted();
-        source.Start();
-
-        await WaitUntilAsync(() =>
-            source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
-        );
-
-        using var occupied = await applicationJobQueue.AcquireAsync(
-            CancellationToken.None,
-            ZLinkApplicationJobOrigin.Remote
-        );
-        Assert.Equal(
-            ZLinkApplicationJobQueuePressureState.Paused,
-            applicationJobQueue.GetStatus().PressureState
-        );
-        using var payload = Message.From(new byte[] { 1, 2, 3 });
-        Assert.Equal(SubmitResult.Ok, source.SendToNode(targetRid, [payload]));
-
-        Assert.False(dispatched.Task.IsCompleted);
-        Assert.Equal(0UL, applicationJobQueue.GetStatus().CapacityWaiters);
-        Assert.Equal(0UL, target.Status().PendingApplicationMessages);
-
-        await occupied.ReleaseForHandlerStartAsync();
-        await dispatched.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await WaitUntilAsync(() =>
+        try
         {
-            var status = applicationJobQueue.GetStatus();
-            return target.Status().PendingApplicationMessages == 0
-                && status.PressureState == ZLinkApplicationJobQueuePressureState.Running
-                && status.CapacityWaiters == 0;
-        });
-        Assert.Equal(0UL, applicationJobQueue.GetPressureMetrics().FlowStateConfigFailures);
+            target.Start();
+            pump.EnsureStarted();
+            source.Start();
+
+            await WaitUntilAsync(() =>
+                source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
+            );
+
+            // Preserve actual readiness while holding the owner before its next permit reserve.
+            receivePoller.PauseNextReceive();
+            using var payload = Message.From(new byte[] { 1, 2, 3 });
+            Assert.Equal(SubmitResult.Ok, source.SendToNode(targetRid, [payload]));
+            await receivePoller.ReceivePaused.Task.WaitAsync(completionBound);
+
+            using var occupied = await applicationJobQueue.AcquireAsync(
+                CancellationToken.None,
+                ZLinkApplicationJobOrigin.Remote
+            );
+            Assert.Equal(
+                ZLinkApplicationJobQueuePressureState.Paused,
+                applicationJobQueue.GetStatus().PressureState
+            );
+
+            Assert.False(dispatched.Task.IsCompleted);
+            Assert.Equal(0UL, applicationJobQueue.GetStatus().CapacityWaiters);
+            Assert.Equal(0UL, target.Status().PendingApplicationMessages);
+            Assert.Equal(0, Volatile.Read(ref receivedRecords));
+
+            receivePoller.ResumeReceive();
+            await WaitUntilAsync(() => applicationJobQueue.GetStatus().CapacityWaiters == 1);
+            var saturated = applicationJobQueue.GetStatus();
+            Assert.Equal(1UL, saturated.CapacityWaiters);
+            Assert.Equal(1UL, saturated.PermitsInUse);
+            Assert.Equal(0UL, target.Status().PendingApplicationMessages);
+            Assert.False(dispatched.Task.IsCompleted);
+            Assert.Equal(0, Volatile.Read(ref receivedRecords));
+
+            await occupied.ReleaseForHandlerStartAsync();
+            await dispatched.Task.WaitAsync(completionBound);
+            var drained = applicationJobQueue.GetStatus();
+            await WaitUntilAsync(() =>
+            {
+                drained = applicationJobQueue.GetStatus();
+                return target.Status().PendingApplicationMessages == 0
+                    && drained.PressureState == ZLinkApplicationJobQueuePressureState.Running
+                    && drained.CapacityWaiters == 0
+                    && drained.PermitsInUse == 0;
+            });
+            await pump.DisposeAsync();
+            Assert.Equal(1, Volatile.Read(ref receivedRecords));
+            Assert.Equal(ZLinkApplicationJobQueuePressureState.Running, drained.PressureState);
+            Assert.Equal(0UL, drained.CapacityWaiters);
+            Assert.Equal(0UL, drained.ReservedSupplyPermits);
+            Assert.Equal(0UL, drained.QueuedApplicationJobs);
+            Assert.Equal(0UL, drained.PermitsInUse);
+            Assert.Equal(0UL, target.Status().PendingApplicationMessages);
+            Assert.Equal(0UL, applicationJobQueue.GetPressureMetrics().FlowStateConfigFailures);
+        }
+        finally
+        {
+            receivePoller.ResumeReceive();
+        }
     }
 
     [Fact]
@@ -2915,8 +2951,11 @@ public sealed class ServiceRuntimeFoundationTests
             applicationJobQueue.GetStatus().PressureState
             == ZLinkApplicationJobQueuePressureState.Paused
         );
+        // Spec 04 §6 hysteresis: Paused holds until permits fall to the resume
+        // count, so a returned unused reservation may leave fewer than the pause count.
         var paused = applicationJobQueue.GetStatus();
-        Assert.InRange(paused.PermitsInUse, paused.PausePermitCount, (ulong)capacity);
+        Assert.Equal(ZLinkApplicationJobQueuePressureState.Paused, paused.PressureState);
+        Assert.InRange(paused.PermitsInUse, paused.ResumePermitCount + 1, (ulong)capacity);
         pump.EnsureStarted();
 
         await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -3877,6 +3916,91 @@ public sealed class ServiceRuntimeFoundationTests
             if (Stopwatch.GetTimestamp() >= deadline)
                 throw new TimeoutException("The managed MeshNode condition was not reached.");
             await Task.Delay(10);
+        }
+    }
+
+    private sealed class PausedReceivePoller : IPoller
+    {
+        private readonly IPoller _inner = Systems.Zlink.Zlink.CreatePoller();
+        private readonly ManualResetEventSlim _resumeReceive = new(false);
+        private int _pauseNextReceive;
+        private int _disposed;
+        private nuint _socketSlot;
+        internal readonly TaskCompletionSource ReceivePaused = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        internal void PauseNextReceive() => Volatile.Write(ref _pauseNextReceive, 1);
+
+        internal void ResumeReceive() => _resumeReceive.Set();
+
+        public int Wait(Span<PollEvent> destination, TimeSpan timeout)
+        {
+            var count = _inner.Wait(destination, timeout);
+            for (var i = 0; i < count; i++)
+                if (
+                    destination[i].SourceKind == PollSourceKind.Socket
+                    && destination[i].Slot == _socketSlot
+                    && (destination[i].Revents & PollEventFlags.PollIn) != 0
+                    && Interlocked.CompareExchange(ref _pauseNextReceive, 0, 1) == 1
+                )
+                {
+                    ReceivePaused.TrySetResult();
+                    _resumeReceive.Wait();
+                    break;
+                }
+            return count;
+        }
+
+        public int Size => _inner.Size;
+
+        public void Add(IZlinkSocket socket, PollEventFlags events, nuint slot)
+        {
+            _socketSlot = slot;
+            _inner.Add(socket, events, slot);
+        }
+
+        public void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot) =>
+            _inner.Add(monitor, events, slot);
+
+        public void Add(IZlinkTimer timer, nuint slot) => _inner.Add(timer, slot);
+
+        public void AddFd(int fd, PollEventFlags events, nuint slot) =>
+            _inner.AddFd(fd, events, slot);
+
+        public void Modify(IZlinkSocket socket, PollEventFlags events) =>
+            _inner.Modify(socket, events);
+
+        public void Modify(ISocketMonitor monitor, PollEventFlags events) =>
+            _inner.Modify(monitor, events);
+
+        public void ModifyFd(int fd, PollEventFlags events) => _inner.ModifyFd(fd, events);
+
+        public bool Remove(IZlinkSocket socket) => _inner.Remove(socket);
+
+        public bool Remove(ISocketMonitor monitor) => _inner.Remove(monitor);
+
+        public bool Remove(IZlinkTimer timer) => _inner.Remove(timer);
+
+        public bool Remove(int fd) => _inner.Remove(fd);
+
+        public void Clear() => _inner.Clear();
+
+        public void Close() => Dispose();
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                return;
+            _resumeReceive.Set();
+            _inner.Dispose();
+            _resumeReceive.Dispose();
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            Dispose();
+            return ValueTask.CompletedTask;
         }
     }
 }

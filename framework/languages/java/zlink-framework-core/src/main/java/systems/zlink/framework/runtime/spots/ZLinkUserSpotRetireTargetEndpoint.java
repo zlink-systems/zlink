@@ -515,94 +515,91 @@ final class ZLinkUserSpotRetireTargetEndpoint
         return new ZLinkAcceptedJournalReplayer(
                 record -> staging.replaySpot(target.staged(), record),
                 record -> staging.replayActor(target.staged(), record),
-                new ZLinkAcceptedJournalReplayer.ReplyRelay() {
-                    @Override
-                    public CompletionStage<Void> completeSpot(
-                            ZLinkSpotAcceptedJournal.Record record,
-                            long acceptedSequence,
-                            List<byte[]> reply,
-                            Throwable failure) {
-                        RoutingId sourceNode =
-                                record.routingId()
-                                        .orElseThrow(
-                                                () ->
-                                                        new IllegalStateException(
-                                                                "accepted request source node is"
-                                                                        + " unavailable"));
-                        var participant =
-                                participant(
-                                        request,
-                                        request.spotId(),
-                                        record.requestSequence().orElse(0L));
-                        CanonicalReplyPayload payload = null;
-                        if (failure == null && record.requestSequence().isPresent()) {
-                            if (reply.size() != 1 || record.parts().isEmpty()) {
-                                return CompletableFuture.failedFuture(
-                                        new IllegalStateException(
-                                                "canonical Spot request must produce one reply"));
-                            }
-                            payload =
-                                    new CanonicalReplyPayload(
-                                            new String(
-                                                    record.parts().getFirst(),
-                                                    StandardCharsets.UTF_8),
-                                            "application/zlink-framework-json-v1",
-                                            reply.getFirst());
-                        }
-                        return completeCanonicalReplay(
-                                request,
-                                participant,
-                                acceptedSequence,
-                                record.operationHigh(),
-                                record.operationLow(),
-                                record.requestSequence().orElse(0L),
-                                record.sourceOwnerId(),
-                                record.sourceOwnerLeaseGeneration(),
-                                sourceNode,
-                                record.sourceNodeGeneration(),
-                                payload,
-                                failure,
-                                record.parts().isEmpty()
-                                        ? null
-                                        : new String(
-                                                record.parts().getFirst(), StandardCharsets.UTF_8));
-                    }
+                productionReplyRelay(request));
+    }
 
-                    @Override
-                    public CompletionStage<Void> completeActor(
-                            ZLinkActorAcceptedJournal.Record record,
-                            long acceptedSequence,
-                            Optional<byte[]> reply,
-                            Throwable failure) {
-                        CanonicalReplyPayload payload =
-                                (reply == null ? Optional.<byte[]>empty() : reply)
-                                        .map(
-                                                bytes ->
-                                                        new CanonicalReplyPayload(
-                                                                record.header().name(),
-                                                                actorContentType(
-                                                                        record.header().codec()),
-                                                                bytes))
-                                        .orElse(null);
-                        return completeCanonicalReplay(
-                                request,
-                                participant(
-                                        request,
-                                        record.actorId(),
-                                        record.replyRouteId().orElse(0L)),
-                                acceptedSequence,
-                                record.operationHigh(),
-                                record.operationLow(),
-                                record.replyRouteId().orElse(0L),
-                                record.sourceOwnerId(),
-                                record.sourceOwnerLeaseGeneration(),
-                                record.sourceNodeRid(),
-                                record.sourceNodeGeneration(),
-                                payload,
-                                failure,
-                                record.header().name());
+    ZLinkAcceptedJournalReplayer.ReplyRelay productionReplyRelay(
+            ZLinkSpotRetireControl.StageRequest request) {
+        return new ZLinkAcceptedJournalReplayer.ReplyRelay() {
+            @Override
+            public CompletionStage<Void> completeSpot(
+                    ZLinkSpotAcceptedJournal.Record record,
+                    long acceptedSequence,
+                    List<byte[]> reply,
+                    Throwable failure) {
+                RoutingId sourceNode =
+                        record.routingId()
+                                .orElseThrow(
+                                        () ->
+                                                new IllegalStateException(
+                                                        "accepted request source node is"
+                                                                + " unavailable"));
+                var participant =
+                        participant(request, request.spotId(), record.requestSequence().orElse(0L));
+                CanonicalReplyPayload payload = null;
+                if (failure == null && record.requestSequence().isPresent()) {
+                    if (reply.size() != 1 || record.parts().isEmpty()) {
+                        return CompletableFuture.failedFuture(
+                                new IllegalStateException(
+                                        "canonical Spot request must produce one reply"));
                     }
-                });
+                    payload =
+                            new CanonicalReplyPayload(
+                                    new String(record.parts().getFirst(), StandardCharsets.UTF_8),
+                                    "application/zlink-framework-json-v1",
+                                    reply.getFirst());
+                }
+                return completeCanonicalReplay(
+                        request,
+                        participant,
+                        acceptedSequence,
+                        record.operationHigh(),
+                        record.operationLow(),
+                        record.requestSequence().orElse(0L),
+                        record.sourceOwnerId(),
+                        record.sourceOwnerLeaseGeneration(),
+                        sourceNode,
+                        record.sourceNodeGeneration(),
+                        payload,
+                        failure,
+                        sourceReplies == null
+                                        || !sourceReplies.dispatchErrorsEnabled()
+                                        || record.parts().isEmpty()
+                                ? null
+                                : new String(record.parts().getFirst(), StandardCharsets.UTF_8));
+            }
+
+            @Override
+            public CompletionStage<Void> completeActor(
+                    ZLinkActorAcceptedJournal.Record record,
+                    long acceptedSequence,
+                    Optional<byte[]> reply,
+                    Throwable failure) {
+                CanonicalReplyPayload payload =
+                        (reply == null ? Optional.<byte[]>empty() : reply)
+                                .map(
+                                        bytes ->
+                                                new CanonicalReplyPayload(
+                                                        record.header().name(),
+                                                        actorContentType(record.header().codec()),
+                                                        bytes))
+                                .orElse(null);
+                return completeCanonicalReplay(
+                        request,
+                        participant(request, record.actorId(), record.replyRouteId().orElse(0L)),
+                        acceptedSequence,
+                        record.operationHigh(),
+                        record.operationLow(),
+                        record.replyRouteId().orElse(0L),
+                        record.sourceOwnerId(),
+                        record.sourceOwnerLeaseGeneration(),
+                        record.sourceNodeRid(),
+                        record.sourceNodeGeneration(),
+                        payload,
+                        failure,
+                        record.header().name());
+            }
+        };
     }
 
     private CompletionStage<Void> completeCanonicalReplay(
@@ -625,7 +622,7 @@ final class ZLinkUserSpotRetireTargetEndpoint
                             "canonical request replay produced no terminal payload"));
         }
         boolean actor = participant.fence().objectKind() == ZLinkPlacementObjectKind.ACTOR.value();
-        if (failure != null && sourceReplies != null) {
+        if (failure != null && sourceReplies != null && sourceReplies.dispatchErrorsEnabled()) {
             sourceReplies.reportDispatchError(
                     DispatchFailureReport.of(
                                     actor
@@ -677,7 +674,9 @@ final class ZLinkUserSpotRetireTargetEndpoint
         return relayCanonicalOnce(request, participant, completion)
                 .whenComplete(
                         (ignored, relayFailure) -> {
-                            if (relayFailure != null && sourceReplies != null) {
+                            if (relayFailure != null
+                                    && sourceReplies != null
+                                    && sourceReplies.dispatchErrorsEnabled()) {
                                 sourceReplies.reportDispatchError(
                                         DispatchFailureReport.of(
                                                         ZLinkDispatchErrorSurface.SPOT_ROUTE,

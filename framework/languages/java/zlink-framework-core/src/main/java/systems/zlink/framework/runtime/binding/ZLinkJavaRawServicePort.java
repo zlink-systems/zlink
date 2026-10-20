@@ -41,6 +41,7 @@ import java.util.function.Supplier;
  * until the framework record is terminal.
  */
 final class ZLinkJavaRawServicePort implements AutoCloseable {
+    private static final Duration INFINITE_WAIT = Duration.ofMillis(-1);
     private final Context context;
     private final boolean ownsContext;
     private final LinkedHashMap<RouterSocket, ZLinkJavaSocketReceivePoller> receivePollers =
@@ -463,7 +464,45 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     int waitForReady(RouterSocket router, Duration timeout) {
         Objects.requireNonNull(timeout, "timeout");
         ZLinkJavaSocketReceivePoller receivePoller = inStateLane(() -> receivePollerOnLane(router));
-        return receivePoller == null ? 0 : receivePoller.waitForReady(timeout);
+        return receivePoller == null
+                ? 0
+                : consumeOwnerWake(receivePoller, receivePoller.waitForOwnerReady(timeout));
+    }
+
+    int waitForManagementReady(RouterSocket router, long deadline, long now) {
+        var receivePoller =
+                inStateLane(
+                        () -> {
+                            var owner = receivePollerOnLane(router);
+                            owner.prepareManagementWait(deadline, now);
+                            return owner;
+                        });
+        return consumeOwnerWake(receivePoller, receivePoller.waitForOwnerReady(INFINITE_WAIT));
+    }
+
+    private int consumeOwnerWake(ZLinkJavaSocketReceivePoller owner, int ready) {
+        if ((ready & ZLinkJavaSocketReceivePoller.OWNER_WAKE) != 0) {
+            inStateLane(
+                    () -> {
+                        if (closeCompletion == null) owner.consumeOwnerWake();
+                        return null;
+                    });
+        }
+        return ready & ~ZLinkJavaSocketReceivePoller.OWNER_WAKE;
+    }
+
+    void signalReceiveOwner(RouterSocket router) {
+        if (router == null) return;
+        inStateLane(
+                () -> {
+                    // The close claim seals producers before resource disposal outside the lane.
+                    // An in-flight signal has left this lane before close can claim disposal.
+                    if (closeCompletion == null) {
+                        var receivePoller = receivePollers.get(router);
+                        if (receivePoller != null) receivePoller.signal();
+                    }
+                    return null;
+                });
     }
 
     Optional<Inbound> receiveNow(RouterSocket router) {
@@ -496,20 +535,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                                                     "service ROUTER receive has no routing id"));
             // Control decoders request individual headers. Application decoders
             // borrow received.parts() directly while this owner is retained.
-            List<byte[]> frames =
-                    new AbstractList<>() {
-                        @Override
-                        public byte[] get(int index) {
-                            return received.parts().get(index).toByteArray();
-                        }
-
-                        @Override
-                        public int size() {
-                            return received.parts().size();
-                        }
-                    };
-            Inbound inbound =
-                    new Inbound(source, received.replyToken().orElse(null), frames, received);
+            Inbound inbound = new Inbound(source, received.replyToken().orElse(null), received);
             transferred = true;
             return Optional.of(inbound);
         } finally {
@@ -579,18 +605,60 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         }
     }
 
-    record Inbound(
-            RoutingId source, ReplyToken requestSequence, List<byte[]> frames, Received received)
-            implements AutoCloseable {
-        Inbound {
-            Objects.requireNonNull(source, "source");
-            Objects.requireNonNull(frames, "frames");
-            Objects.requireNonNull(received, "received");
+    /**
+     * A received record. For a native record it is also its own header-frame view, so no separate
+     * adapter is allocated per record; a synthetic record keeps its supplied frames. The list view
+     * always matches {@link #frames()}.
+     */
+    static final class Inbound extends AbstractList<byte[]> implements AutoCloseable {
+        private final RoutingId source;
+        private final ReplyToken requestSequence;
+        private final List<byte[]> frames;
+        private final Received received;
+
+        Inbound(RoutingId source, ReplyToken requestSequence, Received received) {
+            this.source = Objects.requireNonNull(source, "source");
+            this.requestSequence = requestSequence;
+            this.received = Objects.requireNonNull(received, "received");
+            frames = this;
+        }
+
+        // Synthetic records can supply their existing frame representation without a native owner.
+        Inbound(
+                RoutingId source,
+                ReplyToken requestSequence,
+                List<byte[]> frames,
+                Received received) {
+            this.source = Objects.requireNonNull(source, "source");
+            this.requestSequence = requestSequence;
+            this.frames = Objects.requireNonNull(frames, "frames");
+            this.received = Objects.requireNonNull(received, "received");
+        }
+
+        RoutingId source() {
+            return source;
+        }
+
+        ReplyToken requestSequence() {
+            return requestSequence;
+        }
+
+        List<byte[]> frames() {
+            return frames;
+        }
+
+        Received received() {
+            return received;
         }
 
         @Override
-        public List<byte[]> frames() {
-            return frames;
+        public byte[] get(int index) {
+            return frames == this ? received.parts().get(index).toByteArray() : frames.get(index);
+        }
+
+        @Override
+        public int size() {
+            return frames == this ? received.parts().size() : frames.size();
         }
 
         /** The Core route generation that delivered this record (Core ROUTER §10.1). */

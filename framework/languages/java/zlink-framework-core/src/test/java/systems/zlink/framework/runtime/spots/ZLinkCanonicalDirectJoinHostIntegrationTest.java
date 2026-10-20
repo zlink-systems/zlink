@@ -156,6 +156,12 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                         .limit(scenario == Scenario.NEXT_DEFERRED_JOIN ? 20 : 1));
     }
 
+    @org.junit.jupiter.api.Test
+    void sourceSettlementMissingDoesNotFailTheJoinAfterRelayReadiness() throws Exception {
+        actualHostsUseOneCanonicalOwnerForB1B2D1AndLifecycleOrdering(
+                Scenario.TARGET_AUTHORITY_MISSING);
+    }
+
     @ParameterizedTest(name = "{0}")
     @MethodSource("canonicalScenarios")
     void actualHostsUseOneCanonicalOwnerForB1B2D1AndLifecycleOrdering(Scenario scenario)
@@ -176,6 +182,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         RESTORE_GATE.set(CompletableFuture.completedFuture(null));
         var locationStore = new ZLinkInMemoryLocationStore();
         var relocationStore = new InMemoryRelocationStore();
+        var releaseSettlement = new CompletableFuture<Void>();
         Duration sourceRetention =
                 switch (scenario) {
                     case NORMAL -> Duration.ofMillis(100);
@@ -207,6 +214,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             nextJoinRelease.complete(null);
                             LEAVE_GATE.get().complete(null);
                             RESTORE_GATE.get().complete(null);
+                            PUSH_TERMINAL.get().complete(null);
+                            releaseSettlement.complete(null);
                         }) {
             ZLinkSpotRuntime targetSpots = (ZLinkSpotRuntime) targetHost.spotManager();
             ZLinkSpotRuntime sourceSpots = (ZLinkSpotRuntime) sourceHost.spotManager();
@@ -408,7 +417,34 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             link.sourceNode(),
                             MESH,
                             sourceRegistration.entrySpotId(),
-                            observed,
+                            scenario == Scenario.TARGET_AUTHORITY_MISSING
+                                    ? (ZLinkLocationRepository)
+                                            Proxy.newProxyInstance(
+                                                    ZLinkLocationRepository.class.getClassLoader(),
+                                                    new Class<?>[] {ZLinkLocationRepository.class},
+                                                    (proxy, method, arguments) -> {
+                                                        if (method.getName().equals("read")
+                                                                && EVENTS.contains(
+                                                                        "canonical.ready")
+                                                                && arguments[0].equals(
+                                                                        ZLinkAuthorityKeyCodec
+                                                                                .actor(ACTOR_ID)))
+                                                            return releaseSettlement.thenCompose(
+                                                                    ignored ->
+                                                                            repository.read(
+                                                                                    ZLinkAuthorityKeyCodec
+                                                                                            .actor(
+                                                                                                    ACTOR_ID),
+                                                                                    OPEN));
+                                                        try {
+                                                            return method.invoke(
+                                                                    observed, arguments);
+                                                        } catch (
+                                                                InvocationTargetException failure) {
+                                                            throw failure.getCause();
+                                                        }
+                                                    })
+                                    : observed,
                             coordinator,
                             unusedRelocationTarget());
             ZLinkSpotRetireControl.TargetEndpoint observedEndpoint =
@@ -502,7 +538,11 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             ZLinkBackendActorRef sourceRef = sourceActors.currentRef(sourceActor);
             sourceActors
                     .bindNativeSession(
-                            sourceActor, inertSpotNode(), sourceRef, SOURCE_RID, SESSION_RID, 7, 1L)
+                            sourceActor,
+                            bindingRecordSpotNode(sourceRef),
+                            sourceRef,
+                            SOURCE_RID,
+                            SESSION_RID)
                     .toCompletableFuture()
                     .join();
 
@@ -659,7 +699,16 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 RESTORE_GATE.set(new CompletableFuture<>());
             }
             CompletableFuture<ZLinkActorJoinRelocationPort.Submission> moved =
-                    sourceJoin.relocate(goal, TIMEOUT).toCompletableFuture();
+                    sourceJoin
+                            .relocate(goal, TIMEOUT)
+                            .thenCompose(
+                                    submission ->
+                                            scenario == Scenario.TARGET_AUTHORITY_MISSING
+                                                    ? CompletableFuture.completedFuture(submission)
+                                                    : submission
+                                                            .sourceCleanup()
+                                                            .thenApply(ignored -> submission))
+                            .toCompletableFuture();
             assertFalse(moved.isDone(), "the source turn boundary must own capture admission");
             activeTurn.complete(null);
             blocker.toCompletableFuture().get(1, TimeUnit.SECONDS);
@@ -697,6 +746,56 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         "source events: " + EVENTS);
                 return;
             }
+            if (scenario == Scenario.TARGET_AUTHORITY_MISSING) {
+                assertInstanceOf(
+                        ZLinkActorJoinCompletion.Accepted.class,
+                        COMPLETION.get().get(4, TimeUnit.SECONDS));
+                PUSH_SUBMITTED.get().get(4, TimeUnit.SECONDS);
+                PUSH_TERMINAL.get().complete(null);
+                targetSpots.awaitDrainBarrier().toCompletableFuture().get(4, TimeUnit.SECONDS);
+                try (var empty = Message.from(new byte[0])) {
+                    targetActors
+                            .joinLocalActor(
+                                    targetActors.localActor(ACTOR_ID).orElseThrow(),
+                                    targetRegistration.entrySpotId(),
+                                    empty)
+                            .toCompletableFuture()
+                            .get(4, TimeUnit.SECONDS);
+                }
+                assertTrue(
+                        targetHost
+                                .actorManager()
+                                .destroy(
+                                        targetHost
+                                                .actorDirectory()
+                                                .find(ACTOR_ID)
+                                                .toCompletableFuture()
+                                                .get(4, TimeUnit.SECONDS)
+                                                .orElseThrow())
+                                .toCompletableFuture()
+                                .get(4, TimeUnit.SECONDS));
+                assertTrue(EVENTS.contains("client.closed"));
+                assertInstanceOf(
+                        systems.zlink.framework.runtime.internal.locations.ZLinkAuthorityMissing
+                                .class,
+                        repository
+                                .read(ZLinkAuthorityKeyCodec.actor(ACTOR_ID), OPEN)
+                                .toCompletableFuture()
+                                .get(4, TimeUnit.SECONDS));
+                releaseSettlement.complete(null);
+                var handoff = moved.get(4, TimeUnit.SECONDS);
+                var cleanupFailure =
+                        assertThrows(
+                                java.util.concurrent.ExecutionException.class,
+                                () ->
+                                        handoff.sourceCleanup()
+                                                .toCompletableFuture()
+                                                .get(4, TimeUnit.SECONDS));
+                assertInstanceOf(ZLinkFrameworkException.class, cleanupFailure.getCause());
+                assertEquals(1, EVENTS.stream().filter("target.completion"::equals).count());
+                assertEquals(1, targetCommits.get());
+                return;
+            }
             if (scenario == Scenario.BINDING_ABSENT) {
                 //  Session-Actor binding §8.3: the Session owner reported that the binding
                 //  is already gone, so the Actor moves without a Session binding.
@@ -704,6 +803,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 assertEquals(TARGET_RID, submission.targetActor().nodeRid());
                 link.targetCompletion.get(4, TimeUnit.SECONDS);
                 assertEquals(1, EVENTS.stream().filter("command42"::equals).count());
+                assertBoundSessionOwnerSealed();
                 assertTrue(
                         ZLinkServiceRelocationEnvelopeCodec.decode(
                                         link.targetRequest.get().relocationPayload())
@@ -761,6 +861,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 return;
             }
             assertEquals(TARGET_RID, submission.targetActor().nodeRid());
+            assertBoundSessionOwnerSealed();
             if (scenario == Scenario.RELOCATE_BEFORE_SOURCE_LEAVE) {
                 verifyCommittedActorLeftSourceInventory(sourceHost, sourceActors);
                 verifyDuplicateLeftPreservesRefreshedFollow(sourceActors, sourceRef, link);
@@ -1264,12 +1365,40 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         };
     }
 
-    private static ZLinkInternalSpotNode inertSpotNode() {
+    // Session-Actor binding §4: the SpotNode binding record owns the Session owner identity taken
+    // from the descriptor at bind. It differs from the live descriptor on purpose, so command 42
+    // shows which of the two it carries.
+    private static final String BOUND_SESSION_OWNER_ID = "bound-session-owner";
+    private static final long BOUND_SESSION_OWNER_LEASE = 41;
+
+    private static void assertBoundSessionOwnerSealed() {
+        assertTrue(
+                EVENTS.contains(
+                        "command42.owner:"
+                                + BOUND_SESSION_OWNER_ID
+                                + "/"
+                                + BOUND_SESSION_OWNER_LEASE),
+                () -> "command 42 must carry the stored Session owner identity: " + EVENTS);
+    }
+
+    private static ZLinkInternalSpotNode bindingRecordSpotNode(ZLinkBackendActorRef actor) {
+        var record =
+                new ZLinkInternalSpotNode.BoundSessionRoute(
+                        SOURCE_RID,
+                        1L,
+                        BOUND_SESSION_OWNER_ID,
+                        BOUND_SESSION_OWNER_LEASE,
+                        SESSION_RID,
+                        7);
         return (ZLinkInternalSpotNode)
                 Proxy.newProxyInstance(
                         ZLinkInternalSpotNode.class.getClassLoader(),
                         new Class<?>[] {ZLinkInternalSpotNode.class},
-                        (proxy, method, arguments) -> defaultValue(method.getReturnType()));
+                        (proxy, method, arguments) ->
+                                method.getName().equals("boundSessionRoute")
+                                                && actor.equals(arguments[0])
+                                        ? Optional.of(record)
+                                        : defaultValue(method.getReturnType()));
     }
 
     private static void assertBefore(String first, String second) {
@@ -1308,6 +1437,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
     private enum Scenario {
         NORMAL(LeaveMode.DELIVER),
+        TARGET_AUTHORITY_MISSING(LeaveMode.DELIVER),
         NEXT_DEFERRED_JOIN(LeaveMode.DELIVER),
         LEAVE_FAILED_FUTURE(LeaveMode.FAILED_FUTURE),
         RELOCATE_BEFORE_SOURCE_LEAVE(LeaveMode.FAILED_FUTURE),
@@ -1593,6 +1723,12 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                             assertEquals(
                                                     target.status().lifecycleGeneration(),
                                                     seal.targetNodeGeneration());
+                                            EVENTS.add(
+                                                    "command42.owner:"
+                                                            + seal.session().ownerId()
+                                                            + "/"
+                                                            + seal.session()
+                                                                    .ownerLeaseGeneration());
                                             EVENTS.add("command42");
                                             yield CompletableFuture.completedFuture(
                                                     codec.encodeSessionRelocationSealed(
@@ -1815,12 +1951,10 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             return actorRuntime
                     .bindNativeSession(
                             prepared.actor(),
-                            pushSpotNode(),
+                            pushSpotNode(session),
                             actorRoute.actor(),
                             session.nodeRid(),
-                            session.sessionRid(),
-                            session.bindingGeneration(),
-                            session.nodeGeneration())
+                            session.sessionRid())
                     .thenApply(ignored -> null);
         }
 
@@ -1848,14 +1982,28 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                             request.targetSpotId(), prepared.actorId()));
         }
 
-        private static ZLinkInternalSpotNode pushSpotNode() {
+        private static ZLinkInternalSpotNode pushSpotNode(
+                ZLinkServiceM6BWireCodec.SessionOwnerFence session) {
+            var binding =
+                    new ZLinkInternalSpotNode.BoundSessionRoute(
+                            session.nodeRid(),
+                            session.nodeGeneration(),
+                            session.ownerId(),
+                            session.ownerLeaseGeneration(),
+                            session.sessionRid(),
+                            session.bindingGeneration());
             return (ZLinkInternalSpotNode)
                     Proxy.newProxyInstance(
                             ZLinkInternalSpotNode.class.getClassLoader(),
                             new Class<?>[] {ZLinkInternalSpotNode.class},
                             (proxy, method, arguments) ->
                                     switch (method.getName()) {
+                                        case "boundSessionRoute" -> Optional.of(binding);
                                         case "hasRemoteActorBoundSessionRoute" -> true;
+                                        case "closeActorBoundSessionAsync" -> {
+                                            EVENTS.add("client.closed");
+                                            yield CompletableFuture.completedFuture(null);
+                                        }
                                         case "sendRemoteActorBoundSession" -> {
                                             @SuppressWarnings("unchecked")
                                             List<Message> frames = (List<Message>) arguments[1];

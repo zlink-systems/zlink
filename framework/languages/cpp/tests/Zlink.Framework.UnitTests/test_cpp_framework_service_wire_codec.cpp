@@ -5,6 +5,7 @@
 #include "runtime/protocol/actor_join_recovery_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/request_deadline.hpp"
+#include "runtime/messaging/request_failure_mapper.hpp"
 
 #include <service_wire_pilot_codec.hpp>
 #include <service_wire_codec.hpp>
@@ -368,10 +369,7 @@ void verify_generated_adoption_goldens ()
         for (const auto &item : fixture.at ("canonical")) {
             const auto bytes = from_hex (item.at ("hex").get<std::string> ());
             verify_generated_service_roundtrip (bytes);
-            if (item.value ("name", "") == "sessionRelocationBindingAbsent")
-                assert (runtime_service_rejects (bytes));
-            else
-                verify_runtime_service_roundtrip (bytes);
+            verify_runtime_service_roundtrip (bytes);
         }
         if (fixture.contains ("malformed")) {
             for (const auto &item : fixture.at ("malformed")) {
@@ -660,6 +658,19 @@ void verify_session_owner_identity_contract ()
     assert ((identifies (accepted) == std::pair{true, true}));
     for (const auto &rejected : fixture.at ("rejected"))
         assert ((identifies (rejected) == std::pair{false, false}));
+
+    // Without the Session owner descriptor the operation is Unavailable; a rejected request
+    // carries the Unavailable representative on the wire.
+    const auto &unavailable = fixture.at ("descriptorUnavailable");
+    assert (text (unavailable.at ("errorKind")) == "Unavailable");
+    const auto terminal = static_cast<std::uint32_t> (number (unavailable.at ("terminalResult")));
+    const auto code = static_cast<std::uint32_t> (number (unavailable.at ("failureCode")));
+    const messaging::request_failure_mapper_t mapper;
+    const auto wire =
+      mapper.target_failure_reply (zlink::framework::framework_error_kind_t::unavailable);
+    assert (wire && wire->terminal_result == terminal && wire->failure_code == code);
+    assert (mapper.reply_header_exception (terminal, code, "bind").kind ()
+            == zlink::framework::framework_error_kind_t::unavailable);
 }
 
 int main (int argc, char **argv)

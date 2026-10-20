@@ -11,6 +11,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CPP_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 REPO_ROOT="$(cd "${CPP_ROOT}/../../.." && pwd)"
 
+# Completion ownership is a lifecycle parity contract and does not need the wire hosts.
+if [[ "${ZLINK_CPP_CROSS_LANGUAGE_STAGE:-all}" == "join-completion-owner" ]]; then
+  exec bash "${SCRIPT_DIR}/run_join_completion_owner_contract.sh"
+fi
+
 BUILD_DIR="${ZLINK_CPP_BUILD_DIR:-${CPP_ROOT}/build-redis-vcpkg}"
 IS_WINDOWS_NATIVE=0
 case "$(uname -s 2>/dev/null || true)" in
@@ -1770,6 +1775,7 @@ assert_remote_actor_create() {
     grep -F "user-spot-source-actor-created" "${source_events}" >&2
     exit 1
   fi
+  wait_for_line "${source_events}"     "user-spot-join-request-reply|accepted=true|actor=cross-lang-remote-create-actor|spot=cross-lang-user-spot" 90
   grep -F "user-spot-source-actor-created" "${source_events}"
 }
 

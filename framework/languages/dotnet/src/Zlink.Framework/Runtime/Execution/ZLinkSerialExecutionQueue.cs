@@ -17,7 +17,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private readonly TaskCompletionSource _drained = new(
         TaskCreationOptions.RunContinuationsAsynchronously
     );
-    private TaskCompletionSource _applicationDrained = CompletedSignal();
+    private TaskCompletionSource? _applicationDrained;
 
     private readonly SemaphoreSlim? _drainGate;
     private ZLinkSerialExecutionQueue? _sharedOwner;
@@ -31,7 +31,6 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     private readonly CancellationToken _executionToken;
     private readonly ZLinkExecutionLanePolicy _policy;
     private readonly Func<ZLinkSerialWorkItem, bool>? _applicationStartAllowed;
-    private readonly Func<ZLinkSerialWorkItem, bool> _applicationRunnable;
 
     // Instance method groups convert to a fresh delegate at every use site;
     // these run once per drained work item, so cache them.
@@ -104,7 +103,13 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         get
         {
             lock (_admissionGate)
-                return _applicationDrained.Task;
+                return _applicationPendingCount == 0
+                    ? Task.CompletedTask
+                    : (
+                        _applicationDrained ??= new TaskCompletionSource(
+                            TaskCreationOptions.RunContinuationsAsynchronously
+                        )
+                    ).Task;
         }
     }
 
@@ -141,7 +146,6 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         _importSharedLifecycle = ImportSharedLifecycle;
         _dispatchTerminal = DispatchTerminalAsync;
         _applicationStartAllowed = applicationStartAllowed;
-        _applicationRunnable = IsApplicationRunnable;
         _postResume = PostResume;
         _tryPostCallback = TryPostCallback;
         _reportHandlerException = ReportHandlerException;
@@ -354,6 +358,19 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         bool transferred,
         CancellationToken cancellationToken,
         Func<bool>? ready = null
+    ) =>
+        ValueTask.FromResult(
+            Post(callback, payloadBytes, metadataBytes, transferred, cancellationToken, ready)
+        );
+
+    // Admission is synchronous: the item is accepted, or this throws the admission failure.
+    internal ZLinkSerialWorkItem Post(
+        Func<CancellationToken, ValueTask> callback,
+        long payloadBytes,
+        long metadataBytes,
+        bool transferred,
+        CancellationToken cancellationToken,
+        Func<bool>? ready = null
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -368,7 +385,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         );
         if (admission != ZLinkSerialPostAdmission.Accepted)
             throw CreateAdmissionException(AdmissionOperationName, admission);
-        return ValueTask.FromResult(item);
+        return item;
     }
 
     public bool TryPost(
@@ -1078,16 +1095,15 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
     {
         if (!item.ReservationHeld)
         {
-            item.BindTerminalRelease(() => CompletePendingItem(item));
+            item.BindTerminalRelease(this);
             PublishWorkUnderLock(destination, item);
             return;
         }
         // This queue owns ordering only. The queued callback retains the
         // actual Core receive owner until its terminal path disposes it.
-        var applicationDrained = NewApplicationDrainedSignalUnderLock(lane);
-        item.BindTerminalRelease(() => CompletePendingItem(item));
+        item.BindTerminalRelease(this);
         PublishWorkUnderLock(destination, item);
-        CommitReservationUnderLock(lane, applicationDrained);
+        CommitReservationUnderLock(lane);
     }
 
     private void PublishWorkUnderLock(ZLinkSerialWorkQueue destination, ZLinkSerialWorkItem item)
@@ -1143,22 +1159,14 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         scheduleDrain = _relocation is null;
     }
 
-    private void CommitReservationUnderLock(
-        ZLinkSerialWorkLane lane,
-        TaskCompletionSource? applicationDrained = null
-    )
+    private void CommitReservationUnderLock(ZLinkSerialWorkLane lane)
     {
         ref var pendingCount = ref PendingCount(lane);
-        if (applicationDrained is not null)
-            _applicationDrained = applicationDrained;
+        if (lane == ZLinkSerialWorkLane.Application && pendingCount == 0)
+            _applicationDrained = null;
         pendingCount++;
         _pendingCount++;
     }
-
-    private TaskCompletionSource? NewApplicationDrainedSignalUnderLock(ZLinkSerialWorkLane lane) =>
-        lane == ZLinkSerialWorkLane.Application && _applicationPendingCount == 0
-            ? new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
-            : null;
 
     private void ReleaseReservedSlotUnderLock(ZLinkSerialWorkLane lane)
     {
@@ -1166,7 +1174,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         pendingCount--;
         _pendingCount--;
         if (lane == ZLinkSerialWorkLane.Application && pendingCount == 0)
-            _applicationDrained.TrySetResult();
+            _applicationDrained?.TrySetResult();
     }
 
     private ref int PendingCount(ZLinkSerialWorkLane lane)
@@ -1174,13 +1182,6 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         if (lane == ZLinkSerialWorkLane.Application)
             return ref _applicationPendingCount;
         return ref _lifecyclePendingCount;
-    }
-
-    private static TaskCompletionSource CompletedSignal()
-    {
-        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        signal.TrySetResult();
-        return signal;
     }
 
     public async ValueTask RunAsync(
@@ -1281,11 +1282,14 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             return;
         }
         if (!_taskRunner.TryRunDetached("serial-queue-drain", drain))
-            _ = Task.Run(
-                async () => await drain(CancellationToken.None).ConfigureAwait(false),
-                CancellationToken.None
-            );
+            PublishFallbackDrain(drain);
     }
+
+    private static void PublishFallbackDrain(Func<CancellationToken, ValueTask> drain) =>
+        _ = Task.Run(
+            async () => await drain(CancellationToken.None).ConfigureAwait(false),
+            CancellationToken.None
+        );
 
     internal void SchedulePendingWork()
     {
@@ -1713,22 +1717,26 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             && (_activeLifecycle?.ReadyContinuation is not null || HasRunnableLifecycle())
         )
             return TryDequeueInfrastructureUnderLock(out item);
-        if (_applicationQueue.Head is { } head && !IsApplicationRunnable(head))
+        var application = SelectApplicationUnderLock(out var previous, out var headRunnable);
+        if (!headRunnable && _applicationQueue.Head is not null)
         {
             if (TryDequeueInfrastructureUnderLock(out item))
                 return true;
-            return _applicationQueue.TryDequeueMatching(_applicationRunnable, out item);
+            if (application is null)
+                return false;
+            item = application;
+            _applicationQueue.Remove(item, previous);
+            return true;
         }
         var lifecycleReady =
             _activeLifecycle?.ReadyContinuation is not null || HasRunnableLifecycle();
-        var applicationReady = HasRunnableApplicationUnderLock();
-        if (!lifecycleReady && !applicationReady)
+        if (!lifecycleReady && application is null)
         {
             item = null!;
             return false;
         }
 
-        var chooseLifecycle = lifecycleReady && (!applicationReady || !_lifecycleYieldDebt);
+        var chooseLifecycle = lifecycleReady && (application is null || !_lifecycleYieldDebt);
         if (chooseLifecycle)
         {
             if (_activeLifecycle?.ReadyContinuation is { } continuation)
@@ -1742,36 +1750,65 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
             return true;
         }
 
-        _applicationQueue.TryDequeue(out item!);
+        item = application!;
+        _applicationQueue.Remove(item, previous);
         _consecutiveLifecycleTurns = 0;
         _lifecycleYieldDebt = false;
         return true;
     }
 
-    private bool HasRunnableLifecycle() =>
-        _relocation?.PreparationOwner is { } owner
-            ? _lifecycleQueue.Any(item => ReferenceEquals(item.LifecycleOwner, owner))
-            : _activeLifecycle is null && _lifecycleQueue.Count != 0;
-
-    private bool HasRunnableApplicationUnderLock()
+    private bool HasRunnableLifecycle()
     {
-        return _applicationQueue.Head is { } head
-            && (IsApplicationRunnable(head) || _applicationQueue.Any(_applicationRunnable));
+        if (_relocation?.PreparationOwner is not { } owner)
+            return _activeLifecycle is null && _lifecycleQueue.Count != 0;
+        foreach (var item in _lifecycleQueue)
+            if (ReferenceEquals(item.LifecycleOwner, owner))
+                return true;
+        return false;
     }
 
-    private bool IsApplicationRunnable(ZLinkSerialWorkItem item) =>
-        (_sharedOwner is null || _readyItem is null || _active is null || !item.ReservationHeld)
-        && (
-            (!item.ReservationHeld && item.Mailbox is null)
-            || _applicationQueue.Head?.IsReady != false
-        )
-        && item.IsReady
-        && (
-            _activeLifecycle is not { } owner
-            || _applicationStartAllowed?.Invoke(owner) != false
-            || !item.IsAccepted
-        )
-        && _applicationStartAllowed?.Invoke(item) != false;
+    private bool HasRunnableApplicationUnderLock() =>
+        SelectApplicationUnderLock(out _, out _) is not null;
+
+    private ZLinkSerialWorkItem? SelectApplicationUnderLock(
+        out ZLinkSerialWorkItem? previous,
+        out bool headRunnable
+    )
+    {
+        previous = null;
+        headRunnable = false;
+        if (_applicationQueue.Head is not { } head)
+            return null;
+
+        var applicationAvailable = _sharedOwner is null || _readyItem is null || _active is null;
+        // Read the head only when a candidate needs it, preserving short-circuit guards.
+        // Reuse that value so a later publication cannot pass a rejected head.
+        bool? headReady = null;
+        foreach (var candidate in _applicationQueue)
+        {
+            var isHead = ReferenceEquals(candidate, head);
+            if (
+                (applicationAvailable || !candidate.ReservationHeld)
+                && (
+                    (!candidate.ReservationHeld && candidate.Mailbox is null)
+                    || (headReady ??= head.IsReady)
+                )
+                && (isHead ? (headReady ??= head.IsReady) : candidate.IsReady)
+                && (
+                    _activeLifecycle is not { } owner
+                    || _applicationStartAllowed?.Invoke(owner) != false
+                    || !candidate.IsAccepted
+                )
+                && _applicationStartAllowed?.Invoke(candidate) != false
+            )
+            {
+                headRunnable = isHead;
+                return candidate;
+            }
+            previous = candidate;
+        }
+        return null;
+    }
 
     internal bool HasPendingAcceptedState(Func<object, bool> predicate)
     {
@@ -1945,7 +1982,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
         }
     }
 
-    private void CompletePendingItem(ZLinkSerialWorkItem item)
+    internal void CompletePendingItem(ZLinkSerialWorkItem item)
     {
         if (_sharedOwner is not null)
         {
@@ -2043,7 +2080,7 @@ internal sealed class ZLinkSerialExecutionQueue : IAsyncDisposable
                 }
                 else
                 {
-                    item.BindTerminalRelease(() => CompletePendingItem(item));
+                    item.BindTerminalRelease(this);
                     lifecycleOwner.ReadyContinuation = item;
                 }
             }

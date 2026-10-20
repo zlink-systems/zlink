@@ -7,6 +7,7 @@ import systems.zlink.framework.ZLinkMessageSerializer;
 import systems.zlink.framework.actors.ZLinkActorManager;
 import systems.zlink.framework.errors.ZLinkConfigurationException;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
 import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
@@ -20,6 +21,7 @@ import systems.zlink.framework.runtime.internal.backend.ZLinkBackendAdapterProvi
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalSpotNode;
 import systems.zlink.framework.runtime.internal.configuration.ZLinkCodecRegistration;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
@@ -114,7 +116,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
     private final Map<String, ZLinkInternalSpotNode> streamSessionRelaySpotNodes = new HashMap<>();
     private final Map<String, SessionState> sessions = new HashMap<>();
     private final Map<SealRecordKey, AbsentSealRecord> absentSealRecords = new HashMap<>();
-    private final ZLinkStateLane stateLane = new ZLinkStateLane();
+    private final ZLinkStateLane stateLane;
     private final ScheduledExecutorService livenessExecutor;
     private final LongSupplier nanoTime;
     private final ScheduledExecutorService replyRetryExecutor;
@@ -270,9 +272,50 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                     admission,
             LongSupplier nanoTime,
             Supplier<ScheduledExecutorService> livenessExecutorFactory) {
+        this(
+                backendFactory,
+                adapterOptions,
+                registration,
+                spotNodes,
+                meshNodes,
+                serializer,
+                actors,
+                handlerFactory,
+                spots,
+                eventDispatcher,
+                context,
+                ownsContext,
+                admission,
+                nanoTime,
+                livenessExecutorFactory,
+                new ZLinkStateLane());
+    }
+
+    ZLinkStreamRuntime(
+            ZLinkBackendAdapterProvider backendFactory,
+            ZLinkBackendAdapterOptions adapterOptions,
+            ZLinkFrameworkRegistration registration,
+            Map<String, ZLinkInternalSpotNode> spotNodes,
+            Map<String, ZLinkInternalMeshNode> meshNodes,
+            ZLinkMessageSerializer serializer,
+            ZLinkActorRuntime actors,
+            ZLinkHandlerActivator handlerFactory,
+            ZLinkSpotRuntime spots,
+            ZLinkRuntimeEventDispatcher eventDispatcher,
+            ZLinkBackendContext context,
+            boolean ownsContext,
+            BiFunction<
+                            ZLinkBackendObject,
+                            ZLinkBackendAdmissionKey,
+                            BiFunction<Supplier<Boolean>, Runnable, CompletionStage<Void>>>
+                    admission,
+            LongSupplier nanoTime,
+            Supplier<ScheduledExecutorService> livenessExecutorFactory,
+            ZLinkStateLane stateLane) {
         if (registration.streamNodes().isEmpty()) {
             throw new ZLinkConfigurationException("at least one stream node is required");
         }
+        this.stateLane = Objects.requireNonNull(stateLane, "stateLane");
         this.registration = Objects.requireNonNull(registration, "registration");
         this.sessionRelocationSealTimeout =
                 registration.locations().options().sessionRelocationSealTimeout();
@@ -497,8 +540,57 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
      */
     public CompletionStage<byte[]> handleSessionRelocationSeal(
             RoutingId transportSource, byte[] command42) {
+        var traceEnabled = flow.begin(ZLinkMessageFlowOutcome.DROPPED) != null;
         var codec = new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec();
-        var command = codec.decodeSessionRelocationSeal(command42);
+        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                        .SessionRelocationSeal
+                command;
+        try {
+            command = codec.decodeSessionRelocationSeal(command42);
+        } catch (RuntimeException failure) {
+            flow.reportFailure(
+                    ZLinkDispatchErrorSurface.STREAM_SESSION,
+                    ZLinkDispatchMessageKind.CONTROL,
+                    ZLinkDispatchErrorReason.INVALID_FRAME,
+                    ZLinkDispatchErrorAction.DROP,
+                    null,
+                    failure);
+            throw failure;
+        }
+        var received = receiveSessionRelocationSeal(transportSource, command, codec);
+        if (!traceEnabled) return received;
+        return received.whenComplete(
+                (reply, failure) -> {
+                    if (failure != null || reply == null) {
+                        traceSessionRelocationSealDrop(
+                                transportSource, command.actor().actor().actorId(), failure);
+                    }
+                });
+    }
+
+    private void traceSessionRelocationSealDrop(
+            RoutingId transportSource, String actorId, Throwable failure) {
+        Throwable cause =
+                failure instanceof java.util.concurrent.CompletionException
+                        ? failure.getCause()
+                        : failure;
+        flow.traceBindingControlDrop(
+                transportSource,
+                actorId,
+                "sessionRelocationSeal",
+                cause instanceof ZLinkFrameworkException error
+                                && error.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE
+                        ? ZLinkDispatchErrorReason.LOCATION_UNAVAILABLE
+                        : ZLinkDispatchErrorReason.STALE_TARGET,
+                cause);
+    }
+
+    private CompletionStage<byte[]> receiveSessionRelocationSeal(
+            RoutingId transportSource,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .SessionRelocationSeal
+                    command,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec codec) {
         RoutingId expectedSource =
                 command.senderRole()
                                 == systems.zlink.framework.runtime.internal.service
@@ -512,17 +604,23 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         }
         ZLinkInternalMeshNode receivingNode = meshNodes.get(resolveActorDispatchMeshName());
         var session = command.session();
-        if (receivingNode == null
-                || receivingNode
-                        .localSessionOwner()
-                        .filter(
-                                owner ->
-                                        owner.identifies(
-                                                session.nodeRid(),
-                                                session.nodeGeneration(),
-                                                session.ownerId(),
-                                                session.ownerLeaseGeneration()))
-                        .isEmpty()) {
+        // Session-Actor binding §4: without this host's own descriptor the seal is Unavailable.
+        if (receivingNode == null || receivingNode.localSessionOwner().isEmpty()) {
+            return CompletableFuture.failedFuture(
+                    new ZLinkFrameworkException(
+                            ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "Session owner has no live MeshNode descriptor"));
+        }
+        if (receivingNode
+                .localSessionOwner()
+                .filter(
+                        owner ->
+                                owner.identifies(
+                                        session.nodeRid(),
+                                        session.nodeGeneration(),
+                                        session.ownerId(),
+                                        session.ownerLeaseGeneration()))
+                .isEmpty()) {
             return CompletableFuture.failedFuture(
                     new ZLinkConfigurationException(
                             "command 42 names a different Session owner identity"));
@@ -544,16 +642,8 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                         node.requestPeerReconcile(
                                 command.targetNodeRid(), command.targetNodeGeneration());
                     }
-                    CompletionStage<Void> recorded =
-                            reply.sealed()
-                                    ? CompletableFuture.completedFuture(null)
-                                    : stateLane.runAsync(
-                                            () -> {
-                                                recordBindingAbsent(key, command);
-                                                return null;
-                                            });
-                    return recorded.thenApply(
-                            ignored -> codec.encodeSessionRelocationSealed(reply));
+                    return CompletableFuture.completedFuture(
+                            codec.encodeSessionRelocationSealed(reply));
                 });
     }
 
@@ -563,17 +653,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         expireAbsentSealRecords();
         AbsentSealRecord absent = absentSealRecords.get(key);
         if (absent != null) {
-            if (!absent.command().equals(command)) {
-                return CompletableFuture.failedFuture(
-                        new ZLinkConfigurationException(
-                                ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                                "Session relocation seal changed fields of the recorded"
-                                        + " command 42: "
-                                        + key.actorId()));
-            }
-            return CompletableFuture.completedFuture(
-                    ZLinkServiceM6BWireCodec.SessionRelocationSealed.replyTo(
-                            command, ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT));
+            return CompletableFuture.completedFuture(recordBindingAbsent(key, command));
         }
         //  The current binding is the one with the largest node-wide binding generation;
         //  the command's SessionRid does not narrow the search (§8.3 step 2).
@@ -591,11 +671,19 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             }
         }
         if (current == null) {
-            return CompletableFuture.completedFuture(
-                    ZLinkServiceM6BWireCodec.SessionRelocationSealed.replyTo(
-                            command, ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT));
+            return CompletableFuture.completedFuture(recordBindingAbsent(key, command));
         }
-        return current.actorRuntime().applyRelocationSealCommand(command);
+        return current.actorRuntime()
+                .applyRelocationSealCommand(command)
+                .thenCompose(
+                        reply ->
+                                reply == null || reply.sealed()
+                                        ? CompletableFuture.completedFuture(reply)
+                                        : stateLane.isOnLane()
+                                                ? CompletableFuture.completedFuture(
+                                                        recordBindingAbsent(key, command))
+                                                : stateLane.runAsync(
+                                                        () -> recordBindingAbsent(key, command)));
     }
 
     private void expireAbsentSealRecords() {
@@ -603,12 +691,24 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         absentSealRecords.values().removeIf(record -> now - record.expiresAtNanos() >= 0);
     }
 
-    private void recordBindingAbsent(
+    private ZLinkServiceM6BWireCodec.SessionRelocationSealed recordBindingAbsent(
             SealRecordKey key, ZLinkServiceM6BWireCodec.SessionRelocationSeal command) {
-        absentSealRecords.putIfAbsent(
-                key,
-                new AbsentSealRecord(
-                        command, nanoTime.getAsLong() + sessionRelocationSealTimeout.toNanos()));
+        AbsentSealRecord recorded = absentSealRecords.get(key);
+        if (recorded != null && !recorded.command().equals(command)) {
+            throw new ZLinkConfigurationException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "Session relocation seal changed fields of the recorded command 42: "
+                            + key.actorId());
+        }
+        if (recorded == null) {
+            absentSealRecords.put(
+                    key,
+                    new AbsentSealRecord(
+                            command,
+                            nanoTime.getAsLong() + sessionRelocationSealTimeout.toNanos()));
+        }
+        return ZLinkServiceM6BWireCodec.SessionRelocationSealed.replyTo(
+                command, ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT);
     }
 
     private record SealRecordKey(
@@ -781,6 +881,28 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
             return;
         }
         SessionState state = findSessionForReplacement(retired);
+        if (state != null) {
+            var owner =
+                    state.ownerNode == null
+                            ? null
+                            : state.ownerNode.localSessionOwner().orElse(null);
+            if (owner == null
+                    || !owner.identifies(
+                            retired.sessionOwnerNodeRid(),
+                            retired.sessionOwnerNodeGeneration(),
+                            retired.sessionOwnerId(),
+                            retired.sessionOwnerLeaseGeneration())) {
+                flow.traceBindingControlDrop(
+                        transportSource,
+                        actor.actorId(),
+                        "boundSessionReplaced",
+                        owner == null
+                                ? ZLinkDispatchErrorReason.LOCATION_UNAVAILABLE
+                                : ZLinkDispatchErrorReason.STALE_TARGET,
+                        null);
+                return;
+            }
+        }
         if (state == null
                 || state.actorRuntime() == null
                 || state.actorRuntime()
@@ -859,11 +981,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         return inStateLane(
                 () ->
                         sessions.values().stream()
-                                .filter(
-                                        state ->
-                                                state.matchesOwner(retired)
-                                                        && state.routingId()
-                                                                .equals(retired.sessionRid()))
+                                .filter(state -> state.routingId().equals(retired.sessionRid()))
                                 .findFirst()
                                 .orElse(null));
     }
@@ -1383,9 +1501,14 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                             SessionState current = sessions.putIfAbsent(key, state);
                             if (current == null) {
                                 ZLinkRuntimeMetrics.add(
-                                        "zlink.stream.connections.active", 1, Map.of());
+                                        ZLinkRuntimeMetrics.Metric.STREAM_CONNECTIONS_ACTIVE
+                                                .metricName(),
+                                        1,
+                                        state.metricTags);
                                 ZLinkRuntimeMetrics.increment(
-                                        "zlink.stream.connections.opened", Map.of());
+                                        ZLinkRuntimeMetrics.Metric.STREAM_CONNECTIONS_OPENED
+                                                .metricName(),
+                                        state.metricTags);
                                 dispatchConnected(state);
                             }
                             return current;
@@ -1405,9 +1528,17 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         if (!state.closeMetricRecorded().compareAndSet(false, true)) {
             return;
         }
-        ZLinkRuntimeMetrics.add("zlink.stream.connections.active", -1, Map.of());
+        ZLinkRuntimeMetrics.add(
+                ZLinkRuntimeMetrics.Metric.STREAM_CONNECTIONS_ACTIVE.metricName(),
+                -1,
+                state.metricTags);
         ZLinkRuntimeMetrics.increment(
-                "zlink.stream.connections.closed", Map.of("close_reason", reason));
+                ZLinkRuntimeMetrics.Metric.STREAM_CONNECTIONS_CLOSED.metricName(),
+                Map.of(
+                        ZLinkRuntimeMetrics.Tag.TRANSPORT.wire(),
+                        state.metricTags.get(ZLinkRuntimeMetrics.Tag.TRANSPORT.wire()),
+                        ZLinkRuntimeMetrics.Tag.CLOSE_REASON.wire(),
+                        reason));
     }
 
     private SessionState createSessionState(
@@ -1843,6 +1974,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
         private final ZLinkSessionActorsRuntime actorRuntime;
         private final Set<ReplacementIdentity> replacements = ConcurrentHashMap.newKeySet();
         private final AtomicBoolean closeScheduled = new AtomicBoolean();
+        private final Map<String, String> metricTags;
         private final AtomicBoolean closeMetricRecorded = new AtomicBoolean();
         private long lastApplicationNanos;
         private long lastInboundNanos;
@@ -1860,6 +1992,7 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
                 long connectedNanos,
                 long createdNanos) {
             this.streamNode = streamNode;
+            this.metricTags = streamNode.metricTags();
             lastHeartbeatPingNanos = connectedNanos;
             this.session = session;
             this.serials = serials;

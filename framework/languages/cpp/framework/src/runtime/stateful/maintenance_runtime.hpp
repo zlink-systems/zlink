@@ -30,10 +30,12 @@
 #include <tuple>
 #include <utility>
 #include <vector>
+#include <variant>
 
 namespace zlink::framework::detail
 {
 class delay_owner_t;
+class monitoring_runtime_state_t;
 }
 
 namespace zlink::framework::runtime::stateful
@@ -353,10 +355,13 @@ struct eligible_relocation_unit_t
         std::chrono::steady_clock::time_point restore_deadline{};
         // Core selected generation and admission readiness, observed by MeshNode.
         std::function<std::pair<std::uint64_t, bool> ()> target_route;
-        std::optional<detail::factory_relocation_kind_t> metric_policy;
         // This is valid only after an exact target failure and before a
         // Cutover enqueue.  It fences source admission restoration.
         std::function<bool ()> abort_target_before_cutover;
+        std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring;
+        std::string mesh_name;
+        framework::detail::factory_relocation_kind_t policy =
+          framework::detail::factory_relocation_kind_t::unspecified;
     };
     std::optional<canonical_wire_context_t> canonical_wire;
 };
@@ -454,6 +459,10 @@ struct relocation_result_t
     source_relocation_settlement_t settlement;
 };
 
+// Readiness transfers Join completion; the continuation owns source settlement only.
+using relocation_source_cleanup_t = std::function<task_t<relocation_result_t> ()>;
+using relocation_preparation_t = std::variant<relocation_result_t, relocation_source_cleanup_t>;
+
 struct aggregate_relocation_result_t
 {
     relocation_terminal_t terminal = relocation_terminal_t::blocked;
@@ -498,6 +507,15 @@ class maintenance_runtime_t
        * join reply; 0 = not advertised, this unit's local budget applies
        * unchanged. */
       std::uint64_t advertised_receive_chunk_limit_bytes = 0);
+    task_t<relocation_preparation_t> relocate_to_ready (
+      const object_ref_t &source,
+      std::string target_node_id,
+      location_owner_token_t target_owner,
+      std::size_t encoded_upper_bound,
+      inventory_digest_t inventory_digest,
+      const std::optional<eligible_relocation_unit_t::canonical_wire_context_t> &canonical_wire,
+      std::stop_token cancellation,
+      std::uint64_t advertised_receive_chunk_limit_bytes);
     relocation_result_t recover (object_kind_t kind,
                                  const std::string &key,
                                  stateful_object_runtime_t &target,
@@ -581,25 +599,6 @@ class maintenance_runtime_t
     compute_inventory_digest (const std::vector<object_ref_t> &participants);
 
   private:
-    task_t<relocation_result_t> relocate_unobserved (
-      const object_ref_t &source,
-      std::string target_node_id,
-      location_owner_token_t target_owner,
-      std::size_t encoded_upper_bound,
-      inventory_digest_t inventory_digest,
-      const std::optional<eligible_relocation_unit_t::canonical_wire_context_t> &canonical_wire,
-      std::stop_token cancellation,
-      std::uint64_t advertised_receive_chunk_limit_bytes);
-    task_t<aggregate_relocation_result_t> relocate_aggregate_unobserved (
-      const std::vector<object_ref_t> &sources,
-      std::string target_node_id,
-      location_owner_token_t target_owner,
-      std::size_t encoded_upper_bound,
-      inventory_digest_t inventory_digest,
-      const std::optional<eligible_relocation_unit_t::canonical_wire_context_t> &canonical_wire =
-        std::nullopt,
-      std::stop_token cancellation = {},
-      std::uint64_t advertised_receive_chunk_limit_bytes = 0);
     std::shared_ptr<runtime::relocation_metrics_t> _metrics;
 
     struct relocation_terminal_state_t;
@@ -622,8 +621,10 @@ class maintenance_runtime_t
     };
 
     permit_t try_acquire ();
+    task_t<relocation_preparation_t>
+    relocate_prepare_ready (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<relocation_result_t>
-    relocate_terminal (std::shared_ptr<relocation_terminal_state_t> state);
+    relocate_source_cleanup (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_seal (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> capture_relocation_session_bindings (
       eligible_relocation_unit_t::canonical_wire_context_t &context);

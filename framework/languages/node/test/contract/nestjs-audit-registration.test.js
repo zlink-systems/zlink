@@ -9,6 +9,7 @@ const framework = require('../../packages/framework/dist');
 const integration = require('../../packages/framework/dist/internal');
 const nestjs = require('../../packages/nestjs/dist');
 const connector = require('../../packages/stream-connector/dist');
+const { createBrowserSafeStreamApp } = require('./helpers/browser-safe-stream-app');
 
 test('Nest fresh Spot creation preserves constructor failure', async () => {
   const failure = new Error('fresh Spot constructor failed');
@@ -136,10 +137,14 @@ module.exports = { PingHandler };
     ],
     providers: [SessionFactory]
   })(Application);
-  const app = await NestFactory.createApplicationContext(Application, {
-    logger: false,
-    abortOnError: false
-  });
+  const app = await createBrowserSafeStreamApp(
+    () =>
+      NestFactory.createApplicationContext(Application, {
+        logger: false,
+        abortOnError: false
+      }),
+    'nest-audit-stream'
+  );
   const endpoint = app
     .get(nestjs.ZLINK_FRAMEWORK_RUNTIME)
     .getListenerStatus('stream', 'nest-audit-stream').endpoint;

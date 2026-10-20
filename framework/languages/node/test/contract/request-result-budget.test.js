@@ -1,7 +1,17 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const { createHook } = require('node:async_hooks');
-const { createZLinkRequest } = require('../../packages/framework/dist/runtime/messaging/request-result');
+const {
+  createZLinkRequest: createMappedRequest,
+  prepareZLinkRequestReply,
+  identityRequestReply
+} = require('../../packages/framework/dist/runtime/messaging/request-result');
+
+// The source owns its result mapping; the public helper owns admission state.
+function createZLinkRequest(start, deliverReply) {
+  return createMappedRequest((admitted) =>
+    prepareZLinkRequestReply(start(admitted), identityRequestReply), deliverReply);
+}
 
 function deferred() {
   let resolve;
@@ -86,23 +96,21 @@ test('one request admission failure does not alter a completed or waiting siblin
   assert.equal(await first, 'first reply');
 });
 
-test('admission notification and reply success reuse one callback', async () => {
+test('admission notification and reply mapping use the same admission owner', async () => {
   const pending = deferred();
+  const failure = new Error('late decode failure');
   let markAdmitted;
-  let completeReply;
-  const then = pending.promise.then;
-  pending.promise.then = function (success, failure) {
-    completeReply = success;
-    return then.call(this, success, failure);
-  };
-  const request = createZLinkRequest((admitted) => {
+  const request = createMappedRequest((admitted) => {
     markAdmitted = admitted;
-    return pending.promise;
+    return prepareZLinkRequestReply(pending.promise, () => { throw failure; });
   });
+  const admitted = request.admitted;
   markAdmitted();
+  await admitted;
   pending.resolve('reply');
-  assert.equal(await request, 'reply');
-  assert.equal(completeReply, markAdmitted);
+  await assert.rejects(request, (error) => error === failure);
+  assert.equal(request.admitted, admitted);
+  await admitted;
 });
 
 test('reply delivery retains its Promise identity and admission getter attributes', async () => {

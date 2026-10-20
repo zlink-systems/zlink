@@ -1,5 +1,4 @@
 using System.Buffers.Binary;
-using System.Diagnostics;
 using System.Security.Cryptography;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Execution;
@@ -107,8 +106,9 @@ internal sealed class ZLinkDeferredActorJoin(
     TimeSpan timeout
 )
 {
-    private readonly long _registeredTimestamp = Stopwatch.GetTimestamp();
-    private readonly DateTimeOffset _absoluteDeadline = DateTimeOffset.UtcNow + timeout;
+    private readonly long _registeredTimestamp = runtime.Registration.TimeProvider.GetTimestamp();
+    private readonly DateTimeOffset _absoluteDeadline =
+        runtime.Registration.TimeProvider.GetUtcNow() + timeout;
     private readonly ZLinkActorJoinOperationId _operationId = CreateOperationId();
 
     // The deferred Join runs after the submitting callback, so the causal flow of
@@ -182,7 +182,11 @@ internal sealed class ZLinkDeferredActorJoin(
                         failure = ZLinkFrameworkErrorKind.DeadlineExceeded;
                     else
                         await targetCompletion
-                            .WaitAsync(remaining, cancellationToken)
+                            .WaitAsync(
+                                remaining,
+                                runtime.Registration.TimeProvider,
+                                cancellationToken
+                            )
                             .ConfigureAwait(false);
                 }
                 catch (Exception exception)
@@ -216,6 +220,7 @@ internal sealed class ZLinkDeferredActorJoin(
             );
             using var dispatch = actorState.EnterDeferredJoinExecution();
             ZLinkActorJoinCompletion? completion = null;
+            ZLinkActorJoinResult.Relayed? relayed = null;
             if (failure is null && RemainingTimeout() <= TimeSpan.Zero)
                 failure = ZLinkFrameworkErrorKind.DeadlineExceeded;
             if (failure is { } failed)
@@ -248,6 +253,9 @@ internal sealed class ZLinkDeferredActorJoin(
 
                     switch (result)
                     {
+                        case ZLinkActorJoinResult.Relayed transferred:
+                            relayed = transferred;
+                            break;
                         case ZLinkActorJoinResult.Accepted accepted
                             when sourceNodeRid is null
                                 || accepted.Actor.NodeRid == sourceNodeRid.Value:
@@ -258,9 +266,7 @@ internal sealed class ZLinkDeferredActorJoin(
                             );
                             break;
                         case ZLinkActorJoinResult.Accepted:
-                            // The target runtime delivers durable cross-node Accepted
-                            // after replay and source cleanup through the handoff
-                            // completion request.
+                            // The remote target owns its public completion.
                             break;
                         case ZLinkActorJoinResult.Rejected rejected:
                             completion = new ZLinkActorJoinCompletion.Rejected(
@@ -298,6 +304,10 @@ internal sealed class ZLinkDeferredActorJoin(
                     completion = new ZLinkActorJoinCompletion.Failed(_operationId, kind);
                 }
 
+            // Source cleanup failures belong to the infrastructure task owner,
+            // outside the public completion conversion above.
+            if (relayed is not null)
+                await relayed.SourceCleanup().ConfigureAwait(false);
             if (completion is not null)
                 await NotifySourceAsync(completion, cancellationToken).ConfigureAwait(false);
         }
@@ -335,7 +345,8 @@ internal sealed class ZLinkDeferredActorJoin(
             batch.Dispose();
     }
 
-    private TimeSpan RemainingTimeout() => timeout - Stopwatch.GetElapsedTime(_registeredTimestamp);
+    private TimeSpan RemainingTimeout() =>
+        timeout - runtime.Registration.TimeProvider.GetElapsedTime(_registeredTimestamp);
 
     private ValueTask NotifySourceAsync(
         ZLinkActorJoinCompletion completion,

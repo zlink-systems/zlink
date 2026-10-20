@@ -216,7 +216,16 @@ capacity 집계에 사용한다.
 **`zlink.spot.count`와 `zlink.actor.count`는 이 MeshNode가 지금 실행하고 있는 수를
 세고, `zlink.object.capacity.*`와 `zlink.spot.type.capacity.*`는 Location Store가
 확정한 population을 읽는다.** 두 계기는 집계 경계가 달라 서로를 대체하지 않으며
-값이 다를 수 있다. Spot 종류를 나타내는 [Spot kind](../00-foundation/02-glossary.ko.md#spot-kind)와
+값이 다를 수 있다.
+
+**Capacity 계기는 local MeshNode마다 마지막으로 Location Store에서 확인한 capacity record 값 하나를 읽는다.**
+Active와 reserved는 그 MeshNode의 capacity record([Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas))의
+active와 pending이고, limit은 그 MeshNode에 등록한 descriptor의 limit이다. 이 값은 capacity record를 읽거나
+바꾼 Store 요청이 성공할 때와, [Location runtime §4](../05-location-relocation/01-location-runtime.ko.md#4-실행-중인-node와-제공-기능을-찾는다)의 descriptor polling 주기마다 local capacity record를 한 번 읽을 때 바뀐다.
+Observable 수집과 application 요청은 이 계기 때문에 Store를 읽지 않는다. 처음 확인하기 전에는 이 계기를
+관측하지 않고, 읽기가 실패하면 마지막 확인값을 유지한다.
+
+Spot 종류를 나타내는 [Spot kind](../00-foundation/02-glossary.ko.md#spot-kind)와
 startup 등록 뒤 바뀌지 않는 type identity인
 [stable type](../00-foundation/02-glossary.ko.md#stable-type)은 등록값으로만 label에 사용한다.
 ID로 처음 호출할 때 Framework가 만들 수 있는 Spot을
@@ -250,7 +259,7 @@ ID로 처음 호출할 때 Framework가 만들 수 있는 Spot을
 | `stable_type` | Startup에 등록하여 개수가 제한된 User·Instance Spot의 stable type만 사용한다. |
 | `object_kind` | `actor|user_spot|instance_spot` |
 | `policy` | `recreate|snapshot` |
-| Relocation `outcome` | `completed|aborted|failed|shutdown` |
+| Relocation `outcome` | `completed|aborted|failed|shutdown`. Source가 기존 authority 정리 결과([Location runtime §10](../05-location-relocation/01-location-runtime.ko.md#10-store-응답을-받지-못했을-때))로 관찰한 결과이며, 네 값은 겹치지 않는다. `completed`는 source가 target commit을 확인한 경우, `aborted`는 source가 `Preserve` 성공을 확인하고 원래 object의 보관 작업을 재개한 경우다. 이 두 값은 확인한 뒤의 정리 오류나 source 종료로 바뀌지 않는다. `shutdown`은 두 결과를 확인하기 전에 source 종료로 relocation이 끝난 경우, `failed`는 그 밖의 terminal 정리이며 authority를 `Missing`으로 읽은 경우를 포함한다. |
 | `transport` | Startup 등록 시점에 정한 허용 값 중 하나다. |
 | `close_reason` | `client_close|idle_timeout|heartbeat_timeout|server_shutdown|protocol_error|transport_error` |
 

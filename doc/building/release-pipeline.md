@@ -42,7 +42,7 @@ scope. `core-conan-release.yml` is a legacy workflow for a private Conan remote 
 | Version sync | `scripts/local-package/sync-version.py --write` or `build-wsl.sh --sync-versions` / `--verify-versions` | every release job verifies tag, `VERSION`, and manifests agree | — |
 | Integrated gates | `scripts/gate/{rebuild-dev,framework-gate,bindings-gate,cross-language-e2e}.sh <tag>` ([README](../../scripts/gate/README.md)) | the CI workflows cover the same scope as a platform matrix | `zlink-work/gates/<tag>/` |
 | Performance | `scripts/perf/perf-ticket.sh submit …` (ticket queue, `perf-queue-runner.sh`) | never in CI | `.artifacts/perf-queue/`, `doc/perf/perf/` |
-| CI helpers | `.github/actions/msvc-env` (Windows MSVC environment), `scripts/ci/dotnet-test-retry.sh` | called by the workflows | — |
+| CI helpers | `.github/actions/msvc-env` (Windows MSVC environment), `scripts/ci/dotnet-test.sh` | called by the workflows | — |
 | Workflows | `.github/workflows/`: `build.yml`, `bindings-release.yml`, `release-dotnet.yml`, `framework-release.yml`, `framework-cpp.yml`, `framework-node.yml`, `framework-dotnet.yml`, `pr-verify.yml`, `docs.yml`, (legacy) `core-conan-release.yml` | — | — |
 
 ## 3. Order
@@ -78,8 +78,8 @@ so the order never inverts.
    Opening PRs in the upstream repositories (`microsoft/vcpkg`, `conan-io/conan-center-index`) is
    still done by a person. Draft bodies are in `doc/building/pr-drafts/`.
 5. Node lockfiles: after Framework Node is published, run `npm install --package-lock-only` in
-   `tutorial`, `tutorial/StreamClient`, `tutorial/HttpClient`, and `quickstart` under
-   `framework/languages/node`, and commit the lockfiles to `main`. The release bump updates only
+   `framework/languages/node/perf` and in `tutorial`, `tutorial/StreamClient`, `tutorial/HttpClient`,
+   and `quickstart` under `framework/languages/node`, and commit the lockfiles to `main`. The release bump updates only
    `package.json`; a lockfile that points to the new version can be created only after publishing (#1002).
 
 ```bash
@@ -179,9 +179,9 @@ paths, sample runner inventory); it builds and tests nothing. Closing that gap i
 The CI workflows use a per-ref `concurrency` group, so a newer run on the same branch cancels the
 run in progress (no matrix pile-up, no runner starvation for releases). Release workflows are never
 cancelled.
-Windows jobs set up MSVC through `.github/actions/msvc-env` (composite, no Node runtime). .NET unit
-tests that fail from scheduler noise on shared runners are rerun once, failed tests only, by
-`scripts/ci/dotnet-test-retry.sh`; test tolerances are never widened.
+Windows jobs set up MSVC through `.github/actions/msvc-env` (composite, no Node runtime). .NET tests
+run once through `scripts/ci/dotnet-test.sh`, and failed tests are not rerun: one failure is a
+defect to fix.
 
 ## 9. Local vs. workflow responsibilities
 

@@ -58,6 +58,10 @@ final class ZLinkBoundSessionRuntime implements ZLinkBoundSession {
                 metadataPolicy == null ? ZLinkRelayMetadataPolicy.EMPTY : metadataPolicy;
     }
 
+    ZLinkInternalSpotNode spotNode() {
+        return spotNode;
+    }
+
     void setActorSlot(int actorSlot) {
         this.actorSlot = actorSlot;
     }

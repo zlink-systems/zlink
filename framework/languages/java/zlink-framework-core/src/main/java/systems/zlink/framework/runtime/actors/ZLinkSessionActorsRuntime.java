@@ -580,11 +580,7 @@ public final class ZLinkSessionActorsRuntime implements ZLinkSessionActors {
                                                         actor,
                                                         boundSession,
                                                         sourceNodeRid,
-                                                        sourceSessionRid,
-                                                        bindingGeneration,
-                                                        spotNode == null
-                                                                ? 0
-                                                                : spotNode.localNodeGeneration())
+                                                        sourceSessionRid)
                                                 .thenApply(
                                                         bindingToken -> {
                                                             boundSession.setActorSlot(actorSlot);

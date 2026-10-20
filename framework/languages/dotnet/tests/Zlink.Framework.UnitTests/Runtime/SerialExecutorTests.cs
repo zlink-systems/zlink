@@ -6,6 +6,999 @@ namespace Zlink.Framework.UnitTests;
 public sealed class SerialExecutorTests
 {
     [Fact]
+    public async Task CanceledActorAdmissionReturnsCanceledTaskAndAllowsLaterWork()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var executor = new ZLinkSpotSerialExecutor(
+            null!,
+            static () => false,
+            CancellationToken.None,
+            errors
+        );
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+        var calls = new int[1];
+        static ValueTask Operation(ZLinkSpotActivation _, int[] calls, CancellationToken token)
+        {
+            Interlocked.Increment(ref calls[0]);
+            return ValueTask.CompletedTask;
+        }
+        var canceled = executor.ExecuteActorAsync(
+            "canceled-actor",
+            Operation,
+            calls,
+            cancellation.Token
+        );
+        Assert.True(canceled.IsCanceled);
+        var error = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            canceled.AsTask()
+        );
+        Assert.Equal(cancellation.Token, error.CancellationToken);
+        Assert.Equal(0, calls[0]);
+        await executor.ExecuteActorAsync(
+            "canceled-actor",
+            Operation,
+            calls,
+            CancellationToken.None
+        );
+        Assert.Equal(1, calls[0]);
+    }
+
+    [Fact]
+    public async Task QueuedActorExecutionAllocatesOnlyAdmissionAndClaimStorage()
+    {
+        const int count = 1000;
+        using var errors = new ZLinkRuntimeErrorSink();
+        using var entered = new ManualResetEventSlim();
+        using var release = new ManualResetEventSlim();
+        var selected = 0;
+        await using var executor = new ZLinkSpotSerialExecutor(
+            null!,
+            static () => false,
+            CancellationToken.None,
+            errors,
+            actorConsumerSelected: () =>
+            {
+                if (Interlocked.Exchange(ref selected, 1) == 0)
+                {
+                    entered.Set();
+                    release.Wait();
+                }
+            }
+        );
+        await using var baselineLane = new ZLinkStateLane();
+        object state = new int[1];
+        Func<ZLinkSpotActivation, object, CancellationToken, ValueTask> operation = static (
+            _,
+            state,
+            _
+        ) =>
+        {
+            Interlocked.Increment(ref ((int[])state)[0]);
+            return ValueTask.CompletedTask;
+        };
+        Func<CancellationToken, ValueTask> callback = static _ => ValueTask.CompletedTask;
+        Func<bool> stateCallback = static () => false;
+        var pending = new Task[count + 2];
+        pending[0] = executor
+            .ExecuteActorAsync("actor-cost", operation, state, CancellationToken.None)
+            .AsTask();
+        try
+        {
+            entered.Wait();
+            pending[1] = executor
+                .ExecuteActorAsync("actor-cost", operation, state, CancellationToken.None)
+                .AsTask();
+            void Baseline()
+            {
+                baselineLane
+                    .RunAsync(
+                        static work => ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(work),
+                        stateCallback
+                    )
+                    .GetAwaiter()
+                    .GetResult();
+                _ = executor
+                    .ActorIngressOwner!.PostAsync(callback, CancellationToken.None)
+                    .GetAwaiter()
+                    .GetResult();
+                // Child publication adds a mailbox marker that parent admission does not create.
+                GC.KeepAlive(new ZLinkSerialWorkItem(executor.ActorIngressOwner));
+                // Reference slots model the two callback captures and the claim storage.
+                GC.KeepAlive(
+                    Tuple.Create<object, object, object, object>(state, state, state, state)
+                );
+                GC.KeepAlive(Tuple.Create<object, object, object>(state, state, state));
+                GC.KeepAlive(Tuple.Create<object, bool, int>(state, true, 0));
+                GC.KeepAlive(new Func<CancellationToken, ValueTask>(callback.Invoke));
+                GC.KeepAlive(new Func<CancellationToken, ValueTask>(callback.Invoke));
+            }
+            Baseline();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < count; i++)
+                Baseline();
+            var admissionStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+            before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < count; i++)
+                pending[i + 2] = executor
+                    .ExecuteActorAsync("actor-cost", operation, state, CancellationToken.None)
+                    .AsTask();
+            var actual = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Equal(admissionStorage, actual);
+        }
+        finally
+        {
+            release.Set();
+            await Task.WhenAll(pending.Where(static task => task is not null));
+        }
+        Assert.Equal(count + 2, ((int[])state)[0]);
+    }
+
+    [Fact]
+    public async Task RelocationSnapshotsShareTheAdmissionOwnedPayloadMaterialization()
+    {
+        await using var queue = CreateQueue(CancellationToken.None);
+        var seal = await queue.TrySealRelocationAsync();
+        Assert.NotNull(seal);
+        var materialized = 0;
+        Assert.Equal(
+            ZLinkAcceptedWorkAdmission.Accepted,
+            queue.TryPostAccepted(
+                1,
+                () =>
+                {
+                    Interlocked.Increment(ref materialized);
+                    return new byte[] { 7 };
+                },
+                static _ => ValueTask.CompletedTask,
+                static () => { },
+                false,
+                out _
+            )
+        );
+        var snapshots = await Task.WhenAll(
+            queue.TryFreezeRelocationIngressAsync(seal).AsTask(),
+            queue.TryFreezeRelocationIngressAsync(seal).AsTask()
+        );
+        Assert.All(snapshots, snapshot => Assert.True(snapshot.Item1));
+        Assert.Equal(1, materialized);
+        var (committed, held) = await queue.TryCommitRelocationAsync(seal);
+        Assert.True(committed);
+        Assert.Equal(new byte[] { 7 }, Assert.Single(held).Payload.ToArray());
+        Assert.Equal(1, materialized);
+    }
+
+    [Fact]
+    public void AcceptedPayloadFactoryAddsNoSeparateSynchronizationObject()
+    {
+        const int count = 1000;
+        Func<CancellationToken, ValueTask> callback = static _ => ValueTask.CompletedTask;
+        Func<ReadOnlyMemory<byte>> factory = static () => ReadOnlyMemory<byte>.Empty;
+        _ = new ZLinkSerialWorkItem(callback, acceptedPayloadFactory: factory);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < count; i++)
+            GC.KeepAlive(new ZLinkSerialWorkItem(callback));
+        var baseline = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < count; i++)
+            GC.KeepAlive(new ZLinkSerialWorkItem(callback, acceptedPayloadFactory: factory));
+        Assert.Equal(baseline, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
+    public void ApplicationScopeAllocatesOnlyItsClaimAndAmbientCarrier()
+    {
+        Exception? failure = null;
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                var ambient = new AsyncLocal<ZLinkApplicationExecutionScope?>();
+                var input = new ZLinkApplicationExecutionScope(
+                    "scope-cost",
+                    ZLinkUserSpotExecutionMode.SpotWide,
+                    null,
+                    true
+                );
+                void Baseline()
+                {
+                    var claim = new ZLinkApplicationExecutionClaim();
+                    ambient.Value = input with { Claim = claim };
+                    claim.Deactivate();
+                    ambient.Value = null;
+                }
+                void Actual()
+                {
+                    using var scope = ZLinkApplicationExecutionContext.Push(input);
+                }
+                for (var i = 0; i < 1000; i++)
+                {
+                    Baseline();
+                    Actual();
+                }
+                var before = GC.GetAllocatedBytesForCurrentThread();
+                for (var i = 0; i < 1000; i++)
+                    Baseline();
+                var ambientStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+                before = GC.GetAllocatedBytesForCurrentThread();
+                for (var i = 0; i < 1000; i++)
+                    Actual();
+                Assert.Equal(ambientStorage, GC.GetAllocatedBytesForCurrentThread() - before);
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+        });
+        using (ExecutionContext.SuppressFlow())
+            thread.Start();
+        thread.Join();
+        if (failure is not null)
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+    }
+
+    [Fact]
+    public async Task ApplicationScopeRestoresOuterScopeAndDeactivatesCapturedClaims()
+    {
+        var input = new ZLinkApplicationExecutionScope(
+            "outer",
+            ZLinkUserSpotExecutionMode.SpotWide,
+            null,
+            true
+        );
+        var outer = ZLinkApplicationExecutionContext.Push(input);
+        var outerClaim = ZLinkApplicationExecutionContext.Current!.Value.Claim!;
+        ZLinkApplicationExecutionClaim innerClaim;
+        try
+        {
+            using (ZLinkApplicationExecutionContext.Push(input with { SpotId = "inner" }))
+            {
+                innerClaim = ZLinkApplicationExecutionContext.Current!.Value.Claim!;
+                await Task.Yield();
+                Assert.Equal("inner", ZLinkApplicationExecutionContext.Current!.Value.SpotId);
+                Assert.True(innerClaim.IsActive);
+            }
+            Assert.False(innerClaim.IsActive);
+            Assert.Equal("outer", ZLinkApplicationExecutionContext.Current!.Value.SpotId);
+            Assert.Same(outerClaim, ZLinkApplicationExecutionContext.Current!.Value.Claim);
+        }
+        finally
+        {
+            outer.Dispose();
+        }
+        Assert.False(outerClaim.IsActive);
+        Assert.Null(ZLinkApplicationExecutionContext.Current);
+    }
+
+    [Fact]
+    public async Task SpotStateReadAllocatesOnlyItsCallbackAndStateLaneContext()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var executor = new ZLinkSpotSerialExecutor(
+            null!,
+            static () => false,
+            CancellationToken.None,
+            errors
+        );
+        var baseline = new ZLinkStateLane();
+        Func<bool> callback = static () => false;
+        void Baseline()
+        {
+            baseline
+                .RunAsync(
+                    static callback => ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(callback),
+                    callback
+                )
+                .GetAwaiter()
+                .GetResult();
+        }
+        Baseline();
+        Assert.False(executor.HasRelocationBarrier);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+            Baseline();
+        var expected = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        var hasBarrier = false;
+        for (var i = 0; i < 1000; i++)
+            hasBarrier |= executor.HasRelocationBarrier;
+        var actual = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.False(hasBarrier);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
+    public async Task AbsentDrainDoesNotAllocate()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
+        queue.PublishDrain(null);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+            queue.PublishDrain(null);
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
+    public async Task IdleQueueReadinessDoesNotAllocate()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
+        queue.SchedulePendingWork();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+            queue.SchedulePendingWork();
+        Assert.Equal(0, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
+    public void ChannelReplyGateAllocatesOnlyItsStateLaneTurns()
+    {
+        var gate = new ZLinkChannelReplyGate();
+        var baseline = new ZLinkStateLane();
+        Action reply = static () => { };
+        gate.TryInvoke(reply);
+        void Baseline()
+        {
+            baseline.RunAsync(static value => value, true).GetAwaiter().GetResult();
+            baseline.RunAsync(static value => value, true).GetAwaiter().GetResult();
+        }
+        Baseline();
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+            Baseline();
+        var laneStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+            gate.TryInvoke(reply);
+        Assert.Equal(laneStorage, GC.GetAllocatedBytesForCurrentThread() - before);
+    }
+
+    [Fact]
+    public async Task BusyQueueAdmissionAllocatesOnlyWorkItemStorage()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var execution = queue
+            .RunAsync(
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await release.Task;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        Func<CancellationToken, ValueTask> callback = static _ => ValueTask.CompletedTask;
+        try
+        {
+            await entered.Task;
+            Assert.True(queue.TryPost(callback, out _));
+            GC.KeepAlive(new ZLinkSerialWorkItem(callback));
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < 1000; i++)
+                GC.KeepAlive(new ZLinkSerialWorkItem(callback));
+            var storage = GC.GetAllocatedBytesForCurrentThread() - before;
+            before = GC.GetAllocatedBytesForCurrentThread();
+            var admitted = 0;
+            for (var i = 0; i < 1000; i++)
+                if (queue.TryPost(callback, out _))
+                    admitted++;
+            var admissionStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Equal(1000, admitted);
+            Assert.Equal(storage, admissionStorage);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await execution;
+            await queue.ApplicationDrained;
+        }
+    }
+
+    [Fact]
+    public void SerialTurnConcurrentSuspensionObservationDoesNotLoseSignals()
+    {
+        const int iterations = 1000;
+        var item = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
+        var turn = new ZLinkSerialTurn(
+            static (_, _) => ZLinkSerialPostAdmission.Closed,
+            static _ => false,
+            static _ => { },
+            CancellationToken.None,
+            item
+        );
+        using var phases = new Barrier(2);
+        var signaler = new Thread(() =>
+        {
+            for (var i = 0; i < iterations; i++)
+            {
+                phases.SignalAndWait();
+                turn.SignalSuspended();
+                phases.SignalAndWait();
+            }
+        });
+        signaler.Start();
+        var completed = 0;
+        try
+        {
+            for (var i = 0; i < iterations; i++)
+            {
+                turn.ResetSuspension();
+                phases.SignalAndWait();
+                var signal = turn.Suspended;
+                phases.SignalAndWait();
+                if (signal.IsCompletedSuccessfully)
+                    completed++;
+            }
+        }
+        finally
+        {
+            signaler.Join();
+        }
+        Assert.Equal(iterations, completed);
+    }
+
+    [Fact]
+    public void SerialTurnConcurrentObserversShareTheSuspensionSignal()
+    {
+        const int iterations = 1000;
+        var item = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
+        var turn = new ZLinkSerialTurn(
+            static (_, _) => ZLinkSerialPostAdmission.Closed,
+            static _ => false,
+            static _ => { },
+            CancellationToken.None,
+            item
+        );
+        using var phases = new Barrier(4);
+        var observed = new Task?[2];
+        var workers = new Thread[3];
+        for (var worker = 0; worker < workers.Length; worker++)
+        {
+            var index = worker;
+            workers[worker] = new Thread(() =>
+            {
+                for (var i = 0; i < iterations; i++)
+                {
+                    phases.SignalAndWait();
+                    if (index < observed.Length)
+                        observed[index] = turn.Suspended;
+                    else
+                        turn.SignalSuspended();
+                    phases.SignalAndWait();
+                }
+            });
+            workers[worker].Start();
+        }
+        var completed = 0;
+        var shared = 0;
+        try
+        {
+            for (var i = 0; i < iterations; i++)
+            {
+                turn.ResetSuspension();
+                phases.SignalAndWait();
+                phases.SignalAndWait();
+                if (observed[0]!.IsCompletedSuccessfully && observed[1]!.IsCompletedSuccessfully)
+                    completed++;
+                if (ReferenceEquals(observed[0], observed[1]))
+                    shared++;
+            }
+        }
+        finally
+        {
+            foreach (var worker in workers)
+                worker.Join();
+        }
+        Assert.Equal(iterations, completed);
+        Assert.Equal(iterations, shared);
+    }
+
+    [Fact]
+    public async Task ApplicationDrainWaitersAreIsolatedAcrossPendingGenerations()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
+        Task? previous = null;
+        for (var cycle = 0; cycle < 2; cycle++)
+        {
+            var entered = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var release = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously
+            );
+            var execution = queue
+                .RunAsync(
+                    async _ =>
+                    {
+                        entered.TrySetResult();
+                        await release.Task;
+                    },
+                    CancellationToken.None
+                )
+                .AsTask();
+            try
+            {
+                await entered.Task;
+                var drained = queue.ApplicationDrained;
+                Assert.False(drained.IsCompleted);
+                Assert.Same(drained, queue.ApplicationDrained);
+                if (previous is not null)
+                {
+                    Assert.NotSame(previous, drained);
+                    Assert.True(previous.IsCompletedSuccessfully);
+                }
+                release.TrySetResult();
+                await execution;
+                await drained;
+                previous = drained;
+            }
+            finally
+            {
+                release.TrySetResult();
+                await execution;
+            }
+        }
+    }
+
+    [Fact]
+    public async Task TerminalCompositionAllocatesOnlyItsTwoCallbackReferences()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirst = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var execution = queue
+            .RunAsync(
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await releaseFirst.Task;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        var items = new ZLinkSerialWorkItem[1000];
+        Action release = static () => { };
+        static Action Baseline(object current, Action release) =>
+            () =>
+            {
+                GC.KeepAlive(current);
+                release();
+            };
+        try
+        {
+            await entered.Task;
+            for (var i = 0; i < items.Length; i++)
+                Assert.True(queue.TryPost(static _ => ValueTask.CompletedTask, out items[i]));
+            GC.KeepAlive(Baseline(queue, release));
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < items.Length; i++)
+                GC.KeepAlive(Baseline(queue, release));
+            var stateStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+            before = GC.GetAllocatedBytesForCurrentThread();
+            for (var i = 0; i < items.Length; i++)
+                items[i].AddTerminalRelease(release);
+            Assert.Equal(stateStorage, GC.GetAllocatedBytesForCurrentThread() - before);
+        }
+        finally
+        {
+            releaseFirst.TrySetResult();
+            await execution;
+            await queue.ApplicationDrained;
+        }
+    }
+
+    [Fact]
+    public async Task ComposedTerminalFailureStillReleasesQueueReservationExactlyOnce()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var execution = queue
+            .RunAsync(
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await release.Task;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        try
+        {
+            await entered.Task;
+            Assert.True(queue.TryPost(static _ => ValueTask.CompletedTask, out var item));
+            var releases = 0;
+            item.AddTerminalRelease(() =>
+            {
+                releases++;
+                throw new InvalidOperationException("terminal failure");
+            });
+            release.TrySetResult();
+            await execution;
+            await Assert.ThrowsAsync<InvalidOperationException>(() => item.Completion);
+            await queue.ApplicationDrained;
+            item.ReleaseForRelocation(static _ => { });
+            Assert.Equal(1, releases);
+            Assert.Equal(0, queue.ApplicationPendingCount);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await execution;
+        }
+    }
+
+    [Fact]
+    public async Task ApplicationDrainSignalIsAllocatedOnlyWhenObserved()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
+        Assert.True(queue.ApplicationDrained.IsCompletedSuccessfully);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var execution = queue
+            .RunAsync(
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await release.Task;
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        try
+        {
+            await entered.Task;
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            GC.KeepAlive(
+                new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+            );
+            var signalStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+            before = GC.GetAllocatedBytesForCurrentThread();
+            var drained = queue.ApplicationDrained;
+            var observedStorage = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.Equal(signalStorage, observedStorage);
+            Assert.Same(drained, queue.ApplicationDrained);
+            Assert.False(drained.IsCompleted);
+            release.TrySetResult();
+            await execution;
+            await drained;
+            Assert.True(queue.ApplicationDrained.IsCompletedSuccessfully);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await execution;
+        }
+    }
+
+    [Fact]
+    public void SerialTurnSuspensionSignalPreservesObservationAndReset()
+    {
+        var item = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
+        var turn = new ZLinkSerialTurn(
+            static (_, _) => ZLinkSerialPostAdmission.Closed,
+            static _ => false,
+            static _ => { },
+            CancellationToken.None,
+            item
+        );
+        var first = turn.Suspended;
+        Assert.Same(first, turn.Suspended);
+        Assert.False(first.IsCompleted);
+        turn.SignalSuspended();
+        Assert.True(first.IsCompletedSuccessfully);
+        turn.SignalSuspended();
+        Assert.Same(first, turn.Suspended);
+        turn.ResetSuspension();
+        turn.SignalSuspended();
+        var second = turn.Suspended;
+        Assert.NotSame(first, second);
+        Assert.True(second.IsCompletedSuccessfully);
+        turn.ResetSuspension();
+        var third = turn.Suspended;
+        Assert.False(third.IsCompleted);
+        turn.SignalSuspended();
+        Assert.True(third.IsCompletedSuccessfully);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SerialWorkItem_CancellationStillObservesCallbackSuspension(bool lifecycle)
+    {
+        var timeout = TimeSpan.FromSeconds(5);
+        using var cancellation = new CancellationTokenSource();
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var yield = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var queue = new ZLinkSerialExecutionQueue(
+            new ZLinkRuntimeTaskRunner(errors, CancellationToken.None),
+            errors,
+            CancellationToken.None
+        );
+        var item = new ZLinkSerialWorkItem(
+            async _ =>
+            {
+                entered.TrySetResult();
+                await yield.Task;
+                ZLinkSerialTurn.Current!.SignalSuspended();
+                await release.Task;
+            },
+            lane: lifecycle ? ZLinkSerialWorkLane.Lifecycle : ZLinkSerialWorkLane.Application,
+            reservationHeld: false
+        );
+        item.BindTerminalRelease(queue);
+        var turn = new ZLinkSerialTurn(
+            static (_, _) => ZLinkSerialPostAdmission.Closed,
+            static _ => false,
+            static _ => { },
+            cancellation.Token,
+            item
+        );
+        var invocation = item.InvokeAsync(static _ => { }, cancellation.Token, turn).AsTask();
+        try
+        {
+            await entered.Task.WaitAsync(timeout);
+            cancellation.Cancel();
+            yield.TrySetResult();
+            Assert.Equal(ZLinkSerialWorkItemResult.Suspended, await invocation.WaitAsync(timeout));
+            Assert.False(item.Completion.IsCompleted);
+        }
+        finally
+        {
+            release.TrySetResult();
+            await invocation.WaitAsync(timeout);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                item.Completion.WaitAsync(timeout)
+            );
+        }
+    }
+
+    [Fact]
+    public async Task SerialExecutionQueue_BusyActorDoesNotStartDurablePreparation()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var owner = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: true
+        );
+        await using var mailbox = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedOwner: owner
+        );
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var external = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var prepared = false;
+        var first = mailbox
+            .RunAsync(
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await ZLinkSerialTurn.Current!.YieldFrameworkCallAsync(
+                        _ => new ValueTask(external.Task),
+                        CancellationToken.None
+                    );
+                },
+                CancellationToken.None
+            )
+            .AsTask();
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(
+                ZLinkSerialPostAdmission.Accepted,
+                mailbox.TryPostDurableApplication(
+                    static _ => ValueTask.CompletedTask,
+                    _ =>
+                    {
+                        prepared = true;
+                        return ValueTask.CompletedTask;
+                    },
+                    static () => { },
+                    out var durable
+                )
+            );
+            // Publication is ahead of this owner turn, so its scheduling
+            // probe has run while the Actor still retains its FIFO claim.
+            await owner
+                .RunAsync(static _ => ValueTask.CompletedTask, CancellationToken.None)
+                .AsTask()
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.False(prepared);
+            external.TrySetResult();
+            await Task.WhenAll(first, durable.Completion).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.True(prepared);
+        }
+        finally
+        {
+            external.TrySetResult();
+            await first.WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [Fact]
+    public async Task SerialExecutionQueue_BusyClaimAllowsMailboxBehindReadyReservedHead()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        var runner = new ZLinkRuntimeTaskRunner(errors, CancellationToken.None);
+        await using var owner = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedGate: true
+        );
+        await using var claimed = new ZLinkSerialExecutionQueue(
+            runner,
+            errors,
+            CancellationToken.None,
+            ZLinkExecutionLanePolicy.Default,
+            sharedOwner: owner
+        );
+        // Arrange this selector input directly: a retained claim, a ready held
+        // head, and a non-reserved mailbox. No consumer runs on the fixture.
+        const System.Reflection.BindingFlags flags =
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+        var type = typeof(ZLinkSerialExecutionQueue);
+        var active = type.GetField("_active", flags)!;
+        var pending = (ZLinkSerialWorkQueue)
+            type.GetField("_applicationQueue", flags)!.GetValue(claimed)!;
+        var headReads = 0;
+        var head = new ZLinkSerialWorkItem(
+            static _ => ValueTask.CompletedTask,
+            ready: () =>
+            {
+                headReads++;
+                return true;
+            }
+        );
+        var mailbox = new ZLinkSerialWorkItem(owner);
+        active.SetValue(claimed, new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask));
+        pending.Enqueue(head);
+        pending.Enqueue(mailbox);
+        try
+        {
+            Assert.True(head.ReservationHeld);
+            Assert.False(mailbox.ReservationHeld);
+            Assert.NotNull(mailbox.Mailbox);
+            Assert.True(
+                (bool)
+                    type.GetMethod("HasRunnableApplicationUnderLock", flags)!.Invoke(claimed, null)!
+            );
+            Assert.True(headReads > 0);
+            var arguments = new object?[] { null };
+            Assert.True(
+                (bool)type.GetMethod("TryDequeueNextUnderLock", flags)!.Invoke(claimed, arguments)!
+            );
+            Assert.Same(mailbox, arguments[0]);
+            Assert.Same(head, pending.Head);
+        }
+        finally
+        {
+            pending.Clear();
+            active.SetValue(claimed, null);
+        }
+    }
+
+    [Fact]
+    public async Task SerialExecutionQueue_ReadinessPublishedDuringSelectionPreservesHeadPosition()
+    {
+        await using var queue = CreateQueue(CancellationToken.None);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var published = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var order = new ConcurrentQueue<string>();
+        var ready = false;
+        Assert.True(
+            queue.TryPost(
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await release.Task.ConfigureAwait(false);
+                },
+                out var blocker
+            )
+        );
+        try
+        {
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var head = await queue.PostAsync(
+                _ =>
+                {
+                    order.Enqueue("head");
+                    return ValueTask.CompletedTask;
+                },
+                0,
+                0,
+                false,
+                CancellationToken.None,
+                ready: () =>
+                {
+                    var snapshot = Volatile.Read(ref ready);
+                    // Publish after this read has rejected the head. Signal the
+                    // publisher outside the selector lock to notify the queue.
+                    if (!snapshot)
+                    {
+                        Volatile.Write(ref ready, true);
+                        published.TrySetResult();
+                    }
+                    return snapshot;
+                }
+            );
+            Assert.True(
+                queue.TryPost(
+                    _ =>
+                    {
+                        order.Enqueue("following");
+                        return ValueTask.CompletedTask;
+                    },
+                    out var following
+                )
+            );
+            release.TrySetResult();
+            await published.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            queue.NotifyReadiness();
+            await Task.WhenAll(blocker.Completion, head.Completion, following.Completion)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(new[] { "head", "following" }, order.ToArray());
+        }
+        finally
+        {
+            release.TrySetResult();
+            Volatile.Write(ref ready, true);
+            queue.NotifyReadiness();
+        }
+    }
+
+    [Fact]
     public async Task RelocationTimerReservationsShareAcceptedSequenceDomain()
     {
         await using var queue = CreateQueue(CancellationToken.None);

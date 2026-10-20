@@ -31,3 +31,8 @@ tasks.named<Test>("integrationTest") {
 tasks.named<JavaCompile>("compileTestJava") {
     options.compilerArgs.add("-parameters")
 }
+
+// Shared observability contract; the fixture remains outside language source trees.
+tasks.named<ProcessResources>("processTestResources") {
+    from(rootProject.file("../../runtime/protocol/fixtures/runtime-metrics-v1.json"))
+}

@@ -12,9 +12,16 @@ import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOption
 import systems.zlink.framework.runtime.host.ZLinkFrameworkRuntimeTestAccess;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorReceived;
 import systems.zlink.framework.runtime.locations.ZLinkInMemoryLocationStore;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
+import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
 import systems.zlink.framework.spots.*;
+import systems.zlink.framework.streams.ZLinkStreamCodec;
+import systems.zlink.framework.streams.ZLinkStreamMessageKind;
 
 import java.time.Duration;
+import java.util.EnumSet;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
@@ -72,7 +79,17 @@ final class ZLinkDeferredJoinActorIngressTest {
                                         Optional.empty(),
                                         0,
                                         0,
-                                        Message.from("RoomView"),
+                                        Message.from(
+                                                ZLinkStreamHeaderCodec.encode(
+                                                        new ZLinkStreamHeader(
+                                                                ZLinkStreamMessageKind.SEND,
+                                                                ZLinkStreamCodec.JSON,
+                                                                EnumSet.noneOf(
+                                                                        ZLinkStreamHeaderFlag
+                                                                                .class),
+                                                                Optional.empty(),
+                                                                "RoomView",
+                                                                Map.of()))),
                                         true,
                                         null,
                                         "application/json");

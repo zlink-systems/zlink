@@ -1211,6 +1211,15 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
     public bool IsStarted =>
         Volatile.Read(ref _lifecyclePhase) == (int)ZLinkRuntimeLifecyclePhase.Running;
 
+    internal ZLinkPlacementCapacity? ConfirmedCapacity(
+        ZLinkMeshNodeDescriptorKey key,
+        ZLinkPlacementCapacity limits
+    ) =>
+        (_locationRuntime?.Store as ZLinkProviderLocationRepository)?.ConfirmedCapacity(
+            key,
+            limits
+        );
+
     internal CancellationToken ShutdownToken =>
         _state?.StopTokenSource.Token ?? new CancellationToken(canceled: true);
 
@@ -1504,7 +1513,10 @@ internal sealed partial class ZLinkFrameworkRuntime : IZLinkSpotManager
         if (state is not null)
             DetachErrorSink(state.ErrorSink);
         if (_locationLifecycle is not null)
+        {
             await CaptureAsync(_locationLifecycle.PauseBackgroundWorkAsync).ConfigureAwait(false);
+            Capture(_locationLifecycle.ResetGeneration);
+        }
 
         if (workerPool is not null)
             await CaptureAsync(workerPool.DisposeAsync).ConfigureAwait(false);

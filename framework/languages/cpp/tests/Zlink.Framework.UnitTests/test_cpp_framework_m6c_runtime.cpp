@@ -4,6 +4,8 @@
 #include "../support/runtime_metric_contract.hpp"
 #include "../support/stateful_ingress_fixture.hpp"
 #include "../support/request_admission_fixture.hpp"
+#include "metric_test_reader.hpp"
+#include "runtime/diagnostics/monitoring_runtime.hpp"
 
 #include "runtime/stateful/maintenance_runtime.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
@@ -3835,6 +3837,221 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
 }
 
 
+void test_source_relocation_metric_outcomes (test_context_t &test)
+{
+    namespace fw = zlink::framework;
+    namespace protocol = fw::runtime::protocol;
+    for (const std::string_view scenario :
+         {"commit", "preserve", "missing", "shutdown", "cleanup-error"}) {
+        metric_test::provider_t provider;
+        auto monitoring = std::make_shared<fw::detail::monitoring_runtime_state_t> ();
+        stateful_object_runtime_t objects;
+        objects.configure_relocation_state (
+          [] (const object_ref_t &, const std::string &,
+              std::stop_token) -> fw::task_t<frozen_object_state_t> {
+              frozen_object_state_t captured;
+              captured.application_state = {0x41};
+              co_return captured;
+          },
+          [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
+              return true;
+          });
+        const auto actor = create_actor (objects, "metric-actor");
+        public_memory_authority_store_t store;
+        const auto store_now = std::chrono::system_clock::time_point{std::chrono::seconds{100}};
+        store.snapshot = fw::authority_snapshot_t{"1",
+                                                  {},
+                                                  actor.object_generation,
+                                                  actor.authority_owner_generation,
+                                                  {"source-owner", 1},
+                                                  store_now};
+        store.owner_lease_read = fw::owner_lease_found_t{
+          {"source-owner", 1}, store_now + std::chrono::seconds{1}, store_now};
+        auto authority = std::make_shared<public_authority_store_adapter_t> (store);
+        auto roots = std::make_shared<memory_relocation_repository_t> ();
+        std::mutex delay_mutex;
+        fw::detail::delay_owner_t delays (delay_mutex);
+        maintenance_runtime_t relocation (objects, authority, roots);
+        relocation.bind_delay_owner (delays);
+        if (scenario == "cleanup-error")
+            relocation.attach_committed_terminal ([] (const object_ref_t &, const auto &) {
+                throw std::runtime_error ("source cleanup failed");
+            });
+        eligible_relocation_unit_t::canonical_wire_context_t wire{
+          .relocation = {0x2278, 1},
+          .target_attempt_generation = 1,
+          .coordinator = {"source-owner", 1, {'s'}, 1, "1"},
+          .target_node_routing_id = {'t'},
+          .target_node_generation = 1,
+          .application_version = 1,
+          .prepare_target = [] (const std::vector<frozen_object_state_t> &,
+                                const relocation_payload_manifest_t &)
+            -> fw::task_t<relocation_reason_t> { co_return relocation_reason_t::none; },
+          .send_state_chunk = [] (const protocol::relocation_state_t &) -> fw::task_t<bool> {
+              co_return true;
+          },
+          .send_relocation_data = [] (const std::vector<protocol::relocation_data_t> &,
+                                      const relocation_ingress_batch_t &) -> fw::task_t<bool> {
+              co_return true;
+          },
+          .send_cutover = [&] (const protocol::relocation_cutover_t &) -> fw::task_t<bool> {
+              if (scenario == "missing")
+                  store.snapshot.reset ();
+              else if (scenario == "shutdown")
+                  delays.request_stop ();
+              else if (scenario != "preserve") {
+                  store.snapshot->store_version = "committed";
+                  store.snapshot->owner = {"target-owner", 2};
+                  ++store.snapshot->authority_owner_generation;
+              }
+              co_return true;
+          },
+          .restore_deadline = scenario == "preserve"
+                                ? std::chrono::steady_clock::time_point{}
+                                : std::chrono::steady_clock::time_point::max (),
+          .abort_target_before_cutover = [] { return true; },
+          .monitoring = monitoring,
+          .mesh_name = "outcome-contract",
+          .policy = scenario == "cleanup-error"
+                      ? fw::detail::factory_relocation_kind_t::preserve_state
+                      : fw::detail::factory_relocation_kind_t::recreate};
+        try {
+            const auto result = await_task (relocation.relocate (
+              actor, "target-owner", {"target-owner", 2}, 1024 * 1024, digest_with (0x41), wire));
+            const auto observed =
+              scenario == "preserve"   ? relocation_authority_t::source_preserved
+              : scenario == "missing"  ? relocation_authority_t::source_lease_expired
+              : scenario == "shutdown" ? relocation_authority_t::unsettled
+                                       : relocation_authority_t::target_committed;
+            test.require (result.settlement.outcome == observed,
+                          "fixture must exercise the requested source settlement");
+            if (scenario == "preserve")
+                test.require (
+                  objects.enqueue (actor, turn_domain_t::application, {1, {0x41}})
+                    == stateful_error_t::none,
+                  "Preserve must resume the retained source work before aborted is recorded");
+            test.require (scenario != "cleanup-error",
+                          "fixture must exercise the committed cleanup error");
+        }
+        catch (const std::runtime_error &) {
+            test.require (scenario == "cleanup-error", "only the controlled cleanup may fail");
+        }
+        const auto expected = scenario == "preserve"   ? "aborted"
+                              : scenario == "shutdown" ? "shutdown"
+                              : scenario == "missing"  ? "failed"
+                                                       : "completed";
+        int terminals = 0, durations = 0, starts = 0, sizes = 0;
+        for (const auto &metric : provider.collect ()) {
+            const auto &name = metric.instrument_descriptor.name_;
+            for (const auto &point : metric.point_data_attr_) {
+                if (name == "zlink.relocation.started" || name == "zlink.relocation.completed") {
+                    const auto *sum = opentelemetry::nostd::get_if<metric_test::sdk::SumPointData> (
+                      &point.point_data);
+                    test.require (sum && opentelemetry::nostd::get<double> (sum->value_) == 1,
+                                  "a source operation must increment each counter exactly once");
+                } else if (name == "zlink.relocation.bytes"
+                           || name == "zlink.relocation.duration") {
+                    const auto *histogram =
+                      opentelemetry::nostd::get_if<metric_test::sdk::HistogramPointData> (
+                        &point.point_data);
+                    test.require (histogram && histogram->count_ == 1,
+                                  "a source operation must record each histogram exactly once");
+                }
+                test.require (
+                  point.attributes.size ()
+                    == (name == "zlink.relocation.started" || name == "zlink.relocation.bytes" ? 3
+                                                                                               : 4),
+                  "object metric labels must remain bounded by the contract");
+                const auto policy = point.attributes.find ("policy");
+                test.require (policy != point.attributes.end ()
+                                && opentelemetry::nostd::get<std::string> (policy->second)
+                                     == (scenario == "cleanup-error" ? "snapshot" : "recreate"),
+                              "the source registration owns the metric policy");
+                if (name == "zlink.relocation.started")
+                    ++starts;
+                if (name == "zlink.relocation.bytes")
+                    ++sizes;
+                if (name != "zlink.relocation.completed" && name != "zlink.relocation.duration")
+                    continue;
+                if (name == "zlink.relocation.completed")
+                    ++terminals;
+                else
+                    ++durations;
+                const auto outcome = point.attributes.find ("outcome");
+                test.require (outcome != point.attributes.end ()
+                                && opentelemetry::nostd::get<std::string> (outcome->second)
+                                     == expected,
+                              "source metric must use its confirmed authority outcome");
+            }
+        }
+        test.require (terminals == 1 && durations == 1 && starts == 1 && sizes == 1,
+                      "each source relocation must emit started, bytes and exactly one "
+                      "completed/duration pair");
+    }
+}
+
+void test_relocation_metric_starts_only_after_unit_admission (test_context_t &test)
+{
+    namespace fw = zlink::framework;
+    for (const bool aggregate : {false, true}) {
+        metric_test::provider_t provider;
+        stateful_object_runtime_t objects;
+        objects.configure_relocation_state (
+          [] (const object_ref_t &, const std::string &,
+              std::stop_token) -> fw::task_t<frozen_object_state_t> {
+              frozen_object_state_t captured;
+              captured.application_state = {0x41};
+              co_return captured;
+          },
+          [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
+              return true;
+          });
+        const auto actor = create_actor (objects, "metric-admission-a");
+        const auto other = create_actor (objects, "metric-admission-b");
+        auto authority = std::make_shared<memory_authority_store_t> ();
+        maintenance_runtime_t relocation (
+          objects, authority, std::make_shared<memory_relocation_repository_t> (),
+          relocation_limits_t{.outbound_units = 1}, {},
+          std::make_shared<memory_aggregate_authority_t> (authority));
+        fw::task_completion_source_t<relocation_reason_t> prepared;
+        eligible_relocation_unit_t::canonical_wire_context_t first_wire{
+          .relocation = {0x2278, 2},
+          .target_attempt_generation = 1,
+          .coordinator = {"source-owner", 1, {'s'}, 1, "1"},
+          .target_node_routing_id = {'t'},
+          .target_node_generation = 1,
+          .application_version = 1,
+          .prepare_target =
+            [&] (const std::vector<frozen_object_state_t> &,
+                 const relocation_payload_manifest_t &) { return prepared.task (); },
+          .send_state_chunk = [] (const fw::runtime::protocol::relocation_state_t &)
+            -> fw::task_t<bool> { co_return true; }};
+        auto occupied = relocation.relocate_to_ready (
+          actor, "target", {"target-owner", 1}, 1024 * 1024, digest_with (1), first_wire, {}, 0);
+        test.require (!occupied.await_ready (),
+                      "fixture must hold an admitted preparation pending");
+        eligible_relocation_unit_t::canonical_wire_context_t wire{
+          .monitoring = std::make_shared<fw::detail::monitoring_runtime_state_t> (),
+          .mesh_name = "admission-contract",
+          .policy = fw::detail::factory_relocation_kind_t::recreate};
+        const auto reason =
+          aggregate ? await_task (relocation.relocate_aggregate ({actor, other}, "target",
+                                                                 {"target-owner", 1}, 1024,
+                                                                 digest_with (1), wire))
+                        .reason
+                    : await_task (relocation.relocate (actor, "target", {"target-owner", 1}, 1024,
+                                                       digest_with (1), wire))
+                        .reason;
+        test.require (reason == relocation_reason_t::permit_unavailable,
+                      "fixture must reject the unit before preparation starts");
+        test.require (provider.collect ().empty (),
+                      "a unit not admitted to preparation must emit no relocation metrics");
+        prepared.complete (
+          fw::result_t<relocation_reason_t>::success (relocation_reason_t::restore_failed));
+        (void) await_task (std::move (occupied));
+    }
+}
+
 void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context_t &test)
 {
     namespace framework = zlink::framework;
@@ -3857,8 +4074,7 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
     zlink::framework::detail::delay_owner_t delays (delay_mutex);
     maintenance_runtime_t relocation (objects, authority, roots);
     relocation.bind_delay_owner (delays);
-    relocation.configure_metrics (
-      std::make_shared<framework::runtime::relocation_metrics_t> ("source-metric-mesh"));
+    relocation.configure_metrics (std::make_shared<framework::runtime::relocation_metrics_t> ());
 
     auto target_terminal =
       std::make_shared<framework::task_completion_source_t<relocation_reason_t>> ();
@@ -3901,7 +4117,9 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
       },
       .abort_target_before_cutover = [] { return true; }};
 
-    wire.metric_policy = framework::detail::factory_relocation_kind_t::preserve_state;
+    wire.monitoring = std::make_shared<framework::detail::monitoring_runtime_state_t> ();
+    wire.mesh_name = "source-metric-mesh";
+    wire.policy = framework::detail::factory_relocation_kind_t::preserve_state;
     const auto result = await_task (relocation.relocate (
       actor, "target-node", {"target-owner", 9}, 1024 * 1024, digest_with (0x31), wire, {}, 16));
     const auto source_resumed = objects.enqueue (actor, turn_domain_t::application, {1, {0x41}});
@@ -4033,7 +4251,7 @@ void test_source_settlement_after_subsequent_moves (test_context_t &test)
         maintenance_runtime_t relocation (objects, authority, roots);
         relocation.bind_delay_owner (delays);
         relocation.configure_metrics (
-          std::make_shared<framework::runtime::relocation_metrics_t> ("settlement-metric-mesh"));
+          std::make_shared<framework::runtime::relocation_metrics_t> ());
         int committed = 0;
         int unavailable = 0;
         int cutover_calls = 0;
@@ -4112,7 +4330,9 @@ void test_source_settlement_after_subsequent_moves (test_context_t &test)
           },
           .restore_deadline = std::chrono::steady_clock::time_point::max (),
           .abort_target_before_cutover = [] { return true; }};
-        wire.metric_policy = framework::detail::factory_relocation_kind_t::preserve_state;
+        wire.monitoring = std::make_shared<framework::detail::monitoring_runtime_state_t> ();
+        wire.mesh_name = "settlement-metric-mesh";
+        wire.policy = framework::detail::factory_relocation_kind_t::preserve_state;
         const auto result = await_task (relocation.relocate (
           actor, "target-owner", {"target-owner", 2}, 1024 * 1024, digest_with (0x41), wire));
         std::cerr << "source-settlement " << scenario
@@ -5576,7 +5796,8 @@ void test_application_relocation_remote_production_path (test_context_t &test,
                                                          bool resolver_failure = false,
                                                          bool post_seal_lookup_failure = false,
                                                          bool missing_target_session_peer = false,
-                                                         bool command44_order = false)
+                                                         bool command44_order = false,
+                                                         bool binding_absent = false)
 {
     using namespace std::chrono_literals;
     namespace detail = zlink::framework::detail;
@@ -5612,9 +5833,15 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     detail::actor_gateway_runtime_t target_gateway (
       std::make_shared<detail::actor_gateway_state_t> ());
     target.configure_bound_session_operations (host::bound_session_operations_t{
-      .bind = [] (const protocol::bound_session_bind_t &, const zlink::routing_id_t &,
-                  std::uint64_t, const framework::location_owner_token_t &,
-                  std::function<bool ()>) { return host::bound_session_bind_operation_result_t{}; },
+      .bind =
+        [] (
+          const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
+          const framework::location_owner_token_t &,
+          std::function<bool (const protocol::stream_bind_reply_tail_t &)> submit_terminal_reply) {
+            (void) submit_terminal_reply (
+              {bind.binding.generation, bind.actor.authority_owner_generation});
+            return host::bound_session_bind_operation_result_t{};
+        },
       .send = [] (const protocol::bound_session_send_t &,
                   std::vector<zlink::message_t>) { return stateful_error_t::conflict; },
       .replaced = [] (const protocol::bound_session_replaced_t &) {},
@@ -5670,6 +5897,9 @@ void test_application_relocation_remote_production_path (test_context_t &test,
           co_return accepted_record_authority_t{
             {"source-owner", 1, query.source_node_routing_id, query.source_node_generation}, 9};
       });
+    std::atomic_int late_routes{0};
+    if (binding_absent)
+        session_owner.configure_late_session_route_update ([&] (const auto &) { ++late_routes; });
     source.configure_session_route_owner (
       [] { return std::optional<framework::location_owner_token_t>{{"source-owner", 1}}; });
     target.configure_session_route_owner (
@@ -5874,6 +6104,11 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     test.require (initial_inbound_completed,
                   "the active Session ingress must complete before sealing");
 
+    if (binding_absent) {
+        test.require (session_owner.native_node ().sessions ().unbind (session_binding).first
+                        == stateful_error_t::none,
+                      "the Session binding must be absent before command 42");
+    }
     std::atomic<bool> stop_dispatch{false};
     const auto dispatch = [&] (detail::mesh_node_runtime_t &node) {
         while (!stop_dispatch.load (std::memory_order_acquire)) {
@@ -6050,7 +6285,7 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     }
     const auto source_relocation_gate = source.native_node ().maintenance ()->gate_snapshot ();
     const auto route_deadline = operation_deadline;
-    while (result.terminal == relocation_terminal_t::completed
+    while (!binding_absent && result.terminal == relocation_terminal_t::completed
            && std::chrono::steady_clock::now () < route_deadline) {
         const auto current =
           session_owner.native_node ().sessions ().current_binding ("production-remote-actor");
@@ -6067,6 +6302,39 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     target_dispatch.join ();
     session_owner_dispatch.join ();
 
+    object_ref_t expected_target{
+      object_kind_t::actor,         std::string (actor.actor_id ().value ()),
+      actor.object_generation (),   2,
+      "production-relocation-mesh", target.status ().routing_id ().to_string ()};
+    if (binding_absent) {
+        const auto restored = target.native_node ().objects ().find (
+          object_kind_t::actor, std::string (actor.actor_id ().value ()));
+        test.require (
+          result.terminal == relocation_terminal_t::completed
+            && restored == std::optional<object_ref_t>{expected_target} && result.target_handoff
+            && result.target_handoff->sources == std::vector<object_ref_t>{*bound_source_object}
+            && source_relocation_gate == relocation_gate_snapshot_t{},
+          "bindingAbsent must preserve the exact Actor handoff and release the source gate");
+        test.require (
+          !session_owner.native_node ().sessions ().current_binding ("production-remote-actor")
+            && late_routes.load () == 0,
+          "bindingAbsent must not send command 44 or recreate a Session binding");
+        const auto target_actor = detail::actor_ref_access_t::make (
+          framework::node_rid_t::from_string (target.status ().routing_id ().to_string ()),
+          "production.actor", std::string (actor.actor_id ().value ()), actor.object_generation ());
+        test.require (
+          !target_gateway.bound_session_route_async (target_actor).result ().value (),
+          "bindingAbsent must omit the target Session route from the relocation envelope");
+        {
+            const std::lock_guard lock (roots->mutex);
+            test.require (roots->roots.empty (),
+                          "bindingAbsent must not create a durable Session journal");
+        }
+        source.stop ();
+        target.stop ();
+        session_owner.stop ();
+        return;
+    }
     const auto committed_binding =
       session_owner.native_node ().sessions ().current_binding ("production-remote-actor");
     const auto [continued_inbound_error, continued_inbound] =
@@ -6086,10 +6354,6 @@ void test_application_relocation_remote_production_path (test_context_t &test,
         test.require (command44_observed_open_dispatch.load (std::memory_order_acquire),
                       "command 44 must observe restored target dispatch open");
 
-    object_ref_t expected_target{
-      object_kind_t::actor,         std::string (actor.actor_id ().value ()),
-      actor.object_generation (),   2,
-      "production-relocation-mesh", target.status ().routing_id ().to_string ()};
     const auto restored_target = target.native_node ().objects ().find (
       object_kind_t::actor, std::string (actor.actor_id ().value ()));
     const auto target_actor = detail::actor_ref_access_t::make (
@@ -8303,12 +8567,21 @@ int main (int argc, char **argv)
         std::cerr << "request-registry cases=3 failures=" << test.failures << '\n';
         return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
+    if (argc == 2 && std::string_view (argv[1]) == "--source-outcomes") {
+        test_source_relocation_metric_outcomes (test);
+        test_relocation_metric_starts_only_after_unit_admission (test);
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--spot-restore-staging") {
         test_spot_restore_stages_before_publication (test);
         return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--aggregate-source") {
         test_application_user_spot_aggregate_remote_production_path (test);
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--binding-absent") {
+        test_application_relocation_remote_production_path (test, false, false, false, false, true);
         return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--route-command44-order") {
@@ -8443,6 +8716,8 @@ int main (int argc, char **argv)
     test_pending_restore_holds_ingress_before_rollback (test);
     test_public_relocation_store_adapter (test);
     test_public_authority_store_adapter (test);
+    test_source_relocation_metric_outcomes (test);
+    test_relocation_metric_starts_only_after_unit_admission (test);
     test_source_relocation_failure_stops_state_chunks_and_unseals (test);
     test_boundary_application_preserves_original_reply (test);
     test_boundary_application_preserves_original_reply (test, true);
@@ -8471,6 +8746,7 @@ int main (int argc, char **argv)
         test_relocation_ready_boundary (test, mode);
     test_application_relocation_remote_production_path (test, false, false, true);
     test_application_relocation_remote_production_path (test, false, false, false, true);
+    test_application_relocation_remote_production_path (test, false, false, false, false, true);
     test_application_relocation_remote_production_path (test);
     test_application_relocation_remote_production_path (test, false, true);
     test_application_relocation_remote_production_path (test, true);

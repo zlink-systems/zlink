@@ -26,6 +26,22 @@ internal sealed class ControllableTimeProvider : TimeProvider
         }
     }
 
+    private event Action<TimeSpan>? TimerCreated;
+
+    internal Task WaitForNextTimerAsync(TimeSpan dueTime)
+    {
+        var created = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void OnTimerCreated(TimeSpan scheduledDueTime)
+        {
+            if (scheduledDueTime != dueTime)
+                return;
+            TimerCreated -= OnTimerCreated;
+            created.TrySetResult();
+        }
+        TimerCreated += OnTimerCreated;
+        return created.Task;
+    }
+
     public override ITimer CreateTimer(
         TimerCallback callback,
         object? state,
@@ -39,16 +55,23 @@ internal sealed class ControllableTimeProvider : TimeProvider
             _timers.Add(timer);
             timer.ChangeCore(_timestamp, dueTime, period);
         }
+        TimerCreated?.Invoke(dueTime);
         return timer;
     }
 
-    internal void AdvanceMonotonic(TimeSpan delta)
+    internal void Advance(TimeSpan delta) => Advance(delta, advanceUtc: true);
+
+    internal void AdvanceMonotonic(TimeSpan delta) => Advance(delta, advanceUtc: false);
+
+    private void Advance(TimeSpan delta, bool advanceUtc)
     {
         if (delta < TimeSpan.Zero)
             throw new ArgumentOutOfRangeException(nameof(delta));
         List<(TimerCallback Callback, object? State)> due = [];
         lock (_gate)
         {
+            if (advanceUtc)
+                _utcNow = _utcNow.Add(delta);
             _timestamp = checked(_timestamp + delta.Ticks);
             foreach (var timer in _timers)
                 if (timer.TryTakeDue(_timestamp, out var callback))

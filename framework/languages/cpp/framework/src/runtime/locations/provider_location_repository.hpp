@@ -773,10 +773,10 @@ class provider_location_repository_t final : public location_repository_t
                                  ? std::get<store_found_t> (authority).value.store_now
                                  : std::get<store_missing_t> (authority).store_now;
         if (request.operation_deadline != std::chrono::system_clock::time_point{}
-            && store_now >= request.operation_deadline)
+            && std::chrono::system_clock::now () >= request.operation_deadline)
             co_return detail::result_access_t::failure<object_reserve_result_t> (
               std::make_exception_ptr (framework_exception_t (
-                framework_error_kind_t::deadline_exceeded, "Actor creation deadline expired")));
+                framework_error_kind_t::deadline_exceeded, "Object creation deadline expired")));
         std::optional<authority_snapshot_t> decoded_current;
         if (const auto *found = std::get_if<store_found_t> (&authority)) {
             decoded_current =
@@ -1315,6 +1315,10 @@ class provider_location_repository_t final : public location_repository_t
             write_request.mutations = {
               store_put_t{authority_key, encode_authority (snapshot), std::nullopt},
               store_put_t{capacity.key, encode_capacity_record (capacity.record), std::nullopt}};
+            if (operation_deadline != std::chrono::system_clock::time_point{}
+                && std::chrono::system_clock::now () >= operation_deadline)
+                throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
+                                             "Object creation deadline expired");
             auto written =
               co_await write_async (std::move (write_request), terminal, terminal_store_now);
             const auto *applied = std::get_if<store_write_applied_t> (&written);

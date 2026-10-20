@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/foundation/operation_registry.hpp"
+#include "runtime/diagnostics/instance_spot_metrics.hpp"
 #include "runtime/dispatch/application_record.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/dispatch/blocking_task.hpp"
@@ -33,6 +34,7 @@
 #include <atomic>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <functional>
 #include <limits>
 #include <map>
@@ -343,11 +345,12 @@ struct bound_session_operations_t
     std::function<task_t<std::optional<location_owner_token_t>> (const zlink::routing_id_t &,
                                                                  std::uint64_t)>
       session_owner;
-    std::function<bound_session_bind_operation_result_t (const protocol::bound_session_bind_t &,
-                                                         const zlink::routing_id_t &,
-                                                         std::uint64_t,
-                                                         const location_owner_token_t &,
-                                                         std::function<bool ()>)>
+    std::function<bound_session_bind_operation_result_t (
+      const protocol::bound_session_bind_t &,
+      const zlink::routing_id_t &,
+      std::uint64_t,
+      const location_owner_token_t &,
+      std::function<bool (const protocol::stream_bind_reply_tail_t &)>)>
       bind;
     std::function<stateful::stateful_error_t (const protocol::bound_session_send_t &,
                                               std::vector<zlink::message_t>)>
@@ -435,6 +438,8 @@ struct instance_spot_activation_result_t
     // Releases the accepted application turn only after its reply is handed
     // to the transport. Instance Spot close waits on this terminal.
     std::function<void ()> accepted_turn_terminal;
+    // Preserve the original failure for diagnostics alongside its wire classification.
+    std::exception_ptr exception;
 };
 
 struct instance_spot_activation_materializer_t
@@ -897,7 +902,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       std::shared_ptr<const mesh::service_mailbox_record_t> reply_record,
       std::function<void (instance_spot_activation_result_t)> done = {});
     task_t<void> dispatch_instance_spot_activation_core (
-      protocol::instance_activation_recovery_t command,
+      std::shared_ptr<protocol::instance_activation_recovery_t> command,
       std::shared_ptr<const mesh::service_mailbox_record_t> reply_record,
       std::function<void (instance_spot_activation_result_t)> done,
       std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> admission,
@@ -1004,6 +1009,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     bool dispatch_bound_session_send (const mesh::service_mailbox_record_t &record);
 
     host_options_t _options;
+    instance_spot_metrics_t _instance_activation_metrics{_options.mesh.descriptor.mesh_name};
     std::function<bool ()> _flow_capture;
     detail::delay_owner_t *_delay_owner = nullptr;
     std::string _entry_spot_id;
@@ -1044,7 +1050,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     {
         protocol::session_relocation_seal_t seal;
         protocol::session_relocation_sealed_t sealed;
-        std::uint64_t last_accepted_sequence = 0;
         stateful::stream_barrier_t barrier;
         std::chrono::steady_clock::time_point expires_at{};
         bool consumed = false;
@@ -1052,12 +1057,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         std::vector<std::uint8_t> response_routing_id;
         std::vector<session_seal_local_completion_t> local_completions;
     };
-    using session_relocation_key_t = std::tuple<std::uint64_t,
-                                                std::uint64_t,
-                                                std::string,
-                                                std::uint64_t,
-                                                std::vector<std::uint8_t>,
-                                                std::uint64_t>;
+    using session_relocation_key_t = std::tuple<std::uint64_t, std::uint64_t, std::string>;
     std::map<session_relocation_key_t, session_seal_terminal_record_t> _session_seal_terminals;
     std::map<session_relocation_key_t,
              std::pair<protocol::session_relocation_seal_t, session_relocation_seal_result_t>>
@@ -1241,7 +1241,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
      * (relocation_cutover_wait_timeout snapshot, default 1000 ms). */
     std::chrono::milliseconds _relocation_cutover_wait{1000};
     std::shared_ptr<runtime::relocation_metrics_t> _relocation_metrics;
-    std::map<std::string, std::shared_ptr<runtime::instance_spot_metrics_t>> _instance_metrics;
+    std::map<std::string, std::shared_ptr<runtime::instance_spot_admission_metrics_t>>
+      _instance_admission_metrics;
     relocation_target_metrics_t _relocation_target_metrics;
     struct user_spot_terminal_record_t
     {

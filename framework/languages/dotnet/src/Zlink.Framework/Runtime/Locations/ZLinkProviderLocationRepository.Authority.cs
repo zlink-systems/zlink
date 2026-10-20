@@ -464,11 +464,53 @@ internal sealed partial class ZLinkProviderLocationRepository
     public ValueTask<ZLinkObjectReserveResult> ReserveAsync(
         ZLinkObjectReservationRequest request,
         CancellationToken cancellationToken = default
-    ) => ReserveCoreAsync(request, cancellationToken);
+    ) =>
+        request.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
+        && Diagnostics.ZLinkRuntimeMetrics.InstanceSpotTakeoversEnabled
+            ? ReserveWithTakeoverMetricAsync(request, cancellationToken)
+            : ReserveCoreAsync(request, cancellationToken);
+
+    private async ValueTask<ZLinkObjectReserveResult> ReserveWithTakeoverMetricAsync(
+        ZLinkObjectReservationRequest request,
+        CancellationToken cancellationToken
+    )
+    {
+        Diagnostics.ZLinkInstanceSpotTakeoverOutcome? takeoverOutcome = null;
+        try
+        {
+            var result = await ReserveCoreAsync(
+                    request,
+                    cancellationToken,
+                    () => takeoverOutcome = Diagnostics.ZLinkInstanceSpotTakeoverOutcome.Failed
+                )
+                .ConfigureAwait(false);
+            if (takeoverOutcome is not null)
+                takeoverOutcome = result switch
+                {
+                    ZLinkObjectReserveResult.Reserved => Diagnostics
+                        .ZLinkInstanceSpotTakeoverOutcome
+                        .Claimed,
+                    ZLinkObjectReserveResult.Conflict or ZLinkObjectReserveResult.AlreadyExists =>
+                        Diagnostics.ZLinkInstanceSpotTakeoverOutcome.Lost,
+                    _ => Diagnostics.ZLinkInstanceSpotTakeoverOutcome.Failed,
+                };
+            return result;
+        }
+        finally
+        {
+            if (takeoverOutcome is not null)
+                Diagnostics.ZLinkRuntimeMetrics.RecordInstanceSpotTakeover(
+                    request.TargetDescriptor.MeshName,
+                    request.StableType,
+                    takeoverOutcome.Value
+                );
+        }
+    }
 
     private async ValueTask<ZLinkObjectReserveResult> ReserveCoreAsync(
         ZLinkObjectReservationRequest request,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action? noteTakeover = null
     )
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -494,7 +536,8 @@ internal sealed partial class ZLinkProviderLocationRepository
                 var reclaim = await TryReclaimStaleAuthorityAsync(
                         current,
                         cancellationToken,
-                        request
+                        request,
+                        noteTakeover
                     )
                     .ConfigureAwait(false);
                 if (reclaim == StaleAuthorityReclaimResult.Reclaimed)
@@ -631,7 +674,8 @@ internal sealed partial class ZLinkProviderLocationRepository
     private async ValueTask<StaleAuthorityReclaimResult> TryReclaimStaleAuthorityAsync(
         StoredAuthority current,
         CancellationToken cancellationToken,
-        ZLinkObjectReservationRequest? request = null
+        ZLinkObjectReservationRequest? request = null,
+        Action? noteTakeover = null
     )
     {
         var active = current.Snapshot.Allocation.State == ZLinkPlacementAllocationState.Active;
@@ -657,6 +701,8 @@ internal sealed partial class ZLinkProviderLocationRepository
             .ReadAsync(descriptorKey, cancellationToken)
             .ConfigureAwait(false);
         var ownerLive = IsOwnerLeaseLive(owners[current.Snapshot.OwnerId], current.Snapshot);
+        if (!ownerLive)
+            noteTakeover?.Invoke();
         if (active)
         {
             if (ownerLive)
@@ -4165,7 +4211,10 @@ internal sealed partial class ZLinkProviderLocationRepository
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (operationDeadline is { } deadline && DateTimeOffset.UtcNow >= deadline)
-                throw new OperationCanceledException(cancellationToken);
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DeadlineExceeded,
+                    "Authority Ready commit exceeded the operation deadline."
+                );
             var current = await ReadAuthorityRecordAsync(reservation.Key, cancellationToken)
                 .ConfigureAwait(false);
             if (current is null)

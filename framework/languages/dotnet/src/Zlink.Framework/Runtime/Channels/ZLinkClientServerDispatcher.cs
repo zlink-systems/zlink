@@ -232,39 +232,53 @@ internal sealed class ZLinkClientServerDispatcher(
         uint maximumMessageBytes
     )
     {
-        replyGate.TryInvoke(() =>
-        {
-            if (received.ReplyToken is null)
-                return;
-
-            var reply = ZLinkEnvelopeCodec.EncodeParts(replyHeader, body, bodyType, codecs);
-            if (!ZLinkClientServerMessageBound.Fits(reply, maximumMessageBytes))
+        replyGate.TryInvoke(
+            static state =>
             {
-                ZLinkMessageParts.DisposeAll(reply);
-                reply = ZLinkEnvelopeCodec.EncodeParts(
-                    ZLinkChannelReplyWriter.CreateErrorHeader(
-                        requestHeader.ChannelName,
-                        requestHeader,
-                        ZLinkClientServerMessageBound.CreateExceededException(maximumMessageBytes)
-                    ),
-                    null,
-                    null,
+                var (
+                    received,
+                    requestHeader,
+                    replyHeader,
+                    body,
+                    bodyType,
+                    maximumMessageBytes,
                     codecs
-                );
+                ) = state;
+                if (received.ReplyToken is null)
+                    return;
+
+                var reply = ZLinkEnvelopeCodec.EncodeParts(replyHeader, body, bodyType, codecs);
                 if (!ZLinkClientServerMessageBound.Fits(reply, maximumMessageBytes))
                 {
                     ZLinkMessageParts.DisposeAll(reply);
-                    return;
+                    reply = ZLinkEnvelopeCodec.EncodeParts(
+                        ZLinkChannelReplyWriter.CreateErrorHeader(
+                            requestHeader.ChannelName,
+                            requestHeader,
+                            ZLinkClientServerMessageBound.CreateExceededException(
+                                maximumMessageBytes
+                            )
+                        ),
+                        null,
+                        null,
+                        codecs
+                    );
+                    if (!ZLinkClientServerMessageBound.Fits(reply, maximumMessageBytes))
+                    {
+                        ZLinkMessageParts.DisposeAll(reply);
+                        return;
+                    }
                 }
-            }
-            try
-            {
-                received.Reply().Messages(reply).Submit();
-            }
-            finally
-            {
-                ZLinkMessageParts.DisposeAll(reply);
-            }
-        });
+                try
+                {
+                    received.Reply().Messages(reply).Submit();
+                }
+                finally
+                {
+                    ZLinkMessageParts.DisposeAll(reply);
+                }
+            },
+            (received, requestHeader, replyHeader, body, bodyType, maximumMessageBytes, codecs)
+        );
     }
 }

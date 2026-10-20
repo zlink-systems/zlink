@@ -1,3 +1,4 @@
+const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -389,32 +390,34 @@ test('managed stream binds Session Actors through the Framework service without 
   const bindAuthorities = [];
   let bindAttempts = 0;
   const transportAttempts = [];
-  const serviceRuntime = withTestSessionOwners(new ServiceStatefulRuntime(
-    {
-      observePeerRoute: () => ({ generation: 1n, ready: true }),
-      observePeerRouteChanged: () => () => {},
-      observePeerConnectionIntentRemoved() {
-        return () => {};
-      },
-      setServiceIngress() {},
-      async requestService(_targetNodeRid, parts) {
-        transportAttempts.push(Buffer.from(parts[0]));
-        if (transportAttempts.length === 1) {
-          throw new ZLinkBackendResultError('submit', SubmitResult.NotConnected);
+  const serviceRuntime = withTestSessionOwners(
+    new ServiceStatefulRuntime(
+      {
+        observePeerRoute: () => ({ generation: 1n, ready: true }),
+        observePeerRouteChanged: () => () => {},
+        observePeerConnectionIntentRemoved() {
+          return () => {};
+        },
+        setServiceIngress() {},
+        async requestService(_targetNodeRid, parts) {
+          transportAttempts.push(Buffer.from(parts[0]));
+          if (transportAttempts.length === 1) {
+            throw new ZLinkBackendResultError('submit', SubmitResult.NotConnected);
+          }
+          const request = serviceStatefulWire.decodeStatefulHeader(parts[0]);
+          return [
+            serviceStatefulWire.encodeStatefulReply(request.correlation, RequestResult.Ok, 0, {
+              kind: 'streamBind',
+              bindingGeneration: 1n,
+              authorityOwnerGeneration: 9n
+            })
+          ];
         }
-        const request = serviceStatefulWire.decodeStatefulHeader(parts[0]);
-        return [
-          serviceStatefulWire.encodeStatefulReply(request.correlation, RequestResult.Ok, 0, {
-            kind: 'streamBind',
-            bindingGeneration: 1n,
-            authorityOwnerGeneration: 9n
-          })
-        ];
-      }
-    },
-    'session-owner',
-    3n
-  ));
+      },
+      'session-owner',
+      3n
+    )
+  );
   t.after(() => serviceRuntime.close());
   let nextOperation = 1n;
   const operation = (kind, promise) => {
@@ -1500,10 +1503,10 @@ test('remote actor session binding uses a non-correlated command over the actor 
       };
     }
   });
-  host.routeTransport.request = async (meshName, targetNodeRid, packetName, request) => {
+  host.routeTransport.request = (meshName, targetNodeRid, packetName, request) => prepareZLinkRequestReply((async () => {
     routed.push({ meshName, targetNodeRid, packetName, request });
     return { ok: true, response: { acknowledged: true } };
-  };
+  })(), identityRequestReply);
 
   await host.boundSessionRelay.actorPackets.confirmRemoteSessionBinding(
     actorRef,
@@ -1603,11 +1606,11 @@ test('acknowledged remote actor session bind nack surfaces the remote failure cl
   });
   const lastFailure = 'actor does not hold a current session binding';
   let replyErrorKind = framework.ZLinkFrameworkInternalErrorKind.ActorSessionNotBound;
-  host.routeTransport.request = async () => ({
+  host.routeTransport.request = () => prepareZLinkRequestReply((async () => ({
     ok: false,
     error: lastFailure,
     ...(replyErrorKind === undefined ? {} : { errorKind: replyErrorKind })
-  });
+  }))(), identityRequestReply);
 
   await assert.rejects(
     host.boundSessionRelay.actorPackets.confirmRemoteSessionBinding(
@@ -2446,10 +2449,10 @@ test('runtime host local actor keeps its current stream route when a remote pack
   const host = new framework.ZLinkFrameworkRuntimeHost({
     registration: framework.createFrameworkRegistration()
   });
-  host.routeTransport.requestToSpot = async (...args) => {
+  host.routeTransport.requestToSpot = (...args) => prepareZLinkRequestReply((async () => {
     routeCalls.push(args);
     return { ok: true };
-  };
+  })(), identityRequestReply);
   const stream = recordingStream('session-current', 'rid-current');
   const context = host.streamBindingRuntime.createSessionContext(stream);
   await context.actors.bind(actorRef);
@@ -2827,9 +2830,9 @@ test('runtime host remote bound session send submits a routed Session command', 
     registration: framework.createFrameworkRegistration()
   });
   const routeCalls = [];
-  host.routeTransport.requestToSpot = async () => {
+  host.routeTransport.requestToSpot = () => prepareZLinkRequestReply((async () => {
     throw new Error('bound session send must not wait for a routed reply');
-  };
+  })(), identityRequestReply);
   host.routeTransport.submitInfrastructure = async (
     routerChannelId,
     targetNodeRid,
@@ -4579,20 +4582,22 @@ test('production command 36 is sent by binding identity after owner lifecycle fi
 
 test('M1 actorJoin actual command 36 reaches the current Session binding during relocation seal', async () => {
   let serviceIngress;
-  const serviceRuntime = withTestSessionOwners(new ServiceStatefulRuntime(
-    {
-      observePeerRoute: () => ({ generation: 1n, ready: true }),
-      observePeerRouteChanged: () => () => {},
-      observePeerConnectionIntentRemoved() {
-        return () => {};
+  const serviceRuntime = withTestSessionOwners(
+    new ServiceStatefulRuntime(
+      {
+        observePeerRoute: () => ({ generation: 1n, ready: true }),
+        observePeerRouteChanged: () => () => {},
+        observePeerConnectionIntentRemoved() {
+          return () => {};
+        },
+        setServiceIngress(handler) {
+          serviceIngress = handler;
+        }
       },
-      setServiceIngress(handler) {
-        serviceIngress = handler;
-      }
-    },
-    'session-owner',
-    4n
-  ));
+      'session-owner',
+      4n
+    )
+  );
   const serviceActor = serviceRuntime.restoreActorAuthority(
     'actor-fifo-terminal',
     'actor',
@@ -4759,20 +4764,22 @@ test('M1 actorJoin actual command 36 reaches the current Session binding during 
 
 test('command 36 refused as not current is traced with the closed flow vocabulary', async () => {
   let serviceIngress;
-  const serviceRuntime = withTestSessionOwners(new ServiceStatefulRuntime(
-    {
-      observePeerRoute: () => ({ generation: 1n, ready: true }),
-      observePeerRouteChanged: () => () => {},
-      observePeerConnectionIntentRemoved() {
-        return () => {};
+  const serviceRuntime = withTestSessionOwners(
+    new ServiceStatefulRuntime(
+      {
+        observePeerRoute: () => ({ generation: 1n, ready: true }),
+        observePeerRouteChanged: () => () => {},
+        observePeerConnectionIntentRemoved() {
+          return () => {};
+        },
+        setServiceIngress(handler) {
+          serviceIngress = handler;
+        }
       },
-      setServiceIngress(handler) {
-        serviceIngress = handler;
-      }
-    },
-    'session-owner',
-    4n
-  ));
+      'session-owner',
+      4n
+    )
+  );
   const serviceActor = serviceRuntime.restoreActorAuthority(
     'actor-command36-stale-trace',
     'actor',
@@ -4860,7 +4867,9 @@ test('actual raw command 36 from an authenticated peer is admitted by the curren
   });
   assert.equal(raw.admitPeer(testServiceNodeDescriptor('source', 4n), 1n, 0), 'admitted');
   assert.equal(raw.admitPeer(testServiceNodeDescriptor('target', 5n), 2n, 0), 'admitted');
-  const serviceRuntime = withTestSessionOwners(new ServiceStatefulRuntime(raw, 'session-owner', 4n));
+  const serviceRuntime = withTestSessionOwners(
+    new ServiceStatefulRuntime(raw, 'session-owner', 4n)
+  );
   const serviceActor = serviceRuntime.restoreActorAuthority(
     actorId,
     'actor',
@@ -4937,20 +4946,22 @@ test('source and target command 36 push reach the client before command 44', asy
   };
   const aggregate = await testActorRouteAggregate(sourceRef, 8, 'session');
   let serviceIngress;
-  const serviceRuntime = withTestSessionOwners(new ServiceStatefulRuntime(
-    {
-      observePeerRoute: () => ({ generation: 1n, ready: true }),
-      observePeerRouteChanged: () => () => {},
-      observePeerConnectionIntentRemoved() {
-        return () => {};
+  const serviceRuntime = withTestSessionOwners(
+    new ServiceStatefulRuntime(
+      {
+        observePeerRoute: () => ({ generation: 1n, ready: true }),
+        observePeerRouteChanged: () => () => {},
+        observePeerConnectionIntentRemoved() {
+          return () => {};
+        },
+        setServiceIngress(handler) {
+          serviceIngress = handler;
+        }
       },
-      setServiceIngress(handler) {
-        serviceIngress = handler;
-      }
-    },
-    'session-owner',
-    4n
-  ));
+      'session-owner',
+      4n
+    )
+  );
   const serviceActor = serviceRuntime.restoreActorAuthority(
     actorId,
     'actor',
@@ -5438,7 +5449,7 @@ test('M2 actorJoin A-to-B-to-A successor seal waits until predecessor exact term
   }
 });
 
-test('concurrent identical ownership terminals commit once while push submits during seal', async () => {
+test('concurrent identical ownership terminals commit once while push submits during seal', async (t) => {
   const actorId = 'actor-concurrent-ownership-terminal';
   const seal = serviceSessionRelocationSeal(actorId, {
     relocation: { high: 21n, low: 22n }
@@ -5529,6 +5540,12 @@ test('concurrent identical ownership terminals commit once while push submits du
     targetAuthorityOwnerGeneration: 12n
   });
 
+  const encodeRoute = serviceStatefulWire.encodeSessionRelocationRoute;
+  let routeEncodings = 0;
+  t.mock.method(serviceStatefulWire, 'encodeSessionRelocationRoute', (...args) => {
+    routeEncodings++;
+    return encodeRoute(...args);
+  });
   const [first, duplicate] = await Promise.all([
     relay.receiveServiceWireSessionRelocationRoute(route),
     relay.receiveServiceWireSessionRelocationRoute(route)
@@ -5536,6 +5553,7 @@ test('concurrent identical ownership terminals commit once while push submits du
   assert.equal(first, undefined);
   assert.equal(duplicate, undefined);
   assert.equal(commitCalls, 1);
+  assert.equal(routeEncodings, 2, 'each command 44 is serialized once for the binding owner');
   assert.deepEqual(deliveries, ['must-not-retain', 'retained']);
   assert.deepEqual(
     await relay.receiveRemoteBoundSessionSend({
@@ -6478,6 +6496,30 @@ test('Actor binding stores the binding identity without a relocation fence', () 
 });
 test('authority-confirmed successor binding replaces the one Actor binding with its own generation', () => {
   const state = new framework.ZLinkActorRuntimeState('actor-session-successor-install');
+  const {
+    ServiceStatefulRegistry,
+    ServiceStaleGenerationError
+  } = require('../../packages/framework/dist/runtime/foundation/service-stateful-registry');
+  const registry = new ServiceStatefulRegistry('actor-node', 1n);
+  const actor = registry.createActor('actor-session-successor-install');
+  const install = (binding) => {
+    try {
+      registry.installSessionBinding({
+        actor: actor.ref,
+        sessionRid: binding.sessionRid.toHex(),
+        sessionOwnerNodeRid: binding.sessionNodeRid.toHex(),
+        sessionOwnerNodeGeneration: binding.sessionOwnerNodeGeneration,
+        sessionOwnerId: binding.sessionOwnerId,
+        sessionOwnerLeaseGeneration: binding.sessionOwnerLeaseGeneration,
+        bindingGeneration: binding.bindingGeneration,
+        membershipEpoch: actor.membershipEpoch
+      });
+    } catch (error) {
+      assert.ok(error instanceof ServiceStaleGenerationError);
+      return false;
+    }
+    return state.installBoundSessionBinding(binding);
+  };
   const predecessor = {
     routerChannelId: 'room.route',
     targetNodeRid: zlink.RoutingId.from('session-node'),
@@ -6490,11 +6532,11 @@ test('authority-confirmed successor binding replaces the one Actor binding with 
     bindingGeneration: 100n,
     relocationSealId: 'seal-predecessor'
   };
-  assert.equal(state.installBoundSessionBinding(predecessor), true);
+  assert.equal(install(predecessor), true);
   assert.equal(state.boundSession.relocationSealId, undefined);
 
   assert.equal(
-    state.installBoundSessionBinding({
+    install({
       routerChannelId: 'room.route',
       targetNodeRid: zlink.RoutingId.from('session-node'),
       spotId: zlink.RoutingId.from('session-entry'),
@@ -6515,7 +6557,7 @@ test('authority-confirmed successor binding replaces the one Actor binding with 
   assert.equal(state.boundSession.relocationSealId, undefined);
 
   assert.equal(
-    state.installBoundSessionBinding({
+    install({
       routerChannelId: 'room.route',
       targetNodeRid: zlink.RoutingId.from('session-node'),
       spotId: zlink.RoutingId.from('session-entry'),
@@ -6533,7 +6575,7 @@ test('authority-confirmed successor binding replaces the one Actor binding with 
   assert.equal(state.boundSession.bindingGeneration, 2n);
 
   assert.equal(
-    state.installBoundSessionBinding({
+    install({
       routerChannelId: 'room.route',
       targetNodeRid: zlink.RoutingId.from('session-node'),
       spotId: zlink.RoutingId.from('session-entry'),
@@ -6549,7 +6591,7 @@ test('authority-confirmed successor binding replaces the one Actor binding with 
   assert.equal(state.boundSessionBindingGeneration, 3n);
   assert.equal(state.boundSession.sessionRid.toHex(), '00000002');
   assert.equal(
-    state.installBoundSessionBinding({
+    install({
       routerChannelId: 'room.route',
       targetNodeRid: zlink.RoutingId.from('session-node'),
       spotId: zlink.RoutingId.from('session-entry'),
@@ -6738,20 +6780,22 @@ test('Actor binding owner turn uses the three-value Actor fence independently of
 
 test('bound-session replacement accepts an authenticated notice despite a stale Actor route projection', async () => {
   let serviceIngress;
-  const serviceRuntime = withTestSessionOwners(new ServiceStatefulRuntime(
-    {
-      observePeerRoute: () => ({ generation: 1n, ready: true }),
-      observePeerRouteChanged: () => () => {},
-      observePeerConnectionIntentRemoved() {
-        return () => {};
+  const serviceRuntime = withTestSessionOwners(
+    new ServiceStatefulRuntime(
+      {
+        observePeerRoute: () => ({ generation: 1n, ready: true }),
+        observePeerRouteChanged: () => () => {},
+        observePeerConnectionIntentRemoved() {
+          return () => {};
+        },
+        setServiceIngress(handler) {
+          serviceIngress = handler;
+        }
       },
-      setServiceIngress(handler) {
-        serviceIngress = handler;
-      }
-    },
-    'session-owner',
-    7n
-  ));
+      'session-owner',
+      7n
+    )
+  );
   const actor = serviceRuntime.restoreActorAuthority(
     'actor-replaced-projection',
     'actor',
@@ -8430,12 +8474,12 @@ test('runtime host awaits routed actor disconnect notification before session cl
       routeChannels: ['spot.service']
     })
   });
-  runtime.routeTransport.request = async () => {
+  runtime.routeTransport.request = () => prepareZLinkRequestReply((async () => {
     sendStarted = true;
     await new Promise((resolve) => {
       releaseSend = resolve;
     });
-  };
+  })(), identityRequestReply);
 
   let disconnectCompleted = false;
   const disconnecting = runtime.boundSessionRelay.actorPackets
@@ -9770,7 +9814,8 @@ async function testActorRouteAggregate(
   const owner = {
     prepareSessionRelocationSeal: (...args) => registry.prepareSessionRelocationSeal(...args),
     clearSessionRelocationResults: () => registry.clearSessionRelocationResults(),
-    acceptSessionRelocationRoute: (value) => registry.acceptSessionRelocationRoute(value),
+    acceptSessionRelocationRoute: (value, apply) =>
+      registry.acceptSessionRelocationRoute(value, apply),
     relocationSnapshot: (actorId, sealId) => registry.relocationSnapshot(actorId, sealId),
     applyRelocation: (...args) => registry.applyRelocation(...args),
     observeRelocationTerminal: (...args) => registry.observeRelocationTerminal(...args),

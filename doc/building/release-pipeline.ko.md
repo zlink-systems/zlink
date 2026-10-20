@@ -42,7 +42,7 @@ Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 �
 | 버전 동기화 | `scripts/local-package/sync-version.py --write` 또는 `build-wsl.sh --sync-versions` / `--verify-versions` | 각 릴리스 job이 태그·`VERSION`·manifest 일치를 검증 | — |
 | 통합 게이트 | `scripts/gate/{rebuild-dev,framework-gate,bindings-gate,cross-language-e2e}.sh <tag>` ([설명](../../scripts/gate/README.md)) | CI 워크플로우가 같은 범위를 플랫폼 matrix로 수행 | `zlink-work/gates/<tag>/` |
 | 성능 측정 | `scripts/perf/perf-ticket.sh submit …` (티켓 큐, `perf-queue-runner.sh`) | CI에서는 하지 않음 | `.artifacts/perf-queue/`, `doc/perf/perf/` |
-| CI 보조 | `.github/actions/msvc-env`(Windows MSVC 환경), `scripts/ci/dotnet-test-retry.sh` | 워크플로우가 호출 | — |
+| CI 보조 | `.github/actions/msvc-env`(Windows MSVC 환경), `scripts/ci/dotnet-test.sh` | 워크플로우가 호출 | — |
 | 워크플로우 | `.github/workflows/`: `build.yml`, `bindings-release.yml`, `release-dotnet.yml`, `framework-release.yml`, `framework-cpp.yml`, `framework-node.yml`, `framework-dotnet.yml`, `pr-verify.yml`, `docs.yml`, (legacy) `core-conan-release.yml` | — | — |
 
 ## 3. 배포 순서
@@ -85,10 +85,11 @@ Python·Go·Rust binding은 `bindings-release.yml`에 job이 있으나 공개 �
    태그 전에 쓴다.
    upstream 저장소(`microsoft/vcpkg`·`conan-io/conan-center-index`)에 PR을 내는 것은 여전히
    사람이 한다. 초안 본문은 `doc/building/pr-drafts/`에 있다.
-5. Node lockfile: Framework Node를 게시한 뒤 `framework/languages/node`의 `tutorial`·`tutorial/StreamClient`·
-   `tutorial/HttpClient`·`quickstart`에서 `npm install --package-lock-only`로 lockfile을 다시 만들어
-   `main`에 넣는다. 릴리스 bump는 `package.json`만 올리며, 새 버전을 가리키는 lockfile은 패키지가
-   게시된 뒤에만 만들 수 있다(#1002).
+5. Node lockfile: Framework Node를 게시한 뒤 `framework/languages/node/perf`와
+   `framework/languages/node`의 `tutorial`·`tutorial/StreamClient`·`tutorial/HttpClient`·
+   `quickstart`에서 `npm install --package-lock-only`로 lockfile을 다시 만들어 `main`에 넣는다.
+   릴리스 bump는 `package.json`만 올리며, 새 버전을 가리키는 lockfile은 패키지가 게시된 뒤에만
+   만들 수 있다(#1002).
 
 dispatch 예시:
 
@@ -187,8 +188,8 @@ Windows에서 실제로 빌드·테스트가 도는 것은 `framework-dotnet.yml
 CI 워크플로우는 ref별 `concurrency`로 같은 브랜치의 새 실행이 진행 중인 run을 취소한다(matrix job
 누적과 릴리스 runner 기아 방지). 릴리스 워크플로우는 취소하지 않는다.
 Windows job의 MSVC 환경은 `.github/actions/msvc-env`(composite, Node 런타임 없음)로 잡는다.
-공유 러너의 스케줄러 노이즈로 실패한 .NET 단위 테스트는 `scripts/ci/dotnet-test-retry.sh`가 실패
-테스트만 한 번 재실행한다(테스트 허용치는 바꾸지 않는다).
+.NET 테스트는 `scripts/ci/dotnet-test.sh`가 한 번 실행하며, 실패한 테스트를 재실행하지 않는다.
+한 번의 실패도 고칠 결함이다.
 
 ## 9. 로컬에서 하는 것과 하지 않는 것
 

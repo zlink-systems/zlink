@@ -528,7 +528,7 @@ internal sealed class ZLinkActorInboundPipeline(
             frame.RequestId != 0
                 ? Diagnostics.ZLinkRuntimeMetrics.StartRequest(actor.Context.MeshName, "actor")
                 : null;
-        var requestOutcome = "completed";
+        var requestOutcome = Diagnostics.ZLinkRuntimeMetrics.RequestCompleted;
         try
         {
             await DispatchCurrentActorAsync(
@@ -542,16 +542,6 @@ internal sealed class ZLinkActorInboundPipeline(
                     callerOwnsDispatchTurn
                 )
                 .ConfigureAwait(false);
-        }
-        catch (TimeoutException)
-        {
-            requestOutcome = "timed_out";
-            throw;
-        }
-        catch (OperationCanceledException)
-        {
-            requestOutcome = "cancelled";
-            throw;
         }
         catch (ZLinkFrameworkException exception)
             when (allowCapture && IsUnitSealRefusal(exception, state))
@@ -583,9 +573,13 @@ internal sealed class ZLinkActorInboundPipeline(
             await CompleteMovingBoundaryAsync(frame, acknowledgeHandledFrame, cancellationToken)
                 .ConfigureAwait(false);
         }
-        catch
+        catch (Exception error)
         {
-            requestOutcome = "failed";
+            requestOutcome = Diagnostics.ZLinkRuntimeMetrics.RequestFailureOutcome(
+                error,
+                cancellationToken,
+                runtime.ShutdownToken
+            );
             throw;
         }
         finally
@@ -743,7 +737,8 @@ internal sealed class ZLinkActorInboundPipeline(
         IZLinkActor actor,
         ZLinkActorRuntimeState state,
         ZLinkSpotActorFrame frame,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool callerOwnsDispatchTurn
     )
     {
         Exception? failure = null;
@@ -758,9 +753,18 @@ internal sealed class ZLinkActorInboundPipeline(
         {
             try
             {
-                await endpoint
-                    .NotifyDisconnectedAsync(actor.Context.ActorId, cancellationToken)
-                    .ConfigureAwait(false);
+                if (callerOwnsDispatchTurn)
+                    await runtime
+                        .NotifyActorDisconnectedByIdAsync(
+                            actor.Context.ActorId,
+                            cancellationToken,
+                            callerOwnsDispatchTurn: true
+                        )
+                        .ConfigureAwait(false);
+                else
+                    await endpoint
+                        .NotifyDisconnectedAsync(actor.Context.ActorId, cancellationToken)
+                        .ConfigureAwait(false);
             }
             catch (Exception exception) when (frame.Header.Kind == ZlinkStreamMessageKind.Request)
             {
@@ -769,8 +773,11 @@ internal sealed class ZLinkActorInboundPipeline(
             }
             finally
             {
+                // Session-Actor binding §7: the Actor owner ends only its own binding here.
+                // The Session owner removes its entry in its own cleanup after this reply,
+                // also when both owners share one node.
                 if (bindingToken.Length != 0)
-                    runtime.RemoveActorSessionBinding(actor.Context.ActorId, bindingToken);
+                    runtime.UnbindActorSession(actor.Context.ActorId, bindingToken);
             }
         }
         else if (malformed && runtime.Flow.DispatchErrorsEnabled)
@@ -825,7 +832,13 @@ internal sealed class ZLinkActorInboundPipeline(
         {
             try
             {
-                await DispatchDisconnectedAsync(actor, state, frame, cancellationToken)
+                await DispatchDisconnectedAsync(
+                        actor,
+                        state,
+                        frame,
+                        cancellationToken,
+                        callerOwnsDispatchTurn
+                    )
                     .ConfigureAwait(false);
             }
             finally
@@ -851,29 +864,18 @@ internal sealed class ZLinkActorInboundPipeline(
         try
         {
             if (
-                await ZLinkRemoteSessionBindingHandler
-                    .TryHandleAsync(
-                        runtime,
-                        actor,
-                        state,
-                        frame,
-                        boundSession,
-                        acknowledgeHandledFrame,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false)
-            )
-            {
-                return;
-            }
-
-            if (
                 frame.Header.Kind == ZlinkStreamMessageKind.Request
                 && frame.Header.RequestSeq is not null
             )
             {
                 var reply = disconnected
-                    ? await DispatchDisconnectedAsync(actor, state, frame, cancellationToken)
+                    ? await DispatchDisconnectedAsync(
+                            actor,
+                            state,
+                            frame,
+                            cancellationToken,
+                            callerOwnsDispatchTurn
+                        )
                         .ConfigureAwait(false)
                     : await endpoint
                         .DispatchForReplyAsync(
@@ -1254,6 +1256,15 @@ internal sealed class ZLinkUserSpotActorInboundEndpoint(
         bool callerOwnsDispatchTurn = false
     )
     {
+        if (callerOwnsDispatchTurn && state.LiveActivation is { } activation)
+            return activation.InvokeOwnedActorPacketAsync(
+                actor,
+                state,
+                header,
+                body,
+                sourceSessionRid,
+                cancellationToken
+            );
         return dispatcher.DispatchAsync(
             actor,
             state,
@@ -1275,6 +1286,15 @@ internal sealed class ZLinkUserSpotActorInboundEndpoint(
         bool callerOwnsDispatchTurn = false
     )
     {
+        if (callerOwnsDispatchTurn && state.LiveActivation is { } activation)
+            return activation.InvokeOwnedActorPacketForReplyAsync(
+                actor,
+                state,
+                header,
+                body,
+                sourceSessionRid,
+                cancellationToken
+            );
         return dispatcher.DispatchForReplyAsync(
             actor,
             state,

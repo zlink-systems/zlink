@@ -148,7 +148,8 @@ internal static class ZLinkLocationStoreRead
         catch (Exception error)
         {
             health?.ReportFailure(source, error);
-            ZLinkRuntimeMetrics.RecordLocationStoreError("read");
+            if (error is ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.Unavailable })
+                ZLinkRuntimeMetrics.RecordLocationStoreError("read");
             throw;
         }
     }

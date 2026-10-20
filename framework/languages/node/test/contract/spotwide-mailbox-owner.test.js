@@ -56,9 +56,9 @@ async function assertConsumerOwnership(injectIndependentConsumer = false) {
   for (const [id, actor] of executor.actorExecutors) {
     const queue = actor.scheduler;
     const take = queue.takeSelected;
-    queue.takeSelected = function (selection) {
-      dequeues.push({ id, sequence: selection.record.acceptedSequence });
-      return take.call(this, selection);
+    queue.takeSelected = function (record) {
+      dequeues.push({ id, sequence: record.acceptedSequence });
+      return take.call(this, record);
     };
   }
   try {

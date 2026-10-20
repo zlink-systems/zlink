@@ -23,7 +23,8 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         IZLinkBackendActorMessageFollowIngress,
         IZLinkBackendMessageFollowNotifications,
         IZLinkBackendBoundSessionReplacementNotifications,
-        IZLinkBackendBoundSessionClose
+        IZLinkBackendBoundSessionClose,
+        IZLinkBackendBoundSessionBind
 {
     private readonly ZLinkManagedMeshNode _node;
     private readonly ZLinkMeshCompletionTable _completions;
@@ -52,6 +53,23 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         _messageFollowIngress = new ActorMessageFollowIngressAdapter(_pump);
         _node.SetActorMessageFollowIngressTarget(_messageFollowIngress);
     }
+
+    public void SetBoundSessionBindHandler(
+        Func<
+            RoutingId,
+            ulong,
+            ServiceWireCodec.BoundSessionBind38,
+            Action,
+            CancellationToken,
+            ValueTask
+        > handler
+    ) => _node.SetBoundSessionBindHandler(handler);
+
+    public ValueTask<ServiceWireCodec.RequestSpecificTailCase2?> BindBoundSessionAsync(
+        ServiceWireCodec.BoundSessionBind38 request,
+        TimeSpan timeout,
+        CancellationToken cancellationToken
+    ) => _node.BindBoundSessionAsync(request, timeout, cancellationToken);
 
     public void SetBoundSessionCloseHandler(
         Func<

@@ -93,38 +93,35 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         var node = new CapturingSpotNode();
         var attempts = 0;
-        node.NodeRequestHandler = (parts, timeout) =>
+        node.CanonicalBindHandler = (request, timeout, cancellationToken) =>
         {
             attempts++;
-            Assert.True(node.LastNodeRequestDurable);
             Assert.Equal(1, attempts);
             Assert.True(timeout > TimeSpan.Zero);
-            var header = ZLinkEnvelopeCodec.DecodeHeader(parts[0]);
-            var responseHeader = header with { Kind = ZLinkMessageKind.Response };
-            var response = new ZLinkRemoteSessionBindResponse(
-                !rejected,
-                1,
-                "entry",
-                RoutingId.From("remote-node").ToBytes().ToArray(),
-                3,
-                5,
-                7
-            );
-            return ValueTask.FromResult(
-                new ZLinkBackendRouteReceived(
-                    ZLinkClientCallCodec.EncodeEnvelopeParts(
-                        responseHeader,
-                        response,
-                        new ZLinkFrameworkRegistration().Codecs
-                    ),
-                    null,
-                    null,
-                    null,
-                    null
+            var frames =
+                Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.EncodeBoundSessionBind38(
+                    request,
+                    Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.DecodeContext.Empty
+                );
+            Assert.Equal(38, frames[0][3]);
+            var decoded =
+                Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.DecodeBoundSessionBind38(
+                    frames,
+                    Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.DecodeContext.Empty
+                );
+            Assert.Equal("actor-a", decoded.Actor.Actor.ActorId.Value);
+            return rejected
+                ? ValueTask.FromException<Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.RequestSpecificTailCase2?>(
+                    new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.Unavailable,
+                        "Bind refused."
+                    )
                 )
-            );
+                : ValueTask.FromResult<Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.RequestSpecificTailCase2?>(
+                    new(new(1), request.Actor.ExpectedAuthorityOwnerGeneration)
+                );
         };
-        var (runtime, _) = await CreateStartedRuntimeAsync(node);
+        var (runtime, actor) = await CreateStartedRuntimeAsync(node);
         try
         {
             var context = new ZLinkSessionContext(
@@ -136,13 +133,13 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             var bind = context.ActorCoordinator.BindActorAsync(
                 context,
-                new ActorRef("remote-bind-actor", 1, "entry", RoutingId.From("remote-node")),
+                new ActorRef(actor.ActorId, actor.Generation, "entry", actor.NodeRid),
                 CancellationToken.None
             );
             if (rejected)
             {
                 var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() => bind.AsTask());
-                Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, error.Kind);
+                Assert.Equal(ZLinkFrameworkErrorKind.Unavailable, error.Kind);
             }
             else
                 Assert.NotNull(await bind);

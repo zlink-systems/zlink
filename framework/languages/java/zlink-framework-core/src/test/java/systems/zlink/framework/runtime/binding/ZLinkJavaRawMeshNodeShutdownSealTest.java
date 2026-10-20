@@ -222,11 +222,8 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
             try (var replacement = new ZLinkJavaRawMeshNode(context, "mesh")) {
                 replacement.setRoutingId(remoteRid);
                 replacement.setBind(remoteEndpoint);
-                replacement.start();
-                // Transport loss leaves the intent open for Core's reconnect
-                // (mesh-node §7.1); replacement closes it through the owner.
-                replaceAfterClose(
-                        local, remoteEndpoint, remoteRid, replacement.lifecycleGeneration());
+                // Observe the selected-route turn before publishing that route.
+                // With no deadline, an idle owner has no subsequent polling turn.
                 var selectedRouteObserved = new CountDownLatch(2);
                 local.setPeerAdmissionSealGate(
                         () -> {
@@ -235,6 +232,11 @@ final class ZLinkJavaRawMeshNodeShutdownSealTest {
                             }
                             return drains.isSealed("mesh");
                         });
+                replacement.start();
+                // Transport loss leaves the intent open for Core's reconnect
+                // (mesh-node §7.1); replacement closes it through the owner.
+                replaceAfterClose(
+                        local, remoteEndpoint, remoteRid, replacement.lifecycleGeneration());
                 await(() -> selectedRouteObserved.getCount() == 0);
                 assertFalse(
                         local.helloExchanges.containsKey(remoteRid),

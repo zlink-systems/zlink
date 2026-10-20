@@ -164,9 +164,7 @@ public final class ZLinkServiceOperationRegistryWakeTest {
                         },
                         new IllegalStateException("closed"),
                         clock::get);
-        var field = ZLinkServiceOperationRegistry.class.getDeclaredField("gate");
-        field.setAccessible(true);
-        gate = field.get(registry);
+        gate = registry.deadlineGateForTest();
         int serialReturns;
         try (registry) {
             var operation = registry.<Integer>register(Duration.ofMillis(100));
@@ -200,8 +198,12 @@ public final class ZLinkServiceOperationRegistryWakeTest {
             if (returns.get() != idleBefore || expires.get() != expiryBefore)
                 throw new AssertionError("idle polling");
             // The first registration wakes indefinite wait. Completing it leaves its timed visit.
-            var later = registry.register(Duration.ofMillis(200));
+            var later = registry.register(Duration.ofSeconds(30));
             parked();
+            if (returns.get() - idleBefore != 1)
+                throw new AssertionError("long deadline must wake the idle owner once");
+            System.out.printf(
+                    "long_deadline seconds=30 wait_returns=%d%n", returns.get() - idleBefore);
             if (!registry.discard(later.id())) throw new AssertionError("discard failed");
             ZLinkServiceOperationRegistry.Operation<Object> earlier;
             synchronized (gate) {

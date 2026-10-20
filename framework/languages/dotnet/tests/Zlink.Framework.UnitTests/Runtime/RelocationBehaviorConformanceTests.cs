@@ -2457,6 +2457,10 @@ internal sealed class RelocationBehaviorTrace
         StringComparer.Ordinal
     );
 
+    internal ConcurrentQueue<(
+        string Node,
+        ZLinkActorJoinCompletion Completion
+    )> JoinCompletions { get; } = new();
     internal string? ActorId { get; set; }
     internal RoutingId SourceNodeRid { get; set; }
     internal RoutingId TargetNodeRid { get; set; }
@@ -2805,7 +2809,9 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
         Action<IServiceCollection>? configureServices = null,
         RoutingId? hiddenAutoConnectPeer = null,
         Action? reconcileReadStarted = null,
-        Task? reconcileReadGate = null
+        Task? reconcileReadGate = null,
+        Func<IZLinkMeshNodeLocationResolver, IZLinkMeshNodeLocationResolver>? meshResolverWrapper =
+            null
     )
     {
         var services = new ServiceCollection();
@@ -2887,6 +2893,10 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
                     ?.RegisterBeforeStoreDispose(host);
                 return host;
             });
+        if (meshResolverWrapper is not null)
+            services.AddSingleton<IZLinkMeshNodeLocationResolver>(provider =>
+                meshResolverWrapper(provider.GetRequiredService<ZLinkStoreLocationResolvers>())
+            );
         var provider = services.BuildServiceProvider();
         if (
             Environment.GetEnvironmentVariable(RelocationBehaviorHost.FlowPathEnvironmentVariable)
@@ -2952,7 +2962,7 @@ internal sealed record BehaviorNode(string Name);
 
 internal sealed record BehaviorCreate(int State);
 
-internal sealed record BeginBehaviorJoin(string TargetSpotId);
+internal sealed record BeginBehaviorJoin(string TargetSpotId, TimeSpan? JoinTimeout = null);
 
 internal sealed record BehaviorWork(string Marker);
 
@@ -2976,6 +2986,7 @@ internal sealed class BehaviorActor(
         CancellationToken cancellationToken
     )
     {
+        trace.JoinCompletions.Enqueue((node.Name, completion));
         if (trace.ExpectedJoinAccepted)
             Assert.IsType<ZLinkActorJoinCompletion.Accepted>(completion);
         else
@@ -3160,7 +3171,7 @@ internal sealed class BeginBehaviorJoinHandler(RelocationBehaviorTrace trace)
         trace.Record("relocationRequested");
         actor
             .Context.JoinSpot(request.TargetSpotId, request)
-            .Timeout(TimeSpan.FromSeconds(15))
+            .Timeout(request.JoinTimeout ?? TimeSpan.FromSeconds(15))
             .Defer();
         await trace.ReleaseJoinHandler.Task.WaitAsync(cancellationToken);
         return new BehaviorAck("join");
@@ -3790,7 +3801,8 @@ internal interface IProbedBackendSpotNode
         IZLinkBackendLocalActorAuthorityReader,
         IZLinkBackendActorMessageFollowIngress,
         IZLinkBackendMessageFollowNotifications,
-        IZLinkBackendBoundSessionReplacementNotifications;
+        IZLinkBackendBoundSessionReplacementNotifications,
+        IZLinkBackendBoundSessionBind;
 
 internal class ProbedBackendSpotNode : DispatchProxy
 {

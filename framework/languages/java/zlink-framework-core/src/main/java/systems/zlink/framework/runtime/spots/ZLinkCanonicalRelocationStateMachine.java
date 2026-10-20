@@ -90,6 +90,11 @@ final class ZLinkCanonicalRelocationStateMachine
     private Runnable sourceQuiescenceChanged = () -> {};
     private final java.util.function.BooleanSupplier targetAdmissionSealed;
 
+    @Override
+    public boolean sourceStopped() {
+        return node.status().state() == MeshNodeState.STOPPED;
+    }
+
     void onSourceQuiescenceChanged(Runnable listener) {
         sourceQuiescenceChanged = Objects.requireNonNull(listener, "listener");
     }
@@ -396,7 +401,10 @@ final class ZLinkCanonicalRelocationStateMachine
         //  boundary batch stay retained until settle() confirms authority (spec 28 §4.4).
         attempt.cutover(encodedCutover);
         batch.observeSubmission(node.observePeerRoute(targetNodeRid));
-        return send(targetNodeRid, encodedCutover);
+        return send(targetNodeRid, encodedCutover)
+                .whenComplete(
+                        (ignored, failure) ->
+                                attempt.cutoverTerminalNanos().complete(System.nanoTime()));
     }
 
     /**
@@ -420,7 +428,6 @@ final class ZLinkCanonicalRelocationStateMachine
         Objects.requireNonNull(preserveAt, "preserveAt");
         Fence key = Fence.from(fence);
         SourceAttempt attempt = requireSource(key, targetNodeRid);
-        long settleNanos = System.nanoTime();
         if (openSourceQuiescenceWindows.incrementAndGet() == 1) {
             sourceQuiescenceChanged.run();
         }
@@ -439,10 +446,20 @@ final class ZLinkCanonicalRelocationStateMachine
                             Instant.now().plus(transferOptions.messageFollowDuration()),
                             () -> {
                                 releaseSourceQuiescenceWindow();
-                                ZLinkRuntimeMetrics.record(
-                                        "zlink.relocation.route_convergence",
-                                        Duration.ofNanos(System.nanoTime() - settleNanos),
-                                        Map.of());
+                                long expiredNanos = System.nanoTime();
+                                attempt.cutoverTerminalNanos()
+                                        .thenAccept(
+                                                submittedNanos ->
+                                                        ZLinkRuntimeMetrics.record(
+                                                                ZLinkRuntimeMetrics.Metric
+                                                                        .RELOCATION_ROUTE_CONVERGENCE
+                                                                        .metricName(),
+                                                                Duration.ofNanos(
+                                                                        Math.max(
+                                                                                0L,
+                                                                                expiredNanos
+                                                                                        - submittedNanos)),
+                                                                unitTags(attempt.prepare())));
                             });
                 });
     }
@@ -565,12 +582,7 @@ final class ZLinkCanonicalRelocationStateMachine
                         });
     }
 
-    /**
-     * Classifies one read of the primary authority record against the source fence: target owner
-     * means the target commit is confirmed; Missing ends the expired owner without Preserve. Any
-     * other StoreVersion means the target commit can no longer succeed, so the source keeps
-     * authority.
-     */
+    /** Classifies the existing source fence, including later owners of the same object (§10). */
     private static Optional<AuthoritySettlement> settlementOf(
             ZLinkAuthorityReadResult read,
             ZLinkSpotRetireControl.StageRequest request,
@@ -578,10 +590,25 @@ final class ZLinkCanonicalRelocationStateMachine
         if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
             return Optional.of(new AuthoritySettlement(Settlement.SOURCE_LEASE_EXPIRED, null));
         }
-        if (snapshot.ownerId().equals(request.targetOwnerId())
-                && snapshot.ownerLeaseGeneration() == request.targetOwnerLeaseGeneration()) {
-            return Optional.of(new AuthoritySettlement(Settlement.TARGET_COMMITTED, snapshot));
+        var source = primary(request.participants());
+        boolean sourceOwner =
+                snapshot.ownerId().equals(request.sourceOwnerId())
+                        && snapshot.ownerLeaseGeneration() == request.sourceOwnerLeaseGeneration();
+        if (snapshot.objectGeneration() == source.objectGeneration()
+                && snapshot.authorityOwnerGeneration() > source.sourceAuthorityOwnerGeneration()
+                && !sourceOwner) {
+            boolean firstTarget =
+                    snapshot.ownerId().equals(request.targetOwnerId())
+                            && snapshot.ownerLeaseGeneration()
+                                    == request.targetOwnerLeaseGeneration();
+            return Optional.of(
+                    new AuthoritySettlement(
+                            Settlement.TARGET_COMMITTED, firstTarget ? snapshot : null));
         }
+        if (!sourceOwner
+                || snapshot.objectGeneration() != source.objectGeneration()
+                || snapshot.authorityOwnerGeneration() != source.sourceAuthorityOwnerGeneration())
+            return Optional.of(new AuthoritySettlement(Settlement.SOURCE_LEASE_EXPIRED, null));
         return snapshot.storeVersion().equals(expectedStoreVersion)
                 ? Optional.empty()
                 : Optional.of(new AuthoritySettlement(Settlement.SOURCE_PRESERVED, null));
@@ -1211,7 +1238,9 @@ final class ZLinkCanonicalRelocationStateMachine
                             "cutover_timeout: relay-ready wait elapsed without a verified"
                                     + " CUTOVER; target CAS and dispatch stay closed: "
                                     + fence.id());
-                    ZLinkRuntimeMetrics.increment("zlink.relocation.cutover_timeout", Map.of());
+                    ZLinkRuntimeMetrics.increment(
+                            ZLinkRuntimeMetrics.Metric.RELOCATION_CUTOVER_TIMEOUT.metricName(),
+                            unitTags(attempt.prepare()));
                     watchUnverifiedTarget(fence, attempt);
                 });
     }
@@ -1323,9 +1352,10 @@ final class ZLinkCanonicalRelocationStateMachine
                             long committedNanos = attempt.committedNanos();
                             if (committedNanos != 0) {
                                 ZLinkRuntimeMetrics.record(
-                                        "zlink.relocation.target_resume",
+                                        ZLinkRuntimeMetrics.Metric.RELOCATION_TARGET_RESUME
+                                                .metricName(),
                                         Duration.ofNanos(System.nanoTime() - committedNanos),
-                                        Map.of());
+                                        unitTags(attempt.prepare()));
                             }
                             return ignored;
                         })
@@ -2195,6 +2225,10 @@ final class ZLinkCanonicalRelocationStateMachine
         return awaitStateLane(stateLane, work);
     }
 
+    private static Map<String, String> unitTags(ZLinkCanonicalRelocationProtocol.Prepare prepare) {
+        return ZLinkRuntimeMetrics.relocationUnitTags(prepare.object().kind());
+    }
+
     private record PublicationClaim(
             CompletionStage<Void> publication, boolean owner, List<byte[]> verifiedBatch) {
         PublicationClaim(CompletionStage<Void> publication, boolean owner) {
@@ -2214,7 +2248,8 @@ final class ZLinkCanonicalRelocationStateMachine
             CompletableFuture<Void> ready,
             AtomicInteger activeWaiters,
             RelayBatch batch,
-            AtomicReference<byte[]> encodedCutover) {
+            AtomicReference<byte[]> encodedCutover,
+            CompletableFuture<Long> cutoverTerminalNanos) {
         SourceAttempt(
                 ZLinkSpotRetireControl.StageRequest request,
                 ZLinkCanonicalRelocationProtocol.Prepare prepare) {
@@ -2224,7 +2259,8 @@ final class ZLinkCanonicalRelocationStateMachine
                     new CompletableFuture<>(),
                     new AtomicInteger(),
                     new RelayBatch(),
-                    new AtomicReference<>());
+                    new AtomicReference<>(),
+                    new CompletableFuture<>());
         }
 
         RoutingId targetNodeRid() {

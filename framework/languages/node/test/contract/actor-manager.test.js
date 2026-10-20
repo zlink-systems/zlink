@@ -1,3 +1,4 @@
+const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const { liveUserSpotAuthority } = require('../helpers/live-user-spot-authority');
 const assert = require('node:assert/strict');
 const test = require('node:test');
@@ -2330,7 +2331,7 @@ test('ZLinkActorNativeJoinCoordinator keeps remote joins on the formal Core surf
           events.push(`canRoute:${routerChannelId}`);
           return true;
         },
-        async request(routerChannelId, targetNodeRid, packetName, payload) {
+        request(routerChannelId, targetNodeRid, packetName, payload) { return prepareZLinkRequestReply((async () => {
           events.push(`routeRequest:${payload.phase}:${routerChannelId}:${targetNodeRid}:${payload.spotId}:${packetName}:${payload.actorId}:${payload.actorType}:${Buffer.from(payload.request, 'base64').toString()}`);
           if (payload.phase === 'admission') {
             assert.equal(typeof payload.transferId, 'string');
@@ -2351,7 +2352,7 @@ test('ZLinkActorNativeJoinCoordinator keeps remote joins on the formal Core surf
             actorGeneration: '2',
             reply: Buffer.from('routed-reply').toString('base64')
           };
-        }
+        })(), identityRequestReply); }
       },
       async remoteActorBinder(actorRef) {
         events.push(`bind:${actorRef.nodeRid}:${actorRef.actorId}:${actorRef.objectGeneration}`);
@@ -2581,7 +2582,7 @@ test('remote relocation failures before READY preserve source ownership and neve
         },
         routedTransport: {
           canRoutePacketChannel() { return true; },
-          async request(_channel, _nodeRid, _packetName, payload) {
+          request(_channel, _nodeRid, _packetName, payload) { return prepareZLinkRequestReply((async () => {
             events.push(`request:${payload.phase}`);
             assert.equal(payload.phase, 'admission');
             return {
@@ -2590,7 +2591,7 @@ test('remote relocation failures before READY preserve source ownership and neve
               actorId: 'alice',
               actorGeneration: '1'
             };
-          }
+          })(), identityRequestReply); }
         },
         actorJoinRelocation: {
           async relocateActorJoin({ actor: joinedActor, state, signal }) {
@@ -2693,7 +2694,7 @@ test('cross-owner formal join rejection returns its typed terminal to the source
       },
       routedTransport: {
         canRoutePacketChannel() { return true; },
-        async request(_channel, _nodeRid, _packetName, payload) {
+        request(_channel, _nodeRid, _packetName, payload) { return prepareZLinkRequestReply((async () => {
           return payload.phase === 'admission'
             ? {
                 accepted: true,
@@ -2707,7 +2708,7 @@ test('cross-owner formal join rejection returns its typed terminal to the source
                 actorId: 'alice',
                 actorGeneration: '1'
               };
-        }
+        })(), identityRequestReply); }
       },
       actorJoinRelocation: {
         async relocateActorJoin() {
@@ -2804,7 +2805,7 @@ function boundSessionCommand44Harness(overrides = {}) {
   const runtime = new ZLinkActorTransferRuntime({
     routeTransport: {
       async sendToSpot() { throw new Error('command 44 must use the service-wire path'); },
-      async requestToSpot() { throw new Error('command 44 must not use request/reply transport'); }
+      requestToSpot() { return prepareZLinkRequestReply((async () => { throw new Error('command 44 must not use request/reply transport'); })(), identityRequestReply); }
     },
     spotManager: () => undefined,
     actorManager: () => ({ getState: () => state }),
@@ -2931,7 +2932,7 @@ test('target route opening remains a no-op when no relocation route was publishe
   let wireCalls = 0;
   const runtime = new ZLinkActorTransferRuntime({
     routeTransport: {
-      async requestToSpot() { wireCalls++; },
+      requestToSpot() { return prepareZLinkRequestReply((async () => { wireCalls++; })(), identityRequestReply); },
       async sendToSpot() { wireCalls++; }
     },
     spotManager: () => undefined,
@@ -3203,7 +3204,7 @@ test('precommit abort reopens source admission and replays backlog before one-wa
   const coordinator = new framework.ZLinkActorHandoffCoordinator({
     routedTransport: {
       async sendToSpot() {},
-      async requestToSpot() { return { ok: true }; }
+      requestToSpot() { return prepareZLinkRequestReply((async () => { return { ok: true }; })(), identityRequestReply); }
     },
     requestSource: () => ({
       meshName: 'mesh',
@@ -3399,7 +3400,7 @@ test('target route opening never submits a second route after command 44', async
   let routeSubmissions = 0;
   const runtime = new ZLinkActorTransferRuntime({
     routeTransport: {
-      async requestToSpot() { throw new Error('route opening must not request an ACK'); },
+      requestToSpot() { return prepareZLinkRequestReply((async () => { throw new Error('route opening must not request an ACK'); })(), identityRequestReply); },
       async sendToSpot() { throw new Error('route opening must not use legacy routing'); }
     },
     spotManager: () => undefined,

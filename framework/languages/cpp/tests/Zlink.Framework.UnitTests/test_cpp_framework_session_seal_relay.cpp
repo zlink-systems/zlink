@@ -155,9 +155,9 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
                                                      binding.binding_generation));
     ASSERT_TRUE (
       gateway.record_session_relay_source (actor, session_rid, binding.binding_generation));
-    const auto seal =
-      sessions.seal_remote_route (connection.connection_id, binding.binding_generation,
-                                  actor_object.key, actor_object.object_generation);
+    const auto seal = sessions.seal_remote_route (
+      connection.connection_id, binding.binding_generation, actor_object.key,
+      actor_object.object_generation, binding.owner_lease_generation);
     ASSERT_EQ (seal.error, stateful::stateful_error_t::none);
 
     std::optional<session_actor_t> other_bound;
@@ -177,9 +177,9 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
                                                          17, other_binding.binding_generation));
         ASSERT_TRUE (gateway.record_session_relay_source (other_actor, session_rid,
                                                           other_binding.binding_generation));
-        const auto other_seal =
-          sessions.seal_remote_route (connection.connection_id, other_binding.binding_generation,
-                                      other_object.key, other_object.object_generation);
+        const auto other_seal = sessions.seal_remote_route (
+          connection.connection_id, other_binding.binding_generation, other_object.key,
+          other_object.object_generation, other_binding.owner_lease_generation);
         ASSERT_EQ (other_seal.error, stateful::stateful_error_t::none);
         other_barrier = other_seal.barrier;
         ASSERT_TRUE (
@@ -235,8 +235,7 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         }));
         lock.unlock ();
         ASSERT_TRUE (gateway.bound_session_route_async (actor).result ().value ());
-        EXPECT_EQ (gateway.bound_session_route_async (actor).result ().value ()->session_sequence,
-                   2u);
+
         EXPECT_EQ (native->pending_operation_count (), 0u);
     } else {
         EXPECT_TRUE (terminal) << "delivery failure must not change accepted caller completion";
@@ -260,8 +259,7 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         }
         lock.unlock ();
         EXPECT_TRUE (sessions.remote_route_sealed ("seal-other-actor"));
-        EXPECT_EQ (gateway.bound_session_route_async (actor).result ().value ()->session_sequence,
-                   2u);
+
         ASSERT_EQ (sessions.abort_barrier (other_barrier), stateful::stateful_error_t::none);
         lock.lock ();
         ASSERT_TRUE (events_changed.wait_for (lock, 2s, [&] {
@@ -293,6 +291,15 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
             }
         }
         EXPECT_EQ (drops, 1u);
+    }
+    if (!close_owner) {
+        // The native Session owner allocates and completes ingress identities.
+        const auto [admission, next] = sessions.admit_inbound (binding);
+        ASSERT_EQ (admission, stateful::stateful_error_t::none);
+        ASSERT_TRUE (next);
+        EXPECT_EQ (next->inbound_sequence, 3u);
+        EXPECT_EQ (sessions.complete_inbound (*next), stateful::stateful_error_t::none);
+        EXPECT_NE (sessions.complete_inbound (*next), stateful::stateful_error_t::none);
     }
 }
 
@@ -397,15 +404,15 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
           if (record.kind == host::record_kind_t::completion)
               return;
           messaging::message_parts_t encoded (std::move (parts));
-          const auto header = messaging::envelope_codec_t{}.decode_header (encoded);
+          const auto header =
+            decode_actor_packet_header (encoded, stream_message_kind_t::request, true);
           ASSERT_TRUE (header);
           EXPECT_EQ (header.value ().correlation_id, "seal-wire-correlation");
           EXPECT_EQ (header.value ().flow_id, "0199a500-0000-7000-8000-000000000001");
           EXPECT_EQ (header.value ().flow_origin, flow_origin_t::inbound);
           auto response = header.value ();
           response.kind = messaging::message_kind_t::response;
-          auto reply = messaging::envelope_codec_t{}.encode_raw_body_parts (
-            response, zlink::message_t::from ("reply"));
+          auto reply = encode_actor_reply (response, zlink::message_t::from ("reply"));
           EXPECT_EQ (host::reply (record.reply_token, reply.items ()), zlink::submit_result_t::ok);
           received.set_value ();
       },
@@ -711,8 +718,8 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
         header.message_name = "SessionIdentityRequest";
         header.content_type = "application/json";
         header.correlation_id = "same-upstream-correlation";
-        auto encoded = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
-          header, zlink::message_t::from (std::move (payload)));
+        auto encoded =
+          detail::encode_actor_packet (header, zlink::message_t::from (std::move (payload)));
         auto parts = std::move (encoded).take_items ();
         // Redeliver the received operation at the Framework ingress boundary.
         // Submitting another local client request would allocate a new operation.
@@ -770,18 +777,7 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
               framework_error_kind_t::deadline_exceeded, "replayed request did not reply");
         EXPECT_EQ (reply_calls->load (), 1u);
         runtime::messaging::message_parts_t response (reply.get ());
-        const auto response_header =
-          runtime::messaging::envelope_codec_t{}.decode_header (response);
-        if (!response_header)
-            return result_t<std::optional<zlink::message_t>>::failure (
-              response_header.error_kind (), response_header.error ()->what ());
-        if (response_header.value ().kind == runtime::messaging::message_kind_t::error)
-            return result_t<std::optional<zlink::message_t>>::failure (
-              framework_error_kind_t::internal_failure,
-              response_header.value ().error_message.value_or ("replayed request failed"));
-        const auto body = runtime::messaging::envelope_codec_t{}.decode_body (response);
-        return body ? result_t<std::optional<zlink::message_t>>::success (body.value ())
-                    : result_t<std::optional<zlink::message_t>>::success (std::nullopt);
+        return detail::decode_actor_reply (response);
     };
     auto stale_route = *original_route;
     ++stale_route.owner_lease_generation;

@@ -513,7 +513,8 @@ internal sealed class ZLinkActorRuntimeState(
         ulong acceptedHighWater,
         string sessionOwnerId = "",
         ulong sessionOwnerLeaseGeneration = 0,
-        Action<ZLinkActorRuntimeState>? acceptAuthority = null
+        Action<ZLinkActorRuntimeState>? acceptAuthority = null,
+        Action? beforePublish = null
     )
     {
         return RunState(() =>
@@ -536,15 +537,36 @@ internal sealed class ZLinkActorRuntimeState(
             );
 
             PurgeExpiredSessionBindingTombstones();
-            EnsureBindingTokenCanBeUsed(replacement);
-            if (_boundSession is { } current && SameBindingToken(current, replacement))
+            if (_boundSession is { } current)
             {
-                EnsureExactBindingIdentity(current, replacement);
-                return new ZLinkActorSessionBindingTransition(replacement, null, Changed: false);
+                if (
+                    current.SessionNodeRid == replacement.SessionNodeRid
+                    && current.SessionOwnerNodeGeneration == replacement.SessionOwnerNodeGeneration
+                    && current.SessionRid == replacement.SessionRid
+                    && current.BindingGeneration == replacement.BindingGeneration
+                )
+                {
+                    beforePublish?.Invoke();
+                    return new ZLinkActorSessionBindingTransition(current, null, Changed: false);
+                }
             }
+            if (
+                _boundSession is { } registered
+                && registered.SessionNodeRid == replacement.SessionNodeRid
+                && registered.SessionOwnerNodeGeneration == replacement.SessionOwnerNodeGeneration
+                && replacement.BindingGeneration <= registered.BindingGeneration
+            )
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.Unavailable,
+                    $"Actor '{ActorId}' session binding generation is stale.",
+                    ZLinkRetryAdvice.DoNotRetry
+                );
+            EnsureBindingTokenCanBeUsed(replacement);
             var previous = _boundSession;
             if (previous is { } retired)
-                RememberRetiredSessionBinding(retired);
+                RememberRetiredSessionBinding(retired, beforePublish);
+            else
+                beforePublish?.Invoke();
             _boundSession = replacement;
             return new ZLinkActorSessionBindingTransition(replacement, previous, Changed: true);
         });
@@ -651,7 +673,10 @@ internal sealed class ZLinkActorRuntimeState(
         );
     }
 
-    private void RememberRetiredSessionBinding(ZLinkActorBoundSession binding)
+    private void RememberRetiredSessionBinding(
+        ZLinkActorBoundSession binding,
+        Action? beforePublish = null
+    )
     {
         PurgeExpiredSessionBindingTombstones();
         if (
@@ -663,6 +688,7 @@ internal sealed class ZLinkActorRuntimeState(
                 $"Actor '{ActorId}' session binding tombstone capacity is exhausted.",
                 ZLinkRetryAdvice.RetryAfterBackoff
             );
+        beforePublish?.Invoke();
         _sessionBindingTombstones[binding.BindingToken] = new ZLinkActorSessionBindingTombstone(
             binding,
             _timeProvider.GetElapsedTime(0, _timeProvider.GetTimestamp())
@@ -1013,25 +1039,25 @@ internal sealed class ZLinkActorRuntimeState(
         });
     }
 
-    public void TombstoneSession(ZLinkActorBoundSession expected)
+    public void TombstoneSession(
+        ZLinkActorBoundSession expected,
+        Action<ZLinkActorRuntimeState>? acceptAuthority = null,
+        Action? reply = null
+    )
     {
         RunState(() =>
         {
+            acceptAuthority?.Invoke(this);
             PurgeExpiredSessionBindingTombstones();
             if (_sessionBindingTombstones.TryGetValue(expected.BindingToken, out var tombstone))
             {
-                EnsureExactBindingIdentity(tombstone.Binding, expected);
+                reply?.Invoke();
                 return;
             }
-            if (_boundSession is not { } current || !SameBindingToken(current, expected))
-                throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.Unavailable,
-                    $"Actor '{ActorId}' no longer has the exact session binding selected for replacement.",
-                    ZLinkRetryAdvice.RetryAfterBackoff
-                );
-            EnsureExactBindingIdentity(current, expected);
-            RememberRetiredSessionBinding(current);
-            _boundSession = null;
+            RememberRetiredSessionBinding(expected);
+            if (_boundSession is { } current && SameBindingToken(current, expected))
+                _boundSession = null;
+            reply?.Invoke();
         });
     }
 

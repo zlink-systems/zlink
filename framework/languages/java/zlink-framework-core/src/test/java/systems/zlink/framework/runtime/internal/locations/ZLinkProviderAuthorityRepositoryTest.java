@@ -59,6 +59,59 @@ import java.util.regex.Pattern;
 import java.util.stream.IntStream;
 
 final class ZLinkProviderAuthorityRepositoryTest {
+    @Test
+    void expiredReadyCommitKeepsDeadlineMeaningAndDoesNotPublish() throws Exception {
+        var fixture = reincarnationFixture("expired-ready");
+        var failure =
+                assertThrows(
+                        RuntimeException.class,
+                        () ->
+                                fixture.repository()
+                                        .commit(
+                                                fixture.reservation(),
+                                                new byte[] {2},
+                                                System.currentTimeMillis() - 1)
+                                        .toCompletableFuture()
+                                        .join());
+        while (failure instanceof java.util.concurrent.CompletionException)
+            failure = (RuntimeException) failure.getCause();
+        assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                assertInstanceOf(
+                                systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                                failure)
+                        .kind());
+        try (var probe =
+                        systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                                .install();
+                var metrics =
+                        new systems.zlink.framework.runtime.internal.metrics
+                                .ZLinkInstanceSpotMetrics("deadline", "room")) {
+            metrics.terminal(System.nanoTime(), failure);
+            assertEquals(
+                    "timed_out",
+                    probe.only("zlink.instance_spot.activations").tags().get("outcome"));
+        }
+        assertEquals(
+                ZLinkObjectCommitResult.COMMITTED,
+                fixture.repository()
+                        .commit(fixture.reservation(), new byte[] {2}, null, () -> false)
+                        .toCompletableFuture()
+                        .join());
+    }
+
+    @Test
+    void explicitCommitCancellationRemainsCancellation() throws Exception {
+        var fixture = reincarnationFixture("cancel-ready");
+        assertThrows(
+                java.util.concurrent.CancellationException.class,
+                () ->
+                        fixture.repository()
+                                .commit(fixture.reservation(), new byte[] {2}, null, () -> true)
+                                .toCompletableFuture()
+                                .join());
+    }
+
     private record ReclaimActor(systems.zlink.framework.actors.ZLinkActorContext context)
             implements systems.zlink.framework.actors.ZLinkActor {}
 
@@ -67,6 +120,84 @@ final class ZLinkProviderAuthorityRepositoryTest {
         public CompletionStage<systems.zlink.framework.actors.ZLinkActor> create(
                 systems.zlink.framework.actors.ZLinkActorContext context) {
             return CompletableFuture.completedFuture(new ReclaimActor(context));
+        }
+    }
+
+    @Test
+    void metricsReadOnlyConfirmedCapacityAndNeverQueryTheStoreDuringCollection() throws Exception {
+        var provider = new ZLinkInMemoryProviderLocationStore();
+        var repository = new ZLinkProviderLocationRepository(provider);
+        var owner =
+                assertInstanceOf(
+                                ZLinkOwnerLeaseClaimed.class,
+                                repository
+                                        .claimOwnerLease("metrics-owner", Duration.ofHours(1))
+                                        .toCompletableFuture()
+                                        .join())
+                        .token();
+        var descriptor = capacityDescriptor(owner);
+        try (var observation = repository.registerCapacityObservation()) {
+            repository
+                    .updateMeshNode(descriptor, ZLinkLocationWriteIntent.NEW_CLAIM)
+                    .toCompletableFuture()
+                    .join();
+            String key = ZLinkAuthorityKeyCodec.spot("metrics-spot");
+            var reservation =
+                    assertInstanceOf(
+                                    ZLinkObjectReserved.class,
+                                    repository
+                                            .reserve(
+                                                    capacityRequest(key, descriptor, owner),
+                                                    () -> false)
+                                            .toCompletableFuture()
+                                            .join())
+                            .reservation();
+            try (var metrics =
+                    systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                            .install()) {
+                var tags = Map.of("mesh_name", "game", "capacity_scope", "spot");
+                assertEquals(0, metrics.observable("zlink.object.capacity.active", tags));
+                assertEquals(1, metrics.observable("zlink.object.capacity.reserved", tags));
+                assertEquals(1, metrics.observable("zlink.object.capacity.limit", tags));
+                // Store confirmation moves one reserved slot to the active population.
+                assertEquals(
+                        ZLinkObjectCommitResult.COMMITTED,
+                        repository
+                                .commit(
+                                        reservation,
+                                        new systems.zlink.framework.runtime.locations
+                                                        .ZLinkServiceAuthorityPayloadCodec()
+                                                .encodeUser(
+                                                        systems.zlink.framework.runtime.locations
+                                                                .ZLinkServiceAuthorityPayloadCodec
+                                                                .State.READY,
+                                                        "room",
+                                                        "metrics-spot",
+                                                        owner.ownerId(),
+                                                        owner.leaseGeneration(),
+                                                        descriptor.meshName(),
+                                                        descriptor.rid(),
+                                                        descriptor.lifecycleGeneration()),
+                                        null,
+                                        () -> false)
+                                .toCompletableFuture()
+                                .join());
+                assertEquals(1, metrics.observable("zlink.object.capacity.active", tags));
+                assertEquals(0, metrics.observable("zlink.object.capacity.reserved", tags));
+                assertInstanceOf(
+                        ZLinkPlacementCapacityExhausted.class,
+                        repository
+                                .reserve(
+                                        capacityRequest(
+                                                ZLinkAuthorityKeyCodec.spot("overflow"),
+                                                descriptor,
+                                                owner),
+                                        () -> false)
+                                .toCompletableFuture()
+                                .join());
+                assertEquals(1, metrics.observable("zlink.object.capacity.active", tags));
+                assertEquals(0, metrics.observable("zlink.object.capacity.reserved", tags));
+            }
         }
     }
 

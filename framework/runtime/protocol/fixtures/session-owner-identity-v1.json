@@ -35,5 +35,11 @@
       "command51Hex": "5a4d013300076163746f722d6100000000000000010a6163746f722d6e6f64650000000000000002000000000000000300000000000000040c73657373696f6e2d6e6f646500000000000000051173657373696f6e2d686f73742d3766336100000000000000050973657373696f6e2d610000000000000007",
       "command54Hex": "5a4d0136000000000000000009076163746f722d6100000000000000010c73657373696f6e2d6e6f646500000000000000051173657373696f6e2d686f73742d3766336100000000000000050973657373696f6e2d610000000000000007"
     }
-  ]
+  ],
+  "descriptorUnavailable": {
+    "description": "Session-Actor binding section 4: without an admitted, lease-verified Session owner descriptor (or the host own descriptor on the same node) the operation is rejected with Unavailable. A rejected request carries the Unavailable representative on the wire: terminal result internalError with failure code routeNotConnected (framework error model section 2.1).",
+    "errorKind": "Unavailable",
+    "terminalResult": "105",
+    "failureCode": "13"
+  }
 }

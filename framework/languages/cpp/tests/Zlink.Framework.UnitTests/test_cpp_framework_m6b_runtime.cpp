@@ -81,6 +81,29 @@ namespace zlink::framework::runtime::host
 // between two management passes without waiting for time to pass.
 struct public_host_runtime_test_access_t
 {
+    static auto admit_seal (public_host_runtime_t &host,
+                            const protocol::session_relocation_seal_t &seal)
+    {
+        return host.admit_session_relocation_seal (
+          seal,
+          {seal.session_owner_id, static_cast<std::int64_t> (seal.session_owner_lease_generation)},
+          {}, {}, {});
+    }
+    static void expire_seal_results (public_host_runtime_t &host)
+    {
+        host._relocation_session_terminal_lane
+          .run ([&] {
+              for (auto &[key, record] : host._session_seal_terminals)
+                  record.expires_at = std::chrono::steady_clock::time_point::min ();
+          })
+          .get ();
+        host.flush_pending_session_relocation_seals ();
+    }
+
+    static void set_dispatch (public_host_runtime_t &host, dispatch_options_t options)
+    {
+        host._options.mesh.dispatch = std::move (options);
+    }
     using key_t = public_host_runtime_t::relocation_attempt_key_t;
 
     static bool restore_saved (public_host_runtime_t &host,
@@ -1262,7 +1285,7 @@ void verify_mesh_stop_drains_admitted_request_completion ()
     target.stop ();
 }
 
-void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
+void verify_remote_bound_session_bind_returns_terminal_fences ()
 {
     using namespace zlink::framework;
 
@@ -1326,51 +1349,83 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
                                         {"bound-owner", 13},
                                         target_descriptor.lifecycle_generation};
 
-    const auto request_and_reply = [&] (protocol::request_terminal_result terminal,
-                                        protocol::framework_error_code failure) {
-        auto result = std::async (std::launch::async, [&] {
-            return source
-              .bind_application_actor_session (
-                actor, zlink::routing_id_t::from ("bound-session-reply-session"), 1, route, 2s)
-              .result ();
-        });
-        const auto deadline = std::chrono::steady_clock::now () + 2s;
-        bool replied = false;
-        while (result.wait_for (0ms) != std::future_status::ready
-               && std::chrono::steady_clock::now () < deadline) {
-            const auto pump = target.native_node ()
-                                .transport ()
-                                .pump_one (mesh::service_liveness_registry_t::clock_t::now ())
-                                .result ()
-                                .value ();
-            assert (pump != mesh::raw_mesh_pump_result_t::protocol_error);
-            if (!replied && pump == mesh::raw_mesh_pump_result_t::infrastructure) {
-                auto claim = target.native_node ().transport ().mailbox ().try_claim (
-                  mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
-                if (claim && claim->records.size () == 1) {
-                    assert (protocol::decode_header (
-                              protocol::message_bytes (claim->records.front ()->parts.front ()))
-                              .kind
-                            == protocol::command::boundSessionBind);
-                    assert (target.native_node ().transport ().reply_bound_session_bind (
-                      (*claim->records.front ()), static_cast<std::uint32_t> (terminal),
-                      static_cast<std::uint32_t> (failure)));
-                    assert (target.native_node ().transport ().mailbox ().release (*claim));
-                    replied = true;
-                }
-            }
-            (void) source.dispatch_ready ([] (const auto &, const auto &, auto) {});
-            std::this_thread::sleep_for (1ms);
+    const auto request_and_reply =
+      [&] (protocol::request_terminal_result terminal, protocol::framework_error_code failure,
+           std::optional<protocol::stream_bind_reply_tail_t> accepted = std::nullopt) {
+          auto result = std::async (std::launch::async, [&] {
+              return source
+                .bind_application_actor_session (
+                  actor, zlink::routing_id_t::from ("bound-session-reply-session"), 1, route, 2s)
+                .result ();
+          });
+          const auto deadline = std::chrono::steady_clock::now () + 2s;
+          bool replied = false;
+          while (result.wait_for (0ms) != std::future_status::ready
+                 && std::chrono::steady_clock::now () < deadline) {
+              const auto pump = target.native_node ()
+                                  .transport ()
+                                  .pump_one (mesh::service_liveness_registry_t::clock_t::now ())
+                                  .result ()
+                                  .value ();
+              assert (pump != mesh::raw_mesh_pump_result_t::protocol_error);
+              if (!replied && pump == mesh::raw_mesh_pump_result_t::infrastructure) {
+                  auto claim = target.native_node ().transport ().mailbox ().try_claim (
+                    mesh::service_mailbox_domain_t::infrastructure, 1, 4096);
+                  if (claim && claim->records.size () == 1) {
+                      assert (protocol::decode_header (
+                                protocol::message_bytes (claim->records.front ()->parts.front ()))
+                                .kind
+                              == protocol::command::boundSessionBind);
+                      assert (target.native_node ().transport ().reply_bound_session_bind (
+                        (*claim->records.front ()), static_cast<std::uint32_t> (terminal),
+                        static_cast<std::uint32_t> (failure), accepted));
+                      assert (target.native_node ().transport ().mailbox ().release (*claim));
+                      replied = true;
+                  }
+              }
+              (void) source.dispatch_ready ([] (const auto &, const auto &, auto) {});
+              std::this_thread::sleep_for (1ms);
+          }
+          assert (replied);
+          assert (result.wait_for (0ms) == std::future_status::ready);
+          return result.get ();
+      };
+
+    const auto accepted = request_and_reply (protocol::request_terminal_result::ok,
+                                             protocol::framework_error_code::none,
+                                             protocol::stream_bind_reply_tail_t{19, 11});
+    assert (accepted);
+    assert (accepted.value ().binding_generation == 19);
+    assert (accepted.value ().authority_owner_generation == 11);
+    assert (route_resolutions == 0);
+    const auto success_bytes =
+      protocol::encode_stream_bind_reply (9, 0, 0, protocol::stream_bind_reply_tail_t{19, 11});
+    assert (protocol::decode_stream_bind_reply (success_bytes).binding
+            == (protocol::stream_bind_reply_tail_t{19, 11}));
+    const auto expect_invalid_reply = [] (const auto &bytes) {
+        bool rejected = false;
+        try {
+            (void) protocol::decode_stream_bind_reply (bytes);
         }
-        assert (replied);
-        assert (result.wait_for (0ms) == std::future_status::ready);
-        return result.get ();
+        catch (const protocol::service_wire_error_t &) {
+            rejected = true;
+        }
+        assert (rejected);
     };
+    expect_invalid_reply (protocol::encode_reply_header (9, 0, 0));
+    auto extra = success_bytes;
+    extra.push_back (0);
+    expect_invalid_reply (extra);
+    auto failure_tail = protocol::encode_reply_header (
+      9, static_cast<std::uint32_t> (protocol::request_terminal_result::internalError),
+      static_cast<std::uint32_t> (protocol::framework_error_code::routeNotConnected));
+    failure_tail.push_back (0);
+    expect_invalid_reply (failure_tail);
 
     const auto stale = request_and_reply (protocol::request_terminal_result::conflict,
                                           protocol::framework_error_code::actorLocationStale);
-    assert (stale);
-    assert (stale.value () == detail::application_actor_session_bind_outcome_t::stale_route);
+    assert (!stale);
+    assert (stale.error_kind () == framework_error_kind_t::unavailable);
     assert (invalidations == 1);
     assert (invalidated);
     assert (invalidated->actor_id == "bound-actor");
@@ -1381,9 +1436,8 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
 
     const auto actor_not_ready = request_and_reply (protocol::request_terminal_result::busy,
                                                     protocol::framework_error_code::none);
-    assert (actor_not_ready);
-    assert (actor_not_ready.value ()
-            == detail::application_actor_session_bind_outcome_t::actor_not_ready);
+    assert (!actor_not_ready);
+    assert (actor_not_ready.error_kind () == framework_error_kind_t::unavailable);
     assert (invalidations == 1);
     assert (route_resolutions == 0);
 
@@ -1392,6 +1446,16 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
                          protocol::framework_error_code::actorAlreadyExists);
     assert (!ordinary_conflict);
     assert (ordinary_conflict.error_kind () == framework_error_kind_t::unavailable);
+    assert (invalidations == 1);
+    assert (route_resolutions == 0);
+
+    // Session-Actor binding §4: the Actor owner rejects a bind whose Session owner has no
+    // admitted, lease-verified descriptor with the Unavailable representative.
+    const auto session_owner_unavailable =
+      request_and_reply (protocol::request_terminal_result::internalError,
+                         protocol::framework_error_code::routeNotConnected);
+    assert (!session_owner_unavailable);
+    assert (session_owner_unavailable.error_kind () == framework_error_kind_t::unavailable);
     assert (invalidations == 1);
     assert (route_resolutions == 0);
 
@@ -1456,15 +1520,6 @@ void verify_remote_bound_session_bind_classifies_retryable_outcomes ()
     assert (invalidations == 1);
     assert (route_resolutions == 0);
 
-    /* Bind retries are bounded by the binding deadline, not attempt count
-     * (dotnet/java parity): both transient outcomes stay retryable on every
-     * attempt, while a completed bind never re-enters. */
-    assert (detail::can_retry_application_actor_session_bind (
-      detail::application_actor_session_bind_outcome_t::stale_route));
-    assert (detail::can_retry_application_actor_session_bind (
-      detail::application_actor_session_bind_outcome_t::actor_not_ready));
-    assert (!detail::can_retry_application_actor_session_bind (
-      detail::application_actor_session_bind_outcome_t::bound));
     source.stop ();
     target.stop ();
 }
@@ -1561,6 +1616,110 @@ void verify_bound_session_bind_uses_only_three_value_actor_fence ()
             == host::bound_session_bind_admission_t::actor_not_ready);
 }
 
+void verify_bind_handler_rejects_missing_session_owner_descriptor (bool test_seal_drop = true)
+{
+    using namespace zlink::framework;
+    auto source = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("descriptor-bind-source"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    auto target = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("descriptor-bind-target"),
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    std::size_t drops = 0;
+    dispatch_options_t options;
+    options.message_flow (message_flow_log_mode_t::normal);
+    detail::dispatch_options_access_t::set_observer_for_tests (
+      options, [&] (const message_flow_event_t &event) {
+          if (event.packet_name == std::optional<std::string> ("sessionRelocationSeal")
+              && event.outcome == message_flow_outcome_t::dropped
+              && event.reason == message_flow_reason_t::location_unavailable)
+              ++drops;
+      });
+    host::public_host_runtime_test_access_t::set_dispatch (*target, std::move (options));
+    const auto local = target->status ();
+    const stateful::object_ref_t actor{
+      stateful::object_kind_t::actor,  "descriptor-actor", 7, 11, "m6b-mesh",
+      local.routing_id ().to_string ()};
+    const auto creation = target->objects ().begin_reserved_object (actor, "descriptor.actor", {});
+    assert (creation.error == stateful::stateful_error_t::none);
+    assert (target->objects ().commit_create (creation.attempt)
+            == stateful::stateful_error_t::none);
+    int binds = 0;
+    target->configure_bound_session_operations (
+      {.session_owner = [] (const zlink::routing_id_t &, std::uint64_t)
+         -> task_t<std::optional<location_owner_token_t>> { co_return std::nullopt; },
+       .bind =
+         [&] (const auto &, const auto &, std::uint64_t, const auto &, auto) {
+             ++binds;
+             return host::bound_session_bind_operation_result_t{};
+         },
+       .send = [] (const auto &, auto) { return stateful::stateful_error_t::conflict; },
+       .replaced = [] (const auto &) {},
+       .commit_relocation_route = [] (const auto &, const auto &, const auto &) { return false; },
+       .prepare_relocation_target_route = [] (const auto &, std::uint64_t) { return false; }});
+    source->start ();
+    target->start ();
+    assert (source->connect_peer (target->transport ().endpoint (), local.routing_id ()));
+    const auto discard = [] (const host::ready_record_t &, const host::receive_record_t &, auto) {};
+    const auto deadline = std::chrono::steady_clock::now () + 5s;
+    while ((!ready_peer (source->transport ().topology (), local.routing_id ().to_bytes ())
+            || !ready_peer (target->transport ().topology (),
+                            source->status ().routing_id ().to_bytes ()))
+           && std::chrono::steady_clock::now () < deadline) {
+        await_task (source->dispatch_ready (discard));
+        await_task (target->dispatch_ready (discard));
+    }
+    std::optional<protocol::reply_header_t> reply;
+    const protocol::bound_session_bind_t bind{
+      0,
+      {actor.key, 7, local.routing_id ().to_bytes (), local.lifecycle_generation (), 11, 13},
+      zlink::routing_id_t::from ("descriptor-session").to_bytes (),
+      {protocol::bound_session_binding_state_t::active, 17}};
+    assert (await_task (source->transport ().request_bound_session_bind (
+      local.routing_id ().to_bytes (), bind, 2s,
+      [&] (foundation::operation_terminal_t, zlink::message_t payload) {
+          reply = protocol::decode_reply_header (protocol::message_bytes (payload));
+      })));
+    while (!reply && std::chrono::steady_clock::now () < deadline) {
+        await_task (target->dispatch_ready (discard));
+        await_task (source->dispatch_ready (discard));
+    }
+    assert (reply
+            && reply->terminal_result
+                 == static_cast<std::uint32_t> (protocol::request_terminal_result::internalError)
+            && reply->failure_code
+                 == static_cast<std::uint32_t> (protocol::framework_error_code::routeNotConnected));
+    assert (binds == 0);
+    if (test_seal_drop) {
+        const protocol::session_relocation_seal_t seal{
+          .relocation = {1, 2},
+          .coordinator = {"coordinator", 3, source->status ().routing_id ().to_bytes (),
+                          source->status ().lifecycle_generation (), "store"},
+          .actor = {actor.key, 7, source->status ().routing_id ().to_bytes (),
+                    source->status ().lifecycle_generation (), 11, 13},
+          .session_owner_node_routing_id = local.routing_id ().to_bytes (),
+          .session_owner_node_generation = local.lifecycle_generation (),
+          .session_owner_id = "session-owner",
+          .session_owner_lease_generation = 19,
+          .session_routing_id = bind.session_routing_id,
+          .binding_generation = 17,
+          .target_node_routing_id = source->status ().routing_id ().to_bytes (),
+          .target_node_generation = source->status ().lifecycle_generation ()};
+        assert (target->transport ().mailbox ().try_enqueue (
+          {.owner = "seal",
+           .domain = mesh::service_mailbox_domain_t::infrastructure,
+           .parts = {zlink::message_t::from (protocol::encode_session_relocation_seal (seal))},
+           .source_routing_id = source->status ().routing_id ().to_bytes (),
+           .source_node_generation = source->status ().lifecycle_generation ()}));
+        await_task (target->dispatch_ready (discard));
+        assert (drops == 1);
+    }
+    source->close ();
+    target->close ();
+}
+
 void verify_bound_session_push_uses_session_registry_when_gateway_projection_rejects ()
 {
     using namespace zlink::framework;
@@ -1580,7 +1739,7 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
     assert (bind_error == stateful::stateful_error_t::none);
     const auto sealed = session_owner->sessions ().seal_remote_route (
       connection.connection_id, binding.binding_generation, previous.key,
-      previous.object_generation);
+      previous.object_generation, binding.owner_lease_generation);
     assert (sealed.error == stateful::stateful_error_t::none);
     auto target = previous;
     target.node_id = source_node.to_string ();
@@ -1609,10 +1768,12 @@ void verify_bound_session_push_uses_session_registry_when_gateway_projection_rej
 
     session_owner->configure_bound_session_operations (host::bound_session_operations_t{
       .bind =
-        [] (const protocol::bound_session_bind_t &, const zlink::routing_id_t &, std::uint64_t,
-            const zlink::framework::location_owner_token_t &,
-            std::function<bool ()> submit_terminal_reply) {
-            (void) submit_terminal_reply ();
+        [] (
+          const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
+          const zlink::framework::location_owner_token_t &,
+          std::function<bool (const protocol::stream_bind_reply_tail_t &)> submit_terminal_reply) {
+            (void) submit_terminal_reply (
+              {bind.binding.generation, bind.actor.authority_owner_generation});
             return host::bound_session_bind_operation_result_t{};
         },
       .send = [] (const protocol::bound_session_send_t &,
@@ -1693,10 +1854,12 @@ void verify_bound_session_push_admission_uses_only_session_owned_fields ()
     std::atomic_int deliveries{0};
     session_owner->configure_bound_session_operations (host::bound_session_operations_t{
       .bind =
-        [] (const protocol::bound_session_bind_t &, const zlink::routing_id_t &, std::uint64_t,
-            const zlink::framework::location_owner_token_t &,
-            std::function<bool ()> submit_terminal_reply) {
-            (void) submit_terminal_reply ();
+        [] (
+          const protocol::bound_session_bind_t &bind, const zlink::routing_id_t &, std::uint64_t,
+          const zlink::framework::location_owner_token_t &,
+          std::function<bool (const protocol::stream_bind_reply_tail_t &)> submit_terminal_reply) {
+            (void) submit_terminal_reply (
+              {bind.binding.generation, bind.actor.authority_owner_generation});
             return host::bound_session_bind_operation_result_t{};
         },
       .send =
@@ -2993,9 +3156,9 @@ void verify_session_ingress_sequence_is_scoped_by_actor_binding ()
         .first
       == stateful::stateful_error_t::conflict);
 
-    const auto sealed_a =
-      sessions.seal_remote_route (connection.connection_id, binding_a.binding_generation,
-                                  actor_a.key, actor_a.object_generation);
+    const auto sealed_a = sessions.seal_remote_route (
+      connection.connection_id, binding_a.binding_generation, actor_a.key,
+      actor_a.object_generation, binding_a.owner_lease_generation);
     assert (sealed_a.error == stateful::stateful_error_t::none);
     assert (sealed_a.last_accepted_sequence == 1);
 
@@ -3004,9 +3167,9 @@ void verify_session_ingress_sequence_is_scoped_by_actor_binding ()
     assert (admit_b_second_error == stateful::stateful_error_t::none);
     assert (admitted_b_second && admitted_b_second->inbound_sequence == 2);
     assert (sessions.complete_inbound (*admitted_b_second) == stateful::stateful_error_t::none);
-    const auto sealed_b =
-      sessions.seal_remote_route (connection.connection_id, binding_b.binding_generation,
-                                  actor_b.key, actor_b.object_generation);
+    const auto sealed_b = sessions.seal_remote_route (
+      connection.connection_id, binding_b.binding_generation, actor_b.key,
+      actor_b.object_generation, binding_b.owner_lease_generation);
     assert (sealed_b.error == stateful::stateful_error_t::none);
     assert (sealed_b.last_accepted_sequence == 2);
     assert (sessions.abort_barrier (sealed_b.barrier) == stateful::stateful_error_t::none);
@@ -3047,8 +3210,9 @@ void verify_session_route_supports_repeated_relocation ()
     assert (first && first->inbound_sequence == 1);
     assert (sessions.complete_inbound (*first) == stateful::stateful_error_t::none);
 
-    const auto first_seal = sessions.seal_remote_route (
-      connection.connection_id, binding.binding_generation, source.key, source.object_generation);
+    const auto first_seal =
+      sessions.seal_remote_route (connection.connection_id, binding.binding_generation, source.key,
+                                  source.object_generation, binding.owner_lease_generation);
     assert (first_seal.error == stateful::stateful_error_t::none);
     assert (first_seal.last_accepted_sequence == 1);
     auto remote = source;
@@ -3069,7 +3233,8 @@ void verify_session_route_supports_repeated_relocation ()
     assert (sessions.complete_inbound (*second) == stateful::stateful_error_t::none);
 
     const auto return_seal = sessions.seal_remote_route (
-      connection.connection_id, binding.binding_generation, remote.key, remote.object_generation);
+      connection.connection_id, binding.binding_generation, remote.key, remote.object_generation,
+      first_commit.binding->owner_lease_generation);
     assert (return_seal.error == stateful::stateful_error_t::none);
     assert (return_seal.last_accepted_sequence == 2);
     auto returned = remote;
@@ -3095,8 +3260,9 @@ void verify_session_route_commit_stores_target_lease ()
       stateful::object_kind_t::actor, "deferred-lease-actor", 7, 11, "mesh-a", "node-a"};
     const auto [bind_error, binding] = sessions.bind_remote (connection, source, 13, 17);
     assert (bind_error == stateful::stateful_error_t::none);
-    const auto sealed = sessions.seal_remote_route (
-      connection.connection_id, binding.binding_generation, source.key, source.object_generation);
+    const auto sealed =
+      sessions.seal_remote_route (connection.connection_id, binding.binding_generation, source.key,
+                                  source.object_generation, binding.owner_lease_generation);
     assert (sealed.error == stateful::stateful_error_t::none);
 
     auto target = source;
@@ -4585,6 +4751,153 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
     assert (current->owner_lease_generation == 13);
     assert (!local->sessions ().remote_route_sealed (actor_object->key));
 
+    local->close ();
+}
+
+void verify_absent_session_seal ()
+{
+    auto local = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("absent-session-owner"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      "entry",
+      {"player"}});
+    local->configure_session_relocation_store (std::make_shared<memory_relocation_repository_t> ());
+    local->configure_session_route_owner ([] {
+        return std::make_optional (zlink::framework::location_owner_token_t{"absent-owner", 19});
+    });
+    int late_routes = 0;
+    local->configure_late_session_route_update ([&] (const auto &) { ++late_routes; });
+    local->start ();
+    const auto status = local->status ();
+    const auto actor = local->create_actor ("player", "absent-actor");
+    const auto object = local->resolve_actor (actor.ref ()).value ();
+    const auto rid = zlink::routing_id_t::from ("absent-session");
+    const auto original_connection = local->sessions ().open (rid.to_hex ());
+    const auto [original_error, original] =
+      local->sessions ().bind (original_connection, object, status.lifecycle_generation (), 23);
+    assert (original_error == stateful::stateful_error_t::none);
+    assert (local->sessions ().unbind (original).first == stateful::stateful_error_t::none);
+    const protocol::session_relocation_seal_t seal{
+      {81, 82},
+      {"coordinator", 7, status.routing_id ().to_bytes (), status.lifecycle_generation (),
+       "store-v1"},
+      protocol::relocation_role_t::source,
+      {object.key, object.object_generation, status.routing_id ().to_bytes (),
+       status.lifecycle_generation (), object.authority_owner_generation, 23},
+      status.routing_id ().to_bytes (),
+      status.lifecycle_generation (),
+      "absent-owner",
+      19,
+      rid.to_bytes (),
+      original.binding_generation,
+      status.routing_id ().to_bytes (),
+      status.lifecycle_generation ()};
+    const auto submit = [&] (const auto &request) {
+        std::optional<host::session_relocation_seal_result_t> result;
+        const bool admitted =
+          local
+            ->seal_session_remote (
+              status.routing_id (), request, 2s, std::chrono::steady_clock::now () + 2s,
+              [] { return std::vector<std::uint8_t>{0x41}; },
+              [&] (foundation::operation_terminal_t terminal, auto value) {
+                  assert (terminal == foundation::operation_terminal_t::completed);
+                  result = std::move (value);
+              })
+            .result ()
+            .value ();
+        return std::pair{admitted, result};
+    };
+    const auto [admitted, result] = submit (seal);
+    assert (admitted && result);
+    const auto encoded = protocol::encode_session_relocation_sealed (result->sealed);
+    assert (protocol::decode_session_relocation_sealed_43 (encoded).seal_result
+            == protocol::service_wire_pilot_session_seal_result::binding_absent);
+    assert (!local->sessions ().remote_route_sealed (object.key));
+    const auto connection = original_connection;
+    const auto [error, binding] =
+      local->sessions ().bind (connection, object, status.lifecycle_generation (), 23);
+    assert (error == stateful::stateful_error_t::none);
+    // A retained absence result is replayed even after a binding appears.
+    auto changed = seal;
+    ++changed.binding_generation;
+    assert (!submit (changed).first);
+    const auto repeated = submit (seal);
+    assert (repeated.first && repeated.second && repeated.second->sealed == result->sealed);
+    auto mismatch = seal;
+    ++mismatch.relocation.low;
+    mismatch.binding_generation = original.binding_generation;
+    assert (!submit (mismatch).first);
+    assert (local->sessions ().is_current (binding));
+    host::public_host_runtime_test_access_t::expire_seal_results (*local);
+    assert (!host::public_host_runtime_test_access_t::admit_seal (*local, seal).first);
+    assert (!local->sessions ().remote_route_sealed (object.key));
+    assert (local->sessions ().unbind (binding).first == stateful::stateful_error_t::none);
+    const auto absent_again = host::public_host_runtime_test_access_t::admit_seal (*local, seal);
+    assert (absent_again.first && absent_again.second);
+    assert (protocol::decode_session_relocation_sealed_43 (
+              protocol::encode_session_relocation_sealed (*absent_again.second))
+              .seal_result
+            == protocol::service_wire_pilot_session_seal_result::binding_absent);
+    const protocol::session_relocation_route_t late_route{
+      seal.relocation,
+      seal.coordinator,
+      protocol::relocation_role_t::target,
+      {object.key, object.object_generation},
+      seal.session_owner_node_routing_id,
+      seal.session_owner_node_generation,
+      seal.session_owner_id,
+      seal.session_owner_lease_generation,
+      seal.session_routing_id,
+      seal.binding_generation,
+      {protocol::session_relocation_route_action_t::commit, object.authority_owner_generation,
+       object.authority_owner_generation + 1, status.routing_id ().to_bytes (),
+       status.lifecycle_generation (), 0, 23}};
+    assert (local->route_session_remote (status.routing_id (), late_route).result ().value ());
+    local->dispatch_ready ([] (const auto &, const auto &, auto) {}).result ().value ();
+    assert (late_routes == 1);
+    assert (!local->sessions ().current_binding (object.key));
+    const auto [next_error, next_binding] =
+      local->sessions ().bind (connection, object, status.lifecycle_generation (), 23);
+    assert (next_error == stateful::stateful_error_t::none);
+    auto next_seal = seal;
+    ++next_seal.relocation.low;
+    next_seal.binding_generation = next_binding.binding_generation;
+    auto stale_owner = next_seal;
+    --stale_owner.actor.owner_lease_generation;
+    assert (!host::public_host_runtime_test_access_t::admit_seal (*local, stale_owner).first);
+    const auto sealed = host::public_host_runtime_test_access_t::admit_seal (*local, next_seal);
+    assert (sealed.first && sealed.second);
+    assert (protocol::decode_session_relocation_sealed_43 (
+              protocol::encode_session_relocation_sealed (*sealed.second))
+              .seal_result
+            == protocol::service_wire_pilot_session_seal_result::sealed);
+    auto committed = late_route;
+    committed.relocation = next_seal.relocation;
+    committed.binding_generation = next_binding.binding_generation;
+    assert (local->route_session_remote (status.routing_id (), committed).result ().value ());
+    local->dispatch_ready ([] (const auto &, const auto &, auto) {}).result ().value ();
+    assert (!local->sessions ().remote_route_sealed (object.key));
+    const auto closed_record =
+      host::public_host_runtime_test_access_t::admit_seal (*local, next_seal);
+    assert (closed_record.first && !closed_record.second);
+    const auto current = local->sessions ().current_binding (object.key);
+    assert (current
+            && local->sessions ().unbind (*current).first == stateful::stateful_error_t::none);
+    const auto [replacement_error, replacement] = local->sessions ().bind_remote (
+      connection, current->actor, current->target_node_generation, current->owner_lease_generation);
+    assert (replacement_error == stateful::stateful_error_t::none);
+    assert (replacement.binding_generation != current->binding_generation);
+    assert (!host::public_host_runtime_test_access_t::admit_seal (*local, next_seal).first);
+    assert (local->sessions ().is_current (replacement));
+    assert (local->sessions ().unbind (replacement).first == stateful::stateful_error_t::none);
+    const auto removed = host::public_host_runtime_test_access_t::admit_seal (*local, next_seal);
+    assert (removed.first && removed.second);
+    assert (protocol::decode_session_relocation_sealed_43 (
+              protocol::encode_session_relocation_sealed (*removed.second))
+              .seal_result
+            == protocol::service_wire_pilot_session_seal_result::binding_absent);
     local->close ();
 }
 
@@ -8670,6 +8983,18 @@ int main (int argc, char **argv)
         return 0;
     }
 
+    if (argc == 2 && std::string_view (argv[1]) == "--bind-registration-terminal") {
+        verify_remote_bound_session_bind_returns_terminal_fences ();
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--descriptor-bind-handler") {
+        verify_bind_handler_rejects_missing_session_owner_descriptor (false);
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--descriptor-seal-drop") {
+        verify_bind_handler_rejects_missing_session_owner_descriptor ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--creating-subscription") {
         verify_creating_spot_subscription_uses_native_object_lifetime ();
         return 0;
@@ -8694,6 +9019,10 @@ int main (int argc, char **argv)
         verify_atomic_raw_stateful_ingress_commit ();
         return 0;
     }
+    if (argc == 2 && std::string_view (argv[1]) == "--binding-absent") {
+        verify_absent_session_seal ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--session-owner-route") {
         verify_same_node_session_seal_waits_for_active_ingress ();
         verify_session_relocation_gateway_commit_is_atomic ();
@@ -8710,9 +9039,10 @@ int main (int argc, char **argv)
     verify_session_relocation_gateway_commit_is_atomic ();
     verify_mesh_node_role_is_available_before_local_descriptor_publish ();
     verify_mesh_stop_drains_admitted_request_completion ();
-    verify_remote_bound_session_bind_classifies_retryable_outcomes ();
+    verify_remote_bound_session_bind_returns_terminal_fences ();
     verify_local_session_binding_uses_location_authority ();
     verify_bound_session_bind_uses_only_three_value_actor_fence ();
+    verify_bind_handler_rejects_missing_session_owner_descriptor ();
     verify_bound_session_push_uses_session_registry_when_gateway_projection_rejects ();
     verify_bound_session_push_admission_uses_only_session_owned_fields ();
     verify_bound_session_push_source_does_not_prejudge_current_binding ();
@@ -8753,6 +9083,7 @@ int main (int argc, char **argv)
     verify_pending_relocation_management_bounds_dispatch_wait ();
     verify_failed_relay_persistence_rearms_dispatch_wait ();
     verify_root_location_session_seal_timeout_is_startup_snapshot ();
+    verify_absent_session_seal ();
     verify_same_node_session_seal_waits_for_active_ingress ();
     verify_configured_session_seal_timeout_closes_actual_owner ();
     verify_discovery_owner_metadata_preserved ();

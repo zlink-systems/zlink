@@ -1,3 +1,4 @@
+import type { ZLinkRuntimeMetrics } from '../diagnostics/runtime-metrics';
 import { routingIdsEqual, toBackendRoutingId } from '../routing-id';
 import {
   ServiceRelocationAuthorityPayloadCodec,
@@ -219,28 +220,48 @@ const MAX_OWNER_CLEANUP_BATCH_ROWS = 2_047;
  */
 export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   private readonly provider: ZLinkLocationStore;
+  private readonly confirmedCapacities = new Map<string, CapacityRecord | undefined>();
   private readonly aggregateInventory: ZLinkAggregateInventoryStore;
 
   constructor(
     provider: ZLinkLocationStore,
-    private readonly nowProvider: () => Date = () => new Date()
+    private readonly nowProvider: () => Date = () => new Date(),
+    private readonly metrics?: ZLinkRuntimeMetrics
   ) {
     super(nowProvider);
     // Classify only failures of the opaque SPI, before interpreting its records.
+    const confirm = (key: ZLinkStoreKey, bytes?: Uint8Array) => {
+      if (this.confirmedCapacities.has(key.value)) {
+        this.confirmedCapacities.set(
+          key.value,
+          bytes === undefined ? emptyCapacityRecord() : decodeJson<CapacityRecord>(bytes)
+        );
+      }
+    };
     this.provider = {
       async read(key, signal) {
+        let result: ZLinkStoreReadResult;
         try {
-          return await provider.read(key, signal);
+          result = await provider.read(key, signal);
         } catch (error) {
           throw locationStoreProviderFailure(error, signal);
         }
+        confirm(key, result.kind === 'found' ? result.value.bytes : undefined);
+        return result;
       },
       async write(request, signal) {
+        let result;
         try {
-          return await provider.write(request, signal);
+          result = await provider.write(request, signal);
         } catch (error) {
           throw locationStoreProviderFailure(error, signal);
         }
+        if (result.kind === 'applied') {
+          for (const mutation of request.mutations) {
+            if (mutation.kind === 'put') confirm(mutation.key, mutation.bytes);
+          }
+        }
+        return result;
       },
       async scan(request, signal) {
         try {
@@ -253,7 +274,36 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     this.aggregateInventory = new ZLinkAggregateInventoryStore(this.provider);
   }
 
+  private async observeStore<T>(operation: string, request: () => Promise<T>): Promise<T> {
+    try {
+      return await request();
+    } catch (error) {
+      if (
+        error instanceof ZLinkFrameworkException &&
+        error.kind === ZLinkFrameworkErrorKind.Unavailable
+      ) {
+        this.metrics?.recordLocationStoreError(operation);
+      }
+      throw error;
+    }
+  }
+
+  confirmedCapacity(
+    key: ZLinkMeshNodeDescriptorKey,
+    limits: ZLinkMeshNodeDescriptor['populationCapacity']
+  ): ZLinkMeshNodeDescriptor['populationCapacity'] | undefined {
+    const record = this.confirmedCapacities.get(capacityKey(key.meshName, String(key.rid)).value);
+    return record === undefined ? undefined : projectCapacity(limits, record);
+  }
+
   override async readAuthority(
+    key: ZLinkAuthorityKey,
+    signal?: AbortSignal
+  ): Promise<ZLinkAuthorityReadResult> {
+    return this.observeStore('read', () => this.readAuthorityRequest(key, signal));
+  }
+
+  private async readAuthorityRequest(
     key: ZLinkAuthorityKey,
     signal?: AbortSignal
   ): Promise<ZLinkAuthorityReadResult> {
@@ -270,6 +320,17 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 
   override async listAuthorities(
+    prefix: string,
+    cursor: ZLinkAuthorityScanCursor | undefined,
+    limit: number,
+    signal?: AbortSignal
+  ): Promise<ZLinkAuthorityScanResult> {
+    return this.observeStore('read', () =>
+      this.listAuthoritiesRequest(prefix, cursor, limit, signal)
+    );
+  }
+
+  private async listAuthoritiesRequest(
     prefix: string,
     cursor: ZLinkAuthorityScanCursor | undefined,
     limit: number,
@@ -311,6 +372,17 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 
   override async compareExchangeAuthority(
+    key: ZLinkAuthorityKey,
+    expectedStoreVersion: ZLinkAuthorityStoreVersion,
+    mutation: ZLinkAuthorityMutation,
+    signal?: AbortSignal
+  ): Promise<ZLinkAuthorityCompareExchangeResult> {
+    return this.observeStore('compare_exchange', () =>
+      this.compareExchangeAuthorityRequest(key, expectedStoreVersion, mutation, signal)
+    );
+  }
+
+  private async compareExchangeAuthorityRequest(
     key: ZLinkAuthorityKey,
     expectedStoreVersion: ZLinkAuthorityStoreVersion,
     mutation: ZLinkAuthorityMutation,
@@ -561,6 +633,15 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 
   override async prepareAggregate(
+    request: ZLinkAggregatePrepareRequest,
+    signal?: AbortSignal
+  ): Promise<ZLinkAggregatePrepareResult> {
+    return this.observeStore('compare_exchange', () =>
+      this.prepareAggregateRequest(request, signal)
+    );
+  }
+
+  private async prepareAggregateRequest(
     request: ZLinkAggregatePrepareRequest,
     signal?: AbortSignal
   ): Promise<ZLinkAggregatePrepareResult> {
@@ -850,7 +931,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
               aggregateRecord.requestFingerprint === fingerprint &&
               (aggregateRecord.state === 'staging' || aggregateRecord.state === 'prepared')
             ) {
-              return await this.prepareAggregate(request, signal);
+              return await this.prepareAggregateRequest(request, signal);
             }
           }
           await this.clearAggregateMarkers(fence, installed, signal);
@@ -925,6 +1006,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 
   override async commitAggregate(
+    fence: ZLinkAggregateFence,
+    signal?: AbortSignal
+  ): Promise<ZLinkAggregateCommitResult> {
+    return this.observeStore('compare_exchange', () => this.commitAggregateRequest(fence, signal));
+  }
+
+  private async commitAggregateRequest(
     fence: ZLinkAggregateFence,
     signal?: AbortSignal
   ): Promise<ZLinkAggregateCommitResult> {
@@ -1159,6 +1247,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     fence: ZLinkAggregateFence,
     signal?: AbortSignal
   ): Promise<ZLinkAggregateAbortResult> {
+    return this.observeStore('compare_exchange', () => this.abortAggregateRequest(fence, signal));
+  }
+
+  private async abortAggregateRequest(
+    fence: ZLinkAggregateFence,
+    signal?: AbortSignal
+  ): Promise<ZLinkAggregateAbortResult> {
     validateAggregateFence(fence);
     const rowKey = aggregateKey(fence);
     for (;;) {
@@ -1214,6 +1309,17 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 
   override async releaseEndedReservation(
+    key: ZLinkAuthorityKey,
+    expectedStoreVersion: string,
+    signal?: AbortSignal,
+    request?: ZLinkEndedOwnerReleaseIntent
+  ): Promise<boolean> {
+    return this.observeStore('release', () =>
+      this.releaseEndedReservationRequest(key, expectedStoreVersion, signal, request)
+    );
+  }
+
+  private async releaseEndedReservationRequest(
     key: ZLinkAuthorityKey,
     expectedStoreVersion: string,
     signal?: AbortSignal,
@@ -1451,6 +1557,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     signal?: AbortSignal,
     deadlineUnixMs?: bigint
   ): Promise<ZLinkObjectReserveResult> {
+    return this.observeStore('compare_exchange', () =>
+      this.reserveRequest(request, signal, deadlineUnixMs)
+    );
+  }
+
+  private async reserveRequest(
+    request: ZLinkObjectReserveRequest,
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
+  ): Promise<ZLinkObjectReserveResult> {
     const encodedAuthorityKey = encodeAuthorityKey(request.key.kind, request.key.globalId);
     const reservationId = randomUUID();
     let reclaimVersion: string | undefined;
@@ -1596,6 +1712,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     signal?: AbortSignal,
     deadlineUnixMs?: bigint
   ): Promise<ZLinkObjectCommitResult> {
+    return this.observeStore('compare_exchange', () =>
+      this.commitRequest(request, signal, deadlineUnixMs)
+    );
+  }
+
+  private async commitRequest(
+    request: ZLinkObjectCommitRequest,
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
+  ): Promise<ZLinkObjectCommitResult> {
     const key = encodeAuthorityKey(request.key.kind, request.key.globalId);
     const rowKey = authorityKey(key.value);
     for (;;) {
@@ -1682,6 +1808,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     signal?: AbortSignal,
     deadlineUnixMs?: bigint
   ): Promise<ZLinkObjectAbortResult> {
+    return this.observeStore('compare_exchange', () =>
+      this.abortRequest(request, signal, deadlineUnixMs)
+    );
+  }
+
+  private async abortRequest(
+    request: ZLinkObjectAbortRequest,
+    signal?: AbortSignal,
+    deadlineUnixMs?: bigint
+  ): Promise<ZLinkObjectAbortResult> {
     const key = encodeAuthorityKey(request.key.kind, request.key.globalId);
     const rowKey = authorityKey(key.value);
     for (;;) {
@@ -1742,6 +1878,15 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 
   override async completeCreation(
+    request: ZLinkObjectCreationCompleteRequest,
+    signal?: AbortSignal
+  ): Promise<ZLinkObjectCreationCompleteResult> {
+    return this.observeStore('compare_exchange', () =>
+      this.completeCreationRequest(request, signal)
+    );
+  }
+
+  private async completeCreationRequest(
     request: ZLinkObjectCreationCompleteRequest,
     signal?: AbortSignal
   ): Promise<ZLinkObjectCreationCompleteResult> {
@@ -1913,6 +2058,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     operation: ZLinkCreationOperationIdentity,
     signal?: AbortSignal
   ): Promise<ZLinkCreationTerminalReadResult> {
+    return this.observeStore('read', () => this.readCreationTerminalRequest(operation, signal));
+  }
+
+  private async readCreationTerminalRequest(
+    operation: ZLinkCreationOperationIdentity,
+    signal?: AbortSignal
+  ): Promise<ZLinkCreationTerminalReadResult> {
     validateCreationOperation(operation);
     const result = await this.provider.read(creationTerminalKey(operation), signal);
     return result.kind === 'missing'
@@ -1924,6 +2076,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 
   override async claimOwnerLease(
+    ownerId: string,
+    leaseTtlMs: number,
+    signal?: AbortSignal
+  ): Promise<ZLinkOwnerLeaseClaimResult> {
+    return this.observeStore('compare_exchange', () =>
+      this.claimOwnerLeaseRequest(ownerId, leaseTtlMs, signal)
+    );
+  }
+
+  private async claimOwnerLeaseRequest(
     ownerId: string,
     leaseTtlMs: number,
     signal?: AbortSignal
@@ -1979,6 +2141,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     ownerId: string,
     signal?: AbortSignal
   ): Promise<ZLinkOwnerLeaseReadResult> {
+    return this.observeStore('read', () => this.readOwnerLeaseRequest(ownerId, signal));
+  }
+
+  private async readOwnerLeaseRequest(
+    ownerId: string,
+    signal?: AbortSignal
+  ): Promise<ZLinkOwnerLeaseReadResult> {
     const result = await this.provider.read(ownerKey(ownerId), signal);
     if (result.kind === 'missing') return { kind: 'missing' };
     const leaseExpiresAt = requireOwnerLeaseExpiry(result.value);
@@ -1995,6 +2164,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 
   override async renewOwnerLease(
+    token: ZLinkLocationOwnerToken,
+    leaseTtlMs: number,
+    signal?: AbortSignal
+  ): Promise<ZLinkOwnerLeaseRenewResult> {
+    return this.observeStore('lease_renew', () =>
+      this.renewOwnerLeaseRequest(token, leaseTtlMs, signal)
+    );
+  }
+
+  private async renewOwnerLeaseRequest(
     token: ZLinkLocationOwnerToken,
     leaseTtlMs: number,
     signal?: AbortSignal
@@ -2031,6 +2210,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     token: ZLinkLocationOwnerToken,
     signal?: AbortSignal
   ): Promise<ZLinkOwnerLeaseReleaseResult> {
+    return this.observeStore('release', () => this.releaseOwnerLeaseRequest(token, signal));
+  }
+
+  private async releaseOwnerLeaseRequest(
+    token: ZLinkLocationOwnerToken,
+    signal?: AbortSignal
+  ): Promise<ZLinkOwnerLeaseReleaseResult> {
     const key = ownerKey(token.ownerId);
     const current = await this.provider.read(key, signal);
     if (current.kind === 'missing') return 'stale';
@@ -2051,6 +2237,19 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     intent: ZLinkLocationWriteIntent,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
+    return this.observeStore('compare_exchange', () =>
+      this.updateMeshNodeRequest(descriptor, intent, signal)
+    );
+  }
+
+  private async updateMeshNodeRequest(
+    descriptor: ZLinkMeshNodeDescriptor,
+    intent: ZLinkLocationWriteIntent,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationWriteResult> {
+    const capacityRowKey = capacityKey(descriptor.meshName, String(descriptor.rid));
+    if (!this.confirmedCapacities.has(capacityRowKey.value))
+      this.confirmedCapacities.set(capacityRowKey.value, undefined);
     return this.updateDescriptor(
       meshKey(descriptor.meshName, descriptor.rid),
       descriptor,
@@ -2063,6 +2262,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 
   override async removeMeshNode(
+    key: ZLinkMeshNodeDescriptorKey,
+    owner: ZLinkLocationOwnerToken,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationWriteStatus> {
+    return this.observeStore('release', () => this.removeMeshNodeRequest(key, owner, signal));
+  }
+
+  private async removeMeshNodeRequest(
     key: ZLinkMeshNodeDescriptorKey,
     owner: ZLinkLocationOwnerToken,
     signal?: AbortSignal
@@ -2086,10 +2293,20 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       },
       signal
     );
+    if (result.kind === 'applied')
+      this.confirmedCapacities.delete(capacityKey(key.meshName, String(key.rid)).value);
     return result.kind === 'applied' ? WriteStatus.Stored : WriteStatus.IgnoredStale;
   }
 
   override async listMeshNodes(
+    meshName: string,
+    page: ZLinkPageRequest = {},
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> {
+    return this.observeStore('read', () => this.listMeshNodesRequest(meshName, page, signal));
+  }
+
+  private async listMeshNodesRequest(
     meshName: string,
     page: ZLinkPageRequest = {},
     signal?: AbortSignal
@@ -2123,30 +2340,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
             : decodeJson<CapacityRecord>(capacityRead.value.bytes);
         return {
           ...descriptor,
-          populationCapacity: {
-            actors: {
-              ...descriptor.populationCapacity.actors,
-              active: capacity.active.actors,
-              reserved: capacity.pending.actors
-            },
-            spots: {
-              ...descriptor.populationCapacity.spots,
-              active: capacity.active.spots,
-              reserved: capacity.pending.spots
-            },
-            spotTypes: descriptor.populationCapacity.spotTypes.map((value) => {
-              const key = capacityTypeKey({
-                objectKind: value.objectKind,
-                stableType: value.stableType,
-                count: 0
-              });
-              return {
-                ...value,
-                active: capacity.active.spotTypes[key] ?? 0,
-                reserved: capacity.pending.spotTypes[key] ?? 0
-              };
-            })
-          }
+          populationCapacity: projectCapacity(descriptor.populationCapacity, capacity)
         };
       })
     );
@@ -2157,6 +2351,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 
   override async updateClientServer(
+    descriptor: ZLinkClientServerServerDescriptor,
+    intent: ZLinkLocationWriteIntent,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationWriteResult> {
+    return this.observeStore('compare_exchange', () =>
+      this.updateClientServerRequest(descriptor, intent, signal)
+    );
+  }
+
+  private async updateClientServerRequest(
     descriptor: ZLinkClientServerServerDescriptor,
     intent: ZLinkLocationWriteIntent,
     signal?: AbortSignal
@@ -2179,6 +2383,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     owner: ZLinkLocationOwnerToken,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteStatus> {
+    return this.observeStore('release', () => this.removeClientServerRequest(key, owner, signal));
+  }
+
+  private async removeClientServerRequest(
+    key: ZLinkClientServerServerDescriptorKey,
+    owner: ZLinkLocationOwnerToken,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationWriteStatus> {
     return this.removeDescriptor(
       clientServerKey(key.channelName, key.serverRid),
       owner,
@@ -2192,6 +2404,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     page: ZLinkPageRequest = {},
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<ZLinkClientServerServerDescriptor>> {
+    return this.observeStore('read', () =>
+      this.listClientServersRequest(channelName, page, signal)
+    );
+  }
+
+  private async listClientServersRequest(
+    channelName: string,
+    page: ZLinkPageRequest = {},
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationPage<ZLinkClientServerServerDescriptor>> {
     return this.listDescriptors(
       clientServerPrefix(channelName),
       page,
@@ -2201,6 +2423,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 
   override async updateFanoutPublisher(
+    descriptor: ZLinkFanoutPublisherDescriptor,
+    intent: ZLinkLocationWriteIntent,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationWriteResult> {
+    return this.observeStore('compare_exchange', () =>
+      this.updateFanoutPublisherRequest(descriptor, intent, signal)
+    );
+  }
+
+  private async updateFanoutPublisherRequest(
     descriptor: ZLinkFanoutPublisherDescriptor,
     intent: ZLinkLocationWriteIntent,
     signal?: AbortSignal
@@ -2223,6 +2455,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     owner: ZLinkLocationOwnerToken,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteStatus> {
+    return this.observeStore('release', () =>
+      this.removeFanoutPublisherRequest(key, owner, signal)
+    );
+  }
+
+  private async removeFanoutPublisherRequest(
+    key: ZLinkFanoutPublisherDescriptorKey,
+    owner: ZLinkLocationOwnerToken,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationWriteStatus> {
     return this.removeDescriptor(
       fanoutKey(key.channelName, key.publisherRid),
       owner,
@@ -2236,10 +2478,30 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     page: ZLinkPageRequest = {},
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>> {
+    return this.observeStore('read', () =>
+      this.listFanoutPublishersRequest(channelName, page, signal)
+    );
+  }
+
+  private async listFanoutPublishersRequest(
+    channelName: string,
+    page: ZLinkPageRequest = {},
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationPage<ZLinkFanoutPublisherDescriptor>> {
     return this.listDescriptors(fanoutPrefix(channelName), page, reviveFanoutDescriptor, signal);
   }
 
   override async updateSpot(
+    location: ZLinkSpotLocation,
+    intent: ZLinkLocationWriteIntent,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationWriteResult> {
+    return this.observeStore('compare_exchange', () =>
+      this.updateSpotRequest(location, intent, signal)
+    );
+  }
+
+  private async updateSpotRequest(
     location: ZLinkSpotLocation,
     intent: ZLinkLocationWriteIntent,
     signal?: AbortSignal
@@ -2257,10 +2519,25 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     owner: ZLinkLocationOwnerToken,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteStatus> {
+    return this.observeStore('release', () => this.removeSpotRequest(key, owner, signal));
+  }
+
+  private async removeSpotRequest(
+    key: ZLinkSpotLocationKey,
+    owner: ZLinkLocationOwnerToken,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationWriteStatus> {
     return this.removeOwnedLocation(spotKey(key.meshName, String(key.spotId)), owner, signal);
   }
 
   override async resolveSpot(
+    key: ZLinkSpotLocationKey,
+    signal?: AbortSignal
+  ): Promise<ZLinkSpotLocation | undefined> {
+    return this.observeStore('read', () => this.resolveSpotRequest(key, signal));
+  }
+
+  private async resolveSpotRequest(
     key: ZLinkSpotLocationKey,
     signal?: AbortSignal
   ): Promise<ZLinkSpotLocation | undefined> {
@@ -2272,6 +2549,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 
   override async listSpots(
+    filter: ZLinkSpotLocationFilter,
+    page: ZLinkPageRequest = {},
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationPage<ZLinkSpotLocation>> {
+    return this.observeStore('read', () => this.listSpotsRequest(filter, page, signal));
+  }
+
+  private async listSpotsRequest(
     filter: ZLinkSpotLocationFilter,
     page: ZLinkPageRequest = {},
     signal?: AbortSignal
@@ -2290,6 +2575,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     intent: ZLinkLocationWriteIntent,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
+    return this.observeStore('compare_exchange', () =>
+      this.updateActorRequest(location, intent, signal)
+    );
+  }
+
+  private async updateActorRequest(
+    location: ZLinkActorLocation,
+    intent: ZLinkLocationWriteIntent,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationWriteResult> {
     return this.updateOwnedLocation(
       actorKey(location.meshName, location.actorId),
       normalizeActor(location),
@@ -2304,10 +2599,25 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     owner: ZLinkLocationOwnerToken,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteStatus> {
+    return this.observeStore('release', () => this.removeActorRequest(key, owner, signal));
+  }
+
+  private async removeActorRequest(
+    key: ZLinkActorLocationKey,
+    owner: ZLinkLocationOwnerToken,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationWriteStatus> {
     return this.removeOwnedLocation(actorKey(key.meshName, key.actorId), owner, signal);
   }
 
   override async resolveActor(
+    key: ZLinkActorLocationKey,
+    signal?: AbortSignal
+  ): Promise<ZLinkActorLocation | undefined> {
+    return this.observeStore('read', () => this.resolveActorRequest(key, signal));
+  }
+
+  private async resolveActorRequest(
     key: ZLinkActorLocationKey,
     signal?: AbortSignal
   ): Promise<ZLinkActorLocation | undefined> {
@@ -2323,6 +2633,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     page: ZLinkPageRequest = {},
     signal?: AbortSignal
   ): Promise<ZLinkLocationPage<ZLinkActorLocation>> {
+    return this.observeStore('read', () => this.listActorsRequest(filter, page, signal));
+  }
+
+  private async listActorsRequest(
+    filter: ZLinkActorLocationFilter,
+    page: ZLinkPageRequest = {},
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationPage<ZLinkActorLocation>> {
     return this.listOwnedLocations(
       `${PREFIX}actor:`,
       page,
@@ -2333,6 +2651,16 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 
   override async updateRoute(
+    location: ZLinkRouteLocation,
+    intent: ZLinkLocationWriteIntent,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationWriteResult> {
+    return this.observeStore('compare_exchange', () =>
+      this.updateRouteRequest(location, intent, signal)
+    );
+  }
+
+  private async updateRouteRequest(
     location: ZLinkRouteLocation,
     intent: ZLinkLocationWriteIntent,
     signal?: AbortSignal
@@ -2398,6 +2726,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     owner: ZLinkLocationOwnerToken,
     signal?: AbortSignal
   ): Promise<ZLinkLocationWriteResult> {
+    return this.observeStore('release', () => this.removeRouteRequest(key, owner, signal));
+  }
+
+  private async removeRouteRequest(
+    key: ZLinkRouteLocationKey,
+    owner: ZLinkLocationOwnerToken,
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationWriteResult> {
     const rowKey = routeKey(String(key.routeKind), key.routeKey);
     const current = await this.provider.read(rowKey, signal);
     if (current.kind === 'missing') return rejected(current.storeNow);
@@ -2432,6 +2768,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
     key: ZLinkRouteLocationKey,
     signal?: AbortSignal
   ): Promise<ZLinkRouteLocation | undefined> {
+    return this.observeStore('read', () => this.resolveRouteRequest(key, signal));
+  }
+
+  private async resolveRouteRequest(
+    key: ZLinkRouteLocationKey,
+    signal?: AbortSignal
+  ): Promise<ZLinkRouteLocation | undefined> {
     const value = await this.readOwnedLocation<ZLinkRouteLocation>(
       routeKey(String(key.routeKind), key.routeKey),
       signal
@@ -2440,6 +2783,14 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 
   override async listRoutes(
+    filter: ZLinkRouteLocationFilter,
+    page: ZLinkPageRequest = {},
+    signal?: AbortSignal
+  ): Promise<ZLinkLocationPage<ZLinkRouteLocation>> {
+    return this.observeStore('read', () => this.listRoutesRequest(filter, page, signal));
+  }
+
+  private async listRoutesRequest(
     filter: ZLinkRouteLocationFilter,
     page: ZLinkPageRequest = {},
     signal?: AbortSignal
@@ -2454,6 +2805,13 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
   }
 
   override async removeAllByOwner(
+    owner: ZLinkLocationOwnerToken,
+    signal?: AbortSignal
+  ): Promise<bigint> {
+    return this.observeStore('release', () => this.removeAllByOwnerRequest(owner, signal));
+  }
+
+  private async removeAllByOwnerRequest(
     owner: ZLinkLocationOwnerToken,
     signal?: AbortSignal
   ): Promise<bigint> {
@@ -2557,7 +2915,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       const encodedAuthority = authorityContractValueFromPreimage(candidate.key.value);
       const identity = decodeAuthorityKey({ value: encodedAuthority } as ZLinkAuthorityKey);
       if (record.snapshot.allocation.state === 'active') {
-        const result = await this.compareExchangeAuthority(
+        const result = await this.compareExchangeAuthorityRequest(
           { value: encodedAuthority } as ZLinkAuthorityKey,
           current.value.version as unknown as ZLinkAuthorityStoreVersion,
           { kind: 'delete' },
@@ -2568,7 +2926,7 @@ export class ZLinkLocationStoreRepository extends ZLinkInMemoryLocationStore {
       }
       const reservationId = record.snapshot.pendingCreation?.reservationId;
       if (reservationId === undefined) continue;
-      const aborted = await this.abort(
+      const aborted = await this.abortRequest(
         {
           key: identity,
           reservationId,
@@ -4825,7 +5183,10 @@ function requireOwnerInput(ownerId: string, leaseTtlMs: number): void {
 function throwIfOperationExpired(signal?: AbortSignal, deadlineUnixMs?: bigint): void {
   signal?.throwIfAborted();
   if (deadlineUnixMs !== undefined && Date.now() >= Number(deadlineUnixMs)) {
-    throw new DOMException('Operation deadline exceeded.', 'TimeoutError');
+    throw new ZLinkFrameworkException(
+      ZLinkFrameworkErrorKind.DeadlineExceeded,
+      'Operation deadline exceeded.'
+    );
   }
 }
 
@@ -4843,4 +5204,34 @@ function locationStoreProviderFailure(error: unknown, signal?: AbortSignal): unk
     'Location Store provider is unavailable.',
     error
   );
+}
+
+function projectCapacity(
+  limits: ZLinkMeshNodeDescriptor['populationCapacity'],
+  capacity: CapacityRecord
+): ZLinkMeshNodeDescriptor['populationCapacity'] {
+  return {
+    actors: {
+      ...limits.actors,
+      active: capacity.active.actors,
+      reserved: capacity.pending.actors
+    },
+    spots: {
+      ...limits.spots,
+      active: capacity.active.spots,
+      reserved: capacity.pending.spots
+    },
+    spotTypes: limits.spotTypes.map((value) => {
+      const key = capacityTypeKey({
+        objectKind: value.objectKind,
+        stableType: value.stableType,
+        count: 0
+      });
+      return {
+        ...value,
+        active: capacity.active.spotTypes[key] ?? 0,
+        reserved: capacity.pending.spotTypes[key] ?? 0
+      };
+    })
+  };
 }

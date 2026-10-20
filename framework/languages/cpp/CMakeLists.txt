@@ -2260,6 +2260,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_instance_spot_activation PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_use_zlink_gtest_main(test_cpp_framework_instance_spot_activation)
+  target_link_libraries(test_cpp_framework_instance_spot_activation PRIVATE opentelemetry-cpp::metrics)
   # The channel messaging test reaches the service wire codec headers, which include the
   # schema-generated constants header (see test_cpp_framework_service_wire_codec above).
   target_include_directories(test_cpp_framework_channel_messaging PRIVATE
@@ -2308,6 +2309,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-unit;framework-regression;framework-observability;diagnostics")
   target_include_directories(test_cpp_framework_message_flow PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_route_mesh_idle_wait
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_idle_wait.cpp
+    "framework-unit;framework-regression")
+  target_include_directories(test_cpp_framework_route_mesh_idle_wait PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_route_mesh_idle_wait)
   add_zlink_framework_test(
     test_cpp_framework_monitoring
     tests/Zlink.Framework.UnitTests/test_cpp_framework_monitoring.cpp

@@ -181,9 +181,13 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             if (initialPrepared is not null)
                 await cleanup.DiscardPreparedAsync(initialPrepared).ConfigureAwait(false);
             if (captureStarted)
+            {
                 await runtime
                     .RestoreStandaloneActorRelocationSourceAsync(actorState)
                     .ConfigureAwait(false);
+                if (settled == ZLinkSourceSettlement.SourcePreserved)
+                    relocationMetric.CompleteSource(settled);
+            }
             if (sealedSession is { } session)
                 await AbortSessionRouteBestEffortAsync(
                         actorState.ActorId,
@@ -352,7 +356,14 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     deadline,
                     () => IsOwnerLeaseValid(found.Snapshot),
                     token =>
-                        SubmitBoundaryAsync(boundaryCanonical, target.Rid, data, cutover, token),
+                        SubmitBoundaryAsync(
+                            boundaryCanonical,
+                            target.Rid,
+                            data,
+                            cutover,
+                            token,
+                            () => interruption.Complete()
+                        ),
                     registration.Locations.Options.PollingInterval,
                     cancellationToken,
                     () => sourceNode.Node.ObservePeerRoute(target.Rid)
@@ -368,10 +379,12 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 if (preserved)
                     await RestoreSourceAsync().ConfigureAwait(false);
                 else
+                {
+                    relocationMetric.CompleteSource(settlement.Outcome);
                     await runtime
                         .FailStandaloneActorRelocationSourceAsync(actorState, sourceRef.Value)
                         .ConfigureAwait(false);
-                relocationMetric.Complete(ZLinkRelocationMetricOutcome.Aborted);
+                }
                 throw new ZLinkActorRelocationFailureException(
                     ZLinkFrameworkRelocationReason.RelocationFailed,
                     preserved
@@ -389,6 +402,7 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 );
             }
             committed = true;
+            relocationMetric.CompleteSource(settlement.Outcome);
             await CompleteCommittedSourceAsync(
                     actor,
                     actorState,
@@ -398,89 +412,93 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                     target,
                     acceptedCount,
                     settlement.Snapshot?.AuthorityOwnerGeneration,
-                    interruption,
                     cancellationToken
                 )
                 .ConfigureAwait(false);
             sourceTerminalized = true;
-            relocationMetric.Complete(ZLinkRelocationMetricOutcome.Completed);
             return ZLinkStandaloneActorRelocationResult.Committed;
         }
         catch (Exception error) when (settled is null)
         {
-            if (!committed)
+            try
             {
-                // The failed submission ends waiting, not authority cleanup.
-                // Complete the source fence even when its deadline is cancelled.
-                var authority = await authorityStore
-                    .ReadAuthorityAsync(
-                        ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorState.ActorId),
-                        CancellationToken.None
-                    )
-                    .ConfigureAwait(false);
-                var restoredPrecommit = false;
-                if (
-                    authority is ZLinkAuthorityReadResult.Found current
-                    && ZLinkStandaloneActorRelocationPrecommitCoordinator.IsSourcePrecommit(
-                        current.Snapshot,
-                        relocationId
-                    )
-                )
+                if (!committed)
                 {
-                    var restored = await precommit
-                        .AbortSourceAsync(
+                    // The failed submission ends waiting, not authority cleanup.
+                    // Complete the source fence even when its deadline is cancelled.
+                    var authority = await authorityStore
+                        .ReadAuthorityAsync(
                             ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorState.ActorId),
-                            relocationId,
                             CancellationToken.None
                         )
                         .ConfigureAwait(false);
-                    authority = new ZLinkAuthorityReadResult.Found(restored);
-                    restoredPrecommit = true;
+                    var restoredPrecommit = false;
+                    if (
+                        authority is ZLinkAuthorityReadResult.Found current
+                        && ZLinkStandaloneActorRelocationPrecommitCoordinator.IsSourcePrecommit(
+                            current.Snapshot,
+                            relocationId
+                        )
+                    )
+                    {
+                        var restored = await precommit
+                            .AbortSourceAsync(
+                                ZLinkActorAuthorityPayloadCodec.AuthorityKey(actorState.ActorId),
+                                relocationId,
+                                CancellationToken.None,
+                                () => settled = ZLinkSourceSettlement.SourcePreserved
+                            )
+                            .ConfigureAwait(false);
+                        authority = new ZLinkAuthorityReadResult.Found(restored);
+                        restoredPrecommit = true;
+                    }
+                    if (
+                        !IsExactSourceAuthority(
+                            authority,
+                            found.Snapshot,
+                            sourceAuthority,
+                            requireStoreVersion: !restoredPrecommit
+                        )
+                    )
+                        //  A failure here happened before the cutover submission,
+                        //  so no target commit can exist (the settlement owns every
+                        //  outcome after it).
+                        throw DataLost(
+                            $"Actor '{actorState.ActorId}' authority changed to an unrelated owner during relocation."
+                        );
+                    await RestoreSourceAsync().ConfigureAwait(false);
                 }
                 if (
-                    !IsExactSourceAuthority(
-                        authority,
-                        found.Snapshot,
-                        sourceAuthority,
-                        requireStoreVersion: !restoredPrecommit
+                    committed
+                    || (
+                        error is not OperationCanceledException
+                        && !ZLinkActorRelocationFailureException.IsRetryableTargetFailure(error)
                     )
                 )
-                    //  A failure here happened before the cutover submission,
-                    //  so no target commit can exist (the settlement owns every
-                    //  outcome after it).
-                    throw DataLost(
-                        $"Actor '{actorState.ActorId}' authority changed to an unrelated owner during relocation."
+                    throw new ZLinkActorRelocationFailureException(
+                        committed
+                            ? ZLinkFrameworkRelocationReason.RelocationFailed
+                            : ZLinkActorRelocationFailureException.MapReason(error),
+                        committed
+                            ? ZLinkRelocationCommitKnowledge.Committed
+                            : ZLinkRelocationCommitKnowledge.NotCommitted,
+                        sourceTerminalized,
+                        error
                     );
-                await RestoreSourceAsync().ConfigureAwait(false);
+                throw;
             }
-            relocationMetric.Complete(
-                error is OperationCanceledException && runtime.ShutdownToken.IsCancellationRequested
-                    ? ZLinkRelocationMetricOutcome.Shutdown
-                : committed ? ZLinkRelocationMetricOutcome.Failed
-                : error is OperationCanceledException ? ZLinkRelocationMetricOutcome.Shutdown
-                : ZLinkRelocationMetricOutcome.Aborted
-            );
-            if (
-                committed
-                || (
-                    error is not OperationCanceledException
-                    && !ZLinkActorRelocationFailureException.IsRetryableTargetFailure(error)
-                )
-            )
-                throw new ZLinkActorRelocationFailureException(
-                    committed
-                        ? ZLinkFrameworkRelocationReason.RelocationFailed
-                        : ZLinkActorRelocationFailureException.MapReason(error),
-                    committed
-                        ? ZLinkRelocationCommitKnowledge.Committed
-                        : ZLinkRelocationCommitKnowledge.NotCommitted,
-                    sourceTerminalized,
-                    error
+            finally
+            {
+                relocationMetric.CompleteSource(
+                    null,
+                    error is OperationCanceledException
+                        && runtime.ShutdownToken.IsCancellationRequested
                 );
-            throw;
+            }
         }
         finally
         {
+            relocationMetric.CompleteSource(null);
             runtime.CompleteSessionRelocation(actor.Context.MeshName, relocationId);
         }
     }
@@ -647,7 +665,8 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         RoutingId targetRid,
         IReadOnlyList<ZLinkServiceWireCodec.RelocationDataRecord> data,
         ZLinkServiceWireCodec.RelocationCutoverRecord cutover,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        Action? cutoverTerminal = null
     )
     {
         try
@@ -656,9 +675,16 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 await canonical
                     .SendCanonicalRelocationDataAsync(targetRid, record, cancellationToken)
                     .ConfigureAwait(false);
-            await canonical
-                .SendCanonicalRelocationCutoverAsync(targetRid, cutover, cancellationToken)
-                .ConfigureAwait(false);
+            try
+            {
+                await canonical
+                    .SendCanonicalRelocationCutoverAsync(targetRid, cutover, cancellationToken)
+                    .ConfigureAwait(false);
+            }
+            finally
+            {
+                cutoverTerminal?.Invoke();
+            }
         }
         catch (ZLinkFrameworkException exception)
             when (exception.Kind == ZLinkFrameworkErrorKind.Unavailable)
@@ -680,7 +706,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
         ZLinkMeshNodeDescriptor target,
         int acceptedCount,
         ulong? targetAuthorityOwnerGeneration,
-        ZLinkRelocationInterruptionOperation interruption,
         CancellationToken cancellationToken
     )
     {
@@ -717,7 +742,6 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
             throw new ZLinkRelocationDataLostException(
                 $"Actor '{actorState.ActorId}' could not deliver its pre-cutover Message Follow backlog."
             );
-        interruption.Complete();
         await runtime
             .CompleteStandaloneActorRelocationSourceAsync(
                 actor,

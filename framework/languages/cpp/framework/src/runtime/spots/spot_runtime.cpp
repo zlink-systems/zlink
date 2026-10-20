@@ -595,11 +595,11 @@ handoff_reply_envelope (const runtime::messaging::envelope_header_t &request_hea
     detail::channel_reply_writer_t replies;
     auto terminal =
       completed
-        ? replies.reply_raw_envelope (
+        ? detail::encode_actor_reply (
             replies.create_reply_header (runtime::messaging::message_kind_t::response,
                                          request_header.channel_name, request_header),
             completed.value ())
-        : replies.reply_raw_envelope (
+        : detail::encode_actor_reply (
             replies.create_error_header (
               request_header.channel_name, request_header,
               completed.error ()
@@ -677,8 +677,8 @@ task_t<bool> settle_handoff_packet (std::shared_ptr<detail::spot_node_builder_st
           });
         if (!native_request)
             co_return record->complete_native (std::nullopt);
-        auto header = runtime::messaging::envelope_codec_t{}.decode_header (
-          record->application_header (), false);
+        auto header = detail::decode_actor_packet_header (
+          record->application_header (), detail::stream_message_kind_t::request, false);
         if (!header)
             std::rethrow_exception (header.exception ());
         auto terminal = handoff_reply_envelope (header.value (), completed);
@@ -9321,8 +9321,12 @@ task_t<void> spot_node_runtime_t::seal_actor_application_suffix (const actor_ref
           *record->payload (), [&] (auto kind, const auto &application) {
               const runtime::messaging::message_parts_t parts (
                 runtime::protocol::decode_application_parts (application));
-              const auto header =
-                runtime::messaging::envelope_codec_t{}.decode_header (parts, false);
+              const auto header = detail::decode_actor_packet_header (
+                parts,
+                kind == runtime::protocol::frozen_record_kind_t::actor_request
+                  ? detail::stream_message_kind_t::request
+                  : detail::stream_message_kind_t::send,
+                false);
               if (!header)
                   std::rethrow_exception (header.exception ());
               packet.packet_name = header.value ().message_name;
@@ -15192,7 +15196,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
         auto reply_error = [&] (const framework_exception_t &error) {
             if (record.kind != service::record_kind_t::actor_request)
                 return;
-            auto reply = replies.reply_raw_envelope (
+            auto reply = detail::encode_actor_reply (
               replies.create_error_header (header.channel_name, header, error),
               zlink::message_t::from (""));
             (void) service::reply (record.reply_token, reply.items ());
@@ -15331,7 +15335,12 @@ bool spot_node_runtime_t::dispatch_mesh_record (
               _state, message_flow_outcome_t::received, actor_dispatch_kind, header.message_name,
               owner.spot_id, actor.actor_id ().value (), "dispatch_mesh_record.session_admission",
               [&] {
-                  return std::string ("accepted=") + (*session_relay_admission ? "true" : "false");
+                  if (*session_relay_admission)
+                      return std::string ("accepted=true");
+                  return std::string ("accepted=false reason=")
+                         + (session_relay_admission->error ()
+                              ? session_relay_admission->error ()->what ()
+                              : "Bound Session relay source fence was rejected");
               });
             if (!*session_relay_admission) {
                 reply_error (
@@ -15374,11 +15383,11 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                                              std::move (encoded), std::nullopt};
             auto response = dispatcher.dispatch_request (received, header, services);
             const auto reply_parts =
-              response ? replies.reply_raw_envelope (replies.create_reply_header (
+              response ? detail::encode_actor_reply (replies.create_reply_header (
                                                        runtime::messaging::message_kind_t::response,
                                                        header.channel_name, header),
                                                      std::move (response.value ()))
-                       : replies.reply_raw_envelope (
+                       : detail::encode_actor_reply (
                            replies.create_error_header (
                              header.channel_name, header,
                              framework_exception_t (response.error_kind (),
@@ -15393,7 +15402,6 @@ bool spot_node_runtime_t::dispatch_mesh_record (
           session_relay_admission
             ? std::move (session_relay_admission->value ())
             : actor_gateway.actor_context (actor, record.source_binding_generation);
-        const bool semantic_send = header.kind == runtime::messaging::message_kind_t::command;
         const auto handoff_operation =
           runtime::protocol::wire_operation_id_t{record.operation_id.high, record.operation_id.low};
         const auto handoff_source_fence =
@@ -15417,7 +15425,7 @@ bool spot_node_runtime_t::dispatch_mesh_record (
          * a local requester on the current owner) parks and replays exactly
          * like a fenced one; requiring the fence here silently orphaned its
          * terminal, leaving the requester waiting forever. */
-        if (record.kind == service::record_kind_t::actor_request && !semantic_send
+        if (record.kind == service::record_kind_t::actor_request
             && (!record.application_record || !record.application_record->native_reply)
             && (record.operation_id.high != 0 || record.operation_id.low != 0)
             && !header.metadata.contains (std::string (detail::actor_handoff_source_node_key))) {
@@ -15458,25 +15466,9 @@ bool spot_node_runtime_t::dispatch_mesh_record (
             // mailbox/relay queue. Do not retain the source Session ingress
             // until application-handler completion: relocation sealing may be
             // queued behind that same handler.
-            after_application_admission = [request_header, reply_token = record.reply_token,
-                                           terminal_claimed, terminal_owner] {
-                if (terminal_claimed->exchange (true, std::memory_order_acq_rel))
-                    return;
-                std::exception_ptr reply_failure;
-                try {
-                    detail::channel_reply_writer_t writer;
-                    const auto reply = writer.reply_raw_envelope (
-                      writer.create_reply_header (runtime::messaging::message_kind_t::response,
-                                                  request_header.channel_name, request_header),
-                      zlink::message_t{});
-                    (void) service::reply (reply_token, reply.items ());
-                }
-                catch (...) {
-                    reply_failure = std::current_exception ();
-                }
-                (*terminal_owner) ();
-                if (reply_failure)
-                    std::rethrow_exception (reply_failure);
+            after_application_admission = [terminal_claimed, terminal_owner] {
+                if (!terminal_claimed->exchange (true, std::memory_order_acq_rel))
+                    (*terminal_owner) ();
             };
         }
         auto relayed = [&] {
@@ -15506,14 +15498,10 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                 stamp_handoff_actor_route (relay_metadata.values, *record.actor_route,
                                            record.message_follow_hop_count);
             }
-            //  The wire record kind is authoritative for the send/request
-            //  semantic; a bound-session one-way relay can carry a request
-            //  envelope header while its record kind is actor_send.
             return relay_actor_packet (
               actor, std::move (actor_context),
-              semantic_send || record.kind == service::record_kind_t::actor_send
-                ? stream_message_kind_t::send
-                : stream_message_kind_t::request,
+              record.kind == service::record_kind_t::actor_send ? stream_message_kind_t::send
+                                                                : stream_message_kind_t::request,
               header.message_name, body.value (), services, serializers, std::move (relay_metadata),
               admitted_message_follow_route && record.actor_route ? &*record.actor_route : nullptr,
               std::move (before_application_handler), std::move (after_application_admission),
@@ -15528,11 +15516,11 @@ bool spot_node_runtime_t::dispatch_mesh_record (
             return false;
         }
         detail::observe_task_completion (
-          relayed,
-          [state = _state, admission_token, deferred_handoff_request, handoff_pending,
-           request_header, reply_token = record.reply_token, terminal_claimed, terminal_owner,
-           application_completed, application_record = record.application_record] (
-            const result_t<std::optional<zlink::message_t>> &result) mutable {
+          relayed, [state = _state, admission_token, deferred_handoff_request, handoff_pending,
+                    request_header, record_kind = record.kind, reply_token = record.reply_token,
+                    terminal_claimed, terminal_owner, application_completed,
+                    application_record = record.application_record] (
+                     const result_t<std::optional<zlink::message_t>> &result) mutable {
               /* An empty relay result retains the existing native reply owner
                * or the legacy pending entry while handoff replay owns the request.
                * For the legacy path, the reply token stays
@@ -15568,17 +15556,17 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                   finish_application ();
                   return;
               }
-              if (!parked) {
+              if (!parked && record_kind == service::record_kind_t::actor_request) {
                   try {
                       detail::channel_reply_writer_t writer;
                       const auto reply =
                         result
-                          ? writer.reply_raw_envelope (
+                          ? detail::encode_actor_reply (
                               writer.create_reply_header (
                                 runtime::messaging::message_kind_t::response,
                                 request_header.channel_name, request_header),
                               result.value () ? *result.value () : zlink::message_t{})
-                          : writer.reply_raw_envelope (
+                          : detail::encode_actor_reply (
                               writer.create_error_header (
                                 request_header.channel_name, request_header,
                                 framework_exception_t (result.error_kind (),
