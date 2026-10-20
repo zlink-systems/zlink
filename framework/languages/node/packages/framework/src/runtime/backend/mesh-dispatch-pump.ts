@@ -67,7 +67,7 @@ export class ZLinkMeshDispatchPump {
   private infrastructureScheduled = false;
   private disposed = false;
   private readonly activeDrains = new Set<Promise<void>>();
-  private readonly idleApplicationWorkers = new Set<() => void>();
+  private readonly idleApplicationWorkers: Array<() => void> = [];
   private applicationWorkerCount = 0;
   private readonly capacityStop = new AbortController();
   private recordsSinceYield = 0;
@@ -101,7 +101,7 @@ export class ZLinkMeshDispatchPump {
     this.capacityStop.abort();
     this.pendingDomains = ReadyDomain.None;
     for (const wake of this.idleApplicationWorkers) wake();
-    this.idleApplicationWorkers.clear();
+    this.idleApplicationWorkers.length = 0;
     while (this.activeDrains.size > 0) {
       await awaitWithAbort(Promise.all([...this.activeDrains]), signal);
     }
@@ -132,9 +132,8 @@ export class ZLinkMeshDispatchPump {
 
   private wakeApplicationWorker(): void {
     if (this.disposed || (this.pendingDomains & ReadyDomain.Application) === 0) return;
-    const idle = this.idleApplicationWorkers.values().next().value as (() => void) | undefined;
+    const idle = this.idleApplicationWorkers.shift();
     if (idle !== undefined) {
-      this.idleApplicationWorkers.delete(idle);
       this.pendingDomains &= ~ReadyDomain.Application;
       idle();
       return;
@@ -162,7 +161,7 @@ export class ZLinkMeshDispatchPump {
       this.pendingDomains &= ~ReadyDomain.Application;
       return Promise.resolve();
     }
-    return new Promise((resolve) => this.idleApplicationWorkers.add(resolve));
+    return new Promise((resolve) => this.idleApplicationWorkers.push(resolve));
   }
 
   /**
