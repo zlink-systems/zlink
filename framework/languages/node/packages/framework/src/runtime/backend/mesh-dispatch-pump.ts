@@ -151,7 +151,7 @@ export class ZLinkMeshDispatchPump {
     this.applicationWorkerCount += 1;
     let worker: Promise<void>;
     worker = detachedMeshDispatchScope(() =>
-      runZLinkExecutionArea('application', () => this.drainClaim(ReadyDomain.Application))
+      runZLinkExecutionArea('application', () => this.runApplicationWorker())
     ).finally(() => {
       this.applicationWorkerCount -= 1;
       this.activeDrains.delete(worker);
@@ -355,130 +355,37 @@ export class ZLinkMeshDispatchPump {
   }
 
   /** Each worker owns claim continuations for its entire lifetime. */
-  private async drainClaim(
-    domain: number,
-    owner?: ReadyRecord,
-    claim?: Claim,
-    suppliedReceiveBatch?: ReceiveBatch
-  ): Promise<void> {
-    // Application workers claim one owner at a time; infrastructure supplies
-    // the claim already obtained by its bounded lifecycle drain.
-    const readyBatch = claim === undefined ? this.node.createReadyBatch(1) : undefined;
-    let receiveBatch =
-      suppliedReceiveBatch ??
-      (readyBatch === undefined
-        ? undefined
-        : this.node.createReceiveBatch(
-            MESH_DISPATCH_RECEIVE_CAPACITY,
-            this.options.partCapacity ?? DEFAULT_MESH_PART_CAPACITY
-          ));
-    let claimedOwner = owner!;
-    let claimed = claim!;
+  private async runApplicationWorker(): Promise<void> {
+    const readyBatch = this.node.createReadyBatch(1);
+    const receiveBatch = this.node.createReceiveBatch(
+      MESH_DISPATCH_RECEIVE_CAPACITY,
+      this.options.partCapacity ?? DEFAULT_MESH_PART_CAPACITY
+    );
     try {
-      do {
-        if (readyBatch !== undefined) {
-          // This boundary also keeps the first handler off the receive stack.
-          await this.waitForApplicationReady();
-          this.beginDrain();
-        }
+      for (;;) {
+        // This boundary also keeps the first handler off the receive stack.
+        await this.waitForApplicationReady();
+        this.beginDrain();
         try {
-          for (;;) {
-            if (readyBatch !== undefined) {
-              if (this.disposed) break;
-              readyBatch.reset();
-              const drained = this.node.drainReady(
-                ReadyDomain.Application,
-                readyBatch,
-                ZLINK_BACKEND_RECV_DONT_WAIT
-              );
-              if (!drained.ok || drained.records.length === 0) break;
-              if (drained.hasResidue) this.markReady(ReadyDomain.Application);
-              claimedOwner = drained.records[0]!;
-              claimed = readyBatch.takeClaim(0);
-            }
-            try {
-              receiveBatch ??= this.node.createReceiveBatch(
-                MESH_DISPATCH_RECEIVE_CAPACITY,
-                this.options.partCapacity ?? DEFAULT_MESH_PART_CAPACITY
-              );
-              const capacity =
-                claimedOwner.ordinaryIngressPreAdmitted === true
-                  ? MESH_DISPATCH_RECEIVE_CAPACITY
-                  : 1;
-              let claimPermit =
-                claimedOwner.terminalCompletion === true ||
-                claimedOwner.ordinaryIngressPreAdmitted === true ||
-                domain === ReadyDomain.Infrastructure
-                  ? undefined
-                  : await this.acquirePermit();
-              try {
-                if (this.capacityStop.signal.aborted) return;
-                receiveBatch.reset(capacity);
-                const received = claimed.recvBatch(receiveBatch, ZLINK_BACKEND_RECV_DONT_WAIT);
-                if (received.ok) {
-                  // The bounded batch stays in claim order until its records finish.
-                  try {
-                    for (let index = 0; index < received.records.length; index += 1) {
-                      const record = received.records[index]!;
-                      if (this.disposed) break;
-                      const permit = record.applicationJobPermit ?? claimPermit;
-                      if (
-                        claimedOwner.ordinaryIngressPreAdmitted === true &&
-                        permit === undefined
-                      ) {
-                        throw new Error(
-                          'Pre-admitted raw ingress record lost its Application Job Queue permit.'
-                        );
-                      }
-                      this.recordsSinceYield += 1;
-                      if (permit !== undefined) {
-                        if (
-                          domain === ReadyDomain.Application &&
-                          record.applicationJobPermit === undefined
-                        )
-                          permit.markApplicationQueued();
-                        // The scope now owns this reservation, including failure
-                        // and detached handler handoff. Only unused permits remain
-                        // owned by the receive attempt's finally block.
-                        if (permit === claimPermit) claimPermit = undefined;
-                      }
-                      // The record's terminal and the permit turn release follow the
-                      // handler in this turn's own continuation.
-                      const dispatched = this.dispatchRecord(claimedOwner, record, permit);
-                      if (dispatched === false) continue;
-                      if (dispatched !== true) {
-                        try {
-                          await dispatched;
-                        } catch (error) {
-                          this.failRecord(error, record, permit);
-                          continue;
-                        }
-                      }
-                      const finished = this.finishRecord(record, permit);
-                      if (finished !== undefined) await finished;
-                    }
-                  } finally {
-                    // Batch ownership includes records whose dispatch never began,
-                    // including on failure or shutdown in the middle of the batch.
-                    for (let index = 0; index < received.records.length; index += 1) {
-                      const record = received.records[index]!;
-                      for (let partIndex = 0; partIndex < record.parts.length; partIndex += 1)
-                        record.parts[partIndex]!.close();
-                      record.releaseRetainedIngress?.();
-                    }
-                  }
-                }
-              } finally {
-                claimPermit?.releaseAfterInternalProcessing();
-              }
-            } finally {
-              claimed.release();
-            }
-            // Returning a claim remains an asynchronous worker boundary even
-            // when its shared macrotask budget has not expired. The worker owns
-            // that continuation directly, without a separate drain task.
+          while (!this.disposed) {
+            readyBatch.reset();
+            const drained = this.node.drainReady(
+              ReadyDomain.Application,
+              readyBatch,
+              ZLINK_BACKEND_RECV_DONT_WAIT
+            );
+            if (!drained.ok || drained.records.length === 0) break;
+            if (drained.hasResidue) this.markReady(ReadyDomain.Application);
+            const pending = this.dispatchClaim(
+              ReadyDomain.Application,
+              drained.records[0]!,
+              readyBatch.takeClaim(0),
+              receiveBatch
+            );
+            if (pending !== undefined) await pending;
+            // Returning a claim remains an asynchronous worker boundary without
+            // allocating a separate async drain task for a synchronous claim.
             await this.yieldIfNeeded();
-            if (readyBatch === undefined) return;
             // Empty ready claims count toward the shared pump budget too.
             this.recordsSinceYield += 1;
             const nextTurn = this.yieldIfNeeded();
@@ -487,16 +394,130 @@ export class ZLinkMeshDispatchPump {
         } catch (error) {
           this.reportDispatchError(error);
         } finally {
-          if (readyBatch !== undefined) {
-            readyBatch.reset();
-            this.draining -= 1;
-          }
+          readyBatch.reset();
+          this.draining -= 1;
         }
         if (this.disposed) return;
-      } while (readyBatch !== undefined);
+      }
     } finally {
-      if (suppliedReceiveBatch === undefined) receiveBatch?.close();
-      readyBatch?.close();
+      receiveBatch.close();
+      readyBatch.close();
+    }
+  }
+
+  private async drainClaim(
+    domain: number,
+    owner: ReadyRecord,
+    claim: Claim,
+    receiveBatch?: ReceiveBatch
+  ): Promise<void> {
+    try {
+      const pending = this.dispatchClaim(domain, owner, claim, receiveBatch);
+      if (pending !== undefined) await pending;
+      await this.yieldIfNeeded();
+    } catch (error) {
+      this.reportDispatchError(error);
+    }
+  }
+
+  /** A synchronous claim finishes without an async wrapper or a Promise. */
+  private dispatchClaim(
+    domain: number,
+    owner: ReadyRecord,
+    claim: Claim,
+    suppliedReceiveBatch?: ReceiveBatch
+  ): Promise<void> | undefined {
+    let receiveBatch = suppliedReceiveBatch;
+    let claimPermit: ApplicationJobPermitPort | undefined;
+    let records: readonly ReceiveRecord[] = [];
+    let index = 0;
+    let pending: Promise<void> | undefined;
+
+    const finishAndContinue = (
+      record: ReceiveRecord,
+      permit: ApplicationJobPermitPort | undefined
+    ): Promise<void> | undefined => {
+      const finished = this.finishRecord(record, permit);
+      return finished === undefined ? dispatchRecords() : finished.then(dispatchRecords);
+    };
+    const dispatchRecords = (): Promise<void> | undefined => {
+      while (index < records.length && !this.disposed) {
+        const record = records[index++]!;
+        const permit = record.applicationJobPermit ?? claimPermit;
+        if (owner.ordinaryIngressPreAdmitted === true && permit === undefined) {
+          throw new Error('Pre-admitted raw ingress record lost its Application Job Queue permit.');
+        }
+        this.recordsSinceYield += 1;
+        if (permit !== undefined) {
+          if (domain === ReadyDomain.Application && record.applicationJobPermit === undefined)
+            permit.markApplicationQueued();
+          // Only reservations not transferred to a record remain claim-owned.
+          if (permit === claimPermit) claimPermit = undefined;
+        }
+        const dispatched = this.dispatchRecord(owner, record, permit);
+        if (dispatched === false) continue;
+        if (dispatched !== true) {
+          return Promise.resolve(dispatched).then(
+            () => finishAndContinue(record, permit),
+            (error) => {
+              this.failRecord(error, record, permit);
+              return dispatchRecords();
+            }
+          );
+        }
+        const finished = this.finishRecord(record, permit);
+        if (finished !== undefined) return finished.then(dispatchRecords);
+      }
+      return undefined;
+    };
+    const receive = (permit?: ApplicationJobPermitPort): Promise<void> | undefined => {
+      claimPermit = permit;
+      if (this.capacityStop.signal.aborted) return undefined;
+      const capacity =
+        owner.ordinaryIngressPreAdmitted === true ? MESH_DISPATCH_RECEIVE_CAPACITY : 1;
+      receiveBatch!.reset(capacity);
+      const received = claim.recvBatch(receiveBatch!, ZLINK_BACKEND_RECV_DONT_WAIT);
+      if (!received.ok) return undefined;
+      records = received.records;
+      return dispatchRecords();
+    };
+    const finishClaim = (): void => {
+      try {
+        // Ownership includes records whose dispatch never began on failure or shutdown.
+        try {
+          for (let recordIndex = 0; recordIndex < records.length; recordIndex += 1) {
+            const record = records[recordIndex]!;
+            for (let partIndex = 0; partIndex < record.parts.length; partIndex += 1)
+              record.parts[partIndex]!.close();
+            record.releaseRetainedIngress?.();
+          }
+        } finally {
+          claimPermit?.releaseAfterInternalProcessing();
+        }
+      } finally {
+        try {
+          claim.release();
+        } finally {
+          if (suppliedReceiveBatch === undefined) receiveBatch?.close();
+        }
+      }
+    };
+
+    try {
+      receiveBatch ??= this.node.createReceiveBatch(
+        MESH_DISPATCH_RECEIVE_CAPACITY,
+        this.options.partCapacity ?? DEFAULT_MESH_PART_CAPACITY
+      );
+      pending =
+        owner.terminalCompletion === true ||
+        owner.ordinaryIngressPreAdmitted === true ||
+        domain === ReadyDomain.Infrastructure
+          ? receive()
+          : this.acquirePermit().then(receive);
+      if (pending !== undefined) return pending.finally(finishClaim);
+      return undefined;
+    } finally {
+      if (pending === undefined) finishClaim();
     }
   }
 
