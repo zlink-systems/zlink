@@ -85,7 +85,8 @@ public final class ZLinkJsonMessageSerializer
         return decodeJson(message.dataBuffer(), type);
     }
 
-    private <T> T decodeJson(ByteBuffer bytes, Class<T> type) {
+    // Package-private for the heap-range regression test.
+    <T> T decodeJson(ByteBuffer bytes, Class<T> type) {
         if (type == Message.class) {
             return type.cast(Message.from(bytes));
         }

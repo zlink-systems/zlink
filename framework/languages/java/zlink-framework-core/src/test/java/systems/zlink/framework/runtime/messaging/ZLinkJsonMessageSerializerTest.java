@@ -35,21 +35,14 @@ import java.util.stream.IntStream;
 
 final class ZLinkJsonMessageSerializerTest {
     @Test
-    void rawArrayDecodeRespectsHeapBufferRange() throws Exception {
+    void rawArrayDecodeRespectsHeapBufferRange() {
         ZLinkJsonMessageSerializer serializer = new ZLinkJsonMessageSerializer();
-        var decode =
-                ZLinkJsonMessageSerializer.class.getDeclaredMethod(
-                        "decodeJson", ByteBuffer.class, Class.class);
-        decode.setAccessible(true);
         byte[] backing = {9, 1, 2, 3, 8};
         ByteBuffer range = ByteBuffer.wrap(backing, 1, 3);
         for (ByteBuffer input : List.of(range, range.slice(), range.asReadOnlyBuffer())) {
-            assertArrayEquals(
-                    new byte[] {1, 2, 3}, (byte[]) decode.invoke(serializer, input, byte[].class));
+            assertArrayEquals(new byte[] {1, 2, 3}, serializer.decodeJson(input, byte[].class));
         }
-        assertArrayEquals(
-                backing,
-                (byte[]) decode.invoke(serializer, ByteBuffer.wrap(backing), byte[].class));
+        assertArrayEquals(backing, serializer.decodeJson(ByteBuffer.wrap(backing), byte[].class));
     }
 
     @Test
