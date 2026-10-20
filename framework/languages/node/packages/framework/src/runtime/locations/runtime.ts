@@ -633,7 +633,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     } catch (confirmationError) {
       this.recordFailure(errorMessage(confirmationError));
       if (cancelled) throw new ZLinkOwnerCleanupError(confirmationError);
-      throw confirmationError;
+      throw originalError instanceof ZLinkOwnerLeaseClaimError ? originalError : confirmationError;
     }
     if (confirmed.kind !== 'found' || confirmed.token.ownerId !== this.ownerId) {
       throw originalError;
