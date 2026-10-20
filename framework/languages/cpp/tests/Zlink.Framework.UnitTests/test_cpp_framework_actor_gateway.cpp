@@ -1704,21 +1704,24 @@ int bound_session_push_detaches_before_direct_sink_entry ()
     state->serializers = &serializers;
     actor_gateway_runtime_t gateway (state);
     const auto actor = test_actor_ref ("actor-owner", "player", "detached-bound-session", 7);
-    std::atomic_bool saw_fifo_session{false};
-    std::atomic_bool saw_completion_session{false};
+    // The second detached delivery can trace its completion after this test
+    // returns, so the observer owns the flags it writes.
+    auto saw_fifo_session = std::make_shared<std::atomic_bool> (false);
+    auto saw_completion_session = std::make_shared<std::atomic_bool> (false);
     dispatch_options_t trace_options;
     trace_options.message_flow (message_flow_log_mode_t::detailed);
     dispatch_options_access_t::set_observer_for_tests (
-      trace_options, [&] (const message_flow_event_t &event) {
+      trace_options,
+      [saw_fifo_session, saw_completion_session] (const message_flow_event_t &event) {
           if (event.surface != dispatch_error_surface_t::stream_session
               || event.stream_session_id
                    != std::optional<std::string> (
                      zlink::routing_id_t::from ("session-rid").to_hex ()))
               return;
           if (event.detail_stage == std::optional<std::string> ("fifo_accepted"))
-              saw_fifo_session.store (true, std::memory_order_release);
+              saw_fifo_session->store (true, std::memory_order_release);
           if (event.detail_stage == std::optional<std::string> ("detached_delivery_complete"))
-              saw_completion_session.store (true, std::memory_order_release);
+              saw_completion_session->store (true, std::memory_order_release);
       });
     gateway.set_dispatch (std::move (trace_options));
 
@@ -1787,8 +1790,8 @@ int bound_session_push_detaches_before_direct_sink_entry ()
             return 6;
         }
     }
-    if (!saw_fifo_session.load (std::memory_order_acquire)
-        || !saw_completion_session.load (std::memory_order_acquire))
+    if (!saw_fifo_session->load (std::memory_order_acquire)
+        || !saw_completion_session->load (std::memory_order_acquire))
         return 8;
     return 0;
 }
@@ -2732,7 +2735,9 @@ int session_disconnect_callback_owns_spot_lifecycle_gate ()
                   holding.set_value (true);
               co_await release->task ();
           });
-        observe_task_completion (held, [&] (const auto &) {
+        // The observer may run after held.result () returns and this scope
+        // ends, so it owns the flag and touches the promise only before then.
+        observe_task_completion (held, [&holding, hold_signalled] (const auto &) {
             if (!hold_signalled->exchange (true))
                 holding.set_value (false);
         });
@@ -2753,7 +2758,7 @@ int session_disconnect_callback_owns_spot_lifecycle_gate ()
               if (!signalled->exchange (true))
                   admitted.set_value (true);
           });
-        observe_task_completion (notification, [&] (const auto &) {
+        observe_task_completion (notification, [&admitted, signalled] (const auto &) {
             if (!signalled->exchange (true))
                 admitted.set_value (false);
         });
