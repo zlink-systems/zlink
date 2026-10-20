@@ -2320,7 +2320,7 @@ void app_t::_apply_zlink_framework ()
                 expected_binding_generation, header, payload.copy ());
           });
         auto deliver_relay =
-          [application_mesh, actor_gateway_runtime] (
+          [application_mesh] (
             actor_ref_t actor, detail::stream_header_t header, zlink::message_t payload,
             std::optional<detail::bound_session_relay_source_t> bound_session_source,
             std::optional<runtime::stateful::stream_dispatch_t> dispatch,
@@ -2330,25 +2330,9 @@ void app_t::_apply_zlink_framework ()
             detail::session_ingress_completion_t ingress;
             auto routed_actor = actor;
             runtime::protocol::actor_route_fence_t stale_route;
-            std::optional<zlink::routing_id_t> session_owner;
             if (bound_session_source) {
                 auto &sessions = session_owner_runtime->sessions ();
                 ingress.arm (sessions, *dispatch);
-                session_owner = application_mesh->routing_id ();
-                const auto completion_admitted =
-                  session_owner
-                    ? actor_gateway_runtime.begin_session_relay_completion (
-                        actor, *session_owner, bound_session_source->session_rid,
-                        bound_session_source->binding_generation, dispatch->inbound_sequence)
-                    : result_t<void>::failure (framework_error_kind_t::not_found,
-                                               "bound Session owner identity is unavailable");
-                if (!completion_admitted) {
-                    co_return result_t<std::optional<zlink::message_t>>::failure (
-                      completion_admitted.error_kind (),
-                      completion_admitted.error () != nullptr
-                        ? completion_admitted.error ()->what ()
-                        : "bound Session relay completion was not admitted");
-                }
                 routed_actor = detail::actor_ref_access_t::make (
                   node_rid_t::from_string (dispatch->binding.actor.node_id),
                   std::string (detail::actor_ref_access_t::actor_type (actor)),
@@ -2362,13 +2346,8 @@ void app_t::_apply_zlink_framework ()
                   dispatch->binding.owner_lease_generation};
                 bound_session_source->session_sequence = dispatch->inbound_sequence;
             }
-            const auto admitted_source = bound_session_source;
-            //  Spec 20-session-actor-dispatch §3/§7 — the admitted ingress
-            //  and relay-sequence fences must complete exactly once even
-            //  when the application handler throws. Skipping the tail
-            //  leaves the owner's recorded sequence behind, so every later
-            //  request on this binding is rejected with "bound Session
-            //  relay completion is not current or next".
+            // The Session registry owns the admitted ingress fence through
+            // its terminal, including an application-handler failure.
             std::exception_ptr relay_failure;
             std::optional<zlink::message_t> relayed;
             try {
@@ -2385,16 +2364,6 @@ void app_t::_apply_zlink_framework ()
                 relay_failure = std::current_exception ();
             }
             const auto completed = ingress.complete ();
-            result_t<void> observed = result_t<void>::success ();
-            if (admitted_source) {
-                observed =
-                  session_owner
-                    ? actor_gateway_runtime.complete_session_relay (
-                        actor, *session_owner, admitted_source->session_rid,
-                        admitted_source->binding_generation, admitted_source->session_sequence)
-                    : result_t<void>::failure (framework_error_kind_t::not_found,
-                                               "bound Session owner identity is unavailable");
-            }
             //  The original application error stays the single terminal;
             //  fence completion above ran regardless, and its own failure
             //  is reported only when the relay itself succeeded.
@@ -2405,17 +2374,10 @@ void app_t::_apply_zlink_framework ()
                   framework_error_kind_t::internal_failure,
                   "bound Session ingress completion lost its exact fence");
             }
-            if (!observed) {
-                co_return result_t<std::optional<zlink::message_t>>::failure (
-                  observed.error_kind (), observed.error () != nullptr
-                                            ? observed.error ()->what ()
-                                            : "bound Session ingress high-water was not published");
-            }
             co_return relayed;
         };
         actor_gateway_runtime.on_relay (
-          [application_mesh, actor_gateway_runtime, deliver_relay,
-           dispatch_options = options.configure_dispatch (),
+          [application_mesh, deliver_relay, dispatch_options = options.configure_dispatch (),
            request_timeout] (const actor_ref_t &actor, actor_context_t,
                              const detail::stream_header_t &header, const zlink::message_t &payload,
                              std::optional<detail::bound_session_relay_source_t> source,

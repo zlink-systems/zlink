@@ -2183,62 +2183,92 @@ int bound_session_relay_admission_is_exact_and_monotonic ()
                                              0)) {
         return 2;
     }
-    if (!gateway.begin_session_relay_completion (actor, session_owner, session_rid, 17, 1))
-        return 3;
     if (!gateway.admit_session_relay (actor, session_owner, session_rid, 17, 1))
         return 4;
-    if (!gateway.complete_session_relay (actor, session_owner, session_rid, 17, 1)) {
-        return 5;
-    }
-    if (gateway.complete_session_relay (actor, session_owner, session_rid, 17, 1))
-        return 6;
     if (gateway.admit_session_relay (actor, session_owner, session_rid, 17, 1)
         || gateway.admit_session_relay (actor, session_owner, session_rid, 17, 3)
         || gateway.admit_session_relay (
           actor, zlink::routing_id_t::from (std::string ("other-owner")), session_rid, 17, 2)) {
         return 7;
     }
-    if (!gateway.begin_session_relay_completion (actor, session_owner, session_rid, 17, 2))
-        return 8;
     if (!gateway.admit_session_relay (actor, session_owner, session_rid, 17, 2))
         return 9;
-    if (!gateway.complete_session_relay (actor, session_owner, session_rid, 17, 2)
-        || gateway.complete_session_relay (actor, session_owner, session_rid, 17, 4)) {
-        return 10;
-    }
     const auto route = gateway.bound_session_route_async (actor).result ().value ();
     if (!route || route->session_sequence != 2)
         return 11;
 
-    if (!gateway.begin_session_relay_completion (actor, session_owner, session_rid, 17, 3))
+    namespace stateful = runtime::stateful;
+    const stateful::object_ref_t owner{
+      stateful::object_kind_t::actor, "relay-actor", 3, 11, "relay-mesh", "actor-owner"};
+    auto other_owner = owner;
+    other_owner.key = "other-actor";
+    stateful::stream_session_registry_t sessions (
+      [&] (const std::string &key) -> std::optional<stateful::object_ref_t> {
+          if (key == owner.key)
+              return owner;
+          if (key == other_owner.key)
+              return other_owner;
+          return std::nullopt;
+      });
+    const auto connection = sessions.open (session_rid.to_hex (), {}, session_owner, 7);
+    const auto [binding_error, binding] = sessions.bind (connection, owner, 7, 13);
+    if (binding_error != stateful::stateful_error_t::none)
         return 12;
-    if (!gateway.destroy_actor (actor))
+    const auto [first_error, first] = sessions.admit_inbound (binding);
+    if (first_error != stateful::stateful_error_t::none || !first || first->inbound_sequence != 1)
         return 13;
-    if (gateway.complete_session_relay (
-          actor, zlink::routing_id_t::from (std::string ("other-owner")), session_rid, 17, 3))
+    if (sessions.complete_inbound (*first) != stateful::stateful_error_t::none
+        || sessions.complete_inbound (*first) == stateful::stateful_error_t::none)
         return 14;
-    if (!gateway.complete_session_relay (actor, session_owner, session_rid, 17, 3))
+    const auto [second_error, second] = sessions.admit_inbound (binding);
+    if (second_error != stateful::stateful_error_t::none || !second
+        || second->inbound_sequence != 2)
         return 15;
-    if (state->sync ([&] { return !state->active_session_relay_completions.empty (); }))
+    auto wrong_binding = *second;
+    ++wrong_binding.binding.binding_generation;
+    auto wrong_sequence = *second;
+    wrong_sequence.inbound_sequence += 2;
+    if (sessions.complete_inbound (wrong_binding) == stateful::stateful_error_t::none
+        || sessions.complete_inbound (wrong_sequence) == stateful::stateful_error_t::none
+        || sessions.complete_inbound (*second) != stateful::stateful_error_t::none)
         return 16;
-    if (gateway.complete_session_relay (actor, session_owner, session_rid, 17, 3)
-        || gateway.begin_session_relay_completion (actor, session_owner, session_rid, 17, 4))
-        return 17;
 
-    if (!gateway.bind_session_sink (actor,
-                                    [] (std::string, stream_codec_t, const zlink::message_t &) {
-                                        return task_t<void> (result_t<void>::success ());
-                                    })
-        || !gateway.record_bound_session_route (actor, session_owner, session_rid, 7, 11, 13, 17, 0,
-                                                0)
-        || !gateway.begin_session_relay_completion (actor, session_owner, session_rid, 17, 1))
+    const auto [third_error, third] = sessions.admit_inbound (binding);
+    const auto other_connection = sessions.open ("other-session", {}, session_owner, 7);
+    const auto [other_binding_error, other_binding] =
+      sessions.bind (other_connection, other_owner, 7, 13);
+    const auto [other_error, other] = sessions.admit_inbound (other_binding);
+    if (third_error != stateful::stateful_error_t::none || !third || third->inbound_sequence != 3
+        || other_binding_error != stateful::stateful_error_t::none
+        || other_error != stateful::stateful_error_t::none || !other)
+        return 17;
+    auto unaccepted_other_token = *third;
+    unaccepted_other_token.drain = other->drain;
+    if (sessions.complete_inbound (unaccepted_other_token) == stateful::stateful_error_t::none
+        || !gateway.destroy_actor (actor)
+        || sessions.try_seal_actor (owner).first != stateful::stateful_error_t::backpressured
+        || sessions.try_seal_actor (other_owner).first != stateful::stateful_error_t::backpressured)
         return 18;
-    state->sync (
-      [&] { state->actors_by_id.at ("relay-actor").bound_session_route->session_sequence = 3; });
-    if (gateway.complete_session_relay (actor, session_owner, session_rid, 17, 1))
+    if (sessions.complete_inbound (*third) != stateful::stateful_error_t::none
+        || sessions.complete_inbound (*third) == stateful::stateful_error_t::none
+        || gateway.admit_session_relay (actor, session_owner, session_rid, 17, 3)
+        || sessions.complete_inbound (*other) != stateful::stateful_error_t::none)
         return 19;
-    if (state->sync ([&] { return !state->active_session_relay_completions.empty (); }))
+    const auto [seal_error, seal] = sessions.try_seal_actor (owner);
+    if (seal_error != stateful::stateful_error_t::none
+        || sessions.abort_barrier (seal) != stateful::stateful_error_t::none)
         return 20;
+
+    // A later accepted ingress does not invalidate an earlier completion token.
+    const auto [fourth_error, fourth] = sessions.admit_inbound (binding);
+    const auto [fifth_error, fifth] = sessions.admit_inbound (binding);
+    if (fourth_error != stateful::stateful_error_t::none || !fourth
+        || fifth_error != stateful::stateful_error_t::none || !fifth
+        || fourth->inbound_sequence != 4 || fifth->inbound_sequence != 5
+        || sessions.complete_inbound (*fourth) != stateful::stateful_error_t::none
+        || sessions.complete_inbound (*fifth) != stateful::stateful_error_t::none
+        || sessions.complete_inbound (*fourth) == stateful::stateful_error_t::none)
+        return 21;
     return 0;
 }
 

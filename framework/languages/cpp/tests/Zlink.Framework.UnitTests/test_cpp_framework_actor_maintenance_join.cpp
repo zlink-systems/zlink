@@ -1845,17 +1845,16 @@ struct native_intake_fixture_t
         record.source_routing_id = zlink::routing_id_t::from (source_id).to_bytes ();
         record.source_node_generation = 1;
         const wire::actor_route_fence_t fence{actor_id, 1, rid, 1, authority_generation, 1};
-        wire::application_payload_t::multipart_t parts;
         fw::runtime::messaging::envelope_header_t envelope;
         envelope.kind = fw::runtime::messaging::message_kind_t::command;
         envelope.channel_name = mesh_name;
         envelope.message_name = probe_t::packet_name;
-        parts.push_back (fw::runtime::messaging::envelope_codec_t{}.encode_header (envelope));
+        auto parts = fw::detail::encode_actor_packet (envelope, zlink::message_t{});
         record.parts = fw::detail::backend::materialize_binding_parts (
           {wire::encode_actor_message_header (wire::command::actorSend, std::nullopt, fence,
                                               {1, sequence}),
            wire::encode_application_payload (
-             wire::application_payload_t::from_parts (std::move (parts)))});
+             wire::application_payload_t::from_parts (std::move (parts).take_items ()))});
         return record;
     }
 };
