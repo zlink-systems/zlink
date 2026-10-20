@@ -1,0 +1,196 @@
+using System.Text;
+using Systems.Zlink.Stream.Connector.Contracts;
+using Systems.Zlink.Stream.Connector.Runtime;
+using Xunit.Abstractions;
+using Zlink.Framework.Contracts.Messaging;
+using Zlink.Framework.Runtime.Codecs;
+
+namespace Zlink.Framework.UnitTests.Runtime;
+
+public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper output)
+{
+    private const int Iterations = 128;
+
+    [Fact]
+    public void TerminalActorReplyDoesNotCopyThePayload()
+    {
+        using var small = ActorReply(1024);
+        using var large = ActorReply(65536);
+        Message[] smallParts = [small];
+        Message[] largeParts = [large];
+        var smallBytes = Allocated(() => ZLinkActorReplyDecoder.DecodeTerminal(smallParts));
+        var largeBytes = Allocated(() => ZLinkActorReplyDecoder.DecodeTerminal(largeParts));
+        output.WriteLine($"terminal small={smallBytes}, large={largeBytes} B/call");
+        Assert.True(
+            largeBytes <= smallBytes,
+            $"Payload growth added {largeBytes - smallBytes} managed B/call."
+        );
+    }
+
+    [Fact]
+    public void MetadataDecodeDoesNotAllocateUtf8EncodersPerEntry()
+    {
+        var values = new ZLinkMessageMetadata(
+            new Dictionary<string, string> { ["tenant"] = "한글", ["trace"] = "abc" }
+        );
+        var wire = ZLinkMeshMetadataCodec.Encode(values);
+        ZLinkMessageMetadata? decoded = null;
+        var bytes = Allocated(() =>
+        {
+            if (!ZLinkMeshMetadataCodec.TryDecode(wire.Span, out decoded))
+                throw new InvalidOperationException("Invalid metadata fixture.");
+        });
+        Assert.Equal("한글", decoded!.Find("tenant"));
+        Assert.Equal("abc", decoded.Find("trace"));
+        output.WriteLine($"metadata decode={bytes} B/call");
+        // Two strings per entry and the immutable dictionary snapshot fit in
+        // this budget; per-entry UTF8Encoding/fallback objects do not.
+        Assert.True(bytes <= 700, $"Metadata decode allocated {bytes} B/call.");
+    }
+
+    [Fact]
+    public void DefaultWrappedEncodeAllocatesNoRegistry()
+    {
+        var value = new Probe("wrapped");
+        var wrapped = ZLinkMessage.From(value);
+        var directBytes = Allocated(() =>
+        {
+            using var encoded = ZLinkEnvelopeCodec.EncodeBody(value, typeof(Probe), null);
+        });
+        var wrappedBytes = Allocated(() =>
+        {
+            using var encoded = ZLinkEnvelopeCodec.EncodeBody(wrapped, typeof(ZLinkMessage), null);
+        });
+        output.WriteLine($"encode direct={directBytes}, wrapped={wrappedBytes} B/call");
+        Assert.Equal(directBytes, wrappedBytes);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void DefaultWrappedDecodeAllocatesNoRegistry(bool borrowed)
+    {
+        var codecs = new ZLinkCodecRegistryBuilder();
+        using var body = Message.From("{\"text\":\"wrapped\"}");
+        using var header = ZLinkEnvelopeCodec.EncodeHeader(
+            new ZLinkEnvelopeHeader(
+                ZLinkMessageKind.Command,
+                "codec",
+                "probe",
+                "application/json",
+                null,
+                null,
+                null,
+                null,
+                null
+            )
+        );
+        using var frame = ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage([
+            header,
+            body,
+        ]);
+        Assert.True(
+            ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                frame,
+                out var view
+            )
+        );
+        ZLinkMessage? result = null;
+        void Decode(ZLinkCodecRegistryBuilder? registry)
+        {
+            result = borrowed
+                ? (ZLinkMessage)
+                    ZLinkEnvelopeCodec.DecodeBody(
+                        view,
+                        typeof(ZLinkMessage),
+                        "application/json",
+                        registry
+                    )!
+                : (ZLinkMessage)
+                    ZLinkEnvelopeCodec.DecodeBody(
+                        body,
+                        typeof(ZLinkMessage),
+                        "application/json",
+                        registry
+                    )!;
+        }
+        var explicitBytes = Allocated(() => Decode(codecs));
+        var defaultBytes = Allocated(() => Decode(null));
+        Assert.Equal("wrapped", result!.Decode<Probe>().Text);
+        output.WriteLine(
+            $"borrowed={borrowed}: explicit={explicitBytes}, default={defaultBytes} B/call"
+        );
+        Assert.Equal(explicitBytes, defaultBytes);
+    }
+
+    [Fact]
+    public void SnapshotTransfersTheSerializerOwnedBuffer()
+    {
+        var serializer = new OwnedSerializer();
+        var codecs = new ZLinkCodecRegistryBuilder();
+        codecs.AddSerializer("application/x-owned", serializer);
+        var source = new MutableProbe { Text = "before" };
+        var snapshot = ZLinkMessage.From(source).Snapshot(codecs);
+        var owned = serializer.LastPayload.Bytes;
+        source.Text = "after";
+        // ReadOnlyMemory equality checks the backing owner, offset and length.
+        Assert.True(
+            owned.Equals(snapshot.Decode<ReadOnlyMemory<byte>>()),
+            "Snapshot copied the serializer-owned buffer."
+        );
+        Assert.Equal("before", snapshot.Decode<MutableProbe>().Text);
+        using var raw = snapshot.ToRawMessage(codecs);
+        Assert.Equal("before", raw.GetString());
+    }
+
+    private long Allocated(Action action)
+    {
+        for (var i = 0; i < Iterations; i++)
+            action();
+        var start = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < Iterations; i++)
+            action();
+        return (GC.GetAllocatedBytesForCurrentThread() - start) / Iterations;
+    }
+
+    private static Message ActorReply(int size)
+    {
+        var header = new ZlinkStreamHeader(
+            ZlinkStreamMessageKind.Response,
+            ZlinkStreamCodec.Json,
+            ZlinkStreamHeaderFlags.HasRequestSeq,
+            new ZlinkStreamRequestSeq(1),
+            string.Empty,
+            ZlinkStreamMetadata.Empty
+        );
+        return Message.From(
+            ZLinkStreamFrameCodec.Encode(
+                ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
+                new byte[size]
+            )
+        );
+    }
+
+    private sealed record Probe(string Text);
+
+    private sealed class MutableProbe
+    {
+        public string Text { get; set; } = "";
+    }
+
+    private sealed class OwnedSerializer : IZLinkMessageSerializer
+    {
+        public ZLinkEncodedPayload LastPayload { get; private set; }
+
+        public ZLinkEncodedPayload Serialize(object value, Type type)
+        {
+            LastPayload = ZLinkEncodedPayload.From(
+                Encoding.UTF8.GetBytes(((MutableProbe)value).Text)
+            );
+            return LastPayload;
+        }
+
+        public object Deserialize(ZLinkEncodedPayload payload, Type type) =>
+            new MutableProbe { Text = Encoding.UTF8.GetString(payload.Bytes.Span) };
+    }
+}
