@@ -1,3 +1,4 @@
+const { mapZLinkRequestReply, prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -494,7 +495,7 @@ test('typed packet identity is owned by the packet type and not by call or paylo
 
   const registration = meshChannelRegistration('mesh', 'api');
   const call = new framework.DefaultZLinkRouteClient(registration, {
-    async submitToChannel() {}, async requestToChannel() {}
+    async submitToChannel() {}, requestToChannel() { return prepareZLinkRequestReply((async () => {})(), identityRequestReply); }
   }).requestToChannel('api', new ConstructorPacket());
   assert.equal('packetName' in call, false);
 });
@@ -531,13 +532,13 @@ test('Node-direct operations classify Object Client targets as NotFound', async 
     ZLinkSubmitStatus.TargetNotFound
   );
   await assert.rejects(
-    transport.request(
+    mapZLinkRequestReply(transport.request(
       'mesh',
       'client-node',
       undefined,
       packet,
       1000
-    ),
+    )),
     (error) =>
       error.kind === framework.ZLinkFrameworkErrorKind.NotFound
       && !('isRetriable' in error)
@@ -582,9 +583,9 @@ test('Spot outbound selects a RouteMesh ChannelName for send and request', async
       calls.push({ kind: 'send', args });
       return { status: ZLinkSubmitStatus.Submitted };
     },
-    async requestToChannel(...args) {
+    requestToChannel(...args) {
       calls.push({ kind: 'request', args });
-      return { accepted: true };
+      return prepareZLinkRequestReply(Promise.resolve({ accepted: true }), identityRequestReply);
     }
   };
   const channelClient = new framework.DefaultZLinkChannelClient(
@@ -625,9 +626,9 @@ test('ZLinkRouteClient selects the ClientServer path for ChannelName calls', asy
       calls.push({ kind: 'send', args });
       return { status: ZLinkSubmitStatus.Submitted };
     },
-    async request(...args) {
+    request(...args) {
       calls.push({ kind: 'request', args });
-      return { accepted: true };
+      return prepareZLinkRequestReply(Promise.resolve({ accepted: true }), identityRequestReply);
     }
   };
   const client = new framework.DefaultZLinkRouteClient(
@@ -678,9 +679,9 @@ test('ZLinkSendCall snapshots metadata and reports asynchronous admission once',
       calls.push({ kind: 'async', meshName, channelName, packetName, message, metadata: [...metadata] });
       return { status: ZLinkSubmitStatus.Submitted };
     },
-    async requestToChannel() {},
+    requestToChannel() { return prepareZLinkRequestReply((async () => {})(), identityRequestReply); },
     async submit() {},
-    async request() {}
+    request() { return prepareZLinkRequestReply((async () => {})(), identityRequestReply); }
   };
   const client = new framework.DefaultZLinkRouteClient(registration, transport);
   const first = client.sendToChannel('api', typedPacket('Notice', { id: 1 }))
@@ -767,7 +768,7 @@ test('ZLinkRouteClient one-way calls report asynchronous transport admission', a
     submit(routerChannelId, targetNodeRid, packetName, message) {
       calls.push({ routerChannelId, targetNodeRid, packetName, message });
     },
-    async request() { return undefined; }
+    request() { return prepareZLinkRequestReply((async () => { return undefined; })(), identityRequestReply); }
   });
   const packet = typedPacket('Ping', { value: 1 });
 
@@ -803,16 +804,16 @@ test('ZLinkRouteClient uses one SpotHandle snapshot and does not retry a stale r
     }),
     {
       submit() {},
-      async request() {},
+      request() { return prepareZLinkRequestReply((async () => {})(), identityRequestReply); },
       async sendToSpot(target, message, options) {
         sends.push({ target, message, options });
       },
-      async requestToSpot(target, request, options) {
+      requestToSpot(target, request, options) {
         requests.push({ target, request, options });
-        throw new framework.ZLinkFrameworkException(
+        return prepareZLinkRequestReply(Promise.reject(new framework.ZLinkFrameworkException(
           framework.ZLinkFrameworkErrorKind.NotFound,
           'stale spot route'
-        );
+        )), identityRequestReply);
       }
     },
     (meshName) => `${meshName}.route`
@@ -855,12 +856,12 @@ test('ZLinkRouteClient does not refresh or retry a Spot send rejected on a stale
     framework.createFrameworkRegistration(),
     {
       submit() {},
-      async request() {},
+      request() { return prepareZLinkRequestReply((async () => {})(), identityRequestReply); },
       async sendToSpot(target) {
         targets.push(String(target.targetNodeRid));
         return { status: ZLinkSubmitStatus.TargetNotFound };
       },
-      async requestToSpot() {}
+      requestToSpot() { return prepareZLinkRequestReply((async () => {})(), identityRequestReply); }
     }
   );
 
@@ -887,15 +888,15 @@ test('ZLinkRouteClient does not refresh or retry an uncertain Spot request failu
     framework.createFrameworkRegistration(),
     {
       submit() {},
-      async request() {},
+      request() { return prepareZLinkRequestReply((async () => {})(), identityRequestReply); },
       async sendToSpot() {},
-      async requestToSpot() {
+      requestToSpot() { return prepareZLinkRequestReply((async () => {
         requestCount += 1;
         throw new framework.ZLinkFrameworkException(
           framework.ZLinkFrameworkErrorKind.Unavailable,
           'delivery outcome is uncertain'
         );
-      }
+      })(), identityRequestReply); }
     }
   );
 
@@ -912,12 +913,12 @@ test('ZLinkRouteClient channel request call snapshots metadata and passes timeou
   const registration = meshChannelRegistration('mesh', 'api');
   const client = new framework.DefaultZLinkRouteClient(registration, {
     async submitToChannel() {},
-    async requestToChannel(meshName, channelName, packetName, request, timeoutMs, _signal, metadata) {
+    requestToChannel(meshName, channelName, packetName, request, timeoutMs, _signal, metadata, _admitted) {
       calls.push({ meshName, channelName, packetName, request, timeoutMs, metadata: [...metadata] });
-      return { ok: true };
+      return prepareZLinkRequestReply(Promise.resolve({ ok: true }), identityRequestReply);
     },
     async submit() {},
-    async request() {}
+    request() { return prepareZLinkRequestReply((async () => {})(), identityRequestReply); }
   });
 
   const reply = await client
@@ -944,12 +945,12 @@ test('ZLinkRouteClient applies registration request timeout when channel call ti
   const registration = meshChannelRegistration('mesh', 'api', { requestTimeoutMs: 7000 });
   const client = new framework.DefaultZLinkRouteClient(registration, {
     async submitToChannel() {},
-    async requestToChannel(meshName, channelName, packetName, request, timeoutMs) {
+    requestToChannel(meshName, channelName, packetName, request, timeoutMs, _signal, _metadata, _admitted) {
       calls.push({ meshName, channelName, packetName, request, timeoutMs });
-      return { ok: true };
+      return prepareZLinkRequestReply(Promise.resolve({ ok: true }), identityRequestReply);
     },
     async submit() {},
-    async request() {}
+    request() { return prepareZLinkRequestReply((async () => {})(), identityRequestReply); }
   });
 
   const reply = await client
@@ -970,12 +971,12 @@ test('ZLinkRouteClient applies RouteMesh request timeout before registration def
   });
   const client = new framework.DefaultZLinkRouteClient(registration, {
     async submitToChannel() {},
-    async requestToChannel(meshName, channelName, packetName, request, timeoutMs) {
+    requestToChannel(meshName, channelName, packetName, request, timeoutMs, _signal, _metadata, _admitted) {
       calls.push({ meshName, channelName, packetName, request, timeoutMs });
-      return { ok: true };
+      return prepareZLinkRequestReply(Promise.resolve({ ok: true }), identityRequestReply);
     },
     async submit() {},
-    async request() {}
+    request() { return prepareZLinkRequestReply((async () => {})(), identityRequestReply); }
   });
 
   const reply = await client
@@ -1134,9 +1135,9 @@ test('ZLinkRouteClient applies route channel request timeout before registration
   });
   const client = new framework.DefaultZLinkRouteClient(registration, {
     submit() {},
-    async request(routerChannelId, targetNodeRid, packetName, request, timeoutMs) {
+    request(routerChannelId, targetNodeRid, packetName, request, timeoutMs, _signal, _metadata, _admitted) {
       calls.push({ routerChannelId, targetNodeRid, packetName, request, timeoutMs });
-      return { ok: true };
+      return prepareZLinkRequestReply(Promise.resolve({ ok: true }), identityRequestReply);
     }
   });
 
@@ -1278,10 +1279,10 @@ test('Channel send has no cancellation while request and fanout retain pre-abort
     async send() {
       calls.push('send');
     },
-    async request() {
+    request() { return prepareZLinkRequestReply((async () => {
       calls.push('request');
       return { ok: true };
-    },
+    })(), identityRequestReply); },
     async publish() {
       calls.push('publish');
     }
@@ -1446,7 +1447,7 @@ test('ZLinkDealerChannelClientTransport sends without cancellation and rejects p
   );
 
   assert.deepEqual(await transport.send('api', 'Greeting', 'hello'), { status: ZLinkSubmitStatus.Submitted });
-  await assertAborted(() => transport.request('api', 'Ping', 'ping', 250, controller.signal));
+  await assertAborted(() => mapZLinkRequestReply(transport.request('api', 'Ping', 'ping', 250, controller.signal)));
   await assertAborted(() => transport.publish('events', 'topic', 'Event', 'event', controller.signal));
   assert.deepEqual(calls, ['dealer.send']);
 });
@@ -1468,7 +1469,7 @@ test('ZLinkDealerChannelClientTransport maps native request connectivity failure
   });
 
   await assert.rejects(
-    () => transport.request('api', 'Ping', 'ping', 100),
+    () => mapZLinkRequestReply(transport.request('api', 'Ping', 'ping', 100)),
     (error) => error instanceof framework.ZLinkFrameworkException &&
       error.kind === framework.ZLinkFrameworkErrorKind.Unavailable &&
       !('isRetriable' in error) &&
