@@ -7,8 +7,73 @@ using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
-public sealed class ApplicationJobQueueContractTests
+public sealed class ApplicationJobQueueContractTests(Xunit.Abstractions.ITestOutputHelper output)
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void UncontendedPermitAcquisitionAddsNoAllocationBeyondLaneAndLease(
+        bool batch,
+        bool cancellable
+    )
+    {
+        const int iterations = 1000;
+        using var cancellation = new CancellationTokenSource();
+        var cancellationToken = cancellable ? cancellation.Token : CancellationToken.None;
+        using var queue = new ZLinkApplicationJobQueue(
+            new(ZLinkApplicationJobQueueProfile.Balanced, 4000, 1, 4000)
+        );
+        var leases = new ZLinkApplicationJobQueueLease[iterations];
+        for (var index = 0; index < 128; index++)
+        {
+            using var warm = Acquire();
+            Assert.Equal(1, queue.TryReserveBatch(1));
+            queue.ReleaseReserved(1);
+        }
+        var start = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+            leases[index] = Acquire();
+        var actual = GC.GetAllocatedBytesForCurrentThread() - start;
+        Assert.Equal((ulong)iterations, queue.GetStatus().PermitsInUse);
+        foreach (var lease in leases)
+            lease.Dispose();
+        start = GC.GetAllocatedBytesForCurrentThread();
+        for (var index = 0; index < iterations; index++)
+        {
+            _ = queue.TryReserveBatch(1);
+            leases[index] = new ZLinkApplicationJobQueueLease(
+                queue,
+                ZLinkApplicationJobOrigin.Remote
+            );
+        }
+        var baseline = GC.GetAllocatedBytesForCurrentThread() - start;
+        foreach (var lease in leases)
+            lease.Dispose();
+        Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
+        output.WriteLine(
+            $"batch={batch}, cancellable={cancellable}, acquire={actual}B, baseline={baseline}B, excess={actual - baseline}B/{iterations}"
+        );
+        Assert.True(
+            actual == baseline,
+            $"acquire={actual}B, lane + lease baseline={baseline}B, excess={actual - baseline}B/{iterations}"
+        );
+
+        ZLinkApplicationJobQueueLease Acquire()
+        {
+            if (!batch)
+                return queue
+                    .TryAcquireAsync(ZLinkApplicationJobOrigin.Remote)
+                    .GetAwaiter()
+                    .GetResult()!;
+            var reservation = queue
+                .AcquireBatchAsync(1, cancellationToken, ZLinkApplicationJobOrigin.Remote)
+                .GetAwaiter()
+                .GetResult();
+            return reservation.Claim()!;
+        }
+    }
+
     [Fact]
     public void Public_configuration_and_status_surface_matches_the_exact_contract()
     {
