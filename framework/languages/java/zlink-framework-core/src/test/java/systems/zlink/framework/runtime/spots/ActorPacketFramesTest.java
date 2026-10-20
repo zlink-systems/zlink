@@ -31,6 +31,53 @@ import java.util.Optional;
 
 final class ActorPacketFramesTest {
     @Test
+    void actorHeaderRejectsPlainPacketNamesAndMalformedStreamHeaders() {
+        for (byte[] bytes :
+                new byte[][] {
+                    "ActorReq".getBytes(StandardCharsets.UTF_8), new byte[] {(byte) 0xf2, 2, 1, 0}
+                }) {
+            try (Message headerPart = Message.from(bytes)) {
+                assertThrows(
+                        IllegalArgumentException.class,
+                        () -> ActorPacketFrames.decode(actorReceived(headerPart)));
+            }
+        }
+    }
+
+    @Test
+    void actorReplyWithoutStreamSequenceRejectsSuccessAndFramesError() throws IOException {
+        ZLinkStreamHeader request =
+                new ZLinkStreamHeader(
+                        ZLinkStreamMessageKind.SEND,
+                        ZLinkStreamCodec.PROTOBUF,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        Optional.empty(),
+                        "ActorReq",
+                        Map.of());
+        try (Message headerPart = Message.from(ZLinkStreamHeaderCodec.encode(request));
+                Message payload = Message.from("reply".getBytes(StandardCharsets.UTF_8));
+                Message error =
+                        ActorPacketFrames.encodeError(
+                                ActorPacketFrames.decode(actorReceived(headerPart)),
+                                new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.NOT_FOUND, "handler missing"))) {
+            assertThrows(
+                    IllegalArgumentException.class,
+                    () ->
+                            ActorPacketFrames.encodeReply(
+                                    ActorPacketFrames.decode(actorReceived(headerPart)), payload));
+            DecodedFrame failure = decodeFrame(error);
+            assertEquals(ZLinkStreamMessageKind.ERROR, failure.header().kind());
+            assertEquals(ZLinkStreamCodec.JSON, failure.header().codec());
+            assertEquals("", failure.header().packetName());
+            assertTrue(failure.header().requestSequence().isEmpty());
+            assertEquals(
+                    Map.of("code", "not_found", "message", "handler missing"),
+                    new ObjectMapper().readValue(failure.body(), Map.class));
+        }
+    }
+
+    @Test
     void streamActorPacketHeaderKeepsMetadataAndCompressionFlagForForwarding() {
         ZLinkStreamHeader request =
                 new ZLinkStreamHeader(
@@ -42,7 +89,7 @@ final class ActorPacketFramesTest {
                         Map.of("trace-id", "trace-1"));
         try (Message headerPart = Message.from(ZLinkStreamHeaderCodec.encode(request))) {
             ActorPacketFrames.Header decoded = ActorPacketFrames.decode(actorReceived(headerPart));
-            ZLinkStreamHeader forwarded = decoded.toRequestHeader();
+            ZLinkStreamHeader forwarded = decoded.toStreamHeader();
 
             assertEquals(Map.of("trace-id", "trace-1"), forwarded.metadata());
             assertTrue(forwarded.flags().contains(ZLinkStreamHeaderFlag.PAYLOAD_COMPRESSED));

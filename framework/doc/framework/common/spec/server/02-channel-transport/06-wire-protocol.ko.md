@@ -206,6 +206,25 @@ Application byte HWM으로 다시 계산하지 않는다. Core의 byte charge는
 dequeue되는 시점에 끝나며, decode된 payload는 Framework의 일반 소유권 규칙을 따른다. Framework는 receive/claim
 전에 application job queue permit을 확보하여 handler admission을 job 개수로 제한한다.
 
+### Actor typed message profile
+
+Actor에게 보내는 typed message인 `actorSend`(24)와 `actorRequest`(25)는 application payload에
+[Framework multipart application profile](#framework-multipart-application-profile)을 쓰고, 그 안의 part를
+다음과 같이 구성한다. Header 형식은 [STREAM header](../../stream-connector/32-stream-connector.ko.md#42-header)
+하나다. Session에서 Actor로 relay되는 message도 같은 header를 쓰므로, Actor가 받는 message의 header 형식은
+경로와 관계없이 하나다.
+
+| Message | Part 구성 |
+|---|---|
+| `actorSend`·`actorRequest` | part 0은 STREAM header이며 packet name을 담는다. kind는 `actorSend`에서 `Send`, `actorRequest`에서 `Request`다. part 1은 header의 codec으로 만든 payload다. |
+| `actorRequest`에 대한 command 20 reply의 payload | part는 하나이며 [STREAM frame](../../stream-connector/32-stream-connector.ko.md#41-frame) 전체다. Header kind는 `Response` 또는 `Error`이고 packet name은 비어 있다. `Error`의 payload와 codec은 [error payload](../../stream-connector/32-stream-connector.ko.md#53-error-payload)를 따른다. |
+
+- 받는 쪽은 part 0을 STREAM header로만 decode한다. Decode에 실패한 message는 invalid frame으로 처리하며,
+  header bytes를 packet name이나 다른 header 형식으로 다시 해석하지 않는다.
+- Handler 부재 같은 dispatch 오류와 application 오류도 `Error` header를 가진 STREAM frame으로 reply한다.
+  Header 없이 payload만 보내지 않는다.
+- Reply의 상관관계는 command 25의 `correlation`이 소유한다. STREAM header의 `request_seq`로 reply 대상을 정하지 않는다.
+
 ## 3. Command space
 
 Wire v1은 다음 ID를 사용한다. `7..15`, `32`, `35`, `41`, `45`와 `55..255`는 reserved이며
