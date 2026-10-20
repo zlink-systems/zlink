@@ -11,6 +11,8 @@
 #include "runtime/streams/stream_host_service.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 #include "runtime/streams/session_liveness.hpp"
+#include "runtime/stateful/public_host_runtime.hpp"
+#include <boost/beast/websocket.hpp>
 #include "../support/loopback_tcp_endpoint.hpp"
 
 
@@ -1167,8 +1169,234 @@ int descriptor_unavailable_replacement_records_drop ()
     return result;
 }
 
+#ifdef ZLINK_FRAMEWORK_STREAM_TEST_WITH_OPENSSL
+class close_probe_session_t final : public zlink::framework::packet_stream_session_t
+{
+  public:
+    std::promise<zlink::framework::stream_t> connected;
+    zlink::framework::task_completion_source_t<void> disconnect_terminal;
+    zlink::framework::task_t<void> on_disconnected (zlink::framework::stream_t &) override
+    {
+        return disconnect_terminal.task ();
+    }
+    zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
+                                             const zlink::framework::stream_error_t &) override
+    {
+        co_return;
+    }
+    zlink::framework::task_t<void> on_connected (zlink::framework::stream_t &stream) override
+    {
+        connected.set_value (stream);
+        co_return;
+    }
+    zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
+                                              const zlink::framework::session_message_context_t &,
+                                              const zlink::message_t &) override
+    {
+        co_return;
+    }
+};
+
+int transport_bound_close (bool tls, bool remote = false)
+{
+    zlink::framework::detail::configure_stream_dispatch_executor ();
+    struct executor_guard_t
+    {
+        ~executor_guard_t () { zlink::framework::detail::shutdown_stream_dispatch_executor (); }
+    } executor_guard;
+    using namespace zlink::framework;
+    namespace stateful = runtime::stateful;
+    namespace protocol = runtime::protocol;
+    using namespace std::chrono_literals;
+    service_collection_t services;
+    handler_registry_t handlers;
+    serializer_registry_t serializers;
+    auto builder = test::runtime_failure_builder ();
+    detail::zlink_builder_access_t::bind_shared_core_context (
+      builder, std::make_shared<zlink::context_t> ());
+    services.add_singleton<detail::actor_gateway_runtime_t> ();
+    services.add_factory<session_actor_manager_t> (
+      [] (service_provider_t &provider) {
+          return std::make_unique<session_actor_manager_t> (
+            provider.get_required<detail::actor_gateway_runtime_t> ().manager ());
+      },
+      service_lifetime_t::scoped);
+    zlink_framework_options_t options (services, handlers, serializers, builder);
+    options.add_route_mesh ("transport-close-mesh")
+      .set_routing_id (zlink::routing_id_t::from ("transport-close-owner"))
+      .listen (loopback_tcp_any_port);
+    auto listener = options.add_stream_node ("transport-close-stream");
+    listener.bind (tls ? "tls://127.0.0.1:*" : "ws://127.0.0.1:*/close")
+      .register_session ("close-session");
+    if (tls)
+        listener.set_tls_server (ZLINK_FRAMEWORK_STREAM_TEST_CERT, ZLINK_FRAMEWORK_STREAM_TEST_KEY,
+                                 false);
+    options.apply ();
+    for (const auto &registration : detail::mesh_node_runtime_t::registrations (builder))
+        registration->core_context = detail::zlink_builder_access_t::shared_core_context (builder);
+    auto mesh = detail::mesh_node_runtime_t::from (builder, "transport-close-mesh");
+    mesh->bind_serializers (serializers);
+    mesh->start ();
+    auto provider = services.build_provider ();
+    auto runtime = detail::stream_runtime_t::from (builder);
+    close_probe_session_t session;
+    auto connected = session.connected.get_future ();
+    auto listeners = std::make_shared<runtime::listener_status_registry_t> ();
+    runtime::stream_host_service_t host (
+      std::make_shared<runtime::runtime_failure_collector_t> (), runtime, runtime.snapshots (),
+      {{"close-session",
+        [&] (service_provider_t &) -> packet_stream_session_t & { return session; }}},
+      30s, mesh, {}, listeners);
+    struct cleanup_t
+    {
+        runtime::stream_host_service_t &host;
+        detail::mesh_node_runtime_t &mesh;
+        close_probe_session_t &session;
+        ~cleanup_t ()
+        {
+            session.disconnect_terminal.complete (result_t<void>::success ());
+            host.stop ();
+            mesh.stop ();
+        }
+    } cleanup{host, *mesh, session};
+    host.start (provider).result ().value ();
+    const auto port = endpoint_port (
+      listener_endpoint (*listeners, listener_kind_t::stream, "transport-close-stream"));
+    boost::asio::io_context io;
+    boost::asio::ssl::context ssl (boost::asio::ssl::context::tls_client);
+    ssl.set_verify_mode (boost::asio::ssl::verify_none);
+    boost::asio::ssl::stream<boost::asio::ip::tcp::socket> tls_client (io, ssl);
+    boost::beast::websocket::stream<boost::asio::ip::tcp::socket> ws_client (io);
+    const boost::asio::ip::tcp::endpoint endpoint{boost::asio::ip::make_address ("127.0.0.1"),
+                                                  port};
+    if (tls) {
+        tls_client.next_layer ().connect (endpoint);
+        tls_client.handshake (boost::asio::ssl::stream_base::client);
+    } else {
+        ws_client.next_layer ().connect (endpoint);
+        ws_client.handshake ("127.0.0.1", "/close");
+    }
+    if (connected.wait_for (2s) != std::future_status::ready)
+        return 342;
+    auto stream = connected.get ();
+    const auto rid = stream.routing_id ().value ();
+    auto &sessions = mesh->native_node ().sessions ();
+    const auto status = mesh->native_node ().status ();
+    const stateful::stream_connection_t connection{rid.to_hex (), 1, mesh->routing_id (),
+                                                   status.lifecycle_generation ()};
+    const stateful::object_ref_t actor{
+      stateful::object_kind_t::actor, "close-actor", 7, 11, "player", "actor-owner"};
+    const auto [retired_error, retired_binding] = sessions.bind_remote (connection, actor, 1, 13);
+    if (retired_error != stateful::stateful_error_t::none)
+        return 343;
+    const auto [error, binding] = sessions.bind_remote (connection, actor, 1, 13);
+    if (error != stateful::stateful_error_t::none)
+        return 343;
+    const protocol::retired_bound_session_route_fence_t owner{
+      status.routing_id ().to_bytes (), status.lifecycle_generation (), "session-owner", 17, {}, 0};
+    protocol::bound_session_close_t request{
+      1,
+      actor.key,
+      actor.object_generation,
+      {owner.session_owner_node_routing_id, owner.session_owner_node_generation,
+       owner.session_owner_id, owner.session_owner_lease_generation, rid.to_bytes (),
+       binding.binding_generation}};
+    auto stale = request;
+    stale.session.retired_binding_generation = retired_binding.binding_generation;
+    auto other_actor = actor;
+    other_actor.key = "preserved-actor";
+    const auto other_connection = sessions.open ("preserved-connection");
+    const auto [other_error, other_binding] =
+      sessions.bind_remote (other_connection, other_actor, 1, 13);
+    if (other_error != stateful::stateful_error_t::none)
+        return 343;
+    auto caller = std::make_shared<runtime::host::public_host_runtime_t> (
+      runtime::host::host_options_t{runtime::mesh::raw_mesh_node_options_t{
+        .descriptor = {"transport-close-mesh", {'a'}, 1, 1, "tcp://127.0.0.1:0", {}},
+        .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()}});
+    mesh->native_node ().configure_session_route_owner (
+      [] { return std::make_optional (location_owner_token_t{"session-owner", 17}); });
+    std::atomic_bool stop_dispatch{false};
+    if (remote) {
+        caller->start ();
+        caller->connect_peer (status.local_endpoint (), status.routing_id (),
+                              status.lifecycle_generation ());
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
+        const auto noop = [] (const auto &, const auto &, auto) {};
+        for (;;) {
+            mesh->native_node ().dispatch_ready (noop).result ().value ();
+            caller->dispatch_ready (noop).result ().value ();
+            const auto outgoing =
+              caller->transport ().topology ().peer (status.routing_id ().to_bytes ());
+            const auto incoming = mesh->native_node ().transport ().topology ().peer (
+              caller->status ().routing_id ().to_bytes ());
+            if (outgoing && outgoing->ready && incoming && incoming->ready)
+                break;
+            if (std::chrono::steady_clock::now () >= deadline) {
+                caller->close ();
+                return 347;
+            }
+        }
+    }
+    std::thread dispatcher ([&] {
+        const auto noop = [] (const auto &, const auto &, auto) {};
+        while (!stop_dispatch.load ()) {
+            mesh->native_node ().dispatch_ready (noop).result ().value ();
+            if (remote)
+                caller->dispatch_ready (noop).result ().value ();
+            std::this_thread::yield ();
+        }
+    });
+    auto &transport = remote ? caller->transport () : mesh->native_node ().transport ();
+    const auto rejected = transport.request_bound_session_close (stale, 2s).result ();
+    const bool preserved = !rejected
+                           && rejected.error_kind () == framework_error_kind_t::unavailable
+                           && sessions.is_current (binding) && sessions.is_current (other_binding);
+    const auto closed = transport.request_bound_session_close (request, 2s).result ();
+    stop_dispatch.store (true);
+    if (dispatcher.joinable ())
+        dispatcher.join ();
+    caller->close ();
+    if (!preserved)
+        return 344;
+    if (!closed || !sessions.is_current (other_binding))
+        return 345;
+    // The native socket must already be closed when the close task completes.
+    auto &socket = tls ? tls_client.next_layer () : ws_client.next_layer ();
+    socket.non_blocking (true);
+    std::array<char, 1> bytes{};
+    boost::system::error_code terminal;
+    do {
+        socket.read_some (boost::asio::buffer (bytes), terminal);
+    } while (!terminal);
+    if (terminal != boost::asio::error::eof && terminal != boost::asio::error::connection_reset)
+        return 346;
+    return 0;
+}
+#endif
+
 int main (int argc, char **argv)
 {
+#ifdef ZLINK_FRAMEWORK_STREAM_TEST_WITH_OPENSSL
+    if (argc == 2 && std::string_view (argv[1]) == "--tls-bound-close")
+        return transport_bound_close (true);
+    if (argc == 2 && std::string_view (argv[1]) == "--tls-remote-bound-close")
+        return transport_bound_close (true, true);
+    if (argc == 2 && std::string_view (argv[1]) == "--ws-bound-close")
+        return transport_bound_close (false);
+    if (argc == 2 && std::string_view (argv[1]) == "--ws-remote-bound-close")
+        return transport_bound_close (false, true);
+    if (argc == 1) {
+        if (const auto result = transport_bound_close (true); result != 0)
+            return result;
+        if (const auto result = transport_bound_close (false); result != 0)
+            return result;
+        if (const auto result = transport_bound_close (true, true); result != 0)
+            return result;
+        if (const auto result = transport_bound_close (false, true); result != 0)
+            return result;
+    }
+#endif
     if (argc == 2 && std::string_view (argv[1]) == "--descriptor-drop")
         return descriptor_unavailable_replacement_records_drop ();
     if (descriptor_unavailable_replacement_records_drop () != 0)

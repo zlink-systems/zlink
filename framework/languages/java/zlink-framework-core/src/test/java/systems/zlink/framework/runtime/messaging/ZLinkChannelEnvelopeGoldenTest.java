@@ -599,6 +599,48 @@ final class ZLinkChannelEnvelopeGoldenTest {
     }
 
     @Test
+    void nativeHeaderEncodingMatchesJacksonAcrossUnicodeAndNumericBoundaries() throws Exception {
+        StringBuilder text = new StringBuilder();
+        for (int codePoint :
+                new int[] {
+                    0, 1, 8, 9, 10, 12, 13, 31, 32, 34, 92, 127, 128, 0x7ff, 0x800, 0xd7ff, 0xe000,
+                    0xffff, 0x10000, 0x10ffff
+                }) {
+            text.appendCodePoint(codePoint);
+        }
+        String value = text.toString().repeat(257);
+        for (int kind : new int[] {Integer.MIN_VALUE, -1, 0, 1, Integer.MAX_VALUE}) {
+            var header =
+                    new ZLinkChannelEnvelope.Header(
+                            kind, value, value, value, "corr", value, value, value, value, value,
+                            Map.of(), null, null);
+            try (Message encoded = ZLinkChannelEnvelope.encodeHeader(header)) {
+                assertArrayEquals(encodeWithPreviousStringWriter(header), encoded.toByteArray());
+            }
+        }
+        var header =
+                new ZLinkChannelEnvelope.Header(
+                        ZLinkChannelEnvelope.KIND_REQUEST,
+                        value,
+                        value,
+                        value,
+                        "corr",
+                        null,
+                        null,
+                        null,
+                        null,
+                        null,
+                        Map.of(),
+                        null,
+                        null);
+        ZLinkChannelEnvelope.Header decoded;
+        try (Message encoded = ZLinkChannelEnvelope.encodeHeader(header)) {
+            decoded = ZLinkChannelEnvelope.decodeHeader(encoded, false);
+        }
+        assertEquals(header, decoded);
+    }
+
+    @Test
     void sameStableTupleDoesNotRetainAlternatingDynamicFields() {
         for (int attempt = 0; attempt < 6; attempt++) {
             String correlationId = "corr-" + attempt;

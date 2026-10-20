@@ -5,6 +5,7 @@
 #include "runtime/operations/call_id.hpp"
 
 #include <service_wire_constants.hpp>
+#include <service_wire_pilot_codec.hpp>
 
 #include <zlink/framework/contracts/dispatch/execution.hpp>
 
@@ -614,6 +615,8 @@ struct session_relocation_seal_t
                             const session_relocation_seal_t &) = default;
 };
 
+using session_relocation_seal_result_t = service_wire_pilot_session_seal_result;
+
 struct session_relocation_sealed_t
 {
     relocation_id_t relocation;
@@ -625,6 +628,8 @@ struct session_relocation_sealed_t
     std::uint64_t session_owner_lease_generation = 0;
     std::vector<std::uint8_t> session_routing_id;
     std::uint64_t binding_generation = 0;
+
+    session_relocation_seal_result_t seal_result = session_relocation_seal_result_t::sealed;
 
     friend bool operator== (const session_relocation_sealed_t &,
                             const session_relocation_sealed_t &) = default;
