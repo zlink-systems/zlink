@@ -134,9 +134,12 @@ internal sealed class ZLinkInstanceSpotMonitoring
                 SpotId: activation.Target.TargetSpotId,
                 MeshName: activation.Target.MeshName,
                 InstanceSpotType: activation.Target.StableType,
-                Reason: outcome == ActivationOutcome.TimedOut
-                    ? ZLinkMessageFlowReason.ActivationTimeout
-                    : ZLinkMessageFlowReason.ActivationRejected
+                Reason: outcome switch
+                {
+                    ActivationOutcome.TimedOut => ZLinkMessageFlowReason.ActivationTimeout,
+                    ActivationOutcome.Shutdown => ZLinkMessageFlowReason.Shutdown,
+                    _ => ZLinkMessageFlowReason.ActivationRejected,
+                }
             )
             {
                 FlowId = pair.FlowId ?? string.Empty,

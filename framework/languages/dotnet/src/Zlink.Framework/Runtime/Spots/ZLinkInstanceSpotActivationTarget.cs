@@ -511,7 +511,7 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
             var terminal = await operationGate
                 .RunAsync(
                     operation.Target.TargetSpotId,
-                    () => ActivateCoreAsync(operation, metadata, payload, cancellationToken),
+                    () => ActivateBeforeDeadlineAsync(),
                     _ => JoinAsync()
                 )
                 .ConfigureAwait(false);
@@ -522,14 +522,42 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
         {
             try
             {
-                return await ActivateCoreAsync(operation, metadata, payload, cancellationToken)
-                    .ConfigureAwait(false);
+                return await ActivateBeforeDeadlineAsync().ConfigureAwait(false);
             }
             catch (Exception error)
                 when (error is ZLinkFrameworkException or OperationCanceledException)
             {
                 // A participant's refusal belongs to that operation, not to the activation.
                 return Task.FromException<InstanceSpotActivationTerminal>(error);
+            }
+        }
+
+        async Task<Task<InstanceSpotActivationTerminal>> ActivateBeforeDeadlineAsync()
+        {
+            using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var remaining =
+                DateTimeOffset.FromUnixTimeMilliseconds(checked((long)operation.DeadlineUnixMs))
+                - DateTimeOffset.UtcNow;
+            if (remaining <= TimeSpan.Zero)
+                deadline.Cancel();
+            else
+                deadline.CancelAfter(remaining);
+            try
+            {
+                deadline.Token.ThrowIfCancellationRequested();
+                return await ActivateCoreAsync(operation, metadata, payload, deadline.Token)
+                    .WaitAsync(deadline.Token)
+                    .ConfigureAwait(false);
+            }
+            catch (OperationCanceledException error)
+                when (!cancellationToken.IsCancellationRequested && deadline.IsCancellationRequested
+                )
+            {
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DeadlineExceeded,
+                    "Instance Spot activation deadline expired.",
+                    innerException: error
+                );
             }
         }
     }

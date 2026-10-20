@@ -736,8 +736,10 @@ public sealed partial class EntrySpotActorDispatchTests
         public void Configure() => Context.Handlers.AddPacket<ColdSendInstanceHandler>();
     }
 
-    [Fact]
-    public async Task Instance_activation_initialization_rejection_records_one_drop()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Instance_activation_initialization_rejection_records_one_drop(bool expires)
     {
         const string spotId = "initialization-terminal";
         var probe = new ColdSendProbe();
@@ -756,6 +758,9 @@ public sealed partial class EntrySpotActorDispatchTests
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         runtime.ErrorSink.UnhandledCallbackException += error => failed.TrySetResult(error);
+        runtime.Registration.SpotNodes["entry"].DefaultRequestTimeout = expires
+            ? TimeSpan.FromMilliseconds(200)
+            : TimeSpan.FromSeconds(5);
         var nodeRuntime = runtime.GetSpotNodeRuntime("entry");
         var flowId = ZlinkStreamFlowId.Create();
         try
@@ -766,11 +771,18 @@ public sealed partial class EntrySpotActorDispatchTests
                     .InstanceSpot()
                     .Async();
             await probe.Message.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            probe.Release.SetResult();
+            if (!expires)
+                probe.Release.SetResult();
             var error = await failed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            Assert.IsType<InvalidOperationException>(error);
+            if (expires)
+                Assert.Equal(
+                    ZLinkFrameworkErrorKind.DeadlineExceeded,
+                    Assert.IsType<ZLinkFrameworkException>(error).Kind
+                );
+            else
+                Assert.IsType<InvalidOperationException>(error);
             Assert.Equal(
-                "rejected",
+                expires ? "timed_out" : "rejected",
                 Assert
                     .Single(nodeRuntime.GetInstanceSpotMonitoringSnapshots())
                     .LastActivationOutcome
@@ -780,7 +792,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 flow => flow.SpotId == spotId && flow.Phase == "dropped"
             );
             Assert.Equal("instance_spot", dropped.Surface);
-            Assert.Equal("activation_rejected", dropped.Reason);
+            Assert.Equal(expires ? "activation_timeout" : "activation_rejected", dropped.Reason);
             Assert.Equal(flowId, dropped.FlowId);
             Assert.Equal("inbound", dropped.FlowOrigin);
             Assert.Equal(error.GetType().Name, dropped.ErrorType);
@@ -905,10 +917,7 @@ public sealed partial class EntrySpotActorDispatchTests
             {
                 var dropped = Assert.Single(drops);
                 Assert.Equal("instance_spot", dropped.Surface);
-                Assert.Equal(
-                    cancelledShutdown ? "activation_rejected" : "activation_timeout",
-                    dropped.Reason
-                );
+                Assert.Equal(cancelledShutdown ? "shutdown" : "activation_timeout", dropped.Reason);
                 Assert.Equal(flowId, dropped.FlowId);
                 Assert.Equal("inbound", dropped.FlowOrigin);
                 Assert.Equal(error.GetType().Name, dropped.ErrorType);
