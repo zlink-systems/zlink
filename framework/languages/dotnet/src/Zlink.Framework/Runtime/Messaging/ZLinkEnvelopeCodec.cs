@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.Buffers.Text;
-using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -138,7 +137,7 @@ internal static class ZLinkEnvelopeCodec
     private static readonly ZLinkStateLane CacheLane = new();
     private static ImmutableDictionary<SimpleHeaderKey, HeaderPlan> SimpleHeaderCache =
         ImmutableDictionary<SimpleHeaderKey, HeaderPlan>.Empty;
-    private static readonly ConcurrentQueue<SimpleHeaderKey> SimpleHeaderCacheOrder = new();
+    private static readonly Queue<SimpleHeaderKey> SimpleHeaderCacheOrder = new();
     private static HeaderCacheEntry[] DecodedHeaderCache = [];
 
     public static string DefaultContentType => JsonContentType;
