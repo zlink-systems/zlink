@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Backend.DotNet;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
 
@@ -11,6 +13,141 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class MeshApplicationWorkerTests
 {
+    [Fact]
+    public async Task SourceStoreWaits_DoNotBlockCompletionOrReorderOwnerRecords()
+    {
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        await using var node = new ZLinkManagedMeshNode(context, "source-progress");
+        var rid = RoutingId.From("source-progress-node");
+        node.SetRoutingId(rid);
+        node.Start();
+        var table = new ZLinkMeshCompletionTable();
+        await using var pump = new ZLinkMeshDispatchPump(node, table);
+        var store = DispatchProxy.Create<IZLinkLocationRepository, WaitingSourceStore>();
+        var waiting = (WaitingSourceStore)(object)store;
+        var options = new ZLinkLocationOptions();
+        var leases = new ZLinkOwnerLeaseTracker(store, options);
+        pump.SetRequestSourceAcceptance(
+            new ZLinkRequestSourceFenceResolver(
+                new ZLinkStoreLocationResolvers(store, leases, options: options),
+                leases,
+                "source-progress"
+            )
+        );
+        var started = new TaskCompletionSource<ZLinkBackendRouteReceived>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        pump.SetNodeRouteHandler(
+            (records, _) =>
+            {
+                started.TrySetResult(Assert.Single(records));
+                return ValueTask.CompletedTask;
+            }
+        );
+        var order = new ConcurrentQueue<byte>();
+        var delivered = Signal();
+        var workerCount = ZLinkMeshDispatchPump.ApplicationWorkerCount;
+        for (var owner = 0; owner < workerCount; owner++)
+        {
+            var spotId = $"source-owner-{owner}";
+            node.GetOrCreateSpot(spotId, out _);
+            var state = pump.RegisterSpot(spotId);
+            var firstOwner = owner == 0;
+            pump.SetDispatchHandler(
+                spotId,
+                _ =>
+                {
+                    while (state.Routes.TryDequeue(out var record))
+                        using (record)
+                            if (firstOwner)
+                            {
+                                order.Enqueue(record.Parts[0].ToArray()[0]);
+                                if (order.Count == 2)
+                                    delivered.TrySetResult();
+                            }
+                    return (ValueTask.CompletedTask, null);
+                }
+            );
+        }
+        pump.EnsureStarted();
+        using var payload = Message.From(new byte[] { 0 });
+        Assert.Equal(
+            SubmitResult.Ok,
+            node.RequestToNode(rid, [payload], out var operation, TimeSpan.FromSeconds(5))
+        );
+        var completed = new TaskCompletionSource<RequestResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        Assert.True(
+            table.Register(
+                operation,
+                (record, parts) =>
+                {
+                    foreach (var part in parts)
+                        part.Dispose();
+                    completed.TrySetResult((RequestResult)record.TerminalResult);
+                }
+            )
+        );
+        using var request = await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        try
+        {
+            for (var owner = 0; owner < workerCount; owner++)
+            {
+                var spotId = $"source-owner-{owner}";
+                var spot = node.GetOrCreateSpot(spotId, out _);
+                Assert.Equal(
+                    SubmitResult.Ok,
+                    spot.SendToSpot(rid, spotId, spot.LifecycleGeneration, [payload])
+                );
+            }
+            await waiting.AllWorkersReading.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var firstSpot = node.GetOrCreateSpot("source-owner-0", out _);
+            using var next = Message.From(new byte[] { 1 });
+            Assert.Equal(
+                SubmitResult.Ok,
+                firstSpot.SendToSpot(rid, "source-owner-0", firstSpot.LifecycleGeneration, [next])
+            );
+            Assert.Empty(order);
+            Assert.Equal(SubmitResult.Ok, request.Reply(request.Parts));
+            // Check progress before the Store's existing five-second read deadline.
+            Assert.Equal(RequestResult.Ok, await completed.Task.WaitAsync(TimeSpan.FromSeconds(1)));
+            Assert.False(waiting.Release.Task.IsCompleted);
+            Assert.Equal(workerCount, Volatile.Read(ref waiting.Reads));
+            waiting.Release.TrySetResult();
+            await delivered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(new byte[] { 0, 1 }, order);
+        }
+        finally
+        {
+            waiting.Release.TrySetResult();
+        }
+    }
+
+    public class WaitingSourceStore : DispatchProxy
+    {
+        internal readonly TaskCompletionSource AllWorkersReading = Signal();
+        internal readonly TaskCompletionSource Release = Signal();
+        internal int Reads;
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+        {
+            if (targetMethod?.Name != nameof(IZLinkLocationRepository.ListMeshNodesAsync))
+                throw new NotSupportedException(targetMethod?.Name);
+            if (Interlocked.Increment(ref Reads) == ZLinkMeshDispatchPump.ApplicationWorkerCount)
+                AllWorkersReading.TrySetResult();
+            return ReadAsync((CancellationToken)args![^1]!);
+        }
+
+        private async ValueTask<ZLinkLocationPage<ZLinkMeshNodeDescriptor>> ReadAsync(
+            CancellationToken cancellationToken
+        )
+        {
+            await Release.Task.WaitAsync(cancellationToken);
+            return new([], null);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

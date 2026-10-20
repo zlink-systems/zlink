@@ -593,29 +593,10 @@ public final class ZLinkSerialExecutionQueue {
             CompletionStage<Void> execution =
                     manageCurrentInTurn(
                             preparationTerminal.thenCompose(ignored -> operation.get()));
-            if (sharedSpotGate == null) {
-                return execution.whenComplete((ignored, failure) -> rewritePending(failure));
-            }
-            CompletableFuture<Void> settled = new CompletableFuture<>();
-            execution.whenComplete(
-                    (ignored, failure) ->
-                            sharedSpotGate
-                                    .controlAsync(
-                                            () -> {
-                                                rewritePending(failure);
-                                                return null;
-                                            })
-                                    .whenComplete(
-                                            (done, controlFailure) -> {
-                                                if (controlFailure != null) {
-                                                    settled.completeExceptionally(controlFailure);
-                                                } else if (failure != null) {
-                                                    settled.completeExceptionally(failure);
-                                                } else {
-                                                    settled.complete(null);
-                                                }
-                                            }));
-            return settled;
+            // The queue monitor owns applicationPending, and the queue dispatches no
+            // application work before the returned stage completes. The rewrite therefore
+            // precedes dispatch on the completing thread without another gate turn.
+            return execution.whenComplete((ignored, failure) -> rewritePending(failure));
         }
 
         private void rewritePending(Throwable failure) {

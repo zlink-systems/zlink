@@ -4,6 +4,7 @@ using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Dispatch;
+using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Host;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Spots;
@@ -13,6 +14,125 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed partial class EntrySpotActorDispatchTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Owned_actor_handler_has_the_same_context_and_yield_as_ordinary_ingress(
+        bool owned,
+        bool activationEndpoint
+    )
+    {
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            new CapturingSpotNode(),
+            userSpotType: typeof(OwnedContextSpot)
+        );
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var state = runtime.GetOrCreateActorState(actorRef.ActorId);
+            var created = await runtime.GetOrCreateAsync<OwnedContextSpot>("owned-context-spot");
+            var activation = GetSpotActivation(runtime, created.Spot.SpotId);
+            state.JoinSpot(activation);
+            using var frames = ZLinkActorHandoffIngress.CaptureMovingFrames(
+                ZLinkApplicationJobOrigin.Remote,
+                runtime,
+                CreateActorRequestParts(
+                    actorRef,
+                    "owned-context",
+                    "context",
+                    requestId: 0,
+                    flags: 0
+                )
+            );
+            ZLinkActorReply? reply;
+            if (owned)
+            {
+                reply = null;
+                var pipeline = new ZLinkActorInboundPipeline(
+                    runtime,
+                    new ZLinkEntrySpotActorInboundEndpoint(runtime)
+                );
+                var terminals = state.AdmitDurablePrefix([
+                    new ZLinkActorDurableRecord(ct => new ValueTask(
+                        activationEndpoint
+                            ? activation.DispatchOwnedActorFrameAsync(
+                                actorRef,
+                                ZLinkActorHandoffFrames.Capture(frames[0], 0),
+                                (_, result, _) =>
+                                {
+                                    reply = result;
+                                    return ValueTask.CompletedTask;
+                                },
+                                ct
+                            )
+                            : pipeline.DispatchOwnedFrameAsync(
+                                frames,
+                                (_, result, _) =>
+                                {
+                                    reply = result;
+                                    return ValueTask.CompletedTask;
+                                },
+                                ct
+                            )
+                    )),
+                ]);
+                await Task.WhenAll(terminals).WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            else
+            {
+                var frame = frames[0];
+                reply = await runtime.SubmitActorForReplyAsync(
+                    actor,
+                    state,
+                    frame.Header,
+                    frame.Body,
+                    false,
+                    CancellationToken.None,
+                    frame.SourceSessionRid
+                );
+            }
+            Assert.NotNull(reply);
+            Assert.Equal(ZlinkStreamMessageKind.Response, reply.Kind);
+        }
+        finally
+        {
+            await runtime.StopAsync(default);
+        }
+    }
+
+    private sealed class OwnedContextSpot(IZLinkSpotContext context) : IZLinkSpot
+    {
+        public IZLinkSpotContext Context { get; } = context;
+
+        public void Configure() =>
+            Context.Handlers.AddActorPacket<OwnedContextHandler, ProbeActor>("owned-context");
+    }
+
+    private sealed class OwnedContextHandler
+        : IZLinkSpotActorRequestHandler<OwnedContextSpot, ProbeActor, string, ProbeReply>
+    {
+        public async ValueTask<ProbeReply> HandleAsync(
+            OwnedContextSpot spot,
+            ProbeActor actor,
+            IZLinkMessageContext context,
+            string request,
+            CancellationToken cancellationToken
+        )
+        {
+            Assert.Equal(spot.Context.SpotId, ZLinkSpotAmbientContext.CurrentOrDefault?.SpotId);
+            Assert.Equal(actor.ActorId, ZLinkApplicationExecutionContext.Current?.ActorId);
+            var failure = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await spot
+                    .Context.Outbound.RequestToSpot(spot.Context.SpotId, request)
+                    .Async<ProbeReply>(cancellationToken)
+            );
+            Assert.Equal(ZLinkFrameworkErrorKind.InvalidOperation, failure.Kind);
+            var result = await spot.Context.RunCpuWorker(_ => request).Yield(cancellationToken);
+            return new ProbeReply(result);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

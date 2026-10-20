@@ -541,6 +541,16 @@ FRAMEWORK_SCALAR_FIELDS = (
         "perf measured node package",
         rf'("node"\s*:\s*")(?P<version>{SEMVER})(")',
     ),
+    FrameworkField(
+        "framework/languages/node/perf/package.json",
+        "node",
+        "Node perf published Framework package pins",
+        (
+            rf'("@zlink-systems/(?:framework|framework-locations-redis|'
+            rf'nestjs|stream-connector)"\s*:\s*")(?P<version>{SEMVER})(")'
+        ),
+        expected=4,
+    ),
 )
 
 
