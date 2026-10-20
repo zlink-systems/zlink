@@ -2808,14 +2808,17 @@ actor_gateway_runtime_t::record_bound_session_route (const actor_ref_t &actor_re
                                                      std::uint64_t binding_generation,
                                                      std::uint64_t binding_token,
                                                      std::uint64_t session_sequence,
-                                                     bool session_sequence_baseline_unknown)
+                                                     bool session_sequence_baseline_unknown,
+                                                     std::string session_owner_id,
+                                                     std::uint64_t session_owner_lease_generation)
 {
     auto transition = record_bound_session_route_transition (
-      actor_ref, actor_bound_session_route_t{std::move (node_rid), std::move (session_rid),
-                                             actor_ref.object_generation (), node_generation,
-                                             authority_owner_generation, owner_lease_generation,
-                                             binding_generation, binding_token, session_sequence,
-                                             session_sequence_baseline_unknown});
+      actor_ref,
+      actor_bound_session_route_t{
+        std::move (node_rid), std::move (session_rid), actor_ref.object_generation (),
+        node_generation, authority_owner_generation, owner_lease_generation, binding_generation,
+        binding_token, session_sequence, session_sequence_baseline_unknown,
+        std::move (session_owner_id), session_owner_lease_generation});
     if (!transition) {
         return result_t<void>::failure (transition.error_kind (),
                                         transition.error ()
@@ -3200,7 +3203,9 @@ bool actor_gateway_runtime_t::prepare_session_relocation_target_route (
                   route.binding_generation,
                   0,
                   0,
-                  true};
+                  true,
+                  route.session_owner_id,
+                  route.session_owner_lease_generation};
                 found = _state->actors_by_id
                           .emplace (route.actor.actor_id,
                                     actor_record_t{.ref = target_actor,

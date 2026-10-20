@@ -225,11 +225,6 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         return 0L;
     }
 
-    /** Exact local authority owner used by bound-Session relocation command 42. */
-    default String localAuthorityOwnerId() {
-        return "";
-    }
-
     /** Node lifecycle generation currently known for this Actor route. */
     default long actorNodeGeneration(ZLinkBackendActorRef actor) {
         return 0L;
@@ -466,9 +461,15 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         return CompletableFuture.completedFuture(null);
     }
 
+    /**
+     * The Actor's current binding record as this node stores it, including the Session owner
+     * identity taken from its descriptor at bind (Session-Actor binding §4).
+     */
     record BoundSessionRoute(
             RoutingId sessionOwnerNodeRid,
             long sessionOwnerNodeGeneration,
+            String sessionOwnerId,
+            long sessionOwnerLeaseGeneration,
             RoutingId sessionRid,
             long bindingGeneration) {}
 

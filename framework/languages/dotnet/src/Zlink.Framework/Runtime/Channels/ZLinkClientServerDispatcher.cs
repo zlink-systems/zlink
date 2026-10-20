@@ -14,13 +14,17 @@ internal sealed class ZLinkClientServerDispatcher(
         Received received,
         ZLinkChannelReplyGate replyGate,
         uint maximumMessageBytes,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        (ZLinkEnvelopeHeader? Header, ZLinkEnvelopeProtocolException? Error)? decodedEnvelope = null
     )
     {
+        var envelope = decodedEnvelope ?? ReadHeader(received.Parts);
         ZLinkEnvelopeHeader header;
         try
         {
-            header = ZLinkEnvelopeCodec.DecodeHeader(received.Parts, flowCaptureEnabled());
+            if (envelope.Error is { } error)
+                throw error;
+            header = envelope.Header!;
             if (!StringComparer.Ordinal.Equals(header.ChannelName, channelName))
                 throw new ZLinkEnvelopeProtocolException(
                     header,
@@ -112,6 +116,20 @@ internal sealed class ZLinkClientServerDispatcher(
                     maximumMessageBytes
                 );
                 break;
+        }
+    }
+
+    internal (ZLinkEnvelopeHeader? Header, ZLinkEnvelopeProtocolException? Error) ReadHeader(
+        IReadOnlyList<Message> parts
+    )
+    {
+        try
+        {
+            return (ZLinkEnvelopeCodec.DecodeHeader(parts, flowCaptureEnabled()), null);
+        }
+        catch (ZLinkEnvelopeProtocolException error)
+        {
+            return (null, error);
         }
     }
 

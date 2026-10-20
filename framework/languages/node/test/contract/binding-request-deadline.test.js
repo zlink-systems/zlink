@@ -44,7 +44,7 @@ function requestFixture(t, submission) {
   const parts = [Buffer.from('request')];
   return {
     adapter: (onAdmitted) => submitBindingRequest(operation, parts, REQUEST_BUDGET_MS, undefined, onAdmitted),
-    router: () => router.request('target', parts, REQUEST_BUDGET_MS),
+    router: () => new Promise((resolve, reject) => router.request('target', parts, REQUEST_BUDGET_MS, resolve, reject)),
     dealer: () => dealer.request(parts, REQUEST_BUDGET_MS)
   };
 }

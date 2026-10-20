@@ -1,6 +1,14 @@
 package systems.zlink.framework.runtime.spots;
 
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.time.Duration;
+import java.util.concurrent.CompletionStage;
+
 final class ZLinkManualExecutor extends java.util.concurrent.AbstractExecutorService {
+    private static final Duration COMPLETION_TIMEOUT = Duration.ofSeconds(5);
+
     public void shutdown() {}
 
     public java.util.List<Runnable> shutdownNow() {
@@ -45,5 +53,20 @@ final class ZLinkManualExecutor extends java.util.concurrent.AbstractExecutorSer
 
     void drain() {
         for (Runnable task; (task = tasks.poll()) != null; ) task.run();
+    }
+
+    void drainUntil(CompletionStage<?> completion) {
+        var terminal = completion.toCompletableFuture();
+        assertTimeoutPreemptively(
+                COMPLETION_TIMEOUT,
+                () -> {
+                    // Infrastructure completions can submit work after an empty drain returns.
+                    while (!terminal.isDone() && !Thread.currentThread().isInterrupted()) {
+                        drain();
+                        Thread.yield();
+                    }
+                    assertTrue(terminal.isDone(), "manual executor operation did not complete");
+                    terminal.join();
+                });
     }
 }

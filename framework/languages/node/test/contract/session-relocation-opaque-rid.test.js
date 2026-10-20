@@ -24,6 +24,7 @@ const {
   ZLinkMeshCompletionTable
 } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
 const { RequestResult } = require('../../packages/framework/dist/runtime/backend/runtime-values');
+const { withTestSessionOwners } = require('./fixtures/session-owner-descriptors');
 const {
   OperationKind
 } = require('../../packages/framework/dist/runtime/foundation/service-runtime-contracts');
@@ -42,7 +43,7 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
   let bindWireSession;
   const completions = new ZLinkMeshCompletionTable();
   if (nativeBinding) {
-    stateful = new ServiceStatefulRuntime(
+    stateful = withTestSessionOwners(new ServiceStatefulRuntime(
       {
         observePeerRoute: () => ({ generation: 2n, ready: true }),
         observePeerRouteChanged: () => () => {},
@@ -68,7 +69,7 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
       },
       ids.owner,
       4n
-    );
+    ));
     stateful.rememberActorRoute({
       actor: { nodeRid: ids.source, actorId: 'opaque-relocation-actor', generation: 5n },
       targetNodeGeneration: 2n,
@@ -187,9 +188,6 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
   const transfer = new ZLinkActorTransferRuntime({
     primaryMeshNode: () => ({ status: () => ({ routingId: ids.source, lifecycleGeneration: 2n }) }),
     authorityStore: () => ({ readAuthority: async () => currentAuthority }),
-    liveDescriptors: async () => [
-      { rid: ids.owner, lifecycleGeneration: 4n, ownerId: 'session-owner-id', leaseGeneration: 8n }
-    ],
     sessionRelocationWire: () => ({
       requestSessionRelocationSeal: (mesh, target, request, signal) => {
         sent.push(request);
@@ -214,6 +212,9 @@ async function relocationHarness(ids, nativeBinding = false, hooks = {}) {
       routerChannelId: 'mesh',
       targetNodeRid: ids.owner,
       sessionRid: ids.session,
+      sessionOwnerNodeGeneration: 4n,
+      sessionOwnerId: 'session-owner-id',
+      sessionOwnerLeaseGeneration: 8n,
       bindingGeneration: 6n
     }
   };

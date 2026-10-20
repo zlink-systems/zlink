@@ -18,13 +18,14 @@ const {
   actorSessionBindingRuntimeOwner
 } = require('../../packages/framework/dist/runtime/streams/actor-session-binding-runtime-owner');
 const streamProtocol = require('../../packages/framework/dist/runtime/streams/protocol');
+const { withTestSessionOwners } = require('./fixtures/session-owner-descriptors');
 
 function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.RoutingId.from(1)) {
   const actor = { nodeRid: 'actor-node', actorId: 'actor-a', generation: 7n };
   const nextActor = { ...actor, actorId: 'actor-b' };
   const fence = { actor, targetNodeGeneration: 3n, authorityOwnerGeneration: 9n, ownerLeaseGeneration: 10n };
   let ingress;
-  const stateful = new ServiceStatefulRuntime({
+  const stateful = withTestSessionOwners(new ServiceStatefulRuntime({
     observePeerRoute: () => ({ generation: 1n, ready: true }),
     observePeerRouteChanged: () => () => {},
     observePeerConnectionIntentRemoved() { return () => {}; },
@@ -36,7 +37,7 @@ function sessionFixture(disconnectFailure, nativeSocket, routingId = zlink.Routi
       return [wire.encodeStatefulReply(record.correlation, zlink.RequestResult.Ok, 0,
         binding ? { kind: 'streamBind', bindingGeneration: 11n, authorityOwnerGeneration: 9n } : undefined)];
     }
-  }, 'session-node', 3n);
+  }, 'session-node', 3n));
   stateful.rememberActorRoute(fence);
   stateful.rememberActorRoute({ ...fence, actor: nextActor });
   const backend = new ZLinkNodeRawMeshBackend('play', 'session-node', {});

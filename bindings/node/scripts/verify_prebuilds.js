@@ -20,14 +20,18 @@ const coreVersion = process.env.ZLINK_CORE_VERSION || provenance?.version;
 if (!coreVersion || !/^\d+\.\d+\.\d+$/.test(coreVersion)) {
   throw new Error('Core 1.19.0 package provenance or ZLINK_CORE_VERSION=X.Y.Z is required');
 }
-if (process.env.ZLINK_CORE_VERSION && provenance?.version &&
-    process.env.ZLINK_CORE_VERSION !== provenance.version) {
+if (
+  process.env.ZLINK_CORE_VERSION &&
+  provenance?.version &&
+  process.env.ZLINK_CORE_VERSION !== provenance.version
+) {
   throw new Error(
     `ZLINK_CORE_VERSION=${process.env.ZLINK_CORE_VERSION} does not match provenance=${provenance.version}`
   );
 }
 const coreMajor = Number(provenance?.abiMajor ?? 0);
-if (coreMajor !== 0) throw new Error(`prebuild verification requires Core ABI 0, found ${coreMajor}`);
+if (coreMajor !== 0)
+  throw new Error(`prebuild verification requires Core ABI 0, found ${coreMajor}`);
 
 function fail(message) {
   throw new Error(message);
@@ -63,13 +67,15 @@ function readPeImports(target) {
 
 function isWindowsSystemDll(name) {
   const normalized = name.toLowerCase();
-  return normalized === 'kernel32.dll' ||
+  return (
+    normalized === 'kernel32.dll' ||
     normalized === 'advapi32.dll' ||
     normalized === 'ws2_32.dll' ||
     normalized === 'iphlpapi.dll' ||
     normalized === 'mswsock.dll' ||
     normalized === 'libnode.dll' ||
-    normalized.startsWith('api-ms-win-');
+    normalized.startsWith('api-ms-win-')
+  );
 }
 
 function validateLinux(dir, arch) {
@@ -79,32 +85,28 @@ function validateLinux(dir, arch) {
   if (!dynamic.includes(`Shared library: [${expectedSoname}]`)) {
     fail(`${addon} must depend on ${expectedSoname}`);
   }
-  const linkedSonames = [...dynamic.matchAll(/Shared library: \[(libzlink\.so\.\d+)\]/g)]
-    .map((match) => match[1]);
+  const linkedSonames = [...dynamic.matchAll(/Shared library: \[(libzlink\.so\.\d+)\]/g)].map(
+    (match) => match[1]
+  );
   if (linkedSonames.some((soname) => soname !== expectedSoname)) {
     fail(`${addon} still depends on a stale libzlink SONAME`);
   }
   if (!dynamic.includes('Library runpath: [$ORIGIN]')) {
     fail(`${addon} must use $ORIGIN runpath`);
   }
-  const linuxCoreLib = expectedSoname;
-  if (!fs.existsSync(path.join(dir, linuxCoreLib))) {
-    fail(`${dir} is missing ${linuxCoreLib}`);
+  const runtime = path.join(dir, expectedSoname);
+  if (!fs.existsSync(runtime) || !fs.lstatSync(runtime).isFile()) {
+    fail(`${dir} must contain a regular file named ${expectedSoname}; npm omits symlinks`);
   }
-  const exactCoreLibrary = `libzlink.so.${coreVersion}`;
-  if (!fs.existsSync(path.join(dir, exactCoreLibrary))) {
-    fail(`${dir} is missing exact Core runtime ${exactCoreLibrary}`);
+  if (!readElfDynamic(runtime).includes(`Library soname: [${expectedSoname}]`)) {
+    fail(`${runtime} must have SONAME ${expectedSoname}`);
   }
   for (const stale of fs.readdirSync(dir)) {
-    if (/^libzlink\.so\.\d+\.\d+\.\d+$/.test(stale) && stale !== exactCoreLibrary) {
-      fail(`${dir} contains stale ${stale}`);
+    if (stale.startsWith('libzlink.so') && stale !== expectedSoname) {
+      fail(`${dir} contains redundant Core runtime ${stale}`);
     }
   }
-  for (const stale of [
-    'libzlink_c.so',
-    'libzlink_c.so.1',
-    'libzlink_c.so.1.0.0',
-  ]) {
+  for (const stale of ['libzlink_c.so', 'libzlink_c.so.1', 'libzlink_c.so.1.0.0']) {
     if (fs.existsSync(path.join(dir, stale))) {
       fail(`${dir} contains stale ${stale}`);
     }
@@ -136,7 +138,8 @@ function validateWindows(dir, arch) {
   }
 
   const bundled = new Set(
-    fs.readdirSync(dir)
+    fs
+      .readdirSync(dir)
       .filter((name) => name.endsWith('.dll') || name.endsWith('.node'))
       .map((name) => name.toLowerCase())
   );
@@ -173,7 +176,8 @@ function validateDir(entry) {
   }
 }
 
-const entries = fs.readdirSync(prebuildRoot)
+const entries = fs
+  .readdirSync(prebuildRoot)
   .filter((entry) => fs.statSync(path.join(prebuildRoot, entry)).isDirectory())
   .filter((entry) => fs.existsSync(path.join(prebuildRoot, entry, 'zlink.node')))
   .sort();

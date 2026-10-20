@@ -1784,10 +1784,9 @@ final class ZLinkJavaRawMeshNodeM6ATest {
         try (var context = Zlink.createContext();
                 var target = meshNode(context);
                 var source = meshNode(context);
-                var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
                 var caller =
                         new systems.zlink.framework.runtime.internal.service
-                                .ZLinkServiceOperationRegistry(scheduler)) {
+                                .ZLinkServiceOperationRegistry()) {
             target.setRoutingId(targetRid);
             target.setBind(endpoint);
             target.addChannel("orders");

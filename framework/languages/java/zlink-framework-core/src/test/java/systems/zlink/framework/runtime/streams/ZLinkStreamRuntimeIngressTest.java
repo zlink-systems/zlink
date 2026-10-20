@@ -102,6 +102,30 @@ final class ZLinkStreamRuntimeIngressTest {
     private ZLinkFrameworkRegistration lastRegistration;
 
     @Test
+    void streamMetricsUseStartupTlsRegistrationInsteadOfEndpointScheme() throws Exception {
+        var stream = new FakeStream();
+        try (var metrics =
+                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                        .install()) {
+            var runtime =
+                    start(
+                            stream,
+                            0,
+                            65536,
+                            registration ->
+                                    registration
+                                            .streamNodes()
+                                            .getFirst()
+                                            .setTlsServer("certificate.pem", "key.pem", false));
+            runtimes.add(runtime);
+            stream.enqueue(PEER_A, frame("initial", "{}"));
+            TestSession.connected.get(5, TimeUnit.SECONDS);
+            assertEquals(
+                    "tls", metrics.only("zlink.stream.connections.opened").tags().get("transport"));
+        }
+    }
+
+    @Test
     void heartbeatContractConnectionWithoutInboundClosesAtTimeout() throws Exception {
         FakeStream stream = new FakeStream();
         var clock = new java.util.concurrent.atomic.AtomicLong();
@@ -588,8 +612,7 @@ final class ZLinkStreamRuntimeIngressTest {
                     }
                 };
         runtimes.add(start(stream, 0));
-        try (var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
-                var completions = new ZLinkServiceOperationRegistry(scheduler)) {
+        try (var completions = new ZLinkServiceOperationRegistry()) {
             try {
                 checked.get(3, TimeUnit.SECONDS);
                 CompletableFuture<Void> terminal = new CompletableFuture<>();
@@ -609,8 +632,22 @@ final class ZLinkStreamRuntimeIngressTest {
         }
     }
 
+    @Test
+    void cleanupKeepsPredecessorCompletionsOutOfTheNextConnectionProbe() throws Exception {
+        var stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("initial", "{}"));
+        runtimes.add(start(stream, 0));
+        var predecessor = TestSession.connected.get(5, TimeUnit.SECONDS);
+        // A completion from the retiring runtime still belongs to that runtime's probe.
+        predecessor.transportClosed.thenRun(() -> TestSession.connected.complete(predecessor));
+        resetSessionProbe();
+        assertFalse(TestSession.connected.isDone());
+    }
+
     @AfterEach
     void resetSessionProbe() {
+        runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
+        runtimes.clear();
         TestSession.holdFirstDispatch = false;
         TestSession.failNextConstruction = false;
         TestSession.constructionHook = null;
@@ -619,12 +656,13 @@ final class ZLinkStreamRuntimeIngressTest {
         TestSession.decodeWirePayload = false;
         TestSession.replyOnDispatch = false;
         TestSession.decodedWirePayload.set(null);
+        runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
+        runtimes.clear();
+        // Retiring callbacks finish before probes become visible to the next test.
         TestSession.created.clear();
         TestSession.createdCount.set(0);
         TestSession.lastSession.set(null);
         TestSession.connected = new CompletableFuture<>();
-        runtimes.forEach(runtime -> runtime.closeAsync().toCompletableFuture().join());
-        runtimes.clear();
         lastRegistration = null;
     }
 
@@ -633,7 +671,15 @@ final class ZLinkStreamRuntimeIngressTest {
     void reportsTransportCallbacksThroughPublicSessionMethods(String message) throws Exception {
         FakeStream stream = new FakeStream();
         stream.enqueue(PEER_A, frame("initial", "{}"));
-        runtimes.add(start(stream, 0));
+        runtimes.add(
+                start(
+                        stream,
+                        0,
+                        64 * 1024,
+                        registration ->
+                                registration
+                                        .dispatchOptions()
+                                        .messageFlow(ZLinkMessageFlowLogMode.NORMAL)));
         TestSession session = TestSession.connected.get(5, TimeUnit.SECONDS);
         stream.errorHandler.handle(
                 PEER_A,
@@ -649,6 +695,26 @@ final class ZLinkStreamRuntimeIngressTest {
                                         List.of("error:transport failure", "disconnected"))
                         .get(message);
         assertEquals(expected, session.transportClosed.get(5, TimeUnit.SECONDS));
+    }
+
+    @Test
+    void cleanupKeepsSessionProbeUntilRuntimeCallbacksFinish() throws Exception {
+        FakeStream stream = new FakeStream();
+        stream.enqueue(PEER_A, frame("initial", "{}"));
+        runtimes.add(start(stream, 0));
+        CompletableFuture<TestSession> probe = TestSession.connected;
+        TestSession session = probe.get(5, TimeUnit.SECONDS);
+        var observed =
+                session.transportClosed.thenRun(
+                        () ->
+                                assertSame(
+                                        probe,
+                                        TestSession.connected,
+                                        "runtime callbacks must finish before the shared probe resets"));
+
+        resetSessionProbe();
+
+        observed.join();
     }
 
     @Test
@@ -1194,7 +1260,7 @@ final class ZLinkStreamRuntimeIngressTest {
                             () ->
                                     fixture.runtime()
                                             .handleBoundSessionClose(
-                                                    RoutingId.from("session-owner-node"), 3, stale)
+                                                    RoutingId.from("session-owner-node"), stale)
                                             .toCompletableFuture()
                                             .join());
             assertEquals(
@@ -1439,6 +1505,61 @@ final class ZLinkStreamRuntimeIngressTest {
                 .toCompletableFuture()
                 .get(5, TimeUnit.SECONDS);
         assertEquals(1, disconnectCallbacks.get(), "relocation never repeats the callback");
+    }
+
+    @Test
+    void command42NamingAnotherSessionOwnerIdentityIsRejected() throws Exception {
+        FakeStream stream = new FakeStream();
+        ReplacementFixture fixture = startReplacement(stream);
+        runtimes.add(fixture.runtime());
+        ZLinkBackendActorRef actorRef =
+                new ZLinkBackendActorRef(RoutingId.from("actor-node"), "identity-actor", 7);
+        var exact =
+                sessionSeal(
+                        new ZLinkServiceM6BWireCodec.RelocationIdentity(9, 1), actorRef, PEER_A, 1);
+        assertEquals(
+                ServiceWirePilotCodec.SessionSealResult.BINDING_ABSENT,
+                sealResult(fixture.runtime(), actorRef, exact));
+
+        // Session-Actor binding §4: the Session owner compares the carried owner ID and owner
+        // lease generation with its current values exactly.
+        long low = 2;
+        for (var owner :
+                List.of(
+                        new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                                RoutingId.from("session-owner-node"),
+                                3,
+                                "other-owner",
+                                5,
+                                PEER_A,
+                                1),
+                        new ZLinkServiceM6BWireCodec.SessionOwnerFence(
+                                RoutingId.from("session-owner-node"),
+                                3,
+                                "session-owner",
+                                3,
+                                PEER_A,
+                                1))) {
+            var seal =
+                    sessionSeal(
+                            new ZLinkServiceM6BWireCodec.RelocationIdentity(9, low++),
+                            actorRef,
+                            PEER_A,
+                            1);
+            var other =
+                    new ZLinkServiceM6BWireCodec.SessionRelocationSeal(
+                            seal.relocation(),
+                            seal.coordinator(),
+                            seal.senderRole(),
+                            seal.actor(),
+                            owner,
+                            seal.targetNodeRid(),
+                            seal.targetNodeGeneration());
+            assertThrows(
+                    CompletionException.class,
+                    () -> sealResult(fixture.runtime(), actorRef, other),
+                    owner.toString());
+        }
     }
 
     @Test
@@ -1798,8 +1919,16 @@ final class ZLinkStreamRuntimeIngressTest {
                                             case "routingId" ->
                                                     RoutingId.from("session-owner-node");
                                             case "lifecycleGeneration" -> 3L;
-                                            case "localAuthorityOwnerId" -> "session-owner";
                                             case "localAuthorityLeaseGeneration" -> 5L;
+                                            case "localSessionOwner" ->
+                                                    java.util.Optional.of(
+                                                            new ZLinkInternalMeshNode
+                                                                    .PeerAuthorityFence(
+                                                                    RoutingId.from(
+                                                                            "session-owner-node"),
+                                                                    3,
+                                                                    "session-owner",
+                                                                    5));
                                             case "requestPeerReconcile" -> {
                                                 requestedPeer.set((RoutingId) arguments[0]);
                                                 requestedGeneration.set((Long) arguments[1]);

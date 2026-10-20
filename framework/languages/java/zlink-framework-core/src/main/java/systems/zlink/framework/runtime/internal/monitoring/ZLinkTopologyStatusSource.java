@@ -90,16 +90,23 @@ public final class ZLinkTopologyStatusSource<T> {
             current = sources.putIfAbsent(sourceKey, created);
             if (current == null) return created;
         }
-        T previous = current.status;
-        T projected = current.projectSnapshot(previous);
-        sources.computeIfPresent(
-                sourceKey,
-                (key, published) -> {
-                    // A concurrent query may have published while projection was collected.
-                    // Keep that newer publication instead of applying a stale projection.
-                    if (published.status == previous) published.publishSnapshot(projected);
-                    return published;
-                });
+        // A projection is published only from the status it was taken from. When another
+        // publication won the turn first, either projection may describe the later runtime
+        // state, so this caller takes its projection again from the status that won.
+        boolean[] published = {false};
+        while (!published[0]) {
+            T previous = current.status;
+            T projected = current.projectSnapshot(previous);
+            sources.computeIfPresent(
+                    sourceKey,
+                    (key, source) -> {
+                        if (source.status == previous) {
+                            source.publishSnapshot(projected);
+                            published[0] = true;
+                        }
+                        return source;
+                    });
+        }
         return current;
     }
 

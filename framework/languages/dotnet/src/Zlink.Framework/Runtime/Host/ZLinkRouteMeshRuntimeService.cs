@@ -282,10 +282,13 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
     private IReadOnlyList<ZLinkRuntimeMetricMeshSnapshot> BuildMetricSnapshots() =>
         _runtime
             .Registration.SpotNodes.Keys.Select(meshName => SnapshotInternal(meshName).Snapshot)
-            .Select(static snapshot =>
+            .Select(snapshot =>
             {
                 var source = snapshot.DescriptorSources.FirstOrDefault() ?? "manual";
-                var capacity = snapshot.PopulationCapacity;
+                var capacity = _runtime.ConfirmedCapacity(
+                    new(snapshot.MeshName, snapshot.Rid),
+                    BuildPopulationCapacity(_runtime.Registration.SpotNodes[snapshot.MeshName])
+                );
                 return new ZLinkRuntimeMetricMeshSnapshot(
                     snapshot.MeshName,
                     source,
@@ -303,18 +306,22 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                             channel.ReadyMemberCount
                         ))
                         .ToArray(),
-                    new ZLinkRuntimeMetricCapacity(
-                        capacity.Actors.Active,
-                        capacity.Actors.Reserved,
-                        capacity.Actors.Limit
-                    ),
-                    new ZLinkRuntimeMetricCapacity(
-                        capacity.Spots.Active,
-                        capacity.Spots.Reserved,
-                        capacity.Spots.Limit
-                    ),
+                    capacity is null
+                        ? null
+                        : new ZLinkRuntimeMetricCapacity(
+                            capacity.Actors.Active,
+                            capacity.Actors.Reserved,
+                            capacity.Actors.Limit
+                        ),
+                    capacity is null
+                        ? null
+                        : new ZLinkRuntimeMetricCapacity(
+                            capacity.Spots.Active,
+                            capacity.Spots.Reserved,
+                            capacity.Spots.Limit
+                        ),
                     capacity
-                        .SpotTypes.Select(static entry => new ZLinkRuntimeMetricSpotTypeCapacity(
+                        ?.SpotTypes.Select(static entry => new ZLinkRuntimeMetricSpotTypeCapacity(
                             entry.ObjectKind == ZLinkPlacementObjectKind.InstanceSpot
                                 ? "instance"
                                 : "user",
@@ -323,7 +330,8 @@ internal sealed class ZLinkRouteMeshRuntimeService : IZLinkRouteMeshRuntime, IAs
                             entry.Reserved,
                             entry.Limit
                         ))
-                        .ToArray(),
+                        .ToArray()
+                        ?? [],
                     new ZLinkRuntimeMetricActivation(
                         snapshot.ActivationConcurrency.Active,
                         snapshot.ActivationConcurrency.Limit

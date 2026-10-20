@@ -157,7 +157,8 @@ the values that node publishes in its MeshNode descriptor. The Actor owner takes
 bind and stores them in the current binding. When the Session owner is another node, it uses the descriptor whose RID and
 lifecycle generation match that peer's [peer admission](../00-foundation/02-glossary.en.md#peer-admission) and that passed
 the owner-lease check of [Location runtime §4.1](../05-location-relocation/01-location-runtime.en.md#41-validating-a-target-descriptors-owner-lease);
-when it is the same node, it uses its own descriptor. Commands 42, 51 and 54, which carry this identity, send the stored
+when it is the same node, it uses its own descriptor. Without such a descriptor, the
+operation is rejected with `Unavailable`. Commands 42, 51 and 54, which carry this identity, send the stored
 values unchanged, and the receiving Session owner compares them exactly with its own current values. The binding identity
 below uses only the Node RID and lifecycle generation of these; the owner ID and owner lease generation are fence values
 for commands 42, 51 and 54.
@@ -698,6 +699,10 @@ Commands 42 and 43 carry the Session seal's install request and reply.
 Command 43 carries only the seal-installation result (`sealResult`), with no
 Session message sequence or high-water. `sealResult` is `sealed` (1) or
 `bindingAbsent` (2); §8.3 owns how `bindingAbsent` is decided and handled.
+**When the Session owner rejects command 42, it sends no command 43.** A rejection is a missing
+descriptor under §4 or a mismatch or protocol error under §8.3. The Session owner records the
+rejection in the [message flow](../06-observability/03-message-flow-tracing.en.md), and the
+coordinator settles that participant's failure through the seal wait deadline under "Failure" below.
 
 Command 44 is a one-way control that carries the target runtime's commit,
 or the relocation coordinator's abort before relay-ready becomes accepted.
@@ -757,7 +762,7 @@ that Session owner owns.
 |---|---|
 | Seal installed | Installs the seal per §8.1 and returns command 43 with `sealResult = sealed`. |
 | Exact binding absent | Creates no seal, held messages, or seal timeout, and returns command 43 with `sealResult = bindingAbsent`. |
-| Mismatch | Rejects as before. It is never turned into an absence result. |
+| Mismatch | Rejects (§8.2, no command 43). It is never turned into an absence result. |
 
 `bindingAbsent` doesn't mean a seal was installed; it means there is no current binding to
 seal. The result describes only the Session binding and seal, and says nothing about the
@@ -819,8 +824,8 @@ target as saved work; if it arrives after capture, Message Follow forwards it to
 Actor owner judges the notification by §7's identity comparison. The coordinator never
 creates or resubmits a disconnect notification.
 
-**Failure.** If command 42 is rejected as a mismatch or the seal wait reaches its deadline, the
-relocation fails. What is restored is every participant capture already started and the seals of
+**Failure.** If no command 43 arrives by the seal wait deadline, the relocation fails. A
+rejection by the Session owner (§8.2) is this case. What is restored is every participant capture already started and the seals of
 participants already confirmed `sealed`. The restore order follows §8.1's abort order: durable
 abort and source queue restoration are confirmed first, and then the matching command 44 abort is
 sent ([Relocation §9](../05-location-relocation/04-relocation-flow.en.md#9-timeout-failure-and-cancellation)).

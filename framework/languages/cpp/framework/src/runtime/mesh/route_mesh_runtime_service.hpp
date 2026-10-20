@@ -25,6 +25,8 @@ class monitoring_runtime_state_t;
 namespace zlink::framework::runtime
 {
 
+struct route_mesh_runtime_service_test_access_t;
+
 class route_mesh_runtime_service_t final : public route_mesh_runtime_t
 {
   public:
@@ -48,6 +50,13 @@ class route_mesh_runtime_service_t final : public route_mesh_runtime_t
     void stop () noexcept;
 
   private:
+    friend struct route_mesh_runtime_service_test_access_t;
+
+    // A status query in two steps: the projection of the node, then its publication.
+    mesh_node_snapshot_t query_projection (const std::string &mesh_name) const;
+    mesh_node_snapshot_t complete_query (const std::string &mesh_name,
+                                         mesh_node_snapshot_t projection) const;
+
     std::shared_ptr<state_t> _state;
 };
 

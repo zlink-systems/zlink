@@ -30,6 +30,183 @@ function frame(value) {
   return [zlink.Message.from(`header:${value}`), zlink.Message.from(value)];
 }
 
+test('relocation captures the original requester fence and reply route', async () => {
+  const { coordinator } = harness();
+  coordinator.beginProvisional('actor-1', 1n);
+  const parts = frame('original-request');
+  const source = { ownerId: 'requester-A', leaseGeneration: 9n, nodeRid: 'A', nodeGeneration: 7n };
+  const pending = coordinator.capture(
+    'remote',
+    'actor-1',
+    parts,
+    true,
+    undefined,
+    actorRef(),
+    undefined,
+    {
+      sourceNodeRid: 'A',
+      originalOperation: { high: 7n, low: 15n },
+      originalReplyRouteId: 12n,
+      requestSource: source
+    }
+  );
+  const ended = assert.rejects(pending);
+  try {
+    const [packet] = coordinator.snapshot('actor-1');
+    assert.deepEqual(packet.source, {
+      ownerId: 'requester-A',
+      ownerLeaseGeneration: '9',
+      nodeRid: 'A',
+      nodeGeneration: '7',
+      replyRouteId: '12'
+    });
+    assert.strictEqual(packet.messageFollowOrigin.requestSource, source);
+    const {
+      encodeHandoffQueuedMessages,
+      decodeQueuedHandoffPacket
+    } = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+    const restoredC = decodeQueuedHandoffPacket(encodeHandoffQueuedMessages([packet])[0]);
+    const restoredD = decodeQueuedHandoffPacket(encodeHandoffQueuedMessages([restoredC])[0]);
+    assert.deepEqual(restoredD.source, packet.source);
+    assert.deepEqual(restoredD.messageFollowOrigin.requestSource, source);
+  } finally {
+    coordinator.cancel('actor-1');
+    parts.forEach((part) => part.close());
+    await ended;
+  }
+});
+
+test('a queued request moving B to C to D leaves terminal delivery to D and original A', async () => {
+  const b = harness();
+  b.coordinator.begin('actor-1', 1n);
+  const parts = frame('original-A');
+  const source = { ownerId: 'owner-A', leaseGeneration: 9n, nodeRid: 'A', nodeGeneration: 7n };
+  const pending = b.coordinator.capture(
+    'remote',
+    'actor-1',
+    parts,
+    true,
+    undefined,
+    actorRef(),
+    undefined,
+    {
+      sourceNodeRid: 'A',
+      originalOperation: { high: 7n, low: 15n },
+      originalReplyRouteId: 12n,
+      requestSource: source
+    }
+  );
+  const backlog = b.coordinator.snapshot('actor-1');
+  b.coordinator.complete('actor-1', target('C'), targetActorRef('C'), [], ownerFence('C', 2n));
+  assert.equal(await pending, actorHandoff.RELOCATED_REQUEST_OWNED_BY_REQUESTER);
+  assert.equal(b.coordinator.replyRoutes.size, 0);
+  parts.forEach((part) => part.close());
+  const c = harness();
+  const cTerminals = [];
+  let releaseQueue;
+  let openStart;
+  const queueTerminal = new Promise((resolve) => {
+    releaseQueue = resolve;
+  });
+  const start = new Promise((resolve) => {
+    openStart = resolve;
+  });
+  const cAdmission = c.coordinator.admitTransferredPrefix(
+    'actor-1',
+    1n,
+    backlog,
+    (records) => {
+      records.forEach((record) => record.onWithdrawable(() => true));
+      return { terminal: queueTerminal };
+    },
+    undefined,
+    start,
+    (...args) => cTerminals.push(args)
+  );
+  try {
+    c.coordinator.begin('actor-1', 1n);
+    const second = c.coordinator.snapshot('actor-1');
+    assert.deepEqual(second[0].source, backlog[0].source);
+    c.coordinator.complete('actor-1', target('D'), targetActorRef('D'), [], ownerFence('D', 3n));
+    assert.equal(
+      cTerminals.length,
+      0,
+      'C transferred the queued record and must not emit a terminal'
+    );
+    const d = harness();
+    const dTerminals = [];
+    const dAdmission = d.coordinator.admitTransferredPrefix(
+      'actor-1',
+      1n,
+      second,
+      (records) => ({
+        terminal: (async () => {
+          for (const record of records) {
+            await record.preparation.prepare(new AbortController().signal);
+            await record.drain(async () => ({ answer: 42 }));
+          }
+        })()
+      }),
+      undefined,
+      Promise.resolve(),
+      (...args) => dTerminals.push(args)
+    );
+    await dAdmission.terminal;
+    assert.equal(dTerminals.length, 1);
+    assert.equal(dTerminals[0][0].source.nodeRid, 'A');
+    assert.deepEqual(dTerminals[0][1].response, { answer: 42 });
+  } finally {
+    releaseQueue();
+    openStart();
+    await cAdmission.terminal;
+  }
+});
+
+test('relocation keeps the original requester binary RID across serialization', async () => {
+  const { coordinator } = harness();
+  const { decodeRoutingId, routingIdsEqual } = routingIds;
+  const rid = decodeRoutingId('\ufffd', 'ff');
+  const source = { ownerId: 'owner-A', leaseGeneration: 9n, nodeRid: rid, nodeGeneration: 7n };
+  coordinator.begin('actor-1', 1n);
+  const parts = frame('binary-requester');
+  const pending = coordinator.capture(
+    'remote',
+    'actor-1',
+    parts,
+    true,
+    undefined,
+    actorRef(),
+    undefined,
+    {
+      sourceNodeRid: rid,
+      originalOperation: { high: 7n, low: 15n },
+      originalReplyRouteId: 12n,
+      requestSource: source
+    }
+  );
+  const ended = assert.rejects(pending);
+  try {
+    const {
+      encodeHandoffQueuedMessages,
+      decodeQueuedHandoffPacket
+    } = require('../../packages/framework/dist/runtime/host/service-relocation-host-runtime');
+    const [packet] = coordinator.snapshot('actor-1');
+    const restored = decodeQueuedHandoffPacket(encodeHandoffQueuedMessages([packet])[0]);
+    assert.equal(routingIdsEqual(restored.messageFollowOrigin.requestSource.nodeRid, rid), true);
+    assert.equal(
+      routingIdsEqual(
+        restored.messageFollowOrigin.requestSource.nodeRid,
+        decodeRoutingId('\ufffd', 'fe')
+      ),
+      false
+    );
+  } finally {
+    coordinator.cancel('actor-1');
+    parts.forEach((part) => part.close());
+    await ended;
+  }
+});
+
 for (const origin of ['local', 'remote']) {
   test(`durable Actor source replay preserves the ${origin} ingress origin`, async () => {
     const { coordinator } = harness();
@@ -435,26 +612,60 @@ test('native Actor ingress retains its exact source fence across a completed Joi
   const parts = frame('native-after-join');
   const ref = { ...actorRef(), nodeRid: 'source-node' };
   const origin = {
-    sourceNodeRid: 'caller', originalOperation: { high: 7n, low: 11n }, originalReplyRouteId: 0n,
-    target: { actor: { actorId: ref.actorId, nodeRid: ref.nodeRid, generation: ref.objectGeneration },
-      targetNodeGeneration: 1n, authorityOwnerGeneration: 1n, ownerLeaseGeneration: 1n }
+    sourceNodeRid: 'caller',
+    originalOperation: { high: 7n, low: 11n },
+    originalReplyRouteId: 0n,
+    target: {
+      actor: { actorId: ref.actorId, nodeRid: ref.nodeRid, generation: ref.objectGeneration },
+      targetNodeGeneration: 1n,
+      authorityOwnerGeneration: 1n,
+      ownerLeaseGeneration: 1n
+    }
   };
   try {
-    for (const field of ['targetNodeGeneration', 'authorityOwnerGeneration', 'ownerLeaseGeneration']) {
-      await assert.rejects(h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref,
-        undefined, { ...origin, target: { ...origin.target, [field]: 99n } }),
-      { kind: framework.ZLinkFrameworkErrorKind.Unavailable });
+    for (const field of [
+      'targetNodeGeneration',
+      'authorityOwnerGeneration',
+      'ownerLeaseGeneration'
+    ]) {
+      await assert.rejects(
+        h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, {
+          ...origin,
+          target: { ...origin.target, [field]: 99n }
+        }),
+        { kind: framework.ZLinkFrameworkErrorKind.Unavailable }
+      );
     }
-    await h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, origin);
-    await h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, origin);
+    await h.coordinator.capture(
+      'remote',
+      ref.actorId,
+      parts,
+      false,
+      undefined,
+      ref,
+      undefined,
+      origin
+    );
+    await h.coordinator.capture(
+      'remote',
+      ref.actorId,
+      parts,
+      false,
+      undefined,
+      ref,
+      undefined,
+      origin
+    );
     assert.deepEqual(h.followed, ['native-after-join']);
-    const context = actorRelayWire.decodeRemoteActorPacketRelayPayload(h.messageFollowPayloads[0]).messageFollowContext;
+    const context = actorRelayWire.decodeRemoteActorPacketRelayPayload(
+      h.messageFollowPayloads[0]
+    ).messageFollowContext;
     assert.equal(context.operationId, '0000000000000007000000000000000b');
     assert.equal(context.objectGeneration, '1');
     assert.equal(context.sourceOwner.authorityOwnerGeneration, '1');
     assert.equal(context.targetOwner.authorityOwnerGeneration, '2');
   } finally {
-    parts.forEach(part => part.close());
+    parts.forEach((part) => part.close());
   }
 });
 
@@ -464,8 +675,15 @@ test('native ingress for a departed tenure follows that route while a successor 
   h.coordinator.begin('actor-1', 1n);
   h.coordinator.snapshot('actor-1');
   h.coordinator.complete('actor-1', target(), targetActorRef(), [], ownerFence('target', 2n));
-  h.setRequestSource({ meshName: 'mesh', objectGeneration: 1n, ownerId: 'source-owner',
-    ownerLeaseGeneration: 1n, nodeRid: 'source-node', nodeGeneration: 1n, authorityOwnerGeneration: 3n });
+  h.setRequestSource({
+    meshName: 'mesh',
+    objectGeneration: 1n,
+    ownerId: 'source-owner',
+    ownerLeaseGeneration: 1n,
+    nodeRid: 'source-node',
+    nodeGeneration: 1n,
+    authorityOwnerGeneration: 3n
+  });
   h.setCurrentNodeRid('source-node');
   h.setCurrentOwner(sourceOwnerFence(3n));
   h.coordinator.begin('actor-1', 1n);
@@ -473,15 +691,21 @@ test('native ingress for a departed tenure follows that route while a successor 
   const ref = { ...actorRef(), nodeRid: 'source-node' };
   try {
     await h.coordinator.capture('remote', ref.actorId, parts, false, undefined, ref, undefined, {
-      sourceNodeRid: 'caller', originalOperation: { high: 7n, low: 12n }, originalReplyRouteId: 0n,
-      target: { actor: { actorId: ref.actorId, nodeRid: ref.nodeRid, generation: ref.objectGeneration },
-        targetNodeGeneration: 1n, authorityOwnerGeneration: 1n, ownerLeaseGeneration: 1n }
+      sourceNodeRid: 'caller',
+      originalOperation: { high: 7n, low: 12n },
+      originalReplyRouteId: 0n,
+      target: {
+        actor: { actorId: ref.actorId, nodeRid: ref.nodeRid, generation: ref.objectGeneration },
+        targetNodeGeneration: 1n,
+        authorityOwnerGeneration: 1n,
+        ownerLeaseGeneration: 1n
+      }
     });
     assert.deepEqual(h.followed, ['departed-tenure']);
     assert.deepEqual(h.coordinator.snapshot(ref.actorId), []);
   } finally {
     h.coordinator.cancel(ref.actorId);
-    parts.forEach(part => part.close());
+    parts.forEach((part) => part.close());
   }
 });
 

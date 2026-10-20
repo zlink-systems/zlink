@@ -54,6 +54,26 @@
 #include <unistd.h>
 #endif
 
+namespace zlink::framework::runtime
+{
+// Reaches the two steps of one status query so a test can order two queries between them.
+struct route_mesh_runtime_service_test_access_t
+{
+    static mesh_node_snapshot_t query_projection (const route_mesh_runtime_service_t &runtime,
+                                                  const std::string &mesh_name)
+    {
+        return runtime.query_projection (mesh_name);
+    }
+
+    static mesh_node_snapshot_t complete_query (const route_mesh_runtime_service_t &runtime,
+                                                const std::string &mesh_name,
+                                                mesh_node_snapshot_t projection)
+    {
+        return runtime.complete_query (mesh_name, std::move (projection));
+    }
+};
+} // namespace zlink::framework::runtime
+
 namespace
 {
 using namespace std::chrono_literals;
@@ -1573,6 +1593,30 @@ void verify_public_runtime_surface ()
     assert (runtime_options.mesh ("vertical-mesh").placement_weight () == 0);
     runtime_options.mesh ("vertical-mesh").placement_weight (100);
     assert (runtime_options.mesh ("vertical-mesh").placement_weight () == 100);
+
+    // Runtime monitoring §4 and §6: a query returns the value at that time. Two queries project
+    // from the same published status. The older one (it reports a ready peer the node no longer
+    // has) wins the publication turn; the later query must still return the current state.
+    {
+        using access = zlink::framework::runtime::route_mesh_runtime_service_test_access_t;
+        const auto base = runtime->snapshot ("vertical-mesh");
+        auto older = access::query_projection (*runtime, "vertical-mesh");
+        auto newer = access::query_projection (*runtime, "vertical-mesh");
+        assert (older.sequence == base.sequence);
+        assert (newer.sequence == base.sequence);
+        older.ready_peer_count = base.ready_peer_count + 1;
+        const auto older_published =
+          access::complete_query (*runtime, "vertical-mesh", std::move (older));
+        assert (older_published.ready_peer_count == base.ready_peer_count + 1);
+        assert (older_published.sequence == base.sequence + 1);
+        const auto returned = access::complete_query (*runtime, "vertical-mesh", std::move (newer));
+        if (returned.ready_peer_count != base.ready_peer_count
+            || returned.sequence != base.sequence + 2) {
+            std::cerr << "status query returned the older projection: sequence "
+                      << returned.sequence << " ready peers " << returned.ready_peer_count << '\n';
+            std::abort ();
+        }
+    }
 
     std::mutex event_mutex;
     std::condition_variable event_ready;

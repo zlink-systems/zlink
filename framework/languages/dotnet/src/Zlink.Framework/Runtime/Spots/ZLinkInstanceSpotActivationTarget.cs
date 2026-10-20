@@ -563,10 +563,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
             );
 
         var requestSource = await ZLinkRequestSourceFenceResolver
-            .ResolveAsync(
+            .AcceptOrUnavailableAsync(
                 node,
-                authorityStore,
-                operation.Target.MeshName,
                 operation.SourceNodeRid,
                 operation.SourceNodeGeneration,
                 cancellationToken
@@ -982,10 +980,8 @@ internal sealed class ZLinkInstanceSpotActivationTarget(
             );
         var sourceNodeRid = RoutingId.From(record.SourceNodeRid.Value);
         var requestSource = await ZLinkRequestSourceFenceResolver
-            .ResolveAsync(
+            .AcceptOrUnavailableAsync(
                 node,
-                authorityStore,
-                authority.MeshName,
                 sourceNodeRid,
                 record.SourceNodeGeneration.Value,
                 cancellationToken

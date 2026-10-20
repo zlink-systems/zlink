@@ -73,19 +73,13 @@ internal sealed class ZLinkSpotOutboundEndpoint(
                 )
                 .ConfigureAwait(false);
         }
-        catch (TimeoutException)
+        catch (Exception error)
         {
-            outcome = ZLinkRuntimeMetrics.RequestTimedOut;
-            throw;
-        }
-        catch (OperationCanceledException)
-        {
-            outcome = ZLinkRuntimeMetrics.RequestCancelled;
-            throw;
-        }
-        catch
-        {
-            outcome = ZLinkRuntimeMetrics.RequestFailed;
+            outcome = ZLinkRuntimeMetrics.RequestFailureOutcome(
+                error,
+                cancellationToken,
+                runtime.ShutdownToken
+            );
             throw;
         }
         finally

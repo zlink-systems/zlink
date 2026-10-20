@@ -625,7 +625,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         ulong acceptedHighWater,
         string sessionOwnerId = "",
         ulong sessionOwnerLeaseGeneration = 0,
-        Action<ZLinkActorRuntimeState>? acceptAuthority = null
+        Action<ZLinkActorRuntimeState>? acceptAuthority = null,
+        Action? beforePublish = null
     )
     {
         var transition = _getState(actorId)
@@ -643,7 +644,8 @@ internal sealed class ZLinkActorBoundSessionCoordinator
                 acceptedHighWater,
                 sessionOwnerId,
                 sessionOwnerLeaseGeneration,
-                acceptAuthority
+                acceptAuthority,
+                beforePublish
             );
         _boundSessions.Register(
             actorId,
@@ -688,9 +690,14 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         _boundSessions.Unregister(actorId, bindingToken);
     }
 
-    public void TombstoneActorSession(string actorId, ZLinkActorBoundSession expected)
+    public void TombstoneActorSession(
+        string actorId,
+        ZLinkActorBoundSession expected,
+        Action<ZLinkActorRuntimeState>? acceptAuthority = null,
+        Action? reply = null
+    )
     {
-        _getState(actorId).TombstoneSession(expected);
+        _getState(actorId).TombstoneSession(expected, acceptAuthority, reply);
         _boundSessions.Unregister(actorId, expected.BindingToken);
     }
 
@@ -1437,17 +1444,10 @@ internal sealed class ZLinkActorBoundSessionCoordinator
     }
 
     internal ValueTask CloseSessionBindingAsync(
-        RoutingId receivingNodeRid,
-        ulong receivingNodeGeneration,
+        ZLinkServiceWireCodec.RequestSourceFence? sessionOwner,
         Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionClose54 request,
         CancellationToken cancellationToken
-    ) =>
-        _sessionBindings.CloseCurrentAsync(
-            receivingNodeRid,
-            receivingNodeGeneration,
-            request,
-            cancellationToken
-        );
+    ) => _sessionBindings.CloseCurrentAsync(sessionOwner, request, cancellationToken);
 
     private IZLinkBackendSpotNode RequireNodeForMesh(
         string meshName,

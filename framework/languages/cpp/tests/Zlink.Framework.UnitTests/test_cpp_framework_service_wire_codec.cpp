@@ -5,6 +5,7 @@
 #include "runtime/protocol/actor_join_recovery_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/request_deadline.hpp"
+#include "runtime/messaging/request_failure_mapper.hpp"
 
 #include <service_wire_pilot_codec.hpp>
 #include <service_wire_codec.hpp>
@@ -609,6 +610,72 @@ static void test_retained_multipart_wire_bytes ()
     }
 }
 
+/* Session-Actor binding §4: every runtime encodes the stored Session owner
+ * identity unchanged in commands 51 and 54, and the receiving Session owner
+ * accepts only an exact match with its current values. The same bytes are
+ * checked by the .NET, Java and Node.js suites. */
+void verify_session_owner_identity_contract ()
+{
+    const auto fixture = load_fixture (ZLINK_SESSION_OWNER_IDENTITY_FIXTURE_PATH);
+    const auto text = [] (const nlohmann::json &value) { return value.get<std::string> (); };
+    const auto number = [] (const nlohmann::json &value) {
+        return static_cast<std::uint64_t> (std::stoull (value.get<std::string> ()));
+    };
+    const auto &owner = fixture.at ("sessionOwner");
+    const auto &session = fixture.at ("session");
+    const auto &actor = fixture.at ("actor");
+    const protocol::retired_bound_session_route_fence_t local{
+      from_hex (text (owner.at ("nodeRidHex"))),
+      number (owner.at ("nodeGeneration")),
+      text (owner.at ("ownerId")),
+      number (owner.at ("leaseGeneration")),
+      from_hex (text (session.at ("sessionRidHex"))),
+      number (session.at ("bindingGeneration"))};
+    const auto &accepted = fixture.at ("accepted");
+
+    // The Actor owner encodes the stored identity unchanged.
+    const protocol::bound_session_replaced_t replaced{
+      protocol::actor_route_fence_t{
+        text (actor.at ("actorId")), number (actor.at ("objectGeneration")),
+        from_hex (text (actor.at ("ownerNodeRidHex"))), number (actor.at ("ownerNodeGeneration")),
+        number (actor.at ("authorityOwnerGeneration")), number (actor.at ("ownerLeaseGeneration"))},
+      local};
+    assert (protocol::encode_bound_session_replaced (replaced)
+            == from_hex (text (accepted.at ("command51Hex"))));
+    const protocol::bound_session_close_t close{number (fixture.at ("correlation")),
+                                                text (actor.at ("actorId")),
+                                                number (actor.at ("objectGeneration")), local};
+    assert (protocol::encode_bound_session_close (close)
+            == from_hex (text (accepted.at ("command54Hex"))));
+
+    // The Session owner accepts only an exact match with its current values.
+    const auto identifies = [&] (const nlohmann::json &commands) {
+        const auto replaced_bytes = from_hex (text (commands.at ("command51Hex")));
+        const auto close_bytes = from_hex (text (commands.at ("command54Hex")));
+        return std::pair{
+          protocol::same_session_owner_identity (
+            protocol::decode_bound_session_replaced (replaced_bytes).retired_session, local),
+          protocol::same_session_owner_identity (
+            protocol::decode_bound_session_close (close_bytes).session, local)};
+    };
+    assert ((identifies (accepted) == std::pair{true, true}));
+    for (const auto &rejected : fixture.at ("rejected"))
+        assert ((identifies (rejected) == std::pair{false, false}));
+
+    // Without the Session owner descriptor the operation is Unavailable; a rejected request
+    // carries the Unavailable representative on the wire.
+    const auto &unavailable = fixture.at ("descriptorUnavailable");
+    assert (text (unavailable.at ("errorKind")) == "Unavailable");
+    const auto terminal = static_cast<std::uint32_t> (number (unavailable.at ("terminalResult")));
+    const auto code = static_cast<std::uint32_t> (number (unavailable.at ("failureCode")));
+    const messaging::request_failure_mapper_t mapper;
+    const auto wire =
+      mapper.target_failure_reply (zlink::framework::framework_error_kind_t::unavailable);
+    assert (wire && wire->terminal_result == terminal && wire->failure_code == code);
+    assert (mapper.reply_header_exception (terminal, code, "bind").kind ()
+            == zlink::framework::framework_error_kind_t::unavailable);
+}
+
 int main (int argc, char **argv)
 {
     const auto command_golden = [] (const char *path, std::uint8_t command) {
@@ -782,6 +849,7 @@ int main (int argc, char **argv)
         assert (retained.size () == 4096 && retained.bytes ().back () == std::byte{0x5a});
     }
     verify_generated_adoption_goldens ();
+    verify_session_owner_identity_contract ();
     verify_actor_create_reply_canonical_union ();
     const protocol::actor_route_fence_t bound_actor{
       .actor_id = "actor-a",

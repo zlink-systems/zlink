@@ -502,7 +502,13 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             ZLinkBackendActorRef sourceRef = sourceActors.currentRef(sourceActor);
             sourceActors
                     .bindNativeSession(
-                            sourceActor, inertSpotNode(), sourceRef, SOURCE_RID, SESSION_RID, 7, 1L)
+                            sourceActor,
+                            bindingRecordSpotNode(sourceRef),
+                            sourceRef,
+                            SOURCE_RID,
+                            SESSION_RID,
+                            7,
+                            1L)
                     .toCompletableFuture()
                     .join();
 
@@ -704,6 +710,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 assertEquals(TARGET_RID, submission.targetActor().nodeRid());
                 link.targetCompletion.get(4, TimeUnit.SECONDS);
                 assertEquals(1, EVENTS.stream().filter("command42"::equals).count());
+                assertBoundSessionOwnerSealed();
                 assertTrue(
                         ZLinkServiceRelocationEnvelopeCodec.decode(
                                         link.targetRequest.get().relocationPayload())
@@ -761,6 +768,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 return;
             }
             assertEquals(TARGET_RID, submission.targetActor().nodeRid());
+            assertBoundSessionOwnerSealed();
             if (scenario == Scenario.RELOCATE_BEFORE_SOURCE_LEAVE) {
                 verifyCommittedActorLeftSourceInventory(sourceHost, sourceActors);
                 verifyDuplicateLeftPreservesRefreshedFollow(sourceActors, sourceRef, link);
@@ -1264,12 +1272,40 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         };
     }
 
-    private static ZLinkInternalSpotNode inertSpotNode() {
+    // Session-Actor binding §4: the SpotNode binding record owns the Session owner identity taken
+    // from the descriptor at bind. It differs from the live descriptor on purpose, so command 42
+    // shows which of the two it carries.
+    private static final String BOUND_SESSION_OWNER_ID = "bound-session-owner";
+    private static final long BOUND_SESSION_OWNER_LEASE = 41;
+
+    private static void assertBoundSessionOwnerSealed() {
+        assertTrue(
+                EVENTS.contains(
+                        "command42.owner:"
+                                + BOUND_SESSION_OWNER_ID
+                                + "/"
+                                + BOUND_SESSION_OWNER_LEASE),
+                () -> "command 42 must carry the stored Session owner identity: " + EVENTS);
+    }
+
+    private static ZLinkInternalSpotNode bindingRecordSpotNode(ZLinkBackendActorRef actor) {
+        var record =
+                new ZLinkInternalSpotNode.BoundSessionRoute(
+                        SOURCE_RID,
+                        1L,
+                        BOUND_SESSION_OWNER_ID,
+                        BOUND_SESSION_OWNER_LEASE,
+                        SESSION_RID,
+                        7);
         return (ZLinkInternalSpotNode)
                 Proxy.newProxyInstance(
                         ZLinkInternalSpotNode.class.getClassLoader(),
                         new Class<?>[] {ZLinkInternalSpotNode.class},
-                        (proxy, method, arguments) -> defaultValue(method.getReturnType()));
+                        (proxy, method, arguments) ->
+                                method.getName().equals("boundSessionRoute")
+                                                && actor.equals(arguments[0])
+                                        ? Optional.of(record)
+                                        : defaultValue(method.getReturnType()));
     }
 
     private static void assertBefore(String first, String second) {
@@ -1593,6 +1629,12 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                             assertEquals(
                                                     target.status().lifecycleGeneration(),
                                                     seal.targetNodeGeneration());
+                                            EVENTS.add(
+                                                    "command42.owner:"
+                                                            + seal.session().ownerId()
+                                                            + "/"
+                                                            + seal.session()
+                                                                    .ownerLeaseGeneration());
                                             EVENTS.add("command42");
                                             yield CompletableFuture.completedFuture(
                                                     codec.encodeSessionRelocationSealed(

@@ -44,12 +44,12 @@ final class ZLinkDefaultSpotOutboundRequestMetricsTest {
             assertEquals(1L, metrics.inflight("source-mesh", "spot"));
             assertTrue(result.cancel(false));
             assertEquals(0L, metrics.inflight("source-mesh", "spot"));
-            assertEquals(1L, metrics.durationCount("source-mesh", "spot", "failed"));
+            assertEquals(1L, metrics.durationCount("source-mesh", "spot", "cancelled"));
 
             resolution.complete(Optional.empty());
 
             assertEquals(0L, metrics.inflight("source-mesh", "spot"));
-            assertEquals(1L, metrics.durationCount("source-mesh", "spot", "failed"));
+            assertEquals(1L, metrics.durationCount("source-mesh", "spot", "cancelled"));
         }
     }
 

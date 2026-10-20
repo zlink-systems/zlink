@@ -235,7 +235,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
 
   closeOwnerLeaseAdmission(error: unknown): void {
     this.ownerLeaseDeadlineMs = undefined;
-    this.recordFailure(errorMessage(error), 'owner_lease_recovery');
+    this.recordFailure(errorMessage(error));
   }
 
   async reclaimOwnerAuthorities(signal?: AbortSignal): Promise<void> {
@@ -481,7 +481,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     } catch (error) {
       if (signal?.aborted === true) throw error;
       this.recordOwnerLeaseRenewFailure();
-      this.recordFailure(errorMessage(error), 'lease_renew');
+      this.recordFailure(errorMessage(error));
       for (const handler of this.ownerLeaseRenewalFailedHandlers) handler();
       return false;
     }
@@ -505,13 +505,13 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       if (signal?.aborted === true) throw error;
       if (error instanceof ZLinkOwnerLeaseClaimError) throw error;
       this.recordOwnerLeaseRenewFailure();
-      this.recordFailure(errorMessage(error), 'owner_lease_claim');
+      this.recordFailure(errorMessage(error));
       return false;
     }
     const claimCompletedAtMs = this.monotonicNowMs();
     if (claim.kind !== 'claimed') {
       const error = new ZLinkOwnerLeaseClaimError(claim.kind);
-      this.recordFailure(error.message, 'owner_lease_claim');
+      this.recordFailure(error.message);
       throw error;
     }
     try {
@@ -543,7 +543,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       return true;
     } catch (error) {
       if (signal?.aborted === true) throw error;
-      this.recordFailure(errorMessage(error), 'owner_lease_claim');
+      this.recordFailure(errorMessage(error));
       return false;
     }
   }
@@ -587,7 +587,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
             throw new ZLinkOwnerCleanupError(completionError);
           }
           if (!isAbortError(completionError)) {
-            this.recordFailure(errorMessage(completionError), 'owner_lease_claim');
+            this.recordFailure(errorMessage(completionError));
           }
         }
       }
@@ -631,7 +631,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         cleanupSignal
       );
     } catch (confirmationError) {
-      this.recordFailure(errorMessage(confirmationError), 'owner_lease_claim_confirmation');
+      this.recordFailure(errorMessage(confirmationError));
       if (cancelled) throw new ZLinkOwnerCleanupError(confirmationError);
       throw confirmationError;
     }
@@ -649,7 +649,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
           cleanupSignal
         );
       } catch (releaseError) {
-        this.recordFailure(errorMessage(releaseError), 'owner_lease_release');
+        this.recordFailure(errorMessage(releaseError));
         throw new ZLinkOwnerCleanupError(releaseError);
       }
       throw originalError;
@@ -947,7 +947,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
   }
 
   reportDiscoveryFailure(error: unknown): void {
-    this.recordFailure(errorMessage(error), 'read');
+    this.recordFailure(errorMessage(error));
   }
 
   async listPeerLocations(
@@ -978,6 +978,14 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
       signal
     );
     return live.map((row) => ({ ...row, endpoint: normalizeEndpoint(row.endpoint) }));
+  }
+
+  /** Remaining exact owner lease from the same tracker that filters live descriptors. */
+  remainingOwnerTokenLeaseMs(
+    owner: ZLinkLocationOwnerToken,
+    signal?: AbortSignal
+  ): Promise<number> {
+    return this.leaseTracker.remainingOwnerTokenLeaseMs(owner, signal);
   }
 
   async listMeshNodeDescriptors(
@@ -1304,7 +1312,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
         this.monotonicNowMs() >= this.ownerLeaseDeadlineMs
       ) {
         this.ownerLeaseHealthy = false;
-        this.recordFailure('Owner lease expired before renewal completed.', 'lease_expired');
+        this.recordFailure('Owner lease expired before renewal completed.');
         for (const handler of this.ownerLeaseRenewalFailedHandlers) handler();
       }
       const renewal = this.renewOwnerLeaseOnce()
@@ -1329,7 +1337,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     try {
       return await write();
     } catch (error) {
-      this.recordFailure(errorMessage(error), 'compare_exchange');
+      this.recordFailure(errorMessage(error));
       throw error;
     }
   }
@@ -1340,7 +1348,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     try {
       return await write();
     } catch (error) {
-      this.recordFailure(errorMessage(error), 'compare_exchange');
+      this.recordFailure(errorMessage(error));
       throw error;
     }
   }
@@ -1350,12 +1358,6 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     kind: ZLinkLocationKind,
     key: string
   ): void {
-    if (
-      result.status === ZLinkLocationWriteStatus.IgnoredStale ||
-      result.status === ZLinkLocationWriteStatus.RejectedConflict
-    ) {
-      this.metrics?.recordLocationStoreError('compare_exchange');
-    }
     if (result.status !== ZLinkLocationWriteStatus.IgnoredStale) {
       return;
     }
@@ -1369,12 +1371,6 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     kind: ZLinkLocationKind,
     key: string
   ): void {
-    if (
-      status === ZLinkLocationWriteStatus.IgnoredStale ||
-      status === ZLinkLocationWriteStatus.RejectedConflict
-    ) {
-      this.metrics?.recordLocationStoreError('compare_exchange');
-    }
     if (status !== ZLinkLocationWriteStatus.IgnoredStale) {
       return;
     }
@@ -1383,8 +1379,7 @@ export class ZLinkLocationRuntime implements ZLinkLocationRuntimeQuery {
     }
   }
 
-  private recordFailure(message: string, operation = 'read'): void {
-    this.metrics?.recordLocationStoreError(operation);
+  private recordFailure(message: string): void {
     this.ownerLeaseHealthy = false;
     this.lastError = message;
   }

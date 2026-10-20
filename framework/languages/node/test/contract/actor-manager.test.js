@@ -3005,6 +3005,9 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
     spotId: 'session-entry',
     sessionNodeRid: rid('session-node'),
     sessionRid: rid('session-rid'),
+    sessionOwnerNodeGeneration: 4n,
+    sessionOwnerId: 'session-owner',
+    sessionOwnerLeaseGeneration: 8n,
     bindingGeneration: 11n
   };
   const state = {
@@ -3075,17 +3078,6 @@ test('source command 42 seal captures the exact fence and rollback submits one-w
       }
     }),
     relocationStore: () => undefined,
-    liveDescriptors: async (meshName) => {
-      assert.equal(meshName, 'session.route');
-      return [
-        {
-          rid: rid('session-node'),
-          lifecycleGeneration: 4n,
-          ownerId: 'session-owner',
-          leaseGeneration: 8n
-        }
-      ];
-    },
     sessionRelocationWire: () => ({
       async requestSessionRelocationSeal(meshName, targetNodeRid, request) {
         seals.push({ meshName, targetNodeRid, request });
@@ -3187,6 +3179,9 @@ test('precommit abort reopens source admission and replays backlog before one-wa
     spotId: 'session-entry',
     sessionNodeRid: rid('session-node'),
     sessionRid: rid('session-rid'),
+    sessionOwnerNodeGeneration: 4n,
+    sessionOwnerId: 'session-owner',
+    sessionOwnerLeaseGeneration: 8n,
     bindingGeneration: 11n
   };
   const state = {
@@ -3309,12 +3304,6 @@ test('precommit abort reopens source admission and replays backlog before one-wa
     actorHandoff: coordinator,
     authorityStore: () => ({ async readAuthority() { return authority; } }),
     relocationStore: () => undefined,
-    liveDescriptors: async () => [{
-      rid: rid('session-node'),
-      lifecycleGeneration: 4n,
-      ownerId: 'session-owner',
-      leaseGeneration: 8n
-    }],
     sessionRelocationWire: () => ({
       async requestSessionRelocationSeal(_meshName, _targetNodeRid, request) {
         events.push('session-sealed');

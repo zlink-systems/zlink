@@ -58,9 +58,12 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         return 0L;
     }
 
-    default String localAuthorityOwnerId() {
-        RoutingId current = routingId();
-        return current == null ? name() : current.toString();
+    /**
+     * Session-Actor binding §4: this host's Session owner identity, read from its own live MeshNode
+     * descriptor. Empty while that descriptor is not live.
+     */
+    default Optional<PeerAuthorityFence> localSessionOwner() {
+        return Optional.empty();
     }
 
     void setBind(String endpoint);
@@ -736,6 +739,18 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
             long sourceNodeGeneration,
             String ownerId,
             long ownerLeaseGeneration) {
+        /**
+         * Session-Actor binding §4: the receiving Session owner compares the identity carried by
+         * command 42, 51 or 54 with its current values exactly.
+         */
+        public boolean identifies(
+                RoutingId nodeRid, long nodeGeneration, String ownerId, long ownerLeaseGeneration) {
+            return sourceNodeRid.equals(nodeRid)
+                    && sourceNodeGeneration == nodeGeneration
+                    && this.ownerId.equals(ownerId)
+                    && this.ownerLeaseGeneration == ownerLeaseGeneration;
+        }
+
         public PeerAuthorityFence {
             Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
             if (sourceNodeGeneration == 0 || ownerLeaseGeneration <= 0) {

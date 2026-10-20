@@ -108,15 +108,22 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                     )
             );
         }
+        if (node is IZLinkBackendBoundSessionBind boundSessionBind)
+            boundSessionBind.SetBoundSessionBindHandler(
+                (source, generation, request, reply, cancellationToken) =>
+                    runtime.ApplyBoundSessionBindAsync(
+                        node.RoutingId,
+                        source,
+                        generation,
+                        request,
+                        reply,
+                        cancellationToken
+                    )
+            );
         if (node is IZLinkBackendBoundSessionClose boundSessionClose)
             boundSessionClose.SetBoundSessionCloseHandler(
                 (request, cancellationToken) =>
-                    runtime.CloseSessionBindingAsync(
-                        Node.RoutingId,
-                        Node.MeshStatus().LifecycleGeneration,
-                        request,
-                        cancellationToken
-                    )
+                    runtime.CloseSessionBindingAsync(LocalSessionOwner, request, cancellationToken)
             );
         if (locationLifecycle is not null)
         {
@@ -124,9 +131,21 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                 throw new InvalidOperationException(
                     "The MeshNode backend does not support authority fencing."
                 );
-            if (node is not IZLinkBackendRequestSourceFenceObserver)
+            if (node is not IZLinkBackendRequestSourceFenceObserver sources)
                 throw new InvalidOperationException(
                     "The MeshNode backend does not preserve request-source fences."
+                );
+            if (
+                (leaseTracker ?? services.GetService<ZLinkOwnerLeaseTracker>()) is { } leases
+                && services.GetService<IZLinkMeshNodeLocationResolver>() is { } peers
+            )
+                sources.SetRequestSourceAcceptance(
+                    new ZLinkRequestSourceFenceResolver(
+                        peers,
+                        leases,
+                        spotChannelName,
+                        runtime.Flow
+                    )
                 );
         }
         _leaseTracker = leaseTracker;
@@ -293,10 +312,17 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
     }
 
     internal ZLinkServiceWireCodec.RequestSourceFence LocalRequestSource =>
-        Volatile.Read(ref _localRequestSource)?.Value
+        LocalSessionOwner
         ?? throw new InvalidOperationException(
             "The MeshNode does not have a Location Store owner fence."
         );
+
+    /// <summary>
+    /// Session-Actor binding §4: this host's Session owner identity from its own
+    /// MeshNode descriptor, or null while the node has no Location Store owner fence.
+    /// </summary>
+    internal ZLinkServiceWireCodec.RequestSourceFence? LocalSessionOwner =>
+        Volatile.Read(ref _localRequestSource)?.Value;
 
     internal ZLinkMeshNodeStartupState? StartupState { get; private set; }
 

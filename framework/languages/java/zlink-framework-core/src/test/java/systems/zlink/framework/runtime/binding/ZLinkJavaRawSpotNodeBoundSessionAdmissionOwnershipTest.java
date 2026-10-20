@@ -50,6 +50,9 @@ final class ZLinkJavaRawSpotNodeBoundSessionAdmissionOwnershipTest {
                                                 Map.of()),
                                         new byte[] {1}))) {
             node.setRoutingId(RoutingId.from("local-actor-push-node"));
+            node.setBind("inproc://local-actor-push-" + System.nanoTime());
+            node.start();
+            ZLinkTestSessionOwners.install(node);
             ZLinkBackendActorRef actor;
             try (Message create = Message.from("create")) {
                 actor = node.spotNode().createActor("local-actor-push", create);

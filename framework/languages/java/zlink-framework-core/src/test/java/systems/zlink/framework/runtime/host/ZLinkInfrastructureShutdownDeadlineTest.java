@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.host;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -20,6 +21,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -130,8 +132,13 @@ final class ZLinkInfrastructureShutdownDeadlineTest {
         } finally {
             release.countDown();
             assertTrue(executor.awaitTermination(WAIT_SECONDS, TimeUnit.SECONDS));
-            if (shutdown == null) runtime.close();
-            else shutdown.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            if (shutdown != null) shutdown.get(WAIT_SECONDS, TimeUnit.SECONDS);
+            if (executorDeadline) {
+                var failure = assertThrows(ZLinkFrameworkShutdown.Failure.class, runtime::close);
+                assertTrue(failure.getCause() instanceof TimeoutException);
+            } else {
+                runtime.close();
+            }
         }
         var result = shutdown.get(WAIT_SECONDS, TimeUnit.SECONDS);
         assertEquals(ZLinkFrameworkTerminationOutcome.FORCE_STOPPED, result.outcome());

@@ -1479,10 +1479,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             awaitOutstandingApplicationLease(context, 0L);
 
             CompletableFuture<ZLinkBackendReceived> reply;
-            var scheduler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
             try (var caller =
                     new systems.zlink.framework.runtime.internal.service
-                            .ZLinkServiceOperationRegistry(scheduler)) {
+                            .ZLinkServiceOperationRegistry()) {
                 UUID operationId =
                         systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds
                                 .next();
@@ -1535,8 +1534,6 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                     assertEquals("remote-reply", received.parts().getFirst().toUtf8String());
                 }
                 assertEquals(0, caller.pendingCount());
-            } finally {
-                scheduler.shutdownNow();
             }
             assertEquals(2, handlerCalls.get());
 
@@ -1584,7 +1581,10 @@ final class ZLinkJavaRawSpotNodeM6BTest {
                                 .toCompletableFuture();
             }
             try (ZLinkBackendReceived received = stale.get(2, TimeUnit.SECONDS)) {
-                assertEquals(ZLinkBackendRequestResult.CONFLICT, received.result());
+                // Session·Actor binding §4: a sender without a live descriptor ends Unavailable.
+                assertEquals(
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        received.result().toFrameworkErrorKind(received.failureCode()));
             }
             assertEquals(3, handlerCalls.get());
         }
@@ -2250,6 +2250,9 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             RoutingId nodeRid = RoutingId.from("jvm-m6b-stream-node");
             RoutingId sessionRid = RoutingId.from("jvm-m6b-session");
             node.setRoutingId(nodeRid);
+            node.setBind("inproc://jvm-m6b-stream-node-" + System.nanoTime());
+            node.start();
+            ZLinkTestSessionOwners.install(node);
             ZLinkBackendSpot entry = node.spotNode().entrySpot();
             CompletableFuture<RoutingId> delivered = new CompletableFuture<>();
             entry.onDispatchEvent(
@@ -2606,6 +2609,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
             node.setRoutingId(RoutingId.from("jvm-m6b-two-owners-actor-node"));
             node.setBind("inproc://jvm-m6b-two-owners-" + System.nanoTime());
             node.start();
+            ZLinkTestSessionOwners.install(node);
             ZLinkJavaRawSpotNode target = (ZLinkJavaRawSpotNode) node.spotNode();
             ZLinkBackendActorRef actor;
             try (Message create = Message.from("create")) {
@@ -2731,7 +2735,7 @@ final class ZLinkJavaRawSpotNodeM6BTest {
         AtomicInteger unbindAttempts = new AtomicInteger();
         var ended =
                 new systems.zlink.framework.errors.ZLinkFrameworkException(
-                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                        ZLinkFrameworkErrorKind.UNAVAILABLE,
                         "durable request target lifecycle ended");
         try (var context = Zlink.createContext();
                 var node = new ZLinkJavaRawMeshNode(context, "mesh")) {

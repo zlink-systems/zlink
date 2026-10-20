@@ -170,6 +170,12 @@ member만 ready 계기에 포함한다. Remote MeshNode가 identity, endpoint, C
 | `source` | `manual`, `redis`, `manual_and_redis` |
 | Selection failure `reason` | `no_member`, `not_ready`, `draining` |
 | `surface` | `node`, `channel`, `spot`, `instance_spot`, `actor` |
+| Request `outcome` | `completed`, `timed_out`, `cancelled`, `shutdown`, `failed` |
+
+Request `outcome`은 request의 terminal 결과 하나를 값 하나로 기록한다. 성공 reply를 받으면
+`completed`, deadline이 지나면 `timed_out`, 호출자가 취소하면 `cancelled`, runtime 종료가 끝내면
+`shutdown`이고, 그 밖의 terminal 실패(오류 reply, 대상 없음, transport 실패 등)는 모두 `failed`다.
+`zlink.mesh_node.request.timeouts`는 `outcome=timed_out`으로 끝난 request만 센다.
 
 ## 5. One-way message drop
 
@@ -210,7 +216,16 @@ capacity 집계에 사용한다.
 **`zlink.spot.count`와 `zlink.actor.count`는 이 MeshNode가 지금 실행하고 있는 수를
 세고, `zlink.object.capacity.*`와 `zlink.spot.type.capacity.*`는 Location Store가
 확정한 population을 읽는다.** 두 계기는 집계 경계가 달라 서로를 대체하지 않으며
-값이 다를 수 있다. Spot 종류를 나타내는 [Spot kind](../00-foundation/02-glossary.ko.md#spot-kind)와
+값이 다를 수 있다.
+
+**Capacity 계기는 local MeshNode마다 마지막으로 Location Store에서 확인한 capacity record 값 하나를 읽는다.**
+Active와 reserved는 그 MeshNode의 capacity record([Location runtime §6.1](../05-location-relocation/01-location-runtime.ko.md#61-read와-cas))의
+active와 pending이고, limit은 그 MeshNode에 등록한 descriptor의 limit이다. 이 값은 capacity record를 읽거나
+바꾼 Store 요청이 성공할 때와, [Location runtime §4](../05-location-relocation/01-location-runtime.ko.md#4-실행-중인-node와-제공-기능을-찾는다)의 descriptor polling 주기마다 local capacity record를 한 번 읽을 때 바뀐다.
+Observable 수집과 application 요청은 이 계기 때문에 Store를 읽지 않는다. 처음 확인하기 전에는 이 계기를
+관측하지 않고, 읽기가 실패하면 마지막 확인값을 유지한다.
+
+Spot 종류를 나타내는 [Spot kind](../00-foundation/02-glossary.ko.md#spot-kind)와
 startup 등록 뒤 바뀌지 않는 type identity인
 [stable type](../00-foundation/02-glossary.ko.md#stable-type)은 등록값으로만 label에 사용한다.
 ID로 처음 호출할 때 Framework가 만들 수 있는 Spot을

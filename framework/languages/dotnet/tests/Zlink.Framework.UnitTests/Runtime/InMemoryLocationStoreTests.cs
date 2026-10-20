@@ -448,7 +448,8 @@ internal static class AuthorityLocationTestFixture
     internal static async ValueTask<ZLinkAuthoritySnapshot?> PublishActorAsync(
         IZLinkLocationRepository store,
         ZLinkResolvedActorLocation row,
-        bool replace = false
+        bool replace = false,
+        Func<ZLinkMeshNodeDescriptor, ZLinkMeshNodeDescriptor>? configureDescriptor = null
     )
     {
         var key = ZLinkActorAuthorityPayloadCodec.AuthorityKey(row.ActorId);
@@ -475,7 +476,8 @@ internal static class AuthorityLocationTestFixture
             nodeGeneration,
             owner,
             ZLinkPlacementObjectKind.Actor,
-            row.ActorType
+            row.ActorType,
+            configureDescriptor
         );
         var payload = ZLinkActorAuthorityPayloadCodec.Encode(
             new ZLinkActorAuthorityPayload(
@@ -594,7 +596,8 @@ internal static class AuthorityLocationTestFixture
         ulong nodeGeneration,
         ZLinkLocationOwnerToken owner,
         ZLinkPlacementObjectKind objectKind,
-        string stableType
+        string stableType,
+        Func<ZLinkMeshNodeDescriptor, ZLinkMeshNodeDescriptor>? configureDescriptor = null
     )
     {
         var descriptor = new ZLinkMeshNodeDescriptor(
@@ -644,6 +647,8 @@ internal static class AuthorityLocationTestFixture
             ),
             EntrySpotId = CreateEntrySpotId(meshName, nodeRid),
         };
+        if (configureDescriptor is not null)
+            descriptor = configureDescriptor(descriptor);
         var current = await store.ListMeshNodesAsync(meshName, default);
         var existing = current.Items.SingleOrDefault(item => item.Rid == nodeRid);
         if (

@@ -84,7 +84,7 @@ function selectedRouteRuntime(routes, submit, options = {}) {
     async send(target, parts) {
       sent.push([target, wire.decodeHeader(parts[0]).command, Buffer.from(parts[0])]);
     },
-    async request(target) {
+    request(target) {
       //  Core decides whether the selected route carries the request.
       requested.push(target);
       throw new ZLinkBackendResultError('request', RequestResult.Busy);

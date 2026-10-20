@@ -547,7 +547,7 @@ Session owner가 검증하는 값, seal과 route 전환의 정확한 시점·tim
 |---|---|---|
 | Target 선택 또는 준비 전 실패 | Source | Source dispatch를 막지 않고 operation을 실패시킨다. |
 | Command 43이 `bindingAbsent` | Source, relocation 계속 | 그 participant를 bind되지 않은 participant로 다루고 `sessionBindings`와 command 44에서 뺀다([Session과 Actor binding §8.3](../04-session/02-session-actor-binding.ko.md#83-이미-정리된-binding에-대한-seal)). |
-| Command 42 거부 또는 seal 대기 deadline | Source | 이미 시작한 모든 participant capture를 source queue로 복원해 확정한 뒤, 이미 `sealed`인 participant에 matching command 44 abort를 보내고 operation을 실패로 끝낸다. 순서는 [Session과 Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환)의 abort 순서다. |
+| Seal 대기 deadline까지 command 43을 받지 못함(Session owner의 command 42 거부 포함) | Source | 이미 시작한 모든 participant capture를 source queue로 복원해 확정한 뒤, 이미 `sealed`인 participant에 matching command 44 abort를 보내고 operation을 실패로 끝낸다. 순서는 [Session과 Actor binding §8.1](../04-session/02-session-actor-binding.ko.md#81-seal-held-message와-route-전환)의 abort 순서다. |
 | Session seal 뒤, relay 수신 준비 reply가 accepted 상태가 되기 전 명시적인 실패 | Source | Target temporary queue를 실행하지 않는다. Memory에 유지한 payload로 source queue와 matching Session seal을 복원한다. |
 | Chunk 조립 결과가 Restore 요청의 checksum과 다름 | Source | Target은 복원을 시작하지 않고 명시적 실패 reply를 보내며 조립 중인 chunk를 제거한다. Source는 memory의 payload로 queue를 복원하고 operation을 실패로 끝낸다. 재시도하지 않는다. |
 | 같은 relocation identity의 Restore 요청에 처음과 다른 길이나 checksum이 도착 | Source | Target은 기존 조립을 재사용하지도 덮어쓰지도 않고 명시적 conflict 실패로 끝낸다. Source는 위 명시적 실패와 같이 복원한다. |

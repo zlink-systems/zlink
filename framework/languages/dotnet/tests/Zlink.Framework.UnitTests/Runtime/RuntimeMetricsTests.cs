@@ -8,6 +8,187 @@ namespace Zlink.Framework.UnitTests;
 public sealed class RuntimeMetricsTests
 {
     [Fact]
+    public void Request_Terminals_Use_The_Five_Shared_Outcomes()
+    {
+        using var caller = new CancellationTokenSource();
+        using var shutdown = new CancellationTokenSource();
+        caller.Cancel();
+        shutdown.Cancel();
+        var outcomes = new[]
+        {
+            ZLinkRuntimeMetrics.RequestCompleted,
+            ZLinkRuntimeMetrics.RequestFailureOutcome(new TimeoutException(), default, default),
+            ZLinkRuntimeMetrics.RequestFailureOutcome(
+                new OperationCanceledException(caller.Token),
+                caller.Token,
+                default
+            ),
+            ZLinkRuntimeMetrics.RequestFailureOutcome(
+                new OperationCanceledException(shutdown.Token),
+                default,
+                shutdown.Token
+            ),
+            ZLinkRuntimeMetrics.RequestFailureOutcome(
+                new ZLinkFrameworkException(ZLinkFrameworkErrorKind.NotFound, "missing"),
+                default,
+                default
+            ),
+        };
+        Assert.Equal(
+            new[] { "completed", "timed_out", "cancelled", "shutdown", "failed" },
+            outcomes
+        );
+        Assert.Equal(
+            "shutdown",
+            ZLinkRuntimeMetrics.RequestFailureOutcome(
+                new ZLinkFrameworkException(ZLinkFrameworkErrorKind.ShuttingDown, "shutdown"),
+                default,
+                default
+            )
+        );
+        Assert.Equal(
+            "shutdown",
+            ZLinkRuntimeMetrics.RequestFailureOutcome(
+                new OperationCanceledException(shutdown.Token),
+                shutdown.Token,
+                shutdown.Token
+            )
+        );
+        var samples = new List<string>();
+        using var listener = Listen<double>(
+            "zlink.mesh_node.request.duration",
+            (_, _, tags) =>
+            {
+                foreach (var tag in tags)
+                    if (tag.Key == "outcome")
+                        samples.Add((string)tag.Value!);
+            }
+        );
+        foreach (var outcome in outcomes)
+            ZLinkRuntimeMetrics.StartRequest("terminal-test", "channel").Complete(outcome);
+        Assert.Equal(outcomes, samples);
+    }
+
+    [Fact]
+    public void Capacity_And_Takeover_Instruments_Match_Shared_Fixture()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (
+            directory is not null
+            && !File.Exists(
+                Path.Combine(
+                    directory.FullName,
+                    "framework/runtime/protocol/fixtures/runtime-metrics-v1.json"
+                )
+            )
+        )
+            directory = directory.Parent;
+        Assert.NotNull(directory);
+        using var fixture = System.Text.Json.JsonDocument.Parse(
+            File.ReadAllText(
+                Path.Combine(
+                    directory.FullName,
+                    "framework/runtime/protocol/fixtures/runtime-metrics-v1.json"
+                )
+            )
+        );
+        var selected = fixture
+            .RootElement.GetProperty("metrics")
+            .EnumerateArray()
+            .Where(row =>
+                row.GetProperty("name").GetString() is { } name
+                && (
+                    name.StartsWith("zlink.object.capacity.")
+                    || name.StartsWith("zlink.spot.type.capacity.")
+                    || name == "zlink.instance_spot.takeovers"
+                    || name == "zlink.mesh_node.request.duration"
+                )
+            )
+            .ToDictionary(row => row.GetProperty("name").GetString()!);
+        var instruments = new Dictionary<string, Instrument>();
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, owner) =>
+            {
+                if (
+                    instrument.Meter.Name == ZLinkMeters.Framework
+                    && selected.ContainsKey(instrument.Name)
+                )
+                {
+                    instruments[instrument.Name] = instrument;
+                    owner.EnableMeasurementEvents(instrument);
+                }
+            },
+        };
+        var observed = new HashSet<string>();
+        void Check(Instrument instrument, ReadOnlySpan<KeyValuePair<string, object?>> tags)
+        {
+            var actual = new List<string>();
+            foreach (var tag in tags)
+                actual.Add(tag.Key);
+            Assert.Equal(
+                selected[instrument.Name]
+                    .GetProperty("labels")
+                    .EnumerateArray()
+                    .Select(value => value.GetString())
+                    .Order(),
+                actual.Order()
+            );
+            observed.Add(instrument.Name);
+        }
+        listener.SetMeasurementEventCallback<long>(
+            (instrument, _, tags, _) => Check(instrument, tags)
+        );
+        listener.SetMeasurementEventCallback<double>(
+            (instrument, _, tags, _) => Check(instrument, tags)
+        );
+        listener.Start();
+        using (
+            ZLinkRuntimeMetrics.RegisterMeshSnapshots(() =>
+                [new("unobserved", "manual", 0, 0, 0, [], null, null, [], new(0, 1), [])]
+            )
+        )
+        {
+            listener.RecordObservableInstruments();
+            Assert.Empty(observed);
+        }
+        using var registration = ZLinkRuntimeMetrics.RegisterMeshSnapshots(() =>
+            [
+                new(
+                    "fixture-mesh",
+                    "manual",
+                    0,
+                    0,
+                    0,
+                    [],
+                    new(1, 2, 8),
+                    new(1, 2, 8),
+                    [new("user", "room", 1, 2, 8)],
+                    new(0, 1),
+                    []
+                ),
+            ]
+        );
+        listener.RecordObservableInstruments();
+        ZLinkRuntimeMetrics.StartRequest("fixture-mesh", "channel").Complete("completed");
+        foreach (var outcome in Enum.GetValues<ZLinkInstanceSpotTakeoverOutcome>())
+            ZLinkRuntimeMetrics.RecordInstanceSpotTakeover("fixture-mesh", "room", outcome);
+        Assert.Equal(selected.Keys.Order(), observed.Order());
+        foreach (var (name, row) in selected)
+        {
+            Assert.Equal(row.GetProperty("unit").GetString(), instruments[name].Unit);
+            var kind = row.GetProperty("kind").GetString();
+            Assert.Equal(
+                kind == "observable" ? typeof(ObservableGauge<>)
+                    : kind == "histogram" ? typeof(Histogram<>)
+                    : typeof(Counter<>),
+                instruments[name].GetType().GetGenericTypeDefinition()
+            );
+            listener.DisableMeasurementEvents(instruments[name]);
+        }
+    }
+
+    [Fact]
     public void State_Tag_Values_Are_Exact()
     {
         Assert.Equal("current", ZLinkRuntimeMetrics.StateTagValues.Current);
@@ -75,6 +256,7 @@ public sealed class RuntimeMetricsTests
             ["zlink.instance_spot.pending.messages"] = (typeof(ObservableGauge<>), "{message}"),
             ["zlink.instance_spot.pending.bytes"] = (typeof(ObservableGauge<>), "By"),
             ["zlink.instance_spot.claim.conflicts"] = (typeof(Counter<>), "{claim}"),
+            ["zlink.instance_spot.takeovers"] = (typeof(Counter<>), "{takeover}"),
             ["zlink.location.store.errors"] = (typeof(Counter<>), "{error}"),
             ["zlink.location.owner_lease.renew.failures"] = (typeof(Counter<>), "{failure}"),
             ["zlink.location.owner_lease.renew.lateness"] = (typeof(Histogram<>), "s"),

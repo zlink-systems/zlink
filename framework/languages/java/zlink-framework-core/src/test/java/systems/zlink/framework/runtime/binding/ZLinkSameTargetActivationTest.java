@@ -31,6 +31,44 @@ import java.util.function.Supplier;
 
 final class ZLinkSameTargetActivationTest {
     @Test
+    void activationMetricsFollowTheBarrierAndExcludeReadyMessages() throws Exception {
+        var ready = new CompletableFuture<Void>();
+        var registry =
+                new ZLinkJavaInstanceSpotRegistry(
+                        new ZLinkStateLane(Runnable::run), Runnable::run, "metrics-mesh");
+        registry.register(
+                "room", (id, generation) -> backendSpot(generation), (type, route, spot) -> ready);
+        try (var metrics =
+                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                        .install()) {
+            var tags = java.util.Map.of("mesh_name", "metrics-mesh", "instance_spot_type", "room");
+            var first =
+                    registry.activate(
+                            "spot",
+                            "room",
+                            route(),
+                            Long.MAX_VALUE,
+                            (spot, admission) -> CompletableFuture.completedFuture(null),
+                            128L);
+            assertEquals(1, metrics.observable("zlink.instance_spot.pending.messages", tags));
+            assertEquals(128, metrics.observable("zlink.instance_spot.pending.bytes", tags));
+            assertEquals(0, metrics.count("zlink.instance_spot.activations"));
+            ready.complete(null);
+            first.toCompletableFuture().join();
+            assertEquals(0, metrics.observable("zlink.instance_spot.pending.messages", tags));
+            assertEquals(0, metrics.observable("zlink.instance_spot.pending.bytes", tags));
+            assertEquals(
+                    "ready", metrics.only("zlink.instance_spot.activations").tags().get("outcome"));
+            assertEquals(1, metrics.count("zlink.instance_spot.activation.duration"));
+            registry.activate("spot", "room", route()).toCompletableFuture().join();
+            assertEquals(1, metrics.count("zlink.instance_spot.activations"));
+            metrics.assertContractLabels();
+        } finally {
+            registry.closeAll();
+        }
+    }
+
+    @Test
     void coldFactoryAndHookRunOutsideIngressLane() throws Exception {
         assertActivationRunsOutsideIngressLane(false);
     }
