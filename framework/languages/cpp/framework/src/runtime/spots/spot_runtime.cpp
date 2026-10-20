@@ -503,7 +503,7 @@ class actor_handoff_barrier_t final : public detail::deferred_barrier_t
     }
     actor_handoff_barrier_t (std::shared_ptr<detail::deferred_barrier_t> inner,
                              std::function<void ()> cancel_reservation,
-                             std::function<void ()> settle_reservation) :
+                             std::function<task_t<void> ()> settle_reservation) :
         _inner (std::move (inner)),
         _cancel_reservation (std::move (cancel_reservation)),
         _settle_reservation (std::move (settle_reservation))
@@ -512,29 +512,10 @@ class actor_handoff_barrier_t final : public detail::deferred_barrier_t
 
     result_t<void> activate (std::function<void ()> work) override
     {
-        {
-            std::lock_guard lock (_mutex);
-            if (_activated)
-                return result_t<void>::failure (framework_error_kind_t::invalid_operation,
-                                                "Actor handoff barrier is already activated");
-            _activated = true;
-        }
-        auto activated =
-          _inner->activate ([work = std::move (work), settle = _settle_reservation] () mutable {
-              try {
-                  work ();
-              }
-              catch (...) {
-                  if (settle)
-                      settle ();
-                  throw;
-              }
-              if (settle)
-                  settle ();
-          });
-        if (!activated && _cancel_reservation)
-            _cancel_reservation ();
-        return activated;
+        return activate_async ([work = std::move (work)] (async_completion_t complete) {
+            work ();
+            complete (result_t<void>::success ());
+        });
     }
 
     result_t<void> activate_async (async_work_t work) override
@@ -549,23 +530,30 @@ class actor_handoff_barrier_t final : public detail::deferred_barrier_t
         auto activated =
           _inner->activate_async ([work = std::move (work), settle = _settle_reservation] (
                                     async_completion_t complete) mutable {
-              try {
-                  work ([complete = std::move (complete), settle] (result_t<void> result) mutable {
-                      if (settle)
-                          settle ();
+              auto finish = [complete, settle] (result_t<void> result) mutable {
+                  if (!settle) {
                       complete (std::move (result));
-                  });
+                      return;
+                  }
+                  auto settlement = settle ();
+                  detail::observe_task_completion (
+                    settlement, [complete, settle, result = std::move (result)] (
+                                  const result_t<void> &settled) mutable {
+                        complete (settled ? std::move (result) : settled);
+                    });
+              };
+              try {
+                  work (finish);
               }
               catch (const framework_exception_t &error) {
-                  if (settle)
-                      settle ();
-                  complete (detail::result_access_t::failure<void> (error));
+                  finish (detail::result_access_t::failure<void> (error));
               }
               catch (const std::exception &error) {
-                  if (settle)
-                      settle ();
-                  complete (result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                                     error.what ()));
+                  finish (result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                                   error.what ()));
+              }
+              catch (...) {
+                  finish (detail::result_access_t::failure<void> (std::current_exception ()));
               }
           });
         if (!activated && _cancel_reservation)
@@ -594,7 +582,7 @@ class actor_handoff_barrier_t final : public detail::deferred_barrier_t
   private:
     std::shared_ptr<detail::deferred_barrier_t> _inner;
     std::function<void ()> _cancel_reservation;
-    std::function<void ()> _settle_reservation;
+    std::function<task_t<void> ()> _settle_reservation;
     std::mutex _mutex;
     bool _activated = false;
 };
@@ -9419,31 +9407,13 @@ spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref)
             fail_handoff_backlog (state, state->actor_transfer_coordinator.cancel_move (key));
         }
     };
-    auto settle_reservation = [state = _state, actor_ref, key, reservation_id] {
-        if (state->actor_transfer_coordinator.phase (key) != actor_move_phase_t::source_reserved
-            || !state->actor_transfer_coordinator.is_current (key, reservation_id)) {
-            return;
-        }
-        const auto has_root_services =
-          state->lane.run ([&] { return state->root_services.has_value (); }).get ();
-        if (!has_root_services) {
-            const auto completed =
-              state->actor_transfer_coordinator.complete_move_and_take_backlog (key);
-            if (!completed.backlog.empty ()
-                && spot_node_runtime_t (state).actor_transfer_marker_enabled (
-                  message_flow_result_t::failed)) {
-                spot_node_runtime_t (state).emit_actor_transfer_marker (
-                  "handoff_replay_unavailable", actor_ref, key, std::nullopt, std::nullopt,
-                  std::make_exception_ptr (
-                    framework_exception_t (framework_error_kind_t::unavailable,
-                                           "Actor handoff replay owner is unavailable")));
-            }
-            fail_handoff_backlog (state, std::move (completed.backlog));
-            return;
-        }
-        // The prefix takes the claim and backlog before this Join turn ends.
-        // A detached worker could leave the claim visible to the next handler.
-        (void) spot_node_runtime_t (state).open_local_actor_handoff (actor_ref);
+    auto settle_reservation = [state = _state, actor_ref, reservation_id] {
+        return [] (std::shared_ptr<spot_node_builder_state_t> state, actor_ref_t actor_ref,
+                   std::string reservation_id) -> task_t<void> {
+            // Opening owns backlog failures; settlement preserves the Join result.
+            (void) co_await spot_node_runtime_t (state).open_local_actor_handoff (actor_ref,
+                                                                                  reservation_id);
+        }(state, actor_ref, reservation_id);
     };
     return result_t<std::shared_ptr<deferred_barrier_t>>::success (
       std::make_shared<actor_handoff_barrier_t> (std::move (reserved.value ()),
@@ -9457,26 +9427,49 @@ void spot_node_runtime_t::cancel_local_actor_handoff (const actor_ref_t &actor_r
                           _state->actor_transfer_coordinator.cancel_move (actor_key (actor_ref)));
 }
 
-result_t<void> spot_node_runtime_t::open_local_actor_handoff (const actor_ref_t &actor_ref)
+task_t<result_t<void>>
+spot_node_runtime_t::open_local_actor_handoff (actor_ref_t actor_ref,
+                                               std::optional<std::string> reservation_id)
 {
+    const auto state = _state;
     const auto key = actor_key (actor_ref);
+    // Take one lane snapshot, then settle on the retained Join turn. No lane
+    // suspension may separate reservation validation from claim removal.
+    auto [context, services] = co_await state->lane.run_task ([state, key] {
+        std::shared_ptr<spot_context_state_t> context;
+        const auto location = state->actor_spot_ids.find (key);
+        if (location != state->actor_spot_ids.end ()) {
+            const auto target = spot_node_runtime_t (state).find_context_core (location->second);
+            if (target)
+                context = target->_state;
+        }
+        return std::make_pair (std::move (context), state->root_services);
+    });
+    if (reservation_id
+        && (state->actor_transfer_coordinator.phase (key) != actor_move_phase_t::source_reserved
+            || !state->actor_transfer_coordinator.is_current (key, *reservation_id))) {
+        co_return result_t<void>::success ();
+    }
     // Same-target Join has no move to open. Completion delivery owns the
     // decision; source barrier settlement does not classify its result again.
-    if (!_state->actor_transfer_coordinator.phase (key))
-        return result_t<void>::success ();
-    std::shared_ptr<spot_context_state_t> context;
+    if (!state->actor_transfer_coordinator.phase (key))
+        co_return result_t<void>::success ();
+    if (reservation_id && !services) {
+        const auto completed =
+          state->actor_transfer_coordinator.complete_move_and_take_backlog (key);
+        if (!completed.backlog.empty ()
+            && spot_node_runtime_t (state).actor_transfer_marker_enabled (
+              message_flow_result_t::failed)) {
+            spot_node_runtime_t (state).emit_actor_transfer_marker (
+              "handoff_replay_unavailable", actor_ref, key, std::nullopt, std::nullopt,
+              std::make_exception_ptr (framework_exception_t (
+                framework_error_kind_t::unavailable, "Actor handoff replay owner is unavailable")));
+        }
+        fail_handoff_backlog (state, std::move (completed.backlog));
+        co_return result_t<void>::success ();
+    }
     std::shared_ptr<deferred_barrier_t> prefix;
-    std::optional<service_provider_t> services;
     const auto prepared = [&] () -> result_t<void> {
-        context = _state->lane
-                    .run ([&] {
-                        const auto location = _state->actor_spot_ids.find (key);
-                        if (location == _state->actor_spot_ids.end ())
-                            return std::shared_ptr<spot_context_state_t>{};
-                        const auto target = find_context_core (location->second);
-                        return target ? target->_state : std::shared_ptr<spot_context_state_t>{};
-                    })
-                    .get ();
         if (!context)
             return result_t<void>::failure (framework_error_kind_t::unavailable,
                                             "local Actor handoff target is unavailable");
@@ -9490,7 +9483,6 @@ result_t<void> spot_node_runtime_t::open_local_actor_handoff (const actor_ref_t 
             return detail::propagate_failure<void> (reserved,
                                                     "local Actor handoff prefix was refused");
         prefix = std::move (reserved.value ());
-        services = _state->lane.run ([&] { return _state->root_services; }).get ();
         if (!services) {
             prefix->cancel ();
             return result_t<void>::failure (framework_error_kind_t::unavailable,
@@ -9499,17 +9491,17 @@ result_t<void> spot_node_runtime_t::open_local_actor_handoff (const actor_ref_t 
         return result_t<void>::success ();
     }();
     if (!prepared) {
-        fail_handoff_backlog (_state, _state->actor_transfer_coordinator.cancel_move (key));
-        return prepared;
+        fail_handoff_backlog (state, state->actor_transfer_coordinator.cancel_move (key));
+        co_return prepared;
     }
     auto backlog = std::make_shared<std::vector<handoff_packet_t>> ();
-    auto transfer_id = message_flow_tracer_t (_state->dispatch).capture_enabled ()
-                         ? _state->actor_transfer_coordinator.transfer_id (key).value_or (key)
+    auto transfer_id = message_flow_tracer_t (state->dispatch).capture_enabled ()
+                         ? state->actor_transfer_coordinator.transfer_id (key).value_or (key)
                          : std::string{};
     // Relocation §4.6: reserve the FIFO placeholder before atomically taking
     // the whole backlog and removing the move. Ordinary ingress can now only
     // enter behind that placeholder; no replay handler sees the previous move.
-    auto owner = std::make_shared<spot_node_runtime_t> (_state);
+    auto owner = std::make_shared<spot_node_runtime_t> (state);
     deferred_barrier_t::async_work_t replay_prefix = [owner, actor_ref,
                                                       services = std::move (*services),
                                                       transfer_id = std::move (transfer_id),
@@ -9530,12 +9522,12 @@ result_t<void> spot_node_runtime_t::open_local_actor_handoff (const actor_ref_t 
               complete (result);
           });
     };
-    auto completed = _state->actor_transfer_coordinator.complete_move_and_take_backlog (key);
+    auto completed = state->actor_transfer_coordinator.complete_move_and_take_backlog (key);
     *backlog = std::move (completed.backlog);
     const auto opened = prefix->activate_async (std::move (replay_prefix));
     if (!opened)
-        fail_handoff_backlog (_state, std::move (*backlog));
-    return opened;
+        fail_handoff_backlog (state, std::move (*backlog));
+    co_return opened;
 }
 
 task_t<result_t<void>>

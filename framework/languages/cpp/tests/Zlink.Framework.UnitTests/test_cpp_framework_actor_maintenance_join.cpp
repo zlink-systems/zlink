@@ -27,6 +27,7 @@
 #include <map>
 #include <optional>
 #include <stdexcept>
+#include <stop_token>
 #include <thread>
 #include <tuple>
 #include <utility>
@@ -60,25 +61,28 @@ struct public_host_runtime_test_access_t
               attempt.terminal = std::make_shared<task_completion_source_t<void>> ();
           })
           .get ();
-        task_completion_source_t<void> release_index;
+        std::promise<void> release_index;
+        auto index_release = release_index.get_future ();
         std::promise<void> index_entered;
         auto index = std::async (std::launch::async, [&] {
             host._spot_actor_index_lane
               .run ([&] {
                   index_entered.set_value ();
-                  release_index.task ().result ().value ();
+                  // This is test-controlled lane occupancy, not a Framework wait.
+                  index_release.wait ();
               })
               .get ();
         });
         struct release_and_join_t
         {
-            task_completion_source_t<void> &release;
+            std::promise<void> &release;
             std::future<void> &worker;
             ~release_and_join_t ()
             {
-                release.complete (result_t<void>::success ());
-                if (worker.valid ())
+                if (worker.valid ()) {
+                    release.set_value ();
                     worker.wait ();
+                }
             }
         } release_and_join{release_index, index};
         index_entered.get_future ().get ();
@@ -104,7 +108,7 @@ struct public_host_runtime_test_access_t
             .get ();
         if (!activation_started)
             activated.emplace (host.activate_relocation_assembly (key, pending, staging));
-        release_index.complete (result_t<void>::success ());
+        release_index.set_value ();
         index.get ();
         if (discarded) {
             std::vector<public_host_runtime_t::relocation_target_attempt_t> cleanup;
@@ -1500,6 +1504,40 @@ struct join_claim_fixture_t
     }
 };
 
+TEST (ActorMaintenanceJoin, LocalHandoffCancellationRetainsQueuedLaneInputs)
+{
+    join_claim_fixture_t fixture;
+    std::promise<void> entered;
+    std::promise<void> release;
+    auto released = release.get_future ();
+    ASSERT_TRUE (fixture.node->lane.try_post ([&] {
+        entered.set_value ();
+        released.wait ();
+    }));
+    entered.get_future ().get ();
+    std::stop_source cancellation;
+    auto owner = std::make_unique<fw::detail::spot_node_runtime_t> (fixture.node);
+    auto pending = [&] {
+        fw::detail::ambient_context_scope_t scope (nullptr, nullptr, cancellation.get_token (),
+                                                   false);
+        return owner->open_local_actor_handoff (fixture.actor);
+    }();
+    cancellation.request_stop ();
+    const auto stopped = fw::detail::observe_task_result_for (pending, wait_budget, {});
+    std::promise<void> drained;
+    auto lane_drained = drained.get_future ();
+    EXPECT_TRUE (fixture.node->lane.try_post ([&] { drained.set_value (); }));
+    owner.reset ();
+    release.set_value ();
+    lane_drained.get ();
+    fixture.node->lane_executor.drain ();
+    fixture.drain ();
+    ASSERT_TRUE (stopped);
+    EXPECT_FALSE (*stopped);
+    ASSERT_TRUE (stopped->error ());
+    EXPECT_EQ (stopped->error ()->kind (), fw::framework_error_kind_t::shutting_down);
+}
+
 TEST (ActorMaintenanceJoin, DeferredJoinReleasesClaimBeforeNextActorTurn)
 {
     join_claim_fixture_t fixture;
@@ -1517,8 +1555,26 @@ TEST (ActorMaintenanceJoin, DeferredJoinReleasesClaimBeforeNextActorTurn)
             claim.value ()->cancel ();
         next.set_value (static_cast<bool> (claim));
     }));
-    complete (fw::result_t<void>::success ());
-    const auto accepted = next.get_future ().get ();
+    std::promise<void> lane_entered;
+    std::promise<void> release_lane;
+    auto lane_release = release_lane.get_future ().share ();
+    ASSERT_TRUE (fixture.node->lane.try_post ([&] {
+        lane_entered.set_value ();
+        lane_release.wait ();
+    }));
+    lane_entered.get_future ().get ();
+    auto finished =
+      std::async (std::launch::async, [&] { complete (fw::result_t<void>::success ()); });
+    // Settlement must yield to the occupied node lane while retaining the
+    // Actor FIFO: neither this caller nor the next Actor turn may wait in it.
+    const auto returned = finished.wait_for (wait_budget);
+    auto next_claim = next.get_future ();
+    const auto next_while_lane_held = next_claim.wait_for (0s);
+    release_lane.set_value ();
+    finished.get ();
+    EXPECT_EQ (returned, std::future_status::ready);
+    EXPECT_EQ (next_while_lane_held, std::future_status::timeout);
+    const auto accepted = next_claim.get ();
     fixture.drain ();
     EXPECT_TRUE (accepted);
 }
@@ -1534,7 +1590,7 @@ TEST (ActorMaintenanceJoin, DeferredJoinCompletionKeepsSuccessorClaim)
     auto complete = callback.get_future ().get ();
     // The local completion path has already handed its backlog to the FIFO,
     // while the enclosing deferred barrier has not published its terminal yet.
-    EXPECT_TRUE (fixture.owner.open_local_actor_handoff (fixture.actor));
+    EXPECT_TRUE (fixture.owner.open_local_actor_handoff (fixture.actor).result ().value ());
     auto successor = fixture.owner.reserve_actor_join_barrier (fixture.actor);
     EXPECT_TRUE (successor);
     complete (fw::result_t<void>::success ());
@@ -1553,7 +1609,7 @@ TEST (ActorMaintenanceJoin, DeferredJoinDiscardKeepsSuccessorClaim)
     join_claim_fixture_t fixture;
     auto reserved = fixture.owner.reserve_actor_join_barrier (fixture.actor);
     ASSERT_TRUE (reserved);
-    EXPECT_TRUE (fixture.owner.open_local_actor_handoff (fixture.actor));
+    EXPECT_TRUE (fixture.owner.open_local_actor_handoff (fixture.actor).result ().value ());
     auto successor = fixture.owner.reserve_actor_join_barrier (fixture.actor);
     EXPECT_TRUE (successor);
     reserved.value ()->cancel ();
