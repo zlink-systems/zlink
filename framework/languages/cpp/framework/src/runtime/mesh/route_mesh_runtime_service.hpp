@@ -54,6 +54,18 @@ class route_mesh_runtime_service_t final : public route_mesh_runtime_t
   private:
     friend struct route_mesh_runtime_service_test_access_t;
 
+    static constexpr auto management_refresh_interval = std::chrono::milliseconds (100);
+
+    template <class Now, class Refresh, class Wait>
+    static void pump_management (Now now, Refresh refresh, Wait wait)
+    {
+        // Topology changes publish through their existing callback. This owner waits
+        // only for descriptor management and shutdown (hot path §4.1 I0, §4.2).
+        // The local capacity projection also needs this deadline without a Store.
+        while (wait (now () + management_refresh_interval))
+            refresh ();
+    }
+
     // A status query in two steps: the projection of the node, then its publication.
     mesh_node_snapshot_t query_projection (const std::string &mesh_name) const;
     mesh_node_snapshot_t complete_query (const std::string &mesh_name,
