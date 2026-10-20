@@ -30,6 +30,12 @@ import {
   ZLinkSpotRelocationReadyOutcome,
   ZLinkUserSpotExecutionMode
 } from '../../contracts';
+import {
+  ZLinkDispatchErrorSurface,
+  ZLinkDispatchMessageKind,
+  ZLinkRuntimeDispatchErrorAction as ZLinkDispatchErrorAction,
+  ZLinkRuntimeMessageFlowOutcome as ZLinkMessageFlowOutcome
+} from '../../contracts/Dispatch/ZLinkDispatchOptions';
 
 import type { ZLinkProviderResolver } from '../../contracts/Common/ZLinkProviderResolver';
 import { zlinkRuntimeDefaultLocationOptions } from '../../contracts/Locations/Options';
@@ -66,6 +72,12 @@ import {
 } from '../diagnostics';
 
 import { METRIC_NAMES, MILLISECONDS_PER_SECOND } from '../diagnostics/runtime-metrics';
+import {
+  traceSessionBindingControlDrop,
+  flowIfEnabled,
+  type ZLinkMessageFlowTracer
+} from '../diagnostics/message-flow';
+import { dispatchErrorDetails } from '../diagnostics/dispatch-error-details';
 import { isStructuralGuardEnabled, trackDiagnosticCompletion } from '../execution/state-lane';
 import {
   RECREATE_RELOCATION_CONTENT_TYPE,
@@ -232,6 +244,7 @@ const INITIAL_MEMBERSHIP_EPOCH = 1n;
 
 interface ZLinkHostRelocationOptions {
   readonly flowCreationEnabled?: () => boolean;
+  readonly messageFlow?: () => ZLinkMessageFlowTracer | undefined;
   readonly registration: ZLinkFrameworkRegistration;
   readonly providerResolver?: ZLinkProviderResolver;
   readonly locationStore: () => ZLinkLocationStore | undefined;
@@ -366,6 +379,7 @@ interface SourceActorJoinProfile {
   readonly canonicalRecovery?: NonNullable<
     Parameters<ZLinkActorJoinRelocation['relocateActorJoin']>[0]['canonicalRecovery']
   >;
+  readonly relayReady: () => void;
   readonly ready: Promise<void>;
   readonly resolveReady: (failure?: ServiceRelocationPostCommitError) => void;
   retirement?: Promise<void>;
@@ -490,6 +504,10 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
         else reject(failure.cause);
       };
     });
+    let acceptRelay!: () => void;
+    const relayReady = new Promise<void>((resolve) => {
+      acceptRelay = resolve;
+    });
     this.sourceActorJoinProfiles.set(input.relocationId, {
       actor: input.actor,
       state: input.state,
@@ -504,44 +522,53 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
           : RECREATE_RELOCATION_CONTENT_TYPE,
       completionOperationId: input.completionOperationId,
       canonicalRecovery: input.canonicalRecovery,
+      relayReady: acceptRelay,
       ready,
       resolveReady
     });
     const membershipEpoch =
       input.state.spotMembershipEpoch > 0n ? input.state.spotMembershipEpoch : 1n;
     const spotGeneration = input.target.targetSpotGeneration ?? target.lifecycleGeneration;
-    try {
-      await this.relocateStandaloneActor(
-        input.meshName,
-        input.state,
-        target,
-        target.applicationVersion,
-        input.signal,
-        {
-          ...input.target,
-          spotKind:
-            input.target.spotKind === ZLinkSpotKind.Entry
-              ? ZLinkSpotKind.Entry
-              : ZLinkSpotKind.User,
-          spotObjectGeneration: spotGeneration
-        },
-        input.relocationId,
-        true,
-        input.advertisedReceiveChunkLimitBytes,
-        input.deadlineAtMs
-      );
-      resolveReady();
-    } catch (error) {
-      if (error instanceof ServiceRelocationPostCommitError) {
-        resolveReady(error);
-        this.completeActorJoinSourceCleanup(input.state.actorId);
-      } else {
-        this.sourceActorJoinProfiles.delete(input.relocationId);
+    const cleanup = (async () => {
+      try {
+        await this.relocateStandaloneActor(
+          input.meshName,
+          input.state,
+          target,
+          target.applicationVersion,
+          input.signal,
+          {
+            ...input.target,
+            spotKind:
+              input.target.spotKind === ZLinkSpotKind.Entry
+                ? ZLinkSpotKind.Entry
+                : ZLinkSpotKind.User,
+            spotObjectGeneration: spotGeneration
+          },
+          input.relocationId,
+          true,
+          input.advertisedReceiveChunkLimitBytes,
+          input.deadlineAtMs
+        );
         resolveReady();
-        throw error;
+      } catch (error) {
+        if (error instanceof ServiceRelocationPostCommitError) {
+          resolveReady(error);
+          this.completeActorJoinSourceCleanup(input.state.actorId);
+        } else {
+          this.sourceActorJoinProfiles.delete(input.relocationId);
+          resolveReady();
+          throw error;
+        }
       }
-    }
+    })();
+    const settledCleanup = Promise.allSettled([cleanup]);
+    await Promise.race([relayReady, cleanup]);
     return {
+      sourceCleanup: async () => {
+        const [outcome] = await settledCleanup;
+        if (outcome.status === 'rejected') throw outcome.reason;
+      },
       actorRef: {
         actorId: sourceRef.actorId,
         generation: sourceRef.generation,
@@ -931,13 +958,45 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       return true;
     }
     if (command === M6bServiceWireCommand.sessionRelocationSeal) {
-      const request = decodeSessionRelocationSeal(payload);
-      const response = await this.handleSessionRelocationSeal(
-        meshName,
-        request,
-        record.sourceNodeRid,
-        signal
-      );
+      let request: ServiceSessionRelocationSeal;
+      try {
+        request = decodeSessionRelocationSeal(payload);
+      } catch (error) {
+        const outcome = ZLinkMessageFlowOutcome.Error;
+        flowIfEnabled(this.options.messageFlow?.(), outcome)?.trace({
+          outcome,
+          surface: ZLinkDispatchErrorSurface.StreamSession,
+          messageKind: ZLinkDispatchMessageKind.Control,
+          packetName: 'sessionRelocationSeal',
+          sourceRid: record.sourceNodeRid ?? undefined,
+          errorReason: 'invalid_frame',
+          errorAction: ZLinkDispatchErrorAction.Drop,
+          ...dispatchErrorDetails(error)
+        });
+        throw error;
+      }
+      let response: ServiceSessionRelocationSealed | undefined;
+      try {
+        response = await this.handleSessionRelocationSeal(
+          meshName,
+          request,
+          record.sourceNodeRid,
+          signal
+        );
+      } catch (error) {
+        traceSessionBindingControlDrop(
+          this.options.messageFlow?.(),
+          record.sourceNodeRid ?? '',
+          request.actor.actor.actorId,
+          'sessionRelocationSeal',
+          error instanceof ZLinkFrameworkException &&
+            error.kind === ZLinkFrameworkErrorKind.Unavailable
+            ? 'location_unavailable'
+            : 'stale_target',
+          error
+        );
+        throw error;
+      }
       if (response !== undefined) {
         await this.sendSessionRelocationResponse(
           meshName,
@@ -2506,6 +2565,7 @@ export class ZLinkHostServiceRelocationRuntime implements ZLinkActorJoinRelocati
       // forward the source can no longer reopen dispatch without risking two
       // owners.
       readyReceived = true;
+      actorJoinProfile?.relayReady();
 
       const boundaryBatch: Array<{
         readonly frame: Buffer;

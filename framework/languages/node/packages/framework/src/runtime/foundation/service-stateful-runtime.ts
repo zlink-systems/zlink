@@ -17,7 +17,7 @@ import { requestDurableService } from './durable-service-request';
 import { shouldCompactBackingArray } from '../admission';
 import { RequestResult, SubmitResult, isZLinkBackendResultError } from '../backend/runtime-values';
 import type { ZLinkDispatchErrorReporter } from '../channels/dispatch-error-reporter';
-import { flowIfEnabled } from '../diagnostics/message-flow';
+import { flowIfEnabled, traceSessionBindingControlDrop } from '../diagnostics/message-flow';
 import { captureZLinkExecutionTurn } from '../execution';
 import {
   ZLinkFrameworkInternalErrorKind,
@@ -3835,10 +3835,24 @@ export class ServiceStatefulRuntime {
       return 'infrastructure';
     }
     const sessionOwner = this.localSessionOwner();
-    if (
-      sessionOwner === undefined ||
-      !sessionOwnerFenceMatches(sessionOwner, record.retiredSession)
-    ) {
+    if (sessionOwner === undefined) {
+      traceSessionBindingControlDrop(
+        this.dispatchErrors?.flow,
+        ingress.sourceRoutingId,
+        authority.actor.actorId,
+        'boundSessionReplaced',
+        'location_unavailable'
+      );
+      return 'infrastructure';
+    }
+    if (!sessionOwnerFenceMatches(sessionOwner, record.retiredSession)) {
+      traceSessionBindingControlDrop(
+        this.dispatchErrors?.flow,
+        ingress.sourceRoutingId,
+        authority.actor.actorId,
+        'boundSessionReplaced',
+        'stale_target'
+      );
       return 'infrastructure';
     }
     const actor = authority.actor;

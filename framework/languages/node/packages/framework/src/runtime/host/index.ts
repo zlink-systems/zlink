@@ -786,6 +786,7 @@ export class ZLinkFrameworkRuntimeHost
     });
     this.serviceRelocation = new ZLinkHostServiceRelocationRuntime({
       flowCreationEnabled: () => this.flowCreationEnabled(),
+      messageFlow: () => this.createDispatchErrorReporter(this.runtimeOrPreStartErrorSink).flow,
       registration: options.registration,
       targetAdmissionSealed: () => this.shutdownOperationStartedAt !== undefined,
       requestPeerReconcile: (meshName, peerRid) =>

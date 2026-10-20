@@ -737,7 +737,8 @@ internal sealed class ZLinkActorInboundPipeline(
         IZLinkActor actor,
         ZLinkActorRuntimeState state,
         ZLinkSpotActorFrame frame,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        bool callerOwnsDispatchTurn
     )
     {
         Exception? failure = null;
@@ -752,9 +753,18 @@ internal sealed class ZLinkActorInboundPipeline(
         {
             try
             {
-                await endpoint
-                    .NotifyDisconnectedAsync(actor.Context.ActorId, cancellationToken)
-                    .ConfigureAwait(false);
+                if (callerOwnsDispatchTurn)
+                    await runtime
+                        .NotifyActorDisconnectedByIdAsync(
+                            actor.Context.ActorId,
+                            cancellationToken,
+                            callerOwnsDispatchTurn: true
+                        )
+                        .ConfigureAwait(false);
+                else
+                    await endpoint
+                        .NotifyDisconnectedAsync(actor.Context.ActorId, cancellationToken)
+                        .ConfigureAwait(false);
             }
             catch (Exception exception) when (frame.Header.Kind == ZlinkStreamMessageKind.Request)
             {
@@ -822,7 +832,13 @@ internal sealed class ZLinkActorInboundPipeline(
         {
             try
             {
-                await DispatchDisconnectedAsync(actor, state, frame, cancellationToken)
+                await DispatchDisconnectedAsync(
+                        actor,
+                        state,
+                        frame,
+                        cancellationToken,
+                        callerOwnsDispatchTurn
+                    )
                     .ConfigureAwait(false);
             }
             finally
@@ -853,7 +869,13 @@ internal sealed class ZLinkActorInboundPipeline(
             )
             {
                 var reply = disconnected
-                    ? await DispatchDisconnectedAsync(actor, state, frame, cancellationToken)
+                    ? await DispatchDisconnectedAsync(
+                            actor,
+                            state,
+                            frame,
+                            cancellationToken,
+                            callerOwnsDispatchTurn
+                        )
                         .ConfigureAwait(false)
                     : await endpoint
                         .DispatchForReplyAsync(
@@ -1234,6 +1256,15 @@ internal sealed class ZLinkUserSpotActorInboundEndpoint(
         bool callerOwnsDispatchTurn = false
     )
     {
+        if (callerOwnsDispatchTurn && state.LiveActivation is { } activation)
+            return activation.InvokeOwnedActorPacketAsync(
+                actor,
+                state,
+                header,
+                body,
+                sourceSessionRid,
+                cancellationToken
+            );
         return dispatcher.DispatchAsync(
             actor,
             state,
@@ -1255,6 +1286,15 @@ internal sealed class ZLinkUserSpotActorInboundEndpoint(
         bool callerOwnsDispatchTurn = false
     )
     {
+        if (callerOwnsDispatchTurn && state.LiveActivation is { } activation)
+            return activation.InvokeOwnedActorPacketForReplyAsync(
+                actor,
+                state,
+                header,
+                body,
+                sourceSessionRid,
+                cancellationToken
+            );
         return dispatcher.DispatchForReplyAsync(
             actor,
             state,
