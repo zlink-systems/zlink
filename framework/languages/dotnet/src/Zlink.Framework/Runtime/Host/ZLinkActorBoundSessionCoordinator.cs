@@ -1301,6 +1301,15 @@ internal sealed class ZLinkActorBoundSessionCoordinator
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
+        using var shutdownRegistration = _getShutdownToken()
+            .Register(() =>
+                completion.TrySetException(
+                    new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.ShuttingDown,
+                        "Runtime stopped while awaiting the session disconnect callback."
+                    )
+                )
+            );
         var deadline = checked(
             (ulong)
                 DateTimeOffset
