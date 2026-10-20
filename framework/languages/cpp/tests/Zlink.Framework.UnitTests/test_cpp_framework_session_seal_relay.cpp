@@ -220,6 +220,15 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         EXPECT_TRUE (sessions.close (connection));
     else
         EXPECT_EQ (sessions.abort_barrier (seal.barrier), stateful::stateful_error_t::none);
+    const auto expect_source_accepted_twice = [&] {
+        const auto observed = sessions.seal_remote_route (
+          connection.connection_id, binding.binding_generation, actor_object.key,
+          actor_object.object_generation, binding.owner_lease_generation);
+        ASSERT_EQ (observed.error, stateful::stateful_error_t::none);
+        EXPECT_EQ (observed.last_accepted_sequence, 2u);
+        EXPECT_TRUE (sessions.remote_route_seal_ready (observed.barrier));
+        EXPECT_EQ (sessions.abort_barrier (observed.barrier), stateful::stateful_error_t::none);
+    };
     ASSERT_EQ (completed.wait_for (2s), std::future_status::ready);
     const auto terminal = completed.get ();
     if (request_timeout) {
@@ -235,8 +244,7 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         }));
         lock.unlock ();
         ASSERT_TRUE (gateway.bound_session_route_async (actor).result ().value ());
-        EXPECT_EQ (gateway.bound_session_route_async (actor).result ().value ()->session_sequence,
-                   2u);
+        expect_source_accepted_twice ();
         EXPECT_EQ (native->pending_operation_count (), 0u);
     } else {
         EXPECT_TRUE (terminal) << "delivery failure must not change accepted caller completion";
@@ -260,8 +268,7 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         }
         lock.unlock ();
         EXPECT_TRUE (sessions.remote_route_sealed ("seal-other-actor"));
-        EXPECT_EQ (gateway.bound_session_route_async (actor).result ().value ()->session_sequence,
-                   2u);
+        expect_source_accepted_twice ();
         ASSERT_EQ (sessions.abort_barrier (other_barrier), stateful::stateful_error_t::none);
         lock.lock ();
         ASSERT_TRUE (events_changed.wait_for (lock, 2s, [&] {
@@ -711,8 +718,7 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
         header.message_name = "SessionIdentityRequest";
         header.content_type = "application/json";
         header.correlation_id = "same-upstream-correlation";
-        auto encoded = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
-          header, zlink::message_t::from (std::move (payload)));
+        auto encoded = encode_actor_packet (header, zlink::message_t::from (std::move (payload)));
         auto parts = std::move (encoded).take_items ();
         // Redeliver the received operation at the Framework ingress boundary.
         // Submitting another local client request would allocate a new operation.
@@ -769,18 +775,7 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
               framework_error_kind_t::deadline_exceeded, "replayed request did not reply");
         EXPECT_EQ (reply_calls->load (), 1u);
         runtime::messaging::message_parts_t response (reply.get ());
-        const auto response_header =
-          runtime::messaging::envelope_codec_t{}.decode_header (response);
-        if (!response_header)
-            return result_t<std::optional<zlink::message_t>>::failure (
-              response_header.error_kind (), response_header.error ()->what ());
-        if (response_header.value ().kind == runtime::messaging::message_kind_t::error)
-            return result_t<std::optional<zlink::message_t>>::failure (
-              framework_error_kind_t::internal_failure,
-              response_header.value ().error_message.value_or ("replayed request failed"));
-        const auto body = runtime::messaging::envelope_codec_t{}.decode_body (response);
-        return body ? result_t<std::optional<zlink::message_t>>::success (body.value ())
-                    : result_t<std::optional<zlink::message_t>>::success (std::nullopt);
+        return decode_actor_reply (response);
     };
     auto stale_route = *original_route;
     ++stale_route.owner_lease_generation;

@@ -1316,16 +1316,16 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
                                         11,
                                         {"bound-owner", 13},
                                         target_descriptor.lifecycle_generation};
-    const runtime::spot_address_t current_route{"m6b-mesh",
-                                                zlink::routing_id_t::from ("current-actor-owner"),
-                                                {},
-                                                0,
-                                                {},
-                                                7,
-                                                12,
-                                                {"current-owner", 14},
-                                                target_descriptor.lifecycle_generation == 18 ? 17
-                                                                                             : 18};
+    const runtime::spot_address_t current_route{
+      "m6b-mesh",
+      zlink::routing_id_t::from ("current-actor-owner"),
+      {},
+      0,
+      {},
+      7,
+      12,
+      {"current-owner", 14},
+      target_descriptor.lifecycle_generation == 18 ? std::uint64_t{17} : std::uint64_t{18}};
     assert (current_route.node_generation != route.node_generation);
     source.configure_actor_route_resolver (
       [&] (actor_ref_t) -> task_t<std::optional<runtime::spot_address_t>> {

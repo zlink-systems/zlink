@@ -2186,7 +2186,6 @@ int bound_session_relay_admission_is_exact_and_monotonic ()
     if (!gateway.admit_session_relay (actor, session_owner, session_rid, 17, 1))
         return 4;
     if (gateway.admit_session_relay (actor, session_owner, session_rid, 17, 1)
-        || gateway.admit_session_relay (actor, session_owner, session_rid, 17, 3)
         || gateway.admit_session_relay (
           actor, zlink::routing_id_t::from (std::string ("other-owner")), session_rid, 17, 2)) {
         return 7;
@@ -2196,6 +2195,13 @@ int bound_session_relay_admission_is_exact_and_monotonic ()
     const auto route = gateway.bound_session_route_async (actor).result ().value ();
     if (!route || route->session_sequence != 2)
         return 11;
+    if (!gateway.admit_session_relay (actor, session_owner, session_rid, 17, 4)
+        || gateway.admit_session_relay (actor, session_owner, session_rid, 17, 3)
+        || gateway.admit_session_relay (actor, session_owner, session_rid, 17, 4))
+        return 22;
+    const auto after_gap = gateway.bound_session_route_async (actor).result ().value ();
+    if (!after_gap || after_gap->session_sequence != 4)
+        return 23;
 
     namespace stateful = runtime::stateful;
     const stateful::object_ref_t owner{

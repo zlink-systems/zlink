@@ -2440,16 +2440,15 @@ admit_session_relay_unlocked (actor_gateway_state_t &state,
     if (route.session_sequence_baseline_unknown) {
         // Relocation-target routes learn the source's relay high-water from
         // the first sequence admitted on the exact route (spec 20 keeps
-        // command 43/44 free of numeric high-water); afterwards the strict
-        // next check applies.
+        // command 43/44 free of numeric high-water); afterwards each admitted
+        // sequence must increase.
         route.session_sequence = session_sequence;
         route.session_sequence_baseline_unknown = false;
         return result_t<void>::success ();
     }
-    if (route.session_sequence == std::numeric_limits<std::uint64_t>::max ()
-        || session_sequence != route.session_sequence + 1) {
+    if (session_sequence <= route.session_sequence) {
         return result_t<void>::failure (framework_error_kind_t::invalid_operation,
-                                        "bound Session relay sequence is not next");
+                                        "bound Session relay sequence does not increase");
     }
     route.session_sequence = session_sequence;
     return result_t<void>::success ();
