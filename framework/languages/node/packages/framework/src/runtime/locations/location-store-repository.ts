@@ -5183,7 +5183,10 @@ function requireOwnerInput(ownerId: string, leaseTtlMs: number): void {
 function throwIfOperationExpired(signal?: AbortSignal, deadlineUnixMs?: bigint): void {
   signal?.throwIfAborted();
   if (deadlineUnixMs !== undefined && Date.now() >= Number(deadlineUnixMs)) {
-    throw new DOMException('Operation deadline exceeded.', 'TimeoutError');
+    throw new ZLinkFrameworkException(
+      ZLinkFrameworkErrorKind.DeadlineExceeded,
+      'Operation deadline exceeded.'
+    );
   }
 }
 

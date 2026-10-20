@@ -29,6 +29,42 @@ final class ZLinkInstanceSpotActivationDeadlineTest {
     private static final Duration WAIT = Duration.ofSeconds(5);
 
     @Test
+    void instanceSendDuringRuntimeDrainRemainsShutdown() throws Exception {
+        var options = new DefaultZLinkFrameworkOptions();
+        options.addLocationStore(new ZLinkInMemoryLocationStore());
+        options.addRouteMesh(MESH).listen("inproc://drain-" + UUID.randomUUID()).objects().server();
+        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options)) {
+            var host = (ZLinkSpotRuntime) runtime.spotManager();
+            host.beginDrain().toCompletableFuture().get(WAIT.toMillis(), TimeUnit.MILLISECONDS);
+            var send =
+                    runtime.route()
+                            .sendToSpot("draining-room", new InitialMessage())
+                            .instanceSpot(TYPE)
+                            .inMesh(MESH)
+                            .submit();
+            var failure =
+                    assertThrows(
+                            ExecutionException.class,
+                            () ->
+                                    send.toCompletableFuture()
+                                            .get(WAIT.toMillis(), TimeUnit.MILLISECONDS));
+            var typed = assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.SHUTTING_DOWN, typed.kind());
+            try (var probe =
+                            systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                                    .install();
+                    var metrics =
+                            new systems.zlink.framework.runtime.internal.metrics
+                                    .ZLinkInstanceSpotMetrics(MESH, TYPE)) {
+                metrics.terminal(System.nanoTime(), typed);
+                assertEquals(
+                        "shutdown",
+                        probe.only("zlink.instance_spot.activations").tags().get("outcome"));
+            }
+        }
+    }
+
+    @Test
     void sourceSendsEnvelopeWithoutReservingAndWaitsOnlyForAdmission() throws Exception {
         run(false, true);
     }

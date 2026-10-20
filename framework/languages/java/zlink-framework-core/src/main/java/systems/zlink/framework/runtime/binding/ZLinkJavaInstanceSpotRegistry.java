@@ -198,13 +198,15 @@ final class ZLinkJavaInstanceSpotRegistry {
         var metrics = factories.get(selected).metrics();
         boolean cold = current == null || !current.isDone();
         long startedNanos = current == null && metrics != null ? System.nanoTime() : 0L;
+        CompletionStage<Activation> observed = candidate;
         if (metrics != null && cold) {
             metrics.retain(payloadBytes);
-            candidate.whenComplete(
-                    (activation, failure) -> {
-                        metrics.release(payloadBytes);
-                        if (current == null) metrics.terminal(startedNanos, failure);
-                    });
+            observed =
+                    candidate.whenComplete(
+                            (activation, failure) -> {
+                                metrics.release(payloadBytes);
+                                if (current == null) metrics.terminal(startedNanos, failure);
+                            });
         }
         if (current != null) {
             var result = new CompletableFuture<Activation>();
@@ -318,7 +320,7 @@ final class ZLinkJavaInstanceSpotRegistry {
         } catch (RuntimeException | Error failure) {
             candidate.completeExceptionally(failure);
         }
-        return candidate.thenCompose(value -> firstTerminal.thenApply(ignored -> value));
+        return observed.thenCompose(value -> firstTerminal.thenApply(ignored -> value));
     }
 
     CompletionStage<Void> admitExisting(

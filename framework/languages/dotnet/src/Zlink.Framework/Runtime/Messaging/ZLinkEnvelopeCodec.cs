@@ -330,7 +330,7 @@ internal static class ZLinkEnvelopeCodec
     public static ZLinkEnvelopeHeader DecodeHeader(Message message, bool validateFlow = true) =>
         DecodeHeader(message.AsReadOnlySpan(), validateFlow);
 
-    private static ZLinkEnvelopeHeader DecodeHeader(ReadOnlySpan<byte> bytes, bool validateFlow)
+    internal static ZLinkEnvelopeHeader DecodeHeader(ReadOnlySpan<byte> bytes, bool validateFlow)
     {
         var hash = HashBytes(bytes);
         var cached = FindDecodedHeaderCacheEntry(bytes, hash);
