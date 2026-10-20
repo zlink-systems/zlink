@@ -30,6 +30,7 @@ const { NestFactory } = require('@nestjs/core');
 const nestjs = require('../../packages/nestjs/dist');
 const framework = require('../../packages/framework/dist/internal');
 const connector = require('../../packages/stream-connector/dist');
+const { createBrowserSafeStreamApp } = require('./helpers/browser-safe-stream-app');
 
 for (const remote of [false, true])
   for (const join of [false, true]) {
@@ -159,10 +160,15 @@ for (const remote of [false, true])
               ? [SessionFactory]
               : [Factory, SessionFactory, DropEntry, DropRoom, Move]
           })(AppModule);
-          const app = await NestFactory.createApplicationContext(AppModule, {
-            logger: false,
-            abortOnError: false
-          });
+          const createApp = () =>
+            NestFactory.createApplicationContext(AppModule, {
+              logger: false,
+              abortOnError: false
+            });
+          const app =
+            sessionOnly || !remote
+              ? await createBrowserSafeStreamApp(createApp, 'clients')
+              : await createApp();
           apps.push(app);
           return app;
         }
