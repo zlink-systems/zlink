@@ -31,8 +31,8 @@ class ActorJoinRegistrationScope {
     this.open = false;
   }
 
-  async prepareSealedJoins(): Promise<void> {
-    await this.prepareSealedJoinsCore();
+  prepareSealedJoins(): Promise<void> {
+    return this.prepareSealedJoinsCore();
   }
 
   private async prepareSealedJoinsCore(): Promise<void> {
@@ -40,8 +40,8 @@ class ActorJoinRegistrationScope {
       return;
     }
     this.prepared = true;
-    for (const intent of this.intents) {
-      await intent.prepare?.();
+    for (let index = 0; index < this.intents.length; index++) {
+      await this.intents[index]!.prepare?.();
     }
   }
 
@@ -62,8 +62,8 @@ class ActorJoinRegistrationScope {
   }
 
   private async execute(): Promise<void> {
-    for (const intent of this.intents) {
-      await intent.execute();
+    for (let index = 0; index < this.intents.length; index++) {
+      await this.intents[index]!.execute();
     }
   }
 }
