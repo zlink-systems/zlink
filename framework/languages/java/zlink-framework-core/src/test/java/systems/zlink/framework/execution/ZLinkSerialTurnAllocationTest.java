@@ -123,12 +123,33 @@ public final class ZLinkSerialTurnAllocationTest {
             long baseline = 0;
             long actions = 0;
             long iterators = 0;
+            long turnContextEntries = 0;
             try (var events = new RecordingFile(recordingPath)) {
                 while (events.hasMoreEvents()) {
                     var event = events.readEvent();
                     if (!event.getEventType().getName().equals("jdk.ObjectAllocationOutsideTLAB"))
                         continue;
                     String allocatedClass = event.getClass("objectClass").getName();
+                    if (allocatedClass.equals("java.lang.ThreadLocal$ThreadLocalMap$Entry")) {
+                        var owner =
+                                event.getStackTrace().getFrames().stream()
+                                        .filter(
+                                                frame ->
+                                                        frame.getMethod()
+                                                                .getType()
+                                                                .getName()
+                                                                .startsWith(
+                                                                        "systems.zlink.framework."))
+                                        .findFirst();
+                        if (owner.isPresent()
+                                && owner.get()
+                                        .getMethod()
+                                        .getType()
+                                        .getName()
+                                        .equals(ZLinkSerialExecutionQueue.class.getName())
+                                && owner.get().getMethod().getName().equals("invokeInline"))
+                            turnContextEntries++;
+                    }
                     if (allocatedClass.startsWith("java.util.")
                             && !allocatedClass.contains("$$Lambda")
                             && java.util.Iterator.class.isAssignableFrom(
@@ -203,10 +224,21 @@ public final class ZLinkSerialTurnAllocationTest {
                             + baseline);
             System.out.println("serial worker submission actions: " + actions + "/1000");
             System.out.println("serial finish Iterator allocations: " + iterators + "/1000");
+            System.out.println(
+                    "serial physical/deferred context ThreadLocal entries: "
+                            + turnContextEntries
+                            + "/1000");
+            long contextEntries = turnContextEntries;
             long finishIterators = iterators;
             long submittedActions = actions;
             long turnFutures = futures - baseline;
             org.junit.jupiter.api.Assertions.assertAll(
+                    () ->
+                            assertEquals(
+                                    2000,
+                                    contextEntries,
+                                    "one physical turn and one deferred-release context entry per"
+                                        + " turn"),
                     () ->
                             assertEquals(
                                     0,
@@ -221,7 +253,8 @@ public final class ZLinkSerialTurnAllocationTest {
                             assertEquals(
                                     1000,
                                     turnFutures,
-                                    "one execution gate per turn beyond the JDK observer baseline"));
+                                    "one execution gate per turn beyond the JDK observer"
+                                        + " baseline"));
         } finally {
             Files.deleteIfExists(recordingPath);
         }

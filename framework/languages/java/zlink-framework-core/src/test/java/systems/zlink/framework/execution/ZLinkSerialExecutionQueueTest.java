@@ -932,6 +932,62 @@ final class ZLinkSerialExecutionQueueTest {
     }
 
     @Test
+    void physicalSpotTurnDoesNotBorrowActorOwnershipFromForeignLogicalCarrier() throws Exception {
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var spot = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+            var actor =
+                    new ZLinkSerialExecutionQueue(
+                            executor, ZLinkExecutionLanePolicy.actorDelivery());
+            var foreignQueue =
+                    new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic());
+            var shared = new ZLinkSerialExecutionQueue.SharedSpotGate(spot);
+            actor.bindSharedSpotGate(shared);
+            var foreign = new AtomicReference<Object>();
+            try {
+                foreignQueue
+                        .enqueue(
+                                () -> {
+                                    foreign.set(
+                                            ZLinkSuspendInvocationContext
+                                                    .currentSerialExecutionTurn());
+                                    return CompletableFuture.completedFuture(null);
+                                },
+                                null)
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS);
+                actor.enqueue(
+                                () -> {
+                                    assertTrue(spot.isCurrent());
+                                    assertTrue(actor.isCurrent());
+                                    try (var scope =
+                                            ZLinkSuspendInvocationContext.enterSerialExecutionTurn(
+                                                    foreign.get())) {
+                                        assertTrue(
+                                                spot.isCurrent(),
+                                                "the physical Spot gate remains current");
+                                        assertFalse(
+                                                actor.isCurrent(),
+                                                "a mismatched logical carrier must not expose the"
+                                                        + " Actor entry");
+                                    }
+                                    assertTrue(
+                                            actor.isCurrent(),
+                                            "restoring the logical carrier restores Actor"
+                                                    + " ownership");
+                                    return CompletableFuture.completedFuture(null);
+                                },
+                                null)
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS);
+            } finally {
+                actor.close();
+                spot.close();
+                foreignQueue.close();
+            }
+        }
+    }
+
+    @Test
     void completedTurnCarrierDoesNotOwnLaterYield() throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         AtomicReference<Object> carrier = new AtomicReference<>();
