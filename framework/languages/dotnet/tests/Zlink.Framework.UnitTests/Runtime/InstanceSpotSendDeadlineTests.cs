@@ -758,9 +758,9 @@ public sealed partial class EntrySpotActorDispatchTests
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         runtime.ErrorSink.UnhandledCallbackException += error => failed.TrySetResult(error);
-        runtime.Registration.SpotNodes["entry"].DefaultRequestTimeout = expires
-            ? TimeSpan.FromMilliseconds(200)
-            : TimeSpan.FromSeconds(5);
+        if (expires)
+            runtime.Registration.SpotNodes["entry"].DefaultRequestTimeout =
+                TimeSpan.FromMilliseconds(200);
         var nodeRuntime = runtime.GetSpotNodeRuntime("entry");
         var flowId = ZlinkStreamFlowId.Create();
         try
