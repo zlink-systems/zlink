@@ -1,5 +1,6 @@
 package systems.zlink.framework.execution;
 
+import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -11,6 +12,7 @@ import static org.junit.jupiter.api.Assertions.fail;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
@@ -24,6 +26,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.OptionalLong;
+import java.util.concurrent.AbstractExecutorService;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -932,6 +935,62 @@ final class ZLinkSerialExecutionQueueTest {
     }
 
     @Test
+    void physicalSpotTurnDoesNotBorrowActorOwnershipFromForeignLogicalCarrier() throws Exception {
+        try (var executor = Executors.newSingleThreadExecutor()) {
+            var spot = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+            var actor =
+                    new ZLinkSerialExecutionQueue(
+                            executor, ZLinkExecutionLanePolicy.actorDelivery());
+            var foreignQueue =
+                    new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.generic());
+            var shared = new ZLinkSerialExecutionQueue.SharedSpotGate(spot);
+            actor.bindSharedSpotGate(shared);
+            var foreign = new AtomicReference<Object>();
+            try {
+                foreignQueue
+                        .enqueue(
+                                () -> {
+                                    foreign.set(
+                                            ZLinkSuspendInvocationContext
+                                                    .currentSerialExecutionTurn());
+                                    return CompletableFuture.completedFuture(null);
+                                },
+                                null)
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS);
+                actor.enqueue(
+                                () -> {
+                                    assertTrue(spot.isCurrent());
+                                    assertTrue(actor.isCurrent());
+                                    try (var scope =
+                                            ZLinkSuspendInvocationContext.enterSerialExecutionTurn(
+                                                    foreign.get())) {
+                                        assertTrue(
+                                                spot.isCurrent(),
+                                                "the physical Spot gate remains current");
+                                        assertFalse(
+                                                actor.isCurrent(),
+                                                "a mismatched logical carrier must not expose the"
+                                                        + " Actor entry");
+                                    }
+                                    assertTrue(
+                                            actor.isCurrent(),
+                                            "restoring the logical carrier restores Actor"
+                                                    + " ownership");
+                                    return CompletableFuture.completedFuture(null);
+                                },
+                                null)
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS);
+            } finally {
+                actor.close();
+                spot.close();
+                foreignQueue.close();
+            }
+        }
+    }
+
+    @Test
     void completedTurnCarrierDoesNotOwnLaterYield() throws Exception {
         ZLinkSerialExecutionQueue queue = new ZLinkSerialExecutionQueue();
         AtomicReference<Object> carrier = new AtomicReference<>();
@@ -1573,6 +1632,154 @@ final class ZLinkSerialExecutionQueueTest {
         active.complete(null);
         queue.awaitQuiescence().toCompletableFuture().get(3, TimeUnit.SECONDS);
         assertEquals(List.of("lifecycle-1", "lifecycle-2", "application", "lifecycle-3"), order);
+    }
+
+    private enum InvocationPath {
+        INDEPENDENT,
+        SHARED_SPOT,
+        SHARED_ACTOR
+    }
+
+    @ParameterizedTest
+    @EnumSource(InvocationPath.class)
+    void yieldedGateWaitsForPhysicalInvocationToAssembleLateDependent(InvocationPath path)
+            throws Exception {
+        var tasks = new CountingExecutor();
+        // Only execute is used: this fixture owns and joins every physical worker below.
+        var executor =
+                new AbstractExecutorService() {
+                    @Override
+                    public void execute(Runnable command) {
+                        tasks.execute(command);
+                    }
+
+                    @Override
+                    public void shutdown() {
+                        throw new UnsupportedOperationException();
+                    }
+
+                    @Override
+                    public List<Runnable> shutdownNow() {
+                        throw new UnsupportedOperationException();
+                    }
+
+                    @Override
+                    public boolean isShutdown() {
+                        return false;
+                    }
+
+                    @Override
+                    public boolean isTerminated() {
+                        return false;
+                    }
+
+                    @Override
+                    public boolean awaitTermination(long timeout, TimeUnit unit) {
+                        throw new UnsupportedOperationException();
+                    }
+                };
+        var spot = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        ZLinkSerialExecutionQueue queue = spot;
+        if (path != InvocationPath.INDEPENDENT) {
+            var shared = new ZLinkSerialExecutionQueue.SharedSpotGate(spot);
+            if (path == InvocationPath.SHARED_ACTOR) {
+                queue =
+                        new ZLinkSerialExecutionQueue(
+                                executor, ZLinkExecutionLanePolicy.actorDelivery());
+                queue.bindSharedSpotGate(shared);
+            }
+        }
+        var owner = queue;
+        var remote = new CompletableFuture<Void>();
+        var assembling = new CompletableFuture<Void>();
+        var releaseAssembly = new CompletableFuture<Void>();
+        var managed = new AtomicReference<CompletionStage<Void>>();
+        var followingStarted = new AtomicBoolean();
+        var lateDependentCurrent = new AtomicBoolean();
+        var workers = new ArrayList<Thread>();
+        CompletableFuture<Void> first = null;
+        CompletableFuture<Void> following = null;
+        try {
+            first =
+                    owner.enqueue(
+                                    () -> {
+                                        var yielded =
+                                                ZLinkSerialExecutionQueue.yieldCurrent(remote);
+                                        managed.set(yielded);
+                                        assembling.complete(null);
+                                        releaseAssembly.join();
+                                        return yielded.thenRun(
+                                                () -> lateDependentCurrent.set(owner.isCurrent()));
+                                    },
+                                    null)
+                            .toCompletableFuture();
+            // Also accommodates an executor that first posts the physical invocation separately.
+            while (!assembling.isDone()) {
+                Runnable task = tasks.take();
+                var returned = new CompletableFuture<Void>();
+                var worker =
+                        Thread.ofPlatform()
+                                .unstarted(
+                                        () -> {
+                                            try {
+                                                task.run();
+                                                returned.complete(null);
+                                            } catch (Throwable failure) {
+                                                returned.completeExceptionally(failure);
+                                            }
+                                        });
+                workers.add(worker);
+                worker.start();
+                CompletableFuture.anyOf(assembling, returned).get(3, TimeUnit.SECONDS);
+                if (returned.isCompletedExceptionally()) returned.join();
+            }
+            int submittedWhileAssembling = tasks.submissions.get();
+            following =
+                    owner.enqueue(
+                                    () -> {
+                                        followingStarted.set(true);
+                                        return CompletableFuture.completedFuture(null);
+                                    },
+                                    null)
+                            .toCompletableFuture();
+            remote.complete(null);
+            // A broken early-return boundary leaves its next drain here; execute it
+            // deterministically.
+            Runnable pending;
+            while ((pending = tasks.pending.poll()) != null) pending.run();
+            assertAll(
+                    () ->
+                            assertFalse(
+                                    followingStarted.get(),
+                                    "the next record started before physical invocation returned"),
+                    () ->
+                            assertFalse(
+                                    managed.get().toCompletableFuture().isDone(),
+                                    "the continuation completed before its late dependent was attached"),
+                    () ->
+                            assertEquals(
+                                    submittedWhileAssembling,
+                                    tasks.submissions.get(),
+                                    "a new drain was posted while the physical invocation was assembling"));
+            releaseAssembly.complete(null);
+            for (Thread worker : workers) worker.join();
+            tasks.runUntil(first);
+            tasks.runUntil(following);
+            tasks.runUntil(owner.awaitQuiescence().toCompletableFuture());
+            first.get(3, TimeUnit.SECONDS);
+            following.get(3, TimeUnit.SECONDS);
+            assertTrue(
+                    lateDependentCurrent.get(),
+                    "the late dependent must execute in its continuation turn");
+            assertTrue(followingStarted.get());
+        } finally {
+            remote.complete(null);
+            releaseAssembly.complete(null);
+            for (Thread worker : workers) worker.join();
+            tasks.runUntil(owner.awaitQuiescence().toCompletableFuture());
+            owner.close();
+            if (owner != spot) spot.close();
+        }
     }
 
     @Test
