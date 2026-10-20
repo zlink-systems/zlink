@@ -5,6 +5,7 @@ import systems.zlink.framework.locationprovider.ZLinkBlobFound;
 import systems.zlink.framework.locationprovider.ZLinkBlobReference;
 import systems.zlink.framework.locationprovider.ZLinkBlobRenewed;
 import systems.zlink.framework.locationprovider.ZLinkBlobStored;
+import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics.LocationOperation;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -49,7 +50,14 @@ public final class ZLinkProviderRelocationRepository implements ZLinkRelocationS
             return CompletableFuture.failedFuture(
                     new java.util.concurrent.CancellationException("operation expired"));
         }
-        return provider.put(reference, bytes, retention, cancellation::isCancellationRequested)
+        return observe(
+                        LocationOperation.RELOCATION_PUT,
+                        () ->
+                                provider.put(
+                                        reference,
+                                        bytes,
+                                        retention,
+                                        cancellation::isCancellationRequested))
                 .<CompletionStage<ZLinkRelocationStored>>handle(
                         (result, failure) -> {
                             if (failure != null) {
@@ -91,7 +99,9 @@ public final class ZLinkProviderRelocationRepository implements ZLinkRelocationS
             long checksum,
             Duration retention,
             ZLinkStoreCancellation cancellation) {
-        return provider.read(reference, cancellation::isCancellationRequested)
+        return observe(
+                        LocationOperation.RELOCATION_GET,
+                        () -> provider.read(reference, cancellation::isCancellationRequested))
                 .thenComposeAsync(
                         result -> {
                             if (result instanceof ZLinkBlobFound found) {
@@ -112,8 +122,12 @@ public final class ZLinkProviderRelocationRepository implements ZLinkRelocationS
     @Override
     public CompletionStage<ZLinkRelocationReadResult> get(
             String reference, ZLinkStoreCancellation cancellation) {
-        return provider.read(
-                        new ZLinkBlobReference(reference), cancellation::isCancellationRequested)
+        return observe(
+                        LocationOperation.RELOCATION_GET,
+                        () ->
+                                provider.read(
+                                        new ZLinkBlobReference(reference),
+                                        cancellation::isCancellationRequested))
                 .thenApply(
                         result ->
                                 result instanceof ZLinkBlobFound found
@@ -124,10 +138,13 @@ public final class ZLinkProviderRelocationRepository implements ZLinkRelocationS
     @Override
     public CompletionStage<ZLinkRelocationRenewResult> renew(
             String reference, Duration retention, ZLinkStoreCancellation cancellation) {
-        return provider.renew(
-                        new ZLinkBlobReference(reference),
-                        retention,
-                        cancellation::isCancellationRequested)
+        return observe(
+                        LocationOperation.RELOCATION_PUT,
+                        () ->
+                                provider.renew(
+                                        new ZLinkBlobReference(reference),
+                                        retention,
+                                        cancellation::isCancellationRequested))
                 .thenApply(
                         result ->
                                 result instanceof ZLinkBlobRenewed renewed
@@ -139,9 +156,34 @@ public final class ZLinkProviderRelocationRepository implements ZLinkRelocationS
     @Override
     public CompletionStage<ZLinkRelocationDeleteResult> delete(
             String reference, ZLinkStoreCancellation cancellation) {
-        return provider.delete(
-                        new ZLinkBlobReference(reference), cancellation::isCancellationRequested)
+        return observe(
+                        LocationOperation.RELOCATION_DELETE,
+                        () ->
+                                provider.delete(
+                                        new ZLinkBlobReference(reference),
+                                        cancellation::isCancellationRequested))
                 .thenApply(ignored -> ZLinkRelocationDeleteResult.DELETED);
+    }
+
+    private static <T> CompletionStage<T> observe(
+            LocationOperation operation, java.util.function.Supplier<CompletionStage<T>> call) {
+        CompletionStage<T> result;
+        try {
+            result = call.get();
+        } catch (RuntimeException failure) {
+            recordFailure(operation, failure);
+            throw failure;
+        }
+        return result.whenComplete(
+                (ignored, failure) -> {
+                    if (failure != null) recordFailure(operation, failure);
+                });
+    }
+
+    private static void recordFailure(LocationOperation operation, Throwable failure) {
+        while (failure instanceof java.util.concurrent.CompletionException
+                && failure.getCause() != null) failure = failure.getCause();
+        if (!(failure instanceof java.util.concurrent.CancellationException)) operation.failure();
     }
 
     private static ZLinkRelocationStored stored(

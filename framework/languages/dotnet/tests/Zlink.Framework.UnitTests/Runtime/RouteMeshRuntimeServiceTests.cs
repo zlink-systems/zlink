@@ -9,6 +9,83 @@ namespace Zlink.Framework.UnitTests;
 public sealed class RouteMeshRuntimeServiceTests
 {
     [Fact]
+    public async Task Capacity_Metrics_Use_Store_Commit_Instead_Of_Local_Actor_Count()
+    {
+        await using var fixture = await RuntimeFixture.StartAsync(
+            ZLinkMeshNodeObjectRole.Server,
+            pollingInterval: TimeSpan.FromMinutes(1)
+        );
+        var descriptor = Assert.Single(
+            (await fixture.Store.ListMeshNodesAsync(RuntimeFixture.MeshName, new())).Items
+        );
+        descriptor = descriptor with
+        {
+            DescriptorRevision = descriptor.DescriptorRevision + 1,
+            ObjectCapabilities =
+            [
+                new(
+                    ZLinkPlacementObjectKind.Actor,
+                    "metric-actor",
+                    ZLinkObjectMaintenancePolicyKind.Disabled,
+                    false,
+                    0
+                ),
+            ],
+        };
+        await fixture.Store.UpdateMeshNodeAsync(descriptor, ZLinkLocationWriteIntent.Renew);
+        var reserved = Assert.IsType<ZLinkObjectReserveResult.Reserved>(
+            await fixture.Store.ReserveAsync(
+                new(
+                    ZLinkPlacementObjectKind.Actor,
+                    ZLinkAuthorityKeyCodec.EncodeActor("metric-actor"),
+                    "metric-actor",
+                    "inline:metric",
+                    new byte[32],
+                    1,
+                    new(descriptor.MeshName, descriptor.Rid),
+                    descriptor.LifecycleGeneration,
+                    new(descriptor.OwnerId, descriptor.LeaseGeneration),
+                    new byte[] { 0x01 },
+                    new(1, 0, null)
+                )
+            )
+        );
+        var samples = new Dictionary<string, long>();
+        using var listener = new System.Diagnostics.Metrics.MeterListener
+        {
+            InstrumentPublished = (instrument, owner) =>
+            {
+                if (
+                    instrument.Name
+                    is "zlink.object.capacity.active"
+                        or "zlink.object.capacity.reserved"
+                )
+                    owner.EnableMeasurementEvents(instrument);
+            },
+        };
+        listener.SetMeasurementEventCallback<long>(
+            (instrument, value, tags, _) =>
+            {
+                var actor = false;
+                foreach (var tag in tags)
+                    if (tag.Key == "capacity_scope" && (string?)tag.Value == "actor")
+                        actor = true;
+                if (actor)
+                    samples[instrument.Name] = value;
+            }
+        );
+        listener.Start();
+        listener.RecordObservableInstruments();
+        Assert.Equal(1, samples["zlink.object.capacity.reserved"]);
+        Assert.IsType<ZLinkObjectCommitResult.Committed>(
+            await fixture.Store.CommitAsync(reserved.Reservation, new byte[] { 0x02 })
+        );
+        listener.RecordObservableInstruments();
+        Assert.Equal(1, samples["zlink.object.capacity.active"]);
+        Assert.Equal(0, samples["zlink.object.capacity.reserved"]);
+    }
+
+    [Fact]
     public async Task UnchangedStatusQueriesAndSubscriptionsPreserveSequence()
     {
         await using var fixture = await RuntimeFixture.StartAsync(ZLinkMeshNodeObjectRole.Server);
@@ -957,6 +1034,8 @@ public sealed class RouteMeshRuntimeServiceTests
             LocalNodeRid = localNodeRid;
             ListenEndpoint = listenEndpoint;
         }
+
+        internal IZLinkLocationRepository Store => _locations.Store;
 
         internal IZLinkRouteMeshRuntime Runtime { get; }
 

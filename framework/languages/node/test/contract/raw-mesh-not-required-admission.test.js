@@ -76,13 +76,17 @@ async function assertTerminalPair({ left, right, disconnected, sent, selectRoute
   assert.equal(right.topology.notRequiredPeers().length, 1);
 }
 
-test('HELLO repeats on liveness maintenance until NotRequired ADMIT retires the intent', async () => {
+test('HELLO repeats on liveness maintenance until NotRequired ADMIT retires the intent', async (t) => {
+  let now = 0;
+  t.mock.method(performance, 'now', () => now);
   const pair = createPair({ endpointOnly: false, hostAttached: false, notify: false });
   const { left, right, sent } = pair;
   try {
     assert.equal(await left.observeSelectedRoutes(), 1);
     assert.equal(sent.length, 1);
+    now = 5000;
     await left.pumpBatch(false);
+    now = 10000;
     await left.pumpBatch(false);
     assert.equal(sent.length, 3);
     assert.equal(await right.pumpOne(), 'infrastructure');

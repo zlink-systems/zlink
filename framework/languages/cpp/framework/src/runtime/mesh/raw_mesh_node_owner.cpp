@@ -426,8 +426,7 @@ task_t<bool> submit_registered_infrastructure_request (
                 operation, detail::backend::materialize_binding_part (std::move (payload)));
           }
           catch (const protocol::service_wire_error_t &) {
-              (void) operations->fail (operation,
-                                       foundation::operation_terminal_t::transport_failed);
+              (void) operations->fail (operation, foundation::operation_terminal_t::protocol_error);
           }
       });
     co_return co_await await_request_admission (accepted->task ());
@@ -1998,6 +1997,54 @@ task_t<bool> raw_mesh_node_owner_t::send_bound_session_replaced (
                                          protocol::encode_bound_session_replaced (record));
 }
 
+task_t<void>
+raw_mesh_node_owner_t::request_bound_session_close (protocol::bound_session_close_t record,
+                                                    std::chrono::milliseconds timeout)
+{
+    const auto target = record.session.session_owner_node_routing_id;
+    auto completion = std::make_shared<task_completion_source_t<void>> ();
+    const auto submitted = co_await request_infrastructure (
+      target,
+      [record = std::move (record)] (std::uint64_t correlation) mutable {
+          record.correlation = correlation;
+          return protocol::encode_bound_session_close (record);
+      },
+      [] (const detail::backend::raw_message_t &parts) {
+          if (parts.size () != 1
+              || parts.front ().size () != protocol::reply_header_t::encoded_size)
+              throw protocol::service_wire_error_t ("Session close reply must have one frame");
+          (void) protocol::decode_reply_header (parts.front ());
+          return protocol::pack_infrastructure_reply (parts);
+      },
+      timeout,
+      [completion] (foundation::operation_terminal_t terminal, zlink::message_t packed) {
+          try {
+              protocol::reply_header_t reply{};
+              if (terminal == foundation::operation_terminal_t::completed) {
+                  const auto parts =
+                    protocol::unpack_infrastructure_reply (protocol::message_bytes (packed));
+                  reply = protocol::decode_reply_header (parts.front ());
+                  if (reply.terminal_result
+                      == static_cast<std::uint32_t> (protocol::request_terminal_result::ok)) {
+                      completion->complete (result_t<void>::success ());
+                      return;
+                  }
+              }
+              completion->complete (result_t<void>::failure (
+                user_spot_terminal::map_user_spot_operation_failure (terminal, reply, false),
+                "Bound Session close failed"));
+          }
+          catch (const protocol::service_wire_error_t &error) {
+              completion->complete (
+                result_t<void>::failure (framework_error_kind_t::protocol_error, error.what ()));
+          }
+      });
+    if (!submitted)
+        completion->complete (result_t<void>::failure (framework_error_kind_t::unavailable,
+                                                       "Session close was not admitted"));
+    co_await completion->task ();
+}
+
 bool raw_mesh_node_owner_t::reply_bound_session_bind (const service_mailbox_record_t &request,
                                                       std::uint32_t terminal_result,
                                                       std::uint32_t failure_code)
@@ -3029,6 +3076,20 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
                 owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
                 std::move (received->parts), std::move (received->source_routing_id),
                 received->reply_token, bind.correlation, admitted->descriptor.lifecycle_generation},
+              raw_mesh_pump_result_t::infrastructure);
+        }
+        if (header.kind == protocol::command::boundSessionClose) {
+            if (header.flags != 0 || received->parts.size () != 1 || !received->reply_token)
+                return raw_mesh_pump_result_t::protocol_error;
+            const auto close = protocol::decode_bound_session_close (
+              protocol::message_bytes (received->parts.front ()));
+            const auto local = _topology.local_descriptor ();
+            return enqueue_received (
+              service_mailbox_record_t{
+                owner_key (local.node_routing_id), service_mailbox_domain_t::infrastructure,
+                std::move (received->parts), std::move (received->source_routing_id),
+                received->reply_token, close.correlation,
+                admitted->descriptor.lifecycle_generation},
               raw_mesh_pump_result_t::infrastructure);
         }
         if (header.kind == protocol::command::boundSessionReplaced) {

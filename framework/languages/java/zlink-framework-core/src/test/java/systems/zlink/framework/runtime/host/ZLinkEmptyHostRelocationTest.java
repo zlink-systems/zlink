@@ -28,7 +28,10 @@ final class ZLinkEmptyHostRelocationTest {
 
     @Test
     void hostWithOnlyMeshListenersRelocatesWithoutATarget() throws Exception {
-        try (var runtime = ZLinkFrameworkRuntimeTestAccess.start(options("solo", false))) {
+        try (var metrics =
+                        systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                                .install();
+                var runtime = ZLinkFrameworkRuntimeTestAccess.start(options("solo", false))) {
             ZLinkFrameworkRuntimeTestAccess.startupCompletion(runtime)
                     .toCompletableFuture()
                     .get(WAIT.toSeconds(), TimeUnit.SECONDS);
@@ -49,6 +52,27 @@ final class ZLinkEmptyHostRelocationTest {
                     ZLinkFrameworkRelocationOutcome.RELOCATED, result.outcome(), result::toString);
             assertEquals(ZLinkFrameworkRelocationReason.NONE, result.reason(), result::toString);
             assertEquals(ZLinkFrameworkRuntimeState.RELOCATED, runtime.status().state());
+            assertEquals(1, metrics.count("zlink.host.relocation.duration"));
+            assertEquals(
+                    "relocated",
+                    metrics.only("zlink.host.relocation.duration").tags().get("outcome"));
+            runtime.shutdown(WAIT).toCompletableFuture().get(WAIT.toSeconds(), TimeUnit.SECONDS);
+            assertEquals(1, metrics.count("zlink.host.shutdown.duration"));
+            assertEquals(java.util.Map.of("stopped", 1L), metrics.collectHostStates());
+            assertEquals(
+                    "stopped", metrics.only("zlink.host.shutdown.duration").tags().get("outcome"));
+            assertEquals(
+                    java.util.List.of(
+                            "preparing",
+                            "serving",
+                            "relocating",
+                            "relocated",
+                            "draining",
+                            "stopped"),
+                    metrics.hostStates.stream().distinct().toList());
+            metrics.assertContractLabels();
+            runtime.close();
+            assertEquals(java.util.Map.of(), metrics.collectHostStates());
         }
     }
 

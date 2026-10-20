@@ -29,6 +29,8 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 
 public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
+    default void cancelPendingOperations() {}
+
     /** Installs the host-owned dispatch-error sink used by transport completion observers. */
     default void setDispatchErrorReporter(ZLinkDispatchErrorReporter reporter) {
         // Alternate backends may report transport failures through their own diagnostics path.
@@ -56,9 +58,12 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         return 0L;
     }
 
-    default String localAuthorityOwnerId() {
-        RoutingId current = routingId();
-        return current == null ? name() : current.toString();
+    /**
+     * Session-Actor binding §4: this host's Session owner identity, read from its own live MeshNode
+     * descriptor. Empty while that descriptor is not live.
+     */
+    default Optional<PeerAuthorityFence> localSessionOwner() {
+        return Optional.empty();
     }
 
     void setBind(String endpoint);
@@ -503,6 +508,17 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
      * Installs the one-way command 51 endpoint. The record is infrastructure state and must not
      * enter the application mailbox.
      */
+    default void setBoundSessionCloseHandler(
+            java.util.function.Function<
+                            ZLinkServiceM6BWireCodec.BoundSessionClose, CompletionStage<Void>>
+                    handler) {}
+
+    default CompletionStage<Void> requestBoundSessionClose(
+            ZLinkServiceM6BWireCodec.BoundSessionClose request, Duration timeout) {
+        return CompletableFuture.failedFuture(
+                new UnsupportedOperationException("Session close is unavailable"));
+    }
+
     default void setBoundSessionReplacedHandler(BoundSessionReplacedHandler handler) {
         // Alternate backends may not support bound-session replacement.
     }
@@ -634,6 +650,7 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
         }
 
         default CompletionStage<Void> admitExisting(
+                ZLinkServiceM6BWireCodec.InstanceRouteFence currentRoute,
                 ZLinkServiceM6BWireCodec.InstanceSpotMessage message,
                 ZLinkBackendReceived received) {
             return null;
@@ -722,6 +739,18 @@ public interface ZLinkInternalMeshNode extends ZLinkBackendObject {
             long sourceNodeGeneration,
             String ownerId,
             long ownerLeaseGeneration) {
+        /**
+         * Session-Actor binding §4: the receiving Session owner compares the identity carried by
+         * command 42, 51 or 54 with its current values exactly.
+         */
+        public boolean identifies(
+                RoutingId nodeRid, long nodeGeneration, String ownerId, long ownerLeaseGeneration) {
+            return sourceNodeRid.equals(nodeRid)
+                    && sourceNodeGeneration == nodeGeneration
+                    && this.ownerId.equals(ownerId)
+                    && this.ownerLeaseGeneration == ownerLeaseGeneration;
+        }
+
         public PeerAuthorityFence {
             Objects.requireNonNull(sourceNodeRid, "sourceNodeRid");
             if (sourceNodeGeneration == 0 || ownerLeaseGeneration <= 0) {

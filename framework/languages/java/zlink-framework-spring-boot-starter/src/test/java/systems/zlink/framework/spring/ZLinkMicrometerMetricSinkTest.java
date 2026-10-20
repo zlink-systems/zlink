@@ -22,10 +22,98 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 final class ZLinkMicrometerMetricSinkTest {
+    @Test
+    void registersEverySharedInstrumentWithItsKindUnitAndLabelKeys() throws Exception {
+        com.fasterxml.jackson.databind.JsonNode fixture;
+        try (var input = getClass().getResourceAsStream("/runtime-metrics-v1.json")) {
+            org.junit.jupiter.api.Assertions.assertNotNull(input);
+            fixture = new com.fasterxml.jackson.databind.ObjectMapper().readTree(input);
+        }
+        var registry = new SimpleMeterRegistry();
+        try {
+            var sink = new ZLinkMicrometerMetricSink(registry);
+            var expectedNames = new java.util.HashSet<String>();
+            for (var definition : fixture.path("metrics")) {
+                String name = definition.path("name").asText();
+                String kind = definition.path("kind").asText();
+                String unit = definition.path("unit").asText();
+                expectedNames.add(name);
+                var tags = new java.util.HashMap<String, String>();
+                definition
+                        .path("labels")
+                        .forEach(
+                                label -> {
+                                    var values =
+                                            definition.path("labelValues").path(label.asText());
+                                    tags.put(
+                                            label.asText(),
+                                            values.isArray()
+                                                    ? values.get(0).asText()
+                                                    : "registered");
+                                });
+                switch (kind) {
+                    case "counter" -> sink.increment(name, tags);
+                    case "updown" -> sink.add(name, 1, tags);
+                    case "histogram" -> sink.record(name, 1d, tags);
+                    case "observable" ->
+                            sink.registerObservable(
+                                    ZLinkRuntimeMetrics.Metric.decode(name), tags, () -> 1L);
+                    default -> throw new AssertionError(kind);
+                }
+                var meter = registry.get(name).meter();
+                assertEquals(unit, meter.getId().getBaseUnit(), name);
+                assertEquals(
+                        tags.keySet(),
+                        meter.getId().getTags().stream()
+                                .map(io.micrometer.core.instrument.Tag::getKey)
+                                .collect(java.util.stream.Collectors.toSet()),
+                        name);
+                assertEquals(
+                        switch (kind) {
+                            case "counter" -> io.micrometer.core.instrument.Meter.Type.COUNTER;
+                            case "histogram" ->
+                                    io.micrometer.core.instrument.Meter.Type.DISTRIBUTION_SUMMARY;
+                            default -> io.micrometer.core.instrument.Meter.Type.GAUGE;
+                        },
+                        meter.getId().getType(),
+                        name);
+            }
+            assertEquals(
+                    expectedNames,
+                    registry.getMeters().stream()
+                            .map(meter -> meter.getId().getName())
+                            .collect(java.util.stream.Collectors.toSet()));
+        } finally {
+            registry.close();
+        }
+    }
+
+    @Test
+    void hostStateReplacesThePreviousSeriesAndByteHistogramsKeepByteUnits() {
+        var registry = new SimpleMeterRegistry();
+        try {
+            var sink = new ZLinkMicrometerMetricSink(registry);
+            sink.observeHostState("serving");
+            sink.observeHostState("draining");
+            sink.observeHostState("stopped");
+            assertEquals(1, registry.find("zlink.host.state").gauges().size());
+            assertEquals(
+                    1d, registry.get("zlink.host.state").tag("state", "stopped").gauge().value());
+            sink.record(
+                    "zlink.relocation.bytes",
+                    128d,
+                    Map.of("mesh_name", "mesh", "object_kind", "actor", "policy", "snapshot"));
+            assertEquals(
+                    "By", registry.get("zlink.relocation.bytes").summary().getId().getBaseUnit());
+            assertEquals(128d, registry.get("zlink.relocation.bytes").summary().totalAmount());
+        } finally {
+            registry.close();
+        }
+    }
+
     @Test
     void retainsRequestAndMessageCounterUnits() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
@@ -62,7 +150,7 @@ final class ZLinkMicrometerMetricSinkTest {
 
         assertEquals(1.0, registry.get("zlink.stream.connections.opened").counter().count());
         assertEquals(1.0, registry.get("zlink.stream.connections.active").gauge().value());
-        assertEquals(1, registry.get("zlink.mesh_node.request.duration").timer().count());
+        assertEquals(1, registry.get("zlink.mesh_node.request.duration").summary().count());
         assertEquals(0.25, registry.get("application.custom.summary").summary().totalAmount());
         assertThrows(
                 IllegalArgumentException.class,
@@ -70,18 +158,16 @@ final class ZLinkMicrometerMetricSinkTest {
     }
 
     @Test
-    void recordsRequestDurationSecondsInTheExistingTimer() {
+    void recordsRequestDurationSecondsWithTheSpecifiedHistogramUnit() {
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         ZLinkMicrometerMetricSink sink = new ZLinkMicrometerMetricSink(registry);
 
         sink.record("zlink.mesh_node.request.duration", 0.25, Map.of());
 
-        assertEquals(1, registry.get("zlink.mesh_node.request.duration").timer().count());
+        assertEquals(1, registry.get("zlink.mesh_node.request.duration").summary().count());
         assertEquals(
                 0.25,
-                registry.get("zlink.mesh_node.request.duration")
-                        .timer()
-                        .totalTime(TimeUnit.SECONDS),
+                registry.get("zlink.mesh_node.request.duration").summary().totalAmount(),
                 0.000001);
     }
 

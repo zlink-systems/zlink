@@ -16,6 +16,7 @@ import systems.zlink.framework.runtime.internal.channels.ZLinkClientServerRuntim
 import systems.zlink.framework.runtime.internal.channels.ZLinkFanoutRuntimeConfiguration;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectPeerResolver;
 import systems.zlink.framework.runtime.internal.locations.ZLinkAutoConnectType;
+import systems.zlink.framework.runtime.internal.locations.ZLinkMeshNodeDescriptorKey;
 import systems.zlink.framework.runtime.internal.monitoring.ZLinkRuntimeEventDispatcher;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceNodeDescriptor;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
@@ -31,6 +32,7 @@ import java.util.Objects;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
 public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
@@ -125,6 +127,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                             peer ->
                                     manualExpectedRids.put(
                                             peer.endpoint(), peer.expectedRoutingId()));
+            var capacityKey = new ZLinkMeshNodeDescriptorKey(mesh.meshName(), mesh.routingId());
             ZLinkAutoConnectLoop loop =
                     addLoop(
                             ZLinkAutoConnectType.ROUTE_MESH,
@@ -141,7 +144,8 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                                     : mesh.objectRoleEnabled()
                                             ? ZLinkMeshNodeObjectRole.CLIENT
                                             : ZLinkMeshNodeObjectRole.NONE,
-                            !mesh.channelWeights().isEmpty());
+                            !mesh.channelWeights().isEmpty(),
+                            () -> runtime.locationStore().refreshCapacityMetrics(capacityKey));
             if (loop != null) {
                 node.setPeerReconcileRequester(peer -> loop.reconcileNow());
             }
@@ -171,7 +175,8 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                     metadata.isEmpty() ? null : Map.copyOf(metadata),
                     capabilities.isEmpty() ? null : capabilities,
                     ZLinkMeshNodeObjectRole.NONE,
-                    false);
+                    false,
+                    () -> CompletableFuture.completedFuture(null));
         }
 
         CompletionStage<Void> chain =
@@ -268,7 +273,8 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                 null,
                 null,
                 ZLinkMeshNodeObjectRole.NONE,
-                false);
+                false,
+                () -> CompletableFuture.completedFuture(null));
     }
 
     private ZLinkAutoConnectLoop addLoop(
@@ -282,7 +288,8 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
             Map<String, String> metadata,
             List<String> capabilities,
             ZLinkMeshNodeObjectRole objectRole,
-            boolean hasRouteMeshServerChannel) {
+            boolean hasRouteMeshServerChannel,
+            Supplier<CompletionStage<Void>> refreshCapacity) {
         boolean advertisable = shouldAdvertise(type, role, nodeRid, endpoint);
         if (!advertisable && executor == ZLinkAutoConnectExecutor.NONE) {
             return null;
@@ -305,7 +312,7 @@ public final class ZLinkLocationAutoConnectHost implements AutoCloseable {
                         System::nanoTime,
                         failure ->
                                 runtimeEvents.publishRuntimeTaskFailure("auto-connect", failure));
-        ZLinkAutoConnectLoop loop = new ZLinkAutoConnectLoop(reconciler, options);
+        ZLinkAutoConnectLoop loop = new ZLinkAutoConnectLoop(reconciler, options, refreshCapacity);
         loops.add(loop);
         return loop;
     }

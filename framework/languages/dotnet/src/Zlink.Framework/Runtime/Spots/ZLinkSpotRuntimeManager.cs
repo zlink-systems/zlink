@@ -190,7 +190,7 @@ internal sealed class ZLinkSpotRuntimeManager(
             cancellationToken
         );
         deadlineToken.CancelAfter(timeout);
-        var localAdmission = false;
+        var completionExpected = false;
         try
         {
             var meshName = source.Registration.SpotNodeName;
@@ -321,6 +321,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                             ZLinkFrameworkErrorKind.AlreadyExists,
                             $"User Spot '{requestedSpotId}' already exists."
                         );
+                    completionExpected = true;
                     var joined = await JoinExistingAsync(
                             requestedSpotId,
                             stableType,
@@ -339,6 +340,7 @@ internal sealed class ZLinkSpotRuntimeManager(
                         is ZLinkObjectReserveResult.Conflict(ZLinkAuthorityReadResult.Found found)
                 )
                 {
+                    completionExpected = true;
                     var joined = await JoinExistingAsync(
                             requestedSpotId,
                             stableType,
@@ -390,7 +392,7 @@ internal sealed class ZLinkSpotRuntimeManager(
             {
                 if (target.Rid == source.Node.RoutingId)
                 {
-                    localAdmission = true;
+                    completionExpected = true;
                     result = await source
                         .CreateUserSpotLocalAsync(
                             requestedSpotId,
@@ -471,10 +473,10 @@ internal sealed class ZLinkSpotRuntimeManager(
             )
         {
             throw new ZLinkFrameworkException(
-                localAdmission
+                completionExpected
                     ? ZLinkFrameworkErrorKind.DeadlineExceeded
                     : ZLinkFrameworkErrorKind.Unavailable,
-                localAdmission
+                completionExpected
                     ? "User Spot creation did not complete before its deadline."
                     : "User Spot creation was not admitted before its deadline.",
                 ZLinkRetryAdvice.RetryAfterBackoff,
@@ -657,8 +659,14 @@ internal sealed class ZLinkSpotRuntimeManager(
                     null
                 );
             if (
-                current.Allocation.State != ZLinkPlacementAllocationState.Reserved
-                || authority.State != ZLinkUserSpotAuthorityState.Creating
+                !(
+                    current.Allocation.State == ZLinkPlacementAllocationState.Reserved
+                    && authority.State == ZLinkUserSpotAuthorityState.Creating
+                )
+                && !(
+                    current.Allocation.State == ZLinkPlacementAllocationState.Active
+                    && authority.State == ZLinkUserSpotAuthorityState.Closing
+                )
             )
                 throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.Unavailable,

@@ -446,13 +446,30 @@ client_server_location_runtime_t::snapshot_source_locked (const std::string &cha
 task_t<client_server_channel_snapshot_t>
 client_server_location_runtime_t::snapshot_task (std::string channel_name) const
 {
+    auto projection = co_await query_projection_task (std::move (channel_name));
+    co_return co_await complete_query_task (std::move (projection));
+}
+
+task_t<client_server_channel_snapshot_t>
+client_server_location_runtime_t::query_projection_task (std::string channel_name) const
+{
     auto source = co_await _lane.run_task ([this, channel_name = std::move (channel_name)] {
         return snapshot_source_locked (channel_name);
     });
-    auto current = co_await build_snapshot_task (std::move (source));
-    co_return co_await _lane.run_task ([this, current = std::move (current)] () mutable {
-        return publish_snapshot_locked (std::move (current));
-    });
+    co_return co_await build_snapshot_task (std::move (source));
+}
+
+task_t<client_server_channel_snapshot_t> client_server_location_runtime_t::complete_query_task (
+  client_server_channel_snapshot_t projection) const
+{
+    auto channel_name = projection.channel_name;
+    auto published =
+      co_await _lane.run_task ([this, projection = std::move (projection)] () mutable {
+          return publish_snapshot_locked (std::move (projection));
+      });
+    if (published)
+        co_return std::move (*published);
+    co_return co_await snapshot_task (std::move (channel_name));
 }
 
 task_t<client_server_channel_snapshot_t>
@@ -572,15 +589,19 @@ bool client_server_location_runtime_t::is_ready (std::string channel_name) const
     return snapshot (std::move (channel_name)).is_ready;
 }
 
-client_server_channel_snapshot_t client_server_location_runtime_t::publish_snapshot_locked (
+// Runtime monitoring §4·§6: a projection is published only from the status it was taken from.
+// When another publication won the turn first, either projection may describe the later
+// channel state, so this returns nothing and the caller projects again from the winner. A new
+// observer registered with the projection's source has already received that publication.
+std::optional<client_server_channel_snapshot_t>
+client_server_location_runtime_t::publish_snapshot_locked (
   client_server_channel_snapshot_t current,
   const std::shared_ptr<observer_t> &initial_observer) const
 {
     const auto &channel_name = current.channel_name;
     const auto previous = _last_snapshots.find (channel_name);
-    if (previous != _last_snapshots.end () && current.sequence < previous->second.sequence) {
-        current = previous->second;
-    }
+    if (previous != _last_snapshots.end () && current.sequence < previous->second.sequence)
+        return std::nullopt;
     const bool changed =
       previous == _last_snapshots.end () || !snapshot_equivalent (previous->second, current);
     if (changed) {
@@ -617,11 +638,15 @@ task_t<void> client_server_location_runtime_t::publish_snapshot_changes ()
     snapshots.reserve (sources.size ());
     for (auto &source : sources)
         snapshots.push_back (co_await build_snapshot_task (std::move (source)));
-    co_await _lane.run_task ([this, snapshots = std::move (snapshots)] () mutable {
-        for (auto &current : snapshots)
-            current = publish_snapshot_locked (std::move (current));
-        return std::move (snapshots);
-    });
+    const bool lost =
+      co_await _lane.run_task ([this, snapshots = std::move (snapshots)] () mutable {
+          bool any_lost = false;
+          for (auto &current : snapshots)
+              any_lost = !publish_snapshot_locked (std::move (current)) || any_lost;
+          return any_lost;
+      });
+    if (lost)
+        co_await publish_snapshot_changes ();
 }
 
 void client_server_location_runtime_t::start ()

@@ -74,6 +74,8 @@ public final class ZLinkRequestMetrics {
                         case COMPLETED -> series.completed;
                         case FAILED -> series.failed;
                         case TIMED_OUT -> series.timedOut;
+                        case CANCELLED -> series.cancelled;
+                        case SHUTDOWN -> series.shutdown;
                     });
         }
         if (outcome == Outcome.TIMED_OUT) {
@@ -113,6 +115,13 @@ public final class ZLinkRequestMetrics {
                             && framework.kind() == ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED) {
                 return Outcome.TIMED_OUT;
             }
+            if (current instanceof java.util.concurrent.CancellationException)
+                return Outcome.CANCELLED;
+            if (current instanceof ZlinkRequestException request
+                    && request.getResult() == RequestResult.TERMINATED) return Outcome.SHUTDOWN;
+            if (current instanceof ZLinkFrameworkException framework
+                    && framework.kind() == ZLinkFrameworkErrorKind.SHUTTING_DOWN)
+                return Outcome.SHUTDOWN;
             Throwable cause = current.getCause();
             if (cause == current) {
                 break;
@@ -125,7 +134,9 @@ public final class ZLinkRequestMetrics {
     private enum Outcome {
         COMPLETED("completed"),
         FAILED("failed"),
-        TIMED_OUT("timed_out");
+        TIMED_OUT("timed_out"),
+        CANCELLED("cancelled"),
+        SHUTDOWN("shutdown");
         private final String wire;
 
         Outcome(String wire) {
@@ -143,6 +154,8 @@ public final class ZLinkRequestMetrics {
         private final Map<String, String> completed;
         private final Map<String, String> failed;
         private final Map<String, String> timedOut;
+        private final Map<String, String> cancelled;
+        private final Map<String, String> shutdown;
 
         private Series(String meshName, String surface) {
             request =
@@ -151,30 +164,22 @@ public final class ZLinkRequestMetrics {
                             meshName,
                             ZLinkRuntimeMetrics.Tag.SURFACE.wire(),
                             surface);
-            completed =
-                    Map.of(
-                            ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
-                            meshName,
-                            ZLinkRuntimeMetrics.Tag.SURFACE.wire(),
-                            surface,
-                            ZLinkRuntimeMetrics.Tag.OUTCOME.wire(),
-                            Outcome.COMPLETED.wire());
-            failed =
-                    Map.of(
-                            ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
-                            meshName,
-                            ZLinkRuntimeMetrics.Tag.SURFACE.wire(),
-                            surface,
-                            ZLinkRuntimeMetrics.Tag.OUTCOME.wire(),
-                            Outcome.FAILED.wire());
-            timedOut =
-                    Map.of(
-                            ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
-                            meshName,
-                            ZLinkRuntimeMetrics.Tag.SURFACE.wire(),
-                            surface,
-                            ZLinkRuntimeMetrics.Tag.OUTCOME.wire(),
-                            Outcome.TIMED_OUT.wire());
+            completed = terminalTags(meshName, surface, Outcome.COMPLETED);
+            failed = terminalTags(meshName, surface, Outcome.FAILED);
+            timedOut = terminalTags(meshName, surface, Outcome.TIMED_OUT);
+            cancelled = terminalTags(meshName, surface, Outcome.CANCELLED);
+            shutdown = terminalTags(meshName, surface, Outcome.SHUTDOWN);
+        }
+
+        private static Map<String, String> terminalTags(
+                String meshName, String surface, Outcome outcome) {
+            return Map.of(
+                    ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(),
+                    meshName,
+                    ZLinkRuntimeMetrics.Tag.SURFACE.wire(),
+                    surface,
+                    ZLinkRuntimeMetrics.Tag.OUTCOME.wire(),
+                    outcome.wire());
         }
 
         private void registerInflight() {

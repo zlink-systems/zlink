@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 using Microsoft.Extensions.DependencyInjection;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Contracts.Messaging;
@@ -240,7 +238,6 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
         {
             var provider = new ZLinkInMemoryProviderLocationStore();
             var store = new ZLinkProviderLocationRepository(provider);
-            var endpoint = AllocateTcpEndpoint();
             var registration = new ZLinkFrameworkRegistration
             {
                 DefaultRequestTimeout = TimeSpan.FromSeconds(2),
@@ -276,7 +273,7 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                 ObjectRoleSelected = true,
                 Router = new ZLinkSpotRouterCapabilityRegistration
                 {
-                    BindEndpoint = endpoint,
+                    BindEndpoint = "tcp://127.0.0.1:0",
                     AcquisitionMode = ZLinkPeerAcquisitionMode.Manual,
                 },
             };
@@ -313,6 +310,9 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
             await runtime.StartAsync(CancellationToken.None);
             try
             {
+                var endpoint = runtime
+                    .GetListenerStatus(ZLinkListenerKind.RouteMesh, MeshName)
+                    .Endpoint;
                 var targetNode = runtime.GetSpotNodeRuntime(MeshName).Node;
                 var targetRid = targetNode.RoutingId;
                 var targetNodeGeneration = targetNode.MeshStatus().LifecycleGeneration;
@@ -518,14 +518,6 @@ public sealed class CanonicalActorJoinWireAdmissionNegativeTests
                     throw new TimeoutException("Wire admission setup did not complete.");
                 await Task.Delay(10);
             }
-        }
-
-        internal static string AllocateTcpEndpoint()
-        {
-            using var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            var endpoint = Assert.IsType<IPEndPoint>(listener.LocalEndpoint);
-            return $"tcp://127.0.0.1:{endpoint.Port}";
         }
     }
 

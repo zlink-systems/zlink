@@ -48,7 +48,6 @@ need them.
     | --- | --- | --- |
     | `lz4` | STREAM compression | `-DZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4=OFF -DZLINK_STREAM_CONNECTOR_WITH_LZ4=OFF` |
     | `openssl` | Stream Connector TLS | `-DZLINK_STREAM_CONNECTOR_WITH_TLS=OFF` |
-    | `boost` (asio, beast) | HTTP and transport | Cannot be turned off. Core and the framework must use the **same Boost tree** |
     | `nlohmann_json` | Default JSON serializer | Cannot be turned off |
     | `opentelemetry-cpp` | Observation | Cannot be turned off |
     | `protobuf` | Protobuf codec | Only when that target is linked |

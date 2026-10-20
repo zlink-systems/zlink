@@ -504,11 +504,11 @@ final class ZLinkActorClientRuntimeTest {
             assertEquals(1L, metrics.inflight("recording", "actor"));
             assertTrue(result.cancel(false));
             assertEquals(0L, metrics.inflight("recording", "actor"));
-            assertEquals(1L, metrics.durationCount("recording", "actor", "failed"));
+            assertEquals(1L, metrics.durationCount("recording", "actor", "cancelled"));
 
             runtimeReady.complete(null);
             assertEquals(0L, metrics.inflight("recording", "actor"));
-            assertEquals(1L, metrics.durationCount("recording", "actor", "failed"));
+            assertEquals(1L, metrics.durationCount("recording", "actor", "cancelled"));
         }
     }
 

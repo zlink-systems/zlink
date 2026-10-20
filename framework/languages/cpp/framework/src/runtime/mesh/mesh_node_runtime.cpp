@@ -1711,6 +1711,11 @@ void mesh_node_runtime_t::configure_session_route_owner (
         _node->configure_session_route_owner (_session_route_owner_resolver);
 }
 
+std::optional<location_owner_token_t> mesh_node_runtime_t::session_route_owner () const
+{
+    return _session_route_owner_resolver ? _session_route_owner_resolver () : std::nullopt;
+}
+
 void mesh_node_runtime_t::configure_stateful_dispatch (
   stateful_dispatch_configuration_t configuration)
 {
@@ -2647,8 +2652,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
         co_return co_await fail_remote_actor_join (
           *s, failed, "source Framework Actor authority is unavailable");
     }
-    const auto source_owner =
-      _session_route_owner_resolver ? _session_route_owner_resolver () : std::nullopt;
+    const auto source_owner = session_route_owner ();
     const auto source_status = _node->status ();
     if (!source_owner || source_owner->lease_generation <= 0
         || source_status.lifecycle_generation () == 0) {
@@ -2850,8 +2854,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     // read at ActorJoinRequest send time), not a per-actor lease -- the JSON
     // admission path (spot_actor_admission_route_request_t) has no per-actor
     // lease field at this phase either.
-    const auto local_owner =
-      _session_route_owner_resolver ? _session_route_owner_resolver () : std::nullopt;
+    const auto local_owner = session_route_owner ();
     if (!local_owner || local_owner->lease_generation <= 0) {
         co_return co_await fail_remote_actor_join (
           *s,

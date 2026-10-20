@@ -223,6 +223,9 @@ class mesh_node_runtime_t
                                std::chrono::steady_clock::time_point restore_deadline);
     void configure_session_route_owner (
       std::function<std::optional<location_owner_token_t> ()> owner_resolver);
+    /** Session-Actor binding §4: this host's descriptor owner token, absent
+     *  while the host has none. */
+    std::optional<location_owner_token_t> session_route_owner () const;
     void configure_bound_session_relocation_resolver (
       std::function<task_t<std::optional<bound_session_relocation_route_t>> (
         const runtime::stateful::object_ref_t &)> resolver);

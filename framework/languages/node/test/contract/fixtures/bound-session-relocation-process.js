@@ -103,6 +103,9 @@ async function startTarget() {
     spotId: 'entry',
     sessionNodeRid: 'session-owner',
     sessionRid: 'session',
+    sessionOwnerNodeGeneration: 4n,
+    sessionOwnerId: 'session-owner-id',
+    sessionOwnerLeaseGeneration: 8n,
     bindingGeneration: 6n
   };
   transferState = {
@@ -142,12 +145,6 @@ async function startTarget() {
   };
   transferRuntime = new ZLinkActorTransferRuntime({
     authorityStore: () => ({ async readAuthority() { return authority; } }),
-    liveDescriptors: async () => [{
-      rid: 'session-owner',
-      lifecycleGeneration: 4n,
-      ownerId: 'session-owner-id',
-      leaseGeneration: 8n
-    }],
     sessionRelocationWire: () => sessionRelocationWire,
     actorHandoff: {
       begin() {},

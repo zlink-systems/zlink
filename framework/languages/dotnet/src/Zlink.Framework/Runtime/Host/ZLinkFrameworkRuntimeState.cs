@@ -262,7 +262,7 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
                 )
                 .ConfigureAwait(false);
 
-        await CaptureAsync(TaskRunner.StopAsync).ConfigureAwait(false);
+        await CaptureAsync(() => TaskRunner.StopAsync(forceStopToken)).ConfigureAwait(false);
 
         foreach (var bundle in resources.PublisherBundles)
             await CaptureAsync(() => DisposeSafelyAsync(bundle.DisposeAsync)).ConfigureAwait(false);

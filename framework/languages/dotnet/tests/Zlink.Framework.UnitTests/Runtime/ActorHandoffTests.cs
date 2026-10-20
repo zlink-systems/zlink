@@ -1659,6 +1659,9 @@ public sealed class ActorHandoffTests
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         Task? escapedChild = null;
+        var childTransitionSubmitted = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
 
         await state.ExecuteDispatchAsync(
             _ =>
@@ -1667,7 +1670,12 @@ public sealed class ActorHandoffTests
                 {
                     childStarted.TrySetResult();
                     await releaseChild.Task;
-                    await state.ExecuteHandoffTransitionAsync(() => true, CancellationToken.None);
+                    var transition = state.ExecuteHandoffTransitionAsync(
+                        () => true,
+                        CancellationToken.None
+                    );
+                    childTransitionSubmitted.TrySetResult();
+                    await transition;
                 });
                 return ValueTask.CompletedTask;
             },
@@ -1694,7 +1702,7 @@ public sealed class ActorHandoffTests
         await secondEntered.Task;
 
         releaseChild.TrySetResult();
-        await Task.Delay(25);
+        await childTransitionSubmitted.Task.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.False(escapedChild!.IsCompleted);
 
         releaseSecond.TrySetResult();
@@ -1853,8 +1861,10 @@ public sealed class ActorHandoffTests
         const string routeRemovedMarker = "message_follow_route_removed entries=0";
         var markers = new System.Collections.Concurrent.ConcurrentQueue<string>();
         var removed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var time = new ControllableTimeProvider();
         var state = new ZLinkActorRuntimeState(
             "actor-private-42",
+            time,
             handoffDiagnostic: marker =>
             {
                 markers.Enqueue(marker);
@@ -1867,7 +1877,9 @@ public sealed class ActorHandoffTests
         state.BindNativeActorRef(source);
         state.Handoff.BeginCapture();
 
+        var followScheduled = time.WaitForNextTimerAsync(TimeSpan.FromMilliseconds(10));
         _ = Cutover(state, 0, source, target, duration: TimeSpan.FromMilliseconds(10));
+        await followScheduled.WaitAsync(TimeSpan.FromSeconds(1));
 
         var registered = Assert.Single(
             markers,
@@ -1880,7 +1892,8 @@ public sealed class ActorHandoffTests
         Assert.DoesNotContain("generation=", registered);
         Assert.DoesNotContain("actor-private-42", registered);
 
-        await removed.Task.WaitAsync(TimeSpan.FromMilliseconds(100));
+        time.AdvanceMonotonic(TimeSpan.FromMilliseconds(10));
+        await removed.Task.WaitAsync(TimeSpan.FromSeconds(1));
 
         Assert.Contains(routeRemovedMarker, markers);
         Assert.All(
@@ -1897,37 +1910,45 @@ public sealed class ActorHandoffTests
     [Fact]
     public async Task SafeToShutdown_TokenReleases_OnlyAfterFollowDurationAndRetransmissionWindow()
     {
-        var state = new ZLinkActorRuntimeState("actor-1");
+        var time = new ControllableTimeProvider();
+        var state = new ZLinkActorRuntimeState("actor-1", time);
         var source = ActorRef("node-a", 1);
         var target = ActorRef("node-b", 2);
         state.BindNativeActorRef(source);
         state.Handoff.BeginCapture();
 
-        var released = false;
-        state.Handoff.PendingShutdownToken = new DisposeSpy(() => released = true);
+        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        state.Handoff.PendingShutdownToken = new DisposeSpy(() => released.TrySetResult());
 
+        var followDuration = TimeSpan.FromMilliseconds(15);
+        var retransmissionWindow = TimeSpan.FromMilliseconds(60);
+        var followScheduled = time.WaitForNextTimerAsync(followDuration);
+        var windowScheduled = time.WaitForNextTimerAsync(retransmissionWindow - followDuration);
         _ = Cutover(
             state,
             0,
             source,
             target,
-            duration: TimeSpan.FromMilliseconds(15),
-            retransmissionWindow: TimeSpan.FromMilliseconds(60)
+            duration: followDuration,
+            retransmissionWindow: retransmissionWindow
         );
-        //  The retransmission window (60ms) outlives the follow duration
-        //  (15ms), so SafeToShutdown must wait for the window, not just S4.
+        // SafeToShutdown waits for the window even after S4.
 
-        Assert.False(released);
-        await Task.Delay(30);
+        await followScheduled.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.False(released.Task.IsCompleted);
+        time.AdvanceMonotonic(followDuration);
+        await windowScheduled.WaitAsync(TimeSpan.FromSeconds(1));
         Assert.False(
-            released,
+            released.Task.IsCompleted,
             "the obligation must still hold once S4 elapses but the retransmission window has not"
         );
 
-        for (var attempt = 0; attempt < 40 && !released; attempt++)
-            await Task.Delay(10);
+        time.AdvanceMonotonic(TimeSpan.FromMilliseconds(44));
+        Assert.False(released.Task.IsCompleted);
+        time.AdvanceMonotonic(TimeSpan.FromMilliseconds(1));
 
-        Assert.True(released);
+        await released.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.True(released.Task.IsCompleted);
     }
 
     [Fact]
@@ -1966,26 +1987,32 @@ public sealed class ActorHandoffTests
         );
         listener.Start();
 
-        var state = new ZLinkActorRuntimeState("actor-1");
+        var time = new ControllableTimeProvider();
+        var state = new ZLinkActorRuntimeState("actor-1", time);
         var source = ActorRef("node-a", 1);
         var target = ActorRef("node-b", 2);
         state.BindNativeActorRef(source);
         state.Handoff.BeginCapture();
-        var released = false;
-        state.Handoff.PendingShutdownToken = new DisposeSpy(() => released = true);
+        var released = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        state.Handoff.PendingShutdownToken = new DisposeSpy(() => released.TrySetResult());
+        var followDuration = TimeSpan.FromMilliseconds(15);
+        var retransmissionWindow = TimeSpan.FromMilliseconds(150);
+        var followScheduled = time.WaitForNextTimerAsync(followDuration);
+        var windowScheduled = time.WaitForNextTimerAsync(retransmissionWindow - followDuration);
         _ = Cutover(
             state,
             0,
             source,
             target,
-            duration: TimeSpan.FromMilliseconds(15),
-            retransmissionWindow: TimeSpan.FromMilliseconds(150)
+            duration: followDuration,
+            retransmissionWindow: retransmissionWindow
         );
-        //  The retransmission window (150ms) far outlives the follow
-        //  duration (15ms). The metric must not wait for the window.
+        // Route convergence records S4 while the retransmission window remains open.
 
-        for (var attempt = 0; attempt < 40 && measurements.Count == 0; attempt++)
-            await Task.Delay(10);
+        await followScheduled.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.Empty(measurements);
+        time.AdvanceMonotonic(followDuration);
+        await windowScheduled.WaitAsync(TimeSpan.FromSeconds(1));
 
         var measurement = Assert.Single(measurements);
         Assert.Contains(
@@ -1993,9 +2020,14 @@ public sealed class ActorHandoffTests
             tag => tag.Key == "unit_kind" && Equals(tag.Value, "actor")
         );
         Assert.False(
-            released,
+            released.Task.IsCompleted,
             "the SafeToShutdown obligation is still open while the retransmission window continues"
         );
+        Assert.Equal(followDuration.TotalSeconds, measurement.Value);
+        time.AdvanceMonotonic(retransmissionWindow - followDuration);
+        await released.Task.WaitAsync(TimeSpan.FromSeconds(1));
+        Assert.True(released.Task.IsCompleted);
+        Assert.Single(measurements);
     }
 
     private sealed class DisposeSpy(Action onDispose) : IDisposable

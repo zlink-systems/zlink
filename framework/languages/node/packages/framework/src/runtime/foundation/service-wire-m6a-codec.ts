@@ -207,7 +207,8 @@ export function encodeMultipartApplicationPayload(
   if (parts.length === 0) fail('Multipart payload must contain at least one part.');
   if (parts.length > MAX_U32) fail('Multipart part count exceeds u32.');
   let multipartLength = 4;
-  for (const part of parts) {
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index]!;
     if (part.byteLength > MAX_U32) fail('Multipart part exceeds u32.');
     multipartLength += 4 + part.byteLength;
     if (multipartLength > MAX_U32) fail('Multipart payload exceeds u32.');
@@ -216,7 +217,8 @@ export function encodeMultipartApplicationPayload(
   let offset = result.byteLength - multipartLength;
   result.writeUInt32BE(parts.length, offset);
   offset += 4;
-  for (const part of parts) {
+  for (let index = 0; index < parts.length; index += 1) {
+    const part = parts[index]!;
     result.writeUInt32BE(part.byteLength, offset);
     offset += 4;
     result.set(part, offset);

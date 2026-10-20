@@ -1943,11 +1943,22 @@ public_host_runtime_t::admit_session_relocation_seal (
   session_seal_local_completion_t local_completion,
   const std::function<void (const std::vector<std::uint8_t> &)> &reconcile)
 {
-    if (session_owner.owner_id != seal.session_owner_id
-        || seal.session_owner_lease_generation
-             > static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ())
-        || session_owner.lease_generation
-             != static_cast<std::int64_t> (seal.session_owner_lease_generation)) {
+    // Session-Actor binding §4: compare with this host's current identity exactly.
+    const auto local = status ();
+    if (session_owner.lease_generation <= 0
+        || !protocol::same_session_owner_identity (
+          {seal.session_owner_node_routing_id,
+           seal.session_owner_node_generation,
+           seal.session_owner_id,
+           seal.session_owner_lease_generation,
+           {},
+           0},
+          {local.routing_id ().to_bytes (),
+           local.lifecycle_generation (),
+           session_owner.owner_id,
+           static_cast<std::uint64_t> (session_owner.lease_generation),
+           {},
+           0})) {
         return {false, std::nullopt};
     }
 
@@ -5002,10 +5013,19 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
            std::optional<instance_spot_authority_payload_t> ready_state) -> task_t<bool> {
         const auto *snapshot = std::get_if<authority_snapshot_t> (&current);
         if (request.target.authority_owner_generation != 0) {
-            // Ready Instance direct의 object generation은 target 판정에 쓰지 않는다.
-            // authority가 없으면 owner fence가 다른 것이다(Spot address messaging §9).
+            // Authority generations identify owner changes within one incarnation.
+            if (snapshot && snapshot->allocation.state == placement_allocation_state_t::active
+                && snapshot->object_generation < request.target.object_generation) {
+                const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (
+                  framework_error_kind_t::invalid_operation,
+                  static_cast<std::uint32_t> (protocol::framework_error_code::spotGenerationStale));
+                reply_terminal ({failure->terminal_result, failure->failure_code, std::nullopt});
+                co_return true;
+            }
             if (!snapshot || snapshot->allocation.state != placement_allocation_state_t::active
-                || snapshot->authority_owner_generation != request.target.authority_owner_generation
+                || (snapshot->object_generation == request.target.object_generation
+                    && snapshot->authority_owner_generation
+                         != request.target.authority_owner_generation)
                 || snapshot->owner.owner_id != request.target.owner_id
                 || static_cast<std::uint64_t> (snapshot->owner.lease_generation)
                      != request.target.owner_lease_generation
@@ -5567,42 +5587,76 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
                     bound_session_bind_operation_result_t operation_result{
                       stateful::stateful_error_t::conflict, std::nullopt};
                     bool terminal_replied = false;
+                    const auto session_owner_rid =
+                      zlink::routing_id_t::from (mailbox_record.source_routing_id);
+                    std::optional<location_owner_token_t> session_owner;
                     if (admission == bound_session_bind_admission_t::ready
-                        && bound_session_operations.bind) {
+                        && bound_session_operations.bind && bound_session_operations.session_owner)
+                        session_owner = co_await bound_session_operations.session_owner (
+                          session_owner_rid, mailbox_record.source_node_generation);
+                    if (admission == bound_session_bind_admission_t::ready && session_owner) {
                         operation_result = bound_session_operations.bind (
-                          bind, zlink::routing_id_t::from (mailbox_record.source_routing_id),
-                          mailbox_record.source_node_generation,
-                          [this, &mailbox_record, &terminal_replied] {
+                          bind, session_owner_rid, mailbox_record.source_node_generation,
+                          *session_owner, [this, &mailbox_record, &terminal_replied] {
                               terminal_replied =
                                 _transport->reply_bound_session_bind (mailbox_record, 0u, 0u);
                               return terminal_replied;
                           });
                     }
-                    const auto replied =
-                      terminal_replied
-                      || _transport->reply_bound_session_bind (
-                        mailbox_record,
-                        operation_result.error == stateful::stateful_error_t::none ? 0u
-                        : admission == bound_session_bind_admission_t::stale_route
-                          ? static_cast<std::uint32_t> (protocol::request_terminal_result::conflict)
-                        : admission == bound_session_bind_admission_t::actor_not_ready
-                          ? static_cast<std::uint32_t> (protocol::request_terminal_result::busy)
-                          : static_cast<std::uint32_t> (
-                              protocol::request_terminal_result::notFound),
-                        operation_result.error == stateful::stateful_error_t::none ? 0u
-                        : admission == bound_session_bind_admission_t::stale_route
-                          ? static_cast<std::uint32_t> (
-                              protocol::framework_error_code::actorLocationStale)
-                        : admission == bound_session_bind_admission_t::actor_not_ready
-                          ? 0u
-                          : static_cast<std::uint32_t> (
-                              protocol::framework_error_code::actorSessionNotBound));
+                    // One terminal per bind. Session-Actor binding §4: without the Session
+                    // owner descriptor the bind is Unavailable.
+                    using terminal_t = protocol::request_terminal_result;
+                    using code_t = protocol::framework_error_code;
+                    const auto [terminal, code] =
+                      operation_result.error == stateful::stateful_error_t::none
+                        ? std::pair{terminal_t::ok, code_t::none}
+                      : admission == bound_session_bind_admission_t::stale_route
+                        ? std::pair{terminal_t::conflict, code_t::actorLocationStale}
+                      : admission == bound_session_bind_admission_t::actor_not_ready
+                        ? std::pair{terminal_t::busy, code_t::none}
+                      : admission == bound_session_bind_admission_t::ready && !session_owner
+                        ? std::pair{terminal_t::internalError, code_t::routeNotConnected}
+                        : std::pair{terminal_t::notFound, code_t::actorSessionNotBound};
+                    const auto replied = terminal_replied
+                                         || _transport->reply_bound_session_bind (
+                                           mailbox_record, static_cast<std::uint32_t> (terminal),
+                                           static_cast<std::uint32_t> (code));
                     if (replied && operation_result.replacement) {
                         (void) co_await _transport->send_bound_session_replaced (
                           operation_result.replacement->retired_session
                             .session_owner_node_routing_id,
                           *operation_result.replacement);
                     }
+                    continue;
+                }
+                if (wire.kind == protocol::command::boundSessionClose) {
+                    const auto request = protocol::decode_bound_session_close (
+                      protocol::message_bytes (mailbox_record.parts.front ()));
+                    const auto local = status ();
+                    // Session-Actor binding §4: compare with this host's current
+                    // descriptor identity.
+                    const auto owner =
+                      session_route_owner_resolver ? session_route_owner_resolver () : std::nullopt;
+                    auto closed = result_t<void>::failure (framework_error_kind_t::unavailable,
+                                                           "Session owner has no live descriptor");
+                    if (owner && owner->lease_generation > 0)
+                        closed = co_await runtime::await_result (_sessions.close_current (
+                          request, {local.routing_id ().to_bytes (),
+                                    local.lifecycle_generation (),
+                                    owner->owner_id,
+                                    static_cast<std::uint64_t> (owner->lease_generation),
+                                    {},
+                                    0}));
+                    const auto failure =
+                      closed ? std::optional<messaging::request_wire_failure_t>{}
+                             : messaging::request_failure_mapper_t{}.target_failure_reply (
+                                 *closed.error ());
+                    _transport->reply_bound_session_bind (
+                      mailbox_record,
+                      failure ? failure->terminal_result
+                              : static_cast<std::uint32_t> (protocol::request_terminal_result::ok),
+                      failure ? failure->failure_code
+                              : static_cast<std::uint32_t> (protocol::framework_error_code::none));
                     continue;
                 }
                 if (wire.kind == protocol::command::boundSessionReplaced) {

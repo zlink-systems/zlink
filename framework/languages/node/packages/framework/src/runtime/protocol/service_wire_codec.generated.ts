@@ -9649,7 +9649,41 @@ const frames: Uint8Array[] = [writer.result()];
 return frames; }
 export function validateRelocationFailedCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
 
-export type ServiceWireCommand = HelloCommand | AdmitCommand | RejectCommand | UpdateCommand | LivenessProbeCommand | LivenessAckCommand | NodeSendCommand | NodeRequestCommand | ChannelSendCommand | ChannelRequestCommand | ReplyCommand | SpotSendCommand | SpotRequestCommand | LogicalMulticastCommand | ActorSendCommand | ActorRequestCommand | ActorLookupCommand | ActorDestroyCommand | ActorJoinCommand | ActorLeftCommand | RelocationReadyCommand | RelocationDataCommand | ReplyRelayCommand | RelocationCutoverCommand | BoundSessionSendCommand | ActorJoinedCommand | BoundSessionBindCommand | InstanceSpotCommand | RelocationPrepareCommand | SessionRelocationSealCommand | SessionRelocationSealedCommand | SessionRelocationRouteCommand | ReplyRelayAckCommand | UserSpotCreateCommand | UserSpotCloseCommand | ActorCreateCommand | MessageFollowCommand | BoundSessionReplacedCommand | RelocationStateCommand | RelocationFailedCommand;
+export type BoundSessionCloseCommand = { readonly command: "boundSessionClose"; readonly flags: number; readonly correlation: NonzeroU64; readonly actor: ActorRef; readonly session: RetiredBoundSessionRouteFence; };
+export function decodeBoundSessionCloseCommand(frames: readonly Uint8Array[], context: ServiceWireDecoderContext): BoundSessionCloseCommand { if (!frames.length) fail("boundSessionClose frames"); const reader = new Reader(frames[0]); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 77 || Number(reader.u(1)) !== 1 || Number(reader.u(1)) !== 54) fail("boundSessionClose header"); const flags = Number(reader.u(1)); if ((flags & ~0) !== 0 || (flags & 0) !== 0) fail("boundSessionClose flags"); const value: any = { command: "boundSessionClose", flags };
+  value["correlation"] = readNonzeroU64(reader, context, value, flags);
+
+
+  value["actor"] = readActorRef(reader, context, value, flags);
+
+
+  value["session"] = readRetiredBoundSessionRouteFence(reader, context, value, flags);
+
+
+reader.done("boundSessionClose"); let frameIndex = 1;
+
+if (frameIndex !== frames.length) fail("boundSessionClose frames");
+
+return value; }
+export function encodeBoundSessionCloseCommand(value: BoundSessionCloseCommand, context: ServiceWireDecoderContext): readonly Uint8Array[] { if ((value.flags & ~0) !== 0 || (value.flags & 0) !== 0) fail("boundSessionClose flags");  const writer = new Writer(); writer.put([90,77, 1, 54, value.flags]);
+  if (value["correlation"] === undefined) fail("correlation required");
+
+
+  writeNonzeroU64(numeric(value["correlation"]), writer, context, value, value.flags);
+  if (value["actor"] === undefined) fail("actor required");
+
+
+  writeActorRef(value["actor"], writer, context, value, value.flags);
+  if (value["session"] === undefined) fail("session required");
+
+
+  writeRetiredBoundSessionRouteFence(value["session"], writer, context, value, value.flags);
+const frames: Uint8Array[] = [writer.result()];
+
+return frames; }
+export function validateBoundSessionCloseCommandRuntimePredicates(value: any, context: ServiceWireDecoderContext): void { void value; void context;  }
+
+export type ServiceWireCommand = HelloCommand | AdmitCommand | RejectCommand | UpdateCommand | LivenessProbeCommand | LivenessAckCommand | NodeSendCommand | NodeRequestCommand | ChannelSendCommand | ChannelRequestCommand | ReplyCommand | SpotSendCommand | SpotRequestCommand | LogicalMulticastCommand | ActorSendCommand | ActorRequestCommand | ActorLookupCommand | ActorDestroyCommand | ActorJoinCommand | ActorLeftCommand | RelocationReadyCommand | RelocationDataCommand | ReplyRelayCommand | RelocationCutoverCommand | BoundSessionSendCommand | ActorJoinedCommand | BoundSessionBindCommand | InstanceSpotCommand | RelocationPrepareCommand | SessionRelocationSealCommand | SessionRelocationSealedCommand | SessionRelocationRouteCommand | ReplyRelayAckCommand | UserSpotCreateCommand | UserSpotCloseCommand | ActorCreateCommand | MessageFollowCommand | BoundSessionReplacedCommand | RelocationStateCommand | RelocationFailedCommand | BoundSessionCloseCommand;
 
 export function decodeAuthorityPayloadV1DurableFormat(bytes: Uint8Array, context: ServiceWireDecoderContext): AuthorityPayloadV1 { if (bytes.length > 1048576) fail("authority-payload-v1 maximum"); const reader = new Reader(bytes); if (Number(reader.u(1)) !== 90 || Number(reader.u(1)) !== 76 || Number(reader.u(1)) !== 65 || Number(reader.u(1)) !== 85 || Number(reader.u(1)) !== 1) fail("authority-payload-v1 header"); const flags = readU16(reader, context, {}, 0); if (!same(flags, 0)) fail("authority-payload-v1 flags"); const length = Number(readU32(reader, context, {}, 0)); const body = reader.take(length); const checksumOffset = reader.offset; const declared = Number(reader.u(4)); reader.done("authority-payload-v1"); if (crc32c(bytes.slice(0, checksumOffset)) !== declared) fail("authority-payload-v1 checksum"); return decodeAuthorityPayloadV1(body, context); }
 export function encodeAuthorityPayloadV1DurableFormat(value: AuthorityPayloadV1, context: ServiceWireDecoderContext): Uint8Array { const body = encodeAuthorityPayloadV1(value, context); const writer = new Writer(); writer.put([90,76,65,85, 1]); writeU16(0, writer, context, {}, 0); writeU32(body.length, writer, context, {}, 0); writer.put(body); writer.u(BigInt(crc32c(writer.result())), 4); const bytes = writer.result(); if (bytes.length > 1048576) fail("authority-payload-v1 maximum"); return bytes; }

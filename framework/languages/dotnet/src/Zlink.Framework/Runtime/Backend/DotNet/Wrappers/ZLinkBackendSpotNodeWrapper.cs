@@ -22,7 +22,9 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         IZLinkBackendCanonicalActorJoin,
         IZLinkBackendActorMessageFollowIngress,
         IZLinkBackendMessageFollowNotifications,
-        IZLinkBackendBoundSessionReplacementNotifications
+        IZLinkBackendBoundSessionReplacementNotifications,
+        IZLinkBackendBoundSessionClose,
+        IZLinkBackendBoundSessionBind
 {
     private readonly ZLinkManagedMeshNode _node;
     private readonly ZLinkMeshCompletionTable _completions;
@@ -51,6 +53,37 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         _messageFollowIngress = new ActorMessageFollowIngressAdapter(_pump);
         _node.SetActorMessageFollowIngressTarget(_messageFollowIngress);
     }
+
+    public void SetBoundSessionBindHandler(
+        Func<
+            RoutingId,
+            ulong,
+            ServiceWireCodec.BoundSessionBind38,
+            Action,
+            CancellationToken,
+            ValueTask
+        > handler
+    ) => _node.SetBoundSessionBindHandler(handler);
+
+    public ValueTask<ServiceWireCodec.RequestSpecificTailCase2?> BindBoundSessionAsync(
+        ServiceWireCodec.BoundSessionBind38 request,
+        TimeSpan timeout,
+        CancellationToken cancellationToken
+    ) => _node.BindBoundSessionAsync(request, timeout, cancellationToken);
+
+    public void SetBoundSessionCloseHandler(
+        Func<
+            Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionClose54,
+            CancellationToken,
+            ValueTask
+        > handler
+    ) => _node.SetBoundSessionCloseHandler(handler);
+
+    public ValueTask CloseBoundSessionAsync(
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionClose54 request,
+        TimeSpan timeout,
+        CancellationToken cancellationToken
+    ) => _node.CloseBoundSessionAsync(request, timeout, cancellationToken);
 
     internal ZLinkManagedMeshNode NativeNode => _node;
 
@@ -83,6 +116,15 @@ internal sealed class ZLinkBackendSpotNodeWrapper
         RoutingId sourceNodeRid,
         ulong sourceNodeGeneration
     ) => _pump.ResolveRequestSourceFence(sourceNodeRid, sourceNodeGeneration);
+
+    public void SetRequestSourceAcceptance(IZLinkBackendRequestSourceAcceptance acceptance) =>
+        _pump.SetRequestSourceAcceptance(acceptance);
+
+    public ValueTask<ZLinkServiceWireCodec.RequestSourceFence?> AcceptRequestSourceAsync(
+        RoutingId sourceNodeRid,
+        ulong sourceNodeGeneration,
+        CancellationToken cancellationToken
+    ) => _pump.AcceptRequestSourceAsync(sourceNodeRid, sourceNodeGeneration, cancellationToken);
 
     public void SetActorMessageFollowIngressHandler(
         Func<IReadOnlyList<ZLinkBackendActorPart>, bool> handler

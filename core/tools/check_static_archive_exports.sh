@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Fail when a distributed static archive exports anything but the public C ABI.
+# Fail when a distributed static archive exports anything but its public surface
+# (the C ABI of Core, the zlink:: namespace of the C++ Framework archives).
 #
 # Usage: check_static_archive_exports.sh <archive> <version-script>
 # Environment: NM (defaults to nm)
@@ -32,7 +33,7 @@ esac
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-"$here/static_archive_public_symbols.sh" "$version_script" "$prefix" > "$work/allowed"
+"$here/static_archive_public_symbols.sh" "$version_script" "$prefix" "$archive" > "$work/allowed"
 
 # --format=posix prints "<name> <type> <value> <size>" per defined external
 # symbol, plus one "<archive>[<member>]:" header line per member. The header
@@ -47,7 +48,7 @@ unexpected=$(wc -l < "$work/unexpected" | tr -d ' ')
 exported=$(wc -l < "$work/exported" | tr -d ' ')
 
 if [ "$unexpected" -ne 0 ]; then
-    echo "$archive exports $unexpected symbol(s) outside the public C ABI." >&2
+    echo "$archive exports $unexpected symbol(s) outside the public surface." >&2
     echo "Internal C++ and vendored Boost definitions must not be visible to a" >&2
     echo "consumer's link; see issue #418. First 20:" >&2
     head -20 "$work/unexpected" >&2
@@ -57,9 +58,9 @@ if [ "$unexpected" -ne 0 ]; then
 fi
 
 if [ "$missing" -ne 0 ]; then
-    echo "$archive is missing $missing public C ABI symbol(s):" >&2
+    echo "$archive is missing $missing public symbol(s):" >&2
     comm -23 "$work/allowed" "$work/exported" | head -20 >&2
     exit 1
 fi
 
-echo "OK: $(basename "$archive") exports $exported symbols, all of them the public C ABI."
+echo "OK: $(basename "$archive") exports $exported symbols, all of them public."

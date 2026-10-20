@@ -12,6 +12,7 @@ const wire = require('../../packages/framework/dist/runtime/foundation/service-s
 const meshWire = require('../../packages/framework/dist/runtime/foundation/service-wire-m6a-codec');
 const { decodeActorJoin28 } = require('../../packages/framework/dist/runtime/protocol/service_wire_pilot_codec.generated');
 const { randomOperationId } = require('../../packages/framework/dist/runtime/locations/creation-operation-id');
+const { withTestSessionOwners } = require('./fixtures/session-owner-descriptors');
 
 const operationKinds = ['userSpotCreate', 'userSpotClose', 'actorCreate', 'streamBind', 'actorJoin'];
 const turn = () => new Promise(resolve => setImmediate(resolve));
@@ -35,7 +36,7 @@ function fixture(request, disconnectOnFailure = true) {
     receive: () => incoming.shift(), send: async () => {},
     submitSend: () => ({ result: SubmitResult.Ok, admitted: Promise.resolve() }),
     routesSnapshot: () => [...routes].map(([routingId, routeGeneration]) => ({ routingId, routeGeneration })),
-    request: async (rid, parts, timeoutMs, _recordReceived, onAdmitted) => {
+    request: (rid, parts, timeoutMs, onReply, onFailed, _recordReceived, onAdmitted) => (async () => {
       const record = parts[0][3] === 28 ? decodeActorJoin28(parts) : wire.decodeStatefulHeader(parts[0]);
       const attempt = { rid, parts, timeoutMs, record };
       attempts.push(attempt);
@@ -50,7 +51,7 @@ function fixture(request, disconnectOnFailure = true) {
         }
         throw error;
       }
-    }
+    })().then(onReply, onFailed)
   };
   const raw = new RawServiceMeshRuntime({
     descriptor: descriptor('source-node'),
@@ -59,7 +60,7 @@ function fixture(request, disconnectOnFailure = true) {
   });
   raw.start();
   raw.connectPeerByRoutingId(target.advertisedEndpoint, target.nodeRoutingId, 'default', 7n);
-  const runtime = new ServiceStatefulRuntime(raw, 'source-node', 7n);
+  const runtime = withTestSessionOwners(new ServiceStatefulRuntime(raw, 'source-node', 7n));
   const actor = { nodeRid: 'target-node', actorId: 'actor', generation: 3n };
   const spot = { spotId: 'spot', generation: 3n };
   runtime.rememberActorRoute({ actor, targetNodeGeneration: 7n, authorityOwnerGeneration: 5n, ownerLeaseGeneration: 7n });
@@ -243,7 +244,7 @@ test('raw binding request maps the installed binding failure through the existin
   try {
     router.setRoutingId('typed-source');
     router.bind('tcp://127.0.0.1:0');
-    await assert.rejects(router.request('absent-peer', [Buffer.from('request')], 20), error => {
+    await assert.rejects(new Promise((resolve, reject) => router.request('absent-peer', [Buffer.from('request')], 20, resolve, reject)), error => {
       assert(error instanceof ZLinkBackendResultError);
       assert(error.cause instanceof zlink.SubmitError);
       assert.equal(error.operation, 'submit');

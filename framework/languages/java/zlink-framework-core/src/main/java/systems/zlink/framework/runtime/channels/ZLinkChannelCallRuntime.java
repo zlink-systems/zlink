@@ -27,7 +27,6 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
 import java.util.function.LongSupplier;
@@ -71,16 +70,14 @@ final class ZLinkChannelCallRuntime {
 
     ZLinkChannelCallRuntime(
             ZLinkMessageFlowTracer flow,
-            ScheduledExecutorService timeoutExecutor,
             ZLinkChannelReplyDecoder replyDecoder,
             SpotSend spotSend,
             SpotRequest spotRequest) {
-        this(flow, timeoutExecutor, replyDecoder, spotSend, spotRequest, System::nanoTime);
+        this(flow, replyDecoder, spotSend, spotRequest, System::nanoTime);
     }
 
     ZLinkChannelCallRuntime(
             ZLinkMessageFlowTracer flow,
-            ScheduledExecutorService timeoutExecutor,
             ZLinkChannelReplyDecoder replyDecoder,
             SpotSend spotSend,
             SpotRequest spotRequest,
@@ -88,7 +85,6 @@ final class ZLinkChannelCallRuntime {
         this.flow = flow;
         this.operations =
                 new ZLinkServiceOperationRegistry(
-                        timeoutExecutor,
                         closedFailure(),
                         () -> requestFailure(new TimeoutException("service operation timed out")),
                         nanoTime);

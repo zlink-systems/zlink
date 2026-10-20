@@ -132,7 +132,6 @@ export class ZLinkUserSpotCreationCoordinator {
     const contentReference = encodeLocationCreationContent(request.requestPayload);
     const excludedNodeRids = new Set<string>();
     let target: Awaited<ReturnType<ZLinkUserSpotCreationCoordinatorOptions['target']>>;
-    let authorityTarget;
     let reserved: ZLinkObjectReserveResult;
     for (;;) {
       try {
@@ -164,7 +163,7 @@ export class ZLinkUserSpotCreationCoordinator {
         );
       }
       const owner = target.owner;
-      authorityTarget = {
+      const authorityTarget = {
         meshName: target.meshName,
         nodeRid: target.nodeRid,
         nodeLifecycleGeneration: target.nodeGeneration,
@@ -218,92 +217,31 @@ export class ZLinkUserSpotCreationCoordinator {
           error
         );
       }
+      if (
+        reserved.kind === 'alreadyExists' ||
+        (reserved.kind === 'conflict' &&
+          reserved.current.kind === 'snapshot' &&
+          reserved.current.allocation.objectKind === 'user_spot' &&
+          reserved.current.allocation.stableType === request.stableType)
+      ) {
+        if (request.generatedIdentity === true) {
+          deadline.close();
+          throw spotIdConflict(request.spotId);
+        }
+        try {
+          const spot = await this.awaitReady(request, signal);
+          if (spot !== undefined) {
+            deadline.close();
+            return { result: { spot, state: ZLinkSpotCreateState.Existing }, spot };
+          }
+        } catch (error) {
+          deadline.close();
+          throw error;
+        }
+        continue;
+      }
       if (reserved.kind !== 'placementCapacityExhausted') break;
       excludedNodeRids.add(encodeRoutingIdStorageHex(target.nodeRid));
-    }
-    if (
-      reserved.kind === 'alreadyExists' ||
-      (reserved.kind === 'conflict' &&
-        reserved.current.kind === 'snapshot' &&
-        reserved.current.allocation.objectKind === 'user_spot' &&
-        reserved.current.allocation.stableType === request.stableType)
-    ) {
-      const current = reserved.kind === 'alreadyExists' ? reserved.current : reserved.current;
-      if (current.kind === 'snapshot' && current.allocation.state === 'active') {
-        if (request.generatedIdentity === true) {
-          deadline.close();
-          throw spotIdConflict(request.spotId);
-        }
-        const spot = spotRef(current, request);
-        deadline.close();
-        return {
-          result: { spot, state: ZLinkSpotCreateState.Existing },
-          spot
-        };
-      }
-      if (current.kind !== 'snapshot' || !sameCreationTarget(current, authorityTarget)) {
-        deadline.close();
-        if (request.generatedIdentity === true) {
-          throw spotIdConflict(request.spotId);
-        }
-        throw createInternalFrameworkException(
-          ZLinkFrameworkInternalErrorKind.RequestFailed,
-          'User Spot creation requires a remote generation-fenced create operation.'
-        );
-      }
-      if (current.allocation.state === 'reserved' && !target.isLocal) {
-        try {
-          return await this.remoteCreate(
-            request,
-            current,
-            target.nodeRid,
-            target.nodeGeneration,
-            deadlineUnixMs,
-            deadlineMs
-          );
-        } finally {
-          deadline.close();
-        }
-      }
-      if (current.allocation.state === 'reserved' && target.isLocal) {
-        const pending = current.pendingCreation;
-        const admitted =
-          pending === undefined ? undefined : this.localCreations.get(pending.reservationId);
-        if (admitted === undefined) {
-          try {
-            const spot = await this.awaitReady(request, signal);
-            return {
-              result: { spot, state: ZLinkSpotCreateState.Existing },
-              spot
-            };
-          } finally {
-            deadline.close();
-          }
-        }
-        try {
-          const result = await admitted;
-          return result.result.state === ZLinkSpotCreateState.Created
-            ? {
-                result: {
-                  ...result.result,
-                  state: ZLinkSpotCreateState.Existing
-                },
-                spot: result.spot
-              }
-            : result;
-        } finally {
-          deadline.close();
-        }
-      }
-      try {
-        const spot = await this.awaitReady(request, signal);
-        return {
-          result: { spot, state: ZLinkSpotCreateState.Existing },
-          spot
-        };
-      } finally {
-        deadline.close();
-      }
     }
     if (reserved.kind === 'typeMismatch') {
       deadline.close();
@@ -777,12 +715,25 @@ export class ZLinkUserSpotCreationCoordinator {
   private async awaitReady(
     request: ZLinkUserSpotCreationRequest,
     signal: AbortSignal
-  ): Promise<SpotRef> {
+  ): Promise<SpotRef | undefined> {
     const key = encodeAuthorityKey('user_spot', String(request.spotId));
     for (;;) {
       signal.throwIfAborted();
       const current = await this.options.store.readAuthority(key, signal);
-      if (current.kind === 'snapshot' && current.allocation.state === 'active') {
+      if (current.kind === 'missing') return undefined;
+      if (
+        current.allocation.objectKind !== 'user_spot' ||
+        current.allocation.stableType !== request.stableType
+      ) {
+        throw createInternalFrameworkException(
+          ZLinkFrameworkInternalErrorKind.SpotTypeMismatch,
+          `User Spot '${String(request.spotId)}' has another stable type.`
+        );
+      }
+      if (
+        current.allocation.state === 'active' &&
+        decodeServiceClosingSpotAuthority(current.payload) === undefined
+      ) {
         return spotRef(current, request);
       }
       await wait(this.options.pollIntervalMs ?? DEFAULT_USER_SPOT_POLL_INTERVAL_MS, signal);
@@ -1058,19 +1009,6 @@ export function decodeLocationCreationContent(
     );
   }
   return payload;
-}
-
-function sameCreationTarget(
-  snapshot: ZLinkAuthoritySnapshot,
-  target: Parameters<ZLinkObjectCreationStore['reserve']>[0]['target']
-): boolean {
-  return (
-    snapshot.allocation.descriptor.meshName === target.meshName &&
-    routingIdsEqual(snapshot.allocation.descriptor.rid, target.nodeRid) &&
-    snapshot.allocation.descriptorLifecycleGeneration === target.nodeLifecycleGeneration &&
-    snapshot.ownerId === target.owner.ownerId &&
-    snapshot.ownerLeaseGeneration === target.owner.leaseGeneration
-  );
 }
 
 function remoteCreationFingerprint(record: ServiceUserSpotCreateRecord): string {

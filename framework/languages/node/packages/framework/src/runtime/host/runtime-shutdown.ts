@@ -59,7 +59,7 @@ export async function stopRuntimeParts(parts: ZLinkRuntimeStopParts): Promise<vo
   );
   await runShutdownStep(errors, () => parts.streamRuntime?.dispose());
   await runShutdownStep(errors, () =>
-    parts.spotNodeRuntime?.dispose(undefined, parts.cleanupDeadline)
+    parts.spotNodeRuntime?.dispose(parts.shutdownSignal, parts.cleanupDeadline)
   );
   await runShutdownStep(errors, () => parts.channelRuntime?.dispose());
   await runShutdownStep(errors, () =>

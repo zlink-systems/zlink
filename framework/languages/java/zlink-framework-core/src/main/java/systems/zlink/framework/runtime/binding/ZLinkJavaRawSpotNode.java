@@ -107,7 +107,14 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     ZLinkJavaRawSpotNode(ZLinkJavaRawMeshNode owner) {
         this.owner = owner;
         this.instanceSpots =
-                new ZLinkJavaInstanceSpotRegistry(stateLane, owner::executeApplication);
+                new ZLinkJavaInstanceSpotRegistry(
+                        stateLane, owner::executeApplication, owner.name());
+    }
+
+    private static long pendingActivationBytes(ZLinkBackendReceived received) {
+        long bytes = received.applicationMetadataSize();
+        for (var part : received.parts()) bytes += part.size();
+        return bytes;
     }
 
     private <T> T inStateLane(Supplier<T> work) {
@@ -143,11 +150,6 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     @Override
     public long localNodeGeneration() {
         return ownerLifecycleGeneration();
-    }
-
-    @Override
-    public String localAuthorityOwnerId() {
-        return owner.localAuthorityOwnerId();
     }
 
     @Override
@@ -1192,13 +1194,33 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
     @Override
     public Optional<ZLinkInternalSpotNode.BoundSessionRoute> boundSessionRoute(
             ZLinkBackendActorRef actor) {
+        // The same-node and the remote Session binding share this one record (Session-Actor
+        // binding §4).
         BindingEntry current = actorBindings.get(actor.actorId());
-        if (current == null
-                || !current.binding().remote()
-                || !current.binding().actor().equals(actor)) {
+        if (current == null || !current.binding().actor().equals(actor)) {
             return Optional.empty();
         }
         return Optional.of(current.binding().route());
+    }
+
+    @Override
+    public CompletionStage<Void> closeActorBoundSessionAsync(
+            ZLinkBackendActorRef actor, Duration timeout) {
+        BindingEntry entry = actorBindings.get(actor.actorId());
+        if (entry == null || !entry.binding().actor().equals(actor))
+            return CompletableFuture.failedFuture(
+                    new systems.zlink.framework.errors.ZLinkFrameworkException(
+                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+                                    .INVALID_OPERATION,
+                            "No current session binding exists for Actor " + actor.actorId()));
+        var binding = entry.binding();
+        return owner.requestBoundSessionClose(
+                new ZLinkServiceM6BWireCodec.BoundSessionClose(
+                        nextActorRequestSequence.getAndIncrement(),
+                        actor.actorId(),
+                        actor.generation(),
+                        sessionOwnerFence(binding)),
+                timeout);
     }
 
     @Override
@@ -1561,7 +1583,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                             header.target().spotId(),
                             header.target().authorityOwnerGeneration(),
                             false,
-                            false)
+                            false,
+                            null)
                     .whenComplete(
                             (rejection, readFailure) -> {
                                 try {
@@ -2175,14 +2198,23 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
      */
     private CompletionStage<Void> bindLocalSession(
             RoutingId sessionRid, ZLinkBackendActorRef actor, long bindingGeneration) {
-        // This node's owner lifecycle values are read when a replacement notice is sent, as a
-        // stream-only node may bind before its mesh lifecycle starts.
+        // Session-Actor binding §4: a same-node Session owner identity is this host's own
+        // descriptor value, stored with the binding. Without a live descriptor there is no
+        // identity and the bind is rejected.
+        Optional<ZLinkInternalMeshNode.PeerAuthorityFence> local = owner.localSessionOwner();
+        if (local.isEmpty()) {
+            return CompletableFuture.failedFuture(
+                    new systems.zlink.framework.errors.ZLinkFrameworkException(
+                            systems.zlink.framework.errors.ZLinkFrameworkErrorKind.UNAVAILABLE,
+                            "Session owner has no live MeshNode descriptor"));
+        }
+        ZLinkInternalMeshNode.PeerAuthorityFence sessionOwner = local.orElseThrow();
         ActorSessionBinding candidate =
                 new ActorSessionBinding(
-                        routingId(),
-                        0,
-                        "",
-                        0,
+                        sessionOwner.sourceNodeRid(),
+                        sessionOwner.sourceNodeGeneration(),
+                        sessionOwner.ownerId(),
+                        sessionOwner.ownerLeaseGeneration(),
                         sessionRid,
                         actor,
                         0,
@@ -2340,25 +2372,21 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
         return true;
     }
 
+    private ZLinkServiceM6BWireCodec.RetiredSessionRouteFence sessionOwnerFence(
+            ActorSessionBinding binding) {
+        return new ZLinkServiceM6BWireCodec.RetiredSessionRouteFence(
+                binding.sessionOwnerNodeRid(),
+                binding.sessionOwnerNodeGeneration(),
+                binding.sessionOwnerId(),
+                binding.sessionOwnerLeaseGeneration(),
+                binding.sessionRid(),
+                binding.bindingGeneration());
+    }
+
     private void notifyBoundSessionReplaced(ActorSessionBinding retired) {
         ZLinkServiceM6BWireCodec.BoundSessionReplaced replacement =
                 new ZLinkServiceM6BWireCodec.BoundSessionReplaced(
-                        actorAuthorityFence(retired.actor()),
-                        retired.remote()
-                                ? new ZLinkServiceM6BWireCodec.RetiredSessionRouteFence(
-                                        retired.sessionOwnerNodeRid(),
-                                        retired.sessionOwnerNodeGeneration(),
-                                        retired.sessionOwnerId(),
-                                        retired.sessionOwnerLeaseGeneration(),
-                                        retired.sessionRid(),
-                                        retired.bindingGeneration())
-                                : new ZLinkServiceM6BWireCodec.RetiredSessionRouteFence(
-                                        owner.routingId(),
-                                        ownerLifecycleGeneration(),
-                                        owner.localAuthorityOwnerId(),
-                                        owner.localAuthorityLeaseGeneration(),
-                                        retired.sessionRid(),
-                                        retired.bindingGeneration()));
+                        actorAuthorityFence(retired.actor()), sessionOwnerFence(retired));
         owner.sendBoundSessionReplaced(retired.sessionOwnerNodeRid(), replacement);
     }
 
@@ -2591,7 +2619,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                                             terminal.complete(null);
                                                         else
                                                             terminal.completeExceptionally(failure);
-                                                    }))
+                                                    }),
+                            pendingActivationBytes(received))
                     .whenComplete(
                             (ignored, failure) -> {
                                 if (failure != null) {
@@ -2693,7 +2722,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                                             () ->
                                                                     instanceSpots.completed(
                                                                             cold.stableType(),
-                                                                            header))))
+                                                                            header)),
+                                            pendingActivationBytes(received)))
                     .whenComplete(
                             (activation, activationFailure) -> {
                                 if (activationFailure != null) {
@@ -2713,7 +2743,8 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         ((ZLinkServiceM6BWireCodec.InstanceRouteFence) header.route())
                                 .authorityOwnerGeneration(),
                         header.instanceIntent(),
-                        false)
+                        false,
+                        (ZLinkServiceM6BWireCodec.InstanceRouteFence) header.route())
                 .whenComplete(
                         (rejection, readFailure) -> {
                             if (readFailure != null || rejection != null) {
@@ -2772,7 +2803,10 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                         try {
                             retained =
                                     instanceSpots.admitExisting(
-                                            authority.stableType(), header, received);
+                                            authority.stableType(),
+                                            authority.route(),
+                                            header,
+                                            received);
                         } catch (RuntimeException | Error retainedFailure) {
                             received.close();
                             failure.accept(retainedFailure);
@@ -2792,8 +2826,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
                                     instanceSpots.activate(
                                             header.route().targetSpotId(),
                                             authority.stableType(),
-                                            (ZLinkServiceM6BWireCodec.InstanceRouteFence)
-                                                    header.route());
+                                            authority.route());
                         } catch (Throwable activationFailure) {
                             received.close();
                             failure.accept(activationFailure);
@@ -3161,14 +3194,19 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
 
         BoundSessionRoute route() {
             return new BoundSessionRoute(
-                    sessionOwnerNodeRid, sessionOwnerNodeGeneration, sessionRid, bindingGeneration);
+                    sessionOwnerNodeRid,
+                    sessionOwnerNodeGeneration,
+                    sessionOwnerId,
+                    sessionOwnerLeaseGeneration,
+                    sessionRid,
+                    bindingGeneration);
         }
 
+        // Session-Actor binding §4: the binding identity uses the Session owner RID and
+        // lifecycle generation only; owner ID and lease generation are command fence values.
         boolean sameSessionOwnerEpoch(ActorSessionBinding other) {
             return sessionOwnerNodeRid.equals(other.sessionOwnerNodeRid)
-                    && sessionOwnerNodeGeneration == other.sessionOwnerNodeGeneration
-                    && sessionOwnerId.equals(other.sessionOwnerId)
-                    && sessionOwnerLeaseGeneration == other.sessionOwnerLeaseGeneration;
+                    && sessionOwnerNodeGeneration == other.sessionOwnerNodeGeneration;
         }
     }
 
@@ -3294,7 +3332,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             return resolver == null
                     ? CompletableFuture.failedFuture(
                             new ZlinkSubmitException(SubmitResult.NOT_FOUND))
-                    : resolver.resolve(targetSpotId, 0, false, false)
+                    : resolver.resolve(targetSpotId, 0, false, false, null)
                             .thenCompose(CompletableFuture::failedFuture);
         }
         byte[] acceptedRecord =
@@ -3427,7 +3465,7 @@ final class ZLinkJavaRawSpotNode implements ZLinkInternalSpotNode {
             return resolver == null
                     ? CompletableFuture.failedFuture(
                             new ZlinkRequestException(RequestResult.NOT_FOUND))
-                    : resolver.resolve(targetSpotId, 0, false, false)
+                    : resolver.resolve(targetSpotId, 0, false, false, null)
                             .thenCompose(CompletableFuture::failedFuture);
         }
         ZLinkTerminalWinner terminal = new ZLinkTerminalWinner();

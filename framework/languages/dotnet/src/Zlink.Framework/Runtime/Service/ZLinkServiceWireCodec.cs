@@ -61,7 +61,8 @@ internal static partial class ZLinkServiceWireCodec
         ulong DeadlineUnixMs,
         bool HasMetadata,
         bool InstanceIntent = false,
-        ulong SourceNodeGeneration = 0
+        ulong SourceNodeGeneration = 0,
+        string TargetOwnerId = ""
     );
 
     internal readonly record struct UserSpotOperationRecord(
@@ -1572,7 +1573,8 @@ internal static partial class ZLinkServiceWireCodec
             0,
             (flags & ServiceWireConstants.Flag.Metadata) != 0,
             route.InstanceIntent == ServiceWireCodec.Bool8.True,
-            sourceGeneration
+            sourceGeneration,
+            route.Authority.OwnerId.Value
         );
         return true;
     }

@@ -251,3 +251,8 @@ dependencies {
     implementation("org.lz4:lz4-java:1.8.0")
     implementation("org.slf4j:slf4j-api:2.0.16")
 }
+
+// Shared observability contract; the fixture remains outside language source trees.
+tasks.named<ProcessResources>("processTestResources") {
+    from(rootProject.file("../../runtime/protocol/fixtures/runtime-metrics-v1.json"))
+}

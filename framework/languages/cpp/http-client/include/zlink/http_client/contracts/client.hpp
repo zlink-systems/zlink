@@ -203,14 +203,7 @@ class request_builder_t
 
     template <typename T> zlink::framework::result_t<http_response_t<T>> submit () const
     {
-        auto raw = submit_raw ();
-        if (!raw) {
-            const auto *error = raw.error ();
-            return zlink::framework::result_t<http_response_t<T>>::failure (
-              error ? error->kind () : zlink::framework::framework_error_kind_t::internal_failure,
-              error ? error->what () : "HTTP request failed without an error");
-        }
-        return decode<T> (raw.value ());
+        return decode_result<T> (submit_raw ());
     }
 
     template <typename T> zlink::framework::task_t<T> fetch () const
@@ -221,9 +214,14 @@ class request_builder_t
 
     template <typename T, typename TCallback> void async (TCallback &&callback) const
     {
-        auto task = async<T> ();
-        zlink::framework::detail::observe_task_completion (task,
-                                                           std::forward<TCallback> (callback));
+        // The raw task already carries the client's resume scheduler, which alone
+        // decides where the callback runs; decoding happens inside the callback.
+        auto task = async_raw ();
+        zlink::framework::detail::observe_task_completion (
+          task, [callback = std::forward<TCallback> (callback)] (
+                  const zlink::framework::result_t<raw_http_response_t> &raw) mutable {
+              callback (decode_result<T> (raw));
+          });
     }
 
   private:
@@ -241,6 +239,19 @@ class request_builder_t
     detail::http_request_t make_request (std::function<void (std::string_view)> sink) const;
     zlink::framework::task_t<raw_http_response_t>
     dispatch_request (detail::http_request_t request) const;
+
+    template <typename T>
+    static zlink::framework::result_t<http_response_t<T>>
+    decode_result (const zlink::framework::result_t<raw_http_response_t> &raw)
+    {
+        if (!raw) {
+            const auto *error = raw.error ();
+            return zlink::framework::result_t<http_response_t<T>>::failure (
+              error ? error->kind () : zlink::framework::framework_error_kind_t::internal_failure,
+              error ? error->what () : "HTTP request failed without an error");
+        }
+        return decode<T> (raw.value ());
+    }
 
     template <typename T>
     static zlink::framework::result_t<http_response_t<T>> decode (const raw_http_response_t &raw)

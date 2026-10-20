@@ -5,9 +5,11 @@ import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
 import { listenOnBrowserSafeLoopbackPort } from './browser-safe-listen.mjs';
 import { closeBrowser, closeContext, closeServer } from '../../test/support/bounded-cleanup.js';
+import { browserCachePath } from './browser-cache-path.mjs';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const workspaceRoot = path.resolve(scriptDir, '../..');
+process.env.PLAYWRIGHT_BROWSERS_PATH = browserCachePath();
 
 async function cleanupResources(context, browser, server) {
   const errors = [];

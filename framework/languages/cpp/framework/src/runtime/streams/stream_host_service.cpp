@@ -1649,11 +1649,17 @@ class stream_host_service_t::listener_t
             return false;
         }
         const auto local = _mesh_node->native_node ().status ();
+        const auto owner = _mesh_node->session_route_owner ();
         const auto &retired = replacement.retired_session;
-        if (retired.session_owner_node_routing_id != local.routing_id ().to_bytes ()
-            || retired.session_owner_node_generation != local.lifecycle_generation ()
-            || retired.session_owner_id != local.routing_id ().to_string ()
-            || retired.session_owner_lease_generation != local.lifecycle_generation ()
+        // Session-Actor binding §4: compare with this host's current descriptor identity.
+        if (!owner || owner->lease_generation <= 0
+            || !runtime::protocol::same_session_owner_identity (
+              retired, {local.routing_id ().to_bytes (),
+                        local.lifecycle_generation (),
+                        owner->owner_id,
+                        static_cast<std::uint64_t> (owner->lease_generation),
+                        {},
+                        0})
             || retired.session_routing_id != state->session_rid.to_bytes ()) {
             trace_stream_host ("actor-binding-replacement-rejected", _stream, std::nullopt,
                                "reason=session-fence-mismatch");
@@ -1910,6 +1916,12 @@ class stream_host_service_t::listener_t
         }
         const auto publish_session_route = [&] {
             const auto local_status = _mesh_node->native_node ().status ();
+            // Session-Actor binding §4: this host is the Session owner; its
+            // identity is its own descriptor value. Without one there is no binding.
+            const auto local_owner = _mesh_node->session_route_owner ();
+            if (!local_owner || local_owner->lease_generation <= 0)
+                return result_t<void>::failure (framework_error_kind_t::unavailable,
+                                                "Session owner has no live descriptor");
             auto actor_gateway = services->get_required<detail::actor_gateway_runtime_t> ();
             auto transition = actor_gateway.record_bound_session_route_transition (
               actor,
@@ -1917,7 +1929,8 @@ class stream_host_service_t::listener_t
                 *local_node, session_rid, actor.object_generation (),
                 local_status.lifecycle_generation (), actor_route->authority_owner_generation,
                 static_cast<std::uint64_t> (actor_route->owner.lease_generation),
-                binding.binding_generation, 0, 0},
+                binding.binding_generation, 0, 0, false, local_owner->owner_id,
+                static_cast<std::uint64_t> (local_owner->lease_generation)},
               [&] {
                   if (publish_client_binding)
                       publish_client_binding ();
@@ -1950,7 +1963,9 @@ class stream_host_service_t::listener_t
             if (transition.value ().changed && transition.value ().previous
                 && transition.value ().previous->session_rid
                 && transition.value ().previous->node_generation != 0
-                && transition.value ().previous->binding_generation != 0) {
+                && transition.value ().previous->binding_generation != 0
+                && !transition.value ().previous->session_owner_id.empty ()
+                && transition.value ().previous->session_owner_lease_generation != 0) {
                 const auto &previous = *transition.value ().previous;
                 const runtime::protocol::bound_session_replaced_t notice{
                   runtime::protocol::actor_route_fence_t{
@@ -1960,7 +1975,7 @@ class stream_host_service_t::listener_t
                     static_cast<std::uint64_t> (actor_route->owner.lease_generation)},
                   runtime::protocol::retired_bound_session_route_fence_t{
                     previous.node_rid.to_bytes (), previous.node_generation,
-                    previous.node_rid.to_string (), previous.node_generation,
+                    previous.session_owner_id, previous.session_owner_lease_generation,
                     previous.session_rid->to_bytes (), previous.binding_generation}};
                 asio::post (*io, [_mesh_node, actor_gateway, notice] () mutable {
                     const auto local_status = _mesh_node->native_node ().status ();
@@ -2217,7 +2232,8 @@ class stream_host_service_t::listener_t
         auto transport_connection = _mesh_node->native_node ().sessions ().open (
           key,
           [this, rid] { request_core_peer_disconnect (rid, "session_relocation_seal_timeout"); },
-          _mesh_node->routing_id (), _mesh_node->native_node ().status ().lifecycle_generation ());
+          _mesh_node->routing_id (), _mesh_node->native_node ().status ().lifecycle_generation (),
+          [this, rid] { _core_socket->disconnect_rid (rid); });
         detail::session_actor_manager_access_t::attach (actors, stream);
         auto created = std::make_shared<core_session_t> (
           std::move (scope), session, actors, std::move (stream), std::move (transport_connection),

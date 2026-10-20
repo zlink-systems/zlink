@@ -73,7 +73,8 @@
 | GoogleTest 시험이 실제로 실행됐나 | 실행 파일이 exit 0 | GTEST_SKIP도 exit 0이다. skipped summary가 있는 출력과 정상 출력을 함께 넣어 판정을 확인하고, skip을 통과 수에서 제외한다 | #1786 · #1771 |
 | 검증 source hash가 stage된 변경도 포함하나 | `git ls-files --modified`로 만든 hash가 같다 | Stage된 변경은 빠진다. `git diff HEAD`와 untracked 파일을 함께 수집하고, stage된 실제 source의 두 내용을 입력해 hash가 달라지는지 확인한다 | #1786 · #1771 |
 | Host가 정상 정산했나 | GTest 단언 통과와 exit 0 | 종료 로그에 `force_stopping`이 있으면 정상 drain의 증거가 아니다. pending·active callback 정산과 정상 종료 transition을 함께 확인한다 | #1786 · #1771 |
-| 메시지 수락이 Store를 조회하지 않나 | 요청 flow로 필터링한 provider 호출 수 0 | 수락 경로가 해당 ambient flow를 전달하지 않아도 0이다. 조회 대상 authority key를 provider에서 직접 세고, 수정 전 실제 조회를 잡는지 먼저 확인한다 | #1786 |
+| WSL 시험이 실패를 종료 코드로 알렸나 | PowerShell에서 띄운 inline `bash -c`의 `$?`·`$code`가 0 | PowerShell이 변수를 먼저 펼쳐 gtest 실패에도 바깥 명령이 0으로 보였다. `.sh` 파일이나 subprocess의 returncode로 판정하고 로그의 실제 시험 수를 함께 확인한다 | #2119 |
+| 생성 codec이 올바른 frame을 받나 | GCC 빌드의 golden 시험 통과 | 함수 인자 평가 순서에 기대는 코드(`batch_end(b, at, batch_r16(b, at))`)는 GCC에서만 통과하고 Clang에서는 정상 frame을 거부했다. 생성 코드는 GCC와 Clang으로 함께 빌드해 시험한다 | #2119 |
 
 ## 4. 무엇이 실제로 답을 줬나
 

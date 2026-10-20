@@ -497,7 +497,6 @@ public final class ZLinkChannelRuntime
         this.callRuntime =
                 new ZLinkChannelCallRuntime(
                         dispatchErrors.flow(),
-                        timeoutExecutor,
                         replyDecoder,
                         this::sendToSpotViaRouterChannel,
                         this::requestToSpotViaRouterChannel,

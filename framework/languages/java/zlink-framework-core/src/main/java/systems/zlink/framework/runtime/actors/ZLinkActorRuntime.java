@@ -193,6 +193,22 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     private final ZLinkInternalSpotNode spotNode;
     private volatile String meshName;
+    private final ConcurrentHashMap<
+                    String, systems.zlink.framework.runtime.internal.metrics.ZLinkPopulationMetrics>
+            populationMetrics = new ConcurrentHashMap<>();
+
+    private void recordActorCount(String actorMesh, long delta) {
+        populationMetrics
+                .computeIfAbsent(
+                        actorMesh,
+                        name ->
+                                new systems.zlink.framework.runtime.internal.metrics
+                                        .ZLinkPopulationMetrics(
+                                        ZLinkRuntimeMetrics.Metric.ACTOR_COUNT,
+                                        Map.of(ZLinkRuntimeMetrics.Tag.MESH_NAME.wire(), name)))
+                .add(delta);
+    }
+
     private final Map<String, Class<? extends ZLinkActorFactory>> factories;
     private final ZLinkActorTransferRegistry actorTransfers;
     // This runtime is the owner of the registry, dispatch admission and actor
@@ -1805,7 +1821,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         if (context != null) {
             context.endMove();
         }
-        ZLinkRuntimeMetrics.increment("zlink.actor.transfers", Map.of());
     }
 
     void abandonSourceLocationOwnership(ZLinkActor actor) {
@@ -2815,20 +2830,21 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return inOwnerTurn(() -> clearSessionBindingOnLane(actor, bindingToken));
     }
 
-    /**
-     * Retires a native bound Session in one owner turn: the Actor context is cleared only for the
-     * exact binding token, and only then the node's route for it is closed.
-     */
-    CompletionStage<Boolean> retireNativeSessionBinding(
-            ZLinkActor actor, long bindingToken, ZLinkInternalSpotNode node, Duration timeout) {
-        return inOwnerTurn(
-                () -> {
-                    boolean cleared = clearSessionBindingOnLane(actor, bindingToken);
-                    if (cleared) {
-                        node.closeActorBoundSession(requireContext(actor).actorRef(), timeout);
-                    }
-                    return cleared;
-                });
+    CompletionStage<Void> closeNativeSessionBinding(
+            ZLinkActor actor, ZLinkInternalSpotNode node, Duration timeout) {
+        var started =
+                inOwnerTurn(
+                        () ->
+                                node.closeActorBoundSessionAsync(
+                                        requireContext(actor).actorRef(), timeout));
+        var terminal = started.thenCompose(request -> request).toCompletableFuture();
+        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge.forwardCancellation(
+                terminal, started);
+        started.thenAccept(
+                request ->
+                        systems.zlink.framework.runtime.internal.ZLinkCompletionBridge
+                                .forwardCancellation(terminal, request));
+        return terminal;
     }
 
     private boolean clearSessionBindingOnLane(ZLinkActor actor, long bindingToken) {
@@ -2956,32 +2972,21 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
         return context.hasBoundSession();
     }
 
-    public Optional<BoundSessionRouteSnapshot> boundSessionRoute(ZLinkActor actor) {
+    /**
+     * The Actor's current binding record, read from the SpotNode that owns it. Session-Actor
+     * binding §4: commands 42·51·54 send the Session owner identity stored there at bind.
+     */
+    public Optional<ZLinkInternalSpotNode.BoundSessionRoute> boundSessionRoute(ZLinkActor actor) {
         DefaultActorContext context = actorRegistry.context(actor);
         if (context == null) {
             throw new ZLinkConfigurationException(
                     "actor is not managed by this runtime: " + actor.context().actorId());
         }
-        ZLinkActorContextState.BoundSessionSource source = context.boundSessionSourceSnapshot();
-        if (source != null) {
-            return Optional.of(
-                    new BoundSessionRouteSnapshot(
-                            source.sourceNodeRid(),
-                            source.sourceSessionRid(),
-                            source.bindingGeneration()));
-        }
-        return Optional.empty();
-    }
-
-    public record BoundSessionRouteSnapshot(
-            RoutingId sessionOwnerNodeRid, RoutingId sessionRid, long bindingGeneration) {
-        public BoundSessionRouteSnapshot {
-            Objects.requireNonNull(sessionOwnerNodeRid, "sessionOwnerNodeRid");
-            Objects.requireNonNull(sessionRid, "sessionRid");
-            if (bindingGeneration <= 0) {
-                throw new IllegalArgumentException("bound Session route generation is invalid");
-            }
-        }
+        ZLinkInternalSpotNode bindingNode = context.state.bindingSpotNode();
+        ZLinkBackendActorRef actorRef = context.actorRef();
+        return bindingNode == null || actorRef == null
+                ? Optional.empty()
+                : bindingNode.boundSessionRoute(actorRef);
     }
 
     public boolean hasBoundSession(
@@ -3259,8 +3264,12 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             if (failure != null) {
                 try {
                     failure.accept(new ZLinkFrameworkException(kind, message));
-                } catch (RuntimeException ignored) {
-                    // The retained source still owns and rejects the packet.
+                } catch (RuntimeException callbackFailure) {
+                    java.util.logging.Logger.getLogger(ZLinkActorRuntime.class.getName())
+                            .log(
+                                    java.util.logging.Level.WARNING,
+                                    "Retained Message Follow failure callback failed",
+                                    callbackFailure);
                 }
             }
         } finally {
@@ -4272,7 +4281,6 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                         sourceSessionRid,
                         bindingGeneration,
                         sessionOwnerNodeGeneration);
-        boundSession.setBindingToken(bindingToken);
         return bindingToken;
     }
 
@@ -4436,6 +4444,13 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                                                                     .toList()))))
                     .whenComplete(
                             (ignored, failure) -> {
+                                populationMetrics
+                                        .values()
+                                        .forEach(
+                                                systems.zlink.framework.runtime.internal.metrics
+                                                                .ZLinkPopulationMetrics
+                                                        ::close);
+                                populationMetrics.clear();
                                 if (failure == null) {
                                     result.complete(null);
                                 } else {
@@ -4554,8 +4569,8 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
 
     private DepartedStay departedStay(DefaultActorContext context) {
         ZLinkBackendActorRef actorRef = context.actorRef();
-        //  A remote Session binding lives only in the SpotNode record; a same-node one in the
-        //  context.
+        //  The SpotNode record holds the same-node and the remote binding; a binding without a
+        //  SpotNode record is known only to the context.
         RoutingId sessionRid =
                 actorRef == null
                         ? null
@@ -4618,6 +4633,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                     byActor.remove(previous.actor());
                                 }
                                 byActor.put(actor, entry);
+                                if (previous == null) recordActorCount(context.meshName(), 1);
                                 return previous == null;
                             });
             if (added) signalCountChanged();
@@ -4720,6 +4736,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
                                 ActorEntry entry = byId.remove(actorId);
                                 if (entry != null) {
                                     byActor.remove(entry.actor());
+                                    recordActorCount(entry.context().meshName(), -1);
                                     acceptedHandoffOperations.remove(actorId);
                                 }
                                 return entry;
@@ -4750,6 +4767,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             }
             byId.remove(actorId);
             byActor.remove(actor);
+            recordActorCount(entry.context().meshName(), -1);
             acceptedHandoffOperations.remove(actorId);
             return true;
         }

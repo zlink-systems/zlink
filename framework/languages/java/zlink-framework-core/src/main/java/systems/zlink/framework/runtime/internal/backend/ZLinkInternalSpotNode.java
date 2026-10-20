@@ -69,19 +69,20 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         // Alternate backends may not expose raw relocation staging.
     }
 
-    /** Resolves Spot admission from the target owner's current authority. */
+    /** Resolves current Spot authority; the activation owns Instance application admission. */
     default void setSpotAdmissionResolver(SpotAdmissionResolver resolver) {
         // Alternate backends may not expose raw target ingress.
     }
 
     @FunctionalInterface
     interface SpotAdmissionResolver {
-        /** A null result admits an Instance intent against Ready authority. */
+        /** A null result leaves ingress to the existing target queue admission. */
         CompletionStage<? extends RuntimeException> resolve(
                 String spotId,
                 long authorityOwnerGeneration,
                 boolean instanceIntent,
-                boolean activationPresent);
+                boolean activationPresent,
+                ZLinkServiceM6BWireCodec.InstanceRouteFence instanceRoute);
     }
 
     /**
@@ -222,11 +223,6 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
     /** Exact local owner fence used by bound-Session relocation command 42. */
     default long localNodeGeneration() {
         return 0L;
-    }
-
-    /** Exact local authority owner used by bound-Session relocation command 42. */
-    default String localAuthorityOwnerId() {
-        return "";
     }
 
     /** Node lifecycle generation currently known for this Actor route. */
@@ -430,6 +426,12 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         return Optional.empty();
     }
 
+    default CompletionStage<Void> closeActorBoundSessionAsync(
+            ZLinkBackendActorRef actor, Duration timeout) {
+        return java.util.concurrent.CompletableFuture.failedFuture(
+                new UnsupportedOperationException("Session close is unavailable"));
+    }
+
     void closeActorBoundSession(ZLinkBackendActorRef actor, Duration timeout);
 
     /** Closes only the binding of the supplied source stay and, when supplied, Session. */
@@ -459,9 +461,15 @@ public interface ZLinkInternalSpotNode extends ZLinkBackendObject {
         return CompletableFuture.completedFuture(null);
     }
 
+    /**
+     * The Actor's current binding record as this node stores it, including the Session owner
+     * identity taken from its descriptor at bind (Session-Actor binding §4).
+     */
     record BoundSessionRoute(
             RoutingId sessionOwnerNodeRid,
             long sessionOwnerNodeGeneration,
+            String sessionOwnerId,
+            long sessionOwnerLeaseGeneration,
             RoutingId sessionRid,
             long bindingGeneration) {}
 

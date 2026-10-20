@@ -25,7 +25,7 @@ internal static class ZLinkFrameworkJsonDocument
                     AllowTrailingCommas = false,
                 }
             );
-            ValidateTokens(ref reader, null);
+            ValidateTokens(ref reader);
         }
         catch (JsonException error)
         {
@@ -33,20 +33,22 @@ internal static class ZLinkFrameworkJsonDocument
         }
     }
 
-    private static void ValidateTokens(ref Utf8JsonReader reader, HashSet<string>? objectProperties)
+    private static void ValidateTokens(ref Utf8JsonReader reader)
     {
+        HashSet<string>? objectProperties = null;
         while (reader.Read())
         {
             switch (reader.TokenType)
             {
                 case JsonTokenType.StartObject:
-                    ValidateTokens(ref reader, new HashSet<string>(StringComparer.Ordinal));
+                    ValidateTokens(ref reader);
                     break;
                 case JsonTokenType.PropertyName:
+                    objectProperties ??= new HashSet<string>(StringComparer.Ordinal);
                     var name =
                         reader.GetString()
                         ?? throw new JsonException("JSON property name is null.");
-                    if (objectProperties is null || !objectProperties.Add(name))
+                    if (!objectProperties.Add(name))
                         throw new JsonException($"Duplicate JSON property '{name}'.");
                     break;
                 case JsonTokenType.EndObject:

@@ -755,6 +755,7 @@ public sealed partial class RelocationBehaviorConformanceTests
         };
         ActivitySource.AddActivityListener(progress);
 
+        await using var routeProxy = replaceRouteAt == 0 ? null : new RouteChangeProxy();
         await using var source = await RelocationBehaviorHost.StartAsync(
             "source",
             trace,
@@ -763,17 +764,8 @@ public sealed partial class RelocationBehaviorConformanceTests
             registerTargetSpot: false,
             canonicalTransportProbe: cutover,
             autoConnectGate: replaceRouteAt == 0 ? null : automaticConnections.Task,
-            advertiseHost: replaceRouteAt == 0 ? null : RouteChangeProxy.AdvertiseHost
+            routeProxy: routeProxy
         );
-        await using var routeProxy =
-            replaceRouteAt == 0
-                ? null
-                : new RouteChangeProxy(
-                    source
-                        .Runtime.GetMeshNodeRuntime(RelocationBehaviorHost.MeshName)
-                        .Node.MeshStatus()
-                        .LocalEndpoint
-                );
         source.Runtime.Registration.DispatchOptions.Diagnostics.SetLevel(
             ZLinkDiagnosticsLevel.Normal
         );
@@ -2809,11 +2801,13 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
         bool relocateSpots = false,
         Task? autoConnectGate = null,
         (RoutingId Rid, string Endpoint)? manualPeer = null,
-        string? advertiseHost = null,
+        RouteChangeProxy? routeProxy = null,
         Action<IServiceCollection>? configureServices = null,
         RoutingId? hiddenAutoConnectPeer = null,
         Action? reconcileReadStarted = null,
-        Task? reconcileReadGate = null
+        Task? reconcileReadGate = null,
+        Func<IZLinkMeshNodeLocationResolver, IZLinkMeshNodeLocationResolver>? meshResolverWrapper =
+            null
     )
     {
         var services = new ServiceCollection();
@@ -2822,7 +2816,8 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
             services.AddSingleton<IZLinkBackendAdapterFactory>(
                 new ProbedBackendAdapterFactory(
                     new ZLinkDotNetBackendAdapterFactory(),
-                    canonicalTransportProbe
+                    canonicalTransportProbe,
+                    routeProxy
                 )
             );
         services.AddSingleton(trace);
@@ -2846,8 +2841,6 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
                 .Listen("tcp://127.0.0.1:0")
                 .SetActorLimit(100)
                 .SetSpotLimit(100);
-            if (advertiseHost is not null)
-                mesh.SetAdvertiseHost(advertiseHost);
             if (manualPeer is { } configuredPeer)
             {
                 mesh.SetRoutingId(RoutingId.From($"behavior-{node}-{Guid.NewGuid():N}"));
@@ -2896,6 +2889,10 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
                     ?.RegisterBeforeStoreDispose(host);
                 return host;
             });
+        if (meshResolverWrapper is not null)
+            services.AddSingleton<IZLinkMeshNodeLocationResolver>(provider =>
+                meshResolverWrapper(provider.GetRequiredService<ZLinkStoreLocationResolvers>())
+            );
         var provider = services.BuildServiceProvider();
         if (
             Environment.GetEnvironmentVariable(RelocationBehaviorHost.FlowPathEnvironmentVariable)
@@ -3728,11 +3725,12 @@ internal sealed class CanonicalRelocationTransportProbe
 
 internal sealed class ProbedBackendAdapterFactory(
     IZLinkBackendAdapterFactory inner,
-    CanonicalRelocationTransportProbe probe
+    CanonicalRelocationTransportProbe probe,
+    RouteChangeProxy? routeProxy
 ) : IZLinkBackendAdapterFactory
 {
     public IZLinkBackendRuntimeContext CreateRuntimeContext() =>
-        new ProbedBackendRuntimeContext(inner.CreateRuntimeContext(), probe);
+        new ProbedBackendRuntimeContext(inner.CreateRuntimeContext(), probe, routeProxy);
 
     public IZLinkMonitoringBackendAdapter CreateMonitoringAdapter() =>
         inner.CreateMonitoringAdapter();
@@ -3740,7 +3738,8 @@ internal sealed class ProbedBackendAdapterFactory(
 
 internal sealed class ProbedBackendRuntimeContext(
     IZLinkBackendRuntimeContext inner,
-    CanonicalRelocationTransportProbe probe
+    CanonicalRelocationTransportProbe probe,
+    RouteChangeProxy? routeProxy
 ) : IZLinkBackendRuntimeContext
 {
     private IZLinkBackendSpotNode? _innerSpotNode;
@@ -3771,7 +3770,7 @@ internal sealed class ProbedBackendRuntimeContext(
     public IZLinkBackendSpotNode CreateSpotNode(string meshName)
     {
         _innerSpotNode = inner.CreateSpotNode(meshName);
-        _probedSpotNode = ProbedBackendSpotNode.Create(_innerSpotNode, probe);
+        _probedSpotNode = ProbedBackendSpotNode.Create(_innerSpotNode, probe, routeProxy);
         return _probedSpotNode;
     }
 
@@ -3797,22 +3796,26 @@ internal interface IProbedBackendSpotNode
         IZLinkBackendLocalActorAuthorityReader,
         IZLinkBackendActorMessageFollowIngress,
         IZLinkBackendMessageFollowNotifications,
-        IZLinkBackendBoundSessionReplacementNotifications;
+        IZLinkBackendBoundSessionReplacementNotifications,
+        IZLinkBackendBoundSessionBind;
 
 internal class ProbedBackendSpotNode : DispatchProxy
 {
     private object _target = null!;
     private CanonicalRelocationTransportProbe _probe = null!;
+    private RouteChangeProxy? _routeProxy;
 
     internal static IZLinkBackendSpotNode Create(
         IZLinkBackendSpotNode target,
-        CanonicalRelocationTransportProbe probe
+        CanonicalRelocationTransportProbe probe,
+        RouteChangeProxy? routeProxy
     )
     {
         var proxy = Create<IProbedBackendSpotNode, ProbedBackendSpotNode>();
         var state = (ProbedBackendSpotNode)(object)proxy;
         state._target = target;
         state._probe = probe;
+        state._routeProxy = routeProxy;
         return proxy;
     }
 
@@ -3896,6 +3899,15 @@ internal class ProbedBackendSpotNode : DispatchProxy
         try
         {
             var result = targetMethod.Invoke(_target, args);
+            // Publish the real proxy endpoint before startup claims the descriptor.
+            if (targetMethod.Name == nameof(IZLinkBackendSpotNode.Start) && _routeProxy is not null)
+            {
+                var node = (IZLinkBackendSpotNode)_target;
+                _routeProxy.ForwardTo(node.MeshStatus().LocalEndpoint);
+                node.SetRouterAdvertisedEndpoint(_routeProxy.Endpoint);
+            }
+            if (result is ZLinkSpotNodeStatus status && _routeProxy is not null)
+                return status with { LocalEndpoint = _routeProxy.Endpoint };
             if (
                 targetMethod.Name == nameof(IZLinkBackendSpotNode.SendToNode)
                 && result is SubmitResult.Ok

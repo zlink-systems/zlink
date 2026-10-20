@@ -46,7 +46,6 @@ channel·Spot·Actor 계약을 사용하므로, 한 mesh 안에서 언어가 달
     | --- | --- | --- |
     | `lz4` | STREAM 압축 | `-DZLINK_FRAMEWORK_CPP_STREAM_WITH_LZ4=OFF -DZLINK_STREAM_CONNECTOR_WITH_LZ4=OFF` |
     | `openssl` | Stream Connector TLS | `-DZLINK_STREAM_CONNECTOR_WITH_TLS=OFF` |
-    | `boost`(asio·beast) | HTTP·전송 | 끌 수 없다. Core와 framework가 **같은 Boost 트리**를 사용해야 한다 |
     | `nlohmann_json` | 기본 JSON serializer | 끌 수 없다 |
     | `opentelemetry-cpp` | 관측 | 끌 수 없다 |
     | `protobuf` | protobuf codec | 해당 타깃을 링크할 때만 |
