@@ -283,6 +283,9 @@ class actor_t final : public fw::actor_t
 
   private:
     fw::actor_context_t _context;
+    // Capture the evidence of the test that created this object; late callbacks must not
+    // write into a later test.
+    std::shared_ptr<observations_t> observations = ::observations;
 };
 class factory_t final : public fw::actor_factory_t<actor_t>
 {
@@ -304,6 +307,11 @@ class factory_t final : public fw::actor_factory_t<actor_t>
         }
         co_return std::make_shared<actor_t> (std::move (context));
     }
+
+  private:
+    // Capture the evidence of the test that created this object; late callbacks must not
+    // write into a later test.
+    std::shared_ptr<observations_t> observations = ::observations;
 };
 class entry_t final : public fw::entry_spot_t<actor_t>
 {
@@ -382,6 +390,9 @@ class entry_t final : public fw::entry_spot_t<actor_t>
 
   private:
     fw::entry_spot_context_t _context;
+    // Capture the evidence of the test that created this object; late callbacks must not
+    // write into a later test.
+    std::shared_ptr<observations_t> observations = ::observations;
 };
 // A second Actor type, so a node can register an Entry Spot that accepts only it.
 constexpr auto other_actor_type = "other-member";
@@ -566,6 +577,9 @@ class room_t final : public fw::spot_t<actor_t>
 
   private:
     fw::spot_context_t _context;
+    // Capture the evidence of the test that created this object; late callbacks must not
+    // write into a later test.
+    std::shared_ptr<observations_t> observations = ::observations;
 };
 class room_state_t final : public fw::spot_relocation_adapter_t<room_t>
 {
@@ -1957,6 +1971,21 @@ TEST_P (ActorHostRelocation, ExistingSessionRelaysAfterRelocation)
 
 INSTANTIATE_TEST_SUITE_P (FreshAndPreviousOwner, ActorHostRelocation, testing::Bool ());
 
+// Drain the queue before the locals its work items reference are destroyed, including on
+// early ASSERT exits.
+struct queue_drain_guard_t
+{
+    fw::runtime::serial_execution_queue_t &queue;
+    std::shared_ptr<fw::detail::deferred_barrier_t> *barrier = nullptr;
+    bool finished = false;
+    ~queue_drain_guard_t ()
+    {
+        if (!finished && barrier && *barrier)
+            (*barrier)->cancel ();
+        queue.drain ();
+    }
+};
+
 TEST (ActorMaintenanceJoin, ReservedLifecycleCaptureKeepsTurn)
 {
     for (const bool early : {true, false}) {
@@ -1967,6 +1996,7 @@ TEST (ActorMaintenanceJoin, ReservedLifecycleCaptureKeepsTurn)
         std::shared_ptr<fw::detail::serial_turn_t> capture_turn;
         std::vector<int> order;
         fw::task_completion_source_t<void> initialized;
+        queue_drain_guard_t guard{queue, &barrier};
         const auto capture = [&] () -> fw::task_t<void> {
             capture_turn = fw::detail::capture_current_serial_turn ();
             EXPECT_TRUE (capture_turn && capture_turn->belongs_to (&queue));
@@ -2004,6 +2034,7 @@ TEST (ActorMaintenanceJoin, ReservedLifecycleCaptureKeepsTurn)
             release (fw::result_t<void>::success ());
         }));
         queue.drain ();
+        guard.finished = true;
         EXPECT_EQ (order, (std::vector<int>{1, 2, 3}));
     }
 }
@@ -2015,6 +2046,7 @@ TEST (ActorMaintenanceJoin, CancelledReservedCaptureFinishes)
     std::optional<fw::task_t<void>> phase;
     bool ran = false;
     fw::task_completion_source_t<void> initialized;
+    queue_drain_guard_t guard{queue};
     queue.post ("cancel-capture", [&] {
         const auto barrier = queue.reserve_barrier_next ("relocation-ready", true).value ();
         phase = barrier->run ([&] () -> fw::task_t<void> {

@@ -2797,16 +2797,21 @@ int main (int argc, char **argv)
             reconnect_server.join ();
             return fail (176);
         }
-        callback_latch_t pending_request_completed;
-        std::atomic_int pending_request_callback_count{0};
-        std::optional<zlink::stream_connector::error_code_t> pending_request_error;
+        // The callback owns its state: it may run after this frame ended.
+        struct pending_request_state_t
+        {
+            callback_latch_t completed;
+            std::atomic_int callback_count{0};
+            std::optional<zlink::stream_connector::error_code_t> error;
+        };
+        auto pending_request = std::make_shared<pending_request_state_t> ();
         reconnect_connector.request (login_request_t{})
           .packet_name ("pending.before.reconnect")
           .timeout (std::chrono::seconds (2))
-          .submit<login_reply_t> ([&] (auto result) {
-              ++pending_request_callback_count;
-              pending_request_error = result.error_code ();
-              pending_request_completed.signal ();
+          .submit<login_reply_t> ([pending_request] (auto result) {
+              ++pending_request->callback_count;
+              pending_request->error = result.error_code ();
+              pending_request->completed.signal ();
           });
         if (!first_request_seen.wait_for (std::chrono::milliseconds (250))) {
             release_first_connection.signal ();
@@ -2840,12 +2845,12 @@ int main (int argc, char **argv)
         }
         reconnect_server.join ();
         const auto pending_completed =
-          pending_request_completed.wait_for (std::chrono::milliseconds (250));
+          pending_request->completed.wait_for (std::chrono::milliseconds (250));
         reconnect_connector.close ();
         if (!reconnecting_seen.load (std::memory_order_acquire) || !second_connection_seen
             || !second_connection_received_fresh_send || !pending_completed
-            || pending_request_callback_count != 1
-            || pending_request_error != zlink::stream_connector::error_code_t::disconnected
+            || pending_request->callback_count != 1
+            || pending_request->error != zlink::stream_connector::error_code_t::disconnected
             || request_during_reconnect
             || request_during_reconnect.error_code ()
                  != zlink::stream_connector::error_code_t::disconnected) {
@@ -2892,27 +2897,32 @@ int main (int argc, char **argv)
             ending_server.join ();
             return fail (183);
         }
-        callback_latch_t wait_completed;
-        std::atomic_bool wait_succeeded{false};
-        std::optional<zlink::stream_connector::error_code_t> wait_error;
+        // The callback owns its state: it may run after this frame ended.
+        struct wait_state_t
+        {
+            callback_latch_t completed;
+            std::atomic_bool succeeded{false};
+            std::optional<zlink::stream_connector::error_code_t> error;
+        };
+        auto wait_state = std::make_shared<wait_state_t> ();
         ending_connector.wait_for<zlink::stream_connector::packet_t> ("never.arrives")
           .timeout (std::chrono::seconds (5))
-          .submit ([&] (zlink::stream_connector::result_t<packet_message_t> result) {
-              wait_succeeded = static_cast<bool> (result);
-              wait_error = result.error_code ();
-              wait_completed.signal ();
+          .submit ([wait_state] (zlink::stream_connector::result_t<packet_message_t> result) {
+              wait_state->succeeded = static_cast<bool> (result);
+              wait_state->error = result.error_code ();
+              wait_state->completed.signal ();
           });
         const auto ended_at = std::chrono::steady_clock::now ();
         release_ending_connection.signal ();
         /* Released by the ending: well inside the 5 s wait timeout and inside
      * the reconnect delay. */
-        const bool released = wait_completed.wait_for (std::chrono::milliseconds (1000));
+        const bool released = wait_state->completed.wait_for (std::chrono::milliseconds (1000));
         const auto release_took = std::chrono::steady_clock::now () - ended_at;
         const auto state_at_release = ending_connector.state ();
         ending_server.join ();
         ending_connector.close ();
-        if (!released || wait_succeeded
-            || wait_error != zlink::stream_connector::error_code_t::disconnected) {
+        if (!released || wait_state->succeeded
+            || wait_state->error != zlink::stream_connector::error_code_t::disconnected) {
             return reconnect_enabled ? 185 : 184;
         }
         if (release_took >= std::chrono::milliseconds (1000)
@@ -3004,38 +3014,38 @@ int main (int argc, char **argv)
     {
         zlink::stream_connector::connector_options_t lifecycle_options;
         lifecycle_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
-        bool connect_lifetime_seen = false;
-        callback_latch_t connect_lifetime_latch;
+        auto connect_lifetime = std::make_shared<callback_outcome_t> ();
         {
             auto lifecycle_connector =
               zlink::stream_connector::connector_factory_t::create (lifecycle_options);
             /* stream-connector §6.3: an empty endpoint is one value outside its
        * range, so it is validation_failed, not configuration_error. */
-            lifecycle_connector.connect ([&] (zlink::stream_connector::result_t<void> result) {
-                connect_lifetime_seen =
-                  !result
-                  && result.error_code ()
-                       == zlink::stream_connector::error_code_t::validation_failed;
-                connect_lifetime_latch.signal ();
-            });
+            lifecycle_connector.connect (
+              [connect_lifetime] (zlink::stream_connector::result_t<void> result) {
+                  connect_lifetime->seen =
+                    !result
+                    && result.error_code ()
+                         == zlink::stream_connector::error_code_t::validation_failed;
+                  connect_lifetime->latch.signal ();
+              });
         }
-        if (!connect_lifetime_latch.wait_for (std::chrono::milliseconds (100))
-            || !connect_lifetime_seen) {
+        if (!connect_lifetime->latch.wait_for (std::chrono::milliseconds (100))
+            || !connect_lifetime->seen) {
             return fail (97);
         }
 
-        bool close_lifetime_seen = false;
-        callback_latch_t close_lifetime_latch;
+        auto close_lifetime = std::make_shared<callback_outcome_t> ();
         {
             auto lifecycle_connector =
               zlink::stream_connector::connector_factory_t::create (lifecycle_options);
-            lifecycle_connector.close ([&] (zlink::stream_connector::result_t<void> result) {
-                close_lifetime_seen = static_cast<bool> (result);
-                close_lifetime_latch.signal ();
-            });
+            lifecycle_connector.close (
+              [close_lifetime] (zlink::stream_connector::result_t<void> result) {
+                  close_lifetime->seen = static_cast<bool> (result);
+                  close_lifetime->latch.signal ();
+              });
         }
-        if (!close_lifetime_latch.wait_for (std::chrono::milliseconds (100))
-            || !close_lifetime_seen) {
+        if (!close_lifetime->latch.wait_for (std::chrono::milliseconds (100))
+            || !close_lifetime->seen) {
             return fail (98);
         }
 
@@ -3058,13 +3068,13 @@ int main (int argc, char **argv)
         lifecycle_options.endpoint = async_connect_endpoint;
         auto async_connect_connector =
           zlink::stream_connector::connector_factory_t::create (lifecycle_options);
-        bool async_connect_seen = false;
-        callback_latch_t async_connect_latch;
+        auto async_connect = std::make_shared<callback_outcome_t> ();
         const auto async_connect_started = std::chrono::steady_clock::now ();
-        async_connect_connector.connect ([&] (zlink::stream_connector::result_t<void> result) {
-            async_connect_seen = static_cast<bool> (result);
-            async_connect_latch.signal ();
-        });
+        async_connect_connector.connect (
+          [async_connect] (zlink::stream_connector::result_t<void> result) {
+              async_connect->seen = static_cast<bool> (result);
+              async_connect->latch.signal ();
+          });
         const auto async_connect_submit_elapsed =
           std::chrono::steady_clock::now () - async_connect_started;
         if (async_connect_submit_elapsed > std::chrono::milliseconds (50)) {
@@ -3077,7 +3087,7 @@ int main (int argc, char **argv)
         /* 비차단 여부는 위의 submit 경과 시간이 단언한다. 여기서는 완료 콜백이
      * 실제로 오는지만 본다. 완료 대기에 짧은 시한을 걸면 부하가 걸린 머신에서
      * 그대로 flake가 된다. */
-        if (!async_connect_latch.wait_for (std::chrono::seconds (5)) || !async_connect_seen
+        if (!async_connect->latch.wait_for (std::chrono::seconds (5)) || !async_connect->seen
             || !async_connect_connector.is_connected ()) {
             async_connect_connector.close ();
             boost::system::error_code ignored;
@@ -3128,13 +3138,13 @@ int main (int argc, char **argv)
           zlink::stream_connector::dispatch_mode_t::immediate;
         auto websocket_connect_connector =
           zlink::stream_connector::connector_factory_t::create (websocket_connect_options);
-        bool websocket_connect_seen = false;
-        callback_latch_t websocket_connect_latch;
+        auto websocket_connect = std::make_shared<callback_outcome_t> ();
         const auto websocket_connect_started = std::chrono::steady_clock::now ();
-        websocket_connect_connector.connect ([&] (zlink::stream_connector::result_t<void> result) {
-            websocket_connect_seen = static_cast<bool> (result);
-            websocket_connect_latch.signal ();
-        });
+        websocket_connect_connector.connect (
+          [websocket_connect] (zlink::stream_connector::result_t<void> result) {
+              websocket_connect->seen = static_cast<bool> (result);
+              websocket_connect->latch.signal ();
+          });
         const auto websocket_connect_submit_elapsed =
           std::chrono::steady_clock::now () - websocket_connect_started;
         if (websocket_connect_submit_elapsed > std::chrono::milliseconds (50)) {
@@ -3148,8 +3158,8 @@ int main (int argc, char **argv)
         // The elapsed assertion above checks that connect() submits asynchronously.
         // Allow the server thread enough time to be scheduled before judging the
         // separate completion callback contract on a loaded test host.
-        if (!websocket_connect_latch.wait_for (std::chrono::seconds (1)) || !websocket_connect_seen
-            || !websocket_connect_connector.is_connected ()) {
+        if (!websocket_connect->latch.wait_for (std::chrono::seconds (1))
+            || !websocket_connect->seen || !websocket_connect_connector.is_connected ()) {
             websocket_connect_close_latch.signal ();
             websocket_connect_connector.close ();
             boost::system::error_code ignored;
@@ -3175,16 +3185,15 @@ int main (int argc, char **argv)
     if (!none_observed) {
         return fail (193);
     }
-    bool async_none_observed = false;
-    callback_latch_t async_none_latch;
+    auto async_none = std::make_shared<callback_outcome_t> ();
     connector.expect_none ("test.none.async")
       .within (std::chrono::milliseconds (5))
-      .submit ([&] (zlink::stream_connector::result_t<void> result) {
-          async_none_observed = static_cast<bool> (result);
-          async_none_latch.signal ();
+      .submit ([async_none] (zlink::stream_connector::result_t<void> result) {
+          async_none->seen = static_cast<bool> (result);
+          async_none->latch.signal ();
       });
-    dispatch_until (connector, async_none_latch, std::chrono::milliseconds (100));
-    if (!async_none_observed) {
+    dispatch_until (connector, async_none->latch, std::chrono::milliseconds (100));
+    if (!async_none->seen) {
         return fail (201);
     }
     runtime.receive_packet (
@@ -4013,8 +4022,7 @@ int main (int argc, char **argv)
         return fail (8);
     }
 
-    bool immediate_wait_callback_seen = false;
-    callback_latch_t immediate_wait_callback_latch;
+    auto immediate_wait_callback = std::make_shared<callback_outcome_t> ();
     runtime.receive_packet (
       zlink::stream_connector::packet_t{"server.wait.immediate",
                                         {},
@@ -4023,50 +4031,50 @@ int main (int argc, char **argv)
                                         as_bytes (std::string ("immediate"))});
     connector.wait_for<zlink::stream_connector::packet_t> ("server.wait.immediate")
       .timeout (std::chrono::milliseconds (100))
-      .submit ([&] (zlink::stream_connector::result_t<packet_message_t> result) {
-          immediate_wait_callback_seen =
-            result && as_string (result.value ().payload.payload) == "immediate";
-          immediate_wait_callback_latch.signal ();
-      });
-    dispatch_until (connector, immediate_wait_callback_latch, std::chrono::milliseconds (100));
-    if (!immediate_wait_callback_seen) {
+      .submit (
+        [immediate_wait_callback] (zlink::stream_connector::result_t<packet_message_t> result) {
+            immediate_wait_callback->seen =
+              result && as_string (result.value ().payload.payload) == "immediate";
+            immediate_wait_callback->latch.signal ();
+        });
+    dispatch_until (connector, immediate_wait_callback->latch, std::chrono::milliseconds (100));
+    if (!immediate_wait_callback->seen) {
         return fail (176);
     }
 
-    bool pending_wait_callback_seen = false;
-    callback_latch_t pending_wait_latch;
+    auto pending_wait_callback = std::make_shared<callback_outcome_t> ();
     connector.wait_for<zlink::stream_connector::packet_t> ("server.wait.callback")
       .timeout (std::chrono::milliseconds (100))
-      .submit ([&] (zlink::stream_connector::result_t<packet_message_t> result) {
-          pending_wait_callback_seen =
-            result && as_string (result.value ().payload.payload) == "wait-callback";
-          pending_wait_latch.signal ();
-      });
+      .submit (
+        [pending_wait_callback] (zlink::stream_connector::result_t<packet_message_t> result) {
+            pending_wait_callback->seen =
+              result && as_string (result.value ().payload.payload) == "wait-callback";
+            pending_wait_callback->latch.signal ();
+        });
     runtime.receive_packet (
       zlink::stream_connector::packet_t{"server.wait.callback",
                                         {},
                                         zlink::stream_connector::codec_t::raw,
                                         false,
                                         as_bytes (std::string ("wait-callback"))});
-    dispatch_until (connector, pending_wait_latch, std::chrono::milliseconds (100));
-    if (!pending_wait_callback_seen) {
+    dispatch_until (connector, pending_wait_callback->latch, std::chrono::milliseconds (100));
+    if (!pending_wait_callback->seen) {
         return fail (83);
     }
 
-    bool pending_wait_timeout_seen = false;
-    callback_latch_t pending_wait_timeout_latch;
+    auto pending_wait_timeout = std::make_shared<callback_outcome_t> ();
     /* stream-connector §10.1: nothing arriving inside the window is a rejected
    * observation, so the wait surface reports validation_failed. */
     connector.wait_for<zlink::stream_connector::packet_t> ("server.wait.missing")
       .timeout (std::chrono::milliseconds (5))
-      .submit ([&] (zlink::stream_connector::result_t<packet_message_t> result) {
-          pending_wait_timeout_seen =
+      .submit ([pending_wait_timeout] (zlink::stream_connector::result_t<packet_message_t> result) {
+          pending_wait_timeout->seen =
             !result
             && result.error_code () == zlink::stream_connector::error_code_t::validation_failed;
-          pending_wait_timeout_latch.signal ();
+          pending_wait_timeout->latch.signal ();
       });
-    dispatch_until (connector, pending_wait_timeout_latch, std::chrono::milliseconds (100));
-    if (!pending_wait_timeout_seen) {
+    dispatch_until (connector, pending_wait_timeout->latch, std::chrono::milliseconds (100));
+    if (!pending_wait_timeout->seen) {
         return fail (84);
     }
 
@@ -4172,42 +4180,48 @@ int main (int argc, char **argv)
         close_handler_options.dispatch_mode = zlink::stream_connector::dispatch_mode_t::immediate;
         auto close_handler_connector =
           zlink::stream_connector::connector_factory_t::create (close_handler_options);
-        callback_latch_t closed_state_started;
-        callback_latch_t release_closed_state;
-        callback_latch_t disconnected_after_closed_state;
-        std::atomic_bool closed_state_finished{false};
-        std::atomic_bool disconnected_ordered{false};
+        // Handlers own their state: they may run after this frame ended.
+        struct close_handler_state_t
+        {
+            callback_latch_t closed_state_started;
+            callback_latch_t release_closed_state;
+            callback_latch_t disconnected_after_closed_state;
+            std::atomic_bool closed_state_finished{false};
+            std::atomic_bool disconnected_ordered{false};
+        };
+        auto close_handler = std::make_shared<close_handler_state_t> ();
         auto close_handler_state_subscription =
-          close_handler_connector.on_connection_state_changed ([&] (const auto &state) {
+          close_handler_connector.on_connection_state_changed ([close_handler] (const auto &state) {
               if (state.current != zlink::stream_connector::connection_state_t::closed) {
                   return;
               }
-              closed_state_started.signal ();
-              release_closed_state.wait_for (std::chrono::seconds (2));
-              closed_state_finished.store (true, std::memory_order_release);
+              close_handler->closed_state_started.signal ();
+              close_handler->release_closed_state.wait_for (std::chrono::seconds (2));
+              close_handler->closed_state_finished.store (true, std::memory_order_release);
           });
         auto close_handler_disconnected_subscription = close_handler_connector.on_disconnected (
-          [&] (std::optional<zlink::stream_connector::close_reason_t> reason) {
-              disconnected_ordered.store (
+          [close_handler] (std::optional<zlink::stream_connector::close_reason_t> reason) {
+              close_handler->disconnected_ordered.store (
                 reason == zlink::stream_connector::close_reason_t::client_close
-                  && closed_state_finished.load (std::memory_order_acquire),
+                  && close_handler->closed_state_finished.load (std::memory_order_acquire),
                 std::memory_order_release);
-              disconnected_after_closed_state.signal ();
+              close_handler->disconnected_after_closed_state.signal ();
           });
         auto close_handler_future =
           std::async (std::launch::async, [&] { return close_handler_connector.close (); });
-        if (!closed_state_started.wait_for (std::chrono::milliseconds (100))
+        if (!close_handler->closed_state_started.wait_for (std::chrono::milliseconds (100))
             || close_handler_future.wait_for (std::chrono::milliseconds (100))
                  != std::future_status::ready) {
-            release_closed_state.signal ();
+            close_handler->release_closed_state.signal ();
             (void) close_handler_future.get ();
             return fail (369);
         }
         const auto close_handler_result = close_handler_future.get ();
-        release_closed_state.signal ();
+        close_handler->release_closed_state.signal ();
         if (!close_handler_result
-            || !disconnected_after_closed_state.wait_for (std::chrono::milliseconds (100))
-            || !disconnected_ordered.load (std::memory_order_acquire)) {
+            || !close_handler->disconnected_after_closed_state.wait_for (
+              std::chrono::milliseconds (100))
+            || !close_handler->disconnected_ordered.load (std::memory_order_acquire)) {
             return fail (257);
         }
     }
@@ -4219,30 +4233,29 @@ int main (int argc, char **argv)
     }
 
     connector.send (login_request_t{}).packet_name ("after.close").submit ();
-    bool request_after_close_callback_seen = false;
-    callback_latch_t request_after_close_latch;
+    auto request_after_close = std::make_shared<callback_outcome_t> ();
     connector.request (login_request_t{})
       .packet_name ("after.close.request")
-      .submit<login_reply_t> ([&] (zlink::stream_connector::result_t<login_reply_t> result) {
-          request_after_close_callback_seen =
+      .submit<login_reply_t> ([request_after_close] (
+                                zlink::stream_connector::result_t<login_reply_t> result) {
+          request_after_close->seen =
             !result && result.error_code () == zlink::stream_connector::error_code_t::disconnected;
-          request_after_close_latch.signal ();
+          request_after_close->latch.signal ();
       });
-    dispatch_until (connector, request_after_close_latch, std::chrono::milliseconds (100));
-    if (!request_after_close_callback_seen) {
+    dispatch_until (connector, request_after_close->latch, std::chrono::milliseconds (100));
+    if (!request_after_close->seen) {
         return fail (59);
     }
-    bool wait_after_close_callback_seen = false;
-    callback_latch_t wait_after_close_latch;
+    auto wait_after_close = std::make_shared<callback_outcome_t> ();
     connector.wait_for<zlink::stream_connector::packet_t> ("after.close.wait")
       .timeout (std::chrono::milliseconds (5))
-      .submit ([&] (zlink::stream_connector::result_t<packet_message_t> result) {
-          wait_after_close_callback_seen =
+      .submit ([wait_after_close] (zlink::stream_connector::result_t<packet_message_t> result) {
+          wait_after_close->seen =
             !result && result.error_code () == zlink::stream_connector::error_code_t::disconnected;
-          wait_after_close_latch.signal ();
+          wait_after_close->latch.signal ();
       });
-    dispatch_until (connector, wait_after_close_latch, std::chrono::milliseconds (100));
-    if (!wait_after_close_callback_seen) {
+    dispatch_until (connector, wait_after_close->latch, std::chrono::milliseconds (100));
+    if (!wait_after_close->seen) {
         return fail (158);
     }
     auto missing_endpoint = zlink::stream_connector::connector_factory_t::create (
@@ -4552,22 +4565,23 @@ int main (int argc, char **argv)
     if (!callback_response_connector.connect ()) {
         return fail (60);
     }
-    std::vector<std::string> request_hook_order;
+    // Hooks run on the delivery strand and own the order record.
+    auto request_hook_order = std::make_shared<std::vector<std::string>> ();
     auto sending_first = callback_response_connector.on_request_sending (
-      [&] (zlink::stream_connector::request_sending_context_t &ctx) {
-          request_hook_order.push_back ("sending-first");
+      [request_hook_order] (zlink::stream_connector::request_sending_context_t &ctx) {
+          request_hook_order->push_back ("sending-first");
           if (ctx.request_packet_name == "callback.response.request" && !ctx.actor_id) {
               ctx.set_metadata ("hook-first", "one");
           }
       });
     auto sending_second = callback_response_connector.on_request_sending (
-      [&] (zlink::stream_connector::request_sending_context_t &ctx) {
-          request_hook_order.push_back ("sending-second");
+      [request_hook_order] (zlink::stream_connector::request_sending_context_t &ctx) {
+          request_hook_order->push_back ("sending-second");
           ctx.set_metadata ("hook-second", "two");
       });
     auto reply_first = callback_response_connector.on_reply_received (
-      [&] (const zlink::stream_connector::reply_received_context_t &ctx) {
-          request_hook_order.push_back ("reply-first");
+      [request_hook_order] (const zlink::stream_connector::reply_received_context_t &ctx) {
+          request_hook_order->push_back ("reply-first");
           if (ctx.request_packet_name != "callback.response.request" || ctx.actor_id
               || !ctx.succeeded || !ctx.reply || ctx.error || ctx.elapsed.count () < 0
               || !ctx.reply->name.empty ()
@@ -4575,7 +4589,7 @@ int main (int argc, char **argv)
               || as_string (ctx.reply->payload) != "ok"
               || ctx.reply->metadata.values.find ("reply-tag") == ctx.reply->metadata.values.end ()
               || ctx.reply->metadata.values.at ("reply-tag") != "present") {
-              request_hook_order.push_back ("invalid-reply-context");
+              request_hook_order->push_back ("invalid-reply-context");
           }
       });
     auto reply_hook_error = std::make_shared<callback_outcome_t> ();
@@ -4586,8 +4600,8 @@ int main (int argc, char **argv)
           reply_hook_error->latch.signal ();
       });
     auto reply_second = callback_response_connector.on_reply_received (
-      [&] (const zlink::stream_connector::reply_received_context_t &) {
-          request_hook_order.push_back ("reply-second");
+      [request_hook_order] (const zlink::stream_connector::reply_received_context_t &) {
+          request_hook_order->push_back ("reply-second");
           throw std::runtime_error ("expected reply hook failure");
       });
     auto request_callback_response = std::make_shared<callback_outcome_t> ();
@@ -4605,7 +4619,7 @@ int main (int argc, char **argv)
     const std::vector<std::string> expected_request_hook_order{"sending-first", "sending-second",
                                                                "reply-first", "reply-second"};
     if (!request_callback_response->seen || !request_hook_metadata_seen || !reply_hook_error->seen
-        || request_hook_order != expected_request_hook_order) {
+        || *request_hook_order != expected_request_hook_order) {
         return fail (61);
     }
     callback_response_connector.close ();
@@ -4647,10 +4661,10 @@ int main (int argc, char **argv)
     if (!invalid_reply_connector.connect ()) {
         return fail (283);
     }
-    bool invalid_reply_hook_seen = false;
+    auto invalid_reply_hook_seen = std::make_shared<callback_outcome_t> ();
     auto invalid_reply_hook = invalid_reply_connector.on_reply_received (
-      [&] (const zlink::stream_connector::reply_received_context_t &ctx) {
-          invalid_reply_hook_seen =
+      [invalid_reply_hook_seen] (const zlink::stream_connector::reply_received_context_t &ctx) {
+          invalid_reply_hook_seen->seen =
             ctx.request_packet_name == "invalid.typed.reply" && !ctx.succeeded && !ctx.reply
             && ctx.error
             && ctx.error->code == zlink::stream_connector::error_code_t::frame_decode_failed;
@@ -4668,7 +4682,7 @@ int main (int argc, char **argv)
         });
     invalid_reply_thread.join ();
     invalid_reply->latch.wait_for (std::chrono::milliseconds (100));
-    if (!invalid_reply->seen || !invalid_reply_hook_seen) {
+    if (!invalid_reply->seen || !invalid_reply_hook_seen->seen) {
         return fail (284);
     }
     invalid_reply_connector.close ();
@@ -4697,10 +4711,10 @@ int main (int argc, char **argv)
     if (!callback_timeout_connector.connect ()) {
         return fail (62);
     }
-    bool timeout_hook_seen = false;
+    auto timeout_hook_seen = std::make_shared<callback_outcome_t> ();
     auto timeout_hook = callback_timeout_connector.on_reply_received (
-      [&] (const zlink::stream_connector::reply_received_context_t &ctx) {
-          timeout_hook_seen =
+      [timeout_hook_seen] (const zlink::stream_connector::reply_received_context_t &ctx) {
+          timeout_hook_seen->seen =
             ctx.request_packet_name == "callback.timeout.request" && !ctx.actor_id && !ctx.succeeded
             && !ctx.reply && ctx.error
             && ctx.error->code == zlink::stream_connector::error_code_t::request_timeout
@@ -4719,7 +4733,8 @@ int main (int argc, char **argv)
         });
     callback_timeout_thread.join ();
     request_callback_timeout->latch.wait_for (std::chrono::milliseconds (100));
-    if (!request_callback_timeout->seen || !callback_timeout_request_seen || !timeout_hook_seen) {
+    if (!request_callback_timeout->seen || !callback_timeout_request_seen
+        || !timeout_hook_seen->seen) {
         return fail (63);
     }
     callback_timeout_connector.close ();
@@ -7071,18 +7086,19 @@ int main (int argc, char **argv)
             auto registered_runtime =
               zlink::stream_connector::detail::connector_runtime_t::from (registered);
             std::atomic_int predicate_calls{0};
-            std::promise<std::string> registered_promise;
-            auto registered_future = registered_promise.get_future ();
+            // The completion callback may run after this scope ended (early return).
+            auto registered_promise = std::make_shared<std::promise<std::string>> ();
+            auto registered_future = registered_promise->get_future ();
             registered.wait_for<packet_t> ("registered.wait", std::chrono::seconds (5))
               .where ([&] (const packet_message_t &message) {
                   ++predicate_calls;
                   (void) registered.pending_dispatch_count ();
                   return as_string (message.payload.payload) == "wanted";
               })
-              .submit ([&registered_promise] (
-                         zlink::stream_connector::result_t<packet_message_t> result) mutable {
-                  registered_promise.set_value (result ? as_string (result.value ().payload.payload)
-                                                       : std::string ("<none>"));
+              .submit ([registered_promise] (
+                         zlink::stream_connector::result_t<packet_message_t> result) {
+                  registered_promise->set_value (
+                    result ? as_string (result.value ().payload.payload) : std::string ("<none>"));
               });
             push (registered_runtime, "registered.wait", "unwanted");
             push (registered_runtime, "registered.wait", "wanted");

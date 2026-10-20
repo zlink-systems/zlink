@@ -27,6 +27,7 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <exception>
 #include <functional>
@@ -3277,7 +3278,10 @@ int main (int argc, char **argv)
     if (!error_close_stop_finished) {
         error_close_stop_thread.detach ();
         error_close_mesh->stop ();
-        return 320;
+        // The detached thread still uses error_close_host and the stop promise on this
+        // stack. Leave without unwinding so nothing it touches is destroyed.
+        std::cout.flush ();
+        std::_Exit (320);
     }
     error_close_stop_thread.join ();
     error_close_mesh->stop ();

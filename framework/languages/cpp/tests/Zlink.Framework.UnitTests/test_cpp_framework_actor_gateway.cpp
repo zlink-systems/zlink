@@ -6452,16 +6452,18 @@ int parked_request_reply_case (const std::string &requester_rid,
     node->actor_generations.emplace (key, 1);
     node->actor_types_by_id.emplace ("parked-actor", "player");
 
-    std::atomic_bool handler_ran{false};
+    // The handler may run after an early return; it owns the flag.
+    const auto handler_ran_owner = std::make_shared<std::atomic_bool> (false);
+    auto &handler_ran = *handler_ran_owner;
     spot->handlers.push_back (
       spot_handler_descriptor_t{spot_handler_kind_t::actor_request, "ParkedProbe", "",
                                 std::type_index (typeid (int)), std::type_index (typeid (void)),
                                 std::type_index (typeid (int)), std::type_index (typeid (void))});
     spot->handler_invokers.push_back (
-      [&handler_ran] (void *, void *, service_provider_t &, serializer_registry_t &,
-                      const zlink::message_t &,
-                      const spot_inbound_message_t &) -> task_t<zlink::message_t> {
-          handler_ran.store (true, std::memory_order_release);
+      [handler_ran_owner] (void *, void *, service_provider_t &, serializer_registry_t &,
+                           const zlink::message_t &,
+                           const spot_inbound_message_t &) -> task_t<zlink::message_t> {
+          handler_ran_owner->store (true, std::memory_order_release);
           co_return zlink::message_t::from (std::string ("pong"));
       });
 
@@ -6527,9 +6529,16 @@ int parked_request_reply_case (const std::string &requester_rid,
         }
     }
 
-    std::mutex reply_mutex;
-    std::vector<zlink::message_t> reply_parts;
-    std::atomic_int reply_calls{0};
+    // The reply callback may run after an early return; it owns its state.
+    struct reply_state_t
+    {
+        std::mutex mutex;
+        std::vector<zlink::message_t> parts;
+        std::atomic_int calls{0};
+    };
+    const auto reply_state = std::make_shared<reply_state_t> ();
+    auto &reply_mutex = reply_state->mutex;
+    auto &reply_parts = reply_state->parts;
     const auto reply_host = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
       .mesh = {.descriptor = {.mesh_name = "parked-replay",
                               .node_routing_id =
@@ -6545,11 +6554,10 @@ int parked_request_reply_case (const std::string &requester_rid,
     record.source_node_rid = zlink::routing_id_t::from (requester_rid);
     record.reply_route_id = 57;
     record.reply_token.host = reply_host;
-    record.reply_token.local_reply = [&reply_mutex, &reply_parts,
-                                      &reply_calls] (const std::vector<zlink::message_t> &parts) {
-        const std::lock_guard lock (reply_mutex);
-        reply_parts = parts;
-        reply_calls.fetch_add (1, std::memory_order_release);
+    record.reply_token.local_reply = [reply_state] (const std::vector<zlink::message_t> &parts) {
+        const std::lock_guard lock (reply_state->mutex);
+        reply_state->parts = parts;
+        reply_state->calls.fetch_add (1, std::memory_order_release);
         return true;
     };
     // Deliberately NO record.actor_route: the requester attached no fence.
@@ -6953,18 +6961,31 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
     actor_gateway_runtime_t gateway (state);
     const auto actor = test_actor_ref ("join-completion-node", "game.actor", "join-player", 7);
     auto delivery = std::make_shared<task_completion_source_t<void>> ();
-    std::atomic_int delivery_calls{0};
-    std::atomic_bool delivery_started{false};
-    std::atomic_bool next_delivery_started{false};
+    // The sink and settlement callbacks may run after an early return; they own this state.
+    struct delivery_state_t
+    {
+        std::atomic_int delivery_calls{0};
+        std::atomic_bool delivery_started{false};
+        std::atomic_bool next_delivery_started{false};
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::optional<result_t<void>> terminal;
+        std::atomic<int> terminal_calls{0};
+        std::atomic<int> next_terminal_calls{0};
+        std::atomic_bool next_succeeded{false};
+    };
+    const auto shared = std::make_shared<delivery_state_t> ();
+    auto &delivery_started = shared->delivery_started;
+    auto &next_delivery_started = shared->next_delivery_started;
     if (!gateway.bind_session_sink (
           actor,
-          [delivery, &delivery_calls, &delivery_started, &next_delivery_started] (
-            std::string, stream_codec_t, const zlink::message_t &) -> task_t<void> {
-              if (delivery_calls.fetch_add (1, std::memory_order_acq_rel) == 0) {
-                  delivery_started.store (true, std::memory_order_release);
+          [delivery, shared] (std::string, stream_codec_t,
+                              const zlink::message_t &) -> task_t<void> {
+              if (shared->delivery_calls.fetch_add (1, std::memory_order_acq_rel) == 0) {
+                  shared->delivery_started.store (true, std::memory_order_release);
                   co_await delivery->task ();
               } else {
-                  next_delivery_started.store (true, std::memory_order_release);
+                  shared->next_delivery_started.store (true, std::memory_order_release);
               }
               co_return;
           })) {
@@ -6977,18 +6998,18 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
     if (!submitted.result ())
         return 2;
 
-    std::mutex mutex;
-    std::condition_variable changed;
-    std::optional<result_t<void>> terminal;
-    std::atomic<int> terminal_calls{0};
+    auto &mutex = shared->mutex;
+    auto &changed = shared->changed;
+    auto &terminal = shared->terminal;
+    auto &terminal_calls = shared->terminal_calls;
     gateway.settle_join_completion_delivery_fence (
-      actor, fence, result_t<void>::success (), [&] (result_t<void> result) {
-          terminal_calls.fetch_add (1, std::memory_order_relaxed);
+      actor, fence, result_t<void>::success (), [shared] (result_t<void> result) {
+          shared->terminal_calls.fetch_add (1, std::memory_order_relaxed);
           {
-              std::lock_guard lock (mutex);
-              terminal.emplace (std::move (result));
+              std::lock_guard lock (shared->mutex);
+              shared->terminal.emplace (std::move (result));
           }
-          changed.notify_all ();
+          shared->changed.notify_all ();
           throw std::runtime_error ("delivery settlement observer failed");
       });
     const auto delivery_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
@@ -7037,12 +7058,12 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
     const auto next_fence = gateway.begin_join_completion_delivery_fence (actor);
     if (next_fence == fence)
         return 9;
-    std::atomic<int> next_terminal_calls{0};
-    bool next_succeeded = false;
+    auto &next_terminal_calls = shared->next_terminal_calls;
+    auto &next_succeeded = shared->next_succeeded;
     gateway.settle_join_completion_delivery_fence (
-      actor, next_fence, result_t<void>::success (), [&] (result_t<void> result) {
-          next_succeeded = static_cast<bool> (result);
-          next_terminal_calls.fetch_add (1, std::memory_order_relaxed);
+      actor, next_fence, result_t<void>::success (), [shared] (result_t<void> result) {
+          shared->next_succeeded = static_cast<bool> (result);
+          shared->next_terminal_calls.fetch_add (1, std::memory_order_relaxed);
           throw std::runtime_error ("immediate settlement observer failed");
       });
     return next_succeeded && next_terminal_calls.load (std::memory_order_relaxed) == 1 ? 0 : 10;

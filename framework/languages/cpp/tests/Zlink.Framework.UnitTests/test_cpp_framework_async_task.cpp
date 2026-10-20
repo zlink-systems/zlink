@@ -1597,14 +1597,15 @@ bool verify_call_facade_yield_releases_gate ()
 {
     using namespace zlink::framework;
     namespace runtime = zlink::framework::runtime;
-    runtime::offload_executor_t executor (2);
-    runtime::serial_execution_queue_t queue (executor, runtime::serial_execution_queue_options_t{},
-                                             runtime::serial_execution_queue_t::error_handler_t{},
-                                             runtime::serial_lane_policy_t::spot_wide ());
     task_completion_source_t<int> reply;
     yield_resume_probe_t probe;
     auto done = probe.done.get_future ();
     std::optional<task_t<void>> handler;
+    // Declared after the locals the queued work references, so it drains first.
+    runtime::offload_executor_t executor (2);
+    runtime::serial_execution_queue_t queue (executor, runtime::serial_execution_queue_options_t{},
+                                             runtime::serial_execution_queue_t::error_handler_t{},
+                                             runtime::serial_lane_policy_t::spot_wide ());
     if (!queue.try_post_async ("facade-yield", [&] (auto complete) {
             handler.emplace (
               await_facade_yield (pending_yield_call_t (reply.task ()), queue, probe));
@@ -1639,10 +1640,6 @@ bool verify_yield_continuation_owned_by_spot_queue (yield_reply_order_t order)
 {
     using namespace zlink::framework;
     namespace runtime = zlink::framework::runtime;
-    runtime::offload_executor_t executor (2);
-    runtime::serial_execution_queue_t queue (executor, runtime::serial_execution_queue_options_t{},
-                                             runtime::serial_execution_queue_t::error_handler_t{},
-                                             runtime::serial_lane_policy_t::spot_wide ());
     task_completion_source_t<int> reply;
     std::promise<void> suspended;
     yield_resume_probe_t probe;
@@ -1656,6 +1653,11 @@ bool verify_yield_continuation_owned_by_spot_queue (yield_reply_order_t order)
           admitted->complete (result_t<void>::success ());
           return request_task_t<int> (reply.task (), std::move (admitted));
       });
+    // Declared after the locals the queued work references, so it drains first.
+    runtime::offload_executor_t executor (2);
+    runtime::serial_execution_queue_t queue (executor, runtime::serial_execution_queue_options_t{},
+                                             runtime::serial_execution_queue_t::error_handler_t{},
+                                             runtime::serial_lane_policy_t::spot_wide ());
     queue.post_async (
       "yielding-leave",
       [&] (auto complete) {
