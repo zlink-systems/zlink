@@ -1,8 +1,9 @@
 package systems.zlink.framework.runtime.spots;
 
-import java.util.Map;
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetrics;
+
+import java.util.Map;
 
 /** Measurement of the existing handoff operation; it never decides its outcome. */
 final class ZLinkRelocationMetricOperation {

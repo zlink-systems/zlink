@@ -1,5 +1,8 @@
 package systems.zlink.framework.runtime.spots;
 
+import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason;
+import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
+
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -7,8 +10,6 @@ import java.util.Objects;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
-import systems.zlink.framework.runtime.host.ZLinkFrameworkRelocationReason;
-import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 
 /**
  * Executes one Entry Spot Actor relocation through the same fenced control channel used by User
