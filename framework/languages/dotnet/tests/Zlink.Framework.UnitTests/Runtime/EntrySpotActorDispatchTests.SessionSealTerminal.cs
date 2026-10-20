@@ -1,5 +1,3 @@
-using System.Collections;
-using System.Reflection;
 using System.Security.Cryptography;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Contracts.Messaging;
@@ -165,15 +163,7 @@ public sealed partial class EntrySpotActorDispatchTests
     {
         internal int PublishedReplies { get; private set; }
         internal int AbortCalls { get; private set; }
-        private IDictionary Terminals =>
-            (IDictionary)
-                typeof(ZLinkManagedMeshNode)
-                    .GetField(
-                        "_sessionRelocationSealReplyTerminals",
-                        BindingFlags.Instance | BindingFlags.NonPublic
-                    )!
-                    .GetValue(records)!;
-        internal int TerminalCount => Terminals.Count;
+        internal int TerminalCount => records._sessionRelocationSealReplyTerminals.Count;
 
         public void SetSessionRelocationBarrierTarget(ISessionRelocationBarrierTarget target) { }
 
@@ -207,20 +197,13 @@ public sealed partial class EntrySpotActorDispatchTests
                 seal
             );
             Assert.True(terminal.TryComplete(reply));
-            var keyType = typeof(ZLinkManagedMeshNode).GetNestedType(
-                "PendingSessionRelocationKey",
-                BindingFlags.NonPublic
-            )!;
-            var key = keyType
-                .GetMethods(BindingFlags.Static | BindingFlags.NonPublic)
-                .Single(method =>
-                    method.Name == "Create"
-                    && method.GetParameters()[1].ParameterType == seal.GetType()
-                )
-                .Invoke(null, [sessionOwnerNodeRid, seal])!;
+            var key = ZLinkManagedMeshNode.PendingSessionRelocationKey.Create(
+                sessionOwnerNodeRid,
+                seal
+            );
             // Model the remote command 43 terminal at the backend boundary;
             // production CompleteSessionRelocation owns its actual removal.
-            Terminals.Add(key, terminal);
+            Assert.True(records._sessionRelocationSealReplyTerminals.TryAdd(key, terminal));
             PublishedReplies++;
             Assert.Equal(PublishedReplies, TerminalCount);
             cancelSourceSeal?.Cancel();
