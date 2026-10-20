@@ -3360,6 +3360,33 @@ export class ServiceStatefulRuntime {
     readonly spot: Pick<ServiceSpotState, 'ref'>;
     readonly route: ServiceInstanceRouteFence;
   }> {
+    const deadline = operationDeadline(record.deadlineUnixMs);
+    try {
+      deadline.signal.throwIfAborted();
+      return await awaitWithAbort(
+        this.runMissingInstanceActivationCore(record, payloadFrame, metadataFrame, deadline.signal),
+        deadline.signal
+      );
+    } catch (error) {
+      if (isAbortError(error) && deadline.signal.aborted) throw deadline.signal.reason;
+      throw error;
+    } finally {
+      deadline.close();
+    }
+  }
+
+  private async runMissingInstanceActivationCore(
+    record: Extract<
+      ServiceStatefulWireRecord,
+      { readonly kind: 'instanceSpot'; readonly activation: 'missing' }
+    >,
+    payloadFrame: Buffer,
+    metadataFrame: Buffer | undefined,
+    signal: AbortSignal
+  ): Promise<{
+    readonly spot: Pick<ServiceSpotState, 'ref'>;
+    readonly route: ServiceInstanceRouteFence;
+  }> {
     const target = record.target;
     if (
       target.targetNodeRid !== this.nodeRid ||
@@ -3367,7 +3394,6 @@ export class ServiceStatefulRuntime {
     ) {
       throw new ServiceStaleGenerationError('spot', target.targetSpotId);
     }
-    remainingDeadlineMs(record.deadlineUnixMs);
     const authority = this.asyncInstanceAuthority;
     if (authority === undefined) {
       throw new Error('Async Instance activation authority is not registered.');
@@ -3476,14 +3502,8 @@ export class ServiceStatefulRuntime {
         throw new ServiceStaleGenerationError('spot', target.targetSpotId);
       }
     }
-    const deadline = operationDeadline(record.deadlineUnixMs);
-    let reserved: ServiceInstanceAuthorityReserve;
-    try {
-      reserved = await authority.reserve(activationRequest, deadline.signal);
-    } finally {
-      deadline.close();
-    }
-    if (this.closed || record.deadlineUnixMs < BigInt(Date.now())) {
+    const reserved = await authority.reserve(activationRequest, signal);
+    if (this.closed || signal.aborted) {
       const error = new ZLinkFrameworkException(
         this.closed
           ? ZLinkFrameworkErrorKind.ShuttingDown
@@ -3497,6 +3517,7 @@ export class ServiceStatefulRuntime {
     let activation: { readonly spot: ServiceSpotState; readonly created: boolean };
     try {
       await this.instanceApplicationLifecycle?.materialize(target, reserved.reservation.attempt);
+      signal.throwIfAborted();
       activation = this.activateInstanceSpot(
         target.targetSpotId,
         target.stableType,

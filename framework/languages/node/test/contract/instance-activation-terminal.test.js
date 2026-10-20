@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const { setTimeout: waitForTestGuard } = require('node:timers/promises');
 const framework = require('../../packages/framework/dist/internal');
 const {
   ZLinkLocationStoreRepository
@@ -45,99 +46,120 @@ function providerFailure(signal) {
   );
 }
 
-for (const phase of ['commit', 'after-reserve', 'shutdown']) {
-  test(`activation metric covers ${phase} after application preparation`, async (t) => {
-    t.mock.timers.enable({ apis: ['Date'], now: 1800000000000 });
-    const deadlineUnixMs = BigInt(Date.now() + 1);
-    const outcomes = [];
-    const metrics = {
-      change() {},
-      startInstanceSpotActivation: () => ({ complete: (outcome) => outcomes.push(outcome) })
-    };
-    class Room {}
-    const manager = new framework.DefaultZLinkSpotManager({
-      detachedTaskRunner: new ZLinkRuntimeTaskRunner(
-        new ZLinkRuntimeTaskErrorSink(),
-        new AbortController().signal
-      ),
-      spotFactories: [Room],
-      instanceSpotFactories: new Map([['mesh', new Map([['Room', Room]])]]),
-      metrics
-    });
-    const runtime = new ServiceStatefulRuntime(
-      { setServiceIngress() {}, topology: {} },
-      'target',
-      7n
-    );
-    runtime.setDispatchErrorReporter({ metrics }, 'mesh');
-    const repository = new ZLinkLocationStoreRepository(new ZLinkInMemoryProviderLocationStore());
-    const record = {
-      kind: 'instanceSpot',
-      activation: 'missing',
-      operationKind: 'send',
-      deadlineUnixMs,
-      operation: { high: 1n, low: 1n },
-      sourceNodeRid: 'source',
-      sourceNodeGeneration: 1n,
-      target: {
-        targetSpotId: 'room',
-        stableType: 'Room',
-        targetNodeRid: 'target',
-        targetNodeGeneration: 7n,
-        targetMeshName: 'mesh',
-        descriptorVersion: '1'
-      }
-    };
-    let prepared = false;
-    runtime.registerAsyncInstanceActivationAuthority({
-      read: async () => ({ kind: 'missing' }),
-      async reserve() {
-        if (phase === 'after-reserve') t.mock.timers.tick(2);
-        if (phase === 'shutdown') runtime.close();
-        return {
-          kind: 'reserved',
-          reservation: { attempt: 1n, authorityOwnerGeneration: 1n, token: 'reservation' }
-        };
-      },
-      commit: () =>
-        repository.commit(
-          { key: { kind: 'instance_spot', globalId: 'room' } },
-          undefined,
-          deadlineUnixMs
+for (const phase of ['commit', 'after-reserve', 'shutdown', 'initialization']) {
+  test(
+    `activation metric covers ${phase} after application preparation`,
+    { timeout: 3000 },
+    async (t) => {
+      t.mock.timers.enable({ apis: ['Date', 'setTimeout'], now: 1800000000000 });
+      const deadlineUnixMs = BigInt(Date.now() + 1);
+      const outcomes = [];
+      const metrics = {
+        change() {},
+        startInstanceSpotActivation: () => ({ complete: (outcome) => outcomes.push(outcome) })
+      };
+      class Room {}
+      const manager = new framework.DefaultZLinkSpotManager({
+        detachedTaskRunner: new ZLinkRuntimeTaskRunner(
+          new ZLinkRuntimeTaskErrorSink(),
+          new AbortController().signal
         ),
-      abort: async () => {}
-    });
-    runtime.registerInstanceApplicationLifecycle({
-      isMaterialized: () => false,
-      async materialize() {
-        await manager.materializeInstance('mesh', 'Room', 'room', 1n);
-        prepared = true;
-        assert.deepEqual(outcomes, [], 'Preparation must not report Ready before commit.');
-        t.mock.timers.tick(2);
-      },
-      discard: async () => {},
-      beginTerminal() {},
-      completeTerminal: async () => false
-    });
-    try {
-      await assert.rejects(
-        runtime.activateMissingInstanceAsync(record, Buffer.from('{}'), undefined, () =>
-          assert.fail('Failure admitted.')
-        ),
-        {
-          kind:
-            phase === 'shutdown'
-              ? framework.ZLinkFrameworkErrorKind.ShuttingDown
-              : framework.ZLinkFrameworkErrorKind.DeadlineExceeded
-        }
+        spotFactories: [Room],
+        instanceSpotFactories: new Map([['mesh', new Map([['Room', Room]])]]),
+        metrics
+      });
+      const runtime = new ServiceStatefulRuntime(
+        { setServiceIngress() {}, topology: {} },
+        'target',
+        7n
       );
-      assert.equal(prepared, phase === 'commit');
-      assert.deepEqual(outcomes, [phase === 'shutdown' ? 'shutdown' : 'timed_out']);
-    } finally {
-      runtime.close();
-      await manager.discardInstance('mesh', 'room');
+      runtime.setDispatchErrorReporter({ metrics }, 'mesh');
+      const repository = new ZLinkLocationStoreRepository(new ZLinkInMemoryProviderLocationStore());
+      const record = {
+        kind: 'instanceSpot',
+        activation: 'missing',
+        operationKind: 'send',
+        deadlineUnixMs,
+        operation: { high: 1n, low: 1n },
+        sourceNodeRid: 'source',
+        sourceNodeGeneration: 1n,
+        target: {
+          targetSpotId: 'room',
+          stableType: 'Room',
+          targetNodeRid: 'target',
+          targetNodeGeneration: 7n,
+          targetMeshName: 'mesh',
+          descriptorVersion: '1'
+        }
+      };
+      let prepared = false;
+      let release;
+      runtime.registerAsyncInstanceActivationAuthority({
+        read: async () => ({ kind: 'missing' }),
+        async reserve() {
+          if (phase === 'after-reserve') t.mock.timers.tick(2);
+          if (phase === 'shutdown') runtime.close();
+          return {
+            kind: 'reserved',
+            reservation: { attempt: 1n, authorityOwnerGeneration: 1n, token: 'reservation' }
+          };
+        },
+        commit: () =>
+          repository.commit(
+            { key: { kind: 'instance_spot', globalId: 'room' } },
+            undefined,
+            deadlineUnixMs
+          ),
+        abort: async () => {}
+      });
+      runtime.registerInstanceApplicationLifecycle({
+        isMaterialized: () => false,
+        async materialize() {
+          await manager.materializeInstance('mesh', 'Room', 'room', 1n);
+          prepared = true;
+          assert.deepEqual(outcomes, [], 'Preparation must not report Ready before commit.');
+          t.mock.timers.tick(2);
+          if (phase === 'initialization')
+            await new Promise((resolve) => {
+              release = resolve;
+            });
+        },
+        discard: async () => {},
+        beginTerminal() {},
+        completeTerminal: async () => false
+      });
+      try {
+        const operation = runtime.activateMissingInstanceAsync(
+          record,
+          Buffer.from('{}'),
+          undefined,
+          () => assert.fail('Failure admitted.')
+        );
+        await assert.rejects(
+          phase === 'initialization'
+            ? Promise.race([
+                operation,
+                waitForTestGuard(200).then(() => {
+                  throw new Error('Activation did not finish at its deadline.');
+                })
+              ])
+            : operation,
+          {
+            kind:
+              phase === 'shutdown'
+                ? framework.ZLinkFrameworkErrorKind.ShuttingDown
+                : framework.ZLinkFrameworkErrorKind.DeadlineExceeded
+          }
+        );
+        assert.equal(prepared, phase === 'commit' || phase === 'initialization');
+        assert.deepEqual(outcomes, [phase === 'shutdown' ? 'shutdown' : 'timed_out']);
+      } finally {
+        release?.();
+        runtime.close();
+        await manager.discardInstance('mesh', 'room');
+      }
     }
-  });
+  );
 }
 
 test('provider Ready commit preserves DeadlineExceeded instead of cancellation or provider failure', async () => {
