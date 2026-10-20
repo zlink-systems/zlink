@@ -7392,23 +7392,26 @@ int relocation_prepare_preserves_runtime_failure ()
     return 4;
 }
 
-int join_completion_callback_failure_propagates ()
+int join_completion_callback_failure_is_reported ()
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
     auto state = std::make_shared<actor_gateway_state_t> ();
+    std::vector<message_dispatch_error_event_t> errors;
+    state->dispatch.message_flow (message_flow_log_mode_t::normal);
+    dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      state->dispatch, [&errors] (const auto &event) { errors.push_back (event); });
     actor_gateway_runtime_t gateway (state);
     auto actor = test_actor_ref ("node", "player", "callback-failure", 7);
     auto fence = gateway.begin_join_completion_delivery_fence (actor);
-    try {
-        gateway.settle_join_completion_delivery_fence (
-          actor, fence, result_t<void>::success (),
-          [] (result_t<void>) { throw std::runtime_error ("completion failure"); });
-    }
-    catch (const std::runtime_error &error) {
-        return std::string_view (error.what ()) == "completion failure" ? 0 : 1;
-    }
-    return 2;
+    gateway.settle_join_completion_delivery_fence (
+      actor, fence, result_t<void>::success (),
+      [] (result_t<void>) { throw std::runtime_error ("completion failure"); });
+    return errors.size () == 1
+               && errors.front ().reason == dispatch_error_reason_t::handler_exception
+               && errors.front ().error_message == "completion failure"
+             ? 0
+             : 1;
 }
 
 int main (int argc, char **argv)
@@ -7418,7 +7421,7 @@ int main (int argc, char **argv)
         if (test == "--prepare-runtime-failure")
             return relocation_prepare_preserves_runtime_failure ();
         if (test == "--join-completion-callback")
-            return join_completion_callback_failure_propagates ();
+            return join_completion_callback_failure_is_reported ();
         if (test == "--close-unbound")
             return close_unbound_session_reports_invalid_operation ();
         if (test == "--close-binding")
@@ -7568,7 +7571,7 @@ int main (int argc, char **argv)
     }
     if (const auto prepare = relocation_prepare_preserves_runtime_failure (); prepare != 0)
         return prepare;
-    if (const auto callback = join_completion_callback_failure_propagates (); callback != 0)
+    if (const auto callback = join_completion_callback_failure_is_reported (); callback != 0)
         return callback;
     if (const auto capacity = session_relay_waiter_accepts_beyond_former_capacity ();
         capacity != 0) {

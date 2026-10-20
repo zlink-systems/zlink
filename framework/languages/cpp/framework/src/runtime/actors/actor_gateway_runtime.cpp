@@ -34,6 +34,11 @@ namespace detail
 class bound_session_delivery_fence_t
 {
   public:
+    explicit bound_session_delivery_fence_t (std::shared_ptr<actor_gateway_state_t> state) :
+        _state (std::move (state))
+    {
+    }
+
     bool try_add ()
     {
         std::lock_guard lock (_mutex);
@@ -56,7 +61,7 @@ class bound_session_delivery_fence_t
             take_terminal_unlocked (settled, terminal);
         }
         if (settled) {
-            settled (std::move (*terminal));
+            invoke_settled (settled, std::move (*terminal));
         }
     }
 
@@ -73,11 +78,29 @@ class bound_session_delivery_fence_t
             take_terminal_unlocked (ready, terminal);
         }
         if (ready) {
-            ready (std::move (*terminal));
+            invoke_settled (ready, std::move (*terminal));
         }
     }
 
   private:
+    void invoke_settled (const std::function<void (result_t<void>)> &settled,
+                         result_t<void> terminal) noexcept
+    {
+        try {
+            settled (std::move (terminal));
+        }
+        catch (...) {
+            dispatch_error_reporter_t (_state->dispatch).report_lazy ([&] {
+                return message_dispatch_error_event_t{
+                  .surface = dispatch_error_surface_t::spot_actor,
+                  .message_kind = dispatch_message_kind_t::control,
+                  .reason = dispatch_error_reason_t::handler_exception,
+                  .action = dispatch_error_action_t::drop,
+                  .exception = std::current_exception ()};
+            });
+        }
+    }
+
     void take_terminal_unlocked (std::function<void (result_t<void>)> &settled,
                                  std::optional<result_t<void>> &terminal)
     {
@@ -87,6 +110,7 @@ class bound_session_delivery_fence_t
         terminal.emplace (_failure ? std::move (*_failure) : result_t<void>::success ());
     }
 
+    std::shared_ptr<actor_gateway_state_t> _state;
     std::mutex _mutex;
     std::size_t _pending = 0;
     bool _sealed = false;
@@ -3601,7 +3625,7 @@ void actor_gateway_runtime_t::on_bound_session_send (
 std::shared_ptr<detail::bound_session_delivery_fence_t>
 actor_gateway_runtime_t::begin_join_completion_delivery_fence (const actor_ref_t &actor_ref)
 {
-    auto fence = std::make_shared<detail::bound_session_delivery_fence_t> ();
+    auto fence = std::make_shared<detail::bound_session_delivery_fence_t> (_state);
     _state->sync ([&] {
         _state->join_completion_delivery_fences.insert_or_assign (
           join_completion_delivery_key (actor_ref), fence);
