@@ -13428,8 +13428,14 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
 
     private ulong ResolvePeerGeneration(RoutingId sourceRid)
     {
-        return RunState(() =>
-            _peersByRid.TryGetValue(sourceRid, out var peer) ? peer.LifecycleGeneration : 0
+        return AwaitStateLane(
+            _lane.RunAsync(
+                static state =>
+                    state.Node._peersByRid.TryGetValue(state.SourceRid, out var peer)
+                        ? peer.LifecycleGeneration
+                        : 0,
+                (Node: this, SourceRid: sourceRid)
+            )
         );
     }
 
