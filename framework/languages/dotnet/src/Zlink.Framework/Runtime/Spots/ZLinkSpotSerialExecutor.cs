@@ -1572,7 +1572,10 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
                 && ReferenceEquals(CurrentRelocationAdmissionOpening.Value?.Owner, this)
                     ? CurrentRelocationAdmissionOpening.Value!.Opening
                     : null;
-            var turn = RunState(() => RunBarrierStateTurn(work, callbackOpening));
+            var turn = RunState(
+                static state => state.Owner.RunBarrierStateTurn(state.Work, state.Opening),
+                (Owner: this, Work: work, Opening: callbackOpening)
+            );
             if (turn.Retry is null)
                 return turn.Result!;
             turn.Retry.GetAwaiter().GetResult();
@@ -1586,19 +1589,24 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         {
             var turn =
                 gateTurn && _executionMode == ZLinkUserSpotExecutionMode.SpotWide
-                    ? await _queue
-                        .RunOnSharedGateAsync(() =>
-                            RunState(() => RunBarrierStateTurn(work, callbackOpening: null))
-                        )
-                        .ConfigureAwait(false)
+                    ? await RunBarrierStateOnGateAsync(work).ConfigureAwait(false)
                     : await _stateLane
-                        .RunAsync(() => RunBarrierStateTurn(work, callbackOpening: null))
+                        .RunAsync(
+                            static state =>
+                                state.Owner.RunBarrierStateTurn(state.Work, callbackOpening: null),
+                            (Owner: this, Work: work)
+                        )
                         .ConfigureAwait(false);
             if (turn.Retry is null)
                 return turn.Result!;
             await turn.Retry.ConfigureAwait(false);
         }
     }
+
+    private ValueTask<ZLinkBarrierStateTurn<T>> RunBarrierStateOnGateAsync<T>(Func<T> work) =>
+        _queue.RunOnSharedGateAsync(() =>
+            RunState(() => RunBarrierStateTurn(work, callbackOpening: null))
+        );
 
     private ZLinkBarrierStateTurn<T> RunBarrierStateTurn<T>(
         Func<T> work,
@@ -1625,19 +1633,23 @@ internal sealed class ZLinkSpotSerialExecutor : IAsyncDisposable
         });
     }
 
-    private T RunState<T>(Func<T> work)
+    private T RunState<T>(Func<T> work) => RunState(static callback => callback(), work);
+
+    private T RunState<TState, T>(Func<TState, T> work, TState state)
     {
         _stateLane.ThrowIfReentrant();
         if (ZLinkSerialTurn.Current is { ExecutionGate: not null } turn)
-        {
-            var operation = work;
-            work = () =>
-            {
-                using var scope = ZLinkSerialTurn.Push(turn);
-                return operation();
-            };
-        }
-        return AwaitStateLane(_stateLane.RunAsync(work));
+            return AwaitStateLane(
+                _stateLane.RunAsync(
+                    static call =>
+                    {
+                        using var scope = ZLinkSerialTurn.Push(call.Turn);
+                        return call.Work(call.State);
+                    },
+                    (Work: work, State: state, Turn: turn)
+                )
+            );
+        return AwaitStateLane(_stateLane.RunAsync(work, state));
     }
 
     private void RunState(Action work)

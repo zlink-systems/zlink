@@ -6,6 +6,44 @@ namespace Zlink.Framework.UnitTests;
 public sealed class SerialExecutorTests
 {
     [Fact]
+    public async Task SpotStateReadAllocatesOnlyItsCallbackAndStateLaneContext()
+    {
+        using var errors = new ZLinkRuntimeErrorSink();
+        await using var executor = new ZLinkSpotSerialExecutor(
+            null!,
+            static () => false,
+            CancellationToken.None,
+            errors
+        );
+        var baseline = new ZLinkStateLane();
+        Func<bool> callback = static () => false;
+        void Baseline()
+        {
+            GC.KeepAlive(new Func<bool>(callback));
+            baseline
+                .RunAsync(
+                    static callback => ZLinkRuntimeTaskRunner.WithoutExecutionContextFlow(callback),
+                    callback
+                )
+                .GetAwaiter()
+                .GetResult();
+        }
+        Baseline();
+        Assert.False(executor.HasRelocationBarrier);
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < 1000; i++)
+            Baseline();
+        var expected = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        var hasBarrier = false;
+        for (var i = 0; i < 1000; i++)
+            hasBarrier |= executor.HasRelocationBarrier;
+        var actual = GC.GetAllocatedBytesForCurrentThread() - before;
+        Assert.False(hasBarrier);
+        Assert.Equal(expected, actual);
+    }
+
+    [Fact]
     public async Task AbsentDrainDoesNotAllocate()
     {
         using var errors = new ZLinkRuntimeErrorSink();
