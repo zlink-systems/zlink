@@ -1311,6 +1311,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_m6c_runtime PRIVATE
     zlink_framework
+    opentelemetry-cpp::metrics
     Threads::Threads)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_m6c_runtime

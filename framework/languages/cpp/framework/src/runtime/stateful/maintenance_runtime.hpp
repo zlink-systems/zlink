@@ -33,6 +33,7 @@
 namespace zlink::framework::detail
 {
 class delay_owner_t;
+class monitoring_runtime_state_t;
 }
 
 namespace zlink::framework::runtime::stateful
@@ -367,6 +368,10 @@ struct eligible_relocation_unit_t
         // This is valid only after an exact target failure and before a
         // Cutover enqueue.  It fences source admission restoration.
         std::function<bool ()> abort_target_before_cutover;
+        std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring;
+        std::string mesh_name;
+        framework::detail::factory_relocation_kind_t policy =
+          framework::detail::factory_relocation_kind_t::unspecified;
     };
     std::optional<canonical_wire_context_t> canonical_wire;
 };
