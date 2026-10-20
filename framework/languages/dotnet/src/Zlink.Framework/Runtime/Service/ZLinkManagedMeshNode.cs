@@ -6588,12 +6588,32 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             ZLinkServiceWireCodec.TryDecodeSessionRelocationSeal(
                 head,
                 out var sessionRelocationSeal,
-                out _
+                out var sessionRelocationSealDecodeError
             )
         )
         {
             ProcessSessionRelocationSeal(sourceRid, sessionRelocationSeal);
             return true;
+        }
+        if (
+            head.Length > 3
+            && head[3] == (byte)ServiceWireConstants.Command.SessionRelocationSeal
+            && sessionRelocationSealDecodeError
+                is not ZLinkServiceWireCodec.DecodeError.None
+                    and not ZLinkServiceWireCodec.DecodeError.UnknownCommand
+            && _flow is { DispatchErrorsEnabled: true } flow
+        )
+        {
+            flow.TraceDispatchError(
+                new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.StreamSession,
+                    ZLinkDispatchMessageKind.Control,
+                    ZLinkDispatchErrorReason.InvalidFrame,
+                    ZLinkDispatchErrorAction.Drop,
+                    "sessionRelocationSeal",
+                    SourceRid: sourceRid.ToHex()
+                )
+            );
         }
         if (
             ZLinkServiceWireCodec.TryDecodeSessionRelocationSealed(
@@ -7836,7 +7856,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private void ProcessSessionRelocationSeal(
+    internal void ProcessSessionRelocationSeal(
         RoutingId sourceNodeRid,
         ZLinkServiceWireCodec.SessionRelocationSealRecord seal
     )
@@ -7849,6 +7869,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         });
         var target = current.Target;
         var peer = current.Peer;
+        if (current.SessionOwner == default)
+        {
+            _flow?.TraceSessionBindingControlDrop(
+                sourceNodeRid,
+                seal.Actor.Actor.ActorId,
+                "sessionRelocationSeal",
+                ZLinkMessageFlowReason.LocationUnavailable
+            );
+            return;
+        }
         if (
             target is null
             || peer is null
@@ -7863,7 +7893,12 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             )
         )
         {
-            Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
+            _flow?.TraceSessionBindingControlDrop(
+                sourceNodeRid,
+                seal.Actor.Actor.ActorId,
+                "sessionRelocationSeal",
+                ZLinkMessageFlowReason.StaleTarget
+            );
             return;
         }
         RunInboundOperation(async () =>
@@ -7874,7 +7909,15 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     .SealAsync(seal, sourceNodeRid, _stop?.Token ?? CancellationToken.None)
                     .ConfigureAwait(false);
                 if (response is null)
+                {
+                    _flow?.TraceSessionBindingControlDrop(
+                        sourceNodeRid,
+                        seal.Actor.Actor.ActorId,
+                        "sessionRelocationSeal",
+                        ZLinkMessageFlowReason.StaleTarget
+                    );
                     return;
+                }
                 await SendCanonicalRelocationRecordAsync(
                         peer,
                         ZLinkServiceWireCodec.EncodeSessionRelocationSealed(response.Value),
@@ -7885,7 +7928,16 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             catch (Exception exception)
             {
                 ZLinkFrameworkDebugLog.TaskFailure("session-relocation-seal", exception);
-                Publish(MeshMonitorEventKind.ProtocolError, peerRid: sourceNodeRid);
+                _flow?.TraceSessionBindingControlDrop(
+                    sourceNodeRid,
+                    seal.Actor.Actor.ActorId,
+                    "sessionRelocationSeal",
+                    exception is ZLinkFrameworkException failure
+                    && failure.Kind == ZLinkFrameworkErrorKind.Unavailable
+                        ? ZLinkMessageFlowReason.LocationUnavailable
+                        : ZLinkMessageFlowReason.StaleTarget,
+                    exception
+                );
             }
         });
     }
