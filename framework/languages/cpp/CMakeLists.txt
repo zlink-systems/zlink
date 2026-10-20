@@ -2254,6 +2254,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_message_flow PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_route_mesh_idle_wait
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_route_mesh_idle_wait.cpp
+    "framework-unit;framework-regression")
+  target_include_directories(test_cpp_framework_route_mesh_idle_wait PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_route_mesh_idle_wait)
+  add_zlink_framework_test(
     test_cpp_framework_monitoring
     tests/Zlink.Framework.UnitTests/test_cpp_framework_monitoring.cpp
     "framework-unit;framework-regression;framework-observability;metrics")

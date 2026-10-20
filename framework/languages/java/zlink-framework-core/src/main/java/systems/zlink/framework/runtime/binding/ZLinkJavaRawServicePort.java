@@ -41,6 +41,7 @@ import java.util.function.Supplier;
  * until the framework record is terminal.
  */
 final class ZLinkJavaRawServicePort implements AutoCloseable {
+    private static final Duration INFINITE_WAIT = Duration.ofMillis(-1);
     private final Context context;
     private final boolean ownsContext;
     private final LinkedHashMap<RouterSocket, ZLinkJavaSocketReceivePoller> receivePollers =
@@ -463,7 +464,45 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
     int waitForReady(RouterSocket router, Duration timeout) {
         Objects.requireNonNull(timeout, "timeout");
         ZLinkJavaSocketReceivePoller receivePoller = inStateLane(() -> receivePollerOnLane(router));
-        return receivePoller == null ? 0 : receivePoller.waitForReady(timeout);
+        return receivePoller == null
+                ? 0
+                : consumeOwnerWake(receivePoller, receivePoller.waitForOwnerReady(timeout));
+    }
+
+    int waitForManagementReady(RouterSocket router, long deadline, long now) {
+        var receivePoller =
+                inStateLane(
+                        () -> {
+                            var owner = receivePollerOnLane(router);
+                            owner.prepareManagementWait(deadline, now);
+                            return owner;
+                        });
+        return consumeOwnerWake(receivePoller, receivePoller.waitForOwnerReady(INFINITE_WAIT));
+    }
+
+    private int consumeOwnerWake(ZLinkJavaSocketReceivePoller owner, int ready) {
+        if ((ready & ZLinkJavaSocketReceivePoller.OWNER_WAKE) != 0) {
+            inStateLane(
+                    () -> {
+                        if (closeCompletion == null) owner.consumeOwnerWake();
+                        return null;
+                    });
+        }
+        return ready & ~ZLinkJavaSocketReceivePoller.OWNER_WAKE;
+    }
+
+    void signalReceiveOwner(RouterSocket router) {
+        if (router == null) return;
+        inStateLane(
+                () -> {
+                    // The close claim seals producers before resource disposal outside the lane.
+                    // An in-flight signal has left this lane before close can claim disposal.
+                    if (closeCompletion == null) {
+                        var receivePoller = receivePollers.get(router);
+                        if (receivePoller != null) receivePoller.signal();
+                    }
+                    return null;
+                });
     }
 
     Optional<Inbound> receiveNow(RouterSocket router) {
