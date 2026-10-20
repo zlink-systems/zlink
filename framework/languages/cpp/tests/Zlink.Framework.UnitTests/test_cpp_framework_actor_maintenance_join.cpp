@@ -1425,6 +1425,148 @@ TEST (ActorMaintenanceJoin, StaleAttemptActivationDoesNotLeaveRawIdentity)
     }
 }
 
+// Keep settlement work queued while the Actor FIFO is free to advance.
+class held_join_settlement_executor_t final : public fw::runtime::offload_executor_t
+{
+  public:
+    bool try_submit_internal (std::function<void ()> work) override
+    {
+        std::lock_guard lock (_mutex);
+        _pending.push_back (std::move (work));
+        return true;
+    }
+
+    void flush ()
+    {
+        std::vector<std::function<void ()>> pending;
+        {
+            std::lock_guard lock (_mutex);
+            pending.swap (_pending);
+        }
+        for (auto &work : pending)
+            work ();
+    }
+
+  private:
+    std::mutex _mutex;
+    std::vector<std::function<void ()>> _pending;
+};
+
+struct join_claim_fixture_t
+{
+    std::shared_ptr<fw::detail::spot_node_builder_state_t> node =
+      fw::test::runtime_failure_fixture<fw::detail::spot_node_builder_state_t> ("join-claim-node");
+    std::shared_ptr<held_join_settlement_executor_t> settlement =
+      std::make_shared<held_join_settlement_executor_t> ();
+    std::shared_ptr<fw::runtime::offload_executor_t> executor =
+      std::make_shared<fw::runtime::offload_executor_t> (1);
+    std::shared_ptr<fw::detail::spot_context_state_t> context =
+      std::make_shared<fw::detail::spot_context_state_t> ();
+    fw::actor_ref_t actor = fw::detail::actor_ref_access_t::make (
+      fw::node_rid_t::from_string ("join-claim-node"), "player", "claim-actor", 1);
+    fw::detail::spot_node_runtime_t owner{node};
+    std::shared_ptr<fw::runtime::serial_execution_queue_t> queue;
+
+    join_claim_fixture_t ()
+    {
+        node->worker_executor = settlement;
+        fw::service_collection_t services;
+        node->root_services = services.build_provider ();
+        context->node = node;
+        context->node_rid = fw::node_rid_t::from_string ("join-claim-node");
+        context->spot_id = fw::spot_id_t ("join-claim-spot");
+        context->serial_executor = executor;
+        context->serial_queue = std::make_shared<fw::runtime::serial_execution_queue_t> (
+          *executor, fw::runtime::serial_execution_queue_options_t{},
+          fw::runtime::serial_execution_queue_t::error_handler_t{},
+          fw::runtime::serial_lane_policy_t::spot_wide ());
+        const std::string key = "player:claim-actor";
+        node->actor_spot_ids.emplace (key, context->spot_id);
+        node->spot_contexts_by_id.emplace (context->spot_id,
+                                           fw::detail::spot_context_access_t::create (context));
+        queue = context->ensure_spot_serial_executor ()->actor_executor (key)->queue ();
+    }
+
+    ~join_claim_fixture_t ()
+    {
+        node->lane.run ([&] { node->spot_contexts_by_id.clear (); }).get ();
+    }
+
+    void drain ()
+    {
+        settlement->flush ();
+        queue->drain ();
+        executor->drain ();
+    }
+};
+
+TEST (ActorMaintenanceJoin, DeferredJoinReleasesClaimBeforeNextActorTurn)
+{
+    join_claim_fixture_t fixture;
+    auto reserved = fixture.owner.reserve_actor_join_barrier (fixture.actor);
+    ASSERT_TRUE (reserved);
+    std::promise<fw::detail::deferred_barrier_t::async_completion_t> callback;
+    ASSERT_TRUE (reserved.value ()->activate_async (
+      [&] (auto complete) { callback.set_value (std::move (complete)); }));
+    auto complete = callback.get_future ().get ();
+    EXPECT_FALSE (fixture.owner.reserve_actor_join_barrier (fixture.actor));
+    std::promise<bool> next;
+    EXPECT_TRUE (fixture.queue->try_post ("next-join-claim", [&] {
+        auto claim = fixture.owner.reserve_actor_join_barrier (fixture.actor);
+        if (claim)
+            claim.value ()->cancel ();
+        next.set_value (static_cast<bool> (claim));
+    }));
+    complete (fw::result_t<void>::success ());
+    const auto accepted = next.get_future ().get ();
+    fixture.drain ();
+    EXPECT_TRUE (accepted);
+}
+
+TEST (ActorMaintenanceJoin, DeferredJoinCompletionKeepsSuccessorClaim)
+{
+    join_claim_fixture_t fixture;
+    auto reserved = fixture.owner.reserve_actor_join_barrier (fixture.actor);
+    ASSERT_TRUE (reserved);
+    std::promise<fw::detail::deferred_barrier_t::async_completion_t> callback;
+    ASSERT_TRUE (reserved.value ()->activate_async (
+      [&] (auto complete) { callback.set_value (std::move (complete)); }));
+    auto complete = callback.get_future ().get ();
+    // The local completion path has already handed its backlog to the FIFO,
+    // while the enclosing deferred barrier has not published its terminal yet.
+    EXPECT_TRUE (fixture.owner.open_local_actor_handoff (fixture.actor));
+    auto successor = fixture.owner.reserve_actor_join_barrier (fixture.actor);
+    EXPECT_TRUE (successor);
+    complete (fw::result_t<void>::success ());
+    auto unexpected = fixture.owner.reserve_actor_join_barrier (fixture.actor);
+    const auto retained = !unexpected;
+    if (unexpected)
+        unexpected.value ()->cancel ();
+    if (successor)
+        successor.value ()->cancel ();
+    fixture.drain ();
+    EXPECT_TRUE (retained);
+}
+
+TEST (ActorMaintenanceJoin, DeferredJoinDiscardKeepsSuccessorClaim)
+{
+    join_claim_fixture_t fixture;
+    auto reserved = fixture.owner.reserve_actor_join_barrier (fixture.actor);
+    ASSERT_TRUE (reserved);
+    EXPECT_TRUE (fixture.owner.open_local_actor_handoff (fixture.actor));
+    auto successor = fixture.owner.reserve_actor_join_barrier (fixture.actor);
+    EXPECT_TRUE (successor);
+    reserved.value ()->cancel ();
+    auto unexpected = fixture.owner.reserve_actor_join_barrier (fixture.actor);
+    const auto retained = !unexpected;
+    if (unexpected)
+        unexpected.value ()->cancel ();
+    if (successor)
+        successor.value ()->cancel ();
+    fixture.drain ();
+    EXPECT_TRUE (retained);
+}
+
 TEST (ActorMaintenanceJoin, ReadyAuthorityAcceptsLocalSendBeforeStoreWriteReturns)
 {
     observations_t evidence;

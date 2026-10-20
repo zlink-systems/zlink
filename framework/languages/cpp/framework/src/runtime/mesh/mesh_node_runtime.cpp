@@ -2339,7 +2339,6 @@ void mesh_node_runtime_t::settle_application_actor_creation (const actor_ref_t &
     }
     const auto opened = spots.open_local_actor_handoff (actor);
     if (!opened) {
-        spots.cancel_local_actor_handoff (actor);
         _state->spot_state->runtime_failures ()->report (opened.exception ());
     }
 }
