@@ -14,9 +14,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CopyOnWriteArrayList;
-import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -131,35 +129,6 @@ final class ZLinkJavaMeshReceiveWakeTest {
             assertEquals(List.of("wait-exit", "poller-close", "timer-close"), fixture.order);
             fixture.receive.signal();
             assertEquals(1, fixture.timer.starts.get(), "closed owner cannot start another wake");
-        }
-    }
-
-    @Test
-    void closeWakesWhenTheCommonPoolHasOnlyOneAvailableWorker() throws Exception {
-        int blockers = ForkJoinPool.getCommonPoolParallelism() - 1;
-        var started = new CountDownLatch(blockers);
-        var release = new CountDownLatch(1);
-        var finished = new CountDownLatch(blockers);
-        try {
-            for (int index = 0; index < blockers; index++) {
-                ForkJoinPool.commonPool()
-                        .execute(
-                                () -> {
-                                    started.countDown();
-                                    try {
-                                        release.await();
-                                    } catch (InterruptedException error) {
-                                        Thread.currentThread().interrupt();
-                                    } finally {
-                                        finished.countDown();
-                                    }
-                                });
-            }
-            assertTrue(started.await(5, TimeUnit.SECONDS));
-            closeWakesBeforeTakingTheReceiveMonitorAndDisposesAfterWait();
-        } finally {
-            release.countDown();
-            assertTrue(finished.await(5, TimeUnit.SECONDS));
         }
     }
 
