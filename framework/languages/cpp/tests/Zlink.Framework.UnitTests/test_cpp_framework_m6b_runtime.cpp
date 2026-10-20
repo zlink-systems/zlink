@@ -1573,7 +1573,11 @@ void verify_bind_handler_rejects_missing_session_owner_descriptor (bool test_sea
         await_task (target->dispatch_ready (discard));
         await_task (source->dispatch_ready (discard));
     }
-    assert (reply && reply->terminal_result == 105 && reply->failure_code == 13);
+    assert (reply
+            && reply->terminal_result
+                 == static_cast<std::uint32_t> (protocol::request_terminal_result::internalError)
+            && reply->failure_code
+                 == static_cast<std::uint32_t> (protocol::framework_error_code::routeNotConnected));
     assert (binds == 0);
     if (test_seal_drop) {
         const protocol::session_relocation_seal_t seal{

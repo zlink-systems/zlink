@@ -1872,7 +1872,7 @@ final class ZLinkStreamRuntimeIngressTest {
     }
 
     @Test
-    void descriptorUnavailableControlsRecordTheSameDropOutcome() throws Exception {
+    void descriptorUnavailableAndMalformedCommandRecordDropOutcome() throws Exception {
         var available = new java.util.concurrent.atomic.AtomicBoolean(true);
         var fixture = startReplacement(new FakeStream(), available::get);
         runtimes.add(fixture.runtime());
@@ -1914,6 +1914,13 @@ final class ZLinkStreamRuntimeIngressTest {
                                                     .encodeSessionRelocationSeal(seal))
                                     .toCompletableFuture()
                                     .join());
+            assertThrows(
+                    RuntimeException.class,
+                    () ->
+                            fixture.runtime()
+                                    .handleSessionRelocationSeal(actorRef.nodeRid(), new byte[0])
+                                    .toCompletableFuture()
+                                    .join());
             var drops =
                     lines.stream()
                             .filter(line -> line.contains("reason=location_unavailable"))
@@ -1925,6 +1932,11 @@ final class ZLinkStreamRuntimeIngressTest {
                                     line ->
                                             line.contains("phase=dropped")
                                                     && line.contains("outcome=dropped")));
+            var decodeDrops =
+                    lines.stream().filter(line -> line.contains("reason=stale_target")).toList();
+            assertEquals(1, decodeDrops.size());
+            assertTrue(decodeDrops.get(0).contains("phase=dropped"));
+            assertTrue(decodeDrops.get(0).contains("outcome=dropped"));
         } finally {
             logger.removeHandler(handler);
         }

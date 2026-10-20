@@ -506,9 +506,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             bindingRecordSpotNode(sourceRef),
                             sourceRef,
                             SOURCE_RID,
-                            SESSION_RID,
-                            7,
-                            1L)
+                            SESSION_RID)
                     .toCompletableFuture()
                     .join();
 
@@ -1860,9 +1858,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             pushSpotNode(session),
                             actorRoute.actor(),
                             session.nodeRid(),
-                            session.sessionRid(),
-                            session.bindingGeneration(),
-                            session.nodeGeneration())
+                            session.sessionRid())
                     .thenApply(ignored -> null);
         }
 

@@ -34,12 +34,7 @@ public sealed class ServiceWireSessionRelocationCodecTests
             Coordinator = seal.Coordinator with { NodeRid = sourceRid },
             Actor = seal.Actor with { TargetNodeRid = sourceRid },
         };
-        typeof(ZLinkManagedMeshNode)
-            .GetMethod(
-                "ProcessSessionRelocationSeal",
-                BindingFlags.NonPublic | BindingFlags.Instance
-            )!
-            .Invoke(node, [seal.Coordinator.NodeRid, seal]);
+        node.ProcessSessionRelocationSeal(seal.Coordinator.NodeRid, seal);
         var drop = Assert.Single(
             events.Where(item =>
                 Equals(item.GetTagItem("packet_name"), "sessionRelocationSeal")

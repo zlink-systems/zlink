@@ -7837,7 +7837,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private void ProcessSessionRelocationSeal(
+    internal void ProcessSessionRelocationSeal(
         RoutingId sourceNodeRid,
         ZLinkServiceWireCodec.SessionRelocationSealRecord seal
     )
@@ -7850,7 +7850,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         });
         var target = current.Target;
         var peer = current.Peer;
-        if (string.IsNullOrEmpty(current.SessionOwner.OwnerId))
+        if (current.SessionOwner == default)
         {
             _flow?.TraceSessionBindingControlDrop(
                 sourceNodeRid,

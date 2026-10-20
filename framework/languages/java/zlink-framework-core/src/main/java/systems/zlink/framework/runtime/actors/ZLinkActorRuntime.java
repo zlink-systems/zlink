@@ -4210,9 +4210,7 @@ public final class ZLinkActorRuntime implements ZLinkActorManager, ZLinkActorDir
             ZLinkInternalSpotNode spotNode,
             ZLinkBackendActorRef actorRef,
             RoutingId sourceNodeRid,
-            RoutingId sourceSessionRid,
-            long bindingGeneration,
-            long sessionOwnerNodeGeneration) {
+            RoutingId sourceSessionRid) {
         return inOwnerTurn(
                 () ->
                         bindNativeSessionOnLane(

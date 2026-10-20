@@ -294,7 +294,7 @@ final class ZLinkActorDisconnectIngressTest {
                                                         throw new UnsupportedOperationException(
                                                                 method.getName());
                                             });
-            actors.bindNativeSession(actor, node, ref, sessionOwner, currentSession, 7L, -1L)
+            actors.bindNativeSession(actor, node, ref, sessionOwner, currentSession)
                     .toCompletableFuture()
                     .get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
 
@@ -305,15 +305,14 @@ final class ZLinkActorDisconnectIngressTest {
             dispatchDisconnect(activation, ref, identity(sessionOwner, -1L, 7L));
             assertEquals(1, entry.callbacks.get());
             long oldToken =
-                    actors.bindNativeSession(
-                                    actor, node, ref, sessionOwner, currentSession, 7L, -1L)
+                    actors.bindNativeSession(actor, node, ref, sessionOwner, currentSession)
                             .toCompletableFuture()
                             .join();
             actors.clearSessionBinding(actor, oldToken).toCompletableFuture().join();
             binding.set(
                     new ZLinkInternalSpotNode.BoundSessionRoute(
                             sessionOwner, 2L, "session-owner", 1L, currentSession, 9L));
-            actors.bindNativeSession(actor, node, ref, sessionOwner, currentSession, 9L, 2L)
+            actors.bindNativeSession(actor, node, ref, sessionOwner, currentSession)
                     .toCompletableFuture()
                     .join();
             Method localNotify =

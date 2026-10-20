@@ -498,40 +498,53 @@ public final class ZLinkStreamRuntime implements AutoCloseable {
      */
     public CompletionStage<byte[]> handleSessionRelocationSeal(
             RoutingId transportSource, byte[] command42) {
-        if (flow.begin(ZLinkMessageFlowOutcome.DROPPED) == null) {
-            return receiveSessionRelocationSeal(transportSource, command42);
+        var traceEnabled = flow.begin(ZLinkMessageFlowOutcome.DROPPED) != null;
+        var codec = new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec();
+        systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                        .SessionRelocationSeal
+                command;
+        try {
+            command = codec.decodeSessionRelocationSeal(command42);
+        } catch (RuntimeException failure) {
+            if (traceEnabled) {
+                traceSessionRelocationSealDrop(transportSource, null, failure);
+            }
+            throw failure;
         }
-        return receiveSessionRelocationSeal(transportSource, command42)
-                .whenComplete(
-                        (reply, failure) -> {
-                            if (failure != null || reply == null) {
-                                Throwable cause =
-                                        failure instanceof java.util.concurrent.CompletionException
-                                                ? failure.getCause()
-                                                : failure;
-                                flow.traceBindingControlDrop(
-                                        transportSource,
-                                        new ZLinkServiceM6BWireCodec()
-                                                .decodeSessionRelocationSeal(command42)
-                                                .actor()
-                                                .actor()
-                                                .actorId(),
-                                        "sessionRelocationSeal",
-                                        cause instanceof ZLinkFrameworkException error
-                                                        && error.kind()
-                                                                == ZLinkFrameworkErrorKind
-                                                                        .UNAVAILABLE
-                                                ? ZLinkDispatchErrorReason.LOCATION_UNAVAILABLE
-                                                : ZLinkDispatchErrorReason.STALE_TARGET,
-                                        cause);
-                            }
-                        });
+        var received = receiveSessionRelocationSeal(transportSource, command, codec);
+        if (!traceEnabled) return received;
+        return received.whenComplete(
+                (reply, failure) -> {
+                    if (failure != null || reply == null) {
+                        traceSessionRelocationSealDrop(
+                                transportSource, command.actor().actor().actorId(), failure);
+                    }
+                });
+    }
+
+    private void traceSessionRelocationSealDrop(
+            RoutingId transportSource, String actorId, Throwable failure) {
+        Throwable cause =
+                failure instanceof java.util.concurrent.CompletionException
+                        ? failure.getCause()
+                        : failure;
+        flow.traceBindingControlDrop(
+                transportSource,
+                actorId,
+                "sessionRelocationSeal",
+                cause instanceof ZLinkFrameworkException error
+                                && error.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE
+                        ? ZLinkDispatchErrorReason.LOCATION_UNAVAILABLE
+                        : ZLinkDispatchErrorReason.STALE_TARGET,
+                cause);
     }
 
     private CompletionStage<byte[]> receiveSessionRelocationSeal(
-            RoutingId transportSource, byte[] command42) {
-        var codec = new systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec();
-        var command = codec.decodeSessionRelocationSeal(command42);
+            RoutingId transportSource,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec
+                            .SessionRelocationSeal
+                    command,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceM6BWireCodec codec) {
         RoutingId expectedSource =
                 command.senderRole()
                                 == systems.zlink.framework.runtime.internal.service
