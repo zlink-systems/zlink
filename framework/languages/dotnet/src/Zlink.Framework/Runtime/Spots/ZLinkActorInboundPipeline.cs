@@ -1234,6 +1234,15 @@ internal sealed class ZLinkUserSpotActorInboundEndpoint(
         bool callerOwnsDispatchTurn = false
     )
     {
+        if (callerOwnsDispatchTurn && state.LiveActivation is { } activation)
+            return activation.InvokeOwnedActorPacketAsync(
+                actor,
+                state,
+                header,
+                body,
+                sourceSessionRid,
+                cancellationToken
+            );
         return dispatcher.DispatchAsync(
             actor,
             state,
@@ -1255,6 +1264,15 @@ internal sealed class ZLinkUserSpotActorInboundEndpoint(
         bool callerOwnsDispatchTurn = false
     )
     {
+        if (callerOwnsDispatchTurn && state.LiveActivation is { } activation)
+            return activation.InvokeOwnedActorPacketForReplyAsync(
+                actor,
+                state,
+                header,
+                body,
+                sourceSessionRid,
+                cancellationToken
+            );
         return dispatcher.DispatchForReplyAsync(
             actor,
             state,
