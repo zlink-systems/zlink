@@ -993,10 +993,12 @@ actor_context_t::join_spot_erased (spot_id_t spot_id,
 
     if (joined.result_code == detail::actor_join_reply_t::relayed) {
         auto cleanup = std::exchange (joined.source_cleanup, {});
-        co_await cleanup ();
+        const auto settled = co_await runtime::await_result (cleanup ());
+        if (!settled)
+            co_return joined;
         joined.result_code = detail::actor_join_reply_t::accepted;
     }
-    if (joined.result_code == 0) {
+    if (joined.result_code == detail::actor_join_reply_t::accepted) {
         state->sync ([&] {
             *actor_ref = joined.actor;
             auto found = state->actors_by_id.find (std::string (actor_ref->actor_id ().value ()));

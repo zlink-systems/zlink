@@ -39,9 +39,9 @@ while true; do
   fi
   sleep 5
 done
-cmake --build "${cpp_build}" --target test_cpp_framework_spot_close_conformance --parallel 2 \
+cmake --build "${cpp_build}" --target test_cpp_framework_spot_close_conformance --parallel 4 \
   >"${log_dir}/cpp-build.log" 2>&1
-GTEST_FILTER='ActorMaintenanceJoin.MissingAfterTargetCommitAndDestroyDoesNotCompleteOnSource:*ActorDeferredJoinFailure.FailureAndRejectionPreserveSourceActor/*' \
+GTEST_FILTER='ActorMaintenanceJoin.RelayedSourceCleanupFailureDoesNotFailDeferredJoin:ActorMaintenanceJoin.MissingAfterTargetCommitAndDestroyDoesNotCompleteOnSource:*ActorDeferredJoinFailure.FailureAndRejectionPreserveSourceActor/*' \
   ctest --test-dir "${cpp_build}" -R '^test_cpp_framework_spot_close_conformance$' \
     --output-on-failure >"${log_dir}/cpp.log" 2>&1
 printf '%s\n' 'Join completion owner contract: dotnet/java/node/cpp passed'

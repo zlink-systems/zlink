@@ -3490,6 +3490,84 @@ class join_settlement_store_t final : public fw::location_store_t
     fw::task_completion_source_t<void> missing;
 };
 
+// Observe the real deferred Join terminal without replacing its execution gate.
+class observed_join_barrier_t final : public fw::detail::deferred_barrier_t
+{
+  public:
+    observed_join_barrier_t (
+      std::shared_ptr<fw::detail::deferred_barrier_t> inner,
+      std::shared_ptr<fw::task_completion_source_t<fw::result_t<void>>> result) :
+        _inner (std::move (inner)), _result (std::move (result))
+    {
+    }
+    fw::result_t<void> activate (std::function<void ()> work) override
+    {
+        return _inner->activate (std::move (work));
+    }
+    fw::result_t<void> activate_async (async_work_t work) override
+    {
+        return _inner->activate_async ([work = std::move (work),
+                                        result = _result] (auto complete) mutable {
+            work ([result, complete = std::move (complete)] (fw::result_t<void> terminal) mutable {
+                result->complete (fw::result_t<fw::result_t<void>>::success (terminal));
+                complete (std::move (terminal));
+            });
+        });
+    }
+    fw::task_t<void> run (std::function<fw::task_t<void> ()> work) override
+    {
+        return _inner->run (std::move (work));
+    }
+    void cancel () noexcept override { _inner->cancel (); }
+
+  private:
+    std::shared_ptr<fw::detail::deferred_barrier_t> _inner;
+    std::shared_ptr<fw::task_completion_source_t<fw::result_t<void>>> _result;
+};
+
+TEST (ActorMaintenanceJoin, RelayedSourceCleanupFailureDoesNotFailDeferredJoin)
+{
+    for (const auto kind :
+         {fw::framework_error_kind_t::internal_failure, fw::framework_error_kind_t::data_lost}) {
+        SCOPED_TRACE (static_cast<int> (kind));
+        fw::runtime::offload_executor_t executor (1, "join-cleanup-contract");
+        fw::runtime::serial_execution_queue_t caller (executor), owner (executor);
+        fw::detail::actor_gateway_runtime_t gateway;
+        const auto source = fw::detail::actor_ref_access_t::make (
+          fw::node_rid_t::from_string ("cleanup-source"), "member", "cleanup-actor", 1);
+        const auto target = fw::detail::actor_ref_access_t::make (
+          fw::node_rid_t::from_string ("cleanup-target"), "member", "cleanup-actor", 1);
+        auto terminal = std::make_shared<fw::task_completion_source_t<fw::result_t<void>>> ();
+        gateway.on_join_barrier ([&] (const fw::actor_ref_t &) {
+            auto reserved = owner.reserve_barrier_next ("join-cleanup", true);
+            if (!reserved)
+                return reserved;
+            return fw::result_t<std::shared_ptr<fw::detail::deferred_barrier_t>>::success (
+              std::make_shared<observed_join_barrier_t> (reserved.value (), terminal));
+        });
+        gateway.on_join_spot ([target, kind] (const auto &, auto, const auto &, auto, auto,
+                                              auto) -> fw::task_t<fw::detail::actor_join_reply_t> {
+            co_return fw::detail::actor_join_reply_t{
+              fw::detail::actor_join_reply_t::relayed, target, {}, [kind] {
+                  return [] (fw::framework_error_kind_t failure) -> fw::task_t<void> {
+                      throw fw::framework_exception_t (failure,
+                                                       "source settlement did not complete");
+                      co_return;
+                  }(kind);
+              }};
+        });
+        auto context = gateway.actor_context (source);
+        caller.run ("join-handler", [&] { context.join_spot ("target-spot").defer (); });
+        const auto completed = terminal->task ().result_for (wait_budget);
+        ASSERT_TRUE (completed);
+        ASSERT_TRUE (*completed);
+        EXPECT_TRUE (completed->value ());
+        EXPECT_EQ (context.actor_ref ().node_rid ().value (), source.node_rid ().value ());
+        caller.drain ();
+        owner.drain ();
+    }
+}
+
 TEST (ActorMaintenanceJoin, MissingAfterTargetCommitAndDestroyDoesNotCompleteOnSource)
 {
     observations_t evidence;
@@ -3508,6 +3586,24 @@ TEST (ActorMaintenanceJoin, MissingAfterTargetCommitAndDestroyDoesNotCompleteOnS
     source.start ();
     ASSERT_TRUE (ready (source));
     auto services = source.app.advanced ().services ().build_provider ();
+    auto join_terminal = std::make_shared<fw::task_completion_source_t<fw::result_t<void>>> ();
+    auto infrastructure_failure =
+      std::make_shared<fw::task_completion_source_t<std::exception_ptr>> ();
+    auto &gateway = services.get_required<fw::detail::actor_gateway_runtime_t> ();
+    const auto reserve = gateway.weak_state ().lock ()->join_barrier_reserver;
+    gateway.on_join_barrier ([reserve, join_terminal] (const fw::actor_ref_t &actor) {
+        auto reserved = reserve (actor);
+        if (!reserved)
+            return reserved;
+        return fw::result_t<std::shared_ptr<fw::detail::deferred_barrier_t>>::success (
+          std::make_shared<observed_join_barrier_t> (reserved.value (), join_terminal));
+    });
+    fw::detail::mesh_node_runtime_t::registrations (source.app.advanced ().zlink ())
+      .front ()
+      ->spot_state->runtime_failures ()
+      ->bind_runtime_reporter ([infrastructure_failure] (std::exception_ptr failure) {
+          infrastructure_failure->complete (fw::result_t<std::exception_ptr>::success (failure));
+      });
     ASSERT_TRUE (services.get_required<fw::actor_manager_t> ()
                    .get_or_create (fw::actor_id_t (actor_id), actor_type)
                    .async ()
@@ -3584,6 +3680,21 @@ TEST (ActorMaintenanceJoin, MissingAfterTargetCommitAndDestroyDoesNotCompleteOnS
         .value ()));
     source_store->release.complete (fw::result_t<void>::success ());
     ASSERT_TRUE (source_store->missing.task ().result_for (wait_budget));
+    const auto public_result = join_terminal->task ().result_for (wait_budget);
+    ASSERT_TRUE (public_result);
+    ASSERT_TRUE (*public_result);
+    EXPECT_TRUE (public_result->value ())
+      << (public_result->value ().error () ? public_result->value ().error ()->what () : "");
+    const auto infrastructure = infrastructure_failure->task ().result_for (wait_budget);
+    ASSERT_TRUE (infrastructure);
+    ASSERT_TRUE (*infrastructure);
+    ASSERT_NE (infrastructure->value (), nullptr);
+    try {
+        std::rethrow_exception (infrastructure->value ());
+    }
+    catch (const fw::framework_exception_t &error) {
+        EXPECT_EQ (error.kind (), fw::framework_error_kind_t::unavailable);
+    }
     evidence.release_leave.complete (fw::result_t<void>::success ());
     const auto stopped = source.app.shutdown (wait_budget).result ();
     ASSERT_TRUE (stopped);

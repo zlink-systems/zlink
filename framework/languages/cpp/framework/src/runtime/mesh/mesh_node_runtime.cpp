@@ -3342,13 +3342,25 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
     }
     const auto cleanup =
       std::get<runtime::stateful::relocation_source_cleanup_t> (std::move (preparation));
-    co_return actor_join_reply_t{actor_join_reply_t::relayed, target_actor,
-                                 zlink::message_t::from (s->admission_payload),
-                                 [this, s, cleanup, target_actor] () -> task_t<void> {
-                                     auto relocated = co_await cleanup ();
-                                     co_await settle_remote_application_actor_join_source (
-                                       s, std::move (relocated), target_actor);
-                                 }};
+    co_return actor_join_reply_t{
+      actor_join_reply_t::relayed, target_actor, zlink::message_t::from (s->admission_payload),
+      [this, s, cleanup, target_actor] {
+          auto pending = [] (mesh_node_runtime_t *self,
+                             std::shared_ptr<remote_actor_join_state_t> source,
+                             runtime::stateful::relocation_source_cleanup_t settle,
+                             actor_ref_t target) -> task_t<void> {
+              auto relocated = co_await settle ();
+              co_await self->settle_remote_application_actor_join_source (
+                std::move (source), std::move (relocated), std::move (target));
+          }(this, s, cleanup, target_actor);
+          detail::observe_task_completion (
+            pending,
+            [failures = _state->spot_state->runtime_failures ()] (const result_t<void> &result) {
+                if (!result)
+                    failures->report (result.exception ());
+            });
+          return pending;
+      }};
 }
 
 task_t<void> mesh_node_runtime_t::settle_remote_application_actor_join_source (
