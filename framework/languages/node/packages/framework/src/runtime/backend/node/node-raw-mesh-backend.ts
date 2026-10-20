@@ -2508,7 +2508,10 @@ function decodeStatefulRecord(
   const ingressLifecycle = receiveIngressLifecycle(record);
   return {
     kind: stateful.receiveKind,
-    requestSource: record.requestSource,
+    get requestSource() {
+      return record.requestSource;
+    },
+    ...(record.prepareDispatch === undefined ? {} : { prepareDispatch: record.prepareDispatch }),
     domain: readyDomain(record.domain),
     sourceNodeRid: (record.sourceRoutingId as RoutingId | undefined) ?? null,
     sourceSpotId: (stateful.sourceSpotId as RoutingId | undefined) ?? null,

@@ -252,6 +252,8 @@ export interface ZLinkMessageFollowOrigin {
 }
 
 export interface ReceiveRecord {
+  /** Resolve record prerequisites in owner order, outside an application handler turn. */
+  readonly prepareDispatch?: (signal: AbortSignal) => boolean | Promise<boolean>;
   readonly requestSource?: import('../locations/request-source-resolver').ZLinkRequestSourceFence;
   readonly kind: number;
   readonly domain: number;

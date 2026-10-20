@@ -2,6 +2,7 @@ import type { RoutingId } from '../../contracts/Common';
 import type { ZLinkMeshNodeDescriptor } from '../../contracts/Locations/Rows';
 import type { ZLinkLocationOwnerToken } from './internal-location-contracts';
 import { encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
+import { awaitWithAbort, throwIfAborted } from '../abort';
 
 /** Source request owner values the first accepting owner records (Location runtime §9.3). */
 export interface ZLinkRequestSourceFence {
@@ -64,27 +65,35 @@ export class ZLinkRequestSourceResolver {
   accept(
     meshName: string,
     nodeRid: RoutingId,
-    nodeGeneration: bigint
+    nodeGeneration: bigint,
+    signal?: AbortSignal
   ): ZLinkRequestSourceFence | undefined | Promise<ZLinkRequestSourceFence | undefined> {
+    throwIfAborted(signal);
     const known = this.polled.get(meshName)?.get(encodeRoutingIdStorageHex(nodeRid));
     if (known !== undefined && known.fence.nodeGeneration === nodeGeneration) {
       return this.monotonicNowMs() < known.leaseDeadlineMs ? known.fence : undefined;
     }
-    return this.readOnce(meshName, nodeRid, nodeGeneration);
+    return this.readOnce(meshName, nodeRid, nodeGeneration, signal);
   }
 
   private async readOnce(
     meshName: string,
     nodeRid: RoutingId,
-    nodeGeneration: bigint
+    nodeGeneration: bigint,
+    signal?: AbortSignal
   ): Promise<ZLinkRequestSourceFence | undefined> {
     // The Store boundary already classifies provider failures as Unavailable. Preserve their
     // cause for the ingress error reporter, and let programming errors propagate unchanged.
-    const descriptors = await this.options.listLiveMeshNodes(meshName);
+    const descriptors = await awaitWithAbort(
+      this.options.listLiveMeshNodes(meshName, signal),
+      signal
+    );
     const descriptor = descriptors.find(
       (value) => routingIdsEqual(value.rid, nodeRid) && value.lifecycleGeneration === nodeGeneration
     );
-    const source = descriptor === undefined ? undefined : await this.polledSource(descriptor);
+    const source =
+      descriptor === undefined ? undefined : await this.polledSource(descriptor, signal);
+    throwIfAborted(signal);
     if (source === undefined) return undefined;
     let sources = this.polled.get(meshName);
     if (sources === undefined) {
@@ -106,8 +115,11 @@ export class ZLinkRequestSourceResolver {
     ) {
       return undefined;
     }
-    const remainingMs = await this.options.remainingOwnerTokenLeaseMs(
-      { ownerId: descriptor.ownerId, leaseGeneration: descriptor.leaseGeneration },
+    const remainingMs = await awaitWithAbort(
+      this.options.remainingOwnerTokenLeaseMs(
+        { ownerId: descriptor.ownerId, leaseGeneration: descriptor.leaseGeneration },
+        signal
+      ),
       signal
     );
     if (remainingMs <= 0) return undefined;

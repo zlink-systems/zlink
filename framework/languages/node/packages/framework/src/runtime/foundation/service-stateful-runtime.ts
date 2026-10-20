@@ -1,3 +1,4 @@
+import { awaitWithAbort } from '../abort';
 import { encodeBoundSessionCloseCommand } from '../protocol/service_wire_codec.generated';
 import { decodeRoutingId, encodeRoutingIdStorageHex, routingIdsEqual } from '../routing-id';
 import { ZlinkStreamContentType } from '@zlink-systems/stream-wire';
@@ -1246,11 +1247,15 @@ export class ServiceStatefulRuntime {
    * sender without a live descriptor ends the request Unavailable (Session·Actor binding §4). The
    * polled descriptors answer without a promise; only a Store read returns one.
    */
-  private acceptRequestSource(ingress: RawServiceIngressRecord): Promise<void> | undefined {
+  private acceptRequestSource(
+    ingress: RawServiceIngressRecord,
+    signal?: AbortSignal
+  ): Promise<void> | undefined {
     if (ingress.requestSource !== undefined) return undefined;
     const acceptance = this.requestSourceAcceptance;
     if (acceptance === undefined) return undefined;
-    const generation = this.tryPeerGeneration(ingress.sourceRoutingId);
+    const generation =
+      ingress.sourceNodeGeneration ?? this.tryPeerGeneration(ingress.sourceRoutingId);
     const sourceRid =
       ingress.sourceRoute === undefined || ingress.sourceRoute.length === 0
         ? ingress.sourceRoutingId
@@ -1258,7 +1263,7 @@ export class ServiceStatefulRuntime {
             ingress.sourceRoutingId,
             Buffer.from(ingress.sourceRoute).toString('hex')
           );
-    const source = generation === undefined ? undefined : acceptance(sourceRid, generation);
+    const source = generation === undefined ? undefined : acceptance(sourceRid, generation, signal);
     if (source instanceof Promise) {
       return source.then(
         (read) => this.recordRequestSource(ingress, read),
@@ -2487,8 +2492,6 @@ export class ServiceStatefulRuntime {
         const followed = this.holdOrRelaySpotMessage(ingress, record);
         if (followed !== undefined) return followed;
         this.validateDirectSpotFence(record.target);
-        const sourcePending = this.acceptRequestSource(ingress);
-        if (sourcePending !== undefined) await sourcePending;
         return this.enqueueApplicationFrame(
           ingress,
           `spot:${record.target.spot.spotId}`,
@@ -2508,8 +2511,6 @@ export class ServiceStatefulRuntime {
       }
       case 'actorSend':
       case 'actorRequest': {
-        const sourcePending = this.acceptRequestSource(ingress);
-        if (sourcePending !== undefined) await sourcePending;
         const actor =
           record.boundSession === undefined
             ? this.validateActorMessageFence(record.target)
@@ -2543,7 +2544,9 @@ export class ServiceStatefulRuntime {
               : { sourceBindingGeneration: record.boundSession.bindingGeneration }),
             targetActor: actor.ref,
             messageFollowOrigin: {
-              requestSource: ingress.requestSource,
+              get requestSource() {
+                return ingress.requestSource;
+              },
               target: record.target,
               sourceNodeRid: ingress.sourceRoutingId,
               originalOperation: record.operation,
@@ -4070,6 +4073,29 @@ export class ServiceStatefulRuntime {
     });
   }
 
+  private prepareRequestSource(
+    ingress: RawServiceIngressRecord,
+    stateful: ServiceStatefulMailboxData,
+    signal: AbortSignal
+  ): boolean | Promise<boolean> {
+    const reject = (error: unknown): false => {
+      if (signal.aborted) return false;
+      if (!(error instanceof ZLinkFrameworkException)) throw error;
+      const result = failure(error);
+      stateful.reply?.(result.terminalResult, result.failureCode);
+      return false;
+    };
+    if (signal.aborted) return false;
+    try {
+      const pending = this.acceptRequestSource(ingress, signal);
+      return pending === undefined
+        ? true
+        : awaitWithAbort(pending, signal).then(() => true, reject);
+    } catch (error) {
+      return reject(error);
+    }
+  }
+
   private enqueueApplicationFrame(
     ingress: RawServiceIngressRecord,
     owner: string,
@@ -4101,7 +4127,9 @@ export class ServiceStatefulRuntime {
       domain,
       parts: [ingress.parts[0]!, payloadFrame],
       sourceRoutingId: ingress.sourceRoutingId,
-      requestSource: ingress.requestSource,
+      get requestSource() {
+        return ingress.requestSource;
+      },
       sourceRoute: ingress.sourceRoute,
       ...(ingress.reply === undefined ? {} : { reply: ingress.reply }),
       ...(ingress.requestSequence === undefined
@@ -4109,6 +4137,17 @@ export class ServiceStatefulRuntime {
         : { requestSequence: ingress.requestSequence }),
       ...(stateful.correlation === undefined ? {} : { correlation: stateful.correlation }),
       stateful,
+      ...(domain === 'application' &&
+      this.requestSourceAcceptance !== undefined &&
+      (stateful.receiveKind === ReceiveKind.SpotSend ||
+        stateful.receiveKind === ReceiveKind.SpotRequest ||
+        stateful.receiveKind === ReceiveKind.ActorSend ||
+        stateful.receiveKind === ReceiveKind.ActorRequest)
+        ? {
+            prepareDispatch: (signal: AbortSignal) =>
+              this.prepareRequestSource(ingress, stateful, signal)
+          }
+        : {}),
       applicationJob
     });
     if (accepted) {
@@ -4844,8 +4883,6 @@ export class ServiceStatefulRuntime {
       return;
     }
     if (decoded.kind === 'actorRequest') {
-      const sourcePending = this.acceptRequestSource(ingress);
-      if (sourcePending !== undefined) await sourcePending;
       const current =
         decoded.boundSession === undefined
           ? this.validateActorMessageFence(decoded.target)
@@ -4860,7 +4897,9 @@ export class ServiceStatefulRuntime {
           correlation: decoded.correlation,
           targetActor: current.ref,
           messageFollowOrigin: {
-            requestSource: ingress.requestSource,
+            get requestSource() {
+              return ingress.requestSource;
+            },
             target: decoded.target,
             sourceNodeRid: ingress.sourceRoutingId,
             originalOperation: decoded.operation,

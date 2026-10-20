@@ -4,6 +4,7 @@ import type { ReceiveRecord } from './service-runtime-contracts';
 export type ServiceMailboxDomain = 'application' | 'infrastructure';
 
 export interface ServiceMailboxRecord {
+  readonly prepareDispatch?: (signal: AbortSignal) => boolean | Promise<boolean>;
   readonly owner: string;
   readonly domain: ServiceMailboxDomain;
   parts: readonly Uint8Array[];

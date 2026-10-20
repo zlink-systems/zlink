@@ -201,12 +201,20 @@ test('SourceRequestOwner reports typed Store failure and retains its cause', asy
   await assert.rejects(resolver.accept('mesh', 'sender', 5n), (actual) => actual === error);
   const events = [];
   const replies = [];
+  let queued;
   const raw = {
     setServiceIngress() {},
     topology: { peer: () => ({ descriptor: { lifecycleGeneration: 5n } }) },
+    mailbox: {
+      tryEnqueue(record) {
+        queued = record;
+        return true;
+      }
+    },
     replyService: (_record, parts) => replies.push(parts)
   };
   const runtime = new ServiceStatefulRuntime(raw, 'local', 7n);
+  runtime.createActor('actor');
   runtime.setDispatchErrorReporter(
     { captureEnabled: () => true, report: (event) => events.push(event) },
     'mesh'
@@ -218,6 +226,7 @@ test('SourceRequestOwner reports typed Store failure and retains its cause', asy
       flags: 0,
       sourceRoutingId: 'sender',
       requestSequence: 1n,
+      applicationJobOwner: { takeInitial: () => ({ close() {} }) },
       parts: [
         encodeActorHeader(
           'actorRequest',
@@ -236,8 +245,10 @@ test('SourceRequestOwner reports typed Store failure and retains its cause', asy
         })
       ]
     }),
-    'infrastructure'
+    'application'
   );
+  assert.equal(events.length, 0, 'source lookup belongs to the claimed record');
+  assert.equal(await queued.prepareDispatch(new AbortController().signal), false);
   assert.equal(replies.length, 1);
   assert.equal(events.length, 1);
   assert.strictEqual(events[0].error, error);

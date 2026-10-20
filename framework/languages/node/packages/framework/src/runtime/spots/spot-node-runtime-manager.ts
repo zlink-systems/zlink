@@ -225,8 +225,13 @@ export class ZLinkSpotNodeRuntimeManager {
         }
         const capability = spotNodeAutoConnectCapability(spotNodeName, spotNode, node);
         if (capability === undefined) continue;
-        node.setRequestSourceAcceptance?.((nodeRid, nodeGeneration) =>
-          location.requestSources.accept(capability.local.meshName, nodeRid, nodeGeneration)
+        node.setRequestSourceAcceptance?.((nodeRid, nodeGeneration, sourceSignal) =>
+          location.requestSources.accept(
+            capability.local.meshName,
+            nodeRid,
+            nodeGeneration,
+            sourceSignal
+          )
         );
         const reconciler = new ZLinkAutoConnectReconciler({
           local: capability.local,
