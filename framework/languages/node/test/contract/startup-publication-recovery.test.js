@@ -1,6 +1,89 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
+const { Module } = require('@nestjs/common');
+const { NestFactory } = require('@nestjs/core');
+const nestjs = require('../../packages/nestjs/dist');
+
+test('lost Preparing publication still prepares object authorities before Serving', async () => {
+  const inner = new framework.ZLinkInMemoryProviderLocationStore();
+  let lostWrite = false;
+  let confirmationKey;
+  const provider = {
+    read(key, signal) {
+      if (key.value === confirmationKey) {
+        confirmationKey = undefined;
+        throw new Error('confirmation reply lost');
+      }
+      return inner.read(key, signal);
+    },
+    scan: (request, signal) => inner.scan(request, signal),
+    write(request, signal) {
+      const mutation = request.mutations.find(
+        (m) => m.kind === 'put' && m.key.value.startsWith('mesh-node')
+      );
+      if (
+        !lostWrite &&
+        mutation &&
+        JSON.parse(Buffer.from(mutation.bytes)).descriptor.state === 'preparing'
+      ) {
+        lostWrite = true;
+        confirmationKey = mutation.key.value;
+        throw new Error('Preparing write reply lost');
+      }
+      return inner.write(request, signal);
+    }
+  };
+  class Entry {
+    constructor(context) {
+      this.context = context;
+    }
+    async onCreateActor() {
+      return { accepted: true };
+    }
+  }
+  class ActorFactory {
+    async create(context) {
+      return { actorId: context.actorId, context };
+    }
+  }
+  class Instance {
+    constructor(context) {
+      this.context = context;
+    }
+  }
+  const builder = nestjs.zlinkFramework().addLocationStore(provider);
+  builder
+    .addRouteMesh('play')
+    .listen('tcp://127.0.0.1:0')
+    .routingId('startup-object')
+    .objects()
+    .server()
+    .addEntrySpot(Entry, 'player')
+    .addActorFactory('player', ActorFactory, (f) => f.disableRelocation())
+    .addInstanceSpotFactory('room', Instance, (f) => f.disableRelocation());
+  class AppModule {}
+  Module({ imports: [nestjs.ZLinkModule.forRoot(builder.build())] })(AppModule);
+  const app = await NestFactory.createApplicationContext(AppModule, {
+    logger: false,
+    abortOnError: false
+  });
+  try {
+    assert.equal(lostWrite, true);
+    const host = app.get(nestjs.ZLINK_FRAMEWORK_RUNTIME);
+    assert.ok(host.statefulAuthorityRoutes, 'object runtime must exist before Serving');
+    assert.equal(host.status.state, framework.ZLinkFrameworkRuntimeState.Serving);
+    const result = await app
+      .get(nestjs.ZLINK_ACTOR_MANAGER)
+      .getOrCreate('startup-player', 'player')
+      .inMesh('play')
+      .timeout(5000)
+      .submit();
+    assert.equal(result.status, 'created');
+  } finally {
+    await app.close();
+  }
+});
 
 for (const applied of [false, true]) {
   for (const lostState of ['preparing', 'serving']) {
