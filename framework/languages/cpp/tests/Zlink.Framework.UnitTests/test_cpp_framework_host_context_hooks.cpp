@@ -4,6 +4,7 @@
 
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
+#include "../support/scope_exit.hpp"
 
 #include <gtest/gtest.h>
 
@@ -11,12 +12,15 @@
 #include <future>
 #include <memory>
 #include <thread>
+#include <utility>
 
 namespace
 {
 
 using namespace zlink::framework;
 using namespace std::chrono_literals;
+
+using zlink::framework::test::scope_exit_t;
 
 class started_service_t final : public hosted_service_t
 {
@@ -67,9 +71,12 @@ TEST (ZLinkFrameworkHostContextHooks, HostStartInstallsRuntimeContextHooks)
     char *argv[] = {command};
     int exit_code = -1;
     std::thread host ([&] { exit_code = app.run (1, argv); });
+    scope_exit_t stop_host ([&] {
+        app.stop ();
+        host.join ();
+    });
     ASSERT_EQ (std::future_status::ready, running.wait_for (5s));
-    app.stop ();
-    host.join ();
+    stop_host.run ();
     EXPECT_EQ (0, exit_code);
 
     EXPECT_TRUE (runtime_turn_rejects_result_for ());
