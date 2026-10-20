@@ -174,6 +174,7 @@ function validateSchema(schema) {
   validateRelocationLogicalStreamReplay(schema.relocationLogicalStreamFormat, fail);
   validateFrameworkJsonV1Profile(schema.frameworkJsonV1Profile, fail);
   validateFrameworkMultipartV1Profile(schema.frameworkMultipartV1Profile, fail);
+  validateActorTypedMessageV1Profile(schema.actorTypedMessageV1Profile, fail);
   validateMaintenanceAdmissionProfile(schema.maintenanceAdmissionProfile, fail);
   validateTerminationResultProfile(schema.terminationResultProfile, fail);
   validateDurableFormats(schema.durableFormats, types, bounds, fail);
@@ -6741,6 +6742,27 @@ function validateFrameworkMultipartV1Profile(profile, fail) {
     fail(
       "$.frameworkMultipartV1Profile",
       "must define the exact cross-language framework-multipart-v1 profile",
+    );
+  }
+}
+
+function validateActorTypedMessageV1Profile(profile, fail) {
+  const expected = {
+    name: "actor-typed-message-v1",
+    consumers: ["cpp", "dotnet", "jvm", "node"],
+    commands: [24, 25],
+    outerProfile: "framework-multipart-v1",
+    messageParts: "part0-stream-header-send-or-request-with-packet-name-then-part1-codec-payload",
+    replyCommand: 20,
+    replyParts: "one-part-complete-stream-frame-response-or-error-with-empty-packet-name",
+    errorPayload: "stream-connector-error-payload",
+    headerDecodeFailure: "invalid-frame-without-reinterpretation",
+    replyCorrelation: "command-25-correlation-not-stream-request-seq",
+  };
+  if (!isObject(profile) || JSON.stringify(profile) !== JSON.stringify(expected)) {
+    fail(
+      "$.actorTypedMessageV1Profile",
+      "must define the exact cross-language actor-typed-message-v1 profile",
     );
   }
 }

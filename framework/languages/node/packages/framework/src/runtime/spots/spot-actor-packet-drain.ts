@@ -1,5 +1,4 @@
 import type { ActorRef, RoutingId, ZLinkMessageSerializer } from '../../contracts';
-import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import { ZLinkBufferMessage as RuntimeMessage } from '../backend/runtime-message';
 import { RequestResult } from '../backend/runtime-values';
@@ -16,6 +15,7 @@ import {
   ZLinkStreamMessageKind
 } from '../streams/protocol';
 import { encodeFrameworkPayload } from '../messaging/payload-codec';
+import { boundSessionErrorPayload } from '../streams/bound-session-response-target';
 
 export interface ZLinkActorDispatchPart {
   readonly info: {
@@ -218,7 +218,7 @@ export class ZLinkSpotActorPacketDrain {
           this.encodeActorReplyFrame(
             parts[0],
             ZLinkStreamMessageKind.Error,
-            frameworkErrorPayload(error)
+            boundSessionErrorPayload(error)
           )
         ],
         RequestResult.Ok
@@ -232,12 +232,15 @@ export class ZLinkSpotActorPacketDrain {
     payload: unknown
   ): Message {
     const requestHeader = decodeStreamHeader(messageToBytes(requestHeaderPart), this.flowEnabled());
-    const encoded = encodeFrameworkPayload(
-      payload,
-      this.options.messageSerializers,
-      kind === ZLinkStreamMessageKind.Response ? requestHeader.name : undefined,
-      'payload'
-    );
+    const encoded =
+      kind === ZLinkStreamMessageKind.Response
+        ? encodeFrameworkPayload(
+            payload,
+            this.options.messageSerializers,
+            requestHeader.name,
+            'payload'
+          )
+        : encodeFrameworkPayload(payload);
     try {
       //  encodeStreamFrame returns a fresh, unaliased array; view it without re-copying.
       const frame = encodeStreamFrame(
@@ -328,17 +331,4 @@ function isStreamHeaderMessage(message: Message, flowEnabled: boolean): boolean 
 
 function closeMessages(messages: readonly Message[]): void {
   for (const message of messages) message.close();
-}
-
-function frameworkErrorPayload(error: unknown): {
-  readonly message: string;
-  readonly kind: ZLinkFrameworkErrorKind;
-} {
-  return {
-    message: error instanceof Error ? error.message : String(error),
-    kind:
-      error instanceof ZLinkFrameworkException
-        ? error.kind
-        : ZLinkFrameworkErrorKind.InternalFailure
-  };
 }
