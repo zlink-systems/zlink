@@ -12,6 +12,94 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed partial class EntrySpotActorDispatchTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task DeferredJoin_ReleasesClaimBeforeOpeningTheNextActorTurn(bool callbackFails)
+    {
+        var timeout = TimeSpan.FromSeconds(5);
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(new CapturingSpotNode());
+        var callback = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        ZLinkActorSerialExecutor.BarrierReservation? nextClaim = null;
+        ZLinkActorRuntimeState? state = null;
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            state = runtime.GetOrCreateActorState(actor.ActorId);
+            actor.JoinCompletionCallback = async () =>
+            {
+                await callback.Task;
+                if (callbackFails)
+                    throw new InvalidOperationException("Controlled Join completion failure.");
+            };
+            var join = new ZLinkDeferredActorJoin(
+                runtime,
+                state,
+                actor,
+                actorRef.Generation,
+                null,
+                ZLinkMessage.Empty,
+                timeout
+            );
+            join.ReserveBarrier();
+
+            // Observe the actual mailbox release boundary without changing its state.
+            // Running this observer as soon as it is queued fixes the scheduling
+            // order that a second worker may otherwise win only intermittently.
+            const System.Reflection.BindingFlags fields =
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
+            var barrier = typeof(ZLinkDeferredActorJoin)
+                .GetField("_barrier", fields)!
+                .GetValue(join)!;
+            var waiter = barrier
+                .GetType()
+                .GetFields(fields)
+                .Single(field => field.FieldType == typeof(ZLinkActorSerialExecutor.Waiter))
+                .GetValue(barrier)!;
+            var released = (TaskCompletionSource)
+                typeof(ZLinkActorSerialExecutor.Waiter)
+                    .GetField("_released", fields)!
+                    .GetValue(waiter)!;
+            var nextTurn = released.Task.ContinueWith(
+                _ => nextClaim = state.ReserveDeferredJoinBarrier(out var target),
+                CancellationToken.None,
+                TaskContinuationOptions.None,
+                new JoinClaimBoundaryScheduler()
+            );
+            join.Activate();
+            Assert.IsType<ZLinkActorJoinCompletion.Accepted>(
+                await actor.JoinCompletion.Task.WaitAsync(timeout)
+            );
+            Assert.Throws<ZLinkFrameworkException>(() => state.ReserveDeferredJoinBarrier(out _));
+            Assert.False(nextTurn.IsCompleted);
+            callback.SetResult();
+            await nextTurn.WaitAsync(timeout);
+            Assert.NotNull(nextClaim);
+            Assert.Throws<ZLinkFrameworkException>(() => state.ReserveDeferredJoinBarrier(out _));
+        }
+        finally
+        {
+            callback.TrySetResult();
+            if (nextClaim is not null)
+            {
+                nextClaim.Discard();
+                _ = state!.Handoff.EndDeferredJoinCapture();
+                state.ReleaseDeferredJoinBarrier();
+            }
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private sealed class JoinClaimBoundaryScheduler : TaskScheduler
+    {
+        protected override IEnumerable<Task>? GetScheduledTasks() => [];
+
+        protected override void QueueTask(Task task) => TryExecuteTask(task);
+
+        protected override bool TryExecuteTaskInline(Task task, bool taskWasPreviouslyQueued) =>
+            TryExecuteTask(task);
+    }
+
+    [Theory]
     [InlineData(ZLinkUserSpotExecutionMode.SpotWide, false)]
     [InlineData(ZLinkUserSpotExecutionMode.PerActor, false)]
     [InlineData(ZLinkUserSpotExecutionMode.SpotWide, true)]
