@@ -496,8 +496,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                                                     "service ROUTER receive has no routing id"));
             // Control decoders request individual headers. Application decoders
             // borrow received.parts() directly while this owner is retained.
-            Inbound inbound =
-                    new Inbound(source, received.replyToken().orElse(null), received);
+            Inbound inbound = new Inbound(source, received.replyToken().orElse(null), received);
             transferred = true;
             return Optional.of(inbound);
         } finally {
@@ -581,7 +580,11 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         }
 
         // Synthetic records can supply their existing frame representation without a native owner.
-        Inbound(RoutingId source, ReplyToken requestSequence, List<byte[]> frames, Received received) {
+        Inbound(
+                RoutingId source,
+                ReplyToken requestSequence,
+                List<byte[]> frames,
+                Received received) {
             this.source = Objects.requireNonNull(source, "source");
             this.requestSequence = requestSequence;
             this.frames = Objects.requireNonNull(frames, "frames");

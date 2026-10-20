@@ -7662,7 +7662,8 @@ final class ZLinkJavaRawMeshNode
         boolean admissionDue = liveness.tickAdmission(nowNanos);
         announceExpectedPeers(admissionDue);
         ZLinkServiceLivenessRegistry.Tick tick = liveness.tick(nowNanos);
-        for (ZLinkServiceLivenessRegistry.Probe probe : tick.probes()) {
+        for (int index = 0; index < tick.probes().size(); index++) {
+            ZLinkServiceLivenessRegistry.Probe probe = tick.probes().get(index);
             try {
                 sendLiveness(
                         probe.nodeRoutingId(),
@@ -7673,14 +7674,13 @@ final class ZLinkJavaRawMeshNode
                 // failure must not stop the service receive pump.
             }
         }
-        tick.timedOutNodes()
-                .forEach(
-                        peer -> {
-                            if (disconnectAdmitted(peer, admittedConnectionId(peer))) {
-                                requireStarted().disconnectRid(peer);
-                                signalStateChanged(peer);
-                            }
-                        });
+        for (int index = 0; index < tick.timedOutNodes().size(); index++) {
+            RoutingId peer = tick.timedOutNodes().get(index);
+            if (disconnectAdmitted(peer, admittedConnectionId(peer))) {
+                requireStarted().disconnectRid(peer);
+                signalStateChanged(peer);
+            }
+        }
     }
 
     private CompletionStage<Void> sendLiveness(RoutingId target, List<byte[]> frames) {
