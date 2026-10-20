@@ -4,6 +4,7 @@
 #include <zlink/framework/contracts/actors/actor.hpp>
 
 #include "runtime/actors/actor_ref_access.hpp"
+#include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include <zlink/framework/contracts/channels/channel.hpp>
@@ -42,6 +43,19 @@ class public_host_runtime_t;
 
 namespace zlink::framework::detail
 {
+
+inline constexpr char actor_message_channel_name[] = "actor";
+
+runtime::messaging::message_parts_t
+encode_actor_packet (const runtime::messaging::envelope_header_t &header, zlink::message_t body);
+result_t<runtime::messaging::envelope_header_t>
+decode_actor_packet_header (const runtime::messaging::message_parts_t &parts,
+                            stream_message_kind_t expected_kind,
+                            bool capture_flow);
+runtime::messaging::message_parts_t
+encode_actor_reply (const runtime::messaging::envelope_header_t &header, zlink::message_t body);
+result_t<std::optional<zlink::message_t>>
+decode_actor_reply (const runtime::messaging::message_parts_t &parts);
 
 class bound_session_delivery_fence_t;
 
@@ -385,12 +399,12 @@ class actor_gateway_runtime_t
       actor_bound_session_route_t route,
       stream_codec_t codec = stream_codec_t::message_pack,
       bool replace_existing = true);
-    result_t<actor_bound_session_transition_t>
-    replace_session_route (actor_ref_t actor_ref,
-                           bound_session_sink_t sink,
-                           actor_bound_session_route_t route,
-                           stream_codec_t codec = stream_codec_t::message_pack,
-                           std::function<bool ()> before_publish = {});
+    result_t<actor_bound_session_transition_t> replace_session_route (
+      actor_ref_t actor_ref,
+      bound_session_sink_t sink,
+      actor_bound_session_route_t route,
+      stream_codec_t codec = stream_codec_t::message_pack,
+      std::function<bool (const actor_bound_session_route_t &)> before_publish = {});
     result_t<void>
     record_bound_session_route (const actor_ref_t &actor_ref,
                                 zlink::routing_id_t node_rid,

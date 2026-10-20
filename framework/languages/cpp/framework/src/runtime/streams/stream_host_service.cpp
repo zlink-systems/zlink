@@ -69,6 +69,7 @@ using websocket_stream_t = websocket::stream<tcp::socket>;
 #ifdef ZLINK_FRAMEWORK_STREAM_WITH_OPENSSL
 namespace ssl = asio::ssl;
 #endif
+using detail::stream_error_payload;
 using detail::stream_header_flags_t;
 using detail::stream_header_t;
 using detail::stream_message_kind_t;
@@ -529,48 +530,6 @@ const char *stream_kind_name (stream_message_kind_t kind)
             return "control";
     }
     return "unknown";
-}
-
-/* The stream error payload uses the canonical framework wire error name. */
-const char *stream_error_code (framework_error_kind_t kind)
-{
-    switch (kind) {
-        case framework_error_kind_t::not_found:
-            return "not_found";
-        case framework_error_kind_t::already_exists:
-            return "already_exists";
-        case framework_error_kind_t::type_mismatch:
-            return "type_mismatch";
-        case framework_error_kind_t::not_configured:
-            return "not_configured";
-        case framework_error_kind_t::rejected:
-            return "rejected";
-        case framework_error_kind_t::unavailable:
-            return "unavailable";
-        case framework_error_kind_t::deadline_exceeded:
-            return "deadline_exceeded";
-        case framework_error_kind_t::shutting_down:
-            return "shutting_down";
-        case framework_error_kind_t::protocol_error:
-            return "protocol_error";
-        case framework_error_kind_t::invalid_operation:
-            return "invalid_operation";
-        case framework_error_kind_t::data_lost:
-            return "data_lost";
-        case framework_error_kind_t::internal_failure:
-            return "internal_failure";
-    }
-    return "internal_failure";
-}
-
-zlink::message_t stream_error_payload (const result_t<void> &error)
-{
-    const auto *failure = error.error ();
-    nlohmann::json payload;
-    payload["code"] =
-      stream_error_code (failure ? failure->kind () : framework_error_kind_t::internal_failure);
-    payload["message"] = failure ? failure->what () : "STREAM request failed";
-    return zlink::message_t::from (payload.dump ());
 }
 
 void trace_stream_host_enabled (std::string_view stage,
@@ -1816,27 +1775,18 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
           });
     }
 
-    request_task_t<void> bind_actor_session (
-      runtime::stateful::stream_connection_t transport_connection,
-      zlink::routing_id_t session_rid,
-      actor_ref_t actor,
-      std::shared_ptr<replacement_session_state_t> replacement,
-      std::uint64_t binding_generation,
-      std::function<void ()> publish_client_binding,
-      detail::application_actor_session_bind_attempt_t bind_attempt =
-        detail::application_actor_session_bind_attempt_t::initial,
-      std::optional<std::chrono::steady_clock::time_point> retry_deadline = std::nullopt)
+    request_task_t<void>
+    bind_actor_session (runtime::stateful::stream_connection_t transport_connection,
+                        zlink::routing_id_t session_rid,
+                        actor_ref_t actor,
+                        std::shared_ptr<replacement_session_state_t> replacement,
+                        std::uint64_t binding_generation,
+                        std::function<void ()> publish_client_binding)
     {
         const auto _mesh_node = this->_mesh_node;
         auto *const services = _services;
         auto *const io = &_io;
-        const auto binding_deadline =
-          retry_deadline.value_or (std::chrono::steady_clock::now () + std::chrono::seconds (5));
-        if (bind_attempt == detail::application_actor_session_bind_attempt_t::retry
-            && std::chrono::steady_clock::now () >= binding_deadline) {
-            throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
-                                         "Actor session binding deadline elapsed");
-        }
+        const auto binding_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
         if (!_mesh_node) {
             throw framework_exception_t (framework_error_kind_t::not_configured,
                                          "STREAM Actor dispatch MeshNode is not started");
@@ -1851,25 +1801,6 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             throw framework_exception_t (framework_error_kind_t::not_found,
                                          "Actor session binding route is unavailable");
         }
-        const auto previous_binding = _mesh_node->native_node ().sessions ().current_binding (
-          std::string (actor.actor_id ().value ()));
-        /* A re-bind (a previous binding exists -- the reconnect window) may
-         * be riding a stale cached route after its one-way command 44 was
-         * lost. The former owner can still accept the route during its
-         * retransmission window, so actor_not_ready is not a reliable
-         * refresh trigger. Re-resolve every re-bind from Store before
-         * selecting either the local or remote owner. A first bind keeps its
-         * freshly resolved route. */
-        if (previous_binding) {
-            const auto cached_route = *actor_route;
-            actor_route =
-              co_await _mesh_node->refresh_application_actor_route (actor, cached_route);
-            if (!actor_route) {
-                throw framework_exception_t (framework_error_kind_t::not_found,
-                                             "Actor session binding route refresh failed");
-            }
-        }
-
         runtime::stateful::stream_binding_t binding;
         runtime::stateful::stateful_error_t error;
         if (local_node->to_hex () == actor_route->node_rid.to_hex ()) {
@@ -1878,22 +1809,6 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
               actor.object_generation ());
             const auto resolved = _mesh_node->native_node ().resolve_actor (native_actor);
             if (!resolved) {
-                /* actor_not_ready on the local node: short-backoff retry
-                 * bounded by the binding deadline (bind can race the
-                 * actor's own admission). */
-                const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
-                  binding_deadline - std::chrono::steady_clock::now ());
-                if (detail::can_retry_application_actor_session_bind (
-                      detail::application_actor_session_bind_outcome_t::actor_not_ready)
-                    && remaining > std::chrono::milliseconds::zero ()) {
-                    co_await detail::delay (_delay_owner,
-                                            std::min (remaining, std::chrono::milliseconds (10)));
-                    co_await detail::request_submission (bind_actor_session (
-                      transport_connection, session_rid, actor, replacement, binding_generation,
-                      publish_client_binding,
-                      detail::application_actor_session_bind_attempt_t::retry, binding_deadline));
-                    co_return;
-                }
                 throw framework_exception_t (
                   framework_error_kind_t::unavailable,
                   "Framework STREAM Actor is not ready for session binding");
@@ -1921,7 +1836,6 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
         }
 
         result_t<void> recorded = result_t<void>::success ();
-        std::optional<detail::application_actor_session_bind_outcome_t> retryable_outcome;
         decltype (replacement->actor_bindings)::node_type prepared_replacement;
         if (replacement) {
             decltype (replacement->actor_bindings) prepared;
@@ -1943,7 +1857,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
               actor,
               detail::actor_bound_session_route_t{
                 *local_node, session_rid, actor.object_generation (),
-                local_status.lifecycle_generation (), actor_route->authority_owner_generation,
+                local_status.lifecycle_generation (), binding.actor.authority_owner_generation,
                 static_cast<std::uint64_t> (actor_route->owner.lease_generation),
                 binding.binding_generation, 0, 0, false, local_owner->owner_id,
                 static_cast<std::uint64_t> (local_owner->lease_generation)},
@@ -2020,21 +1934,9 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                 const auto remote_binding =
                   co_await detail::request_submission (_mesh_node->bind_application_actor_session (
                     actor, session_rid, binding.binding_generation, *actor_route, remaining));
-                if (remote_binding
-                    == detail::application_actor_session_bind_outcome_t::stale_route) {
-                    retryable_outcome = remote_binding;
-                    recorded =
-                      result_t<void>::failure (framework_error_kind_t::invalid_operation,
-                                               "Remote Actor session binding route is stale");
-                } else if (remote_binding
-                           == detail::application_actor_session_bind_outcome_t::actor_not_ready) {
-                    retryable_outcome = remote_binding;
-                    recorded =
-                      result_t<void>::failure (framework_error_kind_t::unavailable,
-                                               "Remote Actor session binding owner is not ready");
-                } else {
-                    recorded = result_t<void>::success ();
-                }
+                binding.binding_generation = remote_binding.binding_generation;
+                binding.actor.authority_owner_generation =
+                  remote_binding.authority_owner_generation;
             }
         }
         if (recorded) {
@@ -2047,7 +1949,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
                   return recorded ? runtime::stateful::stateful_error_t::none
                                   : runtime::stateful::stateful_error_t::conflict;
               },
-              binding_generation);
+              binding.binding_generation);
             if (error != runtime::stateful::stateful_error_t::none)
                 recorded =
                   result_t<void>::failure (framework_error_kind_t::invalid_operation,
@@ -2057,38 +1959,6 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             co_return;
         }
 
-        if (retryable_outcome
-            && detail::can_retry_application_actor_session_bind (*retryable_outcome)) {
-            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
-              binding_deadline - std::chrono::steady_clock::now ());
-            if (remaining <= std::chrono::milliseconds::zero ()) {
-                throw framework_exception_t (framework_error_kind_t::deadline_exceeded,
-                                             "Remote Actor session binding deadline elapsed");
-            }
-            if (*retryable_outcome
-                == detail::application_actor_session_bind_outcome_t::stale_route) {
-                /* Invalidate the stale cached route, then wait (capped
-                 * ~1s) for the authority to publish a changed route
-                 * before re-entering the bind. */
-                (void) co_await _mesh_node->refresh_application_actor_route (actor, *actor_route);
-                (void) co_await _mesh_node->wait_for_application_actor_route_change (
-                  actor, *actor_route, std::min (remaining, std::chrono::milliseconds (1000)));
-            } else {
-                /* actor_not_ready can be a short target-materialization lag,
-                 * but it is also how the former owner reports a route whose
-                 * Store watcher has not observed the committed relocation
-                 * yet. Refresh before retrying so a reconnect cannot pin the
-                 * removed source Actor for the entire binding deadline. */
-                (void) co_await _mesh_node->refresh_application_actor_route (actor, *actor_route);
-                co_await detail::delay (_delay_owner,
-                                        std::min (remaining, std::chrono::milliseconds (10)));
-            }
-            co_await detail::request_submission (bind_actor_session (
-              transport_connection, session_rid, actor, replacement, binding_generation,
-              publish_client_binding, detail::application_actor_session_bind_attempt_t::retry,
-              binding_deadline));
-            co_return;
-        }
         throw recorded.error () ? *recorded.error ()
                                 : framework_exception_t (framework_error_kind_t::internal_failure,
                                                          "Framework STREAM actor binding failed");

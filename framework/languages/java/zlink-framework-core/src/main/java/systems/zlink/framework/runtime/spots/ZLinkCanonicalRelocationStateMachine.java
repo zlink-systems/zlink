@@ -90,6 +90,11 @@ final class ZLinkCanonicalRelocationStateMachine
     private Runnable sourceQuiescenceChanged = () -> {};
     private final java.util.function.BooleanSupplier targetAdmissionSealed;
 
+    @Override
+    public boolean sourceStopped() {
+        return node.status().state() == MeshNodeState.STOPPED;
+    }
+
     void onSourceQuiescenceChanged(Runnable listener) {
         sourceQuiescenceChanged = Objects.requireNonNull(listener, "listener");
     }
@@ -577,12 +582,7 @@ final class ZLinkCanonicalRelocationStateMachine
                         });
     }
 
-    /**
-     * Classifies one read of the primary authority record against the source fence: target owner
-     * means the target commit is confirmed; Missing ends the expired owner without Preserve. Any
-     * other StoreVersion means the target commit can no longer succeed, so the source keeps
-     * authority.
-     */
+    /** Classifies the existing source fence, including later owners of the same object (§10). */
     private static Optional<AuthoritySettlement> settlementOf(
             ZLinkAuthorityReadResult read,
             ZLinkSpotRetireControl.StageRequest request,
@@ -590,10 +590,25 @@ final class ZLinkCanonicalRelocationStateMachine
         if (!(read instanceof ZLinkAuthoritySnapshot snapshot)) {
             return Optional.of(new AuthoritySettlement(Settlement.SOURCE_LEASE_EXPIRED, null));
         }
-        if (snapshot.ownerId().equals(request.targetOwnerId())
-                && snapshot.ownerLeaseGeneration() == request.targetOwnerLeaseGeneration()) {
-            return Optional.of(new AuthoritySettlement(Settlement.TARGET_COMMITTED, snapshot));
+        var source = primary(request.participants());
+        boolean sourceOwner =
+                snapshot.ownerId().equals(request.sourceOwnerId())
+                        && snapshot.ownerLeaseGeneration() == request.sourceOwnerLeaseGeneration();
+        if (snapshot.objectGeneration() == source.objectGeneration()
+                && snapshot.authorityOwnerGeneration() > source.sourceAuthorityOwnerGeneration()
+                && !sourceOwner) {
+            boolean firstTarget =
+                    snapshot.ownerId().equals(request.targetOwnerId())
+                            && snapshot.ownerLeaseGeneration()
+                                    == request.targetOwnerLeaseGeneration();
+            return Optional.of(
+                    new AuthoritySettlement(
+                            Settlement.TARGET_COMMITTED, firstTarget ? snapshot : null));
         }
+        if (!sourceOwner
+                || snapshot.objectGeneration() != source.objectGeneration()
+                || snapshot.authorityOwnerGeneration() != source.sourceAuthorityOwnerGeneration())
+            return Optional.of(new AuthoritySettlement(Settlement.SOURCE_LEASE_EXPIRED, null));
         return snapshot.storeVersion().equals(expectedStoreVersion)
                 ? Optional.empty()
                 : Optional.of(new AuthoritySettlement(Settlement.SOURCE_PRESERVED, null));

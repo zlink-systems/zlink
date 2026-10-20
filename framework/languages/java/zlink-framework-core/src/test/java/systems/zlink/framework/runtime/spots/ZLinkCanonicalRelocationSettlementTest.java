@@ -554,7 +554,58 @@ final class ZLinkCanonicalRelocationSettlementTest {
         assertEquals(0, fixture.commits.get());
     }
 
+    @Test
+    void continuedRelocationProvesCommitWithoutTheFirstTargetOwner() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.stage();
+        var source = fixture.authority();
+        fixture.authorityRead.set(
+                new ZLinkAuthoritySnapshot(
+                        "next-owner-version",
+                        source.payload(),
+                        source.objectGeneration(),
+                        source.authorityOwnerGeneration() + 2,
+                        "next-owner",
+                        1,
+                        source.allocation(),
+                        source.storeNow()));
+        var settled =
+                fixture.source
+                        .settleAuthority(fixture.targetRid, fixture.request.fence(), Instant.now())
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS);
+        assertEquals(
+                ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED, settled.outcome());
+        org.junit.jupiter.api.Assertions.assertNull(
+                settled.target(),
+                "a subsequent owner does not reveal the first target's Follow fence");
+    }
+
+    @Test
+    void replacementObjectOnTargetDoesNotProveThisRelocationCommitted() throws Exception {
+        Fixture fixture = new Fixture();
+        fixture.stage();
+        var source = fixture.authority();
+        fixture.authorityRead.set(
+                new ZLinkAuthoritySnapshot(
+                        "replacement-version",
+                        source.payload(),
+                        source.objectGeneration() + 1,
+                        source.authorityOwnerGeneration() + 1,
+                        fixture.targetOwner.ownerId(),
+                        fixture.targetOwner.leaseGeneration(),
+                        source.allocation(),
+                        source.storeNow()));
+        assertEquals(
+                ZLinkRelocationTransitionClient.Settlement.SOURCE_LEASE_EXPIRED,
+                fixture.source
+                        .settle(fixture.targetRid, fixture.request.fence(), Instant.now())
+                        .toCompletableFuture()
+                        .get(3, TimeUnit.SECONDS));
+    }
+
     private static final class Fixture {
+        final AtomicReference<ZLinkAuthoritySnapshot> authorityRead = new AtomicReference<>();
         final RoutingId sourceRid = RoutingId.from("source-node");
         final RoutingId targetRid = RoutingId.from("target-node");
         final ZLinkInMemoryLocationStore locations = new ZLinkInMemoryLocationStore();
@@ -658,6 +709,11 @@ final class ZLinkCanonicalRelocationSettlementTest {
                                     ZLinkLocationRepository.class.getClassLoader(),
                                     new Class<?>[] {ZLinkLocationRepository.class},
                                     (proxy, method, args) -> {
+                                        if (method.getName().equals("read")
+                                                && authorityRead.get() != null
+                                                && authorityKey.equals(args[0]))
+                                            return CompletableFuture.completedFuture(
+                                                    authorityRead.get());
                                         if (method.getName().equals("prepareAggregate")) {
                                             prepareEntered.complete(null);
                                             return prepareCompletion.thenCompose(

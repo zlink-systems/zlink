@@ -375,7 +375,7 @@ final class ZLinkUserSpotRetireSourceBuilder {
                         })
                 .whenComplete(
                         (prepared, failure) -> {
-                            if (failure != null) metrics.complete(null, failure);
+                            if (failure != null) metrics.complete(null, false);
                         });
     }
 

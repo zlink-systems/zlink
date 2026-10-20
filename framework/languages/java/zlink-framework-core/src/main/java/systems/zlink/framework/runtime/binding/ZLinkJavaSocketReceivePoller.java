@@ -5,10 +5,13 @@ import systems.zlink.contracts.eventing.PollEventFlags;
 import systems.zlink.contracts.eventing.PollEvents;
 import systems.zlink.contracts.eventing.PollSourceKind;
 import systems.zlink.contracts.eventing.Poller;
+import systems.zlink.contracts.eventing.ZlinkTimer;
 import systems.zlink.contracts.sockets.Socket;
+import systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry;
 
 import java.time.Duration;
 import java.util.Objects;
+import java.util.function.Supplier;
 
 /**
  * Owns the public zlink Poller used to guard one Framework socket receive.
@@ -19,16 +22,24 @@ import java.util.Objects;
  */
 final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
     private static final long SOCKET_SLOT = 1L;
+    private static final long WAKE_SLOT = 2L;
+    private static final Duration WAKE_INTERVAL = Duration.ofNanos(1);
+    private static final long WAKE_FIRE_COUNT = 1;
     static final int READABLE = 1;
     static final int ROUTE_CHANGED = 2;
+    static final int OWNER_WAKE = 4;
 
     private final Socket socket;
     private final Poller poller;
+    private final ZlinkTimer wakeTimer;
     private final boolean ownsCompletionQueue;
     private final boolean observesRoutes;
-    private final PollEvents events = new PollEvents(1);
+    private final PollEvents events;
     private volatile boolean registered;
-    private boolean closed;
+    private volatile boolean closed;
+    // Last physical timer registration; null means an explicit owner notification is pending.
+    // The logical deadline remains owned by the management registry.
+    private volatile Long scheduledManagementDeadline = ZLinkServiceLivenessRegistry.NO_DEADLINE;
 
     ZLinkJavaSocketReceivePoller(Socket socket) {
         this(socket, true, false);
@@ -45,11 +56,41 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
      */
     ZLinkJavaSocketReceivePoller(
             Socket socket, boolean ownsCompletionQueue, boolean observesRoutes) {
+        this(
+                socket,
+                ownsCompletionQueue,
+                observesRoutes,
+                Zlink::createPoller,
+                observesRoutes ? Zlink::createTimer : () -> null);
+    }
+
+    ZLinkJavaSocketReceivePoller(
+            Socket socket,
+            boolean ownsCompletionQueue,
+            boolean observesRoutes,
+            Supplier<Poller> pollerFactory,
+            Supplier<ZlinkTimer> wakeTimerFactory) {
         Objects.requireNonNull(socket, "socket");
         this.socket = socket;
         this.ownsCompletionQueue = ownsCompletionQueue;
         this.observesRoutes = observesRoutes;
-        poller = Zlink.createPoller();
+        this.poller = Objects.requireNonNull(pollerFactory.get(), "poller");
+        ZlinkTimer timer = null;
+        boolean accepted = false;
+        try {
+            timer = wakeTimerFactory.get();
+            events = new PollEvents(timer == null ? 1 : 2);
+            this.wakeTimer = timer;
+            accepted = true;
+        } finally {
+            if (!accepted) {
+                try {
+                    if (timer != null) timer.close();
+                } finally {
+                    this.poller.close();
+                }
+            }
+        }
     }
 
     void ensureRegistered() {
@@ -83,6 +124,7 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
             } else {
                 poller.add(socket, SOCKET_SLOT, PollEventFlags.POLLIN);
             }
+            if (wakeTimer != null) poller.add(wakeTimer, WAKE_SLOT);
             registered = true;
         }
     }
@@ -93,6 +135,12 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
 
     /** Waits once and returns the {@link #READABLE} and {@link #ROUTE_CHANGED} bits it reported. */
     synchronized int waitForReady(Duration timeout) {
+        int ready = waitForOwnerReady(timeout);
+        if ((ready & OWNER_WAKE) != 0) consumeOwnerWake();
+        return ready & ~OWNER_WAKE;
+    }
+
+    synchronized int waitForOwnerReady(Duration timeout) {
         if (closed) {
             return 0;
         }
@@ -100,6 +148,11 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
         int count = poller.wait(events, timeout);
         int ready = 0;
         for (int index = 0; index < count; index++) {
+            if (events.sourceKind(index) == PollSourceKind.TIMER
+                    && events.slot(index) == WAKE_SLOT) {
+                ready |= OWNER_WAKE;
+                continue;
+            }
             if (events.sourceKind(index) != PollSourceKind.SOCKET
                     || events.slot(index) != SOCKET_SLOT) {
                 continue;
@@ -114,6 +167,33 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
         return ready;
     }
 
+    // The port's existing state lane and close claim serialize producers with disposal.
+    // Do not acquire this monitor: the receive owner holds it during native wait.
+    void signal() {
+        if (!closed && wakeTimer != null) {
+            wakeTimer.start(WAKE_INTERVAL, WAKE_FIRE_COUNT);
+            scheduledManagementDeadline = null;
+        }
+    }
+
+    // The port invokes preparation and consumption on its existing state lane, alongside signal.
+    void prepareManagementWait(long deadline, long now) {
+        ensureRegistered();
+        if (scheduledManagementDeadline == null || scheduledManagementDeadline == deadline) return;
+        if (deadline == ZLinkServiceLivenessRegistry.NO_DEADLINE) wakeTimer.stop();
+        else
+            wakeTimer.start(
+                    Duration.ofNanos(Math.max(WAKE_INTERVAL.toNanos(), deadline - now)),
+                    WAKE_FIRE_COUNT);
+        scheduledManagementDeadline = deadline;
+    }
+
+    void consumeOwnerWake() {
+        wakeTimer.recv();
+        if (scheduledManagementDeadline == null)
+            scheduledManagementDeadline = ZLinkServiceLivenessRegistry.NO_DEADLINE;
+    }
+
     private static boolean isReadable(PollEvents events, int index) {
         // A socket close or exceptional receive condition is still a receive
         // wake-up. The caller performs the public recv and owns the resulting
@@ -124,11 +204,13 @@ final class ZLinkJavaSocketReceivePoller implements AutoCloseable {
     }
 
     @Override
-    public synchronized void close() {
-        if (closed) {
-            return;
+    public void close() {
+        signal();
+        synchronized (this) {
+            if (closed) return;
+            poller.close();
+            if (wakeTimer != null) wakeTimer.close();
+            closed = true;
         }
-        poller.close();
-        closed = true;
     }
 }

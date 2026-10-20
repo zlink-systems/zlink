@@ -489,7 +489,7 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                         })
                 .whenComplete(
                         (prepared, failure) -> {
-                            if (failure != null) metrics.complete(null, failure);
+                            if (failure != null) metrics.complete(null, false);
                         });
     }
 
@@ -1268,9 +1268,8 @@ final class ZLinkStandaloneActorRelocationSourceBuilder {
                                     throw new IllegalStateException(
                                             "Actor relocation target did not commit");
                                 }
-                                var snapshot =
-                                        Objects.requireNonNull(
-                                                result.target(), "committed target authority");
+                                var snapshot = result.target();
+                                if (snapshot == null) return null;
                                 if (snapshot.objectGeneration()
                                                 != owned.snapshot().objectGeneration()
                                         || !isTargetOwner(snapshot)

@@ -42,6 +42,31 @@ import java.util.stream.Stream;
 
 final class ZLinkActorTransferHandoffTest {
     @Test
+    void confirmedLaterOwnerCompletesWithoutAFirstTargetFollowRoute() {
+        var handoff = new ZLinkActorTransferHandoff();
+        try {
+            var source = route("node-a", 11, 3);
+            var target =
+                    new java.util.concurrent.CompletableFuture<
+                            ZLinkServiceM6BWireCodec.ActorRouteFence>();
+            handoff.stageRelocationRouteAsync(source, ref("node-b", 7), target)
+                    .toCompletableFuture()
+                    .join();
+            var staged = handoff.messageFollowSource(source).orElseThrow();
+            target.complete(null);
+            assertTrue(
+                    staged.targetReady().toCompletableFuture().isDone(),
+                    "a confirmed later owner settles the pending route without waiting for a timer");
+            handoff.commitRelocationRouteAsync(source, Duration.ofSeconds(30))
+                    .toCompletableFuture()
+                    .join();
+            assertEquals(0, handoff.messageFollowSourceCount());
+        } finally {
+            handoff.close();
+        }
+    }
+
+    @Test
     void closePreservesSourceRemovalFailuresAndRetiresEveryOwnedSource() {
         ZLinkActorTransferHandoff handoff = new ZLinkActorTransferHandoff();
         IllegalStateException first = new IllegalStateException("first removal failed");

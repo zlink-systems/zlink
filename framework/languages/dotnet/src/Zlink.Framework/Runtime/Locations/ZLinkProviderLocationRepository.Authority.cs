@@ -4211,7 +4211,10 @@ internal sealed partial class ZLinkProviderLocationRepository
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (operationDeadline is { } deadline && DateTimeOffset.UtcNow >= deadline)
-                throw new OperationCanceledException(cancellationToken);
+                throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.DeadlineExceeded,
+                    "Authority Ready commit exceeded the operation deadline."
+                );
             var current = await ReadAuthorityRecordAsync(reservation.Key, cancellationToken)
                 .ConfigureAwait(false);
             if (current is null)

@@ -119,18 +119,16 @@ final class ZLinkRelocationHandOff {
                 new ZLinkRelocationMetricOperation(request, 0L));
     }
 
-    private static CompletionStage<CompletionStage<ZLinkRelocationTransitionClient.Settlement>>
-            runToReady(
-                    ZLinkRelocationTransitionClient client,
-                    ZLinkSpotRetireControl.StageRequest request,
-                    java.util.function.Function<
-                                    CompletionStage<
-                                            ZLinkRelocationTransitionClient.AuthoritySettlement>,
-                                    CompletionStage<Void>>
-                            relayCapturedIngress,
-                    Duration timeout,
-                    Instant restoreDeadline,
-                    ZLinkRelocationMetricOperation metrics) {
+    static CompletionStage<CompletionStage<ZLinkRelocationTransitionClient.Settlement>> runToReady(
+            ZLinkRelocationTransitionClient client,
+            ZLinkSpotRetireControl.StageRequest request,
+            java.util.function.Function<
+                            CompletionStage<ZLinkRelocationTransitionClient.AuthoritySettlement>,
+                            CompletionStage<Void>>
+                    relayCapturedIngress,
+            Duration timeout,
+            Instant restoreDeadline,
+            ZLinkRelocationMetricOperation metrics) {
         Objects.requireNonNull(client, "client");
         Objects.requireNonNull(request, "request");
         Objects.requireNonNull(relayCapturedIngress, "relayCapturedIngress");
@@ -238,11 +236,24 @@ final class ZLinkRelocationHandOff {
                                                                     (ignored, failure) -> result)
                                                             : CompletableFuture.completedFuture(
                                                                     result))
-                                    .whenComplete(metrics::complete);
+                                    .whenComplete(
+                                            (result, failure) -> {
+                                                // Preserve is recorded by the source owner after
+                                                // its
+                                                // retained work has resumed, not at the Store
+                                                // fence.
+                                                if (result
+                                                        != ZLinkRelocationTransitionClient
+                                                                .Settlement.SOURCE_PRESERVED)
+                                                    metrics.complete(
+                                                            result,
+                                                            failure != null
+                                                                    && client.sourceStopped());
+                                            });
                         })
                 .whenComplete(
                         (ignored, failure) -> {
-                            if (failure != null) metrics.complete(null, failure);
+                            if (failure != null) metrics.complete(null, client.sourceStopped());
                         });
     }
 

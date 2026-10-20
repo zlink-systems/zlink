@@ -65,6 +65,10 @@ final class ZLinkStandaloneActorRelocationScheduler {
             }
             case SOURCE_PRESERVED ->
                     source.abort()
+                            .whenComplete(
+                                    (ignored, failure) ->
+                                            source.metrics.complete(
+                                                    failure == null ? settlement : null, false))
                             .thenCompose(
                                     ignored ->
                                             CompletableFuture.failedFuture(

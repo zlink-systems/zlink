@@ -611,6 +611,8 @@ internal sealed record MeshMonitorStatus(
 
 internal interface IMeshNodeMonitor : IDisposable, IAsyncDisposable
 {
+    ValueTask<bool> WaitAsync(CancellationToken cancellationToken);
+
     MeshMonitorStatus Status();
     MeshMonitorEvent? Recv(RecvFlags flags = RecvFlags.None);
 }

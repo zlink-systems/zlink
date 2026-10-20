@@ -494,6 +494,61 @@ final class ZLinkLocationRuntimeRecoveryTest {
     }
 
     @Test
+    void completedClaimRejectionSurvivesExpiredConfirmationDeadline() {
+        for (var result :
+                java.util.List.of(
+                        new ZLinkOwnerLeaseClaimConflict(),
+                        new ZLinkOwnerLeaseGenerationExhausted())) {
+            var now = new java.util.concurrent.atomic.AtomicLong();
+            var timeout = Duration.ofSeconds(1);
+            var reads = new AtomicInteger();
+            var store =
+                    new ZLinkLocationStoreTestAdapter() {
+                        @Override
+                        public CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(
+                                String ownerId, Duration ttl) {
+                            now.addAndGet(timeout.toNanos());
+                            return CompletableFuture.completedFuture(result);
+                        }
+
+                        @Override
+                        public CompletionStage<ZLinkOwnerLeaseReadResult> readOwnerLease(
+                                String ownerId) {
+                            reads.incrementAndGet();
+                            return CompletableFuture.failedFuture(
+                                    new java.util.concurrent.TimeoutException(
+                                            "confirmation failed"));
+                        }
+                    };
+            try (var runtime =
+                    new ZLinkLocationRuntime(
+                            ZLinkRegisteredLocationStores.fromUnified(store),
+                            "owner-a",
+                            Duration.ofSeconds(15),
+                            Duration.ofSeconds(5),
+                            timeout,
+                            Duration.ofSeconds(1),
+                            now::get,
+                            java.util.concurrent.Executors.newSingleThreadScheduledExecutor())) {
+                var failure =
+                        assertThrows(
+                                java.util.concurrent.CompletionException.class,
+                                () ->
+                                        runtime.start(RoutingId.from("node-a"))
+                                                .toCompletableFuture()
+                                                .join());
+                assertEquals(
+                        result instanceof ZLinkOwnerLeaseGenerationExhausted
+                                ? "owner lease generation is exhausted"
+                                : "owner lease is already claimed",
+                        failure.getCause().getMessage());
+                assertFalse(runtime.ownerLeaseHealthy());
+                assertEquals(0, reads.get(), "confirmation must not start after the deadline");
+            }
+        }
+    }
+
+    @Test
     void cancellingStartupReleasesAClaimThatCompletesAfterCancellation() throws Exception {
         DelayedClaimStore store = new DelayedClaimStore();
         try (ZLinkLocationRuntime runtime =

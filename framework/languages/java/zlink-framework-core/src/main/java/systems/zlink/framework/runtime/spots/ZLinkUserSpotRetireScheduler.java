@@ -50,6 +50,10 @@ final class ZLinkUserSpotRetireScheduler {
             }
             case SOURCE_PRESERVED ->
                     source.abortPrecommit()
+                            .whenComplete(
+                                    (ignored, failure) ->
+                                            source.metrics.complete(
+                                                    failure == null ? settlement : null, false))
                             .thenCompose(
                                     ignored ->
                                             CompletableFuture.failedFuture(

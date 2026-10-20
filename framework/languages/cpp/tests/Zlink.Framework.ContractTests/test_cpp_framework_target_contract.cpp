@@ -788,7 +788,7 @@ int main ()
                       == std::string::npos
                     && mesh_node_runtime.find ("emit_backlog_enqueued_marker") == std::string::npos,
                   "E2E-CP-57", "actor bridge still emits environment-gated stderr handoff markers");
-    const auto stream_bind_begin = stream_host.find ("task_t<void> bind_actor_session");
+    const auto stream_bind_begin = stream_host.find ("bind_actor_session (");
     const auto stream_remote_bind =
       stream_host.find ("_mesh_node->bind_application_actor_session", stream_bind_begin);
     gate.require (stream_bind_begin != std::string::npos && stream_remote_bind != std::string::npos
@@ -1060,10 +1060,13 @@ int main ()
       failure_origin_wire.find ("actor_transfer_in_progress") != std::string::npos
         && channel_reply_writer.find ("runtime::messaging::write_failure_origin (header, error)")
              != std::string::npos
-        && actor_client_runtime.find ("runtime::messaging::restore_failure_origin")
+        && actor_client_runtime.find ("detail::decode_actor_reply") != std::string::npos
+        && actor_gateway_runtime.find ("runtime::messaging::restore_failure_origin")
              != std::string::npos
         && actor_client_runtime.find (".find (\"transfer is in progress\")") == std::string::npos
-        && actor_client_runtime.find ("message.find (") == std::string::npos,
+        && actor_client_runtime.find ("message.find (") == std::string::npos
+        && actor_gateway_runtime.find (".find (\"transfer is in progress\")") == std::string::npos
+        && actor_gateway_runtime.find ("message.find (") == std::string::npos,
       "CPP-COMP-001",
       "Actor retry or native failure classification still depends on exception text");
 

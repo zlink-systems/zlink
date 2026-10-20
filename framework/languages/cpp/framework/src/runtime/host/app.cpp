@@ -97,34 +97,6 @@ std::vector<zlink::message_t> encode_bound_session_frame (const stream_runtime_t
     return {zlink::message_t::from (std::move (encoded_frame.value ()))};
 }
 
-std::pair<stream_header_t, zlink::message_t>
-decode_bound_session_frame (const stream_runtime_t &runtime,
-                            const std::vector<zlink::message_t> &parts)
-{
-    if (parts.size () != 1)
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "bound Session frame must contain one part");
-    const auto bytes = parts.front ().to_bytes ();
-    if (bytes.size () < 6)
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "bound Session frame prefix is incomplete");
-    const auto header_size =
-      (static_cast<std::size_t> (bytes[0]) << 8) | static_cast<std::size_t> (bytes[1]);
-    const auto payload_size =
-      (static_cast<std::size_t> (bytes[2]) << 24) | (static_cast<std::size_t> (bytes[3]) << 16)
-      | (static_cast<std::size_t> (bytes[4]) << 8) | static_cast<std::size_t> (bytes[5]);
-    if (header_size > bytes.size () - 6 || payload_size != bytes.size () - 6 - header_size)
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "bound Session frame size does not match its prefix");
-    std::vector<std::uint8_t> header_bytes (bytes.begin () + 6, bytes.begin () + 6 + header_size);
-    const auto header = runtime.decode_header (header_bytes);
-    if (!header)
-        throw framework_exception_t (header.error_kind (),
-                                     header.error () ? header.error ()->what ()
-                                                     : "bound Session header decode failed");
-    return {header.value (), zlink::message_t::from (std::vector<std::uint8_t> (
-                               bytes.begin () + 6 + header_size, bytes.end ()))};
-}
 
 class session_ingress_completion_t final
 {
@@ -2643,7 +2615,8 @@ void app_t::_apply_zlink_framework ()
               const runtime::protocol::bound_session_bind_t &bind,
               const zlink::routing_id_t &session_owner, std::uint64_t session_owner_generation,
               const location_owner_token_t &session_owner_token,
-              std::function<bool ()> submit_terminal_reply) mutable {
+              std::function<bool (const runtime::protocol::stream_bind_reply_tail_t &)>
+                submit_terminal_reply) mutable {
                 const auto actor = detail::actor_ref_access_t::make (
                   node_rid_t::from_string (
                     zlink::routing_id_t::from (bind.actor.target_node_routing_id).to_string ()),
@@ -2729,7 +2702,12 @@ void app_t::_apply_zlink_framework ()
                     bind.actor.owner_lease_generation, bind.binding.generation, 0, 0, false,
                     session_owner_token.owner_id,
                     static_cast<std::uint64_t> (session_owner_token.lease_generation)},
-                  stream_codec_t::message_pack, std::move (submit_terminal_reply));
+                  stream_codec_t::message_pack,
+                  [submit_terminal_reply = std::move (submit_terminal_reply)] (
+                    const detail::actor_bound_session_route_t &accepted) {
+                      return submit_terminal_reply (
+                        {accepted.binding_generation, accepted.authority_owner_generation});
+                  });
                 if (!transition) {
                     return runtime::host::bound_session_bind_operation_result_t{
                       runtime::stateful::stateful_error_t::conflict, std::nullopt};
@@ -2744,18 +2722,6 @@ void app_t::_apply_zlink_framework ()
                              + " replaced=" + (change.changed ? "true" : "false");
                   },
                   &session_rid);
-                if (change.current
-                    && change.current->binding_generation != bind.binding.generation) {
-                    actor_gateway_runtime.trace_bound_session_send_stage (
-                      bind.actor.actor_id, "actor_owner_route_publish_stale_ignored",
-                      [&] {
-                          return "session_rid=" + session_rid.to_hex ()
-                                 + " binding_generation=" + std::to_string (bind.binding.generation)
-                                 + " current_binding_generation="
-                                 + std::to_string (change.current->binding_generation);
-                      },
-                      &session_rid);
-                }
                 if (change.changed && change.previous && change.previous->session_rid
                     && change.previous->node_generation != 0
                     && change.previous->binding_generation != 0
@@ -2788,7 +2754,7 @@ void app_t::_apply_zlink_framework ()
                       node_rid_t::from_string (
                         zlink::routing_id_t::from (send.actor.target_node_routing_id).to_string ()),
                       {}, send.actor.actor_id, send.actor.object_generation);
-                    auto [header, payload] = decode_bound_session_frame (stream_runtime, parts);
+                    auto [header, payload] = stream_runtime.decode_frame (parts);
                     const auto dispatched = actor_gateway_runtime.dispatch_bound_session_send (
                       actor, std::string (header.packet_name ()), header.codec (), payload);
                     return dispatched ? runtime::stateful::stateful_error_t::none
@@ -2834,7 +2800,7 @@ void app_t::_apply_zlink_framework ()
                 return [admitted = std::move (*admitted),
                         stream_runtime] (std::vector<zlink::message_t> parts) mutable {
                     try {
-                        auto [header, payload] = decode_bound_session_frame (stream_runtime, parts);
+                        auto [header, payload] = stream_runtime.decode_frame (parts);
                         const auto dispatched =
                           admitted (std::string (header.packet_name ()), header.codec (), payload);
                         return dispatched ? runtime::stateful::stateful_error_t::none

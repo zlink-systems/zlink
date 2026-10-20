@@ -126,6 +126,31 @@ final class ZLinkRelocationHandOffTest {
         }
     }
 
+    @Test
+    void cleanupFailureAfterConfirmedCommitCannotReplaceCompleted() throws Exception {
+        try (var metrics =
+                systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                        .install()) {
+            var result =
+                    ZLinkRelocationHandOff.run(
+                            client(
+                                    new AtomicInteger(),
+                                    ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                                    CompletableFuture.failedFuture(
+                                            new IllegalStateException("cutover cleanup failed"))),
+                            request(),
+                            () -> CompletableFuture.completedFuture(null),
+                            Duration.ofSeconds(1),
+                            Instant.now());
+            assertEquals(
+                    ZLinkRelocationTransitionClient.Settlement.TARGET_COMMITTED,
+                    result.toCompletableFuture().join());
+            assertEquals(
+                    "completed", metrics.only("zlink.relocation.completed").tags().get("outcome"));
+            assertEquals(1, metrics.count("zlink.relocation.duration"));
+        }
+    }
+
     private static ZLinkSpotRetireControl.StageRequest request() {
         RoutingId source = RoutingId.from("source");
         RoutingId target = RoutingId.from("target");

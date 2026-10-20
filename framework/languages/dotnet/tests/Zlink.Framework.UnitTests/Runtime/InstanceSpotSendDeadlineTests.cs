@@ -1,9 +1,11 @@
 using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using Systems.Zlink.Framework.Runtime.Protocol;
+using Systems.Zlink.Stream.Connector.Runtime.Protocol;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Channels;
+using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Locations;
 using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
@@ -624,18 +626,23 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    [InlineData(true, false)]
     public async Task Local_instance_send_does_not_return_target_activation_deadline_failure(
-        bool activationDeadlineExpires
+        bool activationDeadlineExpires,
+        bool inboundFlow
     )
     {
         const string spotId = "local-cold-send-deadline";
         HeldInstanceResolveStore? heldStore = null;
         var probe = new ColdSendProbe();
         var relocationStore = new ObservedActivationRelocationStore();
+        using var observer = new CapturingMessageFlowObserver();
         var (runtime, _) = await CreateStartedRuntimeAsync(
             new CapturingSpotNode(),
+            messageFlowObserver: observer,
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal,
             includeActorFactory: false,
             includeInstanceSpotRoute: true,
             instanceSpotType: typeof(ColdSendInstanceSpot),
@@ -650,13 +657,20 @@ public sealed partial class EntrySpotActorDispatchTests
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         runtime.ErrorSink.UnhandledCallbackException += error => targetFailure.TrySetResult(error);
+        var flowId = ZlinkStreamFlowId.Create();
         try
         {
-            var pending = new ZLinkSpotClient(runtime)
-                .SendToSpot(spotId, new ProbeRouteMessage("activate"))
-                .InstanceSpot()
-                .Async()
-                .AsTask();
+            Task pending;
+            using (
+                inboundFlow
+                    ? ZLinkFlowContext.EnterExisting(flowId, ZLinkFlowOrigin.Inbound)
+                    : default
+            )
+                pending = new ZLinkSpotClient(runtime)
+                    .SendToSpot(spotId, new ProbeRouteMessage("activate"))
+                    .InstanceSpot()
+                    .Async()
+                    .AsTask();
             await heldStore!.Entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
             if (activationDeadlineExpires)
                 await Task.Delay(TimeSpan.FromMilliseconds(350));
@@ -664,9 +678,33 @@ public sealed partial class EntrySpotActorDispatchTests
             heldStore.Release.TrySetResult();
             await pending.WaitAsync(TimeSpan.FromSeconds(5));
             if (activationDeadlineExpires)
-                Assert.IsType<OperationCanceledException>(
+            {
+                var error = Assert.IsType<ZLinkFrameworkException>(
                     await targetFailure.Task.WaitAsync(TimeSpan.FromSeconds(5))
                 );
+                Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, error.Kind);
+                Assert.Equal(
+                    "timed_out",
+                    Assert
+                        .Single(
+                            runtime.GetSpotNodeRuntime("entry").GetInstanceSpotMonitoringSnapshots()
+                        )
+                        .LastActivationOutcome
+                );
+                var dropped = Assert.Single(
+                    observer.Events,
+                    flow => flow.SpotId == spotId && flow.Phase == "dropped"
+                );
+                Assert.Equal("instance_spot", dropped.Surface);
+                Assert.Equal("activation_timeout", dropped.Reason);
+                if (inboundFlow)
+                    Assert.Equal(flowId, dropped.FlowId);
+                else
+                    Assert.True(ZlinkStreamFlowId.IsValid(dropped.FlowId));
+                Assert.Equal(inboundFlow ? "inbound" : "application", dropped.FlowOrigin);
+                Assert.Equal(error.GetType().Name, dropped.ErrorType);
+                Assert.Equal(error.Message, dropped.ErrorMessage);
+            }
             else
             {
                 Assert.Equal(
@@ -696,6 +734,209 @@ public sealed partial class EntrySpotActorDispatchTests
         public IZLinkInstanceSpotContext Context { get; } = context;
 
         public void Configure() => Context.Handlers.AddPacket<ColdSendInstanceHandler>();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Instance_activation_initialization_rejection_records_one_drop(bool expires)
+    {
+        const string spotId = "initialization-terminal";
+        var probe = new ColdSendProbe();
+        using var observer = new CapturingMessageFlowObserver();
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            new CapturingSpotNode(),
+            messageFlowObserver: observer,
+            messageFlowMode: ZLinkDiagnosticsLevel.Normal,
+            includeActorFactory: false,
+            includeInstanceSpotRoute: true,
+            instanceSpotType: typeof(FailingInitializationInstanceSpot),
+            instanceDispatchProbe: probe,
+            relocationStore: new InMemoryRelocationStore()
+        );
+        var failed = new TaskCompletionSource<Exception>(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        runtime.ErrorSink.UnhandledCallbackException += error => failed.TrySetResult(error);
+        if (expires)
+            runtime.Registration.SpotNodes["entry"].DefaultRequestTimeout =
+                TimeSpan.FromMilliseconds(200);
+        var nodeRuntime = runtime.GetSpotNodeRuntime("entry");
+        var flowId = ZlinkStreamFlowId.Create();
+        try
+        {
+            using (ZLinkFlowContext.EnterExisting(flowId, ZLinkFlowOrigin.Inbound))
+                await new ZLinkSpotClient(runtime)
+                    .SendToSpot(spotId, new ProbeRouteMessage("activate"))
+                    .InstanceSpot()
+                    .Async();
+            await probe.Message.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (!expires)
+                probe.Release.SetResult();
+            var error = await failed.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            if (expires)
+                Assert.Equal(
+                    ZLinkFrameworkErrorKind.DeadlineExceeded,
+                    Assert.IsType<ZLinkFrameworkException>(error).Kind
+                );
+            else
+                Assert.IsType<InvalidOperationException>(error);
+            Assert.Equal(
+                expires ? "timed_out" : "rejected",
+                Assert
+                    .Single(nodeRuntime.GetInstanceSpotMonitoringSnapshots())
+                    .LastActivationOutcome
+            );
+            var dropped = Assert.Single(
+                observer.Events,
+                flow => flow.SpotId == spotId && flow.Phase == "dropped"
+            );
+            Assert.Equal("instance_spot", dropped.Surface);
+            Assert.Equal(expires ? "activation_timeout" : "activation_rejected", dropped.Reason);
+            Assert.Equal(flowId, dropped.FlowId);
+            Assert.Equal("inbound", dropped.FlowOrigin);
+            Assert.Equal(error.GetType().Name, dropped.ErrorType);
+            Assert.Equal(error.Message, dropped.ErrorMessage);
+        }
+        finally
+        {
+            probe.Release.TrySetResult();
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private sealed class FailingInitializationInstanceSpot(
+        IZLinkInstanceSpotContext context,
+        ColdSendProbe probe
+    ) : IZLinkInstanceSpot
+    {
+        public IZLinkInstanceSpotContext Context { get; } = context;
+
+        public async ValueTask OnInitializeAsync(CancellationToken cancellationToken)
+        {
+            probe.Message.SetResult("initializing");
+            await probe.Release.Task.WaitAsync(cancellationToken);
+            throw new InvalidOperationException("Instance initialization rejected.");
+        }
+    }
+
+    [Theory]
+    [InlineData(ZLinkDiagnosticsLevel.Off, true)]
+    [InlineData(ZLinkDiagnosticsLevel.Normal, true)]
+    [InlineData(ZLinkDiagnosticsLevel.Normal, false)]
+    public async Task Instance_activation_target_distinguishes_expired_deadline_from_shutdown(
+        ZLinkDiagnosticsLevel level,
+        bool cancelledShutdown
+    )
+    {
+        const string spotId = "cancelled-activation";
+        var node = new CapturingInstanceActivationNode();
+        using var observer = new CapturingMessageFlowObserver();
+        var (runtime, _) = await CreateStartedRuntimeAsync(
+            node,
+            messageFlowObserver: observer,
+            messageFlowMode: level,
+            includeActorFactory: false,
+            includeInstanceSpotRoute: true,
+            relocationStore: new InMemoryRelocationStore()
+        );
+        var shutdownToken = runtime.ShutdownToken;
+        if (cancelledShutdown)
+        {
+            await runtime.StopAsync(CancellationToken.None);
+            Assert.True(shutdownToken.IsCancellationRequested);
+        }
+        var flowId = ZlinkStreamFlowId.Create();
+        using var header = ZLinkEnvelopeCodec.EncodeHeader(
+            ZLinkClientCallCodec.CreateEnvelope(
+                ZLinkMessageKind.Command,
+                "entry",
+                "ProbeRouteMessage"
+            ) with
+            {
+                FlowId = flowId,
+                FlowOrigin = ZLinkFlowOrigin.Inbound,
+            }
+        );
+        var operation = new InstanceSpotActivationOperation(
+            new InstanceSpotActivationTarget(
+                "entry",
+                node.RoutingId,
+                node.MeshStatus().LifecycleGeneration,
+                spotId,
+                "Tests.InstanceSpot",
+                "1"
+            ),
+            node.RoutingId,
+            node.MeshStatus().LifecycleGeneration,
+            string.Empty,
+            new MeshOperationId(1, 2),
+            false,
+            0,
+            checked(
+                (ulong)
+                    DateTimeOffset
+                        .UtcNow.AddSeconds(cancelledShutdown ? 1 : -1)
+                        .ToUnixTimeMilliseconds()
+            )
+        );
+        try
+        {
+            Exception error;
+            if (cancelledShutdown)
+            {
+                var cancelled = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+                    node.Target!.ActivateAsync(operation, null, [header.ToArray()], shutdownToken)
+                        .AsTask()
+                );
+                Assert.True(cancelled.CancellationToken.IsCancellationRequested);
+                error = cancelled;
+            }
+            else
+            {
+                var expired = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                    node.Target!.ActivateAsync(operation, null, [header.ToArray()], shutdownToken)
+                        .AsTask()
+                );
+                Assert.Equal(ZLinkFrameworkErrorKind.DeadlineExceeded, expired.Kind);
+                Assert.False(shutdownToken.IsCancellationRequested);
+                error = expired;
+            }
+            Assert.Equal(
+                cancelledShutdown ? "shutdown" : "timed_out",
+                ((ZLinkInstanceSpotActivationTarget)node.Target!)
+                    .MonitoringSnapshot("Tests.InstanceSpot")
+                    .LastActivationOutcome
+            );
+            var drops = observer.Events.Where(flow =>
+                flow.SpotId == spotId && flow.Phase == "dropped"
+            );
+            if (level == ZLinkDiagnosticsLevel.Off)
+                Assert.Empty(drops);
+            else
+            {
+                var dropped = Assert.Single(drops);
+                Assert.Equal("instance_spot", dropped.Surface);
+                Assert.Equal(cancelledShutdown ? "shutdown" : "activation_timeout", dropped.Reason);
+                Assert.Equal(flowId, dropped.FlowId);
+                Assert.Equal("inbound", dropped.FlowOrigin);
+                Assert.Equal(error.GetType().Name, dropped.ErrorType);
+                Assert.Equal(error.Message, dropped.ErrorMessage);
+            }
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private sealed class CapturingInstanceActivationNode : CapturingSpotNode, IZLinkBackendSpotNode
+    {
+        public IInstanceSpotActivationTarget? Target { get; private set; }
+
+        void IZLinkBackendSpotNode.SetInstanceSpotActivationTarget(
+            IInstanceSpotActivationTarget target
+        ) => Target = target;
     }
 
     private sealed class ColdSendProbe

@@ -400,15 +400,15 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
           if (record.kind == host::record_kind_t::completion)
               return;
           messaging::message_parts_t encoded (std::move (parts));
-          const auto header = messaging::envelope_codec_t{}.decode_header (encoded);
+          const auto header =
+            decode_actor_packet_header (encoded, stream_message_kind_t::request, true);
           ASSERT_TRUE (header);
           EXPECT_EQ (header.value ().correlation_id, "seal-wire-correlation");
           EXPECT_EQ (header.value ().flow_id, "0199a500-0000-7000-8000-000000000001");
           EXPECT_EQ (header.value ().flow_origin, flow_origin_t::inbound);
           auto response = header.value ();
           response.kind = messaging::message_kind_t::response;
-          auto reply = messaging::envelope_codec_t{}.encode_raw_body_parts (
-            response, zlink::message_t::from ("reply"));
+          auto reply = encode_actor_reply (response, zlink::message_t::from ("reply"));
           EXPECT_EQ (host::reply (record.reply_token, reply.items ()), zlink::submit_result_t::ok);
           received.set_value ();
       },
