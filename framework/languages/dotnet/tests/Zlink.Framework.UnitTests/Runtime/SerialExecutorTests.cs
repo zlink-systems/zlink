@@ -185,66 +185,75 @@ public sealed class SerialExecutorTests
         }
     }
 
-    [Theory]
-    [InlineData(1)]
-    [InlineData(2)]
-    public async Task SerialExecutionQueue_ReadinessPublishedDuringSelectionPreservesHeadPosition(
-        int publishOnRead
-    )
+    [Fact]
+    public async Task SerialExecutionQueue_ReadinessPublishedDuringSelectionPreservesHeadPosition()
     {
         await using var queue = CreateQueue(CancellationToken.None);
-        // Exercise each selector read directly, without depending on how many
-        // probes fit in a drain slice. This fixture has no running consumer.
-        const System.Reflection.BindingFlags flags =
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic;
-        var type = typeof(ZLinkSerialExecutionQueue);
-        var pending = (ZLinkSerialWorkQueue)
-            type.GetField("_applicationQueue", flags)!.GetValue(queue)!;
-        var select = type.GetMethod("TryDequeueNextUnderLock", flags)!;
-        var reads = 0;
-        var ready = false;
-        var head = new ZLinkSerialWorkItem(
-            static _ => ValueTask.CompletedTask,
-            ready: () =>
-            {
-                var snapshot = ready;
-                // Publish after rejecting the head in this selection. A later
-                // candidate must use the same head-readiness snapshot.
-                if (++reads == publishOnRead)
-                    ready = true;
-                return snapshot;
-            }
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var published = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var following = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
-        pending.Enqueue(head);
-        pending.Enqueue(following);
+        var order = new ConcurrentQueue<string>();
+        var ready = false;
+        Assert.True(
+            queue.TryPost(
+                async _ =>
+                {
+                    entered.TrySetResult();
+                    await release.Task.ConfigureAwait(false);
+                },
+                out var blocker
+            )
+        );
         try
         {
-            var arguments = new object?[] { null };
-            ZLinkSerialWorkItem? first = null;
-            for (var probe = 0; probe < publishOnRead && !ready; probe++)
-            {
-                if ((bool)select.Invoke(queue, arguments)!)
+            await entered.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var head = await queue.PostAsync(
+                _ =>
                 {
-                    first = (ZLinkSerialWorkItem)arguments[0]!;
-                    break;
+                    order.Enqueue("head");
+                    return ValueTask.CompletedTask;
+                },
+                0,
+                0,
+                false,
+                CancellationToken.None,
+                ready: () =>
+                {
+                    var snapshot = Volatile.Read(ref ready);
+                    // Publish after this read has rejected the head. Signal the
+                    // publisher outside the selector lock to notify the queue.
+                    if (!snapshot)
+                    {
+                        Volatile.Write(ref ready, true);
+                        published.TrySetResult();
+                    }
+                    return snapshot;
                 }
-                Assert.Same(head, pending.Head);
-            }
-            Assert.True(ready);
-            if (first is null)
-            {
-                Assert.True((bool)select.Invoke(queue, arguments)!);
-                first = (ZLinkSerialWorkItem)arguments[0]!;
-            }
-            Assert.Same(head, first);
-            Assert.True((bool)select.Invoke(queue, arguments)!);
-            Assert.Same(following, arguments[0]);
-            Assert.Null(pending.Head);
+            );
+            Assert.True(
+                queue.TryPost(
+                    _ =>
+                    {
+                        order.Enqueue("following");
+                        return ValueTask.CompletedTask;
+                    },
+                    out var following
+                )
+            );
+            release.TrySetResult();
+            await published.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            queue.NotifyReadiness();
+            await Task.WhenAll(blocker.Completion, head.Completion, following.Completion)
+                .WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.Equal(new[] { "head", "following" }, order.ToArray());
         }
         finally
         {
-            pending.Clear();
+            release.TrySetResult();
+            Volatile.Write(ref ready, true);
+            queue.NotifyReadiness();
         }
     }
 
