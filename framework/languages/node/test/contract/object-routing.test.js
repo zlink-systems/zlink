@@ -1,3 +1,4 @@
+const { prepareZLinkRequestReply, identityRequestReply } = require('../../packages/framework/dist/runtime/messaging/request-result');
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist');
@@ -328,7 +329,7 @@ test('cached Ready direct Spot route applies host admission before Spot Close se
     resolver: () => resolver,
     routed: {
       async sendToSpot() { throw new Error('send is not used.'); },
-      async requestToSpot(route) {
+      requestToSpot(route) { return prepareZLinkRequestReply((async () => {
         routedCalls++;
         const claim = admission.claim('play', 'direct Spot request');
         try {
@@ -345,7 +346,7 @@ test('cached Ready direct Spot route applies host admission before Spot Close se
           ownerLeaseGeneration: route.ownerLeaseGeneration,
           storeVersion: route.authorityStoreVersion
         });
-      }
+      })(), identityRequestReply); }
     },
     meshNames: () => ['play'], meshNode: () => undefined,
     completions: () => undefined, defaultRequestTimeoutMs: 1_000
@@ -784,9 +785,9 @@ test('a failed direct Spot operation does not refresh and resubmit to a fresh ow
       submitCount += 1;
       return { status: ZLinkSubmitStatus.TargetNotFound };
     },
-    async requestToSpot() {
+    requestToSpot() { return prepareZLinkRequestReply((async () => {
       throw new Error('unexpected request');
-    }
+    })(), identityRequestReply); }
   }, handle, new Notice());
 
   assert.equal(result.status, ZLinkSubmitStatus.TargetNotFound);
@@ -822,10 +823,10 @@ test('a direct Spot handle request preserves a route disconnect despite a draini
   await assert.rejects(
     () => internal.requestToSpotHandle({
       async sendToSpot() {},
-      async requestToSpot() {
+      requestToSpot() { return prepareZLinkRequestReply((async () => {
         requestCount += 1;
         throw routeError;
-      }
+      })(), identityRequestReply); }
     }, handle, new Lookup()),
     (error) => error === routeError && error.kind === framework.ZLinkFrameworkErrorKind.Unavailable
   );
@@ -856,12 +857,12 @@ test('Spot address requests preserve the original route failure after invalidati
     resolver: () => resolver,
     routed: {
       async sendToSpot() {},
-      async requestToSpot() {
+      requestToSpot() { return prepareZLinkRequestReply((async () => {
         throw internal.createInternalFrameworkException(
           ZLinkFrameworkInternalErrorKind.RouteNotConnected,
           'MeshNode request failed with result 109.'
         );
-      }
+      })(), identityRequestReply); }
     },
     meshNames: () => [],
     meshNode: () => undefined,
@@ -928,10 +929,10 @@ for (const terminalKind of ['SpotMoving', 'RequestTargetNotFound']) {
             async sendToSpot() {
               throw new Error('Unexpected send.');
             },
-            async requestToSpot() {
+            requestToSpot() { return prepareZLinkRequestReply((async () => {
               requests += 1;
               throw terminal;
-            }
+            })(), identityRequestReply); }
           },
           meshNames: () => ['play'],
           meshNode: () => ({
@@ -1012,9 +1013,9 @@ test('Missing Instance synchronous rejection is preserved without a second submi
       async sendToSpot() {
         throw new Error('Unexpected send.');
       },
-      async requestToSpot() {
+      requestToSpot() { return prepareZLinkRequestReply((async () => {
         throw new Error('Unexpected existing route request.');
-      }
+      })(), identityRequestReply); }
     },
     meshNames: () => ['play'],
     meshNode: () => ({
@@ -1092,10 +1093,10 @@ test('Missing Instance terminal NotFound is not resubmitted after completion', a
       async sendToSpot() {
         throw new Error('send is not used by this test.');
       },
-      async requestToSpot(route) {
+      requestToSpot(route) { return prepareZLinkRequestReply((async () => {
         assert.equal(route, freshRoute);
         return { route: route.targetNodeRid };
-      }
+      })(), identityRequestReply); }
     },
     meshNames: () => ['play'],
     meshNode: () => ({
@@ -1150,7 +1151,7 @@ test('Ready Instance owner loss does not enter cold activation', async () => {
     }),
     routed: {
       async sendToSpot() { throw new Error('Ready route must not be used.'); },
-      async requestToSpot() { throw new Error('Ready route must not be used.'); }
+      requestToSpot() { return prepareZLinkRequestReply((async () => { throw new Error('Ready route must not be used.'); })(), identityRequestReply); }
     },
     meshNames: () => ['play'],
     meshNode: () => ({
@@ -1247,9 +1248,9 @@ test('Missing Instance send directly awaits binding admission and submits once',
       async sendToSpot() {
         throw new Error('Ready route must not be used.');
       },
-      async requestToSpot() {
+      requestToSpot() { return prepareZLinkRequestReply((async () => {
         throw new Error('Ready route must not be used.');
-      }
+      })(), identityRequestReply); }
     },
     meshNames: () => ['play'],
     meshNode: () => node,
