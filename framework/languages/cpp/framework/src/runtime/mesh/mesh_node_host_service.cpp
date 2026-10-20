@@ -73,8 +73,14 @@ decode_mesh_record_header (const host::receive_record_t &record,
     }
     messaging::message_parts_t encoded (std::move (parts));
     std::optional<messaging::envelope_header_t> rejected_header;
+    const bool actor = record.kind == kind_t::actor_send || record.kind == kind_t::actor_request;
     auto decoded =
-      messaging::envelope_codec_t{}.decode_header (encoded, capture_flow, &rejected_header);
+      actor ? detail::decode_actor_packet_header (encoded,
+                                                  record.kind == kind_t::actor_send
+                                                    ? detail::stream_message_kind_t::send
+                                                    : detail::stream_message_kind_t::request,
+                                                  capture_flow)
+            : messaging::envelope_codec_t{}.decode_header (encoded, capture_flow, &rejected_header);
     parts = std::move (encoded).take_items ();
     if (decoded)
         return header_result_t::success (std::move (decoded.value ()));
@@ -84,7 +90,13 @@ decode_mesh_record_header (const host::receive_record_t &record,
       || record.kind == kind_t::spot_request || record.kind == kind_t::actor_request;
     const bool can_correlate = rejected_header && rejected_header->can_correlate_reply ();
     auto submitted = zlink::submit_result_t::terminated;
-    if (request && can_correlate) {
+    if (record.kind == kind_t::actor_request) {
+        detail::channel_reply_writer_t replies;
+        auto reply = detail::encode_actor_reply (
+          replies.create_error_header (detail::actor_message_channel_name, {}, *decoded.error ()),
+          zlink::message_t{});
+        submitted = host::reply (record.reply_token, reply.items ());
+    } else if (request && can_correlate) {
         detail::channel_reply_writer_t replies;
         auto reply = replies.reply_raw_envelope (
           replies.create_error_header (rejected_header->channel_name, *rejected_header,
@@ -642,6 +654,15 @@ void reject_application_request (const host::receive_record_t &record,
                          || record.kind == host::record_kind_t::actor_request;
     if (!request)
         return;
+    if (record.kind == host::record_kind_t::actor_request) {
+        detail::channel_reply_writer_t replies;
+        auto reply = detail::encode_actor_reply (
+          replies.create_error_header (detail::actor_message_channel_name, {},
+                                       framework_exception_t (error_kind, std::move (message))),
+          zlink::message_t{});
+        (void) host::reply (record.reply_token, reply.items ());
+        return;
+    }
     messaging::message_parts_t encoded (std::move (parts));
     messaging::envelope_codec_t codec;
     /* Error-reply construction needs channel/correlation only; a malformed

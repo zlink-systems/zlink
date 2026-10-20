@@ -26,6 +26,10 @@ inline constexpr char heartbeat_ping_name[] = "$zlink.heartbeat.ping";
 inline constexpr char heartbeat_pong_name[] = "$zlink.heartbeat.pong";
 
 
+const char *stream_error_code (framework_error_kind_t kind);
+zlink::message_t stream_error_payload (std::string code, std::string message);
+zlink::message_t stream_error_payload (const result_t<void> &error);
+
 std::string_view stream_content_type (stream_codec_t codec) noexcept;
 stream_codec_t stream_codec_from_content_type (std::string_view content_type) noexcept;
 
@@ -83,6 +87,12 @@ class stream_runtime_t
 
     result_t<std::vector<std::uint8_t>> encode_header (const stream_header_t &header) const;
     result_t<stream_header_t> decode_header (const std::vector<std::uint8_t> &bytes) const;
+    static result_t<stream_header_t> decode_header (const std::vector<std::uint8_t> &bytes,
+                                                    bool capture_flow);
+    std::pair<stream_header_t, zlink::message_t>
+    decode_frame (const std::vector<zlink::message_t> &parts) const;
+    static std::pair<stream_header_t, zlink::message_t>
+    decode_frame (const std::vector<zlink::message_t> &parts, bool capture_flow);
     static result_t<void> validate_frame_representation (std::size_t header_size,
                                                          std::uint64_t payload_size);
     result_t<std::vector<std::uint8_t>> encode_frame (const stream_header_t &header,
@@ -102,7 +112,8 @@ class stream_runtime_t
     send_actor_bound (stream_t &stream, std::uint16_t actor_slot, std::string_view actor_id) const;
     void send_actor_unbound (stream_t &stream, std::uint16_t actor_slot) const;
 
-    result_t<void> validate_header (const stream_header_t &header) const;
+    static void propagate_flow (stream_header_t &header);
+    static result_t<void> validate_header (const stream_header_t &header);
 
     stream_t open_session (std::string stream_name) const;
     void set_session_identity (stream_t &stream,

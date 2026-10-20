@@ -2,6 +2,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.LocationProvider;
 using Zlink.Framework.Runtime.Actors;
+using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Diagnostics;
 using Zlink.Framework.Runtime.Dispatch;
 using Zlink.Framework.Runtime.Locations;
@@ -291,6 +292,150 @@ public sealed partial class EntrySpotActorDispatchTests
             );
             Assert.IsType<ZLinkActorJoinResult.Accepted>(resolved);
             Assert.Null(node.ActorJoinSubmittedParts);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task SameNodeJoin_ResolvesOwnerBeforeSelectingTheLocalPath(
+        bool publishDuringResolution
+    )
+    {
+        const string spotId = "join-resolved-local";
+        ResolvingJoinStore? store = null;
+        var transportRequests = 0;
+        var node = new CapturingSpotNode
+        {
+            SpotRequestHandler = _ =>
+            {
+                transportRequests++;
+                throw new Xunit.Sdk.XunitException("Local Join submitted a transport request.");
+            },
+        };
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(
+            node,
+            includeJoinTarget: true,
+            locationStoreWrapper: inner => store = new ResolvingJoinStore(inner)
+        );
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            if (publishDuringResolution)
+            {
+                Assert.DoesNotContain(
+                    runtime.GetSpotNodeRuntime("entry").Spots,
+                    activation => activation.SpotId == spotId
+                );
+                store!.BeforeReadKey = ZLinkProviderLocationRepository.AuthorityMetaKey(
+                    ZLinkUserSpotAuthorityPayloadCodec.AuthorityKey(spotId)
+                );
+                store.BeforeRead = async () =>
+                {
+                    await runtime.GetOrCreateAsync<JoinTargetSpot>(spotId);
+                };
+            }
+            else
+                await runtime.GetOrCreateAsync<JoinTargetSpot>(spotId);
+
+            var result = await runtime.JoinActorAsync(
+                spotId,
+                actor,
+                ZLinkMessage.Empty,
+                CancellationToken.None
+            );
+
+            Assert.IsType<ZLinkActorJoinResult.Accepted>(result);
+            Assert.Equal(spotId, actor.Context.SpotId);
+            Assert.Equal(publishDuringResolution ? 1 : 0, store!.ResolutionCount);
+            Assert.Equal(0, transportRequests);
+            Assert.Equal(0, node.NodeRequestAttempts);
+            Assert.Null(node.ActorJoinSubmittedParts);
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
+
+    private sealed class ResolvingJoinStore(IZLinkLocationStore inner) : IZLinkLocationStore
+    {
+        public ZLinkStoreKey? BeforeReadKey { get; set; }
+        public Func<ValueTask>? BeforeRead { get; set; }
+        public int ResolutionCount { get; private set; }
+
+        public async ValueTask<ZLinkStoreReadResult> ReadAsync(
+            ZLinkStoreKey key,
+            CancellationToken cancellationToken = default
+        )
+        {
+            if (key == BeforeReadKey && BeforeRead is { } publish)
+            {
+                BeforeRead = null;
+                ResolutionCount++;
+                await publish();
+            }
+            return await inner.ReadAsync(key, cancellationToken);
+        }
+
+        public ValueTask<ZLinkStoreWriteResult> WriteAsync(
+            ZLinkStoreWriteRequest request,
+            CancellationToken cancellationToken = default
+        ) => inner.WriteAsync(request, cancellationToken);
+
+        public ValueTask<ZLinkStoreScanResult> ScanAsync(
+            ZLinkStoreScanRequest request,
+            CancellationToken cancellationToken = default
+        ) => inner.ScanAsync(request, cancellationToken);
+    }
+
+    [Fact]
+    public async Task ActorJoin_ResolvedRemoteOwnerUsesCanonicalAdmission()
+    {
+        CanonicalJoinSpotNode? node = null;
+        var admissions = 0;
+        node = new CanonicalJoinSpotNode
+        {
+            CanonicalActorJoinHandler = (callback, _) =>
+            {
+                admissions++;
+                callback(
+                    new ZLinkBackendActorJoinResult(
+                        RequestResult.Ok,
+                        1,
+                        node!.CanonicalRequest.Actor with
+                        {
+                            NodeRid = node.CanonicalRequest.TargetNodeRid,
+                        },
+                        "spot-ready",
+                        0,
+                        0,
+                        JoinedSpotGeneration: node.CanonicalRequest.TargetSpotGeneration
+                    ),
+                    Array.Empty<Message>()
+                );
+            },
+        };
+        var (runtime, actorRef) = await CreateStartedRuntimeAsync(node, includeSpotRoute: true);
+        try
+        {
+            var actor = RegisterProbeActor(runtime, actorRef);
+            var result = await runtime.JoinActorAsync(
+                "spot-ready",
+                actor,
+                ZLinkMessage.Empty,
+                CancellationToken.None
+            );
+
+            Assert.IsType<ZLinkActorJoinResult.Rejected>(result);
+            Assert.Equal(1, admissions);
+            Assert.Equal(RoutingId.From("spot-node"), node.CanonicalRequest.TargetNodeRid);
+            Assert.Empty(node.SpotRequests);
+            Assert.Equal(0, node.NodeRequestAttempts);
         }
         finally
         {
