@@ -41,7 +41,10 @@ export interface ZLinkActorPacketDescriptor {
 }
 
 export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRegistry {
-  private readonly packets = new Map<string, ZLinkActorPacketDescriptor>();
+  private readonly packets = new Map<
+    ZLinkActorPacketKind,
+    Map<string, Map<string, ZLinkActorPacketDescriptor>>
+  >();
 
   addHandler<THandler>(handlerType: Type<THandler>, packetName?: string): this {
     const metadata = readZLinkDecoratorMetadata(handlerType).find(
@@ -67,8 +70,10 @@ export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRe
   }
 
   addPacket(descriptor: ZLinkActorPacketDescriptor): this {
-    const key = packetKey(descriptor.kind, descriptor.actorType, descriptor.packetName);
-    if (this.packets.has(key)) {
+    const actorTypeName = descriptor.actorType.name;
+    let packets = this.packets.get(descriptor.kind);
+    let actors = packets?.get(descriptor.packetName);
+    if (actors?.has(actorTypeName)) {
       throw createInternalFrameworkException(
         ZLinkFrameworkInternalErrorKind.InvalidOperation,
         `Actor packet '${descriptor.packetName}' for '${descriptor.actorType.name}' is already registered.`
@@ -80,7 +85,15 @@ export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRe
           (descriptor.kind === ZLinkActorPacketKind.Send ? 'spotActorSend' : 'spotActorRequest') &&
         entry.packetName === descriptor.packetName
     );
-    this.packets.set(key, {
+    if (packets === undefined) {
+      packets = new Map();
+      this.packets.set(descriptor.kind, packets);
+    }
+    if (actors === undefined) {
+      actors = new Map();
+      packets.set(descriptor.packetName, actors);
+    }
+    actors.set(actorTypeName, {
       ...descriptor,
       methodName: descriptor.methodName ?? metadata?.methodName
     });
@@ -92,24 +105,20 @@ export class ZLinkSpotActorHandlerRegistryRuntime implements ZLinkActorHandlerRe
     actor: ZLinkActor,
     packetName: string
   ): ZLinkActorPacketDescriptor | undefined {
+    const actors = this.packets.get(kind)?.get(packetName);
+    if (actors === undefined) return undefined;
     const actorType = actor.constructor as Type<ZLinkActor>;
-    const exact = this.packets.get(packetKey(kind, actorType, packetName));
+    const exact = actors.get(actorType.name);
     if (exact !== undefined) {
       return exact;
     }
-    const wildcard = this.packets.get(
-      packetKey(kind, Object as unknown as Type<ZLinkActor>, packetName)
-    );
+    const wildcard = actors.get(Object.name);
     if (wildcard !== undefined) {
       return wildcard;
     }
 
-    for (const descriptor of this.packets.values()) {
-      if (
-        descriptor.kind === kind &&
-        descriptor.packetName === packetName &&
-        actor instanceof descriptor.actorType
-      ) {
+    for (const descriptor of actors.values()) {
+      if (actor instanceof descriptor.actorType) {
         return descriptor;
       }
     }
@@ -402,14 +411,6 @@ export class ZLinkSpotActorDispatcher {
       correlationId: context.correlationId
     };
   }
-}
-
-function packetKey(
-  kind: ZLinkActorPacketKind,
-  actorType: Type<ZLinkActor>,
-  packetName: string
-): string {
-  return `${kind}:${actorType.name}:${packetName}`;
 }
 
 function actorDispatchHandlerNotFound(message: string): ZLinkFrameworkException {
