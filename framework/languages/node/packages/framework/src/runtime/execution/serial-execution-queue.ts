@@ -461,10 +461,15 @@ export class ZLinkSerialExecutionQueue {
 
   private selectNext(): SerialWorkRecord<unknown> | undefined {
     const lifecycleOwner = this.activeLifecycle?.context as ZLinkSerialLifecycleContext | undefined;
-    const applicationRecord =
-      lifecycleOwner === undefined
-        ? this.application.records[0]
-        : this.application.records.find((record) => lifecycleOwner.canExecuteApplication(record));
+    let applicationRecord: SerialWorkRecord<unknown> | undefined;
+    if (lifecycleOwner === undefined) {
+      applicationRecord = this.application.records[0];
+    } else {
+      const owner = lifecycleOwner;
+      applicationRecord = this.application.records.find((record) =>
+        owner.canExecuteApplication(record)
+      );
+    }
     const applicationReady = applicationRecord !== undefined;
     const lifecycleReady = this.activeLifecycle === undefined && this.lifecycle.records.length > 0;
     if (!applicationReady && !lifecycleReady) return undefined;

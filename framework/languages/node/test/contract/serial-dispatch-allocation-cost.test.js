@@ -593,3 +593,25 @@ test('channel invoker preserves record getter and handler flow scopes', async ()
     assert.equal(currentFlowContext(), undefined);
   }
 });
+
+test('serial lifecycle selection preserves predicate receiver, one argument and FIFO search order', () => {
+  const first = { lane: 'application' };
+  const second = { lane: 'application' };
+  const visited = [];
+  const owner = {
+    canExecuteApplication(...args) {
+      assert.equal(this, owner);
+      assert.equal(args.length, 1);
+      visited.push(args[0]);
+      return args[0] === second;
+    }
+  };
+  const scheduler = Object.create(ZLinkSerialExecutionQueue.prototype);
+  scheduler.application = { records: [first, second] };
+  scheduler.lifecycle = { records: [] };
+  assert.equal(scheduler.selectNext(), first);
+  assert.deepEqual(visited, []);
+  scheduler.activeLifecycle = { context: owner };
+  assert.equal(scheduler.selectNext(), second);
+  assert.deepEqual(visited, [first, second]);
+});
