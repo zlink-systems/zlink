@@ -59,9 +59,10 @@ TEST (FrameworkRelocationSealContract, public_actor_push_submits_while_session_r
     constexpr std::uint64_t actor_node_generation = 1;
     constexpr std::uint64_t session_owner_lease_generation = 17;
 
-    std::atomic_int deliveries{0};
-    std::promise<void> delivered;
-    auto delivery = delivered.get_future ();
+    // The send callback is held by `session_owner`; it owns its state.
+    const auto deliveries = std::make_shared<std::atomic_int> (0);
+    const auto delivered = std::make_shared<std::promise<void>> ();
+    auto delivery = delivered->get_future ();
     auto session_owner = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{
         .descriptor = test_descriptor ("seal-session-owner"),
@@ -88,12 +89,12 @@ TEST (FrameworkRelocationSealContract, public_actor_push_submits_while_session_r
             {bind.binding.generation, bind.actor.authority_owner_generation});
           return host::bound_session_bind_operation_result_t{};
       };
-    operations.send = [&deliveries, &delivered] (const protocol::bound_session_send_t &,
-                                                 std::vector<zlink::message_t> parts) {
+    operations.send = [deliveries, delivered] (const protocol::bound_session_send_t &,
+                                               std::vector<zlink::message_t> parts) {
         if (parts.size () != 1)
             return stateful::stateful_error_t::invalid;
-        deliveries.fetch_add (1, std::memory_order_release);
-        delivered.set_value ();
+        deliveries->fetch_add (1, std::memory_order_release);
+        delivered->set_value ();
         return stateful::stateful_error_t::none;
     };
     operations.replaced = [] (const protocol::bound_session_replaced_t &) {};
@@ -169,7 +170,7 @@ TEST (FrameworkRelocationSealContract, public_actor_push_submits_while_session_r
                              .result ();
     ASSERT_TRUE (submitted);
     EXPECT_EQ (delivery.wait_for (std::chrono::seconds (2)), std::future_status::ready);
-    EXPECT_EQ (deliveries.load (std::memory_order_acquire), 1);
+    EXPECT_EQ (deliveries->load (std::memory_order_acquire), 1);
 }
 
 TEST (FrameworkRelocationSealContract, failed_publication_keeps_owner_binding_and_projections)
@@ -283,30 +284,37 @@ TEST (FrameworkRelocationSealContract, relay_drain_keeps_seal_until_native_submi
       binding.owner_lease_generation);
     ASSERT_EQ (seal.error, stateful::stateful_error_t::none);
     auto native_submission = std::make_shared<task_completion_source_t<void>> ();
-    std::promise<void> first_started;
-    auto first = first_started.get_future ();
-    std::promise<void> last_submitted;
-    auto last = last_submitted.get_future ();
-    std::mutex mutex;
-    std::vector<std::uint64_t> order;
+    // The callbacks are held by `owner`; they own their state.
+    struct fifo_state_t
+    {
+        std::promise<void> first_started;
+        std::promise<void> last_submitted;
+        std::mutex mutex;
+        std::vector<std::uint64_t> order;
+    };
+    const auto fifo = std::make_shared<fifo_state_t> ();
+    auto first = fifo->first_started.get_future ();
+    auto last = fifo->last_submitted.get_future ();
+    auto &mutex = fifo->mutex;
+    auto &order = fifo->order;
     const auto retain = [&] {
-        return [owner, native_submission, &first_started, &last_submitted, &mutex,
-                &order] (std::optional<stateful::stream_dispatch_t> dispatch, message_flow_reason_t,
-                         std::optional<result_t<void>>) -> task_t<void> {
+        return [owner, native_submission,
+                fifo] (std::optional<stateful::stream_dispatch_t> dispatch, message_flow_reason_t,
+                       std::optional<result_t<void>>) -> task_t<void> {
             if (!dispatch)
                 co_return;
             {
-                const std::lock_guard lock (mutex);
-                order.push_back (dispatch->inbound_sequence);
+                const std::lock_guard lock (fifo->mutex);
+                fifo->order.push_back (dispatch->inbound_sequence);
             }
             if (dispatch->inbound_sequence == 1) {
-                first_started.set_value ();
+                fifo->first_started.set_value ();
                 co_await native_submission->task ();
             }
             EXPECT_EQ (owner->sessions ().complete_inbound (*dispatch),
                        stateful::stateful_error_t::none);
             if (dispatch->inbound_sequence == 3)
-                last_submitted.set_value ();
+                fifo->last_submitted.set_value ();
             co_return;
         };
     };
@@ -349,21 +357,22 @@ TEST (FrameworkRelocationSealContract, terminal_hook_failure_does_not_veto_commi
           connection.connection_id, binding.binding_generation, actor.key, actor.object_generation,
           binding.owner_lease_generation);
         ASSERT_EQ (seal.error, stateful::stateful_error_t::none);
-        std::promise<void> delivered;
-        auto delivery = delivered.get_future ();
-        std::promise<void> later_delivered;
-        auto later_delivery = later_delivered.get_future ();
+        // The callbacks are held by `owner`; they own the promises.
+        const auto delivered = std::make_shared<std::promise<void>> ();
+        auto delivery = delivered->get_future ();
+        const auto later_delivered = std::make_shared<std::promise<void>> ();
+        auto later_delivery = later_delivered->get_future ();
         const auto retain = [&] {
-            return [owner, &delivered, &later_delivered] (
+            return [owner, delivered, later_delivered] (
                      std::optional<stateful::stream_dispatch_t> dispatch, message_flow_reason_t,
                      std::optional<result_t<void>>) -> task_t<void> {
                 if (dispatch) {
                     EXPECT_EQ (owner->sessions ().complete_inbound (*dispatch),
                                stateful::stateful_error_t::none);
                     if (dispatch->inbound_sequence == 1)
-                        delivered.set_value ();
+                        delivered->set_value ();
                     else
-                        later_delivered.set_value ();
+                        later_delivered->set_value ();
                 }
                 co_return;
             };
@@ -433,27 +442,28 @@ TEST (FrameworkRelocationSealContract, drain_failure_only_settles_failed_actor_w
       owner->sessions ().seal_remote_route (connection.connection_id, other.binding_generation,
                                             other_actor.key, 7, other.owner_lease_generation);
     auto failure = std::make_shared<task_completion_source_t<void>> ();
-    std::promise<message_flow_reason_t> settled;
-    auto settlement = settled.get_future ();
-    std::promise<bool> other_delivered;
-    auto other_delivery = other_delivered.get_future ();
+    // The callbacks are held by `owner`; they own the promises.
+    const auto settled = std::make_shared<std::promise<message_flow_reason_t>> ();
+    auto settlement = settled->get_future ();
+    const auto other_delivered = std::make_shared<std::promise<bool>> ();
+    auto other_delivery = other_delivered->get_future ();
     const auto retain = [&] {
-        return [owner, failure, &settled] (std::optional<stateful::stream_dispatch_t> dispatch,
-                                           message_flow_reason_t reason,
-                                           auto... errors) -> task_t<void> {
-            if constexpr (sizeof...(errors) != 0) {
-                if (std::get<0> (std::tuple{errors...}))
-                    co_return;
-            }
-            if (!dispatch) {
-                settled.set_value (reason);
-                co_return;
-            }
-            // Production relay's ingress guard completes this same active record.
-            EXPECT_EQ (owner->sessions ().complete_inbound (*dispatch),
-                       stateful::stateful_error_t::none);
-            co_await failure->task ();
-        };
+        return
+          [owner, failure, settled] (std::optional<stateful::stream_dispatch_t> dispatch,
+                                     message_flow_reason_t reason, auto... errors) -> task_t<void> {
+              if constexpr (sizeof...(errors) != 0) {
+                  if (std::get<0> (std::tuple{errors...}))
+                      co_return;
+              }
+              if (!dispatch) {
+                  settled->set_value (reason);
+                  co_return;
+              }
+              // Production relay's ingress guard completes this same active record.
+              EXPECT_EQ (owner->sessions ().complete_inbound (*dispatch),
+                         stateful::stateful_error_t::none);
+              co_await failure->task ();
+          };
     };
     for (std::uint64_t sequence : {1u, 2u})
         ASSERT_EQ (owner->sessions ()
@@ -465,12 +475,12 @@ TEST (FrameworkRelocationSealContract, drain_failure_only_settles_failed_actor_w
                  .admit_inbound (connection.connection_id, other.binding_generation,
                                  other_actor.key, 1, std::chrono::milliseconds{0},
                                  [&] {
-                                     return [owner, &other_delivered] (
+                                     return [owner, other_delivered] (
                                               std::optional<stateful::stream_dispatch_t> dispatch,
                                               message_flow_reason_t, auto...) -> task_t<void> {
                                          if (dispatch)
                                              (void) owner->sessions ().complete_inbound (*dispatch);
-                                         other_delivered.set_value (dispatch.has_value ());
+                                         other_delivered->set_value (dispatch.has_value ());
                                          co_return;
                                      };
                                  })
@@ -494,16 +504,28 @@ TEST (FrameworkRelocationSealContract, drain_failure_only_settles_failed_actor_w
 TEST (FrameworkRelocationSealContract,
       settlement_callback_failure_reports_once_without_second_settlement)
 {
-    dispatch_options_t options;
-    options.message_flow (message_flow_log_mode_t::normal);
-    std::vector<message_dispatch_error_event_t> errors;
-    std::promise<void> reported;
-    auto report = reported.get_future ();
-    dispatch_options_access_t::set_dispatch_error_observer_for_tests (options,
-                                                                      [&] (const auto &event) {
-                                                                          errors.push_back (event);
-                                                                          reported.set_value ();
-                                                                      });
+    // The settlement callback is held by `owner` and the error observer by `state->options`; each
+    // owns its state. The observer state is separate so state and options do not form a cycle.
+    struct report_state_t
+    {
+        std::vector<message_dispatch_error_event_t> errors;
+        std::promise<void> reported;
+    };
+    struct settlement_state_t
+    {
+        dispatch_options_t options;
+        int settlements = 0;
+    };
+    const auto reports = std::make_shared<report_state_t> ();
+    const auto state = std::make_shared<settlement_state_t> ();
+    state->options.message_flow (message_flow_log_mode_t::normal);
+    auto &errors = reports->errors;
+    auto report = reports->reported.get_future ();
+    dispatch_options_access_t::set_dispatch_error_observer_for_tests (
+      state->options, [reports] (const auto &event) {
+          reports->errors.push_back (event);
+          reports->reported.set_value ();
+      });
     auto owner = std::make_shared<host::public_host_runtime_t> (
       host::host_options_t{mesh::raw_mesh_node_options_t{
         .descriptor = test_descriptor ("settlement-owner"),
@@ -518,15 +540,14 @@ TEST (FrameworkRelocationSealContract,
       owner->sessions ().seal_remote_route (connection.connection_id, binding.binding_generation,
                                             actor.key, 7, binding.owner_lease_generation);
     ASSERT_EQ (seal.error, stateful::stateful_error_t::none);
-    int settlements = 0;
     auto completion = std::make_shared<task_completion_source_t<void>> ();
     const auto retain = [&] {
-        return [owner, completion, &settlements,
-                &options] (std::optional<stateful::stream_dispatch_t> dispatch,
-                           message_flow_reason_t reason, auto... failures) -> task_t<void> {
+        return [owner, completion, state] (std::optional<stateful::stream_dispatch_t> dispatch,
+                                           message_flow_reason_t reason,
+                                           auto... failures) -> task_t<void> {
             if constexpr (sizeof...(failures) != 0) {
                 if (auto failed = std::get<0> (std::tuple{failures...})) {
-                    dispatch_error_reporter_t (options).report_lazy ([&] {
+                    dispatch_error_reporter_t (state->options).report_lazy ([&] {
                         message_dispatch_error_event_t event{};
                         event.surface = dispatch_error_surface_t::stream_session;
                         event.reason = dispatch_reason_from_error (failed->error ());
@@ -538,7 +559,7 @@ TEST (FrameworkRelocationSealContract,
             }
             EXPECT_FALSE (dispatch);
             EXPECT_EQ (reason, message_flow_reason_t::target_closed);
-            ++settlements;
+            ++state->settlements;
             co_await completion->task ();
         };
     };
@@ -555,7 +576,7 @@ TEST (FrameworkRelocationSealContract,
     }
     catch (const framework_exception_t &) {
     }
-    EXPECT_EQ (settlements, 1);
+    EXPECT_EQ (state->settlements, 1);
     ASSERT_EQ (report.wait_for (std::chrono::seconds{2}), std::future_status::ready);
     ASSERT_EQ (errors.size (), 1u);
     EXPECT_EQ (errors.front ().error_message, "settlement delivery failed");
@@ -578,27 +599,29 @@ TEST (FrameworkRelocationSealContract, old_drain_failure_preserves_new_binding_s
       first_connection.connection_id, first_binding.binding_generation, actor.key, 7,
       first_binding.owner_lease_generation);
     auto failure = std::make_shared<task_completion_source_t<void>> ();
-    std::promise<void> started, reported;
-    auto start = started.get_future ();
-    auto report = reported.get_future ();
+    // The callbacks are held by `owner`; they own the promises.
+    const auto started = std::make_shared<std::promise<void>> ();
+    const auto reported = std::make_shared<std::promise<void>> ();
+    auto start = started->get_future ();
+    auto report = reported->get_future ();
     ASSERT_EQ (owner->sessions ()
                  .admit_inbound (first_connection.connection_id, first_binding.binding_generation,
                                  actor.key, 1, std::chrono::milliseconds{0},
                                  [&] {
                                      return
-                                       [owner, failure, &started, &reported] (
+                                       [owner, failure, started, reported] (
                                          std::optional<stateful::stream_dispatch_t> dispatch,
                                          message_flow_reason_t,
                                          std::optional<result_t<void>> failed) -> task_t<void> {
                                            if (failed) {
-                                               reported.set_value ();
+                                               reported->set_value ();
                                                co_return;
                                            }
                                            EXPECT_TRUE (dispatch);
                                            if (!dispatch)
                                                co_return;
                                            (void) owner->sessions ().complete_inbound (*dispatch);
-                                           started.set_value ();
+                                           started->set_value ();
                                            co_await failure->task ();
                                        };
                                  })
@@ -615,19 +638,19 @@ TEST (FrameworkRelocationSealContract, old_drain_failure_preserves_new_binding_s
       next_connection.connection_id, next_binding.binding_generation, actor.key, 7,
       next_binding.owner_lease_generation);
     ASSERT_EQ (next_seal.error, stateful::stateful_error_t::none);
-    std::promise<bool> delivered;
-    auto delivery = delivered.get_future ();
+    const auto delivered = std::make_shared<std::promise<bool>> ();
+    auto delivery = delivered->get_future ();
     ASSERT_EQ (owner->sessions ()
                  .admit_inbound (next_connection.connection_id, next_binding.binding_generation,
                                  actor.key, 1, std::chrono::milliseconds{0},
                                  [&] {
-                                     return [owner, &delivered] (
+                                     return [owner, delivered] (
                                               std::optional<stateful::stream_dispatch_t> dispatch,
                                               message_flow_reason_t,
                                               std::optional<result_t<void>>) -> task_t<void> {
                                          if (dispatch)
                                              (void) owner->sessions ().complete_inbound (*dispatch);
-                                         delivered.set_value (dispatch.has_value ());
+                                         delivered->set_value (dispatch.has_value ());
                                          co_return;
                                      };
                                  })
