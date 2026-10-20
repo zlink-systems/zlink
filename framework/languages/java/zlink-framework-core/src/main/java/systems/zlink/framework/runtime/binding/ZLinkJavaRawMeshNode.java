@@ -371,7 +371,7 @@ final class ZLinkJavaRawMeshNode
                                                 () ->
                                                         new IllegalStateException(
                                                                 "local MeshNode authority"
-                                                                    + " descriptor is not live")));
+                                                                        + " descriptor is not live")));
     }
 
     ZLinkInternalMeshNode.PeerAuthorityFence localAuthorityFence() {
@@ -3282,7 +3282,7 @@ final class ZLinkJavaRawMeshNode
                         });
     }
 
-    CompletionStage<Void> bindRemoteStreamSession(
+    CompletionStage<ZLinkServiceM6BWireCodec.BoundSessionBindReply> bindRemoteStreamSession(
             RoutingId sessionRid,
             ZLinkBackendActorRef actor,
             long authorityOwnerGeneration,
@@ -3323,14 +3323,15 @@ final class ZLinkJavaRawMeshNode
                                                     bindingGeneration)));
                         },
                         timeout)
-                .thenAccept(
+                .thenApply(
                         replies -> {
                             if (replies.size() != 1) {
                                 throw new IllegalArgumentException(
                                         "bound session binding reply frame count");
                             }
-                            ZLinkServiceM6AWireCodec.Reply reply =
-                                    wire.decodeReplyHeader(replies.getFirst());
+                            ZLinkServiceM6BWireCodec.BoundSessionBindReply reply =
+                                    statefulWire.decodeBoundSessionBindReply(
+                                            replies.getFirst(), active);
                             if (reply.correlation() != correlation) {
                                 throw new IllegalArgumentException(
                                         "bound session binding reply correlation");
@@ -3344,6 +3345,7 @@ final class ZLinkJavaRawMeshNode
                                         reply.failureCode(),
                                         java.util.Map.of());
                             }
+                            return reply;
                         });
     }
 
@@ -7070,21 +7072,12 @@ final class ZLinkJavaRawMeshNode
     private void replyBoundSessionBind(
             ZLinkJavaRawServicePort.Inbound inbound,
             ZLinkServiceM6BWireCodec.BoundSessionBind binding,
-            boolean accepted) {
-        if (accepted) {
-            port.reply(
-                    requireStarted(),
-                    inbound.source(),
-                    inbound.requestSequence(),
-                    List.of(wire.encodeReplyHeader(binding.correlation(), 0, 0)));
-            return;
-        }
-        replyBoundSessionBindFailure(
-                inbound,
-                binding,
-                ZLinkRequestFailureMapping.outgoing(
-                        ZLinkFrameworkErrorKind.NOT_FOUND,
-                        (int) ServiceWireConstants.FRAMEWORK_ERROR_ACTOR_ROUTE_NOT_FOUND));
+            ZLinkServiceM6BWireCodec.BoundSessionBindReply reply) {
+        port.reply(
+                requireStarted(),
+                inbound.source(),
+                inbound.requestSequence(),
+                List.of(statefulWire.encodeBoundSessionBindReply(reply, binding.active())));
     }
 
     private void replyBoundSessionBindFailure(
