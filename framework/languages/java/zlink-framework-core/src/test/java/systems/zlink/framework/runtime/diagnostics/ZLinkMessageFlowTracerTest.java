@@ -78,6 +78,21 @@ class ZLinkMessageFlowTracerTest {
     }
 
     @Test
+    void offDoesNotInspectActivationFailureDetails() {
+        var tracer = tracer(options(ZLinkMessageFlowLogMode.OFF));
+        var failure =
+                new RuntimeException() {
+                    @Override
+                    public String getMessage() {
+                        throw new AssertionError("Off must not format activation failures");
+                    }
+                };
+        tracer.traceInstanceActivationDrop(
+                "room", null, failure, ZLinkDispatchErrorReason.ACTIVATION_REJECTED, null);
+        assertEquals(0, tracer.tracedCount());
+    }
+
+    @Test
     void flowCaptureIsOnOnlyAtNormalAndDetailed() {
         //  04-flow-correlation.ko.md:91 (§4): message-flow tracing is on at Normal and
         //  Detailed; Off and Errors skip flow creation/installation/propagation.

@@ -59,6 +59,59 @@ import java.util.regex.Pattern;
 import java.util.stream.IntStream;
 
 final class ZLinkProviderAuthorityRepositoryTest {
+    @Test
+    void expiredReadyCommitKeepsDeadlineMeaningAndDoesNotPublish() throws Exception {
+        var fixture = reincarnationFixture("expired-ready");
+        var failure =
+                assertThrows(
+                        RuntimeException.class,
+                        () ->
+                                fixture.repository()
+                                        .commit(
+                                                fixture.reservation(),
+                                                new byte[] {2},
+                                                System.currentTimeMillis() - 1)
+                                        .toCompletableFuture()
+                                        .join());
+        while (failure instanceof java.util.concurrent.CompletionException)
+            failure = (RuntimeException) failure.getCause();
+        assertEquals(
+                systems.zlink.framework.errors.ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED,
+                assertInstanceOf(
+                                systems.zlink.framework.errors.ZLinkFrameworkException.class,
+                                failure)
+                        .kind());
+        try (var probe =
+                        systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe
+                                .install();
+                var metrics =
+                        new systems.zlink.framework.runtime.internal.metrics
+                                .ZLinkInstanceSpotMetrics("deadline", "room")) {
+            metrics.terminal(System.nanoTime(), failure);
+            assertEquals(
+                    "timed_out",
+                    probe.only("zlink.instance_spot.activations").tags().get("outcome"));
+        }
+        assertEquals(
+                ZLinkObjectCommitResult.COMMITTED,
+                fixture.repository()
+                        .commit(fixture.reservation(), new byte[] {2}, null, () -> false)
+                        .toCompletableFuture()
+                        .join());
+    }
+
+    @Test
+    void explicitCommitCancellationRemainsCancellation() throws Exception {
+        var fixture = reincarnationFixture("cancel-ready");
+        assertThrows(
+                java.util.concurrent.CancellationException.class,
+                () ->
+                        fixture.repository()
+                                .commit(fixture.reservation(), new byte[] {2}, null, () -> true)
+                                .toCompletableFuture()
+                                .join());
+    }
+
     private record ReclaimActor(systems.zlink.framework.actors.ZLinkActorContext context)
             implements systems.zlink.framework.actors.ZLinkActor {}
 
