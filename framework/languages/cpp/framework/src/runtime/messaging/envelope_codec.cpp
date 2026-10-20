@@ -546,14 +546,13 @@ class header_sax_t final : public nlohmann::json_sax<nlohmann::json>
             return failure (_parse_error);
         if (!_root_object || !_root_closed || _depth != 0)
             return failure ("ZLink envelope header must be a JSON object");
-        envelope_header_t header;
-        header.kind = static_cast<message_kind_t> (_kind.number);
-        header.channel_name = std::move (_channel_name.string);
-        header.message_name = std::move (_message_name.string);
-        header.content_type = _content_type.type == header_value_t::string
-                                ? std::move (_content_type.string)
-                                : envelope_codec_t::default_content_type;
-        header.correlation_id = std::move (_correlation_id.string);
+        envelope_header_t header{.kind = static_cast<message_kind_t> (_kind.number),
+                                 .channel_name = std::move (_channel_name.string),
+                                 .message_name = std::move (_message_name.string),
+                                 .content_type = _content_type.type == header_value_t::string
+                                                   ? std::move (_content_type.string)
+                                                   : envelope_codec_t::default_content_type,
+                                 .correlation_id = std::move (_correlation_id.string)};
         header.deadline = take_optional (_deadline);
         header.topic = take_optional (_topic);
         header.error_code = take_optional (_error_code);
