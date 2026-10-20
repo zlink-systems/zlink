@@ -9,7 +9,6 @@ internal sealed class ZLinkFrameworkHostRuntimeCoordinator(
     ZLinkRouteMeshRuntimeService routeMeshRuntime,
     ZLinkLocationRuntime? locationRuntime,
     ZLinkAutoConnectLifecycleCoordinator autoConnectLifecycle,
-    ZLinkLocationLifecycle? locationLifecycle,
     ZLinkFrameworkMaintenanceRuntime maintenance
 )
 {
@@ -102,7 +101,6 @@ internal sealed class ZLinkFrameworkHostRuntimeCoordinator(
                 locationRuntime?.StopAsync(CancellationToken.None).AsTask() ?? Task.CompletedTask
             )
             .ConfigureAwait(false);
-        locationLifecycle?.ResetGeneration();
 
         if (failures is { Count: 1 })
             throw failures[0];

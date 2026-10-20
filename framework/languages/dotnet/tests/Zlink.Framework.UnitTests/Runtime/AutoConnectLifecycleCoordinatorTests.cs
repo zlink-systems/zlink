@@ -4,6 +4,7 @@ using Microsoft.Extensions.Hosting;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Contracts.Configuration;
 using Zlink.Framework.Runtime.Host;
+using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
 
 namespace Zlink.Framework.UnitTests;
@@ -27,6 +28,52 @@ public sealed class AutoConnectLifecycleCoordinatorTests
 
         Assert.Equal(1, starts);
         Assert.Equal(1, stops);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Runtime_restart_does_not_retain_location_generation(bool force)
+    {
+        using var host = new HostBuilder()
+            .ConfigureServices(services =>
+                services.AddZLinkFramework(options =>
+                {
+                    options.UseTestLocationStore();
+                    options.AddRouteMesh("generation-reset").Listen("tcp://127.0.0.1:0");
+                })
+            )
+            .Build();
+        await host.StartAsync();
+        var runtime = host.Services.GetRequiredService<ZLinkFrameworkRuntime>();
+        var locations = host.Services.GetRequiredService<ZLinkLocationLifecycle>();
+        var spot = ZLinkSpotId.FromBoundary("old-entry", "spot");
+        try
+        {
+            await locations.SpotLocations.ClaimAsync(
+                ZLinkMeshName.FromBoundary("generation-reset", "mesh"),
+                spot,
+                17,
+                null,
+                RoutingId.From("generation-owner"),
+                1,
+                ZLinkSpotKind.Entry,
+                1,
+                null
+            );
+            Assert.Equal(17UL, await locations.SpotLocations.GetTrackedGenerationAsync(spot));
+            if (force)
+                await runtime.ForceStopAsync(CancellationToken.None);
+            else
+                await runtime.StopAsync(CancellationToken.None);
+            await runtime.StartAsync(CancellationToken.None);
+            Assert.Null(await locations.SpotLocations.GetTrackedGenerationAsync(spot));
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+            await host.StopAsync();
+        }
     }
 
     [Theory]
