@@ -28,6 +28,10 @@ export function prepareZLinkRequestReply<TSource, TReply>(
   };
 }
 
+export function rejectZLinkRequestReply<TReply>(error: unknown): ZLinkRequestResult<TReply> {
+  return prepareZLinkRequestReply(Promise.reject<TReply>(error), identityRequestReply);
+}
+
 class RequestAdmission {
   private admitted: Promise<void> | undefined;
   private resolveAdmission: (() => void) | undefined;
@@ -58,10 +62,6 @@ class RequestAdmission {
   }
 }
 
-function decodeRequestReply<TReply>(result: ZLinkRequestResult<TReply>, value: unknown): TReply {
-  return result.decode(value);
-}
-
 function requestFailure<TReply>(result: ZLinkRequestResult<TReply>, error: unknown): unknown {
   try {
     return result.mapFailure(error);
@@ -73,7 +73,7 @@ function requestFailure<TReply>(result: ZLinkRequestResult<TReply>, error: unkno
 /** Yield applies the same transport decoding without public admission. */
 export function mapZLinkRequestReply<TReply>(result: ZLinkRequestResult<TReply>): Promise<TReply> {
   return result.pending.then(
-    (value) => decodeRequestReply(result, value),
+    (value) => result.decode(value),
     (error: unknown) => {
       throw requestFailure(result, error);
     }
@@ -92,7 +92,7 @@ export function createZLinkRequest<TReply>(
     pending = result.pending.then(
       (value) => {
         try {
-          const reply = decodeRequestReply(result, value);
+          const reply = result.decode(value);
           admission.confirm();
           return reply;
         } catch (error) {

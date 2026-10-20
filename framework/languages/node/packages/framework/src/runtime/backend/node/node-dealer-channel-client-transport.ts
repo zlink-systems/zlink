@@ -1,6 +1,6 @@
 import {
   prepareZLinkRequestReply,
-  identityRequestReply,
+  rejectZLinkRequestReply,
   type ZLinkRequestResult
 } from '../../messaging/request-result';
 import { bindingRequestReply } from './node-backend-adapter-support';
@@ -105,7 +105,7 @@ export class ZLinkDealerChannelClientTransport implements ZLinkChannelClientTran
         }
       });
     } catch (error) {
-      return prepareZLinkRequestReply(Promise.reject(error), identityRequestReply);
+      return rejectZLinkRequestReply(error);
     }
   }
 

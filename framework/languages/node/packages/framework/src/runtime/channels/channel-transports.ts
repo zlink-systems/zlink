@@ -1,6 +1,7 @@
 import {
   prepareZLinkRequestReply,
   identityRequestReply,
+  rejectZLinkRequestReply,
   type ZLinkRequestResult
 } from '../messaging/request-result';
 import { ZLinkFrameworkException } from '../../contracts';
@@ -481,7 +482,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         );
       }
     } catch (error) {
-      return prepareZLinkRequestReply(Promise.reject(error), identityRequestReply);
+      return rejectZLinkRequestReply(error);
     }
     const correlationId = newChannelCorrelationId();
     const traceFailure = (error: unknown): unknown => {
@@ -564,7 +565,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
           )
       );
     } catch (error) {
-      return prepareZLinkRequestReply(Promise.reject(traceFailure(error)), identityRequestReply);
+      return rejectZLinkRequestReply(traceFailure(error));
     }
   }
 
@@ -731,7 +732,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
           )
       );
     } catch (error) {
-      return prepareZLinkRequestReply(Promise.reject(error), identityRequestReply);
+      return rejectZLinkRequestReply(error);
     }
   }
 
@@ -910,7 +911,7 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       }
       return this.waitForMeshReply<TReply>(meshName, completionPromise);
     } catch (error) {
-      return prepareZLinkRequestReply(Promise.reject(error), identityRequestReply);
+      return rejectZLinkRequestReply(error);
     }
   }
 
@@ -925,9 +926,8 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
       readonly onAdmitted?: () => void;
     }
   ): ZLinkRequestResult<TReply> {
-    let pending: Promise<TReply>;
     try {
-      pending = this.requireManager().routeRequestFromSpotToSpot<TReply>(
+      const pending = this.requireManager().routeRequestFromSpotToSpot<TReply>(
         sourceSpot,
         spotRouteTarget,
         options.packetName,
@@ -936,10 +936,10 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         options.signal,
         options.onAdmitted
       );
+      return prepareZLinkRequestReply(pending, identityRequestReply);
     } catch (error) {
-      pending = Promise.reject(error);
+      return rejectZLinkRequestReply(error);
     }
-    return prepareZLinkRequestReply(pending, identityRequestReply);
   }
 
   async requestRawFromSpotToSpot(

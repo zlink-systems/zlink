@@ -1,6 +1,7 @@
 import {
   prepareZLinkRequestReply,
   identityRequestReply,
+  rejectZLinkRequestReply,
   type ZLinkRequestResult
 } from '../messaging/request-result';
 import type { ZLinkListenerRecords } from '../foundation/listener-records';
@@ -256,9 +257,8 @@ export class ZLinkChannelRuntimeManager {
     metadata?: ReadonlyMap<string, string>,
     onAdmitted?: () => void
   ): ZLinkRequestResult<TReply> {
-    let pending: Promise<TReply>;
     try {
-      pending = this.outbound.request<TReply>(
+      const pending = this.outbound.request<TReply>(
         channelName,
         packetName,
         request,
@@ -267,10 +267,10 @@ export class ZLinkChannelRuntimeManager {
         metadata,
         onAdmitted
       );
+      return prepareZLinkRequestReply(pending, identityRequestReply);
     } catch (error) {
-      pending = Promise.reject(error);
+      return rejectZLinkRequestReply(error);
     }
-    return prepareZLinkRequestReply(pending, identityRequestReply);
   }
 
   tryPublish(
