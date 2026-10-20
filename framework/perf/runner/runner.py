@@ -227,8 +227,7 @@ class OwnedProcesses:
                     detail = f"exited before cleanup with code {exit_code}"
                 issues.append({"code": "OwnedProcessFailure",
                                "message": f"Owned process {name} PID {process.pid} {detail}.",
-                               "sourceFile": "cleanup.json", "name": name,
-                               "pid": process.pid, "exitCode": exit_code})
+                               "sourceFile": "cleanup.json"})
 
         write_json(self.cell / "cleanup.json", {"ownedProcesses": process_results,
                     "redisContainerId": self.redis_container_id,
