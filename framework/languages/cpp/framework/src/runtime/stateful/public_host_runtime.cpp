@@ -4661,58 +4661,39 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
     auto lifetime = shared_from_this ();
     auto owned_command =
       std::make_shared<protocol::instance_activation_recovery_t> (std::move (command));
-    const auto reply_terminal = [lifetime, owned_command, transport = _transport, mailbox_record,
-                                 done] (instance_spot_activation_result_t result) {
+    const auto started = _instance_activation_metrics.enabled ()
+                           ? std::chrono::steady_clock::now ()
+                           : std::chrono::steady_clock::time_point{};
+    const auto activation =
+      (_instance_activation_metrics.enabled ()
+       || detail::message_flow_tracer_t (_options.mesh.dispatch)
+            .enabled_for (message_flow_outcome_t::dropped)
+       || detail::dispatch_error_reporter_t (_options.mesh.dispatch).enabled ())
+        ? std::make_shared<const protocol::instance_spot_activation_header_t> (
+            owned_command->activation)
+        : nullptr;
+    const auto deliver_terminal = [lifetime, transport = _transport, owned_command, activation,
+                                   mailbox_record,
+                                   done] (instance_spot_activation_result_t result) {
         if (result.terminal_result != 0) {
-            const auto &dispatch = lifetime->_options.mesh.dispatch;
-            const detail::dispatch_error_reporter_t reporter (dispatch);
-            const detail::message_flow_tracer_t tracer (dispatch);
-            if (reporter.enabled () || tracer.enabled_for (message_flow_outcome_t::dropped)) {
+            const detail::dispatch_error_reporter_t reporter (lifetime->_options.mesh.dispatch);
+            if (reporter.enabled ()) {
                 const auto error = messaging::request_failure_mapper_t{}.reply_header_exception (
                   result.terminal_result, result.failure_code, "Instance Spot activation");
                 const auto exception =
                   result.exception ? result.exception : std::make_exception_ptr (error);
-                if (!owned_command->activation.request && !result.accepted_turn_terminal) {
-                    tracer.trace (message_flow_outcome_t::dropped, [&] {
-                        message_flow_event_t event{
-                          .outcome = message_flow_outcome_t::dropped,
-                          .surface = dispatch_error_surface_t::instance_spot,
-                          .message_kind = dispatch_message_kind_t::send,
-                          .packet_name = owned_command->application_payload.packet_name,
-                          .source_rid = zlink::routing_id_t::from (
-                                          owned_command->activation.source_node_routing_id)
-                                          .to_string (),
-                          .spot_id = owned_command->activation.target.spot_id,
-                          .error_action = dispatch_error_action_t::drop,
-                          .exception = exception,
-                          .flow_id = owned_command->application_payload.flow_id,
-                          .flow_origin = owned_command->application_payload.flow_origin,
-                          .mesh_name = lifetime->_options.mesh.descriptor.mesh_name,
-                          .instance_spot_type = owned_command->activation.target.stable_type,
-                          .result = error.kind () == framework_error_kind_t::shutting_down
-                                      ? message_flow_result_t::shutdown
-                                      : message_flow_result_t::dropped,
-                          .reason = error.kind () == framework_error_kind_t::deadline_exceeded
-                                      ? message_flow_reason_t::activation_timeout
-                                      : message_flow_reason_t::activation_rejected};
-                        return event;
-                    });
-                }
                 reporter.report_lazy ([&] {
                     message_dispatch_error_event_t event{
                       .surface = dispatch_error_surface_t::instance_spot,
-                      .message_kind = owned_command->activation.request
-                                        ? dispatch_message_kind_t::request
-                                        : dispatch_message_kind_t::send,
+                      .message_kind = activation->request ? dispatch_message_kind_t::request
+                                                          : dispatch_message_kind_t::send,
                       .reason = detail::dispatch_reason_from_error (&error),
-                      .action = owned_command->activation.request
-                                  ? dispatch_error_action_t::reply_error
-                                  : dispatch_error_action_t::drop,
+                      .action = activation->request ? dispatch_error_action_t::reply_error
+                                                    : dispatch_error_action_t::drop,
                       .packet_name = owned_command->application_payload.packet_name,
-                      .spot_id = owned_command->activation.target.spot_id,
+                      .spot_id = activation->target.spot_id,
                       .source_rid =
-                        zlink::routing_id_t::from (owned_command->activation.source_node_routing_id)
-                          .to_string (),
+                        zlink::routing_id_t::from (activation->source_node_routing_id).to_string (),
                       .exception = exception,
                       .mesh_name = lifetime->_options.mesh.descriptor.mesh_name};
                     event.flow_id = owned_command->application_payload.flow_id;
@@ -4739,16 +4720,94 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
         if (accepted_turn_terminal)
             accepted_turn_terminal ();
     };
-    const auto fail_activation = [&] (std::exception_ptr exception) {
-        const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (exception);
-        reply_terminal ({failure->terminal_result,
-                         failure->failure_code,
-                         std::nullopt,
-                         {},
-                         std::move (exception)});
+    const auto record_activation = [lifetime, owned_command, activation,
+                                    started] (instance_spot_activation_result_t result) {
+        // Reuse the frozen factory catalog; wire type names must not create metric series.
+        const auto &materializer = lifetime->_instance_spot_materializer;
+        const bool collect_metrics =
+          lifetime->_instance_activation_metrics.enabled () && materializer
+          && materializer->relocation_policy
+          && materializer->relocation_policy (activation->target.stable_type).has_value ();
+        if (result.terminal_result != 0) {
+            const auto &dispatch = lifetime->_options.mesh.dispatch;
+            const detail::message_flow_tracer_t tracer (dispatch);
+            if (collect_metrics || tracer.enabled_for (message_flow_outcome_t::dropped)) {
+                const auto error = messaging::request_failure_mapper_t{}.reply_header_exception (
+                  result.terminal_result, result.failure_code, "Instance Spot activation");
+                const auto exception =
+                  result.exception ? result.exception : std::make_exception_ptr (error);
+                auto outcome = instance_spot_activation_outcome_t::rejected;
+                const auto typed = detail::framework_error (exception);
+                if (typed) {
+                    switch (typed->kind ()) {
+                        case framework_error_kind_t::deadline_exceeded:
+                            outcome = instance_spot_activation_outcome_t::timed_out;
+                            break;
+                        case framework_error_kind_t::shutting_down:
+                            outcome = instance_spot_activation_outcome_t::shutdown;
+                            break;
+                        case framework_error_kind_t::already_exists:
+                            outcome = instance_spot_activation_outcome_t::conflict;
+                            break;
+                        case framework_error_kind_t::invalid_operation:
+                            outcome = instance_spot_activation_outcome_t::fenced;
+                            break;
+                        case framework_error_kind_t::unavailable:
+                        case framework_error_kind_t::internal_failure:
+                        case framework_error_kind_t::not_found:
+                            outcome = instance_spot_activation_outcome_t::store_failure;
+                            break;
+                        default:
+                            break;
+                    }
+                } else if (error.kind () == framework_error_kind_t::shutting_down) {
+                    outcome = instance_spot_activation_outcome_t::shutdown;
+                }
+                if (collect_metrics)
+                    lifetime->_instance_activation_metrics.complete (
+                      started, activation->target.stable_type, outcome);
+                if (!activation->request && !result.accepted_turn_terminal) {
+                    tracer.trace (message_flow_outcome_t::dropped, [&] {
+                        message_flow_event_t event{
+                          .outcome = message_flow_outcome_t::dropped,
+                          .surface = dispatch_error_surface_t::instance_spot,
+                          .message_kind = dispatch_message_kind_t::send,
+                          .packet_name = owned_command->application_payload.packet_name,
+                          .source_rid =
+                            zlink::routing_id_t::from (activation->source_node_routing_id)
+                              .to_string (),
+                          .spot_id = activation->target.spot_id,
+                          .error_action = dispatch_error_action_t::drop,
+                          .exception = exception,
+                          .flow_id = owned_command->application_payload.flow_id,
+                          .flow_origin = owned_command->application_payload.flow_origin,
+                          .mesh_name = lifetime->_options.mesh.descriptor.mesh_name,
+                          .instance_spot_type = activation->target.stable_type,
+                          .result = message_flow_result_t::dropped,
+                          .reason = outcome == instance_spot_activation_outcome_t::timed_out
+                                      ? message_flow_reason_t::activation_timeout
+                                    : outcome == instance_spot_activation_outcome_t::shutdown
+                                      ? message_flow_reason_t::shutdown
+                                      : message_flow_reason_t::activation_rejected};
+                        return event;
+                    });
+                }
+            }
+        } else if (collect_metrics) {
+            lifetime->_instance_activation_metrics.complete (
+              started, activation->target.stable_type, instance_spot_activation_outcome_t::ready);
+        }
     };
-    const auto spot_id = owned_command->activation.target.spot_id;
+    const auto fail_activation = [record_activation,
+                                  deliver_terminal] (std::exception_ptr exception) {
+        const auto failure = messaging::request_failure_mapper_t{}.target_failure_reply (exception);
+        instance_spot_activation_result_t terminal{
+          failure->terminal_result, failure->failure_code, std::nullopt, {}, exception};
+        record_activation (terminal);
+        deliver_terminal (std::move (terminal));
+    };
     std::shared_ptr<instance_activation_operation_t> operation;
+    const auto spot_id = owned_command->activation.target.spot_id;
     std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> previous_admission;
     std::shared_ptr<instance_activation_operation_t> previous;
     try {
@@ -4781,8 +4840,14 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
     }
     if (!operation) {
         try {
-            co_await dispatch_instance_spot_activation_core (owned_command, mailbox_record,
-                                                             reply_terminal, nullptr, nullptr);
+            co_await dispatch_instance_spot_activation_core (
+              owned_command, mailbox_record,
+              [record_activation, deliver_terminal] (instance_spot_activation_result_t result) {
+                  if (result.terminal_result != 0 && !result.accepted_turn_terminal)
+                      record_activation (result);
+                  deliver_terminal (std::move (result));
+              },
+              nullptr, nullptr);
         }
         catch (...) {
             fail_activation (std::current_exception ());
@@ -4791,11 +4856,62 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
     }
     auto admission = std::shared_ptr<task_completion_source_t<instance_activation_admission_t>> (
       operation, &operation->admission);
+    auto deadline = std::make_shared<detail::deadline_state_t> ();
+    auto observed = [] (task_t<instance_activation_admission_t> admitted,
+                        std::shared_ptr<detail::deadline_state_t> deadline, auto record_activation,
+                        auto deliver_terminal) -> task_t<void> {
+        const auto result = co_await runtime::await_result (std::move (admitted));
+        deadline->cancelled.store (true, std::memory_order_release);
+        detail::deadline_scheduler_t::instance ().wake ();
+        if (result && std::holds_alternative<instance_activation_ready_t> (result.value ())) {
+            record_activation ({});
+            co_return;
+        }
+        instance_spot_activation_result_t terminal;
+        if (result)
+            terminal = std::get<instance_spot_activation_result_t> (result.value ());
+        else {
+            const auto failure =
+              messaging::request_failure_mapper_t{}.target_failure_reply (result.exception ());
+            terminal = {failure->terminal_result,
+                        failure->failure_code,
+                        std::nullopt,
+                        {},
+                        result.exception ()};
+        }
+        record_activation (terminal);
+        deliver_terminal (std::move (terminal));
+    }(admission->task (), deadline, record_activation, deliver_terminal);
+    const auto reply_terminal = [admission,
+                                 deliver_terminal] (instance_spot_activation_result_t result) {
+        if (result.terminal_result != 0 && !result.accepted_turn_terminal) {
+            auto completed = admission->task ();
+            if (admission->complete (result_t<instance_activation_admission_t>::success (result)))
+                return;
+            const auto terminal = completed.result ();
+            if (!terminal
+                || !std::holds_alternative<instance_activation_ready_t> (terminal.value ()))
+                return;
+        }
+        deliver_terminal (std::move (result));
+    };
+    if (!admission->task ().await_ready ()) {
+        detail::deadline_scheduler_t::instance ().schedule (
+          messaging::request_deadline_from_unix_ms (
+            owned_command->activation.target.deadline_unix_ms),
+          deadline, [weak = std::weak_ptr (admission)] {
+              if (auto current = weak.lock ())
+                  current->complete (result_t<instance_activation_admission_t>::failure (
+                    framework_error_kind_t::deadline_exceeded,
+                    "Instance Spot activation deadline expired"));
+          });
+    }
     const auto result = co_await runtime::await_result (dispatch_instance_spot_activation_core (
       owned_command, mailbox_record, reply_terminal, admission, previous_admission));
     if (!result)
         admission->complete (
           detail::result_access_t::failure<instance_activation_admission_t> (result.exception ()));
+    const auto observed_result = co_await runtime::await_result (std::move (observed));
     if (previous)
         co_await previous->terminal.task ();
     _lifecycle_configuration_lane
@@ -4806,8 +4922,7 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
       })
       .get ();
     operation->terminal.complete (result_t<void>::success ());
-    if (!result)
-        fail_activation (result.exception ());
+    observed_result.value ();
 }
 
 task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (

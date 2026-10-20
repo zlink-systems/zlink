@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/foundation/operation_registry.hpp"
+#include "runtime/diagnostics/instance_spot_metrics.hpp"
 #include "runtime/dispatch/application_record.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
 #include "runtime/dispatch/blocking_task.hpp"
@@ -950,6 +951,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     bool dispatch_bound_session_send (const mesh::service_mailbox_record_t &record);
 
     host_options_t _options;
+    instance_spot_metrics_t _instance_activation_metrics{_options.mesh.descriptor.mesh_name};
     std::function<bool ()> _flow_capture;
     detail::delay_owner_t *_delay_owner = nullptr;
     std::string _entry_spot_id;
