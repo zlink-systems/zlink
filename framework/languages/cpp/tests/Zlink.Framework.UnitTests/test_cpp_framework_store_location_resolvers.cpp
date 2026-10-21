@@ -1912,10 +1912,11 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
                      .node_lifecycle_generation = 7,
                      .owner = owner}}});
 
-    store_location_resolvers_t resolvers (store);
+    const auto resolvers_owner = std::make_shared<store_location_resolvers_t> (store);
+    auto &resolvers = *resolvers_owner;
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
-    runtime.bind_spot_address_resolver (resolvers);
+    runtime.bind_spot_address_resolver (resolvers_owner);
 
     std::atomic_int sends{0};
     std::atomic_int requests{0};
