@@ -434,6 +434,7 @@ internal static class TestHostScenarioConfigurator
                 .SetPlacementWeight(100);
             mesh.Channel(meshName).Server();
             var objects = mesh.Objects().Server();
+            objects.AddEntrySpot<RelocationEntrySpot>();
             objects.AddSpotFactory<RelocationUserSpot>(
                 RelocationUserSpot.SpotType,
                 factory => factory.DisableRelocation()
