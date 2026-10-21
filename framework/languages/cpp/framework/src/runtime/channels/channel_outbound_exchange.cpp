@@ -212,8 +212,13 @@ std::exception_ptr map_native_exception (const std::exception &error, bool class
         return std::make_exception_ptr (runtime::messaging::map_channel_submit_result_exception (
           submit_error->result (), submit_error->what ()));
     }
-    return std::make_exception_ptr (
-      framework_exception_t (framework_error_kind_t::internal_failure, error.what ()));
+    try {
+        std::throw_with_nested (
+          framework_exception_t (framework_error_kind_t::internal_failure, error.what ()));
+    }
+    catch (...) {
+        return std::current_exception ();
+    }
 }
 
 void trace_channel_backpressure (const dispatch_options_t &dispatch,
@@ -1011,9 +1016,30 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                 }
                 const auto effective_timeout = std::chrono::ceil<std::chrono::milliseconds> (
                   deadline - std::chrono::steady_clock::now ());
-                auto reply = co_await detail::request_submission (
+                auto submission = detail::request_submission (
                   (*requester) (call_packet_name, std::move (serialized.content_type),
                                 std::move (payload), effective_timeout, metadata));
+                // Classify admission before publishing it, while retaining the
+                // request frame until the physical reply finishes cleanup.
+                detail::observe_task_terminal (
+                  submission.admitted, [admitted = co_await detail::request_admission_source_t{}] (
+                                         const result_t<void> &result) {
+                      if (result) {
+                          admitted->complete (result);
+                          return;
+                      }
+                      try {
+                          std::rethrow_exception (result.exception ());
+                      }
+                      catch (const std::exception &error) {
+                          admitted->complete (
+                            detail::result_access_t::failure<void> (map_native_exception (error)));
+                      }
+                      catch (...) {
+                          admitted->complete (result);
+                      }
+                  });
+                auto reply = co_await std::move (submission.reply);
                 auto completion = runtime.complete_outbound_reply (reservation.value ());
                 if (!completion) {
                     co_return completion.error () != nullptr

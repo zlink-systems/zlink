@@ -2126,6 +2126,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp
     "framework-unit;framework-regression;channel")
   add_zlink_framework_test(
+    test_cpp_framework_submission_failure_contract
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_submission_failure_contract.cpp
+    "framework-unit;framework-contract;channel;messaging")
+  target_use_zlink_gtest_main(test_cpp_framework_submission_failure_contract)
+  add_zlink_framework_test(
     test_cpp_framework_route_client_channel_routing
     tests/Zlink.Framework.UnitTests/test_cpp_framework_route_client_channel_routing.cpp
     "framework-contract;framework-regression;channel;messaging")
