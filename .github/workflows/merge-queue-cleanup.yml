@@ -1,0 +1,32 @@
+name: Merge queue cleanup
+
+# Mergify deletes a draft batch branch when it closes the batch (merged,
+# dequeued, or split to find a failing pull request), but GitHub keeps the
+# runs already started on that branch. Those runs hold runners the live
+# batches wait for. When a merge queue or backport branch is deleted, cancel
+# the runs that have not finished on it.
+on:
+  delete:
+
+permissions:
+  actions: write
+
+jobs:
+  cancel:
+    if: >-
+      github.event.ref_type == 'branch'
+      && (startsWith(github.event.ref, 'mergify/merge-queue/')
+          || startsWith(github.event.ref, 'mergify/bp/'))
+    runs-on: ubuntu-latest
+    steps:
+      - name: Cancel unfinished runs of the deleted branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          BRANCH: ${{ github.event.ref }}
+        run: |
+          gh run list --branch "$BRANCH" --limit 100 --json databaseId,status \
+            --jq '.[] | select(.status != "completed") | .databaseId' |
+          while read -r run_id; do
+            gh run cancel "$run_id" || echo "run $run_id already finished"
+          done
