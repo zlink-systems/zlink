@@ -11,7 +11,8 @@ internal static class ZLinkClientCallCodec
         TimeSpan? timeout = null,
         string? topic = null,
         string? source = null,
-        bool includeDeadline = true
+        bool includeDeadline = true,
+        IReadOnlyDictionary<string, string>? metadata = null
     )
     {
         if (kind is ZLinkMessageKind.Response or ZLinkMessageKind.Error)
@@ -36,6 +37,7 @@ internal static class ZLinkClientCallCodec
             source
         )
         {
+            Metadata = metadata,
             FlowId = flow?.FlowId,
             FlowOrigin = flow?.Origin,
         };
@@ -55,52 +57,21 @@ internal static class ZLinkClientCallCodec
         );
     }
 
-    // A logical request can be reselected before admission. The body remains
-    // the caller-owned typed encoding, while each attempt owns a new header
-    // and native Message reference for transport handoff.
-    public static Message EncodeEnvelopeBody<TMessage>(
-        TMessage message,
-        ZLinkCodecRegistryBuilder? codecs,
-        out string contentType
-    ) =>
-        ZLinkEnvelopeCodec.EncodeBody(
-            message,
-            ZLinkClientCallTypeCache<TMessage>.Resolve(message),
-            codecs,
-            out contentType
-        );
-
-    public static IReadOnlyList<Message> CopyEnvelopeParts(
-        ZLinkEnvelopeHeader header,
-        Message encodedBody,
-        string contentType
-    )
-    {
-        var headerPart = ZLinkEnvelopeCodec.EncodeHeader(header, contentType);
-        try
-        {
-            return ZLinkMessageParts.Create(headerPart, encodedBody.Copy());
-        }
-        catch
-        {
-            headerPart.Dispose();
-            throw;
-        }
-    }
-
     public static TReply DecodeEnvelopeReplyAndDispose<TReply>(
         IReadOnlyList<Message> reply,
         string emptyMessage,
         string errorMessage,
         ZLinkCodecRegistryBuilder? codecs,
-        bool validateFlow = true
+        bool validateFlow = true,
+        string? errorMessageArgument = null
     ) =>
         DecodeEnvelopeReplyAndDispose<TReply>(
             new ZLinkBackendRouteReceived(reply, null, null, null, null),
             emptyMessage,
             errorMessage,
             codecs,
-            validateFlow
+            validateFlow,
+            errorMessageArgument
         );
 
     public static TReply DecodeEnvelopeReplyAndDispose<TReply>(
@@ -108,7 +79,8 @@ internal static class ZLinkClientCallCodec
         string emptyMessage,
         string errorMessage,
         ZLinkCodecRegistryBuilder? codecs,
-        bool validateFlow = true
+        bool validateFlow = true,
+        string? errorMessageArgument = null
     )
     {
         try
@@ -119,7 +91,8 @@ internal static class ZLinkClientCallCodec
                 errorMessage,
                 codecs,
                 validateFlow,
-                reply.ApplicationPayloadView
+                reply.ApplicationPayloadView,
+                errorMessageArgument
             );
         }
         finally
@@ -137,7 +110,8 @@ internal static class ZLinkEnvelopeReplyDecoder
         string errorMessage,
         ZLinkCodecRegistryBuilder? codecs,
         bool validateFlow = true,
-        ZLinkMultipartPayloadView? applicationPayloadView = null
+        ZLinkMultipartPayloadView? applicationPayloadView = null,
+        string? errorMessageArgument = null
     )
     {
         var partCount = applicationPayloadView?.Count ?? reply.Count;
@@ -164,7 +138,11 @@ internal static class ZLinkEnvelopeReplyDecoder
             );
         }
         if (replyHeader.Kind == ZLinkMessageKind.Error)
-            throw ZLinkEnvelopeErrorMapper.CreateException(replyHeader, errorMessage);
+            throw ZLinkEnvelopeErrorMapper.CreateException(
+                replyHeader,
+                errorMessage,
+                errorMessageArgument
+            );
         if (replyHeader.Kind != ZLinkMessageKind.Response)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
@@ -214,9 +192,23 @@ internal static class ZLinkEnvelopeReplyDecoder
 
 internal static class ZLinkEnvelopeErrorMapper
 {
-    public static Exception CreateException(ZLinkEnvelopeHeader header, string fallbackMessage)
+    public static Exception CreateException(
+        ZLinkEnvelopeHeader header,
+        string fallbackMessage,
+        string? errorMessageArgument = null
+    )
     {
-        var message = header.ErrorMessage ?? fallbackMessage;
+        var message =
+            header.ErrorMessage
+            ?? (
+                errorMessageArgument is null
+                    ? fallbackMessage
+                    : string.Format(
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        fallbackMessage,
+                        errorMessageArgument
+                    )
+            );
         // Stale-route contract (C++ channel_runtime route reply mapping): only
         // framework-generated remote errors carry the zlink.origin=framework
         // marker. Unmarked remote errors came from the application handler and
