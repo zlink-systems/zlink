@@ -52,6 +52,7 @@ test('raw router reuses receive storage while earlier requests keep payload and 
       if (record === undefined) await immediate();
       else records.push(record);
     }
+    assert.equal(target.receive(true), undefined);
     for (let index = count - 1; index >= 0; index--) {
       assert.equal(records[index].parts[0].toString(), `request-${index}`);
       records[index].reply([Buffer.from(`reply-${index}`)]);
@@ -70,6 +71,8 @@ test('raw router reuses receive storage while earlier requests keep payload and 
       assert.equal(parts[0].data().toString(), `reply-${index}`);
       for (const part of parts) part.close();
     });
+    host.close();
+    assert.equal(records[0].parts[0].toString(), 'request-0');
     t.diagnostic(`binding Received instances for ${count} requests: ${storage.size}`);
     assert.equal(storage.size, 1);
   } finally {
