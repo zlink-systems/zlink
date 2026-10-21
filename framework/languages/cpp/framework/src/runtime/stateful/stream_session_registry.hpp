@@ -101,6 +101,8 @@ struct stream_close_result_t
 
 class stream_session_registry_t
 {
+    friend struct stream_session_registry_test_access_t;
+
   public:
     using authority_resolver_t = std::function<std::optional<object_ref_t> (const std::string &)>;
     using binding_publish_t = std::function<stateful_error_t (const stream_binding_t &)>;

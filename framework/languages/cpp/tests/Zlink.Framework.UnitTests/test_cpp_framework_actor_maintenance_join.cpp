@@ -5,6 +5,7 @@
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
@@ -41,6 +42,29 @@
 #include <thread>
 #include <tuple>
 #include <utility>
+
+namespace zlink::framework::runtime::stateful
+{
+struct stream_session_registry_test_access_t
+{
+    static bool wait_for_held_drain (stream_session_registry_t &registry,
+                                     const std::string &actor_id,
+                                     std::chrono::steady_clock::time_point deadline)
+    {
+        for (;;) {
+            const auto observed = registry._changed_generation.load (std::memory_order_acquire);
+            if (!registry.remote_route_sealed (actor_id))
+                return true;
+            std::unique_lock lock (registry._changed_mutex);
+            if (!registry._changed.wait_until (lock, deadline, [&] {
+                    return registry._changed_generation.load (std::memory_order_acquire)
+                           != observed;
+                }))
+                return false;
+        }
+    }
+};
+} // namespace zlink::framework::runtime::stateful
 
 namespace zlink::framework::runtime::host
 {
@@ -1498,9 +1522,10 @@ void expired_sealed_request_preserves_next_live_actor_relay (bool remote)
     ASSERT_TRUE (receiver_route->session_rid);
     EXPECT_EQ (receiver_route->session_rid->to_hex (), current->connection.connection_id);
     EXPECT_EQ (receiver_route->node_rid.to_hex (), native->status ().routing_id ().to_hex ());
+    const auto drain_deadline = std::chrono::steady_clock::now () + 2s;
     {
         std::unique_lock lock (binding->mutex);
-        ASSERT_TRUE (binding->changed.wait_for (lock, 2s, [&] {
+        ASSERT_TRUE (binding->changed.wait_until (lock, drain_deadline, [&] {
             return std::any_of (
               binding->flows.begin (), binding->flows.end (), [] (const auto &event) {
                   return event.packet_name == record_t::packet_name
@@ -1528,6 +1553,8 @@ void expired_sealed_request_preserves_next_live_actor_relay (bool remote)
         EXPECT_EQ (admitted, 1u);
     }
     EXPECT_EQ (native->pending_operation_count (), 0u);
+    ASSERT_TRUE (st::stream_session_registry_test_access_t::wait_for_held_drain (sessions, actor_id,
+                                                                                 drain_deadline));
     const auto drained = sessions.seal_remote_route (
       current->connection.connection_id, current->binding_generation, current->actor.key,
       current->actor.object_generation, current->owner_lease_generation);
