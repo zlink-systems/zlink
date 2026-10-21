@@ -539,55 +539,90 @@ public_fence (const protocol::user_spot_reservation_fence_t &wire,
                                   wire.pending_capacity_delta}}};
 }
 
-class application_claim_release_state_t
+} // namespace
+
+// Owns the claim, its reservation children and the suspended record cursor.
+// Handler terminals keep only this payload owner; dispatch accounting ends
+// when the claim loop finishes, independently of retained payload lifetimes.
+struct public_host_runtime_t::application_claim_owner_t
 {
-  public:
-    application_claim_release_state_t (std::size_t record_count,
-                                       std::function<void ()> release_claim) :
-        _remaining (record_count),
-        _records (record_count),
-        _release_claim (std::move (release_claim))
-    {
-    }
-
-    void retain (std::size_t index) noexcept
-    {
-        _records[index].retained.store (true, std::memory_order_release);
-    }
-
-    bool retained (std::size_t index) const noexcept
-    {
-        return _records[index].retained.load (std::memory_order_acquire);
-    }
-
-    void release (std::size_t index)
-    {
-        if (!_records[index].released.exchange (true, std::memory_order_acq_rel))
-            release_records (1);
-    }
-
-    void release_records (std::size_t count)
-    {
-        if (count == 0)
-            return;
-        const auto previous = _remaining.fetch_sub (count, std::memory_order_acq_rel);
-        if (previous == count)
-            _release_claim ();
-    }
-
-  private:
+    using dispatch_t = mesh::service_mailbox_t::application_dispatch_t;
+    mesh::service_mailbox_claim_t claim;
+    std::weak_ptr<public_host_runtime_t> host;
+    dispatch_t dispatch;
+    std::function<void ()> rejected;
+    std::size_t index = 0;
+    std::size_t count = 0;
+    std::size_t handed_off = 0;
     struct record_state_t
     {
         std::atomic_bool retained{false};
         std::atomic_bool released{false};
     };
+    std::atomic_size_t remaining;
+    std::vector<record_state_t> records;
 
-    std::atomic_size_t _remaining;
-    std::vector<record_state_t> _records;
-    std::function<void ()> _release_claim;
+    application_claim_owner_t (mesh::service_mailbox_claim_t value,
+                               std::weak_ptr<public_host_runtime_t> owner,
+                               dispatch_t callback,
+                               std::function<void ()> reject) :
+        claim (std::move (value)),
+        host (std::move (owner)),
+        dispatch (std::move (callback)),
+        rejected (std::move (reject)),
+        remaining (claim.records.size ()),
+        records (claim.records.size ())
+    {
+        trace_mesh_host ("mailbox-claim",
+                         std::string ("records=") + std::to_string (claim.records.size ()));
+    }
+
+    void retain (std::size_t child) noexcept
+    {
+        records[child].retained.store (true, std::memory_order_release);
+    }
+    bool retained (std::size_t child) const noexcept
+    {
+        return records[child].retained.load (std::memory_order_acquire);
+    }
+    void release (std::size_t child)
+    {
+        if (!records[child].released.exchange (true, std::memory_order_acq_rel))
+            release_records (1);
+    }
+    void release_records (std::size_t released)
+    {
+        if (released != 0 && remaining.fetch_sub (released, std::memory_order_acq_rel) == released)
+            if (const auto owner = host.lock ())
+                (void) owner->_transport->mailbox ().release (claim);
+    }
+    void handoff (const ready_record_t &ready,
+                  const receive_record_t &record,
+                  std::vector<zlink::message_t> parts)
+    {
+        dispatch (ready, record, std::move (parts));
+        ++handed_off;
+    }
+    void complete_record ()
+    {
+        ++count;
+        if (!retained (index))
+            release (index);
+        ++index;
+    }
+    std::size_t finish ()
+    {
+        if (rejected) {
+            while (handed_off < claim.records.size ()) {
+                rejected ();
+                ++handed_off;
+            }
+        }
+        dispatch = {};
+        rejected = {};
+        return count;
+    }
 };
-
-} // namespace
 
 zlink::routing_id_t node_status_t::routing_id () const
 {
@@ -7095,8 +7130,12 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
               mesh::service_mailbox_domain_t::application, 1, dispatch_limits::receive_batch_bytes);
             if (!claim)
                 break;
-            const auto dispatched =
-              co_await dispatch_application_claim (std::move (*claim), dispatch);
+            auto operation = std::make_shared<application_claim_owner_t> (
+              std::move (*claim), weak_from_this (), dispatch, std::function<void ()>{});
+            auto result = dispatch_application_claim (operation);
+            const auto dispatched = std::holds_alternative<std::size_t> (result)
+                                      ? std::get<std::size_t> (result)
+                                      : co_await std::get<task_t<std::size_t>> (std::move (result));
             count += dispatched;
             application_dispatch_started = dispatched != 0;
         }
@@ -7308,28 +7347,15 @@ bool public_host_runtime_t::claim_stateful_owner (
     return false;
 }
 
-task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
-  mesh::service_mailbox_claim_t claim,
-  const std::function<void (
-    const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch)
+public_host_runtime_t::application_claim_result_t
+public_host_runtime_t::dispatch_application_claim (
+  const std::shared_ptr<application_claim_owner_t> &operation)
 {
-    std::size_t count = 0;
-    trace_mesh_host ("mailbox-claim",
-                     std::string ("records=") + std::to_string (claim.records.size ()));
-    auto claim_holder = std::make_shared<mesh::service_mailbox_claim_t> (std::move (claim));
-    auto release_state = std::make_shared<application_claim_release_state_t> (
-      claim_holder->records.size (), [weak = weak_from_this (), claim_holder] {
-          if (const auto host = weak.lock ())
-              (void) host->_transport->mailbox ().release (*claim_holder);
-      });
-    for (std::size_t index = 0; index < claim_holder->records.size (); ++index) {
-        auto &mailbox_record = claim_holder->records[index];
-        const auto retain_mailbox_reservation = [release_state, index] {
-            release_state->retain (index);
-        };
-        const auto release_mailbox_reservation = [release_state, index] {
-            release_state->release (index);
-        };
+    while (operation->index < operation->claim.records.size ()) {
+        const auto index = operation->index;
+        auto &mailbox_record = operation->claim.records[index];
+        const auto retain_mailbox_reservation = [operation, index] { operation->retain (index); };
+        const auto release_mailbox_reservation = [operation, index] { operation->release (index); };
         try {
             if (mailbox_record.application) {
                 auto application = std::move (*mailbox_record.application);
@@ -7337,17 +7363,29 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                   mailbox_record.before_application_handler;
                 application.record.release_mailbox_reservation = release_mailbox_reservation;
                 application.record.retain_mailbox_reservation = retain_mailbox_reservation;
-                application.record.transferred_owner_byte_cost = claim_holder->record_bytes[index];
+                application.record.transferred_owner_byte_cost =
+                  operation->claim.record_bytes[index];
                 if (_stateful_dispatch && is_actor_application (application.record.kind)
                     && !application.record.application_record) {
-                    const auto object = co_await accept_local_application (std::move (application));
-                    (void) co_await dispatch_stateful_owner (object, dispatch);
+                    auto pending =
+                      [] (std::shared_ptr<public_host_runtime_t> self,
+                          local_application_dispatch_t value,
+                          const std::shared_ptr<application_claim_owner_t> owner) -> task_t<void> {
+                        const auto object =
+                          co_await self->accept_local_application (std::move (value));
+                        (void) co_await self->dispatch_stateful_owner (
+                          object,
+                          [owner] (const ready_record_t &ready, const receive_record_t &record,
+                                   std::vector<zlink::message_t> parts) {
+                              owner->handoff (ready, record, std::move (parts));
+                          });
+                    }(shared_from_this (), std::move (application), operation);
+                    return continue_application_claim (operation, std::move (pending));
                 } else {
-                    dispatch (application.owner, application.record, std::move (application.parts));
+                    operation->handoff (application.owner, application.record,
+                                        std::move (application.parts));
                 }
-                ++count;
-                if (!release_state->retained (index))
-                    release_mailbox_reservation ();
+                operation->complete_record ();
                 continue;
             }
             const auto wire =
@@ -7376,9 +7414,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                   std::move (mailbox_record.before_application_handler)));
                 detail::observe_task_completion (
                   *pending, [self = shared_from_this (), pending] (const result_t<void> &) {});
-                ++count;
-                if (!release_state->retained (index))
-                    release_mailbox_reservation ();
+                operation->complete_record ();
                 continue;
             }
             if (mailbox_record.parts.size () != 2)
@@ -7387,9 +7423,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                 // The outbound stream delivery is a transport handoff, not an application handler.
                 mailbox_record.before_application_handler = {};
                 (void) dispatch_bound_session_send (mailbox_record);
-                ++count;
-                if (!release_state->retained (index))
-                    release_mailbox_reservation ();
+                operation->complete_record ();
                 continue;
             }
             const auto kind = record_kind (wire.kind);
@@ -7414,13 +7448,24 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                 }
                 if (native_owner) {
                     retain_mailbox_reservation ();
-                    (void) co_await _stateful_dispatch->ingest_claimed (
-                      *native_owner, std::move (mailbox_record),
-                      std::function<void ()> (release_mailbox_reservation));
-                    (void) co_await dispatch_stateful_owner (*native_owner, dispatch);
-                    _transport->signal_activity ();
-                    ++count;
-                    continue;
+                    auto pending = [] (std::shared_ptr<public_host_runtime_t> self,
+                                       stateful::object_ref_t object,
+                                       mesh::service_mailbox_record_t record,
+                                       std::function<void ()> release,
+                                       const std::shared_ptr<application_claim_owner_t> owner)
+                      -> task_t<void> {
+                        (void) co_await self->_stateful_dispatch->ingest_claimed (
+                          object, std::move (record), std::move (release));
+                        (void) co_await self->dispatch_stateful_owner (
+                          object,
+                          [owner] (const ready_record_t &ready, const receive_record_t &record,
+                                   std::vector<zlink::message_t> parts) {
+                              owner->handoff (ready, record, std::move (parts));
+                          });
+                        self->_transport->signal_activity ();
+                    }(shared_from_this (), *native_owner, std::move (mailbox_record),
+                      release_mailbox_reservation, operation);
+                    return continue_application_claim (operation, std::move (pending));
                 }
             }
             ready_record_t owner;
@@ -7441,7 +7486,7 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
             if (is_request (kind)) {
                 record.reply_token = {
                   weak_from_this (),
-                  std::shared_ptr<mesh::service_mailbox_record_t> (claim_holder, &mailbox_record)};
+                  std::shared_ptr<mesh::service_mailbox_record_t> (operation, &mailbox_record)};
             }
             if (kind == record_kind_t::channel_send || kind == record_kind_t::channel_request) {
                 owner.owner_kind = owner_kind_t::channel;
@@ -7500,29 +7545,54 @@ task_t<std::size_t> public_host_runtime_t::dispatch_application_claim (
                 + " parts=" + std::to_string (mailbox_record.parts.size ()));
             record.release_mailbox_reservation = release_mailbox_reservation;
             record.retain_mailbox_reservation = retain_mailbox_reservation;
-            record.transferred_owner_byte_cost = claim_holder->record_bytes[index];
-            dispatch (owner, record, std::move (parts));
-            ++count;
-        }
-        catch (const protocol::service_wire_error_t &) {
-            if (!mailbox_record.source_routing_id.empty () && mailbox_record.correlation) {
-                (void) _transport->reply_failure (
-                  mailbox_record,
-                  static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
-                  static_cast<std::uint32_t> (
-                    protocol::framework_error_code::requestProtocolError));
-            }
-            release_mailbox_reservation ();
+            record.transferred_owner_byte_cost = operation->claim.record_bytes[index];
+            operation->handoff (owner, record, std::move (parts));
+            operation->complete_record ();
         }
         catch (...) {
-            release_mailbox_reservation ();
-            release_state->release_records (claim_holder->records.size () - index - 1);
-            throw;
+            fail_application_claim (operation, std::current_exception ());
         }
-        if (!release_state->retained (index))
-            release_mailbox_reservation ();
     }
-    co_return count;
+    return operation->finish ();
+}
+
+void public_host_runtime_t::fail_application_claim (
+  const std::shared_ptr<application_claim_owner_t> &operation, std::exception_ptr error)
+{
+    auto &record = operation->claim.records[operation->index];
+    try {
+        std::rethrow_exception (error);
+    }
+    catch (const protocol::service_wire_error_t &) {
+        if (!record.source_routing_id.empty () && record.correlation) {
+            (void) _transport->reply_failure (
+              record, static_cast<std::uint32_t> (protocol::request_terminal_result::protocolError),
+              static_cast<std::uint32_t> (protocol::framework_error_code::requestProtocolError));
+        }
+        operation->release (operation->index++);
+    }
+    catch (...) {
+        operation->release (operation->index);
+        operation->release_records (operation->claim.records.size () - operation->index - 1);
+        operation->finish ();
+        throw;
+    }
+}
+
+task_t<std::size_t> public_host_runtime_t::continue_application_claim (
+  std::shared_ptr<application_claim_owner_t> operation, task_t<void> pending)
+{
+    try {
+        co_await pending;
+        operation->complete_record ();
+    }
+    catch (...) {
+        fail_application_claim (operation, std::current_exception ());
+    }
+    auto next = dispatch_application_claim (operation);
+    if (const auto count = std::get_if<std::size_t> (&next))
+        co_return *count;
+    co_return co_await std::get<task_t<std::size_t>> (std::move (next));
 }
 
 task_t<bool> public_host_runtime_t::dispatch_application_owner (
@@ -7532,35 +7602,27 @@ task_t<bool> public_host_runtime_t::dispatch_application_owner (
   std::function<void ()> started,
   std::function<void ()> rejected)
 {
-    auto claim = _transport->mailbox ().try_claim_owner (
-      mesh::service_mailbox_domain_t::application, owner, dispatch_limits::receive_batch_messages,
-      dispatch_limits::receive_batch_bytes);
-    if (!claim)
-        co_return false;
-    const auto claimed = claim->records.size ();
-    for (std::size_t index = 0; index < claimed; ++index)
-        started ();
-    std::size_t handed_off = 0;
     try {
-        co_await dispatch_application_claim (
-          std::move (*claim), [&] (const ready_record_t &ready, const receive_record_t &record,
-                                   std::vector<zlink::message_t> parts) {
-              dispatch (ready, record, std::move (parts));
-              ++handed_off;
-          });
+        auto claim = _transport->mailbox ().try_claim_owner (
+          mesh::service_mailbox_domain_t::application, owner,
+          dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes);
+        if (!claim)
+            return task_t<bool> (result_t<bool>::success (false));
+        for (std::size_t index = 0; index < claim->records.size (); ++index)
+            started ();
+        auto operation = std::make_shared<application_claim_owner_t> (
+          std::move (*claim), weak_from_this (), dispatch, std::move (rejected));
+        auto result = dispatch_application_claim (operation);
+        if (std::holds_alternative<std::size_t> (result))
+            return task_t<bool> (result_t<bool>::success (true));
+        return [] (task_t<std::size_t> pending) -> task_t<bool> {
+            (void) co_await pending;
+            co_return true;
+        }(std::get<task_t<std::size_t>> (std::move (result)));
     }
     catch (...) {
-        while (handed_off < claimed) {
-            rejected ();
-            ++handed_off;
-        }
-        throw;
+        return task_t<bool> (detail::current_exception_result<bool> ());
     }
-    while (handed_off < claimed) {
-        rejected ();
-        ++handed_off;
-    }
-    co_return true;
 }
 
 bool public_host_runtime_t::wait_for_dispatch_activity (
