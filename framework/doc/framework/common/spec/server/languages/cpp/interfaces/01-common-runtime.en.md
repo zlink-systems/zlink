@@ -273,6 +273,62 @@ returned when the same `T` is copy-constructible. Another `T`, or a type whose
 retained value cannot be returned again, ends with `protocol_error`. If the
 first call failed, its stored exception is delivered again.
 
+### 4.1 Completion Owner
+
+```cpp
+namespace zlink::framework {
+
+// The lifetime owner of the process completion dispatcher, provided by
+// provider-abstractions. Construction acquires a shared dispatcher reference.
+// At most one dispatcher is active at a time. Hosts and apps internally retain
+// this same type, so existing host/app calling code does not change.
+// A standalone caller constructs an owner before registering asynchronous
+// callbacks and keeps a live owner through the registrations and provider
+// result publications it starts. task_t, task_completion_source_t wait
+// registrations, and native continuations borrow the active owner without
+// extending its lifetime. If no owner is live at the first callback
+// registration or native resumption capture, it fails with invalid_operation
+// before accepting the callback. This path never creates a dispatcher
+// implicitly. Creating/consuming ready values without registering callbacks
+// and blocking returns from result()/result_for() do not require an owner.
+class completion_owner_t {
+public:
+ completion_owner_t();
+ completion_owner_t(const completion_owner_t &) = delete;
+ completion_owner_t &operator=(const completion_owner_t &) = delete;
+ completion_owner_t(completion_owner_t &&) = delete;
+ completion_owner_t &operator=(completion_owner_t &&) = delete;
+
+ // Equivalent to close. Destroying a live owner in a dispatcher completion
+ // turn violates the execution-context condition below; an exception from
+ // this noexcept destructor ends in std::terminate.
+ ~completion_owner_t() noexcept;
+
+ // Before calling, stop external producers using this owner and complete or cancel
+ // external provider operations. Do not race close with new external registrations or
+ // result publication. Does nothing if already closed. If other owners remain,
+ // releases only this owner's reference. The last owner drains callbacks
+ // already accepted and posted or running, including subsequent resumptions
+ // of accepted turns, joins workers, then returns. Another owner shares an
+ // active dispatcher. When a new dispatcher is needed, construction waits
+ // for the previous dispatcher's join to finish.
+ // Construction and close of a live owner must run outside a dispatcher
+ // completion turn. A construction or close violating this context fails with
+ // invalid_operation. A failed close leaves the owner open so that it can be
+ // closed again outside the completion turn.
+ void close();
+};
+
+} // namespace zlink::framework
+```
+
+These lifetime rules apply to both internal host/app owners and standalone owners.
+Normal destructor execution alone completes the same drain and join. The caller
+closes or destroys owners before terminating the process. If the process ends
+without releasing an owner, there is no implicit global drain and completion of
+remaining callbacks is not guaranteed. Application resources referenced by
+callbacks remain alive until owner shutdown finishes.
+
 ## 5. Serialization
 
 The Framework uses a typed JSON serializer as its default path. The
