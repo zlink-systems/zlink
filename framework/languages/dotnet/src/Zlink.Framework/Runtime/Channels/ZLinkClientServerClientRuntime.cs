@@ -291,17 +291,19 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 );
             var reply = await ZLinkRawRequestSubmitter
                 .SubmitAsync(
+                    (Target: target, Admission: requestAdmission, ChannelName: _channelName),
                     parts,
-                    (pending, nativeTimeout, token) =>
+                    static (state, pending, nativeTimeout, token) =>
                         ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
-                            target.Socket.Request().Messages(pending).Timeout(nativeTimeout),
+                            state.Target.Socket.Request().Messages(pending).Timeout(nativeTimeout),
                             nativeTimeout,
                             token,
-                            target.Liveness,
-                            requestAdmission: requestAdmission
+                            state.Target.Liveness,
+                            requestAdmission: state.Admission
                         ),
                     timeout - _time.GetElapsedTime(started),
-                    $"ClientServer request failed for '{_channelName}': {{0}}.",
+                    static (state, result) =>
+                        $"ClientServer request failed for '{state.ChannelName}': {result}.",
                     cancellationToken
                 )
                 .ConfigureAwait(false);
