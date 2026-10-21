@@ -1237,7 +1237,7 @@ int reader_retirement_is_tracked_until_complete ()
     // With a MeshNode, tcp:// sessions use the Core socket path. WebSocket
     // uses the per-connection reader path under test.
     options.add_stream_node ("held-stream")
-      .bind ("ws://127.0.0.1:*/held")
+      .bind ("ws://127.0.0.1:0/held")
       .register_session ("held-session");
     options.apply ();
     for (const auto &registration : detail::mesh_node_runtime_t::registrations (builder))
@@ -1354,7 +1354,7 @@ int transport_bound_close (bool tls, bool remote = false)
       .set_routing_id (zlink::routing_id_t::from ("transport-close-owner"))
       .listen (loopback_tcp_any_port);
     auto listener = options.add_stream_node ("transport-close-stream");
-    listener.bind (tls ? "tls://127.0.0.1:*" : "ws://127.0.0.1:*/close")
+    listener.bind (tls ? "tls://127.0.0.1:0" : "ws://127.0.0.1:0/close")
       .register_session ("close-session");
     if (tls)
         listener.set_tls_server (ZLINK_FRAMEWORK_STREAM_TEST_CERT, ZLINK_FRAMEWORK_STREAM_TEST_KEY,
@@ -2511,7 +2511,7 @@ int main (int argc, char **argv)
     zlink::framework::zlink_framework_options_t mutual_tls_options (
       mutual_tls_services, mutual_tls_handlers, mutual_tls_serializers, mutual_tls_zlink);
     mutual_tls_options.add_stream_node ("mutual-tls-listener")
-      .bind ("tls://127.0.0.1:*")
+      .bind ("tls://127.0.0.1:0")
       .set_tls_server (ZLINK_FRAMEWORK_STREAM_TEST_CERT, ZLINK_FRAMEWORK_STREAM_TEST_KEY, true)
       .register_session ("mutual-tls-listener-session");
     mutual_tls_options.apply ();
