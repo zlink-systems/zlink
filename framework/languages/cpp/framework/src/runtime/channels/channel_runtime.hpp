@@ -139,7 +139,7 @@ class route_client_state_t
 class channel_runtime_state_t
 {
   public:
-    runtime::spot_address_resolver_t *spot_resolver = nullptr;
+    std::shared_ptr<runtime::spot_address_resolver_t> spot_resolver;
     using instance_spot_send_t = std::function<task_t<result_t<void>> (
       const spot_id_t &,
       const spot_activation_intent_t &,
@@ -373,7 +373,8 @@ class channel_runtime_t
     void bind_spot_mesh_transport (std::string mesh_name,
                                    channel_runtime_state_t::spot_mesh_send_t send,
                                    channel_runtime_state_t::spot_mesh_request_t request);
-    void bind_spot_address_resolver (runtime::spot_address_resolver_t &resolver) noexcept;
+    void bind_spot_address_resolver (
+      std::shared_ptr<runtime::spot_address_resolver_t> resolver) noexcept;
     void bind_instance_spot_activator (channel_runtime_state_t::instance_spot_send_t send,
                                        channel_runtime_state_t::instance_spot_request_t request);
     void bind_mesh_node_transport (std::string mesh_name,

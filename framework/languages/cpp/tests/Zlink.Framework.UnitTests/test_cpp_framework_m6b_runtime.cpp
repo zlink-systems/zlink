@@ -571,7 +571,8 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
     old_target->connect_peer (new_status.routing_id (), new_status.local_endpoint (),
                               new_status.lifecycle_generation ());
 
-    actor_send_spot_resolver_t spot_resolver;
+    const auto spot_resolver_owner = std::make_shared<actor_send_spot_resolver_t> ();
+    auto &spot_resolver = *spot_resolver_owner;
     spot_resolver.address =
       runtime::spot_address_t{"actor-send-route-mesh", new_status.routing_id (), "actor-send-spot",
                               target_spot.status ().lifecycle_generation ()};
@@ -729,7 +730,7 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
         [&] { old_state->spot_state->actor_types_by_id[key.global_id] = "route-probe"; })
       .get ();
     detail::spot_node_runtime_t old_spots (old_state->spot_state);
-    old_spots.bind_spot_location_resolver (spot_resolver);
+    old_spots.bind_spot_location_resolver (spot_resolver_owner);
     assert (old_spots
               .complete_remote_actor_transfer (
                 old_actor, new_actor,
@@ -7320,12 +7321,14 @@ bool verify_remote_user_spot_create_close_terminal_once (bool cleanup_only = fal
     // Ready route it resolved before Close, and the source host as the activator.
     location_options_t route_cache_options;
     route_cache_options.route_cache_max_age = 30s;
-    runtime::store_location_resolvers_t route_resolver (*store, route_cache_options);
+    const auto route_resolver_owner =
+      std::make_shared<runtime::store_location_resolvers_t> (*store, route_cache_options);
+    auto &route_resolver = *route_resolver_owner;
     serializer_registry_t serializers;
     zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto channels = detail::channel_runtime_t::from (builder.message_bus ());
     channels.bind_serializers (serializers);
-    channels.bind_spot_address_resolver (route_resolver);
+    channels.bind_spot_address_resolver (route_resolver_owner);
     channels.bind_instance_spot_activator (
       [] (const spot_id_t &, const detail::spot_activation_intent_t &,
           const std::optional<runtime::spot_address_t> &, const std::string &, std::type_index,
