@@ -494,54 +494,57 @@ void raw_mesh_node_owner_t::start ()
 {
     return _lane
       .run ([this] {
-          std::lock_guard lifecycle_lock (_lifecycle_mutex);
-          if (_port) {
-              return;
-          }
-          if (_closed) {
-              throw std::logic_error ("raw mesh node owner cannot restart after close");
-          }
-          auto router = std::make_unique<zlink::router_socket_t> (*_context);
-          router->options ().handover (true);
-          router->options ().mandatory (true);
-          router->options ().linger (std::chrono::milliseconds (0));
-          if (_options.receive_timeout)
-              router->options ().recv_timeout (*_options.receive_timeout);
-          router->set_routing_id (zlink::routing_id_t::from (_options.descriptor.node_routing_id));
-          application_job_queue_t::receive_flow_registration_t receive_flow_registration;
-          if (_options.application_jobs) {
-              receive_flow_registration = _options.application_jobs->register_receive_flow_socket (
-                [socket = router.get ()] (application_job_queue_pressure_state_t state) {
-                    return apply_application_job_receive_flow_state (*socket, state);
-                });
-          }
-          router->bind (_options.descriptor.advertised_endpoint);
-
           auto descriptor = _topology.local_descriptor ();
-          if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ()) {
-              throw std::overflow_error ("service descriptor revision is exhausted");
-          }
-          descriptor.advertised_endpoint = transport::advertised_tcp_endpoint (
-            router->options ().last_endpoint (), _options.advertise_host, "MeshNode");
-          ++descriptor.descriptor_revision;
+          {
+              std::lock_guard lifecycle_lock (_lifecycle_mutex);
+              if (_port) {
+                  return;
+              }
+              if (_closed) {
+                  throw std::logic_error ("raw mesh node owner cannot restart after close");
+              }
+              auto router = std::make_unique<zlink::router_socket_t> (*_context);
+              router->options ().handover (true);
+              router->options ().mandatory (true);
+              router->options ().linger (std::chrono::milliseconds (0));
+              if (_options.receive_timeout)
+                  router->options ().recv_timeout (*_options.receive_timeout);
+              router->set_routing_id (
+                zlink::routing_id_t::from (_options.descriptor.node_routing_id));
+              application_job_queue_t::receive_flow_registration_t receive_flow_registration;
+              if (_options.application_jobs) {
+                  receive_flow_registration =
+                    _options.application_jobs->register_receive_flow_socket (
+                      [socket = router.get ()] (application_job_queue_pressure_state_t state) {
+                          return apply_application_job_receive_flow_state (*socket, state);
+                      });
+              }
+              router->bind (_options.descriptor.advertised_endpoint);
 
-          auto ingress_poller = std::make_unique<zlink::poller_t> ();
-          // The ingress poller is this ROUTER's one route observer: POLLROUTE
-          // wakes the host and pump_one reads the selected-route snapshot.
-          _port = std::make_shared<detail::backend::raw_route_port_t> (
-            *router, _socket_mutex,
-            zlink::poll_event_flag_t::pollin | zlink::poll_event_flag_t::pollroute,
-            ingress_poller.get (), 1);
-          _port->set_request_receive_source (
-            [this] (const auto &target) { return _liveness.connection (target); });
-          _ingress_poller = std::move (ingress_poller);
-          _router = std::move (router);
-          _receive_flow_registration = std::move (receive_flow_registration);
-          // Keep the descriptor in preparing until the receive port, completion
-          // control, and route observation can accept the first admitted message.
-          descriptor.state = service_node_state_t::serving;
-          _topology.publish_local (descriptor);
-          _options.descriptor = descriptor;
+              if (descriptor.descriptor_revision == std::numeric_limits<std::uint64_t>::max ()) {
+                  throw std::overflow_error ("service descriptor revision is exhausted");
+              }
+              descriptor.advertised_endpoint = transport::advertised_tcp_endpoint (
+                router->options ().last_endpoint (), _options.advertise_host, "MeshNode");
+              ++descriptor.descriptor_revision;
+
+              auto ingress_poller = std::make_unique<zlink::poller_t> ();
+              // The ingress poller is this ROUTER's one route observer: POLLROUTE
+              // wakes the host and pump_one reads the selected-route snapshot.
+              _port = std::make_shared<detail::backend::raw_route_port_t> (
+                *router, _socket_mutex,
+                zlink::poll_event_flag_t::pollin | zlink::poll_event_flag_t::pollroute,
+                ingress_poller.get (), 1);
+              _port->set_request_receive_source (
+                [this] (const auto &target) { return _liveness.connection (target); });
+              _ingress_poller = std::move (ingress_poller);
+              _router = std::move (router);
+              _receive_flow_registration = std::move (receive_flow_registration);
+              // Keep the descriptor in preparing until the receive port, completion
+              // control, and route observation can accept the first admitted message.
+              descriptor.state = service_node_state_t::serving;
+          }
+          _topology.publish_local (std::move (descriptor));
       })
       .get ();
 }
@@ -600,6 +603,7 @@ void raw_mesh_node_owner_t::close ()
                 _operations->shutdown ();
                 _routes.clear ();
             }
+            std::lock_guard lifecycle_lock (_lifecycle_mutex);
             return std::tuple{std::move (_port), std::move (_ingress_poller), std::move (_router)};
         })
         .get ();
@@ -762,7 +766,6 @@ bool raw_mesh_node_owner_t::disconnect_peer (const std::vector<std::uint8_t> &ex
     try {
         return _lane
           .run ([this, &expected_routing_id, &endpoint] {
-              std::lock_guard lifecycle_lock (_lifecycle_mutex);
               if (!_router)
                   return false;
               try {
@@ -892,7 +895,6 @@ raw_mesh_node_owner_t::admit_peer (service_node_descriptor_t descriptor,
     return _lane
       .run ([this, descriptor = std::move (descriptor), connection_id = std::move (connection_id),
              now] () mutable {
-          std::lock_guard lifecycle_lock (_lifecycle_mutex);
           if (!_router) {
               return peer_admission_result_t::invalid_descriptor;
           }
@@ -2941,18 +2943,13 @@ raw_mesh_node_owner_t::receive_next (service_liveness_registry_t::clock_t::time_
             const auto admission =
               _lane
                 .run ([this, &received, &descriptor, &expectation, &connection_id, now, header] {
-                    peer_admission_result_t result;
-                    {
-                        std::lock_guard lifecycle_lock (_lifecycle_mutex);
-                        result =
-                          expectation.expected_descriptor
-                            ? _topology.admit (descriptor, connection_id,
-                                               *expectation.expected_descriptor, now, header.kind)
-                            : _topology.admit (descriptor, connection_id, now, header.kind);
-                        trace_admission_phase (received->source_routing_id,
-                                               descriptor.lifecycle_generation, header.kind,
-                                               result);
-                    }
+                    const auto result =
+                      expectation.expected_descriptor
+                        ? _topology.admit (descriptor, connection_id,
+                                           *expectation.expected_descriptor, now, header.kind)
+                        : _topology.admit (descriptor, connection_id, now, header.kind);
+                    trace_admission_phase (received->source_routing_id,
+                                           descriptor.lifecycle_generation, header.kind, result);
                     refresh_admission_due_on_lane ();
                     if (result == peer_admission_result_t::not_required
                         || result == peer_admission_result_t::admitted
@@ -3802,7 +3799,6 @@ std::size_t raw_mesh_node_owner_t::apply_route_snapshot (zlink::poll_event_flag_
       .run ([this] {
           std::size_t changes = 0;
           {
-              std::lock_guard lifecycle_lock (_lifecycle_mutex);
               if (!_router)
                   return changes;
               std::vector<zlink::router_route_t> snapshot;
@@ -3907,27 +3903,27 @@ raw_mesh_node_owner_t::tick_due_liveness (service_liveness_registry_t::clock_t::
             {
                 std::lock_guard lifecycle_lock (_lifecycle_mutex);
                 port = _port;
-                if (!_router)
-                    return std::pair{std::move (tick), port};
-                for (const auto &timed_out : tick.timed_out_nodes) {
-                    const auto peer = _topology.peer (timed_out);
-                    if (!peer)
-                        continue;
-                    const auto removed = _topology.disconnect (timed_out, peer->connection_id);
-                    if (removed) {
-                        {
-                            std::lock_guard socket_lock (*_socket_mutex);
-                            try {
-                                _router->disconnect_rid (zlink::routing_id_t::from (timed_out));
-                            }
-                            catch (const zlink::connect_error_t &error) {
-                                // Core may already have removed the selected route.
-                                if (error.result () != zlink::connect_result_t::not_found)
-                                    throw;
-                            }
+            }
+            if (!_router)
+                return std::pair{std::move (tick), port};
+            for (const auto &timed_out : tick.timed_out_nodes) {
+                const auto peer = _topology.peer (timed_out);
+                if (!peer)
+                    continue;
+                const auto removed = _topology.disconnect (timed_out, peer->connection_id);
+                if (removed) {
+                    {
+                        std::lock_guard socket_lock (*_socket_mutex);
+                        try {
+                            _router->disconnect_rid (zlink::routing_id_t::from (timed_out));
                         }
-                        end_peer_operations_if_disconnected_locked (timed_out);
+                        catch (const zlink::connect_error_t &error) {
+                            // Core may already have removed the selected route.
+                            if (error.result () != zlink::connect_result_t::not_found)
+                                throw;
+                        }
                     }
+                    end_peer_operations_if_disconnected_locked (timed_out);
                 }
             }
             submit_pending_hellos_on_lane ();

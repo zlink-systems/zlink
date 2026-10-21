@@ -123,6 +123,10 @@ void verify_client_server_send_does_not_wait_on_infrastructure_worker ()
     while (!runtime.snapshot ("slow-send").is_ready && std::chrono::steady_clock::now () < deadline)
         std::this_thread::sleep_for (1ms);
     assert (runtime.snapshot ("slow-send").is_ready);
+    auto &concrete = dynamic_cast<client_server::client_server_location_runtime_t &> (runtime);
+    concrete.stop ();
+    concrete.start ();
+    assert (&provider.get_required<zlink::framework::client_server_runtime_t> () == &runtime);
     const auto submitted =
       channels.send ("slow-send", network_probe_message_t{}).async ().result ();
     assert (submitted);
