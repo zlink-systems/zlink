@@ -45,6 +45,7 @@
         <Compile Include="Runtime/SessionFailureClassificationTests.cs"/>
         <Compile Include="Runtime/SpotShutdownExecutionTests.cs"/>
         <Compile Include="Runtime/MeshLivenessPhysicalCloseTests.cs"/>
+        <Compile Include="Runtime/MeshLivenessDisconnectContractTests.cs"/>
         <Compile Include="Runtime/RequestAdmissionStageTests.cs"/>
         <Compile Include="Runtime/SpotRequestSourceDiscoveryTests.cs"/>
         <Compile Include="Runtime/SourceRequestOwnerContractTests.cs"/>
