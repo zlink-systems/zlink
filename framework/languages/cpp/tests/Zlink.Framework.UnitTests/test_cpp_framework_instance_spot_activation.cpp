@@ -633,8 +633,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
-    resolver_t resolver;
-    runtime.bind_spot_address_resolver (resolver);
+    const auto resolver_owner = std::make_shared<resolver_t> ();
+    auto &resolver = *resolver_owner;
+    runtime.bind_spot_address_resolver (resolver_owner);
 
     std::atomic_int activations{0};
     std::atomic_int ready_requests{0};
@@ -740,12 +741,14 @@ TEST (ZLinkFrameworkInstanceSpotActivation, StoreReadFailureHasUnavailablePublic
         int reads = 0;
     } store;
     fw::runtime::provider_location_repository_t repository (store);
-    fw::runtime::store_location_resolvers_t resolver (repository);
+    const auto resolver_owner =
+      std::make_shared<fw::runtime::store_location_resolvers_t> (repository);
+    auto &resolver = *resolver_owner;
     fw::serializer_registry_t serializers;
     auto builder = fw::test::runtime_failure_builder ();
     auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
-    runtime.bind_spot_address_resolver (resolver);
+    runtime.bind_spot_address_resolver (resolver_owner);
     auto client = builder.route_client (serializers);
     const auto send = client.send_to_spot ("uncached-spot", event_t{1}).async ().result ();
     EXPECT_FALSE (send.has_value ());
@@ -880,8 +883,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation, MissingWithoutIntentDoesNotActivate)
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
-    resolver_t resolver;
-    runtime.bind_spot_address_resolver (resolver);
+    const auto resolver_owner = std::make_shared<resolver_t> ();
+    auto &resolver = *resolver_owner;
+    runtime.bind_spot_address_resolver (resolver_owner);
     std::atomic_int activations{0};
     runtime.bind_instance_spot_activator (
       [&] (const auto &, const auto &, const auto &, const auto &, auto, auto, const auto &,
@@ -912,9 +916,10 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ActivationKeepsSubmissionStartAcross
     auto builder = fw::test::runtime_failure_builder ();
     auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
-    resolver_t resolver;
+    const auto resolver_owner = std::make_shared<resolver_t> ();
+    auto &resolver = *resolver_owner;
     resolver.lookup_gate = std::make_shared<fw::task_completion_source_t<void>> ();
-    runtime.bind_spot_address_resolver (resolver);
+    runtime.bind_spot_address_resolver (resolver_owner);
     std::optional<std::chrono::system_clock::time_point> observed_start;
     runtime.bind_instance_spot_activator (
       [&] (const auto &, const auto &, const auto &, const auto &, auto, auto, const auto &,
@@ -1058,8 +1063,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation, MissingRequestUsesDefaultTimeoutForC
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
-    resolver_t resolver;
-    runtime.bind_spot_address_resolver (resolver);
+    const auto resolver_owner = std::make_shared<resolver_t> ();
+    auto &resolver = *resolver_owner;
+    runtime.bind_spot_address_resolver (resolver_owner);
 
     std::chrono::milliseconds observed_timeout{0};
     runtime.bind_instance_spot_activator (
@@ -1426,8 +1432,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
-    resolver_t resolver;
-    runtime.bind_spot_address_resolver (resolver);
+    const auto resolver_owner = std::make_shared<resolver_t> ();
+    auto &resolver = *resolver_owner;
+    runtime.bind_spot_address_resolver (resolver_owner);
     std::atomic_int activations{0};
     runtime.bind_instance_spot_activator (
       [&] (const auto &, const auto &, const auto &, const auto &, auto, auto, const auto &,
@@ -1454,7 +1461,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     EXPECT_EQ (2, activations.load ());
 }
 
-TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBeforeNextColdActivation)
+// Routing §2.2: ShuttingDown is not a stale-route result. A separate cache
+// invalidation, such as a Message Follow notice, enables the next authority read.
+TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalKeepsRouteUntilInvalidation)
 {
     namespace messaging = zlink::framework::runtime::messaging;
 
@@ -1462,12 +1471,13 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
     zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
     auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
     runtime.bind_serializers (serializers);
-    resolver_t resolver;
+    const auto resolver_owner = std::make_shared<resolver_t> ();
+    auto &resolver = *resolver_owner;
     resolver.addresses.insert_or_assign (
       "player-alice",
       zlink::framework::runtime::spot_address_t{
         "gamequest", zlink::routing_id_t::from ("quest-mission"), "player-alice", 7});
-    runtime.bind_spot_address_resolver (resolver);
+    runtime.bind_spot_address_resolver (resolver_owner);
 
     std::atomic_int cold_activations{0};
     std::atomic_int ready_failures{0};
@@ -1547,9 +1557,23 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
     EXPECT_EQ (0, direct_requests.load ());
     EXPECT_EQ (1, ready_failures.load ());
     EXPECT_EQ (0, cold_activations.load ());
-    EXPECT_FALSE (resolver.addresses.contains ("player-alice"));
+    EXPECT_TRUE (resolver.addresses.contains ("player-alice"));
 
-    const auto rehydrated = client.request_to_spot ("player-alice", request_t{2})
+    const auto still_closing = client.request_to_spot ("player-alice", request_t{2})
+                                 .instance_spot ("player-quest")
+                                 .in_mesh ("gamequest")
+                                 .async<reply_t> ()
+                                 .result ();
+    ASSERT_FALSE (still_closing);
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::shutting_down,
+               still_closing.error_kind ());
+    EXPECT_TRUE (resolver.addresses.contains ("player-alice"));
+    EXPECT_EQ (2, ready_failures.load ());
+    EXPECT_EQ (0, cold_activations.load ());
+
+    resolver.invalidate_spot_address ("player-alice");
+
+    const auto rehydrated = client.request_to_spot ("player-alice", request_t{3})
                               .instance_spot ("player-quest")
                               .in_mesh ("gamequest")
                               .async<reply_t> ()
@@ -1557,9 +1581,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
     ASSERT_TRUE (rehydrated);
     EXPECT_EQ (3, rehydrated.value ().value);
     EXPECT_EQ (0, direct_requests.load ());
-    EXPECT_EQ (1, ready_failures.load ());
+    EXPECT_EQ (2, ready_failures.load ());
     EXPECT_EQ (1, cold_activations.load ());
-    EXPECT_EQ (2, resolver.reads.load ());
+    EXPECT_EQ (3, resolver.reads.load ());
 }
 
 // Failover policy §4.4: an Instance intent request whose cached Ready route the
@@ -1618,11 +1642,12 @@ TEST (ZLinkFrameworkInstanceSpotActivation, CachedRouteFenceRefusalReadsAuthorit
         runtime.bind_serializers (serializers);
         const spot_address_t route{"gamequest", zlink::routing_id_t::from ("quest-mission"),
                                    "player-alice", 7};
-        authority_resolver_t resolver;
+        const auto resolver_owner = std::make_shared<authority_resolver_t> ();
+        auto &resolver = *resolver_owner;
         resolver.cached = route;
         if (scenario.authority_present)
             resolver.authority = route;
-        runtime.bind_spot_address_resolver (resolver);
+        runtime.bind_spot_address_resolver (resolver_owner);
         std::vector<bool> cached_routes;
         runtime.bind_instance_spot_activator (
           [] (const auto &, const auto &, const auto &, const auto &, auto, auto, const auto &,
@@ -1663,6 +1688,91 @@ TEST (ZLinkFrameworkInstanceSpotActivation, CachedRouteFenceRefusalReadsAuthorit
         EXPECT_EQ (scenario.cached_routes, cached_routes);
         EXPECT_EQ (scenario.authority_reads, resolver.authority_reads);
     }
+}
+
+// Spot address messaging §5: a request completes terminal-once. A fence refusal
+// that failed admission is already the caller's terminal, so the operation's later
+// physical terminal ends the operation instead of continuing as cold activation.
+TEST (ZLinkFrameworkInstanceSpotActivation, FenceRefusalAfterPublicTerminalDoesNotColdActivate)
+{
+    namespace messaging = zlink::framework::runtime::messaging;
+    using zlink::framework::framework_error_kind_t;
+    using zlink::framework::runtime::spot_address_t;
+
+    class missing_after_invalidate_resolver_t final
+        : public zlink::framework::runtime::spot_address_resolver_t
+    {
+      public:
+        zlink::framework::task_t<std::optional<spot_address_t>>
+        resolve_spot_address (std::string, std::string) override
+        {
+            if (!cached)
+                ++authority_reads;
+            return zlink::framework::task_t<std::optional<spot_address_t>> (
+              zlink::framework::result_t<std::optional<spot_address_t>>::success (cached));
+        }
+
+        void invalidate_spot_address (std::string_view) override { cached.reset (); }
+
+        void invalidate_all_routes_after_store_recovery () override { cached.reset (); }
+
+        std::optional<spot_address_t> cached;
+        std::atomic<int> authority_reads{0};
+    };
+
+    const messaging::request_failure_mapper_t mapper;
+    const auto refusal = *mapper.target_failure_reply (
+      framework_error_kind_t::unavailable,
+      static_cast<std::uint32_t> (
+        zlink::framework::runtime::protocol::framework_error_code::spotMoving));
+    const auto refused = std::make_exception_ptr (mapper.reply_header_exception (
+      refusal.terminal_result, refusal.failure_code, "Instance Spot request"));
+
+    zlink::framework::serializer_registry_t serializers;
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
+    auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    const auto resolver = std::make_shared<missing_after_invalidate_resolver_t> ();
+    resolver->cached =
+      spot_address_t{"gamequest", zlink::routing_id_t::from ("quest-mission"), "player-alice", 7};
+    runtime.bind_spot_address_resolver (resolver);
+    zlink::framework::task_completion_source_t<zlink::message_t> physical_reply;
+    std::atomic<int> activations{0};
+    runtime.bind_instance_spot_activator (
+      [] (const auto &, const auto &, const auto &, const auto &, auto, auto, const auto &,
+          std::chrono::system_clock::time_point)
+        -> zlink::framework::task_t<zlink::framework::result_t<void>> {
+          co_return zlink::framework::result_t<void>::failure (
+            framework_error_kind_t::internal_failure, "unused one-way activation");
+      },
+      [&] (const auto &, const auto &, const auto &, std::string, std::type_index, auto,
+           std::chrono::milliseconds, auto) -> zlink::framework::request_task_t<zlink::message_t> {
+          if (activations++ != 0)
+              return zlink::framework::request_task_t<zlink::message_t> (
+                zlink::framework::result_t<zlink::message_t>::success (
+                  zlink::framework::detail::encoded_payload_to_raw (
+                    serializers.get<reply_t> ().serialize (reply_t{9}))));
+          // The owner refused the fence before admission; the physical reply stays open.
+          auto admitted = std::make_shared<zlink::framework::task_completion_source_t<void>> ();
+          admitted->complete (zlink::framework::detail::result_access_t::failure<void> (refused));
+          return zlink::framework::request_task_t<zlink::message_t> (physical_reply.task (),
+                                                                     admitted);
+      });
+
+    auto pending = builder.route_client (serializers)
+                     .request_to_spot ("player-alice", request_t{1})
+                     .instance_spot ("player-quest")
+                     .async<reply_t> ();
+    const auto reply = pending.result ();
+    ASSERT_FALSE (reply);
+    EXPECT_EQ (framework_error_kind_t::unavailable, reply.error_kind ());
+    physical_reply.complete (
+      zlink::framework::detail::result_access_t::failure<zlink::message_t> (refused));
+    // Waits for the operation's own terminal (no sleep).
+    (void) zlink::framework::detail::request_task_access_t::physical_reply (pending).result ();
+    EXPECT_EQ (1, activations.load ()) << "cold activation ran after the public terminal";
+    EXPECT_EQ (0, resolver->authority_reads.load ());
+    EXPECT_FALSE (resolver->cached) << "the refused route is invalidated for the next call";
 }
 
 TEST (ZLinkFrameworkInstanceSpotActivation, RetiredOwnerRequestCompletesWithUnavailableTerminal)
