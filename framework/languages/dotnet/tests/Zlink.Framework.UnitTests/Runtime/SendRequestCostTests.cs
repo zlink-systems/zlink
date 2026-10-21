@@ -491,7 +491,7 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
             .GetResult();
 
     [Fact]
-    public async Task Alternating_ready_path_cancellation_microbench()
+    public async Task Alternating_nonwaiting_readiness_cancellation_microbench()
     {
         var services = new ServiceCollection();
         services.AddZLinkFramework(options =>
@@ -500,13 +500,10 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
                 .Server()
                 .Listen(0)
                 .SetBindHost("127.0.0.1")
+                .SetWeight(0)
                 .AddSendHandler<ProbeHandler, Probe>()
         );
         await using var server = services.BuildServiceProvider();
-        server
-            .GetRequiredService<ZLinkFrameworkRegistration>()
-            .Channels["cost"]
-            .Server!.SocketConfig.MaxMessageSize = 512;
         var serverRuntime = server.GetRequiredService<ZLinkFrameworkRuntime>();
         await serverRuntime.StartAsync(CancellationToken.None);
         var state = await serverRuntime.EnsureStartedStateAsync(CancellationToken.None);
@@ -525,41 +522,32 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
         try
         {
             var transport = runtime.GetClientServerClientRuntime("cost");
-            // The first rejection waits for real admission. Later operations have
-            // a ready target and terminate at the existing message-bound owner,
-            // before native submission. Both samples share that exact path.
-            await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
-                await transport.SendAsync([Message.From(Body)], CancellationToken.None)
-            );
+            // The first call waits for admission. A zero-weight admitted server
+            // then completes readiness without waiting or constructing an error.
+            var first = await transport.SendAsync([Message.From(Body)], CancellationToken.None);
+            Assert.Equal(ZLinkOneWaySubmitStatus.RouteNotConnected, first.Status);
             var stop = runtime.ShutdownToken;
             Compare(
-                "ready send cancellation",
+                "nonwaiting readiness cancellation",
                 () =>
                 {
                     using var linked = CancellationTokenSource.CreateLinkedTokenSource(
                         CancellationToken.None,
                         stop
                     );
-                    Reject(linked.Token);
+                    Submit();
                 },
-                () => Reject(CancellationToken.None)
+                Submit
             );
 
-            void Reject(CancellationToken token)
+            [MethodImpl(MethodImplOptions.NoInlining)]
+            void Submit()
             {
-                var pending = transport.SendAsync([Message.From(Body)], token);
-                Assert.True(pending.IsCompleted);
-                try
-                {
-                    pending.GetAwaiter().GetResult();
-                }
-                catch (ZLinkFrameworkException error)
-                    when (error.Kind == ZLinkFrameworkErrorKind.Rejected)
-                {
-                    return;
-                }
-                throw new InvalidOperationException(
-                    "The ready target accepted an oversized message."
+                var pending = transport.SendAsync([Message.From(Body)], CancellationToken.None);
+                Assert.True(pending.IsCompletedSuccessfully);
+                Assert.Equal(
+                    ZLinkOneWaySubmitStatus.RouteNotConnected,
+                    pending.GetAwaiter().GetResult().Status
                 );
             }
         }
