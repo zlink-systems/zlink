@@ -2200,6 +2200,9 @@ task_t<void> detail::session_actor_manager_access_t::disconnect_async (
         }
         binding_context->stream.reset ();
         binding_context->stream_state.reset ();
+        binding_context->native_binder = {};
+        binding_context->disconnect_snapshot = {};
+        binding_context->disconnect_cleanup = {};
     }
     struct issued_disconnect_t
     {
@@ -3575,6 +3578,28 @@ void actor_gateway_runtime_t::on_join_spot (
     _state->sync ([this, dispatcher = std::move (dispatcher)] () mutable {
         _state->join_spot_dispatcher = std::move (dispatcher);
     });
+}
+
+void actor_gateway_runtime_t::release_runtime_bindings ()
+{
+    _state->lane
+      .run ([&] {
+          _state->create_dispatcher = {};
+          _state->join_spot_dispatcher = {};
+          _state->join_entry_spot_dispatcher = {};
+          _state->relay_dispatcher = {};
+          _state->disconnect_dispatcher = {};
+          _state->bound_session_registrar = {};
+          _state->bound_session_sender = {};
+          _state->bound_session_closer = {};
+          _state->membership_query = {};
+          _state->join_barrier_reserver = {};
+          _state->bound_session_sinks.clear ();
+          _state->bound_session_replacement_handlers.clear ();
+          _state->actors_by_id.clear ();
+          _state->dispatch = {};
+      })
+      .get ();
 }
 
 void actor_gateway_runtime_t::on_create (actor_gateway_state_t::create_dispatcher_t dispatcher)

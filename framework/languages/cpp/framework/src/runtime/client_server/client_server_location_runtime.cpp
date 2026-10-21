@@ -363,7 +363,7 @@ client_server_location_runtime_t::client_server_location_runtime_t (
     _store (&store),
     _leases (&leases),
     _services (services),
-    _framework_runtime (&_services.get_required<framework_runtime_t> ()),
+    _framework_runtime (&_services->get_required<framework_runtime_t> ()),
     _serializers (&serializers),
     _handlers (&handlers),
     _application_jobs (
@@ -1469,7 +1469,7 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                                                     std::nullopt};
                     });
                     auto scope = zlink::framework::detail::service_scope_t::create (
-                      _services,
+                      *_services,
                       zlink::framework::detail::service_scope_kind_t::handler_invocation);
                     if (record.reply_token) {
                         auto reply =
@@ -1927,6 +1927,7 @@ void client_server_location_runtime_t::stop ()
     if (!was_stopped || has_servers || has_clients)
         failures.capture ([&] { publish_snapshot_changes ().result ().value (); });
     failures.rethrow_if_failed ();
+    _services.reset ();
 }
 
 void client_server_location_runtime_t::stop_clients ()

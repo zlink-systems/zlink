@@ -15,8 +15,66 @@
 
 #include <gtest/gtest.h>
 
+#if defined(ZLINK_TEST_CHECK_CORE_CONTEXTS) && defined(__linux__)
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <string>
+
+namespace
+{
+struct thread_counts_t
+{
+    int threads = 0;
+    int contexts = 0;
+};
+
+thread_counts_t thread_counts ()
+{
+    thread_counts_t counts;
+    for (const auto &thread : std::filesystem::directory_iterator ("/proc/self/task")) {
+        std::ifstream comm (thread.path () / "comm");
+        std::string name;
+        if (std::getline (comm, name)) {
+            ++counts.threads;
+            if (name.find ("core-ct") != std::string::npos)
+                ++counts.contexts;
+        }
+    }
+    return counts;
+}
+
+class core_context_listener_t final : public testing::EmptyTestEventListener
+{
+  public:
+    void OnTestProgramStart (const testing::UnitTest &) override
+    {
+        _baseline = thread_counts ().contexts;
+    }
+
+    void OnTestStart (const testing::TestInfo &) override { _before = thread_counts ().contexts; }
+
+    void OnTestEnd (const testing::TestInfo &test) override
+    {
+        const auto counts = thread_counts ();
+        std::cout << "[ CONTEXTS ] " << test.test_suite_name () << '.' << test.name ()
+                  << " before=" << _before << " after=" << counts.contexts
+                  << " threads=" << counts.threads << std::endl;
+        EXPECT_EQ (counts.contexts, _baseline) << "Core contexts survived test teardown";
+    }
+
+  private:
+    int _baseline = 0;
+    int _before = 0;
+};
+} // namespace
+#endif
+
 int main (int argc, char **argv)
 {
     testing::InitGoogleTest (&argc, argv);
+#if defined(ZLINK_TEST_CHECK_CORE_CONTEXTS) && defined(__linux__)
+    testing::UnitTest::GetInstance ()->listeners ().Append (new core_context_listener_t);
+#endif
     return RUN_ALL_TESTS ();
 }

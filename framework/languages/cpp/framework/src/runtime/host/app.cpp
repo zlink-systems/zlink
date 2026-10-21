@@ -343,6 +343,10 @@ class app_state_t
         failures->capture ([&] { runtime::shutdown_handler_coroutine_executor (); });
         failures->capture ([&] { shutdown_stream_dispatch_executor (); });
         failures->capture ([&] { shutdown_handler_invocation_executor (); });
+        failures->capture ([&] {
+            if (auto gateway = provider.get<actor_gateway_runtime_t> ())
+                gateway->get ().release_runtime_bindings ();
+        });
         failures->capture ([&] { provider.close (); });
     }
 

@@ -2121,6 +2121,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_spot_close_conformance PRIVATE
+    ZLINK_TEST_CHECK_CORE_CONTEXTS
     ZLINK_SPOT_CLOSE_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/spot-close-v1.json")
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_spot_close_conformance

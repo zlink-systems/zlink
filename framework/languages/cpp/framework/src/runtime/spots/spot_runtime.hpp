@@ -1149,6 +1149,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                 activation_scope.reset ();
             }
             node.reset ();
+            channel_runtime.reset ();
             if (callback_error)
                 std::rethrow_exception (callback_error);
             return;
@@ -1630,6 +1631,7 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
                   activation_scope.reset ();
               if (node.get () == owner.get ())
                   node.reset ();
+              channel_runtime.reset ();
           })
           .get ();
 

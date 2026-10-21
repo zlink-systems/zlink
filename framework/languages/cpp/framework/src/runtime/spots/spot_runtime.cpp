@@ -9233,9 +9233,10 @@ task_t<void> spot_node_runtime_t::seal_actor_application_suffix (const actor_ref
               const runtime::messaging::message_parts_t parts (
                 runtime::protocol::decode_application_parts (application));
               const auto header = decode_actor_packet_header (
-                parts, kind == runtime::protocol::frozen_record_kind_t::actor_request
-                         ? stream_message_kind_t::request
-                         : stream_message_kind_t::send,
+                parts,
+                kind == runtime::protocol::frozen_record_kind_t::actor_request
+                  ? stream_message_kind_t::request
+                  : stream_message_kind_t::send,
                 false);
               if (!header)
                   std::rethrow_exception (header.exception ());
@@ -13967,6 +13968,31 @@ void spot_node_runtime_t::release_native_handles () noexcept
             catch (...) {
             }
         }
+        // Host relocation §14: release runtime bindings after application scopes.
+        // These callbacks and the root provider can own the Mesh runtime that
+        // owns this registration; leaving them bound keeps its Core context alive.
+        _state->lane
+          .run ([&] {
+              _state->create_user_spot = {};
+              _state->find_user_spot = {};
+              _state->close_user_spot = {};
+              _state->admit_instance_spot_idle_eviction = {};
+              _state->begin_instance_spot_close = {};
+              _state->select_instance_spot_target = {};
+              _state->begin_user_spot_close = {};
+              _state->destroy_actor_registry = {};
+              _state->update_actor_registry_ref = {};
+              _state->actor_packet_relay = {};
+              _state->actor_message_follow_relay = {};
+              _state->actor_handoff_terminal_sender = {};
+              _state->actor_leave_notification_sender = {};
+              _state->actor_route_admission = {};
+              _state->resolvers.clear ();
+              _state->route_client.reset ();
+              _state->channel_runtime.reset ();
+              _state->root_services.reset ();
+          })
+          .get ();
     }
     catch (...) {
     }
@@ -15530,12 +15556,11 @@ bool spot_node_runtime_t::dispatch_mesh_record (
             return false;
         }
         detail::observe_task_completion (
-          relayed,
-          [state = _state, admission_token, deferred_handoff_request, handoff_pending,
-           request_header, record_kind = record.kind, reply_token = record.reply_token,
-           terminal_claimed, terminal_owner,
-           application_completed, application_record = record.application_record] (
-            const result_t<std::optional<zlink::message_t>> &result) mutable {
+          relayed, [state = _state, admission_token, deferred_handoff_request, handoff_pending,
+                    request_header, record_kind = record.kind, reply_token = record.reply_token,
+                    terminal_claimed, terminal_owner, application_completed,
+                    application_record = record.application_record] (
+                     const result_t<std::optional<zlink::message_t>> &result) mutable {
               /* An empty relay result retains the existing native reply owner
                * or the legacy pending entry while handoff replay owns the request.
                * For the legacy path, the reply token stays

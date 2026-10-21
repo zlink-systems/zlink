@@ -1918,6 +1918,21 @@ void mesh_node_runtime_t::stop ()
                                            [this] { return _peer_callback_gate->active == 0; });
     }
     spot_runtime.cancel_pending_work ();
+    // Configuration callbacks retain their source Mesh runtime while they can run.
+    // After that drain, the Mesh stop owner releases its configuration copies.
+    _user_spot_materializer = {};
+    _user_spot_closer = {};
+    _instance_spot_materializer = {};
+    _actor_create_target = {};
+    _bound_session_operations.reset ();
+    _bound_session_relocation_resolver = {};
+    _late_session_route_update_reporter = {};
+    _stateful_dispatch_configuration = {};
+    _spot_route_fence_resolver = {};
+    _actor_route_resolver = {};
+    _actor_route_invalidator = {};
+    _instance_spot_owner = {};
+    _session_route_owner_resolver = {};
     if (!_node) {
         spot_runtime.release_native_handles ();
         return;

@@ -121,7 +121,7 @@ fanout_location_runtime_t::fanout_location_runtime_t (
     _store (&store),
     _leases (&leases),
     _services (services),
-    _framework_runtime (&_services.get_required<framework_runtime_t> ()),
+    _framework_runtime (&_services->get_required<framework_runtime_t> ()),
     _serializers (&serializers),
     _handlers (&handlers),
     _application_jobs (
@@ -592,7 +592,7 @@ void fanout_location_runtime_t::pump ()
                    topic = std::move (topic)] (auto complete) mutable {
                       auto scope = std::make_shared<zlink::framework::detail::service_scope_t> (
                         zlink::framework::detail::service_scope_t::create (
-                          _services,
+                          *_services,
                           zlink::framework::detail::service_scope_kind_t::handler_invocation));
                       auto dispatched = runtime.dispatch_send_async (
                         channel_name, topic, packet_name, scope->provider (), *_serializers,
@@ -704,6 +704,7 @@ void fanout_location_runtime_t::stop ()
     if (!was_stopped || has_publishers || has_subscribers)
         failures.capture ([&] { publish_snapshot_changes (); });
     failures.rethrow_if_failed ();
+    _services.reset ();
 }
 
 void fanout_location_runtime_t::stop_subscribers ()
