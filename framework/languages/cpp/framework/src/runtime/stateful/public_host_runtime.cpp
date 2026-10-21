@@ -2880,17 +2880,27 @@ task_t<zlink::submit_result_t>
 public_host_runtime_t::send_to_node (const zlink::routing_id_t &target,
                                      const std::vector<zlink::message_t> &parts)
 {
-    const auto target_bytes = target.to_bytes ();
-    co_return co_await _transport->send_to_node_result (target_bytes, encode_application (parts));
+    try {
+        return _transport->send_to_node_result (target.to_bytes (), encode_application (parts));
+    }
+    catch (...) {
+        return task_t<zlink::submit_result_t> (
+          detail::current_exception_result<zlink::submit_result_t> ());
+    }
 }
 
 task_t<zlink::submit_result_t>
 public_host_runtime_t::send_to_node (const zlink::routing_id_t &target,
                                      std::vector<zlink::message_t> &&parts)
 {
-    const auto target_bytes = target.to_bytes ();
-    co_return co_await _transport->send_to_node_result (target_bytes,
-                                                        encode_application (std::move (parts)));
+    try {
+        return _transport->send_to_node_result (target.to_bytes (),
+                                                encode_application (std::move (parts)));
+    }
+    catch (...) {
+        return task_t<zlink::submit_result_t> (
+          detail::current_exception_result<zlink::submit_result_t> ());
+    }
 }
 
 task_t<zlink::submit_result_t>

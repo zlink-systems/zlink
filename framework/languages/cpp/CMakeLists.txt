@@ -1266,7 +1266,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_m6b_runtime
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
+    tests/support/allocation_counter.cpp)
   target_compile_features(test_cpp_framework_m6b_runtime PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_m6b_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
