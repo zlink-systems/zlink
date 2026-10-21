@@ -3,6 +3,7 @@
 #include "runtime/diagnostics/mesh_trace.hpp"
 
 #include "runtime/mesh/mesh_node_host_service.hpp"
+#include "runtime/configuration/service_scope.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/execution/task_result.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
@@ -2438,7 +2439,9 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                     }});
             }
         }
-        auto &spot_resolver = services.get_required<spot_address_resolver_t> ();
+        const auto spot_resolver =
+          zlink::framework::detail::service_scope_access_t::get_required_shared<
+            spot_address_resolver_t> (services);
         auto &actor_resolver = services.get_required<actor_address_resolver_t> ();
         const auto location_options_at_startup = location_runtime.options ();
         for (std::size_t index = 0; index < _nodes.size (); ++index) {
@@ -2446,11 +2449,11 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             const auto registration = _registrations[index];
             const auto mesh_name = node->mesh_name ();
             node->configure_spot_route_fence_resolver (
-              [&spot_resolver,
+              [spot_resolver,
                mesh_name] (zlink::routing_id_t target_node_rid, std::string target_spot_id,
                            std::uint64_t) -> task_t<std::optional<host::route_fence_t>> {
                   const auto resolved = co_await await_result (
-                    spot_resolver.resolve_spot_address (mesh_name, std::move (target_spot_id)));
+                    spot_resolver->resolve_spot_address (mesh_name, std::move (target_spot_id)));
                   if (!resolved || !resolved.value ())
                       co_return std::nullopt;
                   const auto &address = *resolved.value ();

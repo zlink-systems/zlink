@@ -38,6 +38,7 @@
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/sha256.hpp"
 #include "runtime/configuration/endpoint_connections.hpp"
+#include "runtime/configuration/service_scope.hpp"
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/diagnostics/runtime_metrics.hpp"
@@ -1352,7 +1353,7 @@ void app_t::_apply_zlink_framework ()
         const auto resolver_location_options = options.location_options ();
         _state->services.add_factory<runtime::store_location_resolvers_t> (
           [resolver_location_options, actor_location_observer] (service_provider_t &provider) {
-              return std::make_unique<runtime::store_location_resolvers_t> (
+              return std::make_shared<runtime::store_location_resolvers_t> (
                 provider.get_required<runtime::live_location_reader_t> (),
                 resolver_location_options, actor_location_observer);
           },
@@ -1361,9 +1362,12 @@ void app_t::_apply_zlink_framework ()
     if (!_state->services.contains (std::type_index (typeid (runtime::spot_address_resolver_t)))) {
         _state->services.add_factory<runtime::spot_address_resolver_t> (
           [] (service_provider_t &provider) {
-              return std::shared_ptr<runtime::spot_address_resolver_t> (
-                &provider.get_required<runtime::store_location_resolvers_t> (),
-                [] (runtime::spot_address_resolver_t *) noexcept {});
+              // Shares the store resolvers' ownership: runtimes that bind this
+              // resolver keep it for their late operations.
+              const auto resolvers = detail::service_scope_access_t::get_required_shared<
+                runtime::store_location_resolvers_t> (provider);
+              return std::shared_ptr<runtime::spot_address_resolver_t> (resolvers,
+                                                                        resolvers.get ());
           },
           service_lifetime_t::singleton);
     }
@@ -1471,12 +1475,13 @@ void app_t::_apply_zlink_framework ()
     *actor_mesh_name = application_mesh_name;
     {
         auto provider = _state->services.build_provider ();
-        channel_runtime.bind_spot_address_resolver (
-          provider.get_required<runtime::spot_address_resolver_t> ());
+        const auto spot_resolver =
+          detail::service_scope_access_t::get_required_shared<runtime::spot_address_resolver_t> (
+            provider);
+        channel_runtime.bind_spot_address_resolver (spot_resolver);
         provider.get_required<runtime::store_location_resolvers_t> ().set_actor_mesh_name (
           application_mesh_name);
         auto &location_lifecycle = provider.get_required<runtime::location_lifecycle_t> ();
-        auto &spot_resolver = provider.get_required<runtime::spot_address_resolver_t> ();
         auto route_client = provider.get_required<route_client_t> ();
         for (const auto &registration : mesh_node_registrations) {
             registration->spot_state->dispatch = options.configure_dispatch ();
@@ -2256,11 +2261,14 @@ void app_t::_apply_zlink_framework ()
           });
         actor_gateway_runtime.on_join_spot (
           [application_mesh, actor_gateway_runtime,
-           spot_locations = &_state->services.build_provider ()
-                               .get_required<runtime::spot_address_resolver_t> ()] (
-            const actor_ref_t &actor, spot_id_t target_spot, const zlink::message_t &request,
-            std::string packet_name, std::string content_type,
-            std::chrono::milliseconds timeout) -> task_t<detail::actor_join_reply_t> {
+           spot_locations =
+             [&] {
+                 auto provider = _state->services.build_provider ();
+                 return detail::service_scope_access_t::get_required_shared<
+                   runtime::spot_address_resolver_t> (provider);
+             }()] (const actor_ref_t &actor, spot_id_t target_spot, const zlink::message_t &request,
+                   std::string packet_name, std::string content_type,
+                   std::chrono::milliseconds timeout) -> task_t<detail::actor_join_reply_t> {
               auto located = co_await spot_locations->resolve_spot_address ({}, target_spot);
               if (!located) {
                   co_return result_t<detail::actor_join_reply_t>::failure (

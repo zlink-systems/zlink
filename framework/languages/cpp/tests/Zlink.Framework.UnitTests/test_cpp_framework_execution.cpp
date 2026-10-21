@@ -5103,7 +5103,8 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
       service_lifetime_t::singleton);
     auto provider = services.build_provider ();
     owner.bind_service_provider (provider);
-    wire_join_spot_resolver_t resolver;
+    const auto resolver_owner = std::make_shared<wire_join_spot_resolver_t> ();
+    auto &resolver = *resolver_owner;
     resolver.address.node_rid = local_rid;
     resolver.address.spot_id = "target-spot";
     // Deliberately stale: canonical target admission must ignore this
@@ -5112,7 +5113,7 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     resolver.address.node_generation = 2;
     resolver.address.authority_owner_generation = 20;
     resolver.address.owner = location_owner_token_t{"stale-owner", 23};
-    owner.bind_spot_location_resolver (resolver);
+    owner.bind_spot_location_resolver (resolver_owner);
 
     const auto make_request = [&] (std::uint64_t correlation) {
         return runtime::protocol::actor_join_request_t{
