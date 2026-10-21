@@ -888,6 +888,7 @@ void verify_public_host_local_spot_and_actor_requests ()
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     try {
         verify_topology_metrics_and_selection_reasons ();
         verify_not_required_peer_counts_as_configured ();

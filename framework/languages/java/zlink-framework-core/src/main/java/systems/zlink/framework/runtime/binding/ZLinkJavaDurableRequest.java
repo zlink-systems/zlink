@@ -26,6 +26,11 @@ import java.util.logging.Logger;
 
 /** Owns one durable lifecycle request and observes its logical route owner. */
 public final class ZLinkJavaDurableRequest {
+    /** Shares the binding request boundary's failure projection with internal callers. */
+    public static Throwable requestFailure(Throwable failure) {
+        return ZLinkJavaRawMeshNode.requestFailure(failure);
+    }
+
     private static final Logger LOGGER = Logger.getLogger(ZLinkJavaDurableRequest.class.getName());
     private final Supplier<List<byte[]>> prepare;
 

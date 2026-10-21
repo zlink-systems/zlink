@@ -14,9 +14,11 @@
 // call resolve through the same import, so there is one registry.
 
 #include <gtest/gtest.h>
+#include <zlink/framework/contracts/dispatch/task.hpp>
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     testing::InitGoogleTest (&argc, argv);
     return RUN_ALL_TESTS ();
 }

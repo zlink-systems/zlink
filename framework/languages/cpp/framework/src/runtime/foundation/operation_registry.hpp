@@ -6,6 +6,7 @@
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 
 #include <zlink/Contracts/Messaging/message.hpp>
+#include <zlink/framework/contracts/dispatch/task.hpp>
 
 #include <chrono>
 #include <array>
