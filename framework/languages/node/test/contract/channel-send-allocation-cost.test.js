@@ -26,8 +26,8 @@ function promiseCount(call) {
   return { count, result };
 }
 
-for (const backend of [false, true]) {
-  const name = backend ? 'backend' : 'runtime';
+for (const backend of [false, true, 'spot']) {
+  const name = backend === 'spot' ? 'spot' : backend ? 'backend' : 'runtime';
   test(`${name} immediate channel sends create only the required boundary Promise`, async (t) => {
     const f = await channelSendFixture(dist, backend);
     try {
@@ -128,3 +128,18 @@ for (const backend of [false, true]) {
     }
   });
 }
+
+test('closed ServiceSpot channel send rejects through the Promise boundary', async () => {
+  const f = await channelSendFixture(dist, 'spot');
+  try {
+    f.target.close();
+    let pending;
+    assert.doesNotThrow(() => {
+      pending = f.target.sendToChannel('channel', Buffer.alloc(1024));
+    });
+    assert.ok(pending instanceof Promise);
+    await assert.rejects(pending, /Spot '.*' is closed\./);
+  } finally {
+    await f.close();
+  }
+});

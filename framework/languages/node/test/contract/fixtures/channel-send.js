@@ -72,13 +72,18 @@ async function channelSendFixture(dist, backend = false) {
   } else {
     await target.pumpOne(0);
   }
+  const owner = target;
+  if (backend === 'spot') target = owner.createSpot();
   return {
     target,
     setSubmit(value) {
       submit = value;
     },
     mockSubmit: (...args) => router.submitSend(...args),
-    close: () => target.close()
+    close: () => {
+      if (backend === 'spot') target.close();
+      return owner.close();
+    }
   };
 }
 

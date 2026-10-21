@@ -31,7 +31,7 @@ async function main() {
     Promise.all([baseline, current].map((dist) => channelSendFixture(path.resolve(dist), backend)));
   // CPU time helps distinguish scheduler delay from process work; it includes GC.
   // Finish every timing sample before enabling allocation hooks anywhere in this process.
-  for (const backend of [false, true]) {
+  for (const backend of [false, true, 'spot']) {
     const fixtures = await createFixtures(backend);
     try {
       for (const scenario of ['immediate', 'no-target', 'deferred']) {
@@ -62,7 +62,7 @@ async function main() {
           const after = median(times[1]);
           records.push({
             node: process.version,
-            path: backend ? 'backend' : 'runtime',
+            path: backend === 'spot' ? 'spot' : backend ? 'backend' : 'runtime',
             scenario,
             bytes,
             iterations,
@@ -86,11 +86,11 @@ async function main() {
   }
   // Allocation measurement is separate from timing. Subtract the identical mock
   // submission baseline and exclude the caller's await from synchronous init counts.
-  for (const backend of [false, true]) {
+  for (const backend of [false, true, 'spot']) {
     const fixtures = await createFixtures(backend);
     try {
       for (const record of records.filter(
-        (row) => row.path === (backend ? 'backend' : 'runtime')
+        (row) => row.path === (backend === 'spot' ? 'spot' : backend ? 'backend' : 'runtime')
       )) {
         const channel = configure(fixtures, record.scenario);
         const payload = Buffer.alloc(record.bytes);
