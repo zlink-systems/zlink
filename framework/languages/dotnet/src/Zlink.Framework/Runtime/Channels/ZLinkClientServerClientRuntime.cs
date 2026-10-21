@@ -156,16 +156,13 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         CancellationToken cancellationToken
     )
     {
-        using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken,
-            _stopToken
-        );
         ReadyWaitResult readiness;
         try
         {
-            readiness = await WaitForReadyAsync(lifetime.Token).ConfigureAwait(false);
+            readiness = await WaitForReadyAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
+        catch (OperationCanceledException)
+            when (cancellationToken.IsCancellationRequested || _stopToken.IsCancellationRequested)
         {
             ZLinkMessageParts.DisposeAll(parts);
             return new ZLinkOneWaySubmitResult(ZLinkOneWaySubmitStatus.Shutdown);
@@ -249,13 +246,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         Interlocked.Increment(ref _pendingRequests);
         SignalStateChanged();
         var started = _time.GetTimestamp();
-        using var readyWaitCancellation = CancellationTokenSource.CreateLinkedTokenSource(
-            cancellationToken,
-            _stopToken
-        );
         try
         {
-            var readiness = await WaitForReadyAsync(readyWaitCancellation.Token, timeout, started)
+            var readiness = await WaitForReadyAsync(cancellationToken, timeout, started)
                 .ConfigureAwait(false);
             var target = readiness.Target;
             if (target is null)
@@ -291,17 +284,19 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 );
             var reply = await ZLinkRawRequestSubmitter
                 .SubmitAsync(
+                    (Target: target, Admission: requestAdmission, ChannelName: _channelName),
                     parts,
-                    (pending, nativeTimeout, token) =>
+                    static (state, pending, nativeTimeout, token) =>
                         ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
-                            target.Socket.Request().Messages(pending).Timeout(nativeTimeout),
+                            state.Target.Socket.Request().Messages(pending).Timeout(nativeTimeout),
                             nativeTimeout,
                             token,
-                            target.Liveness,
-                            requestAdmission: requestAdmission
+                            state.Target.Liveness,
+                            requestAdmission: state.Admission
                         ),
                     timeout - _time.GetElapsedTime(started),
-                    $"ClientServer request failed for '{_channelName}': {{0}}.",
+                    static (state, result) =>
+                        $"ClientServer request failed for '{state.ChannelName}': {result}.",
                     cancellationToken
                 )
                 .ConfigureAwait(false);
@@ -653,17 +648,24 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     }
 
     private ReadyWaitResult SelectReady() =>
-        RunState(() =>
-        {
-            if (_readySelectionPlan?.Select() is { } ready)
-                return new ReadyWaitResult(ready, ZLinkOneWaySubmitStatus.Submitted);
-            return new ReadyWaitResult(
-                null,
-                DistinctConnections().Any(static connection => connection.AdmittedButIneligible)
-                    ? ZLinkOneWaySubmitStatus.RouteNotConnected
-                    : ZLinkOneWaySubmitStatus.Backpressured
-            );
-        });
+        AwaitStateLane(
+            _lane.RunAsync(
+                static owner =>
+                {
+                    if (owner._readySelectionPlan?.Select() is { } ready)
+                        return new ReadyWaitResult(ready, ZLinkOneWaySubmitStatus.Submitted);
+                    return new ReadyWaitResult(
+                        null,
+                        owner
+                            .DistinctConnections()
+                            .Any(static connection => connection.AdmittedButIneligible)
+                            ? ZLinkOneWaySubmitStatus.RouteNotConnected
+                            : ZLinkOneWaySubmitStatus.Backpressured
+                    );
+                },
+                this
+            )
+        );
 
     private void ScheduleStateChanged(bool selectionChanged)
     {
@@ -761,6 +763,7 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
         while (true)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            _stopToken.ThrowIfCancellationRequested();
             var remaining = requestTimeout is { } limit
                 ? limit - _time.GetElapsedTime(requestStarted)
                 : (TimeSpan?)null;
@@ -772,39 +775,46 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                 || readiness.Status == ZLinkOneWaySubmitStatus.RouteNotConnected
             )
                 return readiness;
-            var changed = new TaskCompletionSource(
-                TaskCreationOptions.RunContinuationsAsynchronously
-            );
-            void OnStateChanged() => changed.TrySetResult();
-            StateChanged += OnStateChanged;
-            try
+            // Only a pending readiness wait needs captured callback storage.
             {
-                readiness = SelectReady();
-                if (
-                    readiness.Target is not null
-                    || readiness.Status == ZLinkOneWaySubmitStatus.RouteNotConnected
-                )
-                    return readiness;
-                if (remaining is { } budget)
+                using var lifetime = CancellationTokenSource.CreateLinkedTokenSource(
+                    cancellationToken,
+                    _stopToken
+                );
+                var changed = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously
+                );
+                void OnStateChanged() => changed.TrySetResult();
+                StateChanged += OnStateChanged;
+                try
                 {
-                    try
+                    readiness = SelectReady();
+                    if (
+                        readiness.Target is not null
+                        || readiness.Status == ZLinkOneWaySubmitStatus.RouteNotConnected
+                    )
+                        return readiness;
+                    if (remaining is { } budget)
                     {
-                        await changed
-                            .Task.WaitAsync(budget, _time, cancellationToken)
-                            .ConfigureAwait(false);
+                        try
+                        {
+                            await changed
+                                .Task.WaitAsync(budget, _time, lifetime.Token)
+                                .ConfigureAwait(false);
+                        }
+                        catch (TimeoutException)
+                        {
+                            // Timer notification can precede the monotonic deadline.
+                            // The next iteration checks the same request budget.
+                        }
                     }
-                    catch (TimeoutException)
-                    {
-                        // Timer notification can precede the monotonic deadline.
-                        // The next iteration checks the same request budget.
-                    }
+                    else
+                        await changed.Task.WaitAsync(lifetime.Token).ConfigureAwait(false);
                 }
-                else
-                    await changed.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-            }
-            finally
-            {
-                StateChanged -= OnStateChanged;
+                finally
+                {
+                    StateChanged -= OnStateChanged;
+                }
             }
         }
     }

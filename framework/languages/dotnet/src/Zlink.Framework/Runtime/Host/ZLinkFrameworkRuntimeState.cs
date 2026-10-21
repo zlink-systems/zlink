@@ -157,6 +157,9 @@ internal sealed class ZLinkFrameworkComponentState : IAsyncDisposable
     // disposal protocol and intentionally spans asynchronous resource cleanup.
     internal ValueTask<T> RunStateAsync<T>(Func<T> work) => _stateLane.RunAsync(work);
 
+    internal ValueTask<T> RunStateAsync<TState, T>(Func<TState, T> work, TState state) =>
+        _stateLane.RunAsync(work, state);
+
     internal ValueTask RunStateAsync(Action work) => _stateLane.RunAsync(work);
 
     public ZLinkSpotNodeRuntime? FindSpotNodeByRoutingId(RoutingId nodeRid)
