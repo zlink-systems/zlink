@@ -2315,7 +2315,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_zlink_framework_test(
     test_cpp_framework_request_reply_cost
     tests/Zlink.Framework.UnitTests/test_cpp_framework_request_reply_cost.cpp
-    "framework-unit;framework-contract;framework-regression;messaging")
+    "framework-unit;framework-contract;framework-regression;messaging"
+    "unit")
   target_sources(test_cpp_framework_request_reply_cost PRIVATE
     tests/support/allocation_counter.cpp)
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_request_reply_cost)
@@ -2324,7 +2325,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_zlink_framework_test(
     test_cpp_framework_claim_owner_cost
     tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_owner_cost.cpp
-    "framework-unit;framework-contract;framework-regression;messaging")
+    "framework-unit;framework-contract;framework-regression;messaging"
+    "unit")
   target_sources(test_cpp_framework_claim_owner_cost PRIVATE
     tests/support/allocation_counter.cpp)
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_claim_owner_cost)
@@ -2333,7 +2335,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_zlink_framework_test(
     test_cpp_framework_ambient_scope_cost
     tests/Zlink.Framework.UnitTests/test_cpp_framework_ambient_scope_cost.cpp
-    "framework-unit;framework-contract;framework-regression;messaging")
+    "framework-unit;framework-contract;framework-regression;messaging"
+    "unit")
   target_sources(test_cpp_framework_ambient_scope_cost PRIVATE
     tests/support/allocation_counter.cpp)
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_ambient_scope_cost)
