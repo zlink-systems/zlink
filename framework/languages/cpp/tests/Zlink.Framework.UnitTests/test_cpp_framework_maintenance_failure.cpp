@@ -57,7 +57,7 @@ TEST (MaintenanceFailure, CompletionSnapshotFailureReleasesSourceSeal)
     for (std::size_t index = 0; index < inventory_count; ++index)
         ASSERT_TRUE (transfers.try_reserve_source (std::to_string (index)));
     injected = 0;
-    fail_size = inventory_count * sizeof (std::string);
+    fail_size = inventory_count * sizeof (std::shared_ptr<task_completion_source_t<void>>);
     const auto result = transfers.try_seal_maintenance_inventory ().result ();
     fail_size = 0;
     ASSERT_EQ (injected.load (), 1);

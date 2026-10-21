@@ -2355,17 +2355,14 @@ void mesh_node_runtime_t::settle_application_actor_creation (const actor_ref_t &
         return;
     }
     auto opened = spots.open_local_actor_handoff (actor);
-    detail::observe_task_completion (
-      opened, [state = _state, actor] (const result_t<result_t<void>> &terminal) {
-          const auto result =
-            terminal
-              ? terminal.value ()
-              : detail::propagate_failure<void> (terminal, "Actor creation handoff prefix failed");
-          if (!result) {
-              spot_node_runtime_t (state->spot_state).cancel_local_actor_handoff (actor);
-              state->spot_state->runtime_failures ()->report (result.exception ());
-          }
-      });
+    detail::observe_task_completion (opened, [state = _state->spot_state] (
+                                               const result_t<result_t<void>> &completion) {
+        const auto result =
+          completion ? completion.value ()
+                     : detail::propagate_failure<void> (completion, "Actor handoff opening failed");
+        if (!result)
+            state->runtime_failures ()->report (result.exception ());
+    });
 }
 
 result_t<void>
@@ -4316,18 +4313,18 @@ mesh_node_runtime_t::request_to_channel (const std::string &channel_name,
                                            std::vector<std::uint8_t> (encoded));
 }
 
-task_t<std::size_t> mesh_node_runtime_t::dispatch_ready (
-  const std::function<void (const host::ready_record_t &,
-                            const host::receive_record_t &,
-                            std::vector<zlink::message_t>)> &dispatch,
-  bool accept_application_receive,
-  const std::function<bool ()> &next_application_receive)
+task_t<std::size_t>
+mesh_node_runtime_t::dispatch_ready (std::function<void (const host::ready_record_t &,
+                                                         const host::receive_record_t &,
+                                                         std::vector<zlink::message_t>)> dispatch,
+                                     bool accept_application_receive,
+                                     std::function<bool ()> next_application_receive)
 {
     if (!dispatch)
         throw configuration_error ("MeshNode dispatch callback is required");
 
-    co_return co_await _node->dispatch_ready (dispatch, accept_application_receive,
-                                              next_application_receive);
+    co_return co_await _node->dispatch_ready (std::move (dispatch), accept_application_receive,
+                                              std::move (next_application_receive));
 }
 
 host::node_status_t mesh_node_runtime_t::status () const

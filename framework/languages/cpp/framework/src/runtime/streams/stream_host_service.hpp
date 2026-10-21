@@ -35,6 +35,12 @@ class delay_owner_t;
 namespace zlink::framework::runtime
 {
 
+struct stream_host_service_test_access_t;
+namespace host
+{
+class public_host_runtime_t;
+}
+
 inline bool stream_host_connection_ready (const zlink::monitor_event_t &event) noexcept
 {
     return event.event == zlink::monitor_event::connection_ready
@@ -106,6 +112,7 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     }
 
   private:
+    friend struct stream_host_service_test_access_t;
     class listener_t;
     void refresh_heartbeat_deadline ();
 
@@ -127,6 +134,13 @@ class stream_host_service_t final : public hosted_service_t, public hosted_servi
     boost::asio::io_context _liveness_io;
     boost::asio::steady_timer _heartbeat_deadline{_liveness_io};
     std::thread _liveness_thread;
+};
+
+struct stream_host_service_test_access_t
+{
+    static std::shared_ptr<void> retain_connection (service_provider_t &services,
+                                                    stream_t stream,
+                                                    host::public_host_runtime_t &node);
 };
 
 } // namespace zlink::framework::runtime

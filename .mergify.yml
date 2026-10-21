@@ -1,27 +1,44 @@
 # Merge queue: PRs labelled `merge-queue` are tested together in batches; a failing
 # batch is split to find the failing PR. Failed checks are never retried: one failure
 # is a defect to fix (AGENTS.md section 4.1).
+#
+# PRs to main are squash-merged so a merged fix is one commit that Mergify can
+# backport. A PR labelled `backport-0.30.2` then gets a backport PR to the release
+# branch, which enters the release queue by itself and merges after the same checks.
 queue_rules:
   - name: default
     batch_size: 4
-    merge_method: merge
+    merge_method: squash
     queue_conditions:
       - base=main
       - label=merge-queue
       - -draft
-    merge_conditions:
+    merge_conditions: &framework_checks
       - check-success=dotnet-release-gate
       - check-success=node-release-gate
       - check-success=Compare Linux and Windows Java results
       - check-success=Framework C++ unit and contract tests
       - check-success=win-x64 / Framework C++ unit and contract tests
+  - name: release
+    batch_size: 4
+    merge_method: merge
+    queue_conditions:
+      - base~=^release/
+      - head~=^mergify/bp/
+      - -draft
+    merge_conditions: *framework_checks
 
-# A PR labelled `merge-queue` enters the queue by itself. Commenting
-# `@mergifyio queue` also queues it. Requires Merge Protections enabled for the repo.
+# A PR labelled `merge-queue`, and every Mergify backport PR to a release branch,
+# enters the queue by itself. Commenting `@mergifyio queue` also queues a PR.
 merge_protections_settings:
   auto_merge_conditions:
-    - base=main
-    - label=merge-queue
+    - or:
+        - and:
+            - base=main
+            - label=merge-queue
+        - and:
+            - base~=^release/
+            - head~=^mergify/bp/
 
 pull_request_rules:
   - name: backport merged fixes to the 0.30.2 release branch

@@ -2134,7 +2134,7 @@ class spot_node_runtime_t
     task_t<std::vector<std::shared_ptr<runtime::serial_application_record_t>>>
     take_actor_application_suffix (const actor_ref_t &actor_ref,
                                    std::function<void ()> seal = {}) const;
-    task_t<result_t<void>> open_local_actor_handoff (const actor_ref_t &actor_ref,
+    task_t<result_t<void>> open_local_actor_handoff (actor_ref_t actor_ref,
                                                      std::string expected_source_transfer = {});
     void cancel_local_actor_handoff (const actor_ref_t &actor_ref);
     // In-flight handoff (spot-actor §10): drains the packets preserved while the

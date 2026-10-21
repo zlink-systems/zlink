@@ -6420,11 +6420,11 @@ task_t<void> spot_node_runtime_t::replay_actor_handoff_core (const actor_ref_t &
 {
     auto owner = std::make_shared<spot_node_runtime_t> (_state);
     auto opened = owner->open_local_actor_handoff (actor_ref);
-    detail::observe_task_completion (opened,
-                                     [owner, actor_ref] (const result_t<result_t<void>> &terminal) {
-                                         if (!terminal || !terminal.value ())
-                                             owner->cancel_local_actor_handoff (actor_ref);
-                                     });
+    detail::observe_task_completion (opened, [owner] (const result_t<result_t<void>> &terminal) {
+        if (!terminal || !terminal.value ())
+            owner->_state->runtime_failures ()->report (terminal ? terminal.value ().exception ()
+                                                                 : terminal.exception ());
+    });
     return task_t<void> (result_t<void>::success ());
 }
 
@@ -9318,16 +9318,11 @@ spot_node_runtime_t::reserve_actor_join_barrier (const actor_ref_t &actor_ref)
                                reservation_id] (deferred_barrier_t::async_completion_t release) {
         auto owner = std::make_shared<spot_node_runtime_t> (state);
         auto opened = owner->open_local_actor_handoff (actor_ref, reservation_id);
-        detail::observe_task_completion (
-          opened, [owner, actor_ref, reservation_id,
-                   release = std::move (release)] (const result_t<result_t<void>> &terminal) {
-              if (!terminal || !terminal.value ())
-                  fail_handoff_backlog (owner->_state,
-                                        owner->_state->actor_transfer_coordinator->cancel_move (
-                                          actor_key (actor_ref), reservation_id));
-              release (terminal ? terminal.value ()
-                                : detail::result_access_t::failure<void> (*terminal.error ()));
-          });
+        detail::observe_task_completion (opened, [owner, release = std::move (release)] (
+                                                   const result_t<result_t<void>> &terminal) {
+            release (terminal ? terminal.value ()
+                              : detail::result_access_t::failure<void> (*terminal.error ()));
+        });
     };
     const auto executor = coordinator->actor_executor (key);
     if (!executor) {
@@ -9451,34 +9446,43 @@ spot_node_runtime_t::take_actor_application_suffix (const actor_ref_t &actor_ref
 }
 
 task_t<result_t<void>>
-spot_node_runtime_t::open_local_actor_handoff (const actor_ref_t &actor_ref,
+spot_node_runtime_t::open_local_actor_handoff (actor_ref_t actor_ref,
                                                std::string expected_source_transfer)
 {
+    const auto state = _state;
     const auto key = actor_key (actor_ref);
-    auto context = _state->lane
-                     .run ([&] {
-                         const auto location = _state->actor_spot_ids.find (key);
-                         if (location == _state->actor_spot_ids.end ())
-                             return std::shared_ptr<spot_context_state_t>{};
-                         const auto target = find_context_core (location->second);
-                         return target ? target->_state : std::shared_ptr<spot_context_state_t>{};
-                     })
-                     .get ();
+    // Retain lane inputs across cancellation and settle before releasing the Join turn.
+    auto [context, services] = co_await state->lane.run_task ([state, key] {
+        std::shared_ptr<spot_context_state_t> context;
+        const auto location = state->actor_spot_ids.find (key);
+        if (location != state->actor_spot_ids.end ()) {
+            const auto target = spot_node_runtime_t (state).find_context_core (location->second);
+            if (target)
+                context = target->_state;
+        }
+        return std::make_pair (std::move (context), state->root_services);
+    });
+    if (!state->actor_transfer_coordinator->phase (key))
+        co_return result_t<void>::success ();
+    const auto fail_before_prefix = [&] (framework_error_kind_t kind, const char *message) {
+        fail_handoff_backlog (
+          state, state->actor_transfer_coordinator->cancel_move (key, expected_source_transfer));
+        return result_t<void>::failure (kind, message);
+    };
     if (!context)
-        co_return result_t<void>::failure (framework_error_kind_t::unavailable,
-                                           "local Actor handoff target is unavailable");
+        co_return fail_before_prefix (framework_error_kind_t::unavailable,
+                                      "local Actor handoff target is unavailable");
     const auto executor = context->ensure_spot_serial_executor ()->actor_executor (key);
     if (!executor)
-        co_return result_t<void>::failure (framework_error_kind_t::shutting_down,
-                                           "local Actor handoff target queue is unavailable");
-    auto services = _state->lane.run ([&] { return _state->root_services; }).get ();
+        co_return fail_before_prefix (framework_error_kind_t::shutting_down,
+                                      "local Actor handoff target queue is unavailable");
     if (!services)
-        co_return result_t<void>::failure (framework_error_kind_t::unavailable,
-                                           "local Actor handoff services are unavailable");
-    auto owner = std::make_shared<spot_node_runtime_t> (_state);
+        co_return fail_before_prefix (framework_error_kind_t::unavailable,
+                                      "local Actor handoff services are unavailable");
+    auto owner = std::make_shared<spot_node_runtime_t> (state);
     const auto accepted = co_await executor->queue ()->adopt_application_prefix (
       [owner, actor_ref, key, context, services = std::move (*services),
-       expected_source_transfer = std::move (expected_source_transfer)] () mutable {
+       expected_source_transfer] () mutable {
           // The target FIFO owns this turn. Removing the previous move and
           // installing all record positions therefore precedes handler entry.
           const auto transfer_id =
@@ -9527,8 +9531,8 @@ spot_node_runtime_t::open_local_actor_handoff (const actor_ref_t &actor_ref,
           return prefix;
       });
     co_return accepted ? result_t<void>::success ()
-                       : result_t<void>::failure (framework_error_kind_t::shutting_down,
-                                                  "local Actor handoff prefix was refused");
+                       : fail_before_prefix (framework_error_kind_t::shutting_down,
+                                             "local Actor handoff prefix was refused");
 }
 
 task_t<result_t<void>>
@@ -13669,6 +13673,18 @@ void spot_node_runtime_t::close_user_spot_owner (const std::string &spot_id,
 
 bool spot_node_runtime_t::close_all_user_spots (std::chrono::steady_clock::time_point deadline_at)
 {
+    const auto remaining = [deadline_at] {
+        return std::max (std::chrono::milliseconds::zero (),
+                         std::chrono::ceil<std::chrono::milliseconds> (
+                           deadline_at - std::chrono::steady_clock::now ()));
+    };
+    // Host relocation §15: Draining finishes accepted operations. A Join stays
+    // moving until its completion ordering ends (Spot-Actor membership §4), so
+    // the shutdown Close retires its Actor only after that move closes.
+    const auto moves_closed =
+      _state->actor_transfer_coordinator->wait_for_source_completions ().result_for (remaining ());
+    if (!moves_closed || !*moves_closed)
+        return false;
     std::vector<spot_id_t> user_spots;
     std::vector<task_t<bool>> running_closes;
     _state->lane
@@ -13692,11 +13708,8 @@ bool spot_node_runtime_t::close_all_user_spots (std::chrono::steady_clock::time_
           }
       })
       .get ();
-    const auto wait_for_close = [deadline_at] (const task_t<bool> &closing) {
-        const auto remaining = std::max (std::chrono::milliseconds::zero (),
-                                         std::chrono::ceil<std::chrono::milliseconds> (
-                                           deadline_at - std::chrono::steady_clock::now ()));
-        const auto result = closing.result_for (remaining);
+    const auto wait_for_close = [&remaining] (const task_t<bool> &closing) {
+        const auto result = closing.result_for (remaining ());
         return result && result->value ();
     };
     for (const auto &closing : running_closes) {

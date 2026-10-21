@@ -50,7 +50,6 @@ final class ZLinkSpotDirectPublishTest {
         var outbound =
                 new ZLinkSpotDirectOutbound(
                         new ZLinkSpotRouteMessages(new ZLinkStringMessageSerializer()),
-                        Runnable::run,
                         new ZLinkMessageFlowTracer(
                                 options, ZLinkHandlerActivator.reflection(), Runnable::run));
         ZLinkSerialExecutionQueue queue =
@@ -112,7 +111,6 @@ final class ZLinkSpotDirectPublishTest {
         var outbound =
                 new ZLinkSpotDirectOutbound(
                         new ZLinkSpotRouteMessages(serializer),
-                        Runnable::run,
                         new ZLinkMessageFlowTracer(
                                 options, ZLinkHandlerActivator.reflection(), Runnable::run));
 
@@ -145,7 +143,6 @@ final class ZLinkSpotDirectPublishTest {
         var outbound =
                 new ZLinkSpotDirectOutbound(
                         new ZLinkSpotRouteMessages(new ZLinkStringMessageSerializer()),
-                        Runnable::run,
                         new ZLinkMessageFlowTracer(
                                 options, ZLinkHandlerActivator.reflection(), Runnable::run));
 
@@ -181,7 +178,6 @@ final class ZLinkSpotDirectPublishTest {
         var outbound =
                 new ZLinkSpotDirectOutbound(
                         new ZLinkSpotRouteMessages(new ZLinkStringMessageSerializer()),
-                        Runnable::run,
                         new ZLinkMessageFlowTracer(
                                 options, ZLinkHandlerActivator.reflection(), Runnable::run));
 

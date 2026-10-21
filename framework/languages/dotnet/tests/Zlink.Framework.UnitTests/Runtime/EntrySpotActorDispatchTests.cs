@@ -12508,13 +12508,15 @@ public sealed partial class EntrySpotActorDispatchTests
         public TaskCompletionSource<ZLinkActorJoinCompletion> JoinCompletion { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        public Func<ValueTask>? JoinCompletionCallback { get; set; }
+
         public ValueTask OnJoinCompletedAsync(
             ZLinkActorJoinCompletion completion,
             CancellationToken cancellationToken = default
         )
         {
             JoinCompletion.TrySetResult(completion);
-            return ValueTask.CompletedTask;
+            return JoinCompletionCallback?.Invoke() ?? ValueTask.CompletedTask;
         }
     }
 
