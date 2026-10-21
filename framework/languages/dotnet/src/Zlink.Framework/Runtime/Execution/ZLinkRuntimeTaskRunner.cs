@@ -2,12 +2,15 @@ namespace Zlink.Framework.Runtime.Execution;
 
 internal sealed class ZLinkRuntimeTaskRunner
 {
-    internal static T WithoutExecutionContextFlow<T>(Func<T> start)
+    internal static T WithoutExecutionContextFlow<T>(Func<T> start) =>
+        WithoutExecutionContextFlow(static callback => callback(), start);
+
+    internal static T WithoutExecutionContextFlow<TState, T>(Func<TState, T> start, TState state)
     {
         if (ExecutionContext.IsFlowSuppressed())
-            return start();
+            return start(state);
         using (ExecutionContext.SuppressFlow())
-            return start();
+            return start(state);
     }
 
     internal static Task RunDisposal(ref Task? task, Func<Task> close)
@@ -161,7 +164,7 @@ internal sealed class ZLinkRuntimeTaskRunner
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
-        var state = new TaskState(this, name, work, _errorSink, _shutdownToken, completion);
+        var state = new TaskState(this, name, work, completion);
         var startedTask = completion.Task;
         var acceptsRunnerExecution =
             AmbientExecution.Value is { IsActive: true } lease
@@ -210,11 +213,11 @@ internal sealed class ZLinkRuntimeTaskRunner
     private static async Task RunDetachedCoreAsync(TaskState state)
     {
         var previous = AmbientExecution.Value;
-        var lease = new ExecutionLease(state.Runner.ExecutionOwner, state.Runner);
+        var lease = new ExecutionLease(state.Runner);
         AmbientExecution.Value = lease;
         try
         {
-            await ((Func<CancellationToken, ValueTask>)state.Work)(state.ShutdownToken)
+            await ((Func<CancellationToken, ValueTask>)state.Work)(state.Runner.ShutdownToken)
                 .ConfigureAwait(false);
         }
         catch (Exception exception)
@@ -230,11 +233,11 @@ internal sealed class ZLinkRuntimeTaskRunner
     private static void RunLoopCore(TaskState state)
     {
         var previous = AmbientExecution.Value;
-        var lease = new ExecutionLease(state.Runner.ExecutionOwner, state.Runner);
+        var lease = new ExecutionLease(state.Runner);
         AmbientExecution.Value = lease;
         try
         {
-            ((Action<CancellationToken>)state.Work)(state.ShutdownToken);
+            ((Action<CancellationToken>)state.Work)(state.Runner.ShutdownToken);
         }
         catch (Exception exception)
         {
@@ -248,11 +251,14 @@ internal sealed class ZLinkRuntimeTaskRunner
 
     private static void Report(TaskState state, Exception exception)
     {
-        if (exception is OperationCanceledException && state.ShutdownToken.IsCancellationRequested)
+        if (
+            exception is OperationCanceledException
+            && state.Runner.ShutdownToken.IsCancellationRequested
+        )
             return;
         try
         {
-            state.ErrorSink.ReportRuntimeTaskException(state.Name, exception);
+            state.Runner.ErrorSink.ReportRuntimeTaskException(state.Name, exception);
         }
         catch (Exception reportingFailure)
         {
@@ -279,16 +285,14 @@ internal sealed class ZLinkRuntimeTaskRunner
         ZLinkRuntimeTaskRunner Runner,
         string Name,
         Delegate Work,
-        IZLinkRuntimeFailureReporter ErrorSink,
-        CancellationToken ShutdownToken,
         TaskCompletionSource Completion
     );
 
-    private sealed class ExecutionLease(object owner, ZLinkRuntimeTaskRunner runner)
+    private sealed class ExecutionLease(ZLinkRuntimeTaskRunner runner)
     {
         private int _active = 1;
 
-        public object Owner { get; } = owner;
+        public object Owner => Runner.ExecutionOwner;
 
         public ZLinkRuntimeTaskRunner Runner { get; } = runner;
 
