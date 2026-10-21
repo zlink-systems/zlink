@@ -1,6 +1,5 @@
 using Google.Protobuf;
 using Systems.Zlink;
-using System.Text;
 using WithGrpcBench.Shared;
 
 var endpoint = ArgValue(args, "--endpoint") ?? "tcp://127.0.0.1:5207";
@@ -15,21 +14,26 @@ builder.Services.AddSingleton<BenchServerMetrics>();
 var app = builder.Build();
 var metrics = app.Services.GetRequiredService<BenchServerMetrics>();
 app.MapGet("/ready", () => Results.Ok("ready"));
-app.MapPost("/bench/reset", () =>
-{
-    metrics.Reset();
-    return Results.Ok();
-});
+app.MapPost(
+    "/bench/reset",
+    () =>
+    {
+        metrics.Reset();
+        return Results.Ok();
+    }
+);
 app.MapGet("/bench/stats", () => Results.Ok(metrics.Snapshot()));
 
 using var context = Systems.Zlink.Zlink.CreateContext();
 using var requestRouter = context.CreateRouterSocket();
 using var commandRouter = context.CreateRouterSocket();
+
 // FB-001 / bench spec 1.3: a ROUTER client addresses this server by routing id,
 // so both sockets must announce their well-known id before bind. A DEALER client
 // ignores these ids, so the legacy DEALER->ROUTER configuration still works.
 requestRouter.SetRoutingId(RoutingId.From(BenchRoutingIds.RawRequestServer));
 commandRouter.SetRoutingId(RoutingId.From(BenchRoutingIds.RawCommandServer));
+
 // A blocking Recv never returns by itself, so each receive returns NoData after
 // ReceivePollInterval and the loop stops once host shutdown begins.
 requestRouter.Options.ReceiveTimeout = RawServerTiming.ReceivePollInterval;
@@ -51,7 +55,11 @@ static void ConfigureQuietLogging(WebApplicationBuilder builder)
     builder.Logging.SetMinimumLevel(LogLevel.Warning);
 }
 
-static void RunRequestRouter(IRouterSocket router, BenchServerMetrics metrics, CancellationToken stopping)
+static void RunRequestRouter(
+    IRouterSocket router,
+    BenchServerMetrics metrics,
+    CancellationToken stopping
+)
 {
     using var received = Received.Create();
     while (!stopping.IsCancellationRequested)
@@ -97,10 +105,7 @@ static void ReplyMultipart(Received received, BenchPayload payload)
     using var header = Message.From(RawEnvelopeHeaders.Response);
     using var replyBody = Message.Allocate(payload.CalculateSize());
     RawWire.Encode(payload, replyBody.AsSpan());
-    received.Reply()
-        .Message(header)
-        .Message(replyBody)
-        .Submit();
+    received.Reply().Message(header).Message(replyBody).Submit();
 }
 
 static void SendMultipart(Received received, BenchPayload payload)
@@ -108,13 +113,14 @@ static void SendMultipart(Received received, BenchPayload payload)
     using var header = Message.From(RawEnvelopeHeaders.Response);
     using var replyBody = Message.Allocate(payload.CalculateSize());
     RawWire.Encode(payload, replyBody.AsSpan());
-    received.Send()
-        .Message(header)
-        .Message(replyBody)
-        .Submit();
+    received.Send().Message(header).Message(replyBody).Submit();
 }
 
-static void RunCommandRouter(IRouterSocket router, BenchServerMetrics metrics, CancellationToken stopping)
+static void RunCommandRouter(
+    IRouterSocket router,
+    BenchServerMetrics metrics,
+    CancellationToken stopping
+)
 {
     using var received = Received.Create();
     while (!stopping.IsCancellationRequested)
@@ -158,7 +164,8 @@ static string? ArgValue(string[] args, string name)
 {
     for (var i = 0; i < args.Length - 1; i++)
     {
-        if (args[i] == name) return args[i + 1];
+        if (args[i] == name)
+            return args[i + 1];
     }
 
     return null;
@@ -167,10 +174,4 @@ static string? ArgValue(string[] args, string name)
 static class RawServerTiming
 {
     public static readonly TimeSpan ReceivePollInterval = TimeSpan.FromMilliseconds(100);
-}
-
-static class RawEnvelopeHeaders
-{
-    public static readonly byte[] Response = Encoding.UTF8.GetBytes(
-        "{\"kind\":2,\"channelName\":\"bench\",\"messageName\":\"BenchPayload\",\"contentType\":\"application/x-protobuf\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null}");
 }
