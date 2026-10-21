@@ -334,7 +334,6 @@ class actor_gateway_runtime_t
     explicit actor_gateway_runtime_t (std::shared_ptr<actor_gateway_state_t> state);
 
     std::weak_ptr<actor_gateway_state_t> weak_state () const noexcept { return _state; }
-    void release_runtime_bindings ();
 
     session_actor_manager_t manager () const;
     std::vector<relayed_frame_t> relayed_frames () const;

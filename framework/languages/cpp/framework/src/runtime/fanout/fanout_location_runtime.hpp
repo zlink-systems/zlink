@@ -107,7 +107,7 @@ class fanout_location_runtime_t final : public fanout_runtime_t
     location_runtime_t *_locations;
     location_repository_t *_store;
     location_repository_t *_leases;
-    std::optional<service_provider_t> _services;
+    service_provider_t _services;
     // Resolved once during configuration. The service registry is not a concurrent
     // structure, so snapshot reads use this reference instead of resolving again.
     framework_runtime_t *_framework_runtime;

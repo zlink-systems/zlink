@@ -661,7 +661,6 @@ void mesh_node_runtime_t::start ()
     if (_node) {
         return;
     }
-    _stopping.store (false, std::memory_order_release);
 
     std::shared_ptr<handler_group_options_state_t> handler_groups;
     std::vector<std::pair<std::string, std::string>> mesh_handler_groups;
@@ -1874,7 +1873,6 @@ task_t<bool> mesh_node_runtime_t::send_instance_spot_activation_remote (
 
 void mesh_node_runtime_t::request_stop () noexcept
 {
-    _stopping.store (true, std::memory_order_release);
     if (_node)
         (void) _node->seal_relocation_targets ();
 }
@@ -1903,7 +1901,6 @@ void mesh_node_runtime_t::stop ()
             return _active_completion_waiters.load (std::memory_order_acquire) == 0;
         });
     }
-    _stopping.store (true, std::memory_order_release);
     _completion_ready.notify_all ();
     _state->lane
       .run ([&] {
@@ -1918,21 +1915,6 @@ void mesh_node_runtime_t::stop ()
                                            [this] { return _peer_callback_gate->active == 0; });
     }
     spot_runtime.cancel_pending_work ();
-    // Configuration callbacks retain their source Mesh runtime while they can run.
-    // After that drain, the Mesh stop owner releases its configuration copies.
-    _user_spot_materializer = {};
-    _user_spot_closer = {};
-    _instance_spot_materializer = {};
-    _actor_create_target = {};
-    _bound_session_operations.reset ();
-    _bound_session_relocation_resolver = {};
-    _late_session_route_update_reporter = {};
-    _stateful_dispatch_configuration = {};
-    _spot_route_fence_resolver = {};
-    _actor_route_resolver = {};
-    _actor_route_invalidator = {};
-    _instance_spot_owner = {};
-    _session_route_owner_resolver = {};
     if (!_node) {
         spot_runtime.release_native_handles ();
         return;

@@ -2730,7 +2730,7 @@ void spot_context_state_t::run_local_close_steps (
         service::after_close_step (
           run_close_step<bool> (
             [self, owner] {
-                auto members =
+                auto [members, services] =
                   owner->lane
                     .run ([&] {
                         std::vector<actor_ref_t> result;
@@ -2744,7 +2744,7 @@ void spot_context_state_t::run_local_close_steps (
                                     self->node_rid, type, id, owner->actor_generations.at (key)));
                             }
                         }
-                        return result;
+                        return std::make_pair (std::move (result), owner->root_services);
                     })
                     .get ();
                 spot_node_runtime_t runtime (owner);
@@ -2761,10 +2761,9 @@ void spot_context_state_t::run_local_close_steps (
                               result_t<bool>::failure (framework_error_kind_t::internal_failure,
                                                        "Host shutdown local Actor cleanup failed"));
                     }
-                    if (owner->root_services) {
+                    if (services) {
                         const auto cleaned =
-                          owner->root_services->get_required<actor_gateway_runtime_t> ()
-                            .destroy_actor (member);
+                          services->get_required<actor_gateway_runtime_t> ().destroy_actor (member);
                         if (!cleaned)
                             return task_t<bool> (detail::propagate_failure<bool> (
                               cleaned, "Host shutdown local Actor registry cleanup failed"));
@@ -13968,27 +13967,11 @@ void spot_node_runtime_t::release_native_handles () noexcept
             catch (...) {
             }
         }
-        // Host relocation §14: release runtime bindings after application scopes.
-        // These callbacks and the root provider can own the Mesh runtime that
-        // owns this registration; leaving them bound keeps its Core context alive.
         _state->lane
           .run ([&] {
-              _state->create_user_spot = {};
-              _state->find_user_spot = {};
-              _state->close_user_spot = {};
-              _state->admit_instance_spot_idle_eviction = {};
-              _state->begin_instance_spot_close = {};
-              _state->select_instance_spot_target = {};
-              _state->begin_user_spot_close = {};
-              _state->destroy_actor_registry = {};
-              _state->update_actor_registry_ref = {};
-              _state->actor_packet_relay = {};
-              _state->actor_message_follow_relay = {};
-              _state->actor_handoff_terminal_sender = {};
-              _state->actor_leave_notification_sender = {};
-              _state->actor_route_admission = {};
-              _state->resolvers.clear ();
-              _state->route_client.reset ();
+              std::atomic_store_explicit (&_state->route_client,
+                                          std::shared_ptr<const route_client_t>{},
+                                          std::memory_order_release);
               _state->channel_runtime.reset ();
               _state->root_services.reset ();
           })
