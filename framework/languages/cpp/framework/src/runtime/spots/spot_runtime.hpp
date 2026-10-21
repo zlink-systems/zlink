@@ -298,7 +298,7 @@ class spot_node_builder_state_t
         std::function<task_t<std::vector<std::byte>> (void *, std::stop_token)> capture;
         std::function<task_t<void> (void *, std::vector<std::byte>, std::stop_token)> restore;
     };
-    std::function<result_t<void> (const actor_ref_t &)> destroy_actor_registry;
+    std::function<task_t<result_t<void>> (actor_ref_t)> destroy_actor_registry;
     std::function<result_t<void> (const actor_ref_t &)> update_actor_registry_ref;
     std::function<task_t<std::optional<zlink::message_t>> (
       const actor_ref_t &,
@@ -1239,6 +1239,9 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
     bool try_post_serial_after_current_turn (std::string name,
                                              std::function<void ()> work,
                                              runtime::serial_work_options_t options = {});
+    bool try_post_serial_task_after_current_turn (std::string name,
+                                                  std::function<task_t<void> ()> work,
+                                                  runtime::serial_work_options_t options = {});
     // Queues work its caller already admitted (admit with a claim).
     bool try_post_serial_async (std::string name,
                                 runtime::serial_execution_queue_t::async_work_t work,
@@ -1837,8 +1840,8 @@ class spot_node_runtime_t
     std::optional<std::string> spot_name_for (spot_id_t spot_id) const;
     std::optional<spot_route_t> resolve_spot (spot_id_t spot_id) const;
     std::optional<spot_id_t> actor_spot (const actor_ref_t &actor_ref) const;
-    result_t<bool> destroy_actor (const actor_ref_t &actor_ref);
-    result_t<bool> release_local_actor (const actor_ref_t &actor_ref);
+    task_t<result_t<bool>> destroy_actor (actor_ref_t actor_ref);
+    task_t<result_t<bool>> release_local_actor_async (actor_ref_t actor);
     void record_actor_spot (const actor_ref_t &actor_ref, spot_id_t spot_id);
     std::optional<spot_route_t> actor_route (const actor_ref_t &actor_ref) const;
     bool matches_actor_message_follow_source (
@@ -1887,6 +1890,7 @@ class spot_node_runtime_t
     void bind_host_phase (std::function<framework_runtime_state_t ()> read_phase);
     /* Entry spots are host infrastructure and are excluded. */
     std::size_t active_user_spot_count () const;
+    task_t<std::size_t> active_user_spot_count_async () const;
     task_t<std::pair<std::size_t, std::size_t>> monitoring_counts_async () const;
     /* Actors still joined to this node's spots, for the drain handoff pass
      * (graceful-drain-handoff §5.2). */
@@ -1894,11 +1898,13 @@ class spot_node_runtime_t
     task_t<bool> relocation_ready_async () const;
     task_t<relocation_units_t> relocation_units () const;
     void begin_relocation_readiness ();
+    task_t<void> begin_relocation_readiness_async ();
     void end_relocation_readiness (const std::vector<spot_id_t> &relocated_spots);
     /* Domain snapshot for the drain handoff join — the same shape the erased
      * cross-node leave path sends alongside the entry-spot join. */
     std::optional<zlink::message_t> serialize_actor_snapshot (const actor_ref_t &actor_ref) const;
     std::shared_ptr<service::mesh_node_t> native_node () const;
+    task_t<std::shared_ptr<service::mesh_node_t>> native_node_async () const;
     task_t<void> send_spot_mesh_parts (const zlink::routing_id_t &target_node_rid,
                                        const spot_id_t &target_spot_id,
                                        runtime::messaging::message_parts_t parts) const;
@@ -1947,7 +1953,7 @@ class spot_node_runtime_t
       std::function<void ()> before_application_handler = {},
       runtime::serial_execution_queue_t::async_completion_t application_completed = {});
     void set_route_client (route_client_t route_client);
-    void on_destroy_actor (std::function<result_t<void> (const actor_ref_t &)> destroy_actor);
+    void on_destroy_actor (std::function<task_t<result_t<void>> (actor_ref_t)> destroy_actor);
     void on_actor_ref_updated (std::function<result_t<void> (const actor_ref_t &)> update_actor);
     void on_actor_packet_relay (std::function<task_t<std::optional<zlink::message_t>> (
                                   const actor_ref_t &,
@@ -2142,7 +2148,7 @@ class spot_node_runtime_t
     // the commit request and once more after the ack for packets that raced it.
     std::vector<handoff_packet_t> take_actor_handoff_backlog (const actor_ref_t &actor_ref);
     bool actor_transfer_in_progress (const actor_ref_t &actor_ref) const;
-    bool actor_transfer_in_progress (std::string_view actor_id) const;
+    task_t<bool> actor_transfer_in_progress_async (actor_ref_t actor) const;
     // Node-local knowledge required to admit a wire actorJoin(28): the
     // stable type string (never carried on that wire body — reconstructing
     // an actor_ref_t requires it) and the actor's current membership epoch

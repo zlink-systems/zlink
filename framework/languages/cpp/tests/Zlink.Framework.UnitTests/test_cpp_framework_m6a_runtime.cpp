@@ -2434,9 +2434,13 @@ void verify_raw_owner_node_send_and_liveness (
     assert (!probe_outstanding (second, first_descriptor.node_routing_id));
 
     std::atomic_int local_operation_callbacks{0};
-    const auto local_operation = first.register_local_operation (
-      foundation::operation_registry_t::clock_t::time_point::max (),
-      [&] (auto, auto) { local_operation_callbacks.fetch_add (1, std::memory_order_release); });
+    const auto local_operation =
+      first
+        .register_local_operation_async (
+          foundation::operation_registry_t::clock_t::time_point::max (),
+          [&] (auto, auto) { local_operation_callbacks.fetch_add (1, std::memory_order_release); })
+        .result ()
+        .value ();
     assert (local_operation);
 
     bool submitted = false;

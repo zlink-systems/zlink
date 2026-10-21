@@ -315,6 +315,7 @@ class stateful_object_runtime_t
 
     void replace_placement_candidates (std::vector<placement_candidate_t> candidates);
     create_result_t begin_create (const create_request_t &request);
+    task_t<create_result_t> begin_create_async (create_request_t request);
     create_result_t begin_reserved_object (const object_ref_t &reserved,
                                            const std::string &stable_type,
                                            std::vector<std::uint8_t> creation_request);
@@ -331,6 +332,7 @@ class stateful_object_runtime_t
                                             const object_ref_t &committed,
                                             const relocation_restore_identity_t &identity);
     stateful_error_t commit_create (std::uint64_t attempt);
+    task_t<stateful_error_t> commit_create_async (std::uint64_t attempt);
     stateful_error_t abort_create (std::uint64_t attempt);
     create_result_t activate_instance (create_request_t request,
                                        const std::function<bool (const object_ref_t &)> &factory);
@@ -341,9 +343,6 @@ class stateful_object_runtime_t
           std::string key,
           std::optional<object_state_t> required_state = object_state_t::ready,
           std::optional<retained_relocation_source_t> *retained = nullptr) const;
-    std::optional<object_ref_t>
-    resolve_spot (const std::string &key,
-                  std::optional<retained_relocation_source_t> *retained = nullptr) const;
     task_t<std::optional<object_ref_t>>
     find_async (object_kind_t kind,
                 std::string key,
@@ -368,19 +367,19 @@ class stateful_object_runtime_t
     task_t<std::optional<retained_relocation_source_t>>
     retained_relocation_source (object_ref_t owner) const;
 
-    std::pair<stateful_error_t, membership_token_t>
-    begin_membership_move (const object_ref_t &actor, const object_ref_t &target_spot);
     task_t<std::pair<stateful_error_t, membership_token_t>>
     begin_membership_move_async (const object_ref_t &actor, const object_ref_t &target_spot);
-    std::pair<stateful_error_t, membership_token_t>
-    begin_remote_membership_move (const object_ref_t &actor, object_ref_t target_spot);
-    std::pair<stateful_error_t, object_ref_t>
-    commit_membership_move (const membership_token_t &token);
-    stateful_error_t abort_membership_move (const membership_token_t &token);
+    task_t<std::pair<stateful_error_t, membership_token_t>>
+    begin_remote_membership_move_async (const object_ref_t &actor, object_ref_t target_spot);
+    task_t<std::pair<stateful_error_t, object_ref_t>>
+    commit_membership_move_async (membership_token_t token);
+    task_t<stateful_error_t> abort_membership_move_async (membership_token_t token);
     std::optional<std::string> actor_membership (const object_ref_t &actor) const;
     stateful_error_t destroy_actor (const object_ref_t &actor);
+    task_t<stateful_error_t> destroy_actor_async (object_ref_t actor);
     std::pair<stateful_error_t, bool> close_spot (const object_ref_t &spot);
-    std::pair<stateful_error_t, bool> can_close_spot (const object_ref_t &spot) const;
+    task_t<std::pair<stateful_error_t, bool>> close_spot_async (const object_ref_t &spot);
+    task_t<std::pair<stateful_error_t, bool>> can_close_spot_async (const object_ref_t &spot) const;
 
     stateful_error_t
     enqueue (const object_ref_t &owner, turn_domain_t domain, turn_record_t record);
@@ -440,7 +439,7 @@ class stateful_object_runtime_t
                                          std::uint64_t timer_id,
                                          std::vector<std::uint8_t> payload);
     std::vector<logical_timer_t> timers (const object_ref_t &owner) const;
-    std::vector<object_inventory_t> inventory () const;
+    task_t<std::vector<object_inventory_t>> inventory_async () const;
     task_t<std::vector<object_inventory_t>> actor_inventory () const;
     task_t<std::optional<std::vector<object_inventory_t>>>
     try_begin_maintenance_inventory (bool actors_only = false);
@@ -488,6 +487,9 @@ class stateful_object_runtime_t
                                         const relocation_restore_identity_t &identity);
 
   private:
+    std::pair<stateful_error_t, object_ref_t>
+    commit_membership_move_on_lane (const membership_token_t &token);
+    stateful_error_t abort_membership_move_on_lane (const membership_token_t &token);
     struct object_key_t
     {
         object_kind_t kind;

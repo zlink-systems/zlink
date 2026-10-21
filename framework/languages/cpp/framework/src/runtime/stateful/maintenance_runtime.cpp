@@ -1913,7 +1913,7 @@ task_t<termination_result_t> host_maintenance_runtime_t::terminate ()
 task_t<termination_result_t> host_maintenance_runtime_t::run_termination ()
 {
     const auto result = co_await run_shutdown ();
-    complete_termination (result);
+    co_await complete_termination (result);
     co_return result;
 }
 
@@ -1934,14 +1934,12 @@ task_t<termination_result_t> host_maintenance_runtime_t::run_shutdown ()
       sealed ? termination_reason_t::none : termination_reason_t::teardown_failed};
 }
 
-void host_maintenance_runtime_t::complete_termination (const termination_result_t &result)
+task_t<void> host_maintenance_runtime_t::complete_termination (termination_result_t result)
 {
-    _lane
-      .run ([this, &result] {
-          _terminal = result;
-          _active_completion.reset ();
-      })
-      .get ();
+    return _lane.run_task ([this, result] {
+        _terminal = result;
+        _active_completion.reset ();
+    });
 }
 
 } // namespace zlink::framework::runtime::stateful

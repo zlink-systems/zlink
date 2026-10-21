@@ -516,7 +516,7 @@ void verify_actor_calls_keep_selected_route_until_follow_notice ()
       });
     old_target->start ();
     new_target->start ();
-    auto target_spot = new_target->get_or_create_spot ("actor-send-spot");
+    auto target_spot = new_target->get_or_create_spot_async ("actor-send-spot").result ().value ();
 
     const auto publish_target = [&] (const detail::mesh_node_runtime_t &runtime,
                                      const location_owner_token_t &owner) {
@@ -2976,12 +2976,14 @@ void verify_membership_turns_and_independent_infrastructure ()
             == stateful::stateful_error_t::none);
     assert (runtime.register_timer (actor, {7, 1000, 1000, 60})
             == stateful::stateful_error_t::none);
-    const auto [prepare_error, token] = runtime.begin_membership_move (actor, spot);
+    const auto [prepare_error, token] =
+      runtime.begin_membership_move_async (actor, spot).result ().value ();
     assert (prepare_error == stateful::stateful_error_t::none);
     assert (runtime.enqueue (actor, stateful::turn_domain_t::application, {51, {51}})
             == stateful::stateful_error_t::none);
     assert (runtime.enqueue_timer_tick (actor, 7, {60}) == stateful::stateful_error_t::none);
-    const auto [commit_error, moved_actor] = runtime.commit_membership_move (token);
+    const auto [commit_error, moved_actor] =
+      runtime.commit_membership_move_async (token).result ().value ();
     assert (commit_error == stateful::stateful_error_t::none);
     assert (moved_actor.object_generation == actor.object_generation);
     assert (moved_actor.authority_owner_generation == actor.authority_owner_generation + 1);
@@ -4693,7 +4695,7 @@ void verify_same_node_session_seal_waits_for_active_ingress ()
     local->start ();
     const auto status = local->status ();
     const auto actor = local->create_actor ("player", "same-node-session-actor");
-    const auto actor_object = local->resolve_actor (actor.ref ());
+    const auto actor_object = local->resolve_actor_async (actor.ref ()).result ().value ();
     assert (actor_object);
 
     const auto session_rid = bytes ("same-node-session-rid");
@@ -4816,7 +4818,7 @@ void verify_absent_session_seal ()
     local->start ();
     const auto status = local->status ();
     const auto actor = local->create_actor ("player", "absent-actor");
-    const auto object = local->resolve_actor (actor.ref ()).value ();
+    const auto object = local->resolve_actor_async (actor.ref ()).result ().value ().value ();
     const auto rid = zlink::routing_id_t::from ("absent-session");
     const auto original_connection = local->sessions ().open (rid.to_hex ());
     const auto [original_error, original] =
@@ -4971,7 +4973,7 @@ void verify_configured_session_seal_timeout_closes_actual_owner ()
 
     const auto status = local->status ();
     const auto actor = local->create_actor ("player", "configured-session-timeout-actor");
-    const auto actor_object = local->resolve_actor (actor.ref ());
+    const auto actor_object = local->resolve_actor_async (actor.ref ()).result ().value ();
     assert (actor_object);
     const auto session_rid = bytes ("configured-session-timeout-rid");
     std::atomic_int physical_close_count{0};

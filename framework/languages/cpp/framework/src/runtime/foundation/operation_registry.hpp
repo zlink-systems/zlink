@@ -6,6 +6,7 @@
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 
 #include <zlink/Contracts/Messaging/message.hpp>
+#include <zlink/framework/contracts/dispatch/task.hpp>
 
 #include <chrono>
 #include <array>
@@ -66,6 +67,7 @@ class operation_registry_t
                    zlink::message_t payload,
                    before_dispatch_t before_dispatch,
                    operation_terminal_t request_terminal = operation_terminal_t::completed);
+    bool complete_async (const call_id_t &id, std::function<task_t<void> ()> before_dispatch);
     bool cancel (const call_id_t &id);
     bool fail (const call_id_t &id, operation_terminal_t terminal, zlink::message_t payload = {});
     bool fail (const call_id_t &id,

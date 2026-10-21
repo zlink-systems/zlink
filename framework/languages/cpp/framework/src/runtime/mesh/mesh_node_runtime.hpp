@@ -190,9 +190,9 @@ class mesh_node_runtime_t
                                 const mesh_node_descriptor_t &target,
                                 const authority_snapshot_t &authority,
                                 std::chrono::steady_clock::time_point restore_deadline);
-    bool application_actor_transfer_in_progress (const actor_ref_t &actor) const;
-    result_t<void> cleanup_application_actor_stateful (const actor_ref_t &actor);
-    result_t<bool> destroy_application_actor (const actor_ref_t &actor);
+    task_t<bool> application_actor_transfer_in_progress (actor_ref_t actor) const;
+    task_t<result_t<void>> cleanup_application_actor_stateful (actor_ref_t actor);
+    task_t<result_t<bool>> destroy_application_actor (actor_ref_t actor);
     task_t<runtime::stateful::aggregate_relocation_result_t>
     relocate_application_unit (std::vector<runtime::stateful::object_ref_t> sources,
                                std::vector<std::string> stable_types,
@@ -289,7 +289,7 @@ class mesh_node_runtime_t
                         host::pending_operation_t &operation_id,
                         std::chrono::milliseconds timeout,
                         const std::map<std::string, std::string> &metadata);
-    host::spot_handle_t get_or_create_spot (std::string spot_id);
+    task_t<host::spot_handle_t> get_or_create_spot_async (std::string spot_id);
     task_t<zlink::submit_result_t> send_to_spot (const std::string &source_spot_id,
                                                  const zlink::routing_id_t &target_node_rid,
                                                  const std::string &target_spot_id,
@@ -328,10 +328,6 @@ class mesh_node_runtime_t
         bound_session_source = std::nullopt);
     zlink::context_t &native_context ();
     host::public_host_runtime_t &native_node ();
-    bool prepare_actor_transfer (const host::actor_transfer_prepare_t &prepare,
-                                 std::chrono::milliseconds timeout,
-                                 host::actor_transfer_token_t &token,
-                                 host::actor_transfer_prepare_result_t &result);
     result_t<actor_ref_t>
     create_application_actor (std::string actor_type,
                               std::string actor_id,
@@ -349,12 +345,13 @@ class mesh_node_runtime_t
                                           node_rid_t target_node,
                                           zlink::message_t request,
                                           std::chrono::milliseconds timeout);
-    result_t<void> submit_application_actor_entry_spot_join (const actor_ref_t &actor,
-                                                             const node_rid_t &target_node,
-                                                             const zlink::message_t &request,
-                                                             std::chrono::milliseconds timeout,
-                                                             host::pending_operation_t &operation,
-                                                             actor_join_completion_t completion);
+    task_t<result_t<void>>
+    submit_application_actor_entry_spot_join (actor_ref_t actor,
+                                              node_rid_t target_node,
+                                              zlink::message_t request,
+                                              std::chrono::milliseconds timeout,
+                                              host::pending_operation_t &operation,
+                                              actor_join_completion_t completion);
 
     void settle_application_actor_creation (const actor_ref_t &actor, bool ready);
 
@@ -473,6 +470,8 @@ class mesh_node_runtime_t
     std::string mesh_name () const;
     std::chrono::milliseconds default_request_timeout () const;
     std::optional<zlink::routing_id_t> routing_id () const;
+    task_t<std::optional<zlink::routing_id_t>> routing_id_async () const;
+    task_t<std::pair<std::string, std::optional<zlink::routing_id_t>>> identity_async () const;
     std::string listen_endpoint () const;
     object_role_t object_role () const;
     std::vector<std::string> channel_names () const;

@@ -747,7 +747,7 @@ class host_maintenance_runtime_t
   private:
     task_t<termination_result_t> run_termination ();
     task_t<termination_result_t> run_shutdown ();
-    void complete_termination (const termination_result_t &result);
+    task_t<void> complete_termination (termination_result_t result);
 
     stateful_object_runtime_t &_objects;
     stream_session_registry_t &_sessions;

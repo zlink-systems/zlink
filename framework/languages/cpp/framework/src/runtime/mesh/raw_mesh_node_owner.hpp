@@ -200,8 +200,17 @@ class raw_mesh_node_owner_t
                         std::uint32_t terminal_result,
                         std::uint32_t failure_code);
     std::size_t expire_requests (foundation::operation_registry_t::clock_t::time_point now);
-    std::uint64_t next_operation_sequence ();
-    std::optional<foundation::call_id_t> register_local_operation (
+    task_t<std::optional<std::uint64_t>> next_operation_sequence_async ();
+    using local_operation_reservation_t =
+      std::pair<foundation::call_id_t, std::shared_ptr<detail::backend::raw_route_port_t>>;
+    task_t<std::optional<local_operation_reservation_t>>
+    prepare_local_operation_async (std::optional<foundation::call_id_t> requested = std::nullopt);
+    bool register_prepared_local_operation (
+      const local_operation_reservation_t &reservation,
+      foundation::operation_registry_t::clock_t::time_point deadline,
+      foundation::operation_registry_t::callback_t callback,
+      mesh_request_surface_t request_surface = mesh_request_surface_t::none);
+    task_t<std::optional<foundation::call_id_t>> register_local_operation_async (
       foundation::operation_registry_t::clock_t::time_point deadline,
       foundation::operation_registry_t::callback_t callback,
       std::optional<foundation::call_id_t> requested = std::nullopt,
@@ -209,6 +218,8 @@ class raw_mesh_node_owner_t
     bool complete_local_operation (
       const foundation::call_id_t &operation,
       foundation::operation_registry_t::before_dispatch_t before_dispatch = {});
+    bool complete_local_operation_async (const foundation::call_id_t &operation,
+                                         std::function<task_t<void> ()> before_dispatch);
     bool
     fail_local_operation (const foundation::call_id_t &operation,
                           foundation::operation_terminal_t terminal,
@@ -443,6 +454,7 @@ class raw_mesh_node_owner_t
                                                std::uint64_t correlation);
     std::uint64_t
     take_reply_route_id_locked (std::optional<std::uint64_t> requested = std::nullopt);
+    std::optional<std::uint64_t> next_operation_sequence_on_lane ();
     std::uint64_t take_operation_sequence_locked ();
     task_t<bool> send_with_header (const std::vector<std::uint8_t> &target_routing_id,
                                    std::vector<std::uint8_t> header,

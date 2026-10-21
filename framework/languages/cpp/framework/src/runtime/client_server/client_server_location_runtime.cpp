@@ -353,6 +353,7 @@ client_server_location_runtime_t::client_server_location_runtime_t (
   service_provider_t &services,
   serializer_registry_t &serializers,
   const handler_registry_t &handlers,
+  std::function<framework_runtime_state_t ()> framework_state,
   std::map<std::string, std::string> advertise_hosts,
   std::shared_ptr<listener_status_registry_t> listener_statuses,
   std::shared_ptr<application_job_queue_t> application_jobs) :
@@ -363,7 +364,7 @@ client_server_location_runtime_t::client_server_location_runtime_t (
     _store (&store),
     _leases (&leases),
     _services (services),
-    _framework_runtime (&_services.get_required<framework_runtime_t> ()),
+    _framework_state (std::move (framework_state)),
     _serializers (&serializers),
     _handlers (&handlers),
     _application_jobs (
@@ -428,7 +429,7 @@ client_server_location_runtime_t::snapshot_source_locked (const std::string &cha
     source.host_state = _stop->load (std::memory_order_acquire)
                           ? (_transport_poller ? framework_runtime_state_t::draining
                                                : framework_runtime_state_t::stopped)
-                          : _framework_runtime->status ().state;
+                          : _framework_state ();
     const auto client = _clients.find (channel_name);
     if (client != _clients.end ()) {
         source.connections.reserve (client->second->connections.size ());

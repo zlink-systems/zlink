@@ -1702,49 +1702,73 @@ raw_mesh_node_owner_t::expire_requests (foundation::operation_registry_t::clock_
     return _operations->expire (now);
 }
 
-std::optional<foundation::call_id_t> raw_mesh_node_owner_t::register_local_operation (
+task_t<std::optional<raw_mesh_node_owner_t::local_operation_reservation_t>>
+raw_mesh_node_owner_t::prepare_local_operation_async (
+  std::optional<foundation::call_id_t> requested)
+{
+    return _lane.run_task ([this, requested] () -> std::optional<local_operation_reservation_t> {
+        std::lock_guard lifecycle_lock (_lifecycle_mutex);
+        if (!_port)
+            return std::nullopt;
+        foundation::call_id_t operation;
+        if (requested) {
+            (void) take_reply_route_id_locked (requested->low);
+            operation = *requested;
+        } else {
+            operation = operation_id (_options.descriptor.lifecycle_generation,
+                                      take_reply_route_id_locked ());
+        }
+        return local_operation_reservation_t{operation, _port};
+    });
+}
+
+bool raw_mesh_node_owner_t::register_prepared_local_operation (
+  const local_operation_reservation_t &reservation,
+  foundation::operation_registry_t::clock_t::time_point deadline,
+  foundation::operation_registry_t::callback_t callback,
+  mesh_request_surface_t request_surface)
+{
+    if (!callback)
+        throw std::invalid_argument ("local operation callback is required");
+    const auto operation = reservation.first;
+    if (!_operations->register_operation (
+          operation, deadline, std::move (callback), {},
+          mesh_request_metric_t (_request_metrics, request_surface),
+          request_surface == mesh_request_surface_t::spot
+              || request_surface == mesh_request_surface_t::actor
+            ? request_identity (protocol::wire_operation_id_t{operation.high, operation.low})
+            : std::nullopt))
+        return false;
+    reservation.second->signal_activity ();
+    return true;
+}
+
+task_t<std::optional<foundation::call_id_t>> raw_mesh_node_owner_t::register_local_operation_async (
   foundation::operation_registry_t::clock_t::time_point deadline,
   foundation::operation_registry_t::callback_t callback,
   std::optional<foundation::call_id_t> requested,
   mesh_request_surface_t request_surface)
 {
-    if (!callback)
-        throw std::invalid_argument ("local operation callback is required");
-    return _lane
-      .run ([this, deadline, callback = std::move (callback), requested,
-             request_surface] () mutable -> std::optional<foundation::call_id_t> {
-          foundation::call_id_t operation;
-          {
-              std::lock_guard lifecycle_lock (_lifecycle_mutex);
-              if (!_port)
-                  return std::nullopt;
-              if (requested) {
-                  (void) take_reply_route_id_locked (requested->low);
-                  operation = *requested;
-              } else {
-                  operation = operation_id (_options.descriptor.lifecycle_generation,
-                                            take_reply_route_id_locked ());
-              }
-          }
-          if (!_operations->register_operation (
-                operation, deadline, std::move (callback), {},
-                mesh_request_metric_t (_request_metrics, request_surface),
-                request_surface == mesh_request_surface_t::spot
-                    || request_surface == mesh_request_surface_t::actor
-                  ? request_identity (protocol::wire_operation_id_t{operation.high, operation.low})
-                  : std::nullopt))
-              return std::nullopt;
-          signal_activity ();
-          return operation;
-      })
-      .get ();
+    const auto reservation = co_await prepare_local_operation_async (requested);
+    if (!reservation
+        || !register_prepared_local_operation (*reservation, deadline, std::move (callback),
+                                               request_surface))
+        co_return std::nullopt;
+    co_return reservation->first;
 }
+
 
 bool raw_mesh_node_owner_t::complete_local_operation (
   const foundation::call_id_t &operation,
   foundation::operation_registry_t::before_dispatch_t before_dispatch)
 {
     return _operations->complete (operation, {}, std::move (before_dispatch));
+}
+
+bool raw_mesh_node_owner_t::complete_local_operation_async (
+  const foundation::call_id_t &operation, std::function<task_t<void> ()> before_dispatch)
+{
+    return _operations->complete_async (operation, std::move (before_dispatch));
 }
 
 bool raw_mesh_node_owner_t::fail_local_operation (
@@ -1870,13 +1894,15 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_to_spot_result (
   std::optional<protocol::wire_operation_id_t> operation,
   std::uint8_t message_follow_hop_count)
 {
-    const auto sequence = next_operation_sequence ();
+    const auto sequence = co_await next_operation_sequence_async ();
+    if (!sequence)
+        co_return zlink::submit_result_t::terminated;
     const auto local = _topology.local_descriptor ();
     co_return co_await send_with_header_result (
       target_routing_id,
       protocol::encode_spot_message_header (
         protocol::command::spotSend, source_spot_id, target,
-        operation.value_or (protocol::wire_operation_id_t{local.lifecycle_generation, sequence}),
+        operation.value_or (protocol::wire_operation_id_t{local.lifecycle_generation, *sequence}),
         std::nullopt, message_follow_hop_count),
       application_payload);
 }
@@ -1932,13 +1958,15 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_to_actor_result (
   std::optional<protocol::wire_operation_id_t> operation,
   std::uint8_t message_follow_hop_count)
 {
-    const auto sequence = next_operation_sequence ();
+    const auto sequence = co_await next_operation_sequence_async ();
+    if (!sequence)
+        co_return zlink::submit_result_t::terminated;
     const auto local = _topology.local_descriptor ();
     co_return co_await send_with_header_result (
       target_routing_id,
       protocol::encode_actor_message_header (
         protocol::command::actorSend, source_actor, target,
-        operation.value_or (protocol::wire_operation_id_t{local.lifecycle_generation, sequence}),
+        operation.value_or (protocol::wire_operation_id_t{local.lifecycle_generation, *sequence}),
         std::nullopt, message_follow_hop_count, std::move (bound_session_source)),
       application_payload);
 }
@@ -3730,17 +3758,19 @@ void raw_mesh_node_owner_t::signal_activity () noexcept
         port->signal_activity ();
 }
 
-std::uint64_t raw_mesh_node_owner_t::next_operation_sequence ()
+task_t<std::optional<std::uint64_t>> raw_mesh_node_owner_t::next_operation_sequence_async ()
 {
-    return _lane
-      .run ([this] {
-          std::lock_guard lifecycle_lock (_lifecycle_mutex);
-          if (!_port)
-              throw std::logic_error ("raw mesh node is not started");
-          return take_operation_sequence_locked ();
-      })
-      .get ();
+    return _lane.run_task ([this] { return next_operation_sequence_on_lane (); });
 }
+
+std::optional<std::uint64_t> raw_mesh_node_owner_t::next_operation_sequence_on_lane ()
+{
+    std::lock_guard lifecycle_lock (_lifecycle_mutex);
+    if (!_port)
+        return std::nullopt;
+    return take_operation_sequence_locked ();
+}
+
 
 std::uint64_t raw_mesh_node_owner_t::take_operation_sequence_locked ()
 {

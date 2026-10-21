@@ -7,6 +7,8 @@
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/foundation/operation_registry.hpp"
+#include "runtime/actors/actor_manager_access.hpp"
 #include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
@@ -115,6 +117,14 @@ struct public_host_runtime_test_access_t
     {
         return stateful::stateful_object_runtime_test_access_t::hold_lane (host._objects);
     }
+
+    static std::promise<void> hold_actor_index (public_host_runtime_t &host)
+    {
+        return stateful::stateful_object_runtime_test_access_t::hold_lane (
+          host._spot_actor_index_lane);
+    }
+
+    static std::string entry_id (public_host_runtime_t &host) { return host._entry_spot_id; }
 
     static std::promise<void> hold_dispatch (public_host_runtime_t &host)
     {
@@ -2328,7 +2338,8 @@ std::string suffix_failure_snapshot (host_t &host)
       fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ()).front ();
     const auto node = fw::detail::spot_node_runtime_t (registration->spot_state).native_node ();
     std::string result;
-    for (const auto &item : node->objects ().inventory ()) {
+    const auto inventory = node->objects ().inventory_async ().result ().value ();
+    for (const auto &item : inventory) {
         if (item.owner.kind == st::object_kind_t::actor && item.owner.key == actor_id) {
             result += " kernel_state=" + std::to_string (static_cast<int> (item.state))
                       + " kernel_pending="
@@ -2442,8 +2453,10 @@ void next_join_suffix (bool remote,
               node->objects ().find (fw::runtime::stateful::object_kind_t::user_spot, suffix_spot);
             EXPECT_TRUE (target_spot);
             if (target_spot) {
-                auto [prepare, token] =
-                  node->objects ().begin_membership_move (*owner, *target_spot);
+                auto [prepare, token] = node->objects ()
+                                          .begin_membership_move_async (*owner, *target_spot)
+                                          .result ()
+                                          .value ();
                 std::printf ("held-kernel-membership-before-release error=%d expected_ready=%d "
                              "release_ready=%d actor=%s generation=%llu authority=%llu\n",
                              static_cast<int> (prepare),
@@ -2453,8 +2466,9 @@ void next_join_suffix (bool remote,
                              static_cast<unsigned long long> (owner->authority_owner_generation));
                 EXPECT_EQ (prepare, fw::runtime::stateful::stateful_error_t::none);
                 if (prepare == fw::runtime::stateful::stateful_error_t::none)
-                    EXPECT_EQ (node->objects ().abort_membership_move (token),
-                               fw::runtime::stateful::stateful_error_t::none);
+                    EXPECT_EQ (
+                      node->objects ().abort_membership_move_async (token).result ().value (),
+                      fw::runtime::stateful::stateful_error_t::none);
             }
         }
         std::printf (
@@ -2755,16 +2769,17 @@ void claimed_join_native_admission (bool remote)
     auto inventory = objects.try_begin_maintenance_inventory ();
     const sf::object_ref_t target{
       sf::object_kind_t::user_spot, "target", 1, 1, mesh_name, "remote"};
-    const auto [error, token] = remote
-                                  ? objects.begin_remote_membership_move (created.object, target)
-                                  : objects.begin_membership_move (created.object, spot.object);
+    const auto [error, token] =
+      remote
+        ? objects.begin_remote_membership_move_async (created.object, target).result ().value ()
+        : objects.begin_membership_move_async (created.object, spot.object).result ().value ();
     EXPECT_EQ (sf::stateful_error_t::none, error);
     EXPECT_FALSE (inventory.await_ready ());
     const auto late = state->actor_transfer_coordinator->try_reserve_source ("member:late");
     EXPECT_FALSE (late);
     EXPECT_EQ (fw::framework_error_kind_t::unavailable, late.error_kind ());
     if (error == sf::stateful_error_t::none)
-        objects.abort_membership_move (token);
+        objects.abort_membership_move_async (token).result ().value ();
     state->actor_transfer_coordinator->cancel_move (key);
     state->actor_transfer_coordinator->cancel_move ("member:late");
     ASSERT_TRUE (inventory.result ().value ());
@@ -4079,7 +4094,8 @@ TEST (ActorMaintenanceJoin, RelocationPreservesAcceptedSourcesWithoutStoreRead)
         EXPECT_EQ (materialized->load (), 1);
         EXPECT_EQ (store->mesh_reads, 0);
         EXPECT_EQ (store->lease_reads, 0);
-        const auto object = host->objects ().resolve_spot ("accepted-spot");
+        const auto object =
+          host->objects ().resolve_spot_async ("accepted-spot").result ().value ();
         EXPECT_TRUE (object.has_value ());
         if (object)
             EXPECT_EQ (
@@ -4149,7 +4165,7 @@ TEST (ActorMaintenanceJoin, StaleAttemptActivationDoesNotLeaveRawIdentity)
         EXPECT_EQ (activated.error ()->kind (), fw::framework_error_kind_t::shutting_down);
         const auto candidate = runtime::host::public_host_runtime_t::remote_actor_ref (
           rid, actor_id, target.object_generation);
-        EXPECT_FALSE (host->resolve_actor (candidate));
+        EXPECT_FALSE (host->resolve_actor_async (candidate).result ().value ());
     }
 }
 
@@ -4499,7 +4515,7 @@ TEST (ActorMaintenanceJoin, SourcePreserveDiscardsRawIdentityPreparedBeforeTarge
        key] (const fw::store_write_request_t &request) mutable -> fw::task_t<bool> {
           // Read-only observation of the raw index; the failure is injected
           // through the Store provider, without a relocation runtime hook.
-          if (!native->resolve_actor (candidate))
+          if (!native->resolve_actor_async (candidate).result ().value ())
               co_return false;
           const auto location =
             co_await target_services.get_required<fw::location_runtime_query_t> ()
@@ -4542,7 +4558,7 @@ TEST (ActorMaintenanceJoin, SourcePreserveDiscardsRawIdentityPreparedBeforeTarge
         }));
     }
     EXPECT_TRUE (store->intercepted_write_conflicted ());
-    EXPECT_FALSE (native->resolve_actor (candidate));
+    EXPECT_FALSE (native->resolve_actor_async (candidate).result ().value ());
     native->seal_relocation_targets ().result ().value ();
     EXPECT_FALSE (native->objects ().find (fw::runtime::stateful::object_kind_t::actor, actor_id));
     const auto location = query.find_actor_location (fw::actor_id_t (actor_id)).result ().value ();
@@ -4978,6 +4994,42 @@ TEST (ActorMaintenanceJoin, ReservedLifecycleCaptureKeepsTurn)
     }
 }
 
+TEST (ActorMaintenanceJoin, DeferredTaskRetainsLifecyclePositionUntilCompletion)
+{
+    fw::runtime::offload_executor_t executor (1);
+    fw::runtime::serial_execution_queue_t queue (executor, {});
+    queue_drain_guard_t guard{queue};
+    fw::task_completion_source_t<void> release;
+    std::promise<void> inspected;
+    auto inspection = inspected.get_future ();
+    std::atomic_bool next_ran{false};
+    std::vector<int> order;
+    queue.post ("handler", [&] {
+        order.push_back (1);
+        EXPECT_TRUE (
+          queue.try_post_deferred_task ("destroy-after-handler", [&] () -> fw::task_t<void> {
+              order.push_back (2);
+              // Two FIFO worker markers also cover a next turn dispatched at this
+              // callback's return; the held task must keep that turn unavailable.
+              executor.submit ([&] { executor.submit ([&] { inspected.set_value (); }); });
+              co_await release.task ();
+              order.push_back (3);
+          }));
+        queue.post (
+          "next-lifecycle",
+          [&] {
+              next_ran.store (true);
+              order.push_back (4);
+          },
+          fw::runtime::serial_work_options_t{fw::runtime::serial_work_lane_t::lifecycle});
+    });
+    inspection.get ();
+    EXPECT_FALSE (next_ran.load ());
+    release.complete (fw::result_t<void>::success ());
+    queue.drain ();
+    EXPECT_EQ (order, (std::vector<int>{1, 2, 3, 4}));
+}
+
 TEST (ActorMaintenanceJoin, CancelledReservedCaptureFinishes)
 {
     fw::runtime::offload_executor_t executor (2);
@@ -5001,6 +5053,104 @@ TEST (ActorMaintenanceJoin, CancelledReservedCaptureFinishes)
     EXPECT_FALSE (*result);
     EXPECT_FALSE (ran);
     queue.drain ();
+}
+
+TEST (ActorMaintenanceJoin, AsyncReplyRetainsOneTerminalWhilePreparationIsPending)
+{
+    namespace foundation = fw::runtime::foundation;
+    foundation::operation_registry_t operations;
+    const foundation::call_id_t operation{1, 1};
+    std::promise<foundation::operation_terminal_t> completed;
+    auto terminal = completed.get_future ();
+    ASSERT_TRUE (operations.register_operation (
+      operation, foundation::operation_registry_t::clock_t::now () + wait_budget,
+      [&] (foundation::operation_terminal_t result, zlink::message_t) {
+          completed.set_value (result);
+      }));
+    fw::task_completion_source_t<void> preparation;
+    auto prepare = [&] () -> fw::task_t<void> { co_await preparation.task (); };
+    ASSERT_TRUE (operations.complete_async (operation, prepare));
+    EXPECT_FALSE (operations.complete_async (operation, prepare));
+    EXPECT_FALSE (operations.cancel (operation));
+    preparation.complete (fw::result_t<void>::success ());
+    EXPECT_EQ (terminal.get (), foundation::operation_terminal_t::completed);
+}
+
+TEST (ActorMaintenanceJoin, CreateEntryJoinWaitsOutsideConfigurationTurn)
+{
+    namespace host = fw::runtime::host;
+    namespace sf = fw::runtime::stateful;
+    using access_t = host::public_host_runtime_test_access_t;
+    const auto rid = zlink::routing_id_t::from (first_rid);
+    auto node = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      fw::test::runtime_failure_options (fw::runtime::mesh::raw_mesh_node_options_t{
+        .descriptor = {mesh_name,
+                       rid.to_bytes (),
+                       1,
+                       1,
+                       "tcp://127.0.0.1:0",
+                       {},
+                       fw::runtime::mesh::service_node_state_t::preparing}})});
+    node->start ();
+    auto actor = node->create_reserved_actor (
+      actor_type, {sf::object_kind_t::actor, actor_id, 1, 1, mesh_name, rid.to_string ()});
+    const sf::object_ref_t target{
+      sf::object_kind_t::user_spot, access_t::entry_id (*node), 1, 1, mesh_name, rid.to_string ()};
+    auto created = node->objects ().begin_reserved_object (target, room_type, {});
+    ASSERT_EQ (node->objects ().commit_create (created.attempt), sf::stateful_error_t::none);
+    host::pending_operation_t operation;
+    auto manager = fw::detail::actor_manager_access_t::create (
+      [&] (bool, fw::actor_id_t, std::string, std::optional<std::string>,
+           std::optional<fw::message_t>, std::chrono::milliseconds timeout,
+           fw::creation_operation_id_t) -> fw::task_t<fw::actor_create_result_t> {
+          EXPECT_EQ (fw::runtime::state_lane_t::current (), nullptr);
+          const auto submitted = co_await actor.join_entry_spot (rid, {}, operation, timeout);
+          EXPECT_EQ (submitted, zlink::submit_result_t::ok);
+          co_return fw::actor_create_rejected_t{};
+      },
+      {}, {}, {});
+    auto release = access_t::hold_actor_index (*node);
+    auto creating = manager.create (fw::actor_id_t (actor_id), actor_type).async ();
+    EXPECT_FALSE (creating.await_ready ());
+    release.set_value ();
+    ASSERT_TRUE (creating.result ());
+    node->close ();
+}
+
+TEST (ActorMaintenanceJoin, DestroyStatefulActorYieldsWhileObjectsLaneIsBusy)
+{
+    namespace host = fw::runtime::host;
+    namespace sf = fw::runtime::stateful;
+    using access_t = host::public_host_runtime_test_access_t;
+    const auto rid = zlink::routing_id_t::from (first_rid);
+    auto node = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      fw::test::runtime_failure_options (fw::runtime::mesh::raw_mesh_node_options_t{
+        .descriptor = {mesh_name,
+                       rid.to_bytes (),
+                       1,
+                       1,
+                       "tcp://127.0.0.1:0",
+                       {},
+                       fw::runtime::mesh::service_node_state_t::preparing}})});
+    node->start ();
+    (void) node->create_reserved_actor (
+      actor_type, {sf::object_kind_t::actor, actor_id, 1, 1, mesh_name, rid.to_string ()});
+    auto release = access_t::hold_objects (*node);
+    fw::runtime::offload_executor_t executor (1, "destroy-submission");
+    fw::runtime::state_lane_t source (executor);
+    std::optional<fw::task_t<sf::stateful_error_t>> destroying;
+    std::promise<void> yielded;
+    auto submitted = yielded.get_future ();
+    EXPECT_TRUE (source.try_post ([&] {
+        destroying.emplace (node->destroy_application_actor_async (actor_id, 1));
+        yielded.set_value ();
+    }));
+    submitted.get ();
+    EXPECT_TRUE (destroying.has_value ());
+    EXPECT_FALSE (destroying->await_ready ());
+    release.set_value ();
+    EXPECT_EQ (destroying->result ().value (), sf::stateful_error_t::none);
+    node->close ();
 }
 
 enum class join_held_lane_t
@@ -5105,7 +5255,7 @@ TEST (ActorMaintenanceJoin, LocalDirectAdmissionUsesCurrentActorId)
                              current_generation, mesh_name, rid.to_string ()});
     const auto stale =
       host::public_host_runtime_t::remote_actor_ref (rid, actor_id, stale_generation);
-    EXPECT_FALSE (node->resolve_actor (stale));
+    EXPECT_FALSE (node->resolve_actor_async (stale).result ().value ());
     const std::vector<zlink::message_t> parts{zlink::message_t::from ("local-admission")};
     const auto sent = node->send_to_actor (stale, parts).result ();
     ASSERT_TRUE (sent);
@@ -5308,7 +5458,7 @@ TEST_P (ActorRestoreCommitFailure, DiscardsPublishedIdentity)
           const auto ref = fw::runtime::host::public_host_runtime_t::remote_actor_ref (
             zlink::routing_id_t::from (objects.front ().node_id), objects.front ().key,
             objects.front ().object_generation);
-          const auto current = node->resolve_actor (ref);
+          const auto current = node->resolve_actor_async (ref).result ().value ();
           {
               std::lock_guard lock (evidence.mutex);
               candidate = ref;
@@ -5326,7 +5476,8 @@ TEST_P (ActorRestoreCommitFailure, DiscardsPublishedIdentity)
       },
       [&, state, weak_target] (const auto &objects) {
           const auto node = weak_target.lock ();
-          const auto removed = !candidate || !node || !node->resolve_actor (*candidate);
+          const auto removed =
+            !candidate || !node || !node->resolve_actor_async (*candidate).result ().value ();
           fw::detail::spot_node_runtime_t (state).abort_relocation_materialization (objects);
           {
               std::lock_guard lock (evidence.mutex);
@@ -5357,7 +5508,7 @@ TEST_P (ActorRestoreCommitFailure, DiscardsPublishedIdentity)
         EXPECT_TRUE (identity_removed);
     }
     target->seal_relocation_targets ().result ().value ();
-    EXPECT_FALSE (target->resolve_actor (*candidate));
+    EXPECT_FALSE (target->resolve_actor_async (*candidate).result ().value ());
     EXPECT_FALSE (target->objects ().find (fw::runtime::stateful::object_kind_t::actor, actor_id));
     const std::vector<zlink::message_t> parts{zlink::message_t::from ("failed-restore")};
     EXPECT_EQ (target->send_to_actor (*candidate, parts).result ().value (),
@@ -5416,7 +5567,7 @@ TEST (ActorMaintenanceJoin, PreservesEarlierIdentityWhenRestoreIsRejected)
         EXPECT_TRUE (
           std::holds_alternative<fw::actor_join_failed_t> (evidence.completions.front ()));
     }
-    const auto current = target->resolve_actor (previous_actor.ref ());
+    const auto current = target->resolve_actor_async (previous_actor.ref ()).result ().value ();
     ASSERT_TRUE (current);
     EXPECT_EQ (*current, previous);
 }
@@ -6550,7 +6701,7 @@ TEST (ActorMaintenanceJoin, ActiveInventoryExcludesCreatingRecoveringAndFinalize
     EXPECT_EQ (fw::detail::actor_ref_access_t::actor_type (active.front ()), actor_type);
     EXPECT_EQ (active.front ().object_generation (), owner.object_generation);
     EXPECT_EQ (active.front ().actor_id ().value (), owner.key);
-    EXPECT_EQ (source.inventory ().front ().owner, owner);
+    EXPECT_EQ (source.inventory_async ().result ().value ().front ().owner, owner);
     EXPECT_EQ (active.front ().node_rid ().value (), owner.node_id);
     EXPECT_EQ (source_runtime.monitoring_counts_async ().result ().value ().first, 1u);
 
@@ -6569,17 +6720,19 @@ TEST (ActorMaintenanceJoin, ActiveInventoryExcludesCreatingRecoveringAndFinalize
           .run (
             [&] { remote_state->actor_instances.emplace (remote_key, std::make_shared<int> ()); })
           .get ();
-        EXPECT_EQ (remote_objects.inventory ().front ().owner, remote);
+        EXPECT_EQ (remote_objects.inventory_async ().result ().value ().front ().owner, remote);
         EXPECT_TRUE (remote_runtime.local_actor_refs ().empty ());
         EXPECT_EQ (remote_runtime.monitoring_counts_async ().result ().value ().first, 0u);
     }
 
     const stateful::object_ref_t destination{
       stateful::object_kind_t::user_spot, local_spot, 1, 1, mesh_name, second_rid};
-    const auto move = source.begin_remote_membership_move (owner, destination);
+    const auto move =
+      source.begin_remote_membership_move_async (owner, destination).result ().value ();
     ASSERT_EQ (move.first, stateful::stateful_error_t::none);
     EXPECT_EQ (source_runtime.local_actor_refs ().size (), 1u);
-    ASSERT_EQ (source.abort_membership_move (move.second), stateful::stateful_error_t::none);
+    ASSERT_EQ (source.abort_membership_move_async (move.second).result ().value (),
+               stateful::stateful_error_t::none);
 
     const auto sealed = source.try_seal_relocation_aggregate ({owner}).result ().value ();
     ASSERT_EQ (sealed.error, stateful::stateful_error_t::none);
@@ -6588,7 +6741,7 @@ TEST (ActorMaintenanceJoin, ActiveInventoryExcludesCreatingRecoveringAndFinalize
                stateful::stateful_error_t::none);
     ASSERT_EQ (source.finalize_relocation_cutover (sealed.seal.token).result ().value (),
                stateful::stateful_error_t::none);
-    ASSERT_EQ (source.inventory ().size (), 1u);
+    ASSERT_EQ (source.inventory_async ().result ().value ().size (), 1u);
     EXPECT_TRUE (
       source.finalized_relocation_source (owner.kind, owner.key, owner.object_generation));
     EXPECT_TRUE (source_runtime.local_actor_refs ().empty ());
@@ -6606,7 +6759,7 @@ TEST (ActorMaintenanceJoin, ActiveInventoryExcludesCreatingRecoveringAndFinalize
                  .result ()
                  .value (),
                stateful::stateful_error_t::none);
-    const auto staged = target.inventory ();
+    const auto staged = target.inventory_async ().result ().value ();
     ASSERT_EQ (staged.size (), 1u);
     EXPECT_EQ (staged.front ().owner, relocated);
     EXPECT_EQ (staged.front ().state, stateful::object_state_t::recovering);
@@ -6623,7 +6776,7 @@ TEST (ActorMaintenanceJoin, ActiveInventoryExcludesCreatingRecoveringAndFinalize
     EXPECT_EQ (fw::detail::actor_ref_access_t::actor_type (committed.front ()), actor_type);
     EXPECT_EQ (committed.front ().object_generation (), relocated.object_generation);
     EXPECT_EQ (committed.front ().actor_id ().value (), relocated.key);
-    EXPECT_EQ (target.inventory ().front ().owner, relocated);
+    EXPECT_EQ (target.inventory_async ().result ().value ().front ().owner, relocated);
     EXPECT_EQ (committed.front ().node_rid ().value (), relocated.node_id);
     EXPECT_EQ (target_runtime.monitoring_counts_async ().result ().value ().first, 1u);
     EXPECT_TRUE (source_runtime.local_actor_refs ().empty ());

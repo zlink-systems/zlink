@@ -75,6 +75,12 @@ class actor_address_resolver_t
         (void) expected;
         return false;
     }
+    virtual task_t<bool> invalidate_actor_address_if_matches_async (std::string actor_id,
+                                                                    spot_address_t expected)
+    {
+        return task_t<bool> (
+          result_t<bool>::success (invalidate_actor_address_if_matches (actor_id, expected)));
+    }
 };
 
 } // namespace zlink::framework::runtime

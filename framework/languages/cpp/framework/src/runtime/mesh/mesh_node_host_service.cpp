@@ -800,15 +800,18 @@ mesh_node_host_service_t::create_actor (bool exclusive,
           framework_error_kind_t::not_configured, "No object Client or Server Mesh is registered");
     const auto deadline = std::chrono::steady_clock::now () + timeout;
     const auto operation_deadline = std::chrono::system_clock::now () + timeout;
-    const auto selected_mesh = mesh_name.value_or (_nodes.front ()->mesh_name ());
-    const auto source_runtime =
-      std::find_if (_nodes.begin (), _nodes.end (), [&] (const auto &node) {
-          const auto rid = node->routing_id ();
-          return rid && rid->to_string () == operation.source_node_rid.value ();
-      });
-    if (source_runtime == _nodes.end ())
+    std::string selected_mesh;
+    if (mesh_name)
+        selected_mesh = *mesh_name;
+    else {
+        const auto identity = co_await _nodes.front ()->identity_async ();
+        selected_mesh = identity.first;
+    }
+    const auto source_node = co_await find_local_actor_node_async (operation.source_node_rid);
+    if (!source_node)
         co_return result_t<actor_create_result_t>::failure (
           framework_error_kind_t::unavailable, "Actor creation source MeshNode is not available");
+    const auto source_runtime = std::find (_nodes.begin (), _nodes.end (), source_node);
 
     const auto source_rid = (*source_runtime)->native_node ().status ().routing_id ();
     // A missing epoch excludes the whole host run; a value excludes just a replaced peer.
@@ -910,12 +913,14 @@ mesh_node_host_service_t::create_actor (bool exclusive,
         return selected;
     };
     mesh_node_descriptor_t target;
-    const auto find_target_runtime = [&] {
-        return std::find_if (_nodes.begin (), _nodes.end (), [&] (const auto &node) {
-            const auto rid = node->routing_id ();
-            return node->mesh_name () == target.mesh_name && rid
-                   && rid->to_hex () == target.rid.to_hex ();
-        });
+    const auto find_target_runtime = [&] () -> task_t<decltype (_nodes.begin ())> {
+        for (auto it = _nodes.begin (); it != _nodes.end (); ++it) {
+            const auto &node = *it;
+            const auto [node_mesh, rid] = co_await node->identity_async ();
+            if (node_mesh == target.mesh_name && rid && rid->to_hex () == target.rid.to_hex ())
+                co_return it;
+        }
+        co_return _nodes.end ();
     };
     auto target_runtime = _nodes.end ();
     std::optional<std::uint64_t> target_peer_epoch;
@@ -944,9 +949,9 @@ mesh_node_host_service_t::create_actor (bool exclusive,
         if (factory != source_registration->spot_state->actor_factories.end ())
             reserve.relocation_policy = factory->second.relocation.kind;
     }
-    const auto select_target = [&] {
+    const auto select_target = [&] () -> task_t<void> {
         target = choose_target ();
-        target_runtime = find_target_runtime ();
+        target_runtime = co_await find_target_runtime ();
         target_peer_epoch =
           target.rid == source_rid
             ? std::optional<std::uint64_t>{}
@@ -960,7 +965,7 @@ mesh_node_host_service_t::create_actor (bool exclusive,
         reserve.creating_payload = target_actor_authority_payload (
           actor_authority_state_t::creating, stable_type, actor_id, target);
     };
-    select_target ();
+    co_await select_target ();
     if (const auto terminal = co_await _location_store->read_creation_terminal (operation))
         co_return result_t<actor_create_result_t>::success (actor_result_from_terminal (
           *terminal, node_rid_t::from_string (target.rid.to_string ()), stable_type,
@@ -970,7 +975,7 @@ mesh_node_host_service_t::create_actor (bool exclusive,
     //  Location runtime §7 and Actor model §6.3: a target that cannot take this creation (no
     //  capacity, no longer serving, or no Entry Spot accepting the type) is excluded for its host
     //  execution generation and another candidate is chosen. False when none remains.
-    const auto exclude_target = [&] {
+    const auto exclude_target = [&] () -> task_t<bool> {
         unavailable_targets.insert (
           {target.rid.to_hex (), target.lifecycle_generation, std::nullopt});
         candidates.erase (std::remove_if (candidates.begin (), candidates.end (),
@@ -982,9 +987,9 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                                           }),
                           candidates.end ());
         if (candidates.empty ())
-            return false;
-        select_target ();
-        return true;
+            co_return false;
+        co_await select_target ();
+        co_return true;
     };
     while (std::chrono::steady_clock::now () < deadline) {
         const auto reserved = co_await _location_store->reserve (reserve);
@@ -1000,7 +1005,8 @@ mesh_node_host_service_t::create_actor (bool exclusive,
           && std::holds_alternative<authority_missing_t> (reserve_conflict->current);
         if (std::holds_alternative<object_placement_capacity_exhausted_t> (reserved)
             || target_unavailable) {
-            if (!exclude_target ())
+            const auto has_next_target = co_await exclude_target ();
+            if (!has_next_target)
                 co_return result_t<actor_create_result_t>::failure (
                   framework_error_kind_t::unavailable, "Actor placement candidates were exhausted");
             continue;
@@ -1025,7 +1031,7 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                         co_return result_t<actor_create_result_t>::failure (
                           framework_error_kind_t::unavailable,
                           "Actor placement target is not RouteMesh-admitted");
-                    select_target ();
+                    co_await select_target ();
                     continue;
                 }
                 const auto source_status = (*source_runtime)->native_node ().status ();
@@ -1058,7 +1064,8 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                 if (remote.value ())
                     co_return result_t<actor_create_result_t>::success (
                       std::move (*remote.value ()));
-                if (!exclude_target ())
+                const auto has_next_target = co_await exclude_target ();
+                if (!has_next_target)
                     co_return result_t<actor_create_result_t>::failure (
                       framework_error_kind_t::unavailable,
                       "Actor placement candidates were exhausted");
@@ -1076,7 +1083,8 @@ mesh_node_host_service_t::create_actor (bool exclusive,
                 if (!aborted)
                     co_return detail::propagate_failure<actor_create_result_t> (
                       aborted, "Actor reservation abort failed");
-                if (!exclude_target ())
+                const auto has_next_target = co_await exclude_target ();
+                if (!has_next_target)
                     co_return result_t<actor_create_result_t>::failure (
                       framework_error_kind_t::unavailable,
                       "Actor placement candidates were exhausted");
@@ -1122,17 +1130,23 @@ mesh_node_host_service_t::create_actor (bool exclusive,
             const auto node = *target_runtime;
             auto joining = std::make_shared<
               task_completion_source_t<zlink::framework::detail::actor_join_reply_t>> ();
-            host::pending_operation_t join_operation;
-            const auto submitted = node->submit_application_actor_entry_spot_join (
+            auto join_operation = std::make_shared<host::pending_operation_t> ();
+            auto submitted = node->submit_application_actor_entry_spot_join (
               created.value (), node_rid_t::from_string (target.rid.to_string ()),
-              raw_request.value_or (zlink::message_t{}), timeout, join_operation,
+              raw_request.value_or (zlink::message_t{}), timeout, *join_operation,
               [joining] (result_t<zlink::framework::detail::actor_join_reply_t> reply) mutable {
                   joining->complete (std::move (reply));
               });
-            if (!submitted)
-                joining->complete (
-                  detail::propagate_failure<zlink::framework::detail::actor_join_reply_t> (
-                    submitted, "Initial Entry membership was not submitted"));
+            detail::observe_task_completion (
+              submitted,
+              [node, join_operation, joining] (const result_t<result_t<void>> &submitted) {
+                  if (!submitted)
+                      joining->complete (detail::propagate_failure<detail::actor_join_reply_t> (
+                        submitted, "Initial Entry membership submission failed"));
+                  else if (!submitted.value ())
+                      joining->complete (detail::propagate_failure<detail::actor_join_reply_t> (
+                        submitted.value (), "Initial Entry membership was not submitted"));
+              });
             auto creation = complete_local_actor_creation (
               joining->task (), target, created.value (), std::move (actor_id),
               std::move (stable_type), reserve.key, winner->fence, operation, operation_deadline);
@@ -1299,31 +1313,40 @@ task_t<std::optional<spot_ref_t>> mesh_node_host_service_t::find_actor_spot (act
     co_return result_t<std::optional<spot_ref_t>>::success (std::nullopt);
 }
 
-result_t<void> mesh_node_host_service_t::finalize_local_actor_destroy (const actor_ref_t &actor)
+task_t<std::shared_ptr<detail::mesh_node_runtime_t>>
+mesh_node_host_service_t::find_local_actor_node_async (node_rid_t actor_node)
+{
+    for (const auto &node : _nodes) {
+        if (!node)
+            continue;
+        const auto rid = co_await node->routing_id_async ();
+        if (rid && rid->to_string () == actor_node.value ())
+            co_return node;
+    }
+    co_return nullptr;
+}
+
+task_t<result_t<void>> mesh_node_host_service_t::finalize_local_actor_destroy (actor_ref_t actor)
 {
     if (::zlink::framework::detail::actor_ref_access_t::empty (actor)) {
-        return result_t<void>::failure (framework_error_kind_t::invalid_operation,
-                                        "Actor destroy requires an exact ActorRef");
+        co_return result_t<void>::failure (framework_error_kind_t::invalid_operation,
+                                           "Actor destroy requires an exact ActorRef");
     }
 
-    const auto node =
-      std::find_if (_nodes.begin (), _nodes.end (), [&actor] (const auto &candidate) {
-          const auto routing_id = candidate ? candidate->routing_id () : std::nullopt;
-          return routing_id && routing_id->to_string () == actor.node_rid ().value ();
-      });
-    if (node != _nodes.end ()) {
-        const auto cleaned = (*node)->cleanup_application_actor_stateful (actor);
+    const auto node = co_await find_local_actor_node_async (actor.node_rid ());
+    if (node) {
+        const auto cleaned = co_await node->cleanup_application_actor_stateful (actor);
         if (!cleaned)
-            return cleaned;
+            co_return cleaned;
     }
 
     std::optional<authority_snapshot_t> removed_snapshot;
     if (_location_store) {
         const auto key = actor_authority_key (actor.actor_id ().value ());
-        const auto current =
-          infrastructure_result ([&] { return _location_store->read_authority (key); });
+        const auto current = co_await runtime::await_result (_location_store->read_authority (key));
         if (!current) {
-            return detail::propagate_failure<void> (current, "Actor destroy authority read failed");
+            co_return detail::propagate_failure<void> (current,
+                                                       "Actor destroy authority read failed");
         }
         if (const auto *snapshot = std::get_if<authority_snapshot_t> (&current.value ())) {
             const bool exact =
@@ -1333,18 +1356,17 @@ result_t<void> mesh_node_host_service_t::finalize_local_actor_destroy (const act
               && snapshot->object_generation == actor.object_generation ()
               && snapshot->allocation.target.node_rid.value () == actor.node_rid ().value ();
             if (exact && snapshot->allocation.state == placement_allocation_state_t::active) {
-                const auto removed = infrastructure_result ([&] {
-                    return _location_store->compare_exchange_authority (
-                      key, snapshot->store_version, authority_delete_t{});
-                });
+                const auto removed =
+                  co_await runtime::await_result (_location_store->compare_exchange_authority (
+                    key, snapshot->store_version, authority_delete_t{}));
                 if (!removed) {
-                    return detail::propagate_failure<void> (
+                    co_return detail::propagate_failure<void> (
                       removed, "Actor destroy authority delete failed");
                 }
                 if (std::holds_alternative<authority_deleted_t> (removed.value ())) {
                     removed_snapshot = *snapshot;
                 } else {
-                    return result_t<void>::failure (
+                    co_return result_t<void>::failure (
                       framework_error_kind_t::unavailable,
                       "Actor destroy authority changed before deletion");
                 }
@@ -1367,20 +1389,20 @@ result_t<void> mesh_node_host_service_t::finalize_local_actor_destroy (const act
               location_owner_token_t{snapshot.allocation.target.owner.owner_id,
                                      snapshot.allocation.target.owner.lease_generation},
               snapshot.allocation.target.node_lifecycle_generation};
-            (void) actor_resolver->get ().invalidate_actor_address_if_matches (
-              actor.actor_id ().value (), expected);
+            (void) co_await actor_resolver->get ().invalidate_actor_address_if_matches_async (
+              std::string (actor.actor_id ().value ()), expected);
         }
     }
 
     if (_services) {
         if (auto gateway = _services->get<detail::actor_gateway_runtime_t> ()) {
-            const auto cleaned = gateway->get ().destroy_actor (actor);
+            const auto cleaned = co_await gateway->get ().destroy_actor_async (actor);
             if (!cleaned) {
-                return cleaned;
+                co_return cleaned;
             }
         }
     }
-    return result_t<void>::success ();
+    co_return result_t<void>::success ();
 }
 
 task_t<bool> mesh_node_host_service_t::destroy_actor (actor_ref_t actor)
@@ -1412,13 +1434,9 @@ task_t<bool> mesh_node_host_service_t::destroy_actor (actor_ref_t actor)
                                                "Actor creation or transfer is in progress");
         }
 
-        const auto node =
-          std::find_if (_nodes.begin (), _nodes.end (), [&actor] (const auto &candidate) {
-              const auto routing_id = candidate ? candidate->routing_id () : std::nullopt;
-              return routing_id && routing_id->to_string () == actor.node_rid ().value ();
-          });
-        if (node != _nodes.end ()) {
-            if ((*node)->application_actor_transfer_in_progress (actor)) {
+        const auto node = co_await find_local_actor_node_async (actor.node_rid ());
+        if (node) {
+            if (co_await node->application_actor_transfer_in_progress (actor)) {
                 co_return result_t<bool>::failure (framework_error_kind_t::unavailable,
                                                    "Actor transfer is in progress");
             }
@@ -1427,7 +1445,7 @@ task_t<bool> mesh_node_host_service_t::destroy_actor (actor_ref_t actor)
              * callback runs after local state is detached and only then
              * removes Location authority. This keeps a failed local cleanup
              * from leaving a deleted authority with retained capacity. */
-            const auto local_destroyed = (*node)->destroy_application_actor (actor);
+            const auto local_destroyed = co_await node->destroy_application_actor (actor);
             if (!local_destroyed) {
                 co_return result_t<bool>::failure (local_destroyed.error_kind (),
                                                    local_destroyed.error ()
@@ -1475,12 +1493,12 @@ task_t<bool> mesh_node_host_service_t::destroy_actor (actor_ref_t actor)
                   location_owner_token_t{snapshot->allocation.target.owner.owner_id,
                                          snapshot->allocation.target.owner.lease_generation},
                   snapshot->allocation.target.node_lifecycle_generation};
-                (void) actor_resolver->get ().invalidate_actor_address_if_matches (
-                  actor.actor_id ().value (), expected);
+                (void) co_await actor_resolver->get ().invalidate_actor_address_if_matches_async (
+                  std::string (actor.actor_id ().value ()), expected);
             }
         }
 
-        const auto finalized = finalize_local_actor_destroy (actor);
+        const auto finalized = co_await finalize_local_actor_destroy (actor);
         if (!finalized) {
             co_return detail::result_access_t::failure<bool> (framework_exception_t (
               finalized.error_kind (),
@@ -2087,10 +2105,10 @@ void execute_actor_create_operation_target (
             if (ready)
                 node->settle_application_actor_creation (actor, true);
         };
-        host::pending_operation_t join_operation;
-        const auto joined = node->submit_application_actor_entry_spot_join (
+        auto join_operation = std::make_shared<host::pending_operation_t> ();
+        auto joined = node->submit_application_actor_entry_spot_join (
           actor, node_rid_t::from_string (status.routing_id ().to_string ()), creation_request,
-          timeout, join_operation,
+          timeout, *join_operation,
           [request, actor, finish_creation,
            publish] (result_t<detail::actor_join_reply_t> joined) mutable {
               host::actor_create_operation_result_t result;
@@ -2136,10 +2154,15 @@ void execute_actor_create_operation_target (
                            finish_creation (std::move (result), published && accepted);
                        });
           });
-        if (!joined)
-            publish (
-              std::nullopt, std::nullopt, std::nullopt,
-              [finish_creation, failed] (bool) mutable { finish_creation (failed (), false); });
+        detail::observe_task_completion (joined,
+                                         [node, join_operation, publish, finish_creation,
+                                          failed] (const result_t<result_t<void>> &submitted) {
+                                             if (!submitted || !submitted.value ())
+                                                 publish (std::nullopt, std::nullopt, std::nullopt,
+                                                          [finish_creation, failed] (bool) mutable {
+                                                              finish_creation (failed (), false);
+                                                          });
+                                         });
     });
 }
 
@@ -2164,21 +2187,22 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                 continue;
             const auto gate = _actor_destroy_gate;
             detail::spot_node_runtime_t spot_runtime (registration->spot_state);
-            spot_runtime.on_destroy_actor ([this, gate] (const actor_ref_t &actor) {
-                if (!gate->try_enter ())
-                    return result_t<void>::failure (
-                      framework_error_kind_t::shutting_down,
-                      "Actor destroy cleanup was rejected during Mesh shutdown");
-                try {
-                    auto result = finalize_local_actor_destroy (actor);
-                    gate->leave ();
-                    return result;
-                }
-                catch (...) {
-                    gate->leave ();
-                    throw;
-                }
-            });
+            spot_runtime.on_destroy_actor (
+              [this, gate] (actor_ref_t actor) -> task_t<result_t<void>> {
+                  if (!gate->try_enter ())
+                      co_return result_t<void>::failure (
+                        framework_error_kind_t::shutting_down,
+                        "Actor destroy cleanup was rejected during Mesh shutdown");
+                  try {
+                      auto result = co_await finalize_local_actor_destroy (actor);
+                      gate->leave ();
+                      co_return result;
+                  }
+                  catch (...) {
+                      gate->leave ();
+                      throw;
+                  }
+              });
             if (actor_gateway) {
                 spot_runtime.on_actor_ref_updated (
                   [gateway = &actor_gateway->get ()] (const actor_ref_t &actor) {
@@ -3450,36 +3474,42 @@ task_t<void> mesh_node_host_service_t::drain_application_owner (
     mailbox.end_application_drain (owner);
 }
 
-zlink::submit_result_t mesh_node_host_service_t::submit_local_node_send (
-  const std::shared_ptr<detail::mesh_node_runtime_t> &node, std::vector<zlink::message_t> parts)
+task_t<zlink::submit_result_t>
+mesh_node_host_service_t::submit_local_node_send (std::shared_ptr<detail::mesh_node_runtime_t> node,
+                                                  std::vector<zlink::message_t> parts)
 {
     const auto found = std::find (_nodes.begin (), _nodes.end (), node);
     if (found == _nodes.end () || _services == nullptr || _serializers == nullptr)
-        return zlink::submit_result_t::not_found;
+        co_return zlink::submit_result_t::not_found;
     const auto index = static_cast<std::size_t> (std::distance (_nodes.begin (), found));
     const auto registration = _registrations[index];
-    const auto source_rid = node->routing_id ();
+    const auto source_rid = co_await node->routing_id_async ();
     if (!source_rid)
-        return zlink::submit_result_t::not_found;
+        co_return zlink::submit_result_t::not_found;
     node->note_local_node_submit_attempt ();
 
     {
         std::lock_guard lock (_dispatch_gate_mutex);
         if (!_accept_application_dispatch.load (std::memory_order_relaxed) || !_location_runtime
             || !_location_runtime->owner_lease_usable ())
-            return zlink::submit_result_t::terminated;
+            co_return zlink::submit_result_t::terminated;
     }
-    auto application_permit =
-      _application_jobs->wait_for_supply_blocking (application_job_queue_t::origin_t::local);
-    if (!application_permit)
-        return zlink::submit_result_t::terminated;
-    auto application_job =
-      std::make_shared<application_job_queue_t::permit_t> (std::move (*application_permit));
+    using permit_t = application_job_queue_t::permit_t;
+    auto supplied = std::make_shared<task_completion_source_t<std::shared_ptr<permit_t>>> ();
+    auto waiter = _application_jobs->wait_for_supply (
+      [supplied] (std::optional<permit_t> permit) {
+          supplied->complete (result_t<std::shared_ptr<permit_t>>::success (
+            permit ? std::make_shared<permit_t> (std::move (*permit)) : nullptr));
+      },
+      application_job_queue_t::origin_t::local);
+    auto application_job = co_await supplied->task ();
+    if (!application_job)
+        co_return zlink::submit_result_t::terminated;
     {
         std::lock_guard lock (_dispatch_gate_mutex);
         if (!_accept_application_dispatch.load (std::memory_order_relaxed) || !_location_runtime
             || !_location_runtime->owner_lease_usable ())
-            return zlink::submit_result_t::terminated;
+            co_return zlink::submit_result_t::terminated;
         application_job->mark_queued ();
     }
 
@@ -3497,8 +3527,8 @@ zlink::submit_result_t mesh_node_host_service_t::submit_local_node_send (
     mailbox_record.application = std::make_shared<host::local_application_dispatch_t> (
       host::local_application_dispatch_t{std::move (owner), std::move (record), std::move (parts)});
     if (!node->native_node ().transport ().mailbox ().try_enqueue (std::move (mailbox_record)))
-        return zlink::submit_result_t::terminated;
-    return zlink::submit_result_t::ok;
+        co_return zlink::submit_result_t::terminated;
+    co_return zlink::submit_result_t::ok;
 }
 
 } // namespace zlink::framework::runtime

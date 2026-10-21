@@ -380,7 +380,7 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
     target->start ();
     const auto target_status = target->status ();
     auto target_actor = target->create_actor ("player", "seal-wire-actor");
-    const auto object = target->resolve_actor (target_actor.ref ());
+    const auto object = target->resolve_actor_async (target_actor.ref ()).result ().value ();
     ASSERT_TRUE (object);
     auto source_state = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::mesh_node_builder_state_t> ("seal-wire-mesh");
@@ -565,7 +565,8 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
     source.start ();
     const auto native_actor = source.create_actor ("player", "seal-dedup-actor", {}, 2s);
     ASSERT_EQ (native_actor.ref ().object_generation (), actor.object_generation ());
-    const auto native_object = source.native_node ().resolve_actor (native_actor.ref ());
+    const auto native_object =
+      source.native_node ().resolve_actor_async (native_actor.ref ()).result ().value ();
     ASSERT_TRUE (native_object);
     spot_node_runtime_t spots (node);
     spots.record_actor_spot (actor, spot->spot_id);

@@ -3,6 +3,7 @@
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
+#include "runtime/execution/task_result.hpp"
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
@@ -304,6 +305,29 @@ bool operation_registry_t::complete (const call_id_t &id,
     }
     notify (std::move (completion), operation_terminal_t::completed, std::move (payload),
             request_terminal);
+    return true;
+}
+
+namespace
+{
+task_t<void> finish_completion_async (std::unique_ptr<operation_completion_item_t> completion,
+                                      std::function<task_t<void> ()> before_dispatch)
+{
+    const auto prepared = co_await runtime::await_result (before_dispatch ());
+    notify (std::move (completion),
+            prepared ? operation_terminal_t::completed : operation_terminal_t::transport_failed,
+            {});
+}
+} // namespace
+
+bool operation_registry_t::complete_async (const call_id_t &id,
+                                           std::function<task_t<void> ()> before_dispatch)
+{
+    std::unique_ptr<operation_completion_item_t> completion;
+    if (!take (id, completion))
+        return false;
+    // The existing completion reservation retains the drain until preparation ends.
+    (void) finish_completion_async (std::move (completion), std::move (before_dispatch));
     return true;
 }
 

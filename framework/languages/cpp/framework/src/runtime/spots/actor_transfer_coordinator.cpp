@@ -892,6 +892,13 @@ bool actor_transfer_coordinator_t::blocks_dispatch (const std::string &actor_key
     return _lane.run_checked ([&, this] { return blocks_dispatch_on_lane (actor_key); }).get ();
 }
 
+task_t<bool> actor_transfer_coordinator_t::blocks_dispatch_async (std::string actor_key) const
+{
+    return _lane.run_task (
+      [this, actor_key = std::move (actor_key)] { return blocks_dispatch_on_lane (actor_key); });
+}
+
+
 std::optional<actor_move_phase_t>
 actor_transfer_coordinator_t::phase (const std::string &actor_key) const
 {

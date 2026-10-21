@@ -1762,22 +1762,25 @@ bool serial_execution_queue_t::post_async_wait (std::string name,
 
 bool serial_execution_queue_t::try_post_deferred (std::string name, std::function<void ()> work)
 {
-    if (!work) {
+    if (!work)
         throw std::invalid_argument ("serial execution queue work is empty");
-    }
+    return try_post_deferred_task (std::move (name), [work = std::move (work)] () mutable {
+        work ();
+        return task_t<void> (result_t<void>::success ());
+    });
+}
+
+bool serial_execution_queue_t::try_post_deferred_task (std::string name,
+                                                       std::function<task_t<void> ()> work)
+{
     // The caller owns the current turn of this queue; the work keeps its
     // accepted position and runs after that turn ends, whatever its outcome.
     auto *turn =
       dynamic_cast<serial_turn_handle_impl_t *> (detail::capture_current_serial_turn ().get ());
     if (turn == nullptr || !turn->belongs_to (this))
         return false;
-    return static_cast<bool> (turn->register_deferred (
-      std::move (name),
-      [work = std::move (work)] () mutable {
-          work ();
-          return task_t<void> (result_t<void>::success ());
-      },
-      {}, true));
+    return static_cast<bool> (
+      turn->register_deferred (std::move (name), std::move (work), {}, true));
 }
 
 result_t<std::shared_ptr<detail::deferred_barrier_t>>

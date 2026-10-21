@@ -62,6 +62,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
       std::vector<channel_snapshot_t> channels,
       handler_registry_t &handlers,
       serializer_registry_t &serializers,
+      std::function<framework_runtime_state_t ()> framework_state,
       std::map<std::string, std::string> client_server_advertise_hosts = {},
       std::map<std::string, std::string> fanout_publisher_advertise_hosts = {},
       std::set<std::string> route_mesh_client_channels = {},
@@ -76,6 +77,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         _channels (std::move (channels)),
         _handlers (&handlers),
         _serializers (&serializers),
+        _framework_state (std::move (framework_state)),
         _client_server_advertise_hosts (std::move (client_server_advertise_hosts)),
         _fanout_publisher_advertise_hosts (std::move (fanout_publisher_advertise_hosts)),
         _route_mesh_client_channels (std::move (route_mesh_client_channels)),
@@ -140,7 +142,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             if (!_client_server)
                 _client_server = std::make_shared<client_server::client_server_location_runtime_t> (
                   _bus, _channels, *_runtime, *_store, *_store, services, *_serializers, *_handlers,
-                  _client_server_advertise_hosts, _listener_statuses);
+                  _framework_state, _client_server_advertise_hosts, _listener_statuses);
             _client_server->start ();
             _client_server_started = true;
         }
@@ -154,8 +156,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             if (!_fanout)
                 _fanout = std::make_shared<fanout::fanout_location_runtime_t> (
                   _bus, _channels, *_runtime, *_store, *_store, services, *_serializers, *_handlers,
-                  detail::handler_invocation_executor (), _fanout_publisher_advertise_hosts,
-                  _listener_statuses);
+                  _framework_state, detail::handler_invocation_executor (),
+                  _fanout_publisher_advertise_hosts, _listener_statuses);
             _fanout->start ();
         }
 
@@ -631,6 +633,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     std::vector<channel_snapshot_t> _channels;
     handler_registry_t *_handlers;
     serializer_registry_t *_serializers;
+    const std::function<framework_runtime_state_t ()> _framework_state;
     std::map<std::string, std::string> _client_server_advertise_hosts;
     std::map<std::string, std::string> _fanout_publisher_advertise_hosts;
     std::set<std::string> _route_mesh_client_channels;

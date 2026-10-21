@@ -2269,7 +2269,8 @@ void test_close_eligibility_preserves_execution_and_deletion_is_fenced (test_con
     const auto [claim_error, claim] = objects.try_claim (spot, turn_domain_t::application);
     test.require (claim_error == stateful_error_t::none && claim && claim->sequence == 1,
                   "Spot lane must be active before eligibility is read");
-    test.require (objects.can_close_spot (spot) == std::pair{stateful_error_t::none, true},
+    test.require (objects.can_close_spot_async (spot).result ().value ()
+                    == std::pair{stateful_error_t::none, true},
                   "eligibility must return without waiting for the active application turn");
     test.require (objects.find (object_kind_t::user_spot, spot.key) == spot
                     && objects.register_timer (spot, {1, 1000, 1000, 1}) == stateful_error_t::none
@@ -2287,20 +2288,25 @@ void test_close_eligibility_preserves_execution_and_deletion_is_fenced (test_con
                   "the execution owner completes application work before local release");
     auto stale = spot;
     ++stale.object_generation;
-    test.require (objects.can_close_spot (stale).first == stateful_error_t::generation_stale
+    test.require (objects.can_close_spot_async (stale).result ().value ().first
+                      == stateful_error_t::generation_stale
                     && objects.close_spot (stale).first == stateful_error_t::generation_stale
                     && objects.find (object_kind_t::user_spot, spot.key) == spot,
                   "stale eligibility and deletion must preserve the current generation");
     const auto actor = create_actor (objects, "closing-member");
-    const auto [join_error, join] = objects.begin_membership_move (actor, spot);
-    const auto [membership_error, member] = objects.commit_membership_move (join);
+    const auto [join_error, join] =
+      objects.begin_membership_move_async (actor, spot).result ().value ();
+    const auto [membership_error, member] =
+      objects.commit_membership_move_async (join).result ().value ();
     test.require (join_error == stateful_error_t::none && membership_error == stateful_error_t::none
-                    && objects.can_close_spot (spot) == std::pair{stateful_error_t::none, false}
+                    && objects.can_close_spot_async (spot).result ().value ()
+                         == std::pair{stateful_error_t::none, false}
                     && objects.close_spot (spot) == std::pair{stateful_error_t::none, false}
                     && objects.find (object_kind_t::user_spot, spot.key) == spot,
                   "active Actor membership keeps eligibility false and preserves the Spot");
     test.require (objects.destroy_actor (member) == stateful_error_t::none
-                    && objects.can_close_spot (spot) == std::pair{stateful_error_t::none, true},
+                    && objects.can_close_spot_async (spot).result ().value ()
+                         == std::pair{stateful_error_t::none, true},
                   "removing the last member makes the same exact Spot eligible");
     test.require (objects.close_spot (spot) == std::pair{stateful_error_t::none, true}
                     && !objects.find (object_kind_t::user_spot, spot.key)
@@ -2799,14 +2805,14 @@ void test_restore_validates_generation_before_spot_publication (test_context_t &
     test.require (
       single.restore_relocation (single_frozen, single_target, single_identity).result ().value ()
           == stateful_error_t::generation_stale
-        && single_restore_count == 0 && single.inventory ().empty (),
+        && single_restore_count == 0 && single.inventory_async ().result ().value ().empty (),
       "stale single restore must not publish application Spot state");
 
     single_frozen.owner.object_generation = 2;
     single_target.object_generation = 2;
     const auto fresh_single =
       single.restore_relocation (single_frozen, single_target, single_identity).result ().value ();
-    const auto single_inventory = single.inventory ();
+    const auto single_inventory = single.inventory_async ().result ().value ();
     test.require (fresh_single == stateful_error_t::none && single_restore_count == 1
                     && single_inventory.size () == 1
                     && single_inventory.front ().owner == single_target,
@@ -2815,8 +2821,10 @@ void test_restore_validates_generation_before_spot_publication (test_context_t &
     stateful_object_runtime_t aggregate;
     const auto holder = create_spot (aggregate, object_kind_t::user_spot, "entry:holder");
     const auto old_actor = create_actor (aggregate, "stale-actor");
-    const auto [join_error, join] = aggregate.begin_membership_move (old_actor, holder);
-    const auto [commit_error, joined_actor] = aggregate.commit_membership_move (join);
+    const auto [join_error, join] =
+      aggregate.begin_membership_move_async (old_actor, holder).result ().value ();
+    const auto [commit_error, joined_actor] =
+      aggregate.commit_membership_move_async (join).result ().value ();
     test.require (join_error == stateful_error_t::none && commit_error == stateful_error_t::none
                     && aggregate.destroy_actor (joined_actor) == stateful_error_t::none
                     && aggregate.close_spot (holder) == std::pair{stateful_error_t::none, true},
@@ -2864,7 +2872,7 @@ void test_restore_validates_generation_before_spot_publication (test_context_t &
             .result ()
             .value ()
           == stateful_error_t::generation_stale
-        && aggregate_restore_count == 0 && aggregate.inventory ().empty (),
+        && aggregate_restore_count == 0 && aggregate.inventory_async ().result ().value ().empty (),
       "one stale Actor must reject the aggregate before Spot publication");
 
     participants[1].owner.object_generation = 2;
@@ -2873,7 +2881,7 @@ void test_restore_validates_generation_before_spot_publication (test_context_t &
       aggregate.restore_relocation_aggregate (participants, aggregate_targets, aggregate_identity)
         .result ()
         .value ();
-    const auto aggregate_inventory = aggregate.inventory ();
+    const auto aggregate_inventory = aggregate.inventory_async ().result ().value ();
     test.require (fresh_aggregate == stateful_error_t::none && aggregate_restore_count == 1
                     && aggregate_inventory.size () == 2
                     && std::any_of (aggregate_inventory.begin (), aggregate_inventory.end (),
@@ -2919,7 +2927,7 @@ void test_return_relocation_replaces_departed_remnant (test_context_t &test)
     test.require (objects.finalize_relocation_cutover (sealed.seal.token).result ().value ()
                     == stateful_error_t::none,
                   "cutover must finalize and leave the source record behind");
-    test.require (objects.inventory ().size () == 1,
+    test.require (objects.inventory_async ().result ().value ().size () == 1,
                   "the departed record stays on the source as a `moving` remnant");
 
     frozen_object_state_t frozen{.owner = spot,
@@ -2949,7 +2957,7 @@ void test_return_relocation_replaces_departed_remnant (test_context_t &test)
     restore_succeeds = true;
     const auto retried =
       objects.restore_relocation (frozen, returning, identity).result ().value ();
-    const auto returned_inventory = objects.inventory ();
+    const auto returned_inventory = objects.inventory_async ().result ().value ();
     test.require (retried == stateful_error_t::none && returned_inventory.size () == 1
                     && returned_inventory.front ().owner == returning,
                   "the return retry must replace the remnant instead of wedging");
@@ -3007,7 +3015,7 @@ void test_pending_restore_holds_ingress_before_rollback (test_context_t &test)
     callback_condition.notify_all ();
     restoring.join ();
     test.require (ingress == stateful_error_t::none && restore_result == stateful_error_t::conflict
-                    && target.inventory ().empty (),
+                    && target.inventory_async ().result ().value ().empty (),
                   "pending restore must hold ingress until rollback discards it");
 
     target.configure_relocation_state (
@@ -3020,7 +3028,7 @@ void test_pending_restore_holds_ingress_before_rollback (test_context_t &test)
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
     test.require (target.restore_relocation (frozen, restored_target, identity).result ().value ()
                       == stateful_error_t::none
-                    && target.inventory ().size () == 1,
+                    && target.inventory_async ().result ().value ().size () == 1,
                   "callback failure rollback must release the fresh retry");
 }
 
@@ -3512,7 +3520,7 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
         return authority->publish_count;
     };
     const auto staged = [&] (const std::string &actor_id) {
-        const auto objects = target.objects ().inventory ();
+        const auto objects = target.objects ().inventory_async ().result ().value ();
         return std::any_of (objects.begin (), objects.end (), [&] (const object_inventory_t &item) {
             return item.owner.key == actor_id;
         });
@@ -3551,7 +3559,7 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
         }
         test.require (pump_until ([&] { return shutdown.await_ready (); }, 3s),
                       "CAS settlement must finish target shutdown");
-        const auto active = target.objects ().inventory ();
+        const auto active = target.objects ().inventory_async ().result ().value ();
         test.require (std::any_of (active.begin (), active.end (),
                                    [] (const auto &item) {
                                        return item.owner.key == "shutdown-target"
@@ -3754,7 +3762,7 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
         return authority->publish_count;
     };
     const auto staged = [&] (const std::string &actor_id) {
-        const auto objects = target.native_node ().objects ().inventory ();
+        const auto objects = target.native_node ().objects ().inventory_async ().result ().value ();
         return std::any_of (objects.begin (), objects.end (), [&] (const object_inventory_t &item) {
             return item.owner.key == actor_id;
         });
@@ -3770,7 +3778,9 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
     // retransmitted whole batch replaces the partial copy before cutover.
     const auto [twin, twin_ready] = prepare ("cutover-twins", {0x71, 0x02});
     const auto target_actor = [&] () -> std::optional<object_ref_t> {
-        for (const auto &item : target.native_node ().objects ().inventory ())
+        const auto inventory =
+          target.native_node ().objects ().inventory_async ().result ().value ();
+        for (const auto &item : inventory)
             if (item.owner.key == "cutover-twins")
                 return item.owner;
         return std::nullopt;
@@ -4474,9 +4484,11 @@ void test_relocation_request_source_registration (test_context_t &test,
         auto peer = create_actor (objects, "a-peer");
         const auto spot = create_spot (objects, object_kind_t::user_spot, "registry-spot");
         for (auto *member : {&actor, &peer}) {
-            const auto move = objects.begin_membership_move (*member, spot);
+            const auto move =
+              objects.begin_membership_move_async (*member, spot).result ().value ();
             test.require (move.first == stateful_error_t::none, "aggregate membership must begin");
-            const auto joined = objects.commit_membership_move (move.second);
+            const auto joined =
+              objects.commit_membership_move_async (move.second).result ().value ();
             test.require (joined.first == stateful_error_t::none,
                           "aggregate membership must commit");
             *member = joined.second;
@@ -4880,7 +4892,8 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
             test.require (response.failed->failure_code
                             == static_cast<std::uint32_t> (p::framework_error_code::workerTimedOut),
                           "an expired source deadline must preserve DeadlineExceeded");
-        test.require (aborts == 1 && target->objects ().inventory ().empty (),
+        test.require (aborts == 1
+                        && target->objects ().inventory_async ().result ().value ().empty (),
                       "failed target readiness must discard staging exactly once");
     } else {
         test.require (response.ready.has_value (),
@@ -4989,8 +5002,10 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
       "late ingress target must restore before boundary");
     const foundation::call_id_t occupied{src.lifecycle_generation, 77};
     test.require (source
-                    .register_local_operation (
+                    .register_local_operation_async (
                       std::chrono::steady_clock::now () + 5s, [] (auto, auto) {}, occupied)
+                    .result ()
+                    .value ()
                     .has_value (),
                   "source must reserve its independent local operation before forwarding");
     std::vector<framework::task_t<bool>> submissions;
@@ -5936,7 +5951,8 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     std::promise<void> order_marker_received;
     auto marker_received = order_marker_received.get_future ();
     session_owner.configure_session_route_owner ([&] {
-        const auto inventory = target.native_node ().objects ().inventory ();
+        const auto inventory =
+          target.native_node ().objects ().inventory_async ().result ().value ();
         const auto active =
           std::find_if (inventory.begin (), inventory.end (), [] (const auto &item) {
               return item.owner.key == "production-remote-actor";
@@ -6086,7 +6102,8 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     target_descriptor.owner_id = "target-owner";
     target_descriptor.lease_generation = 9;
 
-    const auto bound_source_object = source.native_node ().resolve_actor (actor);
+    const auto bound_source_object =
+      source.native_node ().resolve_actor_async (actor).result ().value ();
     test.require (bound_source_object.has_value (),
                   "production relocation must resolve the bound Actor before Session sealing");
     if (!bound_source_object) {
@@ -6780,7 +6797,7 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
                     && source_objects.commit_create (created_spot.attempt)
                          == stateful_error_t::none,
                   "production aggregate User Spot must be created");
-    const auto actor = source.native_node ().resolve_actor (actor_handle);
+    const auto actor = source.native_node ().resolve_actor_async (actor_handle).result ().value ();
     const auto spot = source_objects.find (object_kind_t::user_spot, "production-aggregate-spot");
     if (!actor || !spot) {
         test.require (false, "production aggregate participants must resolve");
@@ -6788,8 +6805,10 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
         target.stop ();
         return;
     }
-    const auto [join_error, join] = source_objects.begin_membership_move (*actor, *spot);
-    const auto [commit_error, joined_actor] = source_objects.commit_membership_move (join);
+    const auto [join_error, join] =
+      source_objects.begin_membership_move_async (*actor, *spot).result ().value ();
+    const auto [commit_error, joined_actor] =
+      source_objects.commit_membership_move_async (join).result ().value ();
     test.require (join_error == stateful_error_t::none && commit_error == stateful_error_t::none,
                   "production aggregate Actor must join its User Spot");
 
@@ -8100,7 +8119,9 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
     const object_ref_t membership_target{
       object_kind_t::user_spot, "membership-only-target", 1, 1, "mesh", "node-b"};
     const auto [membership_error, membership_move] =
-      count_limited.begin_remote_membership_move (membership_actor, membership_target);
+      count_limited.begin_remote_membership_move_async (membership_actor, membership_target)
+        .result ()
+        .value ();
     test.require (
       membership_error == stateful_error_t::none
         && count_limited.enqueue (membership_actor, turn_domain_t::application, {1, {7}})
@@ -8134,7 +8155,7 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
                   "source relocation ingress must remain held beyond the configured "
                   "application-lane record capacity");
     if (membership_error == stateful_error_t::none) {
-        test.require (count_limited.abort_membership_move (membership_move)
+        test.require (count_limited.abort_membership_move_async (membership_move).result ().value ()
                         == stateful_error_t::none,
                       "membership-only movement must release its independent hold");
     }
@@ -8396,7 +8417,10 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
     const object_ref_t remote_membership_target{
       object_kind_t::user_spot, "membership-normal-target", 1, 1, "mesh", "node-b"};
     const auto [normal_move_error, normal_move] =
-      normal_lane_caps.begin_remote_membership_move (membership_capped, remote_membership_target);
+      normal_lane_caps
+        .begin_remote_membership_move_async (membership_capped, remote_membership_target)
+        .result ()
+        .value ();
     test.require (
       normal_move_error == stateful_error_t::none
         && normal_lane_caps.enqueue (
@@ -8411,11 +8435,12 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
              == stateful_error_t::none,
       "membership-only movement must retain work beyond former lane limits");
     if (normal_move_error == stateful_error_t::none)
-        (void) normal_lane_caps.abort_membership_move (normal_move);
+        (void) normal_lane_caps.abort_membership_move_async (normal_move).result ().value ();
 
     const auto closing_capped =
       create_spot (normal_lane_caps, object_kind_t::user_spot, "closing-normal-cap");
-    const auto [close_error, close_eligible] = normal_lane_caps.can_close_spot (closing_capped);
+    const auto [close_error, close_eligible] =
+      normal_lane_caps.can_close_spot_async (closing_capped).result ().value ();
     test.require (
       close_error == stateful_error_t::none && close_eligible
         && normal_lane_caps.enqueue (
