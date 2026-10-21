@@ -2881,14 +2881,18 @@ test('REG-003 ZLinkFrameworkRuntimeHost dispatches manual channel handlers and r
       'manual',
       'ManualRegisteredEvent',
       { value: 'published' },
-      () => publishCalls.length === 1
+      () => publishCalls.length > 0
     );
-    assert.deepEqual(publishCalls, [{
-      payload: { value: 'published' },
-      channelName: 'manual-events',
-      packetName: 'ManualRegisteredEvent',
-      topic: 'ManualRegisteredEvent'
-    }]);
+    // publishUntilHandled repeats the publish until a subscriber is joined, so
+    // more than one copy can be handled before the check; each must be the same.
+    for (const call of publishCalls) {
+      assert.deepEqual(call, {
+        payload: { value: 'published' },
+        channelName: 'manual-events',
+        packetName: 'ManualRegisteredEvent',
+        topic: 'ManualRegisteredEvent'
+      });
+    }
 
     await assert.rejects(
       () => client
