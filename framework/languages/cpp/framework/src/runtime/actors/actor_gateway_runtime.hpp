@@ -122,25 +122,6 @@ struct actor_bound_session_transition_t
     bool changed = false;
 };
 
-struct session_relay_completion_fence_t
-{
-    std::string actor_id;
-    std::uint64_t object_generation = 0;
-    std::string source_node_rid;
-    std::string session_rid;
-    std::uint64_t binding_generation = 0;
-    std::uint64_t session_sequence = 0;
-
-    friend bool operator< (const session_relay_completion_fence_t &left,
-                           const session_relay_completion_fence_t &right) noexcept
-    {
-        return std::tie (left.actor_id, left.object_generation, left.source_node_rid,
-                         left.session_rid, left.binding_generation, left.session_sequence)
-               < std::tie (right.actor_id, right.object_generation, right.source_node_rid,
-                           right.session_rid, right.binding_generation, right.session_sequence);
-    }
-};
-
 using bound_session_sink_t =
   std::function<task_t<void> (std::string, stream_codec_t, const zlink::message_t &)>;
 using bound_session_replacement_handler_t =
@@ -304,7 +285,6 @@ class actor_gateway_state_t
     std::set<bound_session_send_queue_key_t> active_bound_session_sends;
     std::map<std::string, std::weak_ptr<bound_session_delivery_fence_t>>
       join_completion_delivery_fences;
-    std::set<session_relay_completion_fence_t> active_session_relay_completions;
     create_dispatcher_t create_dispatcher;
     join_spot_dispatcher_t join_spot_dispatcher;
     join_entry_spot_dispatcher_t join_entry_spot_dispatcher;
@@ -439,16 +419,6 @@ class actor_gateway_runtime_t
       std::uint64_t binding_generation,
       std::uint64_t session_sequence,
       const runtime::protocol::actor_route_fence_t *target_route = nullptr);
-    result_t<void> begin_session_relay_completion (const actor_ref_t &actor_ref,
-                                                   const zlink::routing_id_t &source_node_rid,
-                                                   const zlink::routing_id_t &session_rid,
-                                                   std::uint64_t binding_generation,
-                                                   std::uint64_t session_sequence);
-    result_t<void> complete_session_relay (const actor_ref_t &actor_ref,
-                                           const zlink::routing_id_t &source_node_rid,
-                                           const zlink::routing_id_t &session_rid,
-                                           std::uint64_t binding_generation,
-                                           std::uint64_t session_sequence);
     result_t<void> retire_bound_session_route (const actor_ref_t &actor_ref,
                                                const zlink::routing_id_t &session_owner_node,
                                                const zlink::routing_id_t &session_rid,

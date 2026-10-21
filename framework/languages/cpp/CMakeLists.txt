@@ -1186,6 +1186,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink_framework
     Threads::Threads)
   zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_liveness_not_found_contract
+    COMMAND test_cpp_framework_m6a_runtime --liveness-not-found-contract
+    LABELS "framework-unit;framework-contract;liveness;raw-binding"
+    TIER unit
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
     NAME test_cpp_framework_liveness_physical_close
     COMMAND test_cpp_framework_m6a_runtime --liveness-physical-close
     LABELS "framework-unit;liveness"
@@ -1588,10 +1594,36 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIER integration
     TIMEOUT 30)
 
+  # Snapshot tracked and non-ignored new files on each layout build. Archives
+  # have no Git source set and retain the recursive source-tree scan.
+  set(_zlink_layout_manifest "")
+  find_package(Git QUIET)
+  if(Git_FOUND)
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" -C "${ZLINK_FRAMEWORK_CPP_DIR}" rev-parse --git-path index
+      RESULT_VARIABLE _zlink_layout_git_result
+      OUTPUT_QUIET ERROR_QUIET)
+    if(_zlink_layout_git_result EQUAL 0)
+      set(_zlink_layout_manifest "${CMAKE_CURRENT_BINARY_DIR}/layout-source-files")
+      add_custom_target(zlink_cpp_layout_manifest
+        COMMAND "${CMAKE_COMMAND}"
+          "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
+          "-DSOURCE_DIR=${ZLINK_FRAMEWORK_CPP_DIR}"
+          "-DMANIFEST=${_zlink_layout_manifest}"
+          -P "${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-layout-manifest.cmake"
+        BYPRODUCTS "${_zlink_layout_manifest}"
+        VERBATIM)
+    endif()
+  endif()
+
   add_executable(test_cpp_framework_layout_contract
     tests/Zlink.Framework.ContractTests/test_cpp_framework_layout_contract.cpp)
+  if(TARGET zlink_cpp_layout_manifest)
+    add_dependencies(test_cpp_framework_layout_contract zlink_cpp_layout_manifest)
+  endif()
   target_compile_definitions(test_cpp_framework_layout_contract PRIVATE
-    ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}")
+    ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}"
+    ZLINK_FRAMEWORK_CPP_TRACKED_SOURCE_MANIFEST="${_zlink_layout_manifest}")
   target_compile_features(test_cpp_framework_layout_contract PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_layout_contract)
   zlink_framework_cpp_add_test(
@@ -2125,6 +2157,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_channel_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp
     "framework-unit;framework-regression;channel")
+  add_zlink_framework_test(
+    test_cpp_framework_submission_failure_contract
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_submission_failure_contract.cpp
+    "framework-contract;channel;messaging")
+  target_use_zlink_gtest_main(test_cpp_framework_submission_failure_contract)
   add_zlink_framework_test(
     test_cpp_framework_route_client_channel_routing
     tests/Zlink.Framework.UnitTests/test_cpp_framework_route_client_channel_routing.cpp

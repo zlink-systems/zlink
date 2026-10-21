@@ -30,6 +30,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -42,6 +43,12 @@ import java.util.function.Supplier;
  * until the framework record is terminal.
  */
 final class ZLinkJavaRawServicePort implements AutoCloseable {
+    static final BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller>
+            DEFAULT_RECEIVE_POLLER =
+                    (socket, observesRoutes) ->
+                            new ZLinkJavaSocketReceivePoller(socket, true, observesRoutes);
+    private final BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller>
+            receivePollerFactory;
     private static final Duration INFINITE_WAIT = Duration.ofMillis(-1);
     private final Context context;
     private final boolean ownsContext;
@@ -102,6 +109,25 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             boolean ownsContext,
             ZLinkStateLane stateLane,
             ZLinkServiceOperationRegistry operations) {
+        this(context, ownsContext, stateLane, operations, DEFAULT_RECEIVE_POLLER);
+    }
+
+    ZLinkJavaRawServicePort(
+            Context context,
+            ZLinkStateLane stateLane,
+            ZLinkServiceOperationRegistry operations,
+            BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller> receivePollerFactory) {
+        this(context, false, stateLane, operations, receivePollerFactory);
+    }
+
+    private ZLinkJavaRawServicePort(
+            Context context,
+            boolean ownsContext,
+            ZLinkStateLane stateLane,
+            ZLinkServiceOperationRegistry operations,
+            BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller> receivePollerFactory) {
+        this.receivePollerFactory =
+                Objects.requireNonNull(receivePollerFactory, "receivePollerFactory");
         this.operations = Objects.requireNonNull(operations, "operations");
         this.context = Objects.requireNonNull(context, "context");
         this.ownsContext = ownsContext;
@@ -127,8 +153,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
         boolean accepted = false;
         try {
             router.setRoutingId(Objects.requireNonNull(routingId, "routingId"));
-            receivePollers.put(
-                    router, new ZLinkJavaSocketReceivePoller(router, true, observesRoutes));
+            receivePollers.put(router, receivePollerFactory.apply(router, observesRoutes));
             accepted = true;
             return router;
         } finally {
@@ -303,10 +328,10 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
 
     /**
      * Consumes request messages and reports the request's terminal to {@code terminal} exactly
-     * once, without a stage of its own. A decoded reply, or {@code mapFailure}'s projection of a
-     * failure that is not a {@link ZLinkFrameworkException}, is the value; any other outcome is the
-     * failure. Returns the binding stage that caller cancellation must reach, or {@code null} when
-     * the request failed before submission.
+     * once, without a stage of its own. Binding failures use the shared request failure projection.
+     * A decoded reply, or {@code mapFailure}'s projection of a decode failure, is the value; any
+     * other outcome is the failure. Returns the binding stage that caller cancellation must reach,
+     * or {@code null} when the request failed before submission.
      */
     <T> CompletionStage<?> requestMessagesTo(
             RouterSocket router,
@@ -400,12 +425,7 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             replyOwns = true;
             return bindingReply;
         } catch (RuntimeException failure) {
-            deliverTerminal(
-                    null,
-                    ZLinkJavaRawMeshNode.requestFailure(failure),
-                    decodeReply,
-                    mapFailure,
-                    terminal);
+            deliverTerminal(null, failure, decodeReply, mapFailure, terminal);
             return null;
         } finally {
             if (!replyOwns) {
@@ -420,14 +440,16 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             Function<List<Message>, T> decodeReply,
             Function<Throwable, T> mapFailure,
             BiConsumer<T, Throwable> terminal) {
+        if (failure != null) {
+            terminal.accept(null, ZLinkJavaRawMeshNode.requestFailure(failure));
+            return;
+        }
         T value = null;
-        Throwable terminalFailure = failure;
-        if (failure == null) {
-            try {
-                value = decodeReply.apply(reply);
-            } catch (RuntimeException | Error error) {
-                terminalFailure = error;
-            }
+        Throwable terminalFailure = null;
+        try {
+            value = decodeReply.apply(reply);
+        } catch (RuntimeException | Error error) {
+            terminalFailure = error;
         }
         if (terminalFailure != null && mapFailure != null) {
             if (ZLinkJavaRawMeshNode.unwrap(terminalFailure)

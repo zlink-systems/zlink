@@ -13,6 +13,11 @@
 #include <string>
 #include <vector>
 
+namespace zlink::framework::runtime
+{
+struct serial_application_record_t;
+}
+
 namespace zlink::framework::runtime::mesh
 {
 struct service_mailbox_record_t;
@@ -153,6 +158,7 @@ struct receive_record_t
     std::function<void ()> release_mailbox_reservation;
     std::function<void ()> complete_stateful_dispatch;
     std::function<void ()> before_application_handler;
+    std::shared_ptr<serial_application_record_t> application_record;
 };
 
 struct ready_record_t
