@@ -1379,6 +1379,7 @@ int transport_bound_close (bool tls, bool remote = false)
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
 #ifdef ZLINK_FRAMEWORK_STREAM_TEST_WITH_OPENSSL
     if (argc == 2 && std::string_view (argv[1]) == "--tls-bound-close")
         return transport_bound_close (true);

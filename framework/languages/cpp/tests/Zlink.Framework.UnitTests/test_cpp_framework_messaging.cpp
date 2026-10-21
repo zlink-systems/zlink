@@ -87,6 +87,7 @@ struct envelope_payload_t
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
     {
