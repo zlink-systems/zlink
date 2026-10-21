@@ -772,11 +772,17 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return this.observedOperation(pending, OperationKind.NodeRequest);
   }
 
-  async sendToChannel(
+  sendToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[]
   ): Promise<SubmitResultValue> {
-    return this.requireRuntime().sendToChannel(channelName, encodeMultipartApplicationFrame(parts));
+    try {
+      return Promise.resolve(
+        this.requireRuntime().sendToChannel(channelName, encodeMultipartApplicationFrame(parts))
+      );
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   requestToChannel(
@@ -1907,14 +1913,18 @@ class RawServiceSpot implements ServiceSpot {
     };
   }
 
-  async sendToChannel(
+  sendToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
     options?: { readonly flags?: number }
   ): Promise<SubmitResultValue> {
-    this.requireOpen();
-    void options;
-    return this.backend.sendToChannel(channelName, parts);
+    try {
+      this.requireOpen();
+      void options;
+      return this.backend.sendToChannel(channelName, parts);
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   requestToChannel(
