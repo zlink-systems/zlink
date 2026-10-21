@@ -1613,6 +1613,9 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
             IReadOnlyList<Message> reply;
             try
             {
+                // Count before submitting: once the peer can see the probe, the
+                // count already includes it.
+                Interlocked.Increment(ref _sentLivenessProbeCount);
                 // Keep the Core request/reply envelope; reply completion must
                 // not delay the next probe or the connection's deadline check.
                 var request = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
@@ -1621,7 +1624,6 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
                     cancellationToken,
                     admission
                 );
-                Interlocked.Increment(ref _sentLivenessProbeCount);
                 reply = await request.ConfigureAwait(false);
                 admission.RecordReceived(_time.GetTimestamp());
             }
