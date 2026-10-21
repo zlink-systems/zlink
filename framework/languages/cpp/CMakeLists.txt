@@ -2465,6 +2465,10 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     target_use_zlink_gtest_main(test_cpp_framework_locations_redis)
     target_link_libraries(test_cpp_framework_locations_redis PRIVATE
       zlink::framework_locations_redis)
+    target_include_directories(test_cpp_framework_locations_redis PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    zlink_framework_cpp_add_boost_headers(test_cpp_framework_locations_redis)
     if(TARGET redis++::redis++)
       target_link_libraries(test_cpp_framework_locations_redis PRIVATE redis++::redis++)
     else()
