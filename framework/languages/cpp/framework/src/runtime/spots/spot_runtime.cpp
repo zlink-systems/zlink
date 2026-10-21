@@ -13618,6 +13618,18 @@ void spot_node_runtime_t::close_user_spot_owner (const std::string &spot_id,
 
 bool spot_node_runtime_t::close_all_user_spots (std::chrono::steady_clock::time_point deadline_at)
 {
+    const auto remaining = [deadline_at] {
+        return std::max (std::chrono::milliseconds::zero (),
+                         std::chrono::ceil<std::chrono::milliseconds> (
+                           deadline_at - std::chrono::steady_clock::now ()));
+    };
+    // Host relocation §15: Draining finishes accepted operations. A Join stays
+    // moving until its completion ordering ends (Spot-Actor membership §4), so
+    // the shutdown Close retires its Actor only after that move closes.
+    const auto moves_closed =
+      _state->actor_transfer_coordinator.wait_for_source_completions ().result_for (remaining ());
+    if (!moves_closed || !*moves_closed)
+        return false;
     std::vector<spot_id_t> user_spots;
     std::vector<task_t<bool>> running_closes;
     _state->lane
@@ -13641,11 +13653,8 @@ bool spot_node_runtime_t::close_all_user_spots (std::chrono::steady_clock::time_
           }
       })
       .get ();
-    const auto wait_for_close = [deadline_at] (const task_t<bool> &closing) {
-        const auto remaining = std::max (std::chrono::milliseconds::zero (),
-                                         std::chrono::ceil<std::chrono::milliseconds> (
-                                           deadline_at - std::chrono::steady_clock::now ()));
-        const auto result = closing.result_for (remaining);
+    const auto wait_for_close = [&remaining] (const task_t<bool> &closing) {
+        const auto result = closing.result_for (remaining ());
         return result && result->value ();
     };
     for (const auto &closing : running_closes) {
