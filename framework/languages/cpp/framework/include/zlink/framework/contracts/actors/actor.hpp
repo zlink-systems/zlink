@@ -499,74 +499,25 @@ class actor_join_call_t
             barrier = std::move (reserved.value ());
         }
         auto registered = detail::defer_current_serial_turn (
-          [deferred = std::move (_deferred), async_deferred = std::move (_async_deferred), deadline,
-           barrier] () mutable {
-              auto run = [deferred = std::move (deferred), deadline] () mutable {
-                  const auto now = std::chrono::steady_clock::now ();
-                  if (now >= deadline) {
-                      throw framework_exception_t (
-                        framework_error_kind_t::deadline_exceeded,
-                        "Deferred Actor join deadline elapsed before activation");
-                  }
-                  deferred (std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now));
-              };
-              if (async_deferred) {
-                  if (!barrier) {
-                      throw framework_exception_t (
-                        framework_error_kind_t::not_configured,
-                        "Deferred Actor join async operation requires a join barrier");
-                  }
-                  const auto activated = barrier->activate_async (
-                    [async_deferred = std::move (async_deferred),
-                     deadline] (detail::deferred_barrier_t::async_completion_t complete) mutable {
-                        try {
-                            const auto now = std::chrono::steady_clock::now ();
-                            if (now >= deadline) {
-                                complete (result_t<void>::failure (
-                                  framework_error_kind_t::deadline_exceeded,
-                                  "Deferred Actor join deadline elapsed before activation"));
-                                return;
-                            }
-                            auto pending = async_deferred (
-                              std::chrono::duration_cast<std::chrono::milliseconds> (deadline
-                                                                                     - now));
-                            detail::observe_task_terminal (
-                              pending,
-                              [complete = std::move (complete)] (
-                                const result_t<void> &result) mutable { complete (result); });
-                        }
-                        catch (const framework_exception_t &error) {
-                            complete (detail::result_access_t::failure<void> (error));
-                        }
-                        catch (const std::exception &error) {
-                            complete (result_t<void>::failure (
-                              framework_error_kind_t::internal_failure, error.what ()));
-                        }
-                    });
-                  if (!activated) {
-                      const auto *error = activated.error ();
-                      throw framework_exception_t (
-                        activated.error_kind (),
-                        error != nullptr ? error->what () : "Actor join barrier activation failed");
-                  }
-                  return;
-              }
-              if (barrier) {
-                  const auto activated = barrier->activate (std::move (run));
-                  if (!activated) {
-                      const auto *error = activated.error ();
-                      throw framework_exception_t (
-                        activated.error_kind (),
-                        error != nullptr ? error->what () : "Actor join barrier activation failed");
-                  }
-                  return;
-              }
-              run ();
+          [deferred = std::move (_deferred), async_deferred = std::move (_async_deferred),
+           deadline] () mutable -> task_t<void> {
+              const auto now = std::chrono::steady_clock::now ();
+              if (now >= deadline)
+                  throw framework_exception_t (
+                    framework_error_kind_t::deadline_exceeded,
+                    "Deferred Actor join deadline elapsed before activation");
+              const auto remaining =
+                std::chrono::duration_cast<std::chrono::milliseconds> (deadline - now);
+              if (async_deferred)
+                  return async_deferred (remaining);
+              deferred (remaining);
+              return task_t<void> (result_t<void>::success ());
           },
           [barrier] {
               if (barrier)
                   barrier->cancel ();
-          });
+          },
+          barrier);
         if (!registered) {
             if (barrier)
                 barrier->cancel ();
