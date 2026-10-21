@@ -772,11 +772,17 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return this.observedOperation(pending, OperationKind.NodeRequest);
   }
 
-  async sendToChannel(
+  sendToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[]
   ): Promise<SubmitResultValue> {
-    return this.requireRuntime().sendToChannel(channelName, encodeMultipartApplicationFrame(parts));
+    try {
+      return Promise.resolve(
+        this.requireRuntime().sendToChannel(channelName, encodeMultipartApplicationFrame(parts))
+      );
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   requestToChannel(
