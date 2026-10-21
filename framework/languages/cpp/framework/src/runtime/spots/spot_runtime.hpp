@@ -2324,7 +2324,7 @@ class spot_node_runtime_t
     std::size_t active_user_spot_count_on_lane () const;
     std::optional<std::string> spot_name_for_unlocked (const spot_id_t &spot_id) const;
 
-    std::shared_ptr<service::spot_t>
+    static std::shared_ptr<service::spot_t>
     attach_native_spot (const std::shared_ptr<spot_context_state_t> &state,
                         bool relocation_restore = false,
                         bool publish = true);
