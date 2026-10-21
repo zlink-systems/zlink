@@ -19,6 +19,12 @@ using Zlink.Framework.Contracts.Dispatch;
 
 AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
 
+if (args.Length == 2 && args[0] == "--local-request-backpressure")
+{
+    await BackpressureLocalProbe.RunAsync(args[1]);
+    return;
+}
+
 var options = BenchOptions.Parse(args);
 options.Validate();
 BenchMeasurement.ConfigureThreadPool(options.SendConcurrency);
@@ -322,6 +328,15 @@ internal sealed class FrameworkBenchTransport : IBenchTransport
             host,
             host.Services.GetRequiredService<IZLinkRouteClient>()
         );
+    }
+
+    internal async Task WaitForPeerAsync(CancellationToken cancellationToken)
+    {
+        var topology =
+            host.Services.GetRequiredService<Zlink.Framework.Contracts.Configuration.IZLinkRouteMeshRuntime>();
+        await foreach (var observed in topology.ObserveAsync("bench", cancellationToken))
+            if (observed.Status.ReadyPeerCount > 0)
+                return;
     }
 
     public Zlink.Framework.Contracts.Channels.ZLinkRequest<BenchPayload> SubmitRequest(
@@ -1333,11 +1348,4 @@ internal static class BenchJson
             WriteIndented = true,
             PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
         };
-}
-
-internal static class RawEnvelopeHeaders
-{
-    public static readonly byte[] Request = Encoding.UTF8.GetBytes(
-        "{\"kind\":1,\"channelName\":\"bench\",\"messageName\":\"BenchPayload\",\"contentType\":\"application/x-protobuf\",\"correlationId\":null,\"deadline\":null,\"topic\":null,\"errorCode\":null,\"errorMessage\":null,\"source\":null}"
-    );
 }
