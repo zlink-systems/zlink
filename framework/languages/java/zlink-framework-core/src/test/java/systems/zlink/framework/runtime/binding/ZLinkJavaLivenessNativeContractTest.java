@@ -27,6 +27,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -193,18 +194,28 @@ final class ZLinkJavaLivenessNativeContractTest {
     }
 
     @Test
-    void nativeContextTerminationIsNotConsumedAsPeerAbsence() {
-        try (var context = Zlink.createContext();
-                var socket = context.createRouterSocket()) {
-            context.shutdown();
-            var failure =
-                    assertThrows(
-                            ZlinkConnectException.class,
-                            () ->
-                                    ZLinkJavaSocketSupport.disconnectRidIfPresent(
-                                            socket, RoutingId.from("expired")));
-            assertEquals(ConnectResult.INTERNAL_ERROR, failure.getResult());
-        }
+    void nonNotFoundBindingFailureIsNotConsumedAsPeerAbsence() {
+        var peer = RoutingId.from("expired");
+        var bindingFailure = new ZlinkConnectException(ConnectResult.INTERNAL_ERROR, 156);
+        var disconnectCalls = new AtomicInteger();
+        RouterSocket socket =
+                (RouterSocket)
+                        Proxy.newProxyInstance(
+                                RouterSocket.class.getClassLoader(),
+                                new Class<?>[] {RouterSocket.class},
+                                (proxy, method, args) -> {
+                                    assertEquals("disconnectRid", method.getName());
+                                    assertEquals(peer, args[0]);
+                                    disconnectCalls.incrementAndGet();
+                                    throw bindingFailure;
+                                });
+
+        assertSame(
+                bindingFailure,
+                assertThrows(
+                        ZlinkConnectException.class,
+                        () -> ZLinkJavaSocketSupport.disconnectRidIfPresent(socket, peer)));
+        assertEquals(1, disconnectCalls.get());
     }
 
     private static Object invoke(java.lang.reflect.Method method, Object target, Object[] args)
