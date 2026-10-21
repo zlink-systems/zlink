@@ -246,7 +246,7 @@ struct host_options_t
     std::chrono::milliseconds owner_lease_fencing_margin{5'000};
     std::shared_ptr<zlink::context_t> core_context;
     std::chrono::milliseconds session_relocation_seal_timeout =
-      location_options_t{}.session_relocation_seal_timeout;
+      detail::default_session_relocation_seal_timeout;
     std::chrono::milliseconds user_spot_operation_replay_retention = std::chrono::minutes (5);
 };
 
@@ -1261,6 +1261,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     runtime::offload_executor_t _peer_endpoint_lane_executor;
     runtime::state_lane_t _peer_endpoint_lane{_peer_endpoint_lane_executor};
     std::atomic<std::uint64_t> _next_operation{1};
+    std::unique_ptr<completion_owner_t> _completion_owner;
     bool _started = false;
     bool _closing = false;
 };

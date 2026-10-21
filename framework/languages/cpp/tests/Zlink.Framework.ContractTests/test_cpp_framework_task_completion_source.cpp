@@ -48,6 +48,7 @@ task_t<copy_constructible_t> observe_copy_constructible (task_t<copy_constructib
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     task_completion_source_t<copy_constructible_t> copy_source;
     auto copy_waiter = observe_copy_constructible (copy_source.task ());
     if (copy_waiter.result_for (0ms))

@@ -167,7 +167,7 @@ class mesh_node_runtime_t
       host::spot_route_fence_resolver_t resolver,
       std::chrono::milliseconds owner_lease_fencing_margin = std::chrono::seconds (5),
       std::chrono::milliseconds session_relocation_seal_timeout =
-        location_options_t{}.session_relocation_seal_timeout);
+        detail::default_session_relocation_seal_timeout);
     void configure_actor_route_resolver (
       std::function<task_t<std::optional<runtime::spot_address_t>> (actor_ref_t)> resolver,
       std::function<void (const runtime::protocol::actor_route_fence_t &)> invalidator = {});
@@ -617,7 +617,7 @@ class mesh_node_runtime_t
     std::function<void (const runtime::protocol::actor_route_fence_t &)> _actor_route_invalidator;
     std::chrono::milliseconds _owner_lease_fencing_margin{5'000};
     std::chrono::milliseconds _session_relocation_seal_timeout =
-      location_options_t{}.session_relocation_seal_timeout;
+      detail::default_session_relocation_seal_timeout;
     host::actor_create_operation_target_t _actor_create_target;
     runtime::offload_executor_t _observed_spot_authority_lane_executor;
     mutable runtime::state_lane_t _observed_spot_authority_lane{
