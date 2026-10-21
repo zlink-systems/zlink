@@ -6,6 +6,8 @@
 #include "runtime_failure_fixture.hpp"
 
 #include <atomic>
+#include <array>
+#include <cstdint>
 #include <iostream>
 #include <stdexcept>
 
@@ -105,6 +107,44 @@ auto owner_baseline ()
     });
 }
 
+struct allocation_events_t
+{
+    std::array<tests::allocation_event_t, 64> events{};
+    tests::allocation_event_log_t log{events.data (), events.size ()};
+
+    template <typename TAction> auto measure (TAction &&action)
+    {
+        struct restore_log_t
+        {
+            tests::allocation_event_log_t *previous;
+            ~restore_log_t () { tests::allocation_event_log = previous; }
+        } restore{std::exchange (tests::allocation_event_log, &log)};
+        const auto result = tests::measure_allocations (std::forward<TAction> (action));
+        require (!log.overflow, "allocation attribution event buffer overflowed");
+        require (log.count == result.count, "allocation attribution lost an event");
+        return result;
+    }
+
+    std::size_t containing (const void *ready, const void *record, std::size_t begin) const
+    {
+        const auto contains = [] (const auto &event, const void *address) {
+            const auto base = reinterpret_cast<std::uintptr_t> (event.memory);
+            const auto value = reinterpret_cast<std::uintptr_t> (address);
+            return value >= base && value - base < event.size;
+        };
+        auto found = log.count;
+        for (auto index = begin; index < log.count; ++index) {
+            if (contains (events[index], ready) || contains (events[index], record)) {
+                require (found == log.count, "dispatch locals identify multiple allocations");
+                found = index;
+            }
+        }
+        require (found != log.count,
+                 "compiler did not place a dispatch local in an allocated coroutine frame");
+        return found;
+    }
+};
+
 void verify_cost (host::public_host_runtime_t &target)
 {
     mesh::service_mailbox_t baseline_mailbox;
@@ -115,18 +155,101 @@ void verify_cost (host::public_host_runtime_t &target)
         require (claim.has_value (), "baseline claim failed");
         require (baseline_mailbox.release (*claim), "baseline release failed");
     });
-    const dispatch_t callback = [] (const auto &, const auto &, auto) {};
-    enqueue (target.transport ().mailbox ());
-    const auto actual = tests::measure_allocations (
-      [&] { require (dispatch (target, callback), "measured dispatch failed"); });
+    struct observation_t
+    {
+        allocation_events_t allocations;
+        std::size_t started_at = 0;
+        std::size_t inner_frame = 0;
+        std::size_t started_count = 0;
+        std::size_t dispatched_count = 0;
+        bool inject_allocation = false;
+        std::shared_ptr<int> injected;
+    } observation;
+    const std::function<void ()> started = [&observation] {
+        ++observation.started_count;
+        observation.started_at = observation.allocations.log.count;
+    };
+    const dispatch_t callback = [&observation] (const auto &ready, const auto &record, auto) {
+        ++observation.dispatched_count;
+        observation.inner_frame =
+          observation.allocations.containing (&ready, &record, observation.started_at);
+        if (observation.inject_allocation)
+            observation.injected = std::make_shared<int> (1);
+    };
+    // An empty owner takes the same outer coroutine path without creating a claim
+    // owner. Keep callbacks and argument copies identical to the measured call.
+    const auto outer = tests::measure_allocations ([&] {
+        require (
+          !target.dispatch_application_owner (owner, callback, started, noop).result ().value (),
+          "outer coroutine baseline unexpectedly claimed a record");
+    });
+    allocation_events_t completion_events;
+    const auto completion = completion_events.measure ([] {
+        const task_t<std::size_t> completed (result_t<std::size_t>::success (0));
+        require (completed.result ().value () == 0, "task completion calibration failed");
+    });
+    require (completion_events.log.count != 0,
+             "task completion calibration did not allocate storage");
     const auto expected = owner_baseline ();
-    std::cout << "claim-owner actual-count=" << actual.count << " actual-bytes=" << actual.bytes
-              << " mailbox-count=" << claim_cost.count << " mailbox-bytes=" << claim_cost.bytes
-              << " owner-count=" << expected.count << " owner-bytes=" << expected.bytes << '\n';
+    const auto measure_dispatch = [&] (bool inject_allocation) {
+        auto &events = observation.allocations;
+        events.log.count = 0;
+        observation.started_count = 0;
+        observation.dispatched_count = 0;
+        observation.inject_allocation = inject_allocation;
+        enqueue (target.transport ().mailbox ());
+        const auto actual = events.measure ([&] {
+            require (
+              target.dispatch_application_owner (owner, callback, started, noop).result ().value (),
+              "measured dispatch failed");
+        });
+        const auto inner_frame = observation.inner_frame;
+        require (observation.started_count == 1 && observation.dispatched_count == 1,
+                 "allocation attribution requires exactly one dispatched record");
+        require (inner_frame == observation.started_at,
+                 "unexpected allocation before the inner coroutine frame");
+        require (inner_frame + 1 + completion_events.log.count <= events.log.count,
+                 "inner coroutine completion allocation is missing");
+        // The moved claim and std::function parameters do not allocate. Promise
+        // construction follows the frame allocation and precedes the claim owner.
+        // Frame size comes from the live ready/record addresses, not a compiler ABI.
+        // A compiler placing both locals elsewhere fails attribution explicitly.
+        for (std::size_t index = 0; index < completion_events.log.count; ++index)
+            require (events.events[inner_frame + 1 + index].size
+                       == completion_events.events[index].size,
+                     "inner coroutine promise differs from task completion calibration");
+        const auto overhead_count = outer.count + 1 + completion.count;
+        const auto overhead_bytes =
+          outer.bytes + events.events[inner_frame].size + completion.bytes;
+        require (actual.count >= overhead_count && actual.bytes >= overhead_bytes,
+                 "coroutine attribution exceeds the measured dispatch allocations");
+        std::cout << "claim-owner injected=" << inject_allocation
+                  << " actual-count=" << actual.count << " actual-bytes=" << actual.bytes
+                  << " mailbox-count=" << claim_cost.count << " mailbox-bytes=" << claim_cost.bytes
+                  << " owner-count=" << expected.count << " owner-bytes=" << expected.bytes
+                  << " coroutine-count=" << overhead_count << " coroutine-bytes=" << overhead_bytes
+                  << '\n';
+        std::cout << "claim-owner outer-count=" << outer.count << " outer-bytes=" << outer.bytes
+                  << " inner-frame-event=" << inner_frame
+                  << " inner-frame-bytes=" << events.events[inner_frame].size
+                  << " completion-count=" << completion.count
+                  << " completion-bytes=" << completion.bytes << '\n';
+        for (std::size_t index = 0; index < events.log.count; ++index)
+            std::cout << "claim-owner allocation-event=" << index
+                      << " bytes=" << events.events[index].size << '\n';
+        return tests::allocation_measurement_t{actual.count - overhead_count,
+                                               actual.bytes - overhead_bytes, 0};
+    };
+    const auto actual = measure_dispatch (false);
     require (actual.count <= claim_cost.count + expected.count,
              "claim dispatch allocates more than one shared owner and two callbacks");
     require (actual.bytes <= claim_cost.bytes + expected.bytes,
              "claim dispatch exceeds the calibrated owner storage bound");
+    const auto injected = measure_dispatch (true);
+    require (injected.count > claim_cost.count + expected.count
+               && injected.bytes > claim_cost.bytes + expected.bytes,
+             "allocation attribution hid an injected shared allocation");
+    std::cout << "claim-owner injected allocation rejected by count and byte bounds\n";
 }
 
 void verify_retained_batch (host::public_host_runtime_t &target)

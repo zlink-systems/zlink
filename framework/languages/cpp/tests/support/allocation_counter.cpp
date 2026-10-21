@@ -12,10 +12,17 @@ thread_local std::size_t tracked_allocation_count = 0;
 thread_local std::size_t tracked_allocation_size = 0;
 thread_local std::size_t tracked_allocation_bytes = 0;
 thread_local std::size_t largest_allocation = 0;
+thread_local allocation_event_log_t *allocation_event_log = nullptr;
 
-void record_allocation (std::size_t size) noexcept
+void record_allocation (const void *memory, std::size_t size) noexcept
 {
     if (tracking_allocations && (tracked_allocation_size == 0 || tracked_allocation_size == size)) {
+        if (allocation_event_log != nullptr) {
+            if (allocation_event_log->count < allocation_event_log->capacity)
+                allocation_event_log->events[allocation_event_log->count++] = {memory, size};
+            else
+                allocation_event_log->overflow = true;
+        }
         ++tracked_allocation_count;
         tracked_allocation_bytes += size;
         if (size > largest_allocation)
@@ -26,7 +33,7 @@ void record_allocation (std::size_t size) noexcept
 void *allocate_bytes (std::size_t size)
 {
     if (void *memory = std::malloc (size == 0 ? 1 : size)) {
-        record_allocation (size);
+        record_allocation (memory, size);
         return memory;
     }
     throw std::bad_alloc ();
@@ -43,7 +50,7 @@ void *allocate_aligned_bytes (std::size_t size, std::size_t alignment)
         memory = nullptr;
 #endif
     if (memory != nullptr) {
-        record_allocation (size);
+        record_allocation (memory, size);
         return memory;
     }
     throw std::bad_alloc ();
