@@ -2369,6 +2369,9 @@ void app_t::_apply_zlink_framework ()
                 relay_failure = std::current_exception ();
             }
             const auto completed = ingress.complete ();
+            //  The original application error stays the single terminal;
+            //  fence completion above ran regardless, and its own failure
+            //  is reported only when the relay itself succeeded.
             if (relay_failure)
                 std::rethrow_exception (relay_failure);
             if (completed != runtime::stateful::stateful_error_t::none) {
@@ -2379,8 +2382,7 @@ void app_t::_apply_zlink_framework ()
             co_return relayed;
         };
         actor_gateway_runtime.on_relay (
-          [application_mesh, actor_gateway_runtime, deliver_relay,
-           dispatch_options = options.configure_dispatch (),
+          [application_mesh, deliver_relay, dispatch_options = options.configure_dispatch (),
            request_timeout] (const actor_ref_t &actor, actor_context_t,
                              const detail::stream_header_t &header, const zlink::message_t &payload,
                              std::optional<detail::bound_session_relay_source_t> source,

@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <fstream>
 #include <functional>
 #include <future>
@@ -353,8 +354,13 @@ TEST (ZLinkFrameworkSpotCloseConformance, FailedPreparationDrainsYieldedTimerAnd
     std::shared_ptr<void> first_record_claim (nullptr,
                                               [state] (void *) { state->leave_callback (); });
     task_completion_source_t<void> resume;
-    const std::shared_ptr<void> release_on_exit (
-      nullptr, [&] (void *) { resume.complete (result_t<void>::success ()); });
+    task_completion_source_t<void> proceed;
+    std::promise<void> entered;
+    auto callback_entered = entered.get_future ();
+    const std::shared_ptr<void> release_on_exit (nullptr, [&] (void *) {
+        proceed.complete (result_t<void>::success ());
+        resume.complete (result_t<void>::success ());
+    });
     std::promise<void> cancelling;
     auto cancellation_started = cancelling.get_future ();
     struct observed_timer_resource_t final : timer_resource_t
@@ -377,6 +383,8 @@ TEST (ZLinkFrameworkSpotCloseConformance, FailedPreparationDrainsYieldedTimerAnd
     running->native_timer = std::make_unique<observed_timer_resource_t> (cancelling);
     running->handler_invoker = [&] (void *, void *, serializer_registry_t &,
                                     const timer_tick_t &) -> task_t<zlink::message_t> {
+        entered.set_value ();
+        co_await proceed.task ();
         terminal (false);
         co_await detail::yield_call<void> ([&] { return resume.task (); });
         resumed_with_instance = bool (state->spot_instance);
@@ -395,6 +403,7 @@ TEST (ZLinkFrameworkSpotCloseConformance, FailedPreparationDrainsYieldedTimerAnd
     auto marker = std::make_shared<std::promise<void>> ();
     auto application_drained = marker->get_future ();
     std::shared_ptr<void> cleanup_on_exit (nullptr, [&] (void *) {
+        proceed.complete (result_t<void>::success ());
         resume.complete (result_t<void>::success ());
         terminal (false);
         first_record_claim.reset ();
@@ -406,6 +415,9 @@ TEST (ZLinkFrameworkSpotCloseConformance, FailedPreparationDrainsYieldedTimerAnd
     timer_runtime_t::post_fire_count (state, running, {}, 1);
     timer_runtime_t::post_fire_count (state, pending, {}, 1);
     state->spot_serial_executor->open_preparation_admission ();
+    callback_entered.get ();
+    state->spot_serial_executor->close_preparation_admission ();
+    proceed.complete (result_t<void>::success ());
     cancellation_started.get ();
     auto drained = node->lane.run ([&] { return state->preparation_callback_terminal; }).get ();
     ASSERT_TRUE (drained);
@@ -477,10 +489,7 @@ struct observation_t
     std::promise<void> cross_b_reserved;
     std::promise<void> cross_a_initial;
     std::promise<void> cross_b_initial;
-    std::promise<void> cross_a_completed;
-    std::promise<void> cross_b_completed;
-    std::promise<void> cross_a_left;
-    std::promise<void> cross_b_left;
+    std::condition_variable cross_progress;
     std::promise<void> cross_sources_released;
     std::shared_future<void> cross_sources_release = cross_sources_released.get_future ().share ();
     std::string handler_mode;
@@ -498,6 +507,7 @@ struct observation_t
     {
         std::lock_guard lock (mutex);
         order.push_back (std::move (event));
+        cross_progress.notify_all ();
     }
 };
 
@@ -612,8 +622,7 @@ class member_actor_t final : public zf::actor_t
         const auto id = _context.actor_id ().value ();
         if (current ().cross_join_active.load ()) {
             current ().order.push_back ("joinReply:" + std::string (id));
-            (id == "cross-a" ? current ().cross_a_completed : current ().cross_b_completed)
-              .set_value ();
+            current ().cross_progress.notify_all ();
         } else if (id == "cross-a" || id == "cross-b") {
             (id == "cross-a" ? current ().cross_a_initial : current ().cross_b_initial)
               .set_value ();
@@ -771,16 +780,9 @@ class close_room_spot_t final : public zf::spot_t<member_actor_t>
             current ().record ("joinedDone:" + std::string (actor.context ().actor_id ().value ()));
         co_return;
     }
-    zf::task_t<void> on_leave_actor (member_actor_t &actor) override
+    zf::task_t<void> on_leave_actor (member_actor_t &) override
     {
         current ().record ("leaveCompleted:" + _context.spot_id ());
-        if (current ().cross_join_active.load ()) {
-            const auto id = actor.context ().actor_id ().value ();
-            if (id == "cross-a")
-                current ().cross_a_left.set_value ();
-            else if (id == "cross-b")
-                current ().cross_b_left.set_value ();
-        }
         co_return;
     }
 
@@ -1380,13 +1382,8 @@ class scenario_client_t final : public zf::hosted_service_t
             const auto room_a = spot_id;
             const auto room_b = spot_id + "-b";
             (void) create_room (services, room_b);
-            // Membership §7: completion follows target OnJoinedActor; source
-            // OnLeaveActor is a one-way notification with its own terminal.
-            const auto joins_completed = [&] {
-                std::lock_guard lock (current ().mutex);
-                return std::count (current ().notes.begin (), current ().notes.end (),
-                                   "actorJoin:accepted");
-            };
+            // Membership §4.2 sends source Leave one-way before Join completion.
+            // Observe both callbacks within the same deadline before checking order.
             auto initial_a = current ().cross_a_initial.get_future ();
             auto initial_b = current ().cross_b_initial.get_future ();
             join_member (services, room_a, "cross-a");
@@ -1395,10 +1392,6 @@ class scenario_client_t final : public zf::hosted_service_t
             join_member (services, room_b, "cross-b");
             if (initial_b.wait_for (3s) != std::future_status::ready)
                 throw std::runtime_error ("member cross-b did not join room B");
-            auto completed_a = current ().cross_a_completed.get_future ();
-            auto completed_b = current ().cross_b_completed.get_future ();
-            auto left_a = current ().cross_a_left.get_future ();
-            auto left_b = current ().cross_b_left.get_future ();
             auto source_a_reserved = current ().cross_a_reserved.get_future ();
             auto source_b_reserved = current ().cross_b_reserved.get_future ();
             current ().cross_join_active.store (true);
@@ -1422,18 +1415,28 @@ class scenario_client_t final : public zf::hosted_service_t
             (void) to_a.get ();
             if (!both_reserved)
                 throw std::runtime_error ("both source handlers must register their Join barrier");
-            const bool completed =
-              completed_a.wait_until (registration_deadline) == std::future_status::ready
-              && completed_b.wait_until (registration_deadline) == std::future_status::ready
-              && joins_completed () >= 4;
-            const bool sources_left =
-              left_a.wait_until (registration_deadline) == std::future_status::ready
-              && left_b.wait_until (registration_deadline) == std::future_status::ready;
+            bool completed = false;
             bool replies_after_joined = true;
             int checked_replies = 0;
             int checked_leaves = 0;
             {
-                std::lock_guard lock (current ().mutex);
+                std::unique_lock lock (current ().mutex);
+                completed = current ().cross_progress.wait_until (lock, registration_deadline, [&] {
+                    return std::count (current ().notes.begin (), current ().notes.end (),
+                                       "actorJoin:accepted")
+                             >= 4
+                           && std::count (current ().order.begin (), current ().order.end (),
+                                          "joinReply:cross-a")
+                                == 1
+                           && std::count (current ().order.begin (), current ().order.end (),
+                                          "joinReply:cross-b")
+                                == 1
+                           && std::count_if (current ().order.begin (), current ().order.end (),
+                                             [] (const auto &event) {
+                                                 return event.starts_with ("leaveCompleted:");
+                                             })
+                                == 2;
+                });
                 std::set<std::string> joined;
                 for (const auto &event : current ().order) {
                     if (event.starts_with ("leaveCompleted:"))
@@ -1446,10 +1449,10 @@ class scenario_client_t final : public zf::hosted_service_t
                     }
                 }
             }
-            actual["crossJoins"] = completed && sources_left && replies_after_joined
-                                       && checked_replies == 2 && checked_leaves == 2
-                                     ? "completed"
-                                     : "stalled";
+            actual["crossJoins"] =
+              completed && replies_after_joined && checked_replies == 2 && checked_leaves == 2
+                ? "completed"
+                : "stalled";
             current ().cross_join_active.store (false);
             return;
         }

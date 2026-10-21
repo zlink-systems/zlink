@@ -116,6 +116,11 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
     auto &events = events_state->events;
     const auto owner_rid = zlink::routing_id_t::from ("seal-relay-owner");
     auto app = app_t::create ();
+    app.logging ()
+      .use_file (close_owner       ? "seal-retention-close.flow"
+                 : request_timeout ? "seal-retention-request.flow"
+                                   : "seal-retention-one-way.flow")
+      .set_min_level (log_level_t::debug);
     app.set_message_flow_mode (message_flow_log_mode_t::normal);
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
         options.add_route_mesh ("seal-relay-mesh")
@@ -228,14 +233,29 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         EXPECT_TRUE (sessions.close (connection));
     else
         EXPECT_EQ (sessions.abort_barrier (seal.barrier), stateful::stateful_error_t::none);
+    const auto expect_source_accepted_twice = [&] (std::chrono::steady_clock::time_point deadline) {
+        // A drop precedes the drain's final lane turn that releases the seal.
+        while (sessions.remote_route_sealed (actor_object.key)
+               && std::chrono::steady_clock::now () < deadline)
+            std::this_thread::yield ();
+        ASSERT_FALSE (sessions.remote_route_sealed (actor_object.key));
+        const auto observed = sessions.seal_remote_route (
+          connection.connection_id, binding.binding_generation, actor_object.key,
+          actor_object.object_generation, binding.owner_lease_generation);
+        ASSERT_EQ (observed.error, stateful::stateful_error_t::none);
+        EXPECT_EQ (observed.last_accepted_sequence, 2u);
+        EXPECT_TRUE (sessions.remote_route_seal_ready (observed.barrier));
+        EXPECT_EQ (sessions.abort_barrier (observed.barrier), stateful::stateful_error_t::none);
+    };
     ASSERT_EQ (completed.wait_for (2s), std::future_status::ready);
     const auto terminal = completed.get ();
     if (request_timeout) {
         EXPECT_FALSE (terminal);
         EXPECT_EQ (terminal.error_kind (), framework_error_kind_t::deadline_exceeded);
         EXPECT_EQ (native->pending_operation_count (), 0u);
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
         std::unique_lock lock (events_mutex);
-        ASSERT_TRUE (events_changed.wait_for (lock, 2s, [&] {
+        ASSERT_TRUE (events_changed.wait_until (lock, deadline, [&] {
             return std::any_of (events.begin (), events.end (), [] (const auto &event) {
                 return event.packet_name == "AfterExpired"
                        && event.outcome == message_flow_outcome_t::dropped;
@@ -243,14 +263,15 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         }));
         lock.unlock ();
         ASSERT_TRUE (gateway.bound_session_route_async (actor).result ().value ());
-
+        expect_source_accepted_twice (deadline);
         EXPECT_EQ (native->pending_operation_count (), 0u);
     } else {
         EXPECT_TRUE (terminal) << "delivery failure must not change accepted caller completion";
     }
     if (other_bound) {
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
         std::unique_lock lock (events_mutex);
-        ASSERT_TRUE (events_changed.wait_for (lock, 2s, [&] {
+        ASSERT_TRUE (events_changed.wait_until (lock, deadline, [&] {
             return std::count_if (events.begin (), events.end (),
                                   [] (const auto &event) {
                                       return event.outcome == message_flow_outcome_t::dropped
@@ -267,7 +288,7 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         }
         lock.unlock ();
         EXPECT_TRUE (sessions.remote_route_sealed ("seal-other-actor"));
-
+        expect_source_accepted_twice (deadline);
         ASSERT_EQ (sessions.abort_barrier (other_barrier), stateful::stateful_error_t::none);
         lock.lock ();
         ASSERT_TRUE (events_changed.wait_for (lock, 2s, [&] {

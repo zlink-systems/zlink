@@ -77,7 +77,7 @@ class layout_snapshot_t
 {
   public:
     layout_snapshot_t () :
-        layout_snapshot_t (ZLINK_FRAMEWORK_CPP_SOURCE_DIR, tracked_source_paths (), [] {})
+        layout_snapshot_t (ZLINK_FRAMEWORK_CPP_SOURCE_DIR, source_paths (), [] {})
     {
     }
 
@@ -116,19 +116,32 @@ class layout_snapshot_t
     }
 
   private:
-    static std::vector<std::filesystem::path> tracked_source_paths ()
+    static std::vector<std::filesystem::path> source_paths ()
     {
+        const std::filesystem::path root{ZLINK_FRAMEWORK_CPP_SOURCE_DIR};
+        if (std::string_view{ZLINK_FRAMEWORK_CPP_TRACKED_SOURCE_MANIFEST}.empty ()) {
+            std::vector<std::filesystem::path> paths;
+            for (auto it = std::filesystem::recursive_directory_iterator{root};
+                 it != std::filesystem::recursive_directory_iterator{}; ++it) {
+                if (it->is_directory ()
+                    && std::filesystem::exists (it->path () / "CMakeCache.txt")) {
+                    it.disable_recursion_pending ();
+                } else if (it->is_regular_file ()) {
+                    paths.push_back (it->path ());
+                }
+            }
+            return paths;
+        }
         std::ifstream manifest{ZLINK_FRAMEWORK_CPP_TRACKED_SOURCE_MANIFEST, std::ios::binary};
         if (!manifest) {
-            throw std::runtime_error (
-              "tracked source manifest unavailable; configure from a Git checkout");
+            throw std::runtime_error ("layout source manifest unavailable");
         }
         std::vector<std::filesystem::path> paths;
         for (std::string relative; std::getline (manifest, relative, '\0');) {
             paths.emplace_back (std::filesystem::path{ZLINK_FRAMEWORK_CPP_SOURCE_DIR} / relative);
         }
         if (paths.empty () || !manifest.eof ()) {
-            throw std::runtime_error ("tracked source manifest is empty or unreadable");
+            throw std::runtime_error ("layout source manifest is empty or unreadable");
         }
         return paths;
     }

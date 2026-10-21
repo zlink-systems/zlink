@@ -74,6 +74,8 @@
 | 검증 source hash가 stage된 변경도 포함하나 | `git ls-files --modified`로 만든 hash가 같다 | Stage된 변경은 빠진다. `git diff HEAD`와 untracked 파일을 함께 수집하고, stage된 실제 source의 두 내용을 입력해 hash가 달라지는지 확인한다 | #1786 · #1771 |
 | Host가 정상 정산했나 | GTest 단언 통과와 exit 0 | 종료 로그에 `force_stopping`이 있으면 정상 drain의 증거가 아니다. pending·active callback 정산과 정상 종료 transition을 함께 확인한다 | #1786 · #1771 |
 | 메시지 수락이 Store를 조회하지 않나 | 요청 flow로 필터링한 provider 호출 수 0 | 수락 경로가 해당 ambient flow를 전달하지 않아도 0이다. 조회 대상 authority key를 provider에서 직접 세고, 수정 전 실제 조회를 잡는지 먼저 확인한다 | #1786 |
+| Lane 자기 대기 시험이 실제 Host 실행 문맥을 사용하나 | Host를 시작하지 않은 fixture가 수정 전에도 통과 | Host hook과 coroutine executor를 등록하지 않으면 provider task의 별도 executor에서 재개해 자기 대기를 지나친다. 실제 Host와 같은 실행 문맥을 등록하고, 수정 전 대기 만료와 수정 후 완료를 함께 확인한다 | #2109 · #2119 |
+| Relocation metric이 task 완료 전에 기록됐나 | await 뒤 수집이 한 번 통과 | shared state 소멸자가 metric을 기록하면 완료 관찰과 소멸의 순서에 따라 통과한다. terminal observer를 먼저 등록하고 그 안에서 수집해 수정 전 누락과 수정 후 1회 기록을 확인한다 | #2109 · #2119 |
 | WSL 시험이 실패를 종료 코드로 알렸나 | PowerShell에서 띄운 inline `bash -c`의 `$?`·`$code`가 0 | PowerShell이 변수를 먼저 펼쳐 gtest 실패에도 바깥 명령이 0으로 보였다. `.sh` 파일이나 subprocess의 returncode로 판정하고 로그의 실제 시험 수를 함께 확인한다 | #2119 |
 | 생성 codec이 올바른 frame을 받나 | GCC 빌드의 golden 시험 통과 | 함수 인자 평가 순서에 기대는 코드(`batch_end(b, at, batch_r16(b, at))`)는 GCC에서만 통과하고 Clang에서는 정상 frame을 거부했다. 생성 코드는 GCC와 Clang으로 함께 빌드해 시험한다 | #2119 |
 

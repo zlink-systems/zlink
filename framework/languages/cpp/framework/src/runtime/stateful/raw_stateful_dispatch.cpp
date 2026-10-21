@@ -3,6 +3,7 @@
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/stateful/accepted_actor_record.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
@@ -429,15 +430,16 @@ stateful_error_t raw_stateful_dispatch_t::finish_accepted_ingress (
                   == protocol::framework_multipart_packet_name
                 && admission.admitted_application->content_type
                      == protocol::framework_multipart_content_type) {
-                auto parts = protocol::decode_application_parts (*admission.admitted_application);
-                if (!parts.empty ()) {
+                const messaging::message_parts_t parts (
+                  protocol::decode_application_parts (*admission.admitted_application));
+                if (parts.size () != 0) {
                     const auto header = actor ? detail::decode_actor_packet_header (
-                                                  parts.front (),
+                                                  parts,
                                                   request ? detail::stream_message_kind_t::request
                                                           : detail::stream_message_kind_t::send,
                                                   tracer.capture_enabled ())
                                               : messaging::envelope_codec_t{}.decode_header (
-                                                  parts.front (), tracer.capture_enabled ());
+                                                  parts[0], tracer.capture_enabled ());
                     if (header) {
                         event.packet_name = header.value ().message_name;
                         event.channel_name = header.value ().channel_name;

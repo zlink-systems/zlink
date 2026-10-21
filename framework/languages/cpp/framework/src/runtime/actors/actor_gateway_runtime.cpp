@@ -2446,18 +2446,36 @@ admit_session_relay_unlocked (actor_gateway_state_t &state,
     if (route.session_sequence_baseline_unknown) {
         // Relocation-target routes learn the source's relay high-water from
         // the first sequence admitted on the exact route (spec 20 keeps
-        // command 43/44 free of numeric high-water); afterwards the strict
-        // next check applies.
+        // command 43/44 free of numeric high-water); afterwards each admitted
+        // sequence must increase.
         route.session_sequence = session_sequence;
         route.session_sequence_baseline_unknown = false;
         return result_t<void>::success ();
     }
-    if (route.session_sequence == std::numeric_limits<std::uint64_t>::max ()
-        || session_sequence != route.session_sequence + 1) {
+    if (session_sequence <= route.session_sequence) {
         return result_t<void>::failure (framework_error_kind_t::invalid_operation,
-                                        "bound Session relay sequence is not next");
+                                        "bound Session relay sequence does not increase");
     }
     route.session_sequence = session_sequence;
+    return result_t<void>::success ();
+}
+
+result_t<void> admit_bound_session_registration (const actor_bound_session_route_t &current,
+                                                 actor_bound_session_route_t &candidate)
+{
+    if (current.node_rid != candidate.node_rid
+        || current.node_generation != candidate.node_generation)
+        return result_t<void>::success ();
+    if (current.session_rid == candidate.session_rid
+        && current.binding_generation == candidate.binding_generation) {
+        candidate.binding_token = current.binding_token;
+        candidate.session_owner_id = current.session_owner_id;
+        candidate.session_owner_lease_generation = current.session_owner_lease_generation;
+        return result_t<void>::success ();
+    }
+    if (candidate.binding_generation <= current.binding_generation)
+        return result_t<void>::failure (framework_error_kind_t::unavailable,
+                                        "bound Session registration is stale");
     return result_t<void>::success ();
 }
 
@@ -2510,20 +2528,10 @@ result_t<void> bind_session_components (
             if (route && route->binding_generation == 0)
                 route->binding_generation = found->second.source_binding_generation;
             if (route && found->second.bound_session_route) {
-                const auto &current = *found->second.bound_session_route;
-                const bool same_owner_lifecycle =
-                  current.node_rid == route->node_rid
-                  && current.node_generation == route->node_generation;
-                if (same_owner_lifecycle && current.session_rid == route->session_rid
-                    && current.binding_generation == route->binding_generation) {
-                    route->binding_token = current.binding_token;
-                    route->session_owner_id = current.session_owner_id;
-                    route->session_owner_lease_generation = current.session_owner_lease_generation;
-                } else if (same_owner_lifecycle
-                           && route->binding_generation <= current.binding_generation) {
-                    return result_t<void>::failure (framework_error_kind_t::unavailable,
-                                                    "bound Session registration is stale");
-                }
+                const auto admitted =
+                  admit_bound_session_registration (*found->second.bound_session_route, *route);
+                if (!admitted)
+                    return admitted;
             }
             if (before_publish && !before_publish (*route)) {
                 return result_t<void>::failure (framework_error_kind_t::internal_failure,
@@ -3007,11 +3015,12 @@ record_bound_session_route_on_lane (const std::shared_ptr<actor_gateway_state_t>
               framework_error_kind_t::invalid_operation, "actor generation is stale");
         if (route.binding_generation == 0)
             route.binding_generation = found->second.source_binding_generation;
-        if (!publish && found->second.bound_session_route && route.binding_generation != 0
-            && found->second.bound_session_route->binding_generation > route.binding_generation) {
-            actor_bound_session_transition_t transition;
-            transition.current = *found->second.bound_session_route;
-            return result_t<actor_bound_session_transition_t>::success (std::move (transition));
+        if (found->second.bound_session_route) {
+            const auto admitted =
+              admit_bound_session_registration (*found->second.bound_session_route, route);
+            if (!admitted)
+                return result_t<actor_bound_session_transition_t>::failure (
+                  admitted.error_kind (), admitted.error ()->what ());
         }
     }
     if (publish && (!route.session_rid || route.binding_generation == 0))

@@ -765,13 +765,55 @@ public sealed class RuntimeMetricsTests
     [Fact]
     public void Inactive_Meter_Does_Not_Allocate_Or_Retain_Per_Event_State()
     {
-        ZLinkRuntimeMetrics.RecordLocationStoreError("read");
-        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-
-        for (var index = 0; index < 1_000_000; index++)
+        const int intervalCount = 100;
+        const int eventsPerInterval = 10_000;
+        var allocations = new long[intervalCount];
+        Instrument? storeErrors = null;
+        using (
+            var listener = new MeterListener
+            {
+                InstrumentPublished = (instrument, _) =>
+                {
+                    if (
+                        instrument.Meter.Name == ZLinkMeters.Framework
+                        && instrument.Name == "zlink.location.store.errors"
+                    )
+                        storeErrors = instrument;
+                },
+            }
+        )
+        {
+            listener.Start();
             ZLinkRuntimeMetrics.RecordLocationStoreError("read");
+        }
 
-        Assert.Equal(allocatedBefore, GC.GetAllocatedBytesForCurrentThread());
+        Assert.NotNull(storeErrors);
+        var enabledBefore = storeErrors.Enabled;
+        var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
+        var allocatedThroughPreviousInterval = allocatedBefore;
+
+        for (var interval = 0; interval < intervalCount; interval++)
+        {
+            for (var index = 0; index < eventsPerInterval; index++)
+                ZLinkRuntimeMetrics.RecordLocationStoreError("read");
+
+            var allocatedThroughInterval = GC.GetAllocatedBytesForCurrentThread();
+            allocations[interval] = allocatedThroughInterval - allocatedThroughPreviousInterval;
+            allocatedThroughPreviousInterval = allocatedThroughInterval;
+        }
+
+        var enabledAfter = storeErrors.Enabled;
+        var totalAllocated = allocatedThroughPreviousInterval - allocatedBefore;
+        var nonzeroIntervals = allocations
+            .Select((bytes, index) => (Bytes: bytes, Number: index + 1))
+            .Where(interval => interval.Bytes != 0)
+            .Select(interval => $"{interval.Number}: {interval.Bytes} B");
+
+        Assert.True(
+            totalAllocated == 0,
+            $"Allocated {totalAllocated} B; Instrument.Enabled start={enabledBefore}, end={enabledAfter}; "
+                + $"nonzero intervals (1-based, {eventsPerInterval} events each): {string.Join(", ", nonzeroIntervals)}"
+        );
     }
 
     [Fact]

@@ -4093,6 +4093,7 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
       std::make_shared<framework::task_completion_source_t<relocation_reason_t>> ();
     std::uint32_t planned_chunks = 0;
     std::uint32_t sent_chunks = 0;
+    auto send_start = std::make_shared<framework::task_completion_source_t<void>> ();
     eligible_relocation_unit_t::canonical_wire_context_t wire{
       .relocation = {0x51, 0x52},
       .target_attempt_generation = 7,
@@ -4109,6 +4110,7 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
       .send_state_chunk = [&] (const protocol::relocation_state_t &) -> framework::task_t<bool> {
           ++sent_chunks;
           if (sent_chunks == 1) {
+              co_await send_start->task ();
               // A wire reply completes in the registry's existing completion turn.
               auto delivered = std::make_shared<framework::task_completion_source_t<void>> ();
               auto delivery = delivered->task ();
@@ -4133,8 +4135,17 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
     wire.monitoring = std::make_shared<framework::detail::monitoring_runtime_state_t> ();
     wire.mesh_name = "source-metric-mesh";
     wire.policy = framework::detail::factory_relocation_kind_t::preserve_state;
-    const auto result = await_task (relocation.relocate (
-      actor, "target-node", {"target-owner", 9}, 1024 * 1024, digest_with (0x31), wire, {}, 16));
+    auto operation = relocation.relocate (actor, "target-node", {"target-owner", 9}, 1024 * 1024,
+                                          digest_with (0x31), wire, {}, 16);
+    std::vector<metric_test::sdk::MetricData> terminal_metrics;
+    framework::task_completion_source_t<relocation_result_t> observed;
+    framework::detail::observe_task_terminal (
+      operation, [&] (const framework::result_t<relocation_result_t> &result) {
+          terminal_metrics = metric_provider.collect ();
+          observed.complete (result);
+      });
+    send_start->complete (framework::result_t<void>::success ());
+    const auto result = await_task (observed.task ());
     const auto source_resumed = objects.enqueue (actor, turn_domain_t::application, {1, {0x41}});
     test.require (planned_chunks > 1 && sent_chunks == 1
                     && result.terminal == relocation_terminal_t::blocked
@@ -4142,7 +4153,7 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
                     && source_resumed == stateful_error_t::none,
                   "an explicit target relocation failure must stop remaining state chunks, "
                   "preserve its reason, and unseal the source");
-    const auto data = metric_provider.collect ();
+    const auto &data = terminal_metrics;
     metric_test::validate_metric_contract (data);
     const auto count = [&] (const std::string &name) {
         double value = 0;
@@ -4483,6 +4494,8 @@ void test_relocation_request_source_registration (test_context_t &test,
     namespace framework = zlink::framework;
     namespace protocol = framework::runtime::protocol;
     namespace mesh = framework::runtime::mesh;
+    metric_test::provider_t provider;
+    auto monitoring = std::make_shared<framework::detail::monitoring_runtime_state_t> ();
     stateful_object_runtime_t objects;
     objects.configure_relocation_state (
       [] (const auto &, const auto &, std::stop_token)
@@ -4598,7 +4611,10 @@ void test_relocation_request_source_registration (test_context_t &test,
                         "matching identity must reach the original pending request owner");
           co_return true;
       },
-      .abort_target_before_cutover = [] { return true; }};
+      .abort_target_before_cutover = [] { return true; },
+      .monitoring = monitoring,
+      .mesh_name = "request-registry",
+      .policy = framework::detail::factory_relocation_kind_t::recreate};
     const auto terminal =
       aggregate
         ? await_task (relocation.relocate_aggregate (participants, "target", {"target-owner", 2},
@@ -4609,10 +4625,31 @@ void test_relocation_request_source_registration (test_context_t &test,
             .terminal;
     test.require (terminal == relocation_terminal_t::blocked,
                   "source authority must restore after Ready");
+    test.require (objects.enqueue (actor, turn_domain_t::application, {2, {0x42}})
+                    == stateful_error_t::none,
+                  "source Preserve must resume the original application queue");
     const auto retained = replies.unregister_terminal_source (wire.relocation, request.operation);
     std::cerr << "request-registry boundary=" << boundary << " aggregate=" << aggregate
               << " after-preserve=" << retained << '\n';
     test.require (!retained, "source Preserve must return the request registration lifetime");
+    int terminals = 0;
+    for (const auto &metric : provider.collect ()) {
+        if (metric.instrument_descriptor.name_ != "zlink.relocation.completed")
+            continue;
+        for (const auto &point : metric.point_data_attr_) {
+            ++terminals;
+            const auto *sum =
+              opentelemetry::nostd::get_if<metric_test::sdk::SumPointData> (&point.point_data);
+            test.require (sum && opentelemetry::nostd::get<double> (sum->value_) == 1,
+                          "source Preserve must record its terminal exactly once");
+            const auto outcome = point.attributes.find ("outcome");
+            test.require (outcome != point.attributes.end ()
+                            && opentelemetry::nostd::get<std::string> (outcome->second)
+                                 == "aborted",
+                          "resumed source authority must retain the aborted metric outcome");
+        }
+    }
+    test.require (terminals == 1, "source Preserve must emit one completed metric");
 }
 
 // Relocation §4.3: one source deadline covers Restore and remote Session readiness.
@@ -8582,6 +8619,10 @@ int main (int argc, char **argv)
         test_relocation_request_source_registration (test, true);
         test_relocation_request_source_registration (test, false, true);
         std::cerr << "request-registry cases=3 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--precutover-metric-terminal") {
+        test_source_relocation_failure_stops_state_chunks_and_unseals (test);
         return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--source-outcomes") {
