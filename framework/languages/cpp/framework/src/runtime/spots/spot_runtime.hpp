@@ -2130,7 +2130,9 @@ class spot_node_runtime_t
     deliver_actor_join_completion (const actor_ref_t &actor_ref,
                                    const actor_join_completion_t &completion,
                                    std::optional<spot_id_t> source_spot_id = std::nullopt);
-    result_t<void> open_local_actor_handoff (const actor_ref_t &actor_ref);
+    task_t<result_t<void>>
+    open_local_actor_handoff (actor_ref_t actor_ref,
+                              std::optional<std::string> reservation_id = std::nullopt);
     void cancel_local_actor_handoff (const actor_ref_t &actor_ref);
     // In-flight handoff (spot-actor §10): drains the packets preserved while the
     // actor was moving, in arrival order. The commit path calls this once to fill
