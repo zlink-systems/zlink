@@ -135,6 +135,9 @@ void verify_previous_value_cost ()
 
 int main ()
 {
+    // Asynchronous completions require a live owner (#1867); it exists before any
+    // allocation is measured.
+    zlink::framework::completion_owner_t completion_owner;
     try {
         verify_scopes ();
         verify_combined_ambient ();

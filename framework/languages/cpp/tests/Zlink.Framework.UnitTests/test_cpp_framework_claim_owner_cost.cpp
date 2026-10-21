@@ -365,6 +365,9 @@ void verify_late_release ()
 
 int main ()
 {
+    // Asynchronous completions require a live owner (#1867); it exists before any
+    // allocation is measured.
+    zlink::framework::completion_owner_t completion_owner;
     try {
         auto target = make_host ();
         verify_retained_batch (*target);

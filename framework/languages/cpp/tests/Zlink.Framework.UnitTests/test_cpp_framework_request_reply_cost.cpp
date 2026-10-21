@@ -251,6 +251,9 @@ void verify_failure_identity (detail::mesh_node_runtime_t &runtime, bool ready)
 
 int main ()
 {
+    // Asynchronous completions require a live owner (#1867); it exists before any
+    // allocation is measured.
+    zlink::framework::completion_owner_t completion_owner;
     try {
         void *allocation = nullptr;
         const auto calibration =
