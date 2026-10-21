@@ -1211,6 +1211,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink_framework
     Threads::Threads)
   zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_liveness_not_found_contract
+    COMMAND test_cpp_framework_m6a_runtime --liveness-not-found-contract
+    LABELS "framework-unit;framework-contract;liveness;raw-binding"
+    TIER unit
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
     NAME test_cpp_framework_liveness_physical_close
     COMMAND test_cpp_framework_m6a_runtime --liveness-physical-close
     LABELS "framework-unit;liveness"
@@ -2200,6 +2206,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     test_cpp_framework_channel_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_channel_messaging.cpp
     "framework-unit;framework-regression;channel")
+  add_zlink_framework_test(
+    test_cpp_framework_submission_failure_contract
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_submission_failure_contract.cpp
+    "framework-contract;channel;messaging")
+  target_use_zlink_gtest_main(test_cpp_framework_submission_failure_contract)
   add_zlink_framework_test(
     test_cpp_framework_route_client_channel_routing
     tests/Zlink.Framework.UnitTests/test_cpp_framework_route_client_channel_routing.cpp
