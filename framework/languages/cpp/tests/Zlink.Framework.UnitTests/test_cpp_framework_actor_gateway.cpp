@@ -1190,10 +1190,11 @@ int bound_session_send_does_not_publish_caller_location ()
     actor_gateway_runtime_t gateway (state);
     const auto source = test_actor_ref ("source-node", "player", "send-route-owner", 7);
     const auto target = test_actor_ref ("target-node", "player", "send-route-owner", 7);
-    std::atomic_int sends{0};
+    // The detached delivery can run after this scope ends, so the sink owns its counter.
+    auto sends = std::make_shared<std::atomic_int> (0);
     if (!gateway.bind_session_sink (
-          source, [&sends] (std::string, stream_codec_t, const zlink::message_t &) {
-              ++sends;
+          source, [sends] (std::string, stream_codec_t, const zlink::message_t &) {
+              ++*sends;
               return task_t<void> (result_t<void>::success ());
           })) {
         return 1;
@@ -1205,11 +1206,11 @@ int bound_session_send_does_not_publish_caller_location ()
                   .async ()
                   .result ();
     const auto delivery_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
-    while (sends.load (std::memory_order_acquire) != 1
+    while (sends->load (std::memory_order_acquire) != 1
            && std::chrono::steady_clock::now () < delivery_deadline) {
         std::this_thread::yield ();
     }
-    if (!sent || sends.load () != 1) {
+    if (!sent || sends->load () != 1) {
         return 2;
     }
     if (state->sync ([&] {
@@ -1413,27 +1414,29 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
     const auto target = test_actor_ref ("target-node", "player", "relocation-prewarm", 7);
     const auto session_owner = zlink::routing_id_t::from (std::string ("session-owner"));
     const auto session_rid = zlink::routing_id_t::from (std::string ("session-rid"));
-    std::atomic_int sends{0};
-    std::atomic_bool saw_stale_target{false};
-    std::string sent_node;
+    // The gateway state outlives this scope, so the callbacks own what they write.
+    auto sends = std::make_shared<std::atomic_int> (0);
+    auto sent_node = std::make_shared<std::string> ();
+    // The gateway state outlives this scope, so the observer owns its flag.
+    auto saw_stale_target = std::make_shared<std::atomic_bool> (false);
     dispatch_options_t trace_options;
     trace_options.message_flow (message_flow_log_mode_t::detailed);
     dispatch_options_access_t::set_observer_for_tests (
-      trace_options, [&] (const message_flow_event_t &event) {
+      trace_options, [saw_stale_target] (const message_flow_event_t &event) {
           if (event.outcome == message_flow_outcome_t::dropped
               && event.reason == message_flow_reason_t::stale_target
               && event.detail_stage == std::optional<std::string> ("route_fence")) {
-              saw_stale_target.store (true, std::memory_order_release);
+              saw_stale_target->store (true, std::memory_order_release);
           }
       });
     gateway.set_dispatch (std::move (trace_options));
     gateway.on_bound_session_send (
-      [&sends, &sent_node] (const actor_ref_t &actor, std::uint64_t binding_generation,
-                            const stream_header_t &,
-                            const zlink::message_t &) -> task_t<result_t<void>> {
+      [sends, sent_node] (const actor_ref_t &actor, std::uint64_t binding_generation,
+                          const stream_header_t &,
+                          const zlink::message_t &) -> task_t<result_t<void>> {
           if (binding_generation == 23)
-              sent_node = std::string (actor.node_rid ().value ());
-          ++sends;
+              *sent_node = std::string (actor.node_rid ().value ());
+          ++*sends;
           co_return result_t<void>::success ();
       });
     // The target can retain a lower cache generation when it did not own an
@@ -1476,11 +1479,12 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
       (*staged_source_sink) ("RelocationStagedPush", stream_codec_t::message_pack,
                              zlink::message_t::from ("staged"))
         .result ();
-    if (!staged_push || sends.load (std::memory_order_acquire) != 1 || sent_node != "target-node") {
+    if (!staged_push || sends->load (std::memory_order_acquire) != 1
+        || *sent_node != "target-node") {
         return 4;
     }
-    sends.store (0, std::memory_order_release);
-    sent_node.clear ();
+    sends->store (0, std::memory_order_release);
+    sent_node->clear ();
 
     const protocol::actor_route_fence_t target_fence{"relocation-prewarm",
                                                      7,
@@ -1505,11 +1509,11 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
                              .async ()
                              .result ();
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
-    while (sends.load (std::memory_order_acquire) != 1
+    while (sends->load (std::memory_order_acquire) != 1
            && std::chrono::steady_clock::now () < deadline) {
         std::this_thread::yield ();
     }
-    if (!submitted || sends.load () != 1 || sent_node != "target-node")
+    if (!submitted || sends->load () != 1 || *sent_node != "target-node")
         return 7;
 
     auto stale = route;
@@ -1526,7 +1530,7 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
       (*staged_source_sink) ("StaleBindingPush", stream_codec_t::message_pack,
                              zlink::message_t::from ("stale"))
         .result ();
-    if (stale_binding_push || !saw_stale_target.load (std::memory_order_acquire))
+    if (stale_binding_push || !saw_stale_target->load (std::memory_order_acquire))
         return 10;
 
     auto fresh_state = std::make_shared<actor_gateway_state_t> ();
@@ -1711,36 +1715,44 @@ int bound_session_push_detaches_before_direct_sink_entry ()
     state->serializers = &serializers;
     actor_gateway_runtime_t gateway (state);
     const auto actor = test_actor_ref ("actor-owner", "player", "detached-bound-session", 7);
-    std::atomic_bool saw_fifo_session{false};
-    std::atomic_bool saw_completion_session{false};
+    // The second detached delivery can trace its completion after this test
+    // returns, so the observer owns the flags it writes.
+    auto saw_fifo_session = std::make_shared<std::atomic_bool> (false);
+    auto saw_completion_session = std::make_shared<std::atomic_bool> (false);
     dispatch_options_t trace_options;
     trace_options.message_flow (message_flow_log_mode_t::detailed);
     dispatch_options_access_t::set_observer_for_tests (
-      trace_options, [&] (const message_flow_event_t &event) {
+      trace_options,
+      [saw_fifo_session, saw_completion_session] (const message_flow_event_t &event) {
           if (event.surface != dispatch_error_surface_t::stream_session
               || event.stream_session_id
                    != std::optional<std::string> (
                      zlink::routing_id_t::from ("session-rid").to_hex ()))
               return;
           if (event.detail_stage == std::optional<std::string> ("fifo_accepted"))
-              saw_fifo_session.store (true, std::memory_order_release);
+              saw_fifo_session->store (true, std::memory_order_release);
           if (event.detail_stage == std::optional<std::string> ("detached_delivery_complete"))
-              saw_completion_session.store (true, std::memory_order_release);
+              saw_completion_session->store (true, std::memory_order_release);
       });
     gateway.set_dispatch (std::move (trace_options));
 
-    std::mutex gate_mutex;
-    std::condition_variable gate_changed;
-    int sender_started = 0;
-    bool release_sender = false;
-    auto direct_stream_sink = [&] (std::string, stream_codec_t,
-                                   const zlink::message_t &) -> task_t<void> {
+    // The detached delivery can run after this scope ends, so the sink owns its gate.
+    struct sender_gate_t
+    {
+        std::mutex mutex;
+        std::condition_variable changed;
+        int started = 0;
+        bool release = false;
+    };
+    auto gate = std::make_shared<sender_gate_t> ();
+    auto direct_stream_sink = [gate] (std::string, stream_codec_t,
+                                      const zlink::message_t &) -> task_t<void> {
         const auto ordinal = [&] {
-            std::unique_lock lock (gate_mutex);
-            const auto value = ++sender_started;
-            gate_changed.notify_all ();
+            std::unique_lock lock (gate->mutex);
+            const auto value = ++gate->started;
+            gate->changed.notify_all ();
             if (value == 1)
-                gate_changed.wait (lock, [&] { return release_sender; });
+                gate->changed.wait (lock, [&] { return gate->release; });
             return value;
         }();
         if (ordinal < 1)
@@ -1768,34 +1780,34 @@ int bound_session_push_detaches_before_direct_sink_entry ()
     auto second =
       gateway.actor_context (actor).bound_session ().send (std::string ("joined-again")).async ();
     {
-        std::unique_lock lock (gate_mutex);
-        if (!gate_changed.wait_for (lock, std::chrono::seconds (1),
-                                    [&] { return sender_started == 1; })) {
-            release_sender = true;
-            gate_changed.notify_all ();
+        std::unique_lock lock (gate->mutex);
+        if (!gate->changed.wait_for (lock, std::chrono::seconds (1),
+                                     [&] { return gate->started == 1; })) {
+            gate->release = true;
+            gate->changed.notify_all ();
             return 2;
         }
-        if (sender_started != 1 || !second.await_ready ()) {
-            release_sender = true;
-            gate_changed.notify_all ();
+        if (gate->started != 1 || !second.await_ready ()) {
+            gate->release = true;
+            gate->changed.notify_all ();
             return 3;
         }
-        release_sender = true;
+        gate->release = true;
     }
-    gate_changed.notify_all ();
+    gate->changed.notify_all ();
     if (immediate != std::future_status::ready)
         return 4;
     if (!submitted.get () || !second.result ())
         return 5;
     {
-        std::unique_lock lock (gate_mutex);
-        if (!gate_changed.wait_for (lock, std::chrono::seconds (1),
-                                    [&] { return sender_started == 2; })) {
+        std::unique_lock lock (gate->mutex);
+        if (!gate->changed.wait_for (lock, std::chrono::seconds (1),
+                                     [&] { return gate->started == 2; })) {
             return 6;
         }
     }
-    if (!saw_fifo_session.load (std::memory_order_acquire)
-        || !saw_completion_session.load (std::memory_order_acquire))
+    if (!saw_fifo_session->load (std::memory_order_acquire)
+        || !saw_completion_session->load (std::memory_order_acquire))
         return 8;
     return 0;
 }
@@ -2699,7 +2711,9 @@ int session_disconnect_callback_owns_spot_lifecycle_gate ()
                   holding.set_value (true);
               co_await release->task ();
           });
-        observe_task_completion (held, [&] (const auto &) {
+        // The observer may run after held.result () returns and this scope
+        // ends, so it owns the flag and touches the promise only before then.
+        observe_task_completion (held, [&holding, hold_signalled] (const auto &) {
             if (!hold_signalled->exchange (true))
                 holding.set_value (false);
         });
@@ -2720,7 +2734,7 @@ int session_disconnect_callback_owns_spot_lifecycle_gate ()
               if (!signalled->exchange (true))
                   admitted.set_value (true);
           });
-        observe_task_completion (notification, [&] (const auto &) {
+        observe_task_completion (notification, [&admitted, signalled] (const auto &) {
             if (!signalled->exchange (true))
                 admitted.set_value (false);
         });
@@ -2768,16 +2782,17 @@ int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
     spot->channel_runtime = test::runtime_failure_fixture<channel_runtime_state_t> ();
     spot->channel_runtime->serializers = &serializers;
     auto release = std::make_shared<task_completion_source_t<void>> ();
-    std::promise<bool> entered;
-    auto callback_started = entered.get_future ();
+    auto entered = std::make_shared<std::promise<bool>> ();
+    auto callback_started = entered->get_future ();
     auto entered_once = std::make_shared<std::atomic_bool> (false);
-    std::atomic_int callbacks{0};
-    test::register_session_disconnect_probe (spot, [&] (void *, void *) -> task_t<void> {
-        callbacks.fetch_add (1, std::memory_order_acq_rel);
-        if (!entered_once->exchange (true))
-            entered.set_value (true);
-        co_await release->task ();
-    });
+    auto callbacks = std::make_shared<std::atomic_int> (0);
+    test::register_session_disconnect_probe (
+      spot, [callbacks, entered_once, entered, release] (void *, void *) -> task_t<void> {
+          callbacks->fetch_add (1, std::memory_order_acq_rel);
+          if (!entered_once->exchange (true))
+              entered->set_value (true);
+          co_await release->task ();
+      });
     node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
     spot_node_builder_state_t::actor_factory_registration_t factory;
     factory.actor_type = std::type_index (typeid (int));
@@ -2821,7 +2836,7 @@ int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
           serializers, body);
         node->worker_executor->drain ();
         return delivered && delivered.value ().is_empty () && mismatched
-                   && mismatched.value ().is_empty () && callbacks == 1 && !missing
+                   && mismatched.value ().is_empty () && callbacks->load () == 1 && !missing
                    && missing.error_kind () == framework_error_kind_t::not_found
                  ? 0
                  : 2;
@@ -2829,20 +2844,21 @@ int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
 
     auto terminal_source = std::make_shared<task_completion_source_t<zlink::message_t>> ();
     auto terminal = terminal_source->task ();
-    std::atomic_int terminals{0};
-    std::atomic_bool preserved_route{false};
+    auto terminals = std::make_shared<std::atomic_int> (0);
+    auto preserved_route = std::make_shared<std::atomic_bool> (false);
     node->actor_handoff_terminal_sender =
-      [&] (const zlink::routing_id_t &parking, const zlink::routing_id_t &owner,
-           const rt::protocol::wire_operation_id_t &operation, std::uint64_t reply,
-           const rt::protocol::actor_route_fence_t &,
-           const result_t<zlink::message_t> &completed) -> task_t<bool> {
-        preserved_route.store (parking.to_string () == "parking-node"
-                                 && owner.to_string () == "request-owner" && operation.high == 83
-                                 && operation.low == 91 && reply == 17,
-                               std::memory_order_release);
-        terminals.fetch_add (1, std::memory_order_acq_rel);
+      [terminals, preserved_route, entered_once, entered,
+       terminal_source] (const zlink::routing_id_t &parking, const zlink::routing_id_t &owner,
+                         const rt::protocol::wire_operation_id_t &operation, std::uint64_t reply,
+                         const rt::protocol::actor_route_fence_t &,
+                         const result_t<zlink::message_t> &completed) -> task_t<bool> {
+        preserved_route->store (parking.to_string () == "parking-node"
+                                  && owner.to_string () == "request-owner" && operation.high == 83
+                                  && operation.low == 91 && reply == 17,
+                                std::memory_order_release);
+        terminals->fetch_add (1, std::memory_order_acq_rel);
         if (!entered_once->exchange (true))
-            entered.set_value (false);
+            entered->set_value (false);
         terminal_source->complete (completed);
         co_return true;
     };
@@ -2889,7 +2905,7 @@ int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
         return 4;
     }
     const auto parked = captured.result ();
-    if (!parked || parked.value () || callbacks != 0) {
+    if (!parked || parked.value () || callbacks->load () != 0) {
         release->complete (result_t<void>::success ());
         barrier->cancel ();
         node->worker_executor->drain ();
@@ -2897,8 +2913,8 @@ int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
     }
     std::cerr << "Session disconnect actual handoff replay without ingress metadata starts"
               << std::endl;
-    const auto activated =
-      barrier->activate_async ([&spots, actor] (deferred_barrier_t::async_completion_t complete) {
+    const auto activated = barrier->activate_async (
+      [spots, actor] (deferred_barrier_t::async_completion_t complete) mutable {
           auto opened = spots.open_local_actor_handoff (actor);
           observe_task_completion (opened, [complete = std::move (complete)] (
                                              const result_t<result_t<void>> &outcome) mutable {
@@ -2921,8 +2937,8 @@ int session_disconnect_resolves_context_without_ingress_metadata (bool replay)
         spot->serial_queue->drain ();
     node->worker_executor->drain ();
     return began && !acknowledged_early && completed && completed.value ().is_empty ()
-               && callbacks == 1 && terminals == 1
-               && preserved_route.load (std::memory_order_acquire)
+               && callbacks->load () == 1 && terminals->load () == 1
+               && preserved_route->load (std::memory_order_acquire)
                && node->actor_transfer_coordinator->pending_count () == 0
              ? 0
              : 7;
@@ -3104,10 +3120,12 @@ int common_session_disconnect_uses_actor_packet_route ()
     spot->spot_name = "disconnect";
     spot->serial_executor = node->worker_executor;
     node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
-    int callbacks = 0;
+    // The callbacks live in node state and can run after this scope ends, so they own their state.
+    auto callbacks_counter = std::make_shared<std::atomic_int> (0);
+    const auto &callbacks = *callbacks_counter;
     spot_actor_admission_callbacks_t admission;
-    admission.on_disconnect_actor = [&callbacks] (void *, void *) -> task_t<void> {
-        ++callbacks;
+    admission.on_disconnect_actor = [callbacks_counter] (void *, void *) -> task_t<void> {
+        ++*callbacks_counter;
         co_return;
     };
     test::register_session_disconnect_probe (spot, std::move (admission.on_disconnect_actor));
@@ -3165,10 +3183,11 @@ int common_session_disconnect_uses_actor_packet_route ()
         if (!empty_success (deliver (stale)) || callbacks != 2)
             return 3;
     }
-    std::vector<message_dispatch_error_event_t> errors;
+    auto errors_owner = std::make_shared<std::vector<message_dispatch_error_event_t>> ();
+    const auto &errors = *errors_owner;
     node->dispatch.message_flow (message_flow_log_mode_t::normal);
     dispatch_options_access_t::set_dispatch_error_observer_for_tests (
-      node->dispatch, [&errors] (const auto &event) { errors.push_back (event); });
+      node->dispatch, [errors_owner] (const auto &event) { errors_owner->push_back (event); });
     auto trailing = bytes;
     trailing.push_back (0);
     auto truncated = bytes;
@@ -3207,47 +3226,47 @@ int common_session_disconnect_uses_actor_packet_route ()
     // replace the binding, and release the handler. The comparison belongs to the
     // notification's Actor turn, after replacement, rather than its queue admission.
     auto release = std::make_shared<task_completion_source_t<void>> ();
-    std::promise<bool> entered;
+    auto entered = std::make_shared<std::promise<bool>> ();
     auto entered_once = std::make_shared<std::atomic_bool> (false);
-    auto started = entered.get_future ();
+    auto started = entered->get_future ();
     spot->handlers.push_back (
       spot_handler_descriptor_t{spot_handler_kind_t::actor_send, "DisconnectHold", "",
                                 std::type_index (typeid (int)), std::type_index (typeid (void)),
                                 std::type_index (typeid (int)), std::type_index (typeid (void))});
     spot->handler_invokers.push_back (
-      [release, &entered, entered_once] (
+      [release, entered, entered_once] (
         void *, void *, service_provider_t &, serializer_registry_t &, const zlink::message_t &,
         const spot_inbound_message_t &) -> task_t<zlink::message_t> {
           if (!entered_once->exchange (true))
-              entered.set_value (true);
+              entered->set_value (true);
           co_await release->task ();
           co_return zlink::message_t{};
       });
     auto held = spot_node_runtime_t (node).relay_actor_packet (
       actor, gateway.actor_context (actor), stream_message_kind_t::send, "DisconnectHold",
       zlink::message_t{}, provider, serializers);
-    detail::observe_task_completion (held, [&entered, entered_once] (const auto &) {
+    detail::observe_task_completion (held, [entered, entered_once] (const auto &) {
         if (!entered_once->exchange (true))
-            entered.set_value (false);
+            entered->set_value (false);
     });
     if (!started.get ()) {
         release->complete (result_t<void>::success ());
         (void) held.result ();
         return 8;
     }
-    std::promise<bool> enqueued;
+    auto enqueued = std::make_shared<std::promise<bool>> ();
     auto enqueued_once = std::make_shared<std::atomic_bool> (false);
-    auto accepted = enqueued.get_future ();
+    auto accepted = enqueued->get_future ();
     auto queued = spot_node_runtime_t (node).relay_actor_packet (
       actor, gateway.actor_context (actor), stream_message_kind_t::send,
       runtime::protocol::session_disconnected_packet_name, zlink::message_t::from (bytes), provider,
-      serializers, {}, nullptr, {}, [&enqueued, enqueued_once] {
+      serializers, {}, nullptr, {}, [enqueued, enqueued_once] {
           if (!enqueued_once->exchange (true))
-              enqueued.set_value (true);
+              enqueued->set_value (true);
       });
-    detail::observe_task_completion (queued, [&enqueued, enqueued_once] (const auto &) {
+    detail::observe_task_completion (queued, [enqueued, enqueued_once] (const auto &) {
         if (!enqueued_once->exchange (true))
-            enqueued.set_value (false);
+            enqueued->set_value (false);
     });
     if (!accepted.get ()) {
         release->complete (result_t<void>::success ());
@@ -3321,14 +3340,14 @@ int common_session_disconnect_uses_actor_packet_route ()
     if (!empty_success (deliver (backlog.front ().payload)) || callbacks != 4)
         return 11;
     auto callback_terminal = std::make_shared<task_completion_source_t<void>> ();
-    std::promise<bool> callback_entered;
-    auto callback_started = callback_entered.get_future ();
+    auto callback_entered = std::make_shared<std::promise<bool>> ();
+    auto callback_started = callback_entered->get_future ();
     auto callback_entered_once = std::make_shared<std::atomic_bool> (false);
     spot->actor_admissions.at (std::type_index (typeid (int))).on_disconnect_actor =
-      [callback_terminal, &callback_entered, callback_entered_once] (void *,
-                                                                     void *) -> task_t<void> {
+      [callback_terminal, callback_entered, callback_entered_once] (void *,
+                                                                    void *) -> task_t<void> {
         if (!callback_entered_once->exchange (true))
-            callback_entered.set_value (true);
+            callback_entered->set_value (true);
         co_await callback_terminal->task ();
     };
     auto awaiting_callback = spots.relay_actor_packet (
@@ -3336,9 +3355,9 @@ int common_session_disconnect_uses_actor_packet_route ()
       runtime::protocol::session_disconnected_packet_name, zlink::message_t::from (current_body),
       provider, serializers);
     detail::observe_task_completion (awaiting_callback,
-                                     [&callback_entered, callback_entered_once] (const auto &) {
+                                     [callback_entered, callback_entered_once] (const auto &) {
                                          if (!callback_entered_once->exchange (true))
-                                             callback_entered.set_value (false);
+                                             callback_entered->set_value (false);
                                      });
     const bool began = callback_started.get ();
     const bool acknowledged_before_callback = awaiting_callback.await_ready ();
@@ -3515,11 +3534,13 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route (bool disconne
       zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
     node->channel_runtime->serializers = &serializers;
 
-    std::atomic_int local_materializations{0};
+    // The factory and the relay handler can run after this scope ends (the 500 ms bounded wait
+    // may return first), so they own what they write and capture read-only values by value.
+    auto local_materializations = std::make_shared<std::atomic_int> (0);
     spot_node_builder_state_t::actor_factory_registration_t factory;
     factory.actor_type = std::type_index (typeid (int));
-    factory.create_instance = [&local_materializations] (std::string) {
-        local_materializations.fetch_add (1, std::memory_order_acq_rel);
+    factory.create_instance = [local_materializations] (std::string) {
+        local_materializations->fetch_add (1, std::memory_order_acq_rel);
         return std::make_shared<int> (7);
     };
     factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
@@ -3565,16 +3586,17 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route (bool disconne
     std::promise<bool> follow_entered;
     auto follow_started = follow_entered.get_future ();
     auto follow_entered_once = std::make_shared<std::atomic_bool> (false);
-    std::atomic_int relay_calls{0};
+    auto relay_calls = std::make_shared<std::atomic_int> (0);
     spot_node_runtime_t spots (node);
     spots.on_actor_message_follow (
-      [&] (const actor_ref_t &relayed_actor, const runtime::messaging::envelope_header_t &header,
-           const zlink::message_t &body, std::chrono::milliseconds relay_timeout,
-           const zlink::routing_id_t &source_node,
-           const runtime::protocol::actor_route_fence_t &route, std::uint8_t hop_count,
-           const runtime::protocol::wire_operation_id_t &operation,
-           std::uint64_t reply_route_id) -> task_t<std::optional<zlink::message_t>> {
-          relay_calls.fetch_add (1, std::memory_order_acq_rel);
+      [relay_calls, follow_terminal, follow_entered_once, &follow_entered, disconnect, source_fence,
+       packet_name, payload, inbound_deadline, inbound_source_node_rid, inbound_operation] (
+        const actor_ref_t &relayed_actor, const runtime::messaging::envelope_header_t &header,
+        const zlink::message_t &body, std::chrono::milliseconds relay_timeout,
+        const zlink::routing_id_t &source_node, const runtime::protocol::actor_route_fence_t &route,
+        std::uint8_t hop_count, const runtime::protocol::wire_operation_id_t &operation,
+        std::uint64_t reply_route_id) -> task_t<std::optional<zlink::message_t>> {
+          relay_calls->fetch_add (1, std::memory_order_acq_rel);
           if (disconnect && !follow_entered_once->exchange (true))
               follow_entered.set_value (true);
           if (relayed_actor.actor_id ().value () != "actor-remote-ok" || route != source_fence
@@ -3619,11 +3641,11 @@ int old_owner_forwards_cold_probe_via_active_message_follow_route (bool disconne
                                     : finite_task_result (std::move (relayed));
     if (!outcome || !*outcome)
         return 1;
-    if (relay_calls.load (std::memory_order_acquire) != 1)
+    if (relay_calls->load (std::memory_order_acquire) != 1)
         return 2;
     if (disconnect && (premature || !outcome->value () || !outcome->value ()->is_empty ()))
         return 4;
-    if (local_materializations.load (std::memory_order_acquire) != 0)
+    if (local_materializations->load (std::memory_order_acquire) != 0)
         return 3;
     return 0;
 }
@@ -3957,15 +3979,16 @@ int reconcile_deadline_adopts_target_when_store_shows_committed ()
     // A packet parked while reconcile was pending must actually be drained
     // by forwarding to the adopted target -- not merely have its route
     // adopted with the backlog left stranded.
-    std::atomic_int relay_calls{0};
+    // The adoption task can run after an early return, so the handler owns its counter.
+    auto relay_calls = std::make_shared<std::atomic_int> (0);
     spot_node_runtime_t spots (node);
     spots.on_actor_message_follow (
-      [&relay_calls] (const actor_ref_t &, const runtime::messaging::envelope_header_t &,
-                      const zlink::message_t &, std::chrono::milliseconds,
-                      const zlink::routing_id_t &, const runtime::protocol::actor_route_fence_t &,
-                      std::uint8_t, const runtime::protocol::wire_operation_id_t &,
-                      std::uint64_t) -> task_t<std::optional<zlink::message_t>> {
-          relay_calls.fetch_add (1, std::memory_order_acq_rel);
+      [relay_calls] (const actor_ref_t &, const runtime::messaging::envelope_header_t &,
+                     const zlink::message_t &, std::chrono::milliseconds,
+                     const zlink::routing_id_t &, const runtime::protocol::actor_route_fence_t &,
+                     std::uint8_t, const runtime::protocol::wire_operation_id_t &,
+                     std::uint64_t) -> task_t<std::optional<zlink::message_t>> {
+          relay_calls->fetch_add (1, std::memory_order_acq_rel);
           co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
       });
     (void) node->actor_transfer_coordinator->try_append_backlog (
@@ -3978,7 +4001,7 @@ int reconcile_deadline_adopts_target_when_store_shows_committed ()
     if (spots.cleanup_expired_actor_admissions_at (before_reconcile
                                                    + std::chrono::milliseconds (19))
           != 0
-        || relay_calls.load (std::memory_order_acquire) != 0
+        || relay_calls->load (std::memory_order_acquire) != 0
         || !node->actor_transfer_coordinator->blocks_dispatch (key))
         return 6;
     if (spots.cleanup_expired_actor_admissions_at (after_reconcile + std::chrono::milliseconds (20))
@@ -4005,7 +4028,7 @@ int reconcile_deadline_adopts_target_when_store_shows_committed ()
     // last reference to its own executor and self-joining.
     node->worker_executor->drain ();
     node->worker_executor.reset ();
-    if (relay_calls.load (std::memory_order_acquire) != 1)
+    if (relay_calls->load (std::memory_order_acquire) != 1)
         return 5;
     if (!found_target_route)
         return 2;
@@ -4491,16 +4514,18 @@ int reconcile_deadline_fast_fails_without_target_commit (
     node->actor_spot_ids.emplace (key, spot->spot_id);
     node->actor_generations.emplace (key, 1);
 
-    std::atomic_bool handler_ran{false};
+    // The handlers and sinks below can run after an early return skips the drain, so they own
+    // their flags and counters.
+    auto handler_ran = std::make_shared<std::atomic_bool> (false);
     spot->handlers.push_back (
       spot_handler_descriptor_t{spot_handler_kind_t::actor_send, "ReconcileProbe", "",
                                 std::type_index (typeid (int)), std::type_index (typeid (void)),
                                 std::type_index (typeid (int)), std::type_index (typeid (void))});
     spot->handler_invokers.push_back (
-      [&handler_ran] (void *, void *, service_provider_t &, serializer_registry_t &,
-                      const zlink::message_t &,
-                      const spot_inbound_message_t &) -> task_t<zlink::message_t> {
-          handler_ran.store (true, std::memory_order_release);
+      [handler_ran] (void *, void *, service_provider_t &, serializer_registry_t &,
+                     const zlink::message_t &,
+                     const spot_inbound_message_t &) -> task_t<zlink::message_t> {
+          handler_ran->store (true, std::memory_order_release);
           co_return zlink::message_t{};
       });
 
@@ -4523,16 +4548,16 @@ int reconcile_deadline_fast_fails_without_target_commit (
     // A parked *request* (not just a send) must actually receive an
     // explicit failure reply -- "bounded wait then requestFailed", not
     // just silently dropped or left to time out on its own.
-    std::atomic_int terminal_calls{0};
-    std::atomic_bool terminal_was_failure{false};
+    auto terminal_calls = std::make_shared<std::atomic_int> (0);
+    auto terminal_was_failure = std::make_shared<std::atomic_bool> (false);
     node->actor_handoff_terminal_sender =
-      [&terminal_calls,
-       &terminal_was_failure] (const zlink::routing_id_t &, const zlink::routing_id_t &,
-                               const runtime::protocol::wire_operation_id_t &, std::uint64_t,
-                               const runtime::protocol::actor_route_fence_t &,
-                               const result_t<zlink::message_t> &completed) -> task_t<bool> {
-        terminal_calls.fetch_add (1, std::memory_order_acq_rel);
-        terminal_was_failure.store (!completed, std::memory_order_release);
+      [terminal_calls,
+       terminal_was_failure] (const zlink::routing_id_t &, const zlink::routing_id_t &,
+                              const runtime::protocol::wire_operation_id_t &, std::uint64_t,
+                              const runtime::protocol::actor_route_fence_t &,
+                              const result_t<zlink::message_t> &completed) -> task_t<bool> {
+        terminal_calls->fetch_add (1, std::memory_order_acq_rel);
+        terminal_was_failure->store (!completed, std::memory_order_release);
         co_return true;
     };
     std::map<std::string, std::string> terminal_metadata;
@@ -4548,8 +4573,8 @@ int reconcile_deadline_fast_fails_without_target_commit (
     // Keep a real local reply token here: after terminal identity gained the
     // parking-node and initiating-fence dimensions, a hand-written backlog
     // with no matching pending entry only exercises the intentional drop.
-    std::atomic_int local_reply_calls{0};
-    std::atomic_bool local_reply_was_unavailable{false};
+    auto local_reply_calls = std::make_shared<std::atomic_int> (0);
+    auto local_reply_was_unavailable = std::make_shared<std::atomic_bool> (false);
     auto reply_host = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
       .mesh = {.descriptor = {.mesh_name = "reconcile-indeterminate",
                               .node_routing_id =
@@ -4559,18 +4584,18 @@ int reconcile_deadline_fast_fails_without_target_commit (
                               .advertised_endpoint = "tcp://127.0.0.1:0"},
                .runtime_failures =
                  std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
-    const auto make_reply_token = [&reply_host] (std::atomic_int &calls,
-                                                 std::atomic_bool &was_unavailable) {
+    const auto make_reply_token = [&reply_host] (
+                                    std::shared_ptr<std::atomic_int> calls,
+                                    std::shared_ptr<std::atomic_bool> was_unavailable) {
         host::reply_token_t token;
         token.host = reply_host;
-        token.local_reply = [&calls,
-                             &was_unavailable] (const std::vector<zlink::message_t> &parts) {
+        token.local_reply = [calls, was_unavailable] (const std::vector<zlink::message_t> &parts) {
             const auto reply =
               detail::decode_actor_reply (runtime::messaging::message_parts_t (parts));
-            was_unavailable.store (!reply
-                                     && reply.error_kind () == framework_error_kind_t::unavailable,
-                                   std::memory_order_release);
-            calls.fetch_add (1, std::memory_order_acq_rel);
+            was_unavailable->store (!reply
+                                      && reply.error_kind () == framework_error_kind_t::unavailable,
+                                    std::memory_order_release);
+            calls->fetch_add (1, std::memory_order_acq_rel);
             return true;
         };
         return token;
@@ -4586,8 +4611,8 @@ int reconcile_deadline_fast_fails_without_target_commit (
                                                            {},
                                                            std::chrono::steady_clock::now ()
                                                              + std::chrono::seconds (30)});
-    std::atomic_int second_reply_calls{0};
-    std::atomic_bool second_reply_was_unavailable{false};
+    auto second_reply_calls = std::make_shared<std::atomic_int> (0);
+    auto second_reply_was_unavailable = std::make_shared<std::atomic_bool> (false);
     auto second_metadata = terminal_metadata;
     second_metadata[std::string (actor_handoff_operation_high_key)] = "112";
     second_metadata[std::string (actor_handoff_operation_low_key)] = "223";
@@ -4622,7 +4647,7 @@ int reconcile_deadline_fast_fails_without_target_commit (
     const auto sent_result = finite_task_result (std::move (sent));
     if (!sent_result || !*sent_result)
         return 1;
-    if (handler_ran.load (std::memory_order_acquire))
+    if (handler_ran->load (std::memory_order_acquire))
         return 2;
 
     // Drive the existing monotonic sweep clock across the deadline without
@@ -4630,8 +4655,8 @@ int reconcile_deadline_fast_fails_without_target_commit (
     if (spots.cleanup_expired_actor_admissions_at (before_reconcile
                                                    + std::chrono::milliseconds (19))
           != 0
-        || local_reply_calls.load (std::memory_order_acquire) != 0
-        || second_reply_calls.load (std::memory_order_acquire) != 0)
+        || local_reply_calls->load (std::memory_order_acquire) != 0
+        || second_reply_calls->load (std::memory_order_acquire) != 0)
         return 9;
     const auto expired = after_reconcile + std::chrono::milliseconds (20);
     if (spots.cleanup_expired_actor_admissions_at (expired) != 1)
@@ -4642,13 +4667,13 @@ int reconcile_deadline_fast_fails_without_target_commit (
         return 3;
     if (*node->actor_transfer_coordinator->phase (key) != actor_move_phase_t::reconcile)
         return 4;
-    if (terminal_calls.load (std::memory_order_acquire) != 0
-        || local_reply_calls.load (std::memory_order_acquire) != 1
-        || second_reply_calls.load (std::memory_order_acquire) != 1)
+    if (terminal_calls->load (std::memory_order_acquire) != 0
+        || local_reply_calls->load (std::memory_order_acquire) != 1
+        || second_reply_calls->load (std::memory_order_acquire) != 1)
         return 7;
-    if (terminal_was_failure.load (std::memory_order_acquire)
-        || !local_reply_was_unavailable.load (std::memory_order_acquire)
-        || !second_reply_was_unavailable.load (std::memory_order_acquire))
+    if (terminal_was_failure->load (std::memory_order_acquire)
+        || !local_reply_was_unavailable->load (std::memory_order_acquire)
+        || !second_reply_was_unavailable->load (std::memory_order_acquire))
         return 8;
     if (!node->pending_handoff_requests.empty ()
         || !node->actor_transfer_coordinator->blocks_dispatch (key)
@@ -4668,10 +4693,10 @@ int reconcile_deadline_fast_fails_without_target_commit (
         return 5;
     (void) spots.cleanup_expired_actor_admissions_at (expired);
     node->worker_executor->drain ();
-    if (handler_ran.load (std::memory_order_acquire))
+    if (handler_ran->load (std::memory_order_acquire))
         return 6;
-    if (local_reply_calls.load (std::memory_order_acquire) != 1
-        || second_reply_calls.load (std::memory_order_acquire) != 1
+    if (local_reply_calls->load (std::memory_order_acquire) != 1
+        || second_reply_calls->load (std::memory_order_acquire) != 1
         || !node->actor_transfer_coordinator->blocks_dispatch (key)
         || node->actor_routes.contains (key))
         return 12;
@@ -5624,47 +5649,58 @@ int reconnect_push_reaches_new_session_across_two_hosts ()
                                                 0,
                                                 0};
 
-    std::atomic_int old_client_received{0};
-    std::atomic_int new_client_received{0};
+    // The sinks can run after this scope ends, so they own their counters and gateway handles.
+    auto old_client_received = std::make_shared<std::atomic_int> (0);
+    auto new_client_received = std::make_shared<std::atomic_int> (0);
     if (!session_owner.replace_session_route (
           actor,
-          [&old_client_received] (std::string, stream_codec_t, const zlink::message_t &) {
-              old_client_received.fetch_add (1, std::memory_order_acq_rel);
+          [old_client_received] (std::string, stream_codec_t, const zlink::message_t &) {
+              old_client_received->fetch_add (1, std::memory_order_acq_rel);
               return task_t<void> (result_t<void>::success ());
           },
           old_route)) {
         return 2;
     }
 
-    std::atomic_bool saw_correlated_split{false};
+    // The gateway state outlives this scope, so the observer owns what it reads
+    // and writes.
+    auto saw_correlated_split = std::make_shared<std::atomic_bool> (false);
+    const auto expected_current = "current=session_rid=" + new_route.session_rid->to_hex ()
+                                  + "/bg=" + std::to_string (new_binding.binding_generation);
+    const auto expected_staged = "staged=session_rid=" + old_route.session_rid->to_hex ()
+                                 + "/bg=" + std::to_string (old_binding.binding_generation);
     dispatch_options_t trace_options;
     trace_options.message_flow (message_flow_log_mode_t::detailed);
     dispatch_options_access_t::set_observer_for_tests (
-      trace_options, [&] (const message_flow_event_t &event) {
+      trace_options, [saw_correlated_split, expected_current,
+                      expected_staged] (const message_flow_event_t &event) {
           if (event.outcome == message_flow_outcome_t::admitted
               && event.surface == dispatch_error_surface_t::stream_session
               && event.message_kind == dispatch_message_kind_t::send
               && event.detail_stage == std::optional<std::string> ("actor_owner_push_target")
               && event.detail_result
-              && event.detail_result->find (
-                   "current=session_rid=" + new_route.session_rid->to_hex ()
-                   + "/bg=" + std::to_string (new_binding.binding_generation))
-                   != std::string::npos
-              && event.detail_result->find ("staged=session_rid=" + old_route.session_rid->to_hex ()
-                                            + "/bg="
-                                            + std::to_string (old_binding.binding_generation))
-                   != std::string::npos) {
-              saw_correlated_split.store (true, std::memory_order_release);
+              && event.detail_result->find (expected_current) != std::string::npos
+              && event.detail_result->find (expected_staged) != std::string::npos) {
+              saw_correlated_split->store (true, std::memory_order_release);
           }
       });
     actor_owner.set_dispatch (std::move (trace_options));
 
-    const auto make_remote_sink = [&actor_owner, &session_owner,
+    // The sink lives in the actor owner's state, so it refers back to that
+    // state weakly instead of holding it.
+    const std::weak_ptr<actor_gateway_state_t> weak_actor_owner = actor_owner_state;
+    const auto make_remote_sink = [weak_actor_owner, session_owner,
                                    actor] (actor_bound_session_route_t staged_route) {
-        return [&actor_owner, &session_owner, actor, staged_route = std::move (staged_route)] (
+        return [weak_actor_owner, session_owner, actor, staged_route = std::move (staged_route)] (
                  std::string packet_name, stream_codec_t codec,
                  const zlink::message_t &payload) mutable -> task_t<void> {
-            const auto current = actor_owner.resolve_bound_session_push_route (actor, staged_route);
+            const auto owner_state = weak_actor_owner.lock ();
+            if (!owner_state) {
+                throw framework_exception_t (framework_error_kind_t::not_configured,
+                                             "actor owner is gone");
+            }
+            const auto current = actor_gateway_runtime_t (owner_state)
+                                   .resolve_bound_session_push_route (actor, staged_route);
             if (!current) {
                 throw framework_exception_t (framework_error_kind_t::not_configured,
                                              "current reconnect route is unavailable");
@@ -5694,8 +5730,8 @@ int reconnect_push_reaches_new_session_across_two_hosts ()
 
     if (!session_owner.replace_session_route (
           actor,
-          [&new_client_received] (std::string, stream_codec_t, const zlink::message_t &) {
-              new_client_received.fetch_add (1, std::memory_order_acq_rel);
+          [new_client_received] (std::string, stream_codec_t, const zlink::message_t &) {
+              new_client_received->fetch_add (1, std::memory_order_acq_rel);
               return task_t<void> (result_t<void>::success ());
           },
           new_route)
@@ -5717,14 +5753,14 @@ int reconnect_push_reaches_new_session_across_two_hosts ()
     if (!public_push)
         return 7;
     const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
-    while ((new_client_received.load (std::memory_order_acquire) != 2
-            || !saw_correlated_split.load (std::memory_order_acquire))
+    while ((new_client_received->load (std::memory_order_acquire) != 2
+            || !saw_correlated_split->load (std::memory_order_acquire))
            && std::chrono::steady_clock::now () < deadline) {
         std::this_thread::yield ();
     }
-    return old_client_received.load (std::memory_order_acquire) == 0
-               && new_client_received.load (std::memory_order_acquire) == 2
-               && saw_correlated_split.load (std::memory_order_acquire)
+    return old_client_received->load (std::memory_order_acquire) == 0
+               && new_client_received->load (std::memory_order_acquire) == 2
+               && saw_correlated_split->load (std::memory_order_acquire)
              ? 0
              : 8;
 }
@@ -6565,16 +6601,18 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
         send_record.reply_token = {};
         if (!fixture.dispatch (spots, send_record, send_header, "send-payload"))
             return 9;
-        std::atomic_bool replay_preserved_route{false};
+        // The follow handler can run after an early return, so it owns its flag and fence.
+        auto replay_preserved_route = std::make_shared<std::atomic_bool> (false);
         spots.on_actor_message_follow (
-          [&] (const actor_ref_t &, const runtime::messaging::envelope_header_t &replay_header,
-               const zlink::message_t &, std::chrono::milliseconds, const zlink::routing_id_t &,
-               const runtime::protocol::actor_route_fence_t &route, std::uint8_t hop,
-               const runtime::protocol::wire_operation_id_t &,
-               std::uint64_t) -> task_t<std::optional<zlink::message_t>> {
-              replay_preserved_route.store (replay_header.message_name == "LocalRelaySendProbe"
-                                              && route == source_fence && hop == 3,
-                                            std::memory_order_release);
+          [replay_preserved_route, source_fence] (
+            const actor_ref_t &, const runtime::messaging::envelope_header_t &replay_header,
+            const zlink::message_t &, std::chrono::milliseconds, const zlink::routing_id_t &,
+            const runtime::protocol::actor_route_fence_t &route, std::uint8_t hop,
+            const runtime::protocol::wire_operation_id_t &,
+            std::uint64_t) -> task_t<std::optional<zlink::message_t>> {
+              replay_preserved_route->store (replay_header.message_name == "LocalRelaySendProbe"
+                                               && route == source_fence && hop == 3,
+                                             std::memory_order_release);
               co_return result_t<std::optional<zlink::message_t>>::success (std::nullopt);
           });
         const auto target = test_actor_ref ("actor-b", "player", "local-relay-actor", 1);
@@ -6590,7 +6628,7 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
            target_fence.owner_lease_generation},
           target_fence.authority_owner_generation, "local-relay-hop"));
         if (!completed_move || !*completed_move
-            || !replay_preserved_route.load (std::memory_order_acquire))
+            || !replay_preserved_route->load (std::memory_order_acquire))
             return 11;
     }
     if (!has_original_operation) {
@@ -6710,16 +6748,18 @@ int parked_request_reply_case (const std::string &requester_rid,
     node->actor_generations.emplace (key, 1);
     node->actor_types_by_id.emplace ("parked-actor", "player");
 
-    std::atomic_bool handler_ran{false};
+    // The handler may run after an early return; it owns the flag.
+    const auto handler_ran_owner = std::make_shared<std::atomic_bool> (false);
+    auto &handler_ran = *handler_ran_owner;
     spot->handlers.push_back (
       spot_handler_descriptor_t{spot_handler_kind_t::actor_request, "ParkedProbe", "",
                                 std::type_index (typeid (int)), std::type_index (typeid (void)),
                                 std::type_index (typeid (int)), std::type_index (typeid (void))});
     spot->handler_invokers.push_back (
-      [&handler_ran] (void *, void *, service_provider_t &, serializer_registry_t &,
-                      const zlink::message_t &,
-                      const spot_inbound_message_t &) -> task_t<zlink::message_t> {
-          handler_ran.store (true, std::memory_order_release);
+      [handler_ran_owner] (void *, void *, service_provider_t &, serializer_registry_t &,
+                           const zlink::message_t &,
+                           const spot_inbound_message_t &) -> task_t<zlink::message_t> {
+          handler_ran_owner->store (true, std::memory_order_release);
           co_return zlink::message_t::from (std::string ("pong"));
       });
 
@@ -6760,9 +6800,16 @@ int parked_request_reply_case (const std::string &requester_rid,
         }
     }
 
-    std::mutex reply_mutex;
-    std::vector<zlink::message_t> reply_parts;
-    std::atomic_int reply_calls{0};
+    // The reply callback may run after an early return; it owns its state.
+    struct reply_state_t
+    {
+        std::mutex mutex;
+        std::vector<zlink::message_t> parts;
+        std::atomic_int calls{0};
+    };
+    const auto reply_state = std::make_shared<reply_state_t> ();
+    auto &reply_mutex = reply_state->mutex;
+    auto &reply_parts = reply_state->parts;
     const auto reply_host = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
       .mesh = {.descriptor = {.mesh_name = "parked-replay",
                               .node_routing_id =
@@ -6778,11 +6825,10 @@ int parked_request_reply_case (const std::string &requester_rid,
     record.source_node_rid = zlink::routing_id_t::from (requester_rid);
     record.reply_route_id = 57;
     record.reply_token.host = reply_host;
-    record.reply_token.local_reply = [&reply_mutex, &reply_parts,
-                                      &reply_calls] (const std::vector<zlink::message_t> &parts) {
-        const std::lock_guard lock (reply_mutex);
-        reply_parts = parts;
-        reply_calls.fetch_add (1, std::memory_order_release);
+    record.reply_token.local_reply = [reply_state] (const std::vector<zlink::message_t> &parts) {
+        const std::lock_guard lock (reply_state->mutex);
+        reply_state->parts = parts;
+        reply_state->calls.fetch_add (1, std::memory_order_release);
         return true;
     };
     // Deliberately NO record.actor_route: the requester attached no fence.
@@ -6803,12 +6849,12 @@ int parked_request_reply_case (const std::string &requester_rid,
 
     auto parked = std::make_shared<std::promise<void>> ();
     auto parking = parked->get_future ();
-    std::promise<void> replied;
-    auto reply_ready = replied.get_future ();
+    auto replied = std::make_shared<std::promise<void>> ();
+    auto reply_ready = replied->get_future ();
     const auto original_reply = record.reply_token.local_reply;
-    record.reply_token.local_reply = [original_reply, &replied] (const auto &parts) {
+    record.reply_token.local_reply = [original_reply, replied] (const auto &parts) {
         const auto accepted = original_reply (parts);
-        replied.set_value ();
+        replied->set_value ();
         return accepted;
     };
     bool terminal_deferred = false;
@@ -6851,7 +6897,7 @@ int parked_request_reply_case (const std::string &requester_rid,
                      : node->pending_handoff_requests.size () == pending_handoff_capacity;
         })
         .get ();
-    if (!pending_settled || reply_calls.load (std::memory_order_acquire) != 1)
+    if (!pending_settled || reply_state->calls.load (std::memory_order_acquire) != 1)
         return 8;
     return 0;
 }
@@ -6980,20 +7026,25 @@ int relayed_request_without_deferred_terminal_receives_follow_reply ()
       target_fence, std::chrono::steady_clock::now () + std::chrono::seconds (30));
 
     spot_node_runtime_t spots (node);
-    std::atomic_bool relay_ran{false};
+    // The relay handler and the reply sink can run after an early return, so they own their state.
+    auto relay_ran = std::make_shared<std::atomic_bool> (false);
     spots.on_actor_message_follow (
-      [&relay_ran] (const actor_ref_t &, const runtime::messaging::envelope_header_t &,
-                    const zlink::message_t &, std::chrono::milliseconds,
-                    const zlink::routing_id_t &, const runtime::protocol::actor_route_fence_t &,
-                    std::uint8_t, const runtime::protocol::wire_operation_id_t &,
-                    std::uint64_t) -> task_t<std::optional<zlink::message_t>> {
-          relay_ran.store (true, std::memory_order_release);
+      [relay_ran] (const actor_ref_t &, const runtime::messaging::envelope_header_t &,
+                   const zlink::message_t &, std::chrono::milliseconds, const zlink::routing_id_t &,
+                   const runtime::protocol::actor_route_fence_t &, std::uint8_t,
+                   const runtime::protocol::wire_operation_id_t &,
+                   std::uint64_t) -> task_t<std::optional<zlink::message_t>> {
+          relay_ran->store (true, std::memory_order_release);
           co_return result_t<std::optional<zlink::message_t>>::success (
             std::make_optional (zlink::message_t::from (std::string ("relayed-pong"))));
       });
 
-    std::mutex reply_mutex;
-    std::vector<zlink::message_t> reply_parts;
+    struct reply_state_t
+    {
+        std::mutex mutex;
+        std::vector<zlink::message_t> parts;
+    };
+    auto reply = std::make_shared<reply_state_t> ();
     host::receive_record_t record{.kind = host::record_kind_t::actor_request,
                                   .domain = host::ready_domain_t::application};
     record.operation_id = host::call_id_t{11, 13};
@@ -7001,10 +7052,9 @@ int relayed_request_without_deferred_terminal_receives_follow_reply ()
     record.actor_route = source_fence;
     record.reply_route_id = 17;
     record.reply_token.host = local_host;
-    record.reply_token.local_reply = [&reply_mutex,
-                                      &reply_parts] (const std::vector<zlink::message_t> &parts) {
-        const std::lock_guard lock (reply_mutex);
-        reply_parts = parts;
+    record.reply_token.local_reply = [reply] (const std::vector<zlink::message_t> &parts) {
+        const std::lock_guard lock (reply->mutex);
+        reply->parts = parts;
         return true;
     };
 
@@ -7032,20 +7082,20 @@ int relayed_request_without_deferred_terminal_receives_follow_reply ()
     const auto reply_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (2);
     for (;;) {
         {
-            const std::lock_guard lock (reply_mutex);
-            if (!reply_parts.empty ())
+            const std::lock_guard lock (reply->mutex);
+            if (!reply->parts.empty ())
                 break;
         }
         if (std::chrono::steady_clock::now () >= reply_deadline)
             return 1;
         std::this_thread::yield ();
     }
-    if (!relay_ran.load (std::memory_order_acquire))
+    if (!relay_ran->load (std::memory_order_acquire))
         return 2;
     std::vector<zlink::message_t> delivered;
     {
-        const std::lock_guard lock (reply_mutex);
-        delivered = reply_parts;
+        const std::lock_guard lock (reply->mutex);
+        delivered = reply->parts;
     }
     messaging::message_parts_t reply_envelope (std::move (delivered));
     const auto reply_body = zlink::framework::detail::decode_actor_reply (reply_envelope);
@@ -7163,18 +7213,31 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
     actor_gateway_runtime_t gateway (state);
     const auto actor = test_actor_ref ("join-completion-node", "game.actor", "join-player", 7);
     auto delivery = std::make_shared<task_completion_source_t<void>> ();
-    std::atomic_int delivery_calls{0};
-    std::atomic_bool delivery_started{false};
-    std::atomic_bool next_delivery_started{false};
+    // The sink and settlement callbacks may run after an early return; they own this state.
+    struct delivery_state_t
+    {
+        std::atomic_int delivery_calls{0};
+        std::atomic_bool delivery_started{false};
+        std::atomic_bool next_delivery_started{false};
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::optional<result_t<void>> terminal;
+        std::atomic<int> terminal_calls{0};
+        std::atomic<int> next_terminal_calls{0};
+        std::atomic_bool next_succeeded{false};
+    };
+    const auto shared = std::make_shared<delivery_state_t> ();
+    auto &delivery_started = shared->delivery_started;
+    auto &next_delivery_started = shared->next_delivery_started;
     if (!gateway.bind_session_sink (
           actor,
-          [delivery, &delivery_calls, &delivery_started, &next_delivery_started] (
-            std::string, stream_codec_t, const zlink::message_t &) -> task_t<void> {
-              if (delivery_calls.fetch_add (1, std::memory_order_acq_rel) == 0) {
-                  delivery_started.store (true, std::memory_order_release);
+          [delivery, shared] (std::string, stream_codec_t,
+                              const zlink::message_t &) -> task_t<void> {
+              if (shared->delivery_calls.fetch_add (1, std::memory_order_acq_rel) == 0) {
+                  shared->delivery_started.store (true, std::memory_order_release);
                   co_await delivery->task ();
               } else {
-                  next_delivery_started.store (true, std::memory_order_release);
+                  shared->next_delivery_started.store (true, std::memory_order_release);
               }
               co_return;
           })) {
@@ -7187,18 +7250,18 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
     if (!submitted.result ())
         return 2;
 
-    std::mutex mutex;
-    std::condition_variable changed;
-    std::optional<result_t<void>> terminal;
-    std::atomic<int> terminal_calls{0};
+    auto &mutex = shared->mutex;
+    auto &changed = shared->changed;
+    auto &terminal = shared->terminal;
+    auto &terminal_calls = shared->terminal_calls;
     gateway.settle_join_completion_delivery_fence (
-      actor, fence, result_t<void>::success (), [&] (result_t<void> result) {
-          terminal_calls.fetch_add (1, std::memory_order_relaxed);
+      actor, fence, result_t<void>::success (), [shared] (result_t<void> result) {
+          shared->terminal_calls.fetch_add (1, std::memory_order_relaxed);
           {
-              std::lock_guard lock (mutex);
-              terminal.emplace (std::move (result));
+              std::lock_guard lock (shared->mutex);
+              shared->terminal.emplace (std::move (result));
           }
-          changed.notify_all ();
+          shared->changed.notify_all ();
           throw std::runtime_error ("delivery settlement observer failed");
       });
     const auto delivery_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (1);
@@ -7247,12 +7310,12 @@ int join_completion_waits_for_bound_session_delivery_terminal ()
     const auto next_fence = gateway.begin_join_completion_delivery_fence (actor);
     if (next_fence == fence)
         return 9;
-    std::atomic<int> next_terminal_calls{0};
-    bool next_succeeded = false;
+    auto &next_terminal_calls = shared->next_terminal_calls;
+    auto &next_succeeded = shared->next_succeeded;
     gateway.settle_join_completion_delivery_fence (
-      actor, next_fence, result_t<void>::success (), [&] (result_t<void> result) {
-          next_succeeded = static_cast<bool> (result);
-          next_terminal_calls.fetch_add (1, std::memory_order_relaxed);
+      actor, next_fence, result_t<void>::success (), [shared] (result_t<void> result) {
+          shared->next_succeeded = static_cast<bool> (result);
+          shared->next_terminal_calls.fetch_add (1, std::memory_order_relaxed);
           throw std::runtime_error ("immediate settlement observer failed");
       });
     return next_succeeded && next_terminal_calls.load (std::memory_order_relaxed) == 1 ? 0 : 10;

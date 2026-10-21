@@ -7,6 +7,7 @@
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/live_location_reader.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
@@ -102,7 +103,7 @@ struct public_host_runtime_test_access_t
     static task_t<bool> restore_accepted_spot (public_host_runtime_t &host,
                                                std::shared_ptr<location_repository_t> store,
                                                const protocol::request_source_fence_t &source,
-                                               int &materialized)
+                                               std::shared_ptr<std::atomic<int>> materialized)
     {
         host._user_spot_store = std::move (store);
         host._objects.configure_relocation_state (
@@ -111,8 +112,8 @@ struct public_host_runtime_test_access_t
               zlink::framework::runtime::stateful::frozen_object_state_t> {
               co_return stateful::frozen_object_state_t{owner, type};
           },
-          [&materialized, &source] (const auto &frozen, const auto &, std::stop_token) {
-              ++materialized;
+          [materialized, source] (const auto &frozen, const auto &, std::stop_token) {
+              ++*materialized;
               EXPECT_EQ (frozen.pending_application.size (), 1u);
               if (!frozen.pending_application.empty ()) {
                   const auto &turn = frozen.pending_application.front ();
@@ -350,7 +351,9 @@ struct observations_t
     fw::task_completion_source_t<void> release_completion;
     std::vector<std::string> factory_nodes;
     std::vector<int> recorded;
-} *observations;
+};
+// Shared ownership: late events from detached executors must still hit live memory.
+std::shared_ptr<observations_t> observations;
 struct move_t
 {
     static constexpr const char *packet_name = "maintenance-join-move";
@@ -440,6 +443,9 @@ class actor_t final : public fw::actor_t
 
   private:
     fw::actor_context_t _context;
+    // Capture the evidence of the test that created this object; late callbacks must not
+    // write into a later test.
+    std::shared_ptr<observations_t> observations = ::observations;
 };
 class factory_t final : public fw::actor_factory_t<actor_t>
 {
@@ -461,6 +467,11 @@ class factory_t final : public fw::actor_factory_t<actor_t>
         }
         co_return std::make_shared<actor_t> (std::move (context));
     }
+
+  private:
+    // Capture the evidence of the test that created this object; late callbacks must not
+    // write into a later test.
+    std::shared_ptr<observations_t> observations = ::observations;
 };
 class entry_t final : public fw::entry_spot_t<actor_t>
 {
@@ -544,6 +555,9 @@ class entry_t final : public fw::entry_spot_t<actor_t>
 
   private:
     fw::entry_spot_context_t _context;
+    // Capture the evidence of the test that created this object; late callbacks must not
+    // write into a later test.
+    std::shared_ptr<observations_t> observations = ::observations;
 };
 // A second Actor type, so a node can register an Entry Spot that accepts only it.
 constexpr auto other_actor_type = "other-member";
@@ -792,6 +806,9 @@ class room_t final : public fw::spot_t<actor_t>
 
   private:
     fw::spot_context_t _context;
+    // Capture the evidence of the test that created this object; late callbacks must not
+    // write into a later test.
+    std::shared_ptr<observations_t> observations = ::observations;
 };
 class room_state_t final : public fw::spot_relocation_adapter_t<room_t>
 {
@@ -897,59 +914,59 @@ void configure (host_t &host,
     host.app.logging ().use_file (rid + ".flow").set_min_level (fw::log_level_t::debug);
     options.configure_dispatch ().message_flow (fw::message_flow_log_mode_t::detailed);
     fw::detail::dispatch_options_access_t::set_observer_for_tests (
-      options.configure_dispatch (), [] (const fw::message_flow_event_t &event) {
-          observe_joined_batch_admission (*observations, event);
-          const auto hold = observations->native_handoff_hold;
+      options.configure_dispatch (), [obs = observations] (const fw::message_flow_event_t &event) {
+          observe_joined_batch_admission (*obs, event);
+          const auto hold = obs->native_handoff_hold;
           if (hold && event.actor_id == actor_id && event.spot_id == suffix_spot
               && event.outcome == fw::message_flow_outcome_t::sent
               && event.message_kind == fw::dispatch_message_kind_t::actor_request
               && !event.packet_name) {
               hold->next_join_started.complete (fw::result_t<void>::success ());
-              observations->changed.notify_all ();
+              obs->changed.notify_all ();
           }
           if (hold && event.actor_id == actor_id && event.packet_name == probe_t::packet_name) {
               bool entered = false;
               if (event.detail_stage == "invoke_erased.enter") {
-                  std::lock_guard lock (observations->mutex);
+                  std::lock_guard lock (obs->mutex);
                   entered = ++hold->entries == 2;
               }
               if (event.spot_id == local_spot
                   && event.detail_stage == "invoke_erased.application_handler"
                   && event.detail_result == "result=finished success=true") {
                   hold->preceding_h_finished.complete (fw::result_t<void>::success ());
-                  observations->changed.notify_all ();
+                  obs->changed.notify_all ();
               }
               if (entered) {
                   hold->entered.complete (fw::result_t<void>::success ());
-                  observations->changed.notify_all ();
+                  obs->changed.notify_all ();
                   hold->release.task ().result ().value ();
               }
           }
           {
-              std::lock_guard lock (observations->mutex);
+              std::lock_guard lock (obs->mutex);
               if (event.packet_name == probe_t::packet_name && event.actor_id == actor_id
                   && event.message_kind == fw::dispatch_message_kind_t::actor_request
                   && event.outcome == fw::message_flow_outcome_t::admitted
                   && event.detail_stage == "canonical_application.commit_accepted_ingress")
-                  ++observations->ordinary_posts;
+                  ++obs->ordinary_posts;
               if (event.packet_name == "handoff_replay_failed")
-                  observations->replay_failures.push_back (event);
+                  obs->replay_failures.push_back (event);
           }
-          observations->changed.notify_all ();
-          if (observations->hold_replay_prefix && event.actor_id == actor_id
-              && event.spot_id == local_spot && event.packet_name == probe_t::packet_name
+          obs->changed.notify_all ();
+          if (obs->hold_replay_prefix && event.actor_id == actor_id && event.spot_id == local_spot
+              && event.packet_name == probe_t::packet_name
               && event.detail_stage == "invoke_erased.enter") {
-              std::unique_lock lock (observations->mutex);
-              observations->replay_prefix_entered = true;
-              observations->changed.notify_all ();
-              observations->changed.wait (lock, [] { return observations->release_replay_prefix; });
+              std::unique_lock lock (obs->mutex);
+              obs->replay_prefix_entered = true;
+              obs->changed.notify_all ();
+              obs->changed.wait (lock, [obs] { return obs->release_replay_prefix; });
           }
-          if (!observations->joined_sender || observations->send_after_close
+          if (!obs->joined_sender || obs->send_after_close
               || event.packet_name != move_t::packet_name || event.spot_id != local_spot
               || event.detail_stage != "invoke_erased.post_serial")
               return;
-          std::unique_lock lock (observations->mutex);
-          observations->changed.wait (lock, [] { return observations->release_replay_post; });
+          std::unique_lock lock (obs->mutex);
+          obs->changed.wait (lock, [&obs] { return obs->release_replay_post; });
       });
     options.add_location_store (store);
     options.add_relocation_store (relocations);
@@ -1029,6 +1046,7 @@ class relay_session_t final : public fw::packet_stream_session_t
 
   private:
     fw::actor_manager_t &_actors;
+    std::shared_ptr<observations_t> observations = ::observations;
 };
 constexpr auto session_rid = "join-session";
 constexpr auto stream_name = "maintenance-join-stream";
@@ -1433,8 +1451,9 @@ TEST (RelayAdmission, AcceptedRecordKeepsSourceOriginalAcrossDiscoveryChange)
 
 TEST (RelayAdmission, FirstBoundSessionRequest)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t entry, session;
@@ -1466,9 +1485,10 @@ TEST (RelayAdmission, FirstBoundSessionRequest)
 
 void joined_actor_chain (bool send_after_close)
 {
-    observations_t evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
     evidence.send_after_close = send_after_close;
-    observations = &evidence;
+    observations = evidence_owner;
     host_t host;
     release_callbacks_t release{evidence};
     configure (host, first_rid, std::make_shared<fw::runtime::in_memory_location_store_t> (),
@@ -1489,12 +1509,14 @@ void joined_actor_chain (bool send_after_close)
     ASSERT_TRUE (created);
     const auto actor = std::get<fw::actor_create_created_t> (created.value ()).actor;
     ASSERT_TRUE (services.get_required<fw::detail::actor_gateway_runtime_t> ().bind_session_sink (
-      actor, [&] (std::string, fw::stream_codec_t, const zlink::message_t &) -> fw::task_t<void> {
+      actor,
+      [owner = evidence_owner] (std::string, fw::stream_codec_t,
+                                const zlink::message_t &) -> fw::task_t<void> {
           {
-              std::lock_guard lock (evidence.mutex);
-              ++evidence.session_pushes;
+              std::lock_guard lock (owner->mutex);
+              ++owner->session_pushes;
           }
-          evidence.changed.notify_all ();
+          owner->changed.notify_all ();
           co_return;
       }));
     std::shared_ptr<fw::runtime::serial_execution_queue_t> source_queue;
@@ -1577,13 +1599,17 @@ class consecutive_join_state_t final : public fw::actor_relocation_adapter_t<act
     {
         co_return;
     }
+
+  private:
+    std::shared_ptr<observations_t> observations = ::observations;
 };
 
 TEST (ActorMaintenanceJoin, ConsecutiveDeferredJoinsDoNotHoldTargetSpotDuringCapture)
 {
-    observations_t evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
     evidence.consecutive_join_probe = true;
-    observations = &evidence;
+    observations = evidence_owner;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t source, other_source, target;
@@ -1681,8 +1707,9 @@ TEST (ActorMaintenanceJoin, ConsecutiveDeferredJoinsDoNotHoldTargetSpotDuringCap
 
 void actor_handler_closes_physical_session (bool remote, bool join)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t owner, session;
@@ -1779,11 +1806,12 @@ enum class backlog_case_t
 };
 void local_join_backlog (backlog_case_t scenario)
 {
-    observations_t evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
     evidence.joined_payloads =
       scenario == backlog_case_t::replay_failure ? std::vector<int>{-1} : std::vector<int>{1, 2};
     evidence.fail_completion = scenario == backlog_case_t::completion_failure;
-    observations = &evidence;
+    observations = evidence_owner;
     host_t host;
     release_callbacks_t release{evidence};
     configure (host, first_rid, std::make_shared<fw::runtime::in_memory_location_store_t> (),
@@ -1792,7 +1820,8 @@ void local_join_backlog (backlog_case_t scenario)
     ASSERT_TRUE (ready (host));
     auto services = host.app.advanced ().services ().build_provider ();
     auto &client = services.get_required<fw::actor_client_t> ();
-    evidence.joined_sender = &client;
+    if (scenario != backlog_case_t::replay_failure)
+        evidence.joined_sender = &client;
     ASSERT_TRUE (services.get_required<fw::spot_manager_t> ()
                    .get_or_create (fw::spot_id_t (local_spot), room_type)
                    .async ()
@@ -1805,6 +1834,11 @@ void local_join_backlog (backlog_case_t scenario)
                                  .async<probe_t> ()
                                  .result ();
     ASSERT_TRUE (ingress_ready);
+    // Creation can retain the readiness probe itself; count only this Join's batch.
+    const auto backlog_before_join = [&] {
+        std::lock_guard lock (evidence.mutex);
+        return evidence.backlog_appends;
+    }();
     evidence.hold_replay_prefix = scenario == backlog_case_t::ordinary_order;
     const auto state =
       fw::detail::mesh_node_runtime_t::registrations (host.app.advanced ().zlink ())
@@ -1835,6 +1869,47 @@ void local_join_backlog (backlog_case_t scenario)
     } else {
         source_queue->drain ();
     }
+    if (scenario == backlog_case_t::replay_failure) {
+        // Native acceptance can precede or follow the source handoff terminal.
+        // Submit an actual retained record to replay so this test always exercises
+        // replay failure rather than an ordinary post-Join send failure.
+        const auto actor = state->lane
+                             .run ([&] {
+                                 return fw::detail::actor_ref_access_t::make (
+                                   fw::node_rid_t::from_string (first_rid), actor_type, actor_id,
+                                   state->actor_generations.at (key));
+                             })
+                             .get ();
+        fw::runtime::messaging::envelope_header_t header;
+        header.kind = fw::runtime::messaging::message_kind_t::command;
+        header.message_name = probe_t::packet_name;
+        header.content_type = "application/json";
+        auto encoded = fw::detail::encode_actor_packet (
+          header, zlink::message_t::from (nlohmann::json (probe_t{-1}).dump ()));
+        namespace wire = fw::runtime::protocol;
+        wire::frozen_application_record_t frozen;
+        frozen.kind = wire::frozen_record_kind_t::actor_send;
+        frozen.body = wire::frozen_actor_application_body_t{
+          {}, wire::application_payload_t::from_parts (std::move (encoded).take_items ())};
+        auto record = std::make_shared<fw::runtime::serial_application_record_t> ();
+        record->payload ().emplace ();
+        record->payload ()->application_record = std::move (frozen);
+        auto terminals = std::make_shared<std::atomic<int>> (0);
+        record->native_reply = [terminals] (auto) {
+            ++*terminals;
+            return true;
+        };
+        fw::detail::handoff_packet_t packet;
+        packet.packet_name = probe_t::packet_name;
+        packet.content_type = header.content_type;
+        packet.application_record = record;
+        fw::detail::spot_node_runtime_t runtime (state);
+        ASSERT_TRUE (fw::detail::spot_node_runtime_test_access_t::replay (
+                       runtime, actor, {std::move (packet)}, services)
+                       .result ());
+        EXPECT_EQ (terminals->load (), 1);
+        EXPECT_EQ (evidence.handled_payloads, (std::vector<int>{-1}));
+    }
     if (scenario == backlog_case_t::completion_failure) {
         auto sealed_queue = actor_queue (fw::spot_id_t (local_spot));
         ASSERT_TRUE (sealed_queue);
@@ -1851,8 +1926,16 @@ void local_join_backlog (backlog_case_t scenario)
         }
         ASSERT_TRUE (client.send (fw::actor_id_t (actor_id), probe_t{3}).async ().result ());
         std::unique_lock lock (evidence.mutex);
-        ASSERT_TRUE (evidence.changed.wait_for (lock, wait_budget,
-                                                [&] { return evidence.backlog_appends == 3; }));
+        ASSERT_TRUE (evidence.changed.wait_for (
+          lock, wait_budget, [&] { return evidence.backlog_appends == backlog_before_join + 3; }));
+        const auto admission = evidence.joined_send_captured.task ();
+        lock.unlock ();
+        // Backlog retention and native admission publish on independent owners.
+        // Observe this batch's completion instead of assuming their callback order.
+        const auto captured = admission.result_for (wait_budget);
+        ASSERT_TRUE (captured);
+        ASSERT_TRUE (*captured);
+        lock.lock ();
         EXPECT_TRUE (evidence.joined_send_captured.task ().await_ready ());
         EXPECT_TRUE (evidence.handled_payloads.empty ());
         EXPECT_EQ (evidence.completions.size (), 1u);
@@ -1914,11 +1997,16 @@ void local_join_backlog (backlog_case_t scenario)
     }
     if (scenario == backlog_case_t::ordinary_order) {
         EXPECT_FALSE (state->actor_transfer_coordinator->phase (key));
+        const auto posts_before_request = [&] {
+            std::lock_guard lock (evidence.mutex);
+            return evidence.ordinary_posts;
+        }();
         auto ordinary = client.request (fw::actor_id_t (actor_id), probe_t{3}).async<probe_t> ();
         {
             std::unique_lock lock (evidence.mutex);
-            ASSERT_TRUE (evidence.changed.wait_for (lock, wait_budget,
-                                                    [&] { return evidence.ordinary_posts > 0; }));
+            ASSERT_TRUE (evidence.changed.wait_for (lock, wait_budget, [&] {
+                return evidence.ordinary_posts == posts_before_request + 1;
+            }));
             EXPECT_TRUE (evidence.handled_payloads.empty ());
         }
         {
@@ -1991,14 +2079,15 @@ void next_join_suffix (bool remote,
                        bool native_initiator = false,
                        bool hold_native_suffix = false)
 {
-    observations_t evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
     evidence.joined_payloads = {1, 2};
     evidence.transfer_suffix = true;
     evidence.suffix_request = request;
     evidence.fail_remote_factory = restore_source;
     if (hold_native_suffix)
         evidence.native_handoff_hold = std::make_shared<native_handoff_hold_t> ();
-    observations = &evidence;
+    observations = evidence_owner;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t source, target, initiator;
@@ -2492,8 +2581,9 @@ TEST (ActorMaintenanceJoin, RemoteNextJoinPreservesClaimedNativeSuffixBeforePriv
 
 TEST (NativeIntake, OrdinarySpotDoesNotMaterializeRelocationRecord)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     evidence.ordinary_spot = std::make_shared<ordinary_spot_observation_t> ();
     const auto observation = evidence.ordinary_spot;
     struct release_t
@@ -2786,7 +2876,8 @@ TEST (NativeIntake, CanonicalAdmissionReportsOnlyActualSuccessWhenEnabled)
 
 TEST (NativeIntake, JoinedBatchFenceExcludesInitialMoveAndOtherActor)
 {
-    observations_t evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
     evidence.joined_payloads = {1, 2};
     fw::message_flow_event_t event{};
     event.outcome = fw::message_flow_outcome_t::admitted;
@@ -3278,8 +3369,9 @@ class NativeIntakePendingStore : public testing::TestWithParam<std::tuple<bool, 
 TEST_P (NativeIntakePendingStore, ProductionResolverUsesNoStoreDuringAcceptance)
 {
     const auto [remote, failure_stage] = GetParam ();
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<intake_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t host, peer;
@@ -3305,12 +3397,12 @@ TEST_P (NativeIntakePendingStore, ProductionResolverUsesNoStoreDuringAcceptance)
     store->stage.store (1);
     auto pending =
       (remote ? native : local).request (fw::actor_id_t (actor_id), probe_t{17}).async<probe_t> ();
-    std::atomic<int> terminals{0};
-    std::promise<void> terminal_seen;
-    auto terminal_ready = terminal_seen.get_future ();
-    fw::detail::observe_task_completion (pending, [&] (const auto &) {
-        if (++terminals == 1) {
-            terminal_seen.set_value ();
+    auto terminals = std::make_shared<std::atomic<int>> (0);
+    auto terminal_seen = std::make_shared<std::promise<void>> ();
+    auto terminal_ready = terminal_seen->get_future ();
+    fw::detail::observe_task_completion (pending, [terminals, terminal_seen] (const auto &) {
+        if (++*terminals == 1) {
+            terminal_seen->set_value ();
         }
     });
     const auto result = pending.result ();
@@ -3321,7 +3413,7 @@ TEST_P (NativeIntakePendingStore, ProductionResolverUsesNoStoreDuringAcceptance)
         EXPECT_FALSE (store->reached[index].load ()) << "unexpected Store read=" << index;
     store->release_all ();
     terminal_ready.get ();
-    EXPECT_EQ (terminals.load (), 1);
+    EXPECT_EQ (terminals->load (), 1);
     {
         std::lock_guard lock (evidence.mutex);
         EXPECT_EQ (std::count (evidence.intake_probe_values.begin (),
@@ -3398,9 +3490,10 @@ class ActorCreationHandoff : public testing::TestWithParam<creation_case_t>
 };
 TEST_P (ActorCreationHandoff, TerminalReleasesMoveWithoutJoinLifecycle)
 {
-    observations_t evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
     evidence.creation_case = GetParam ();
-    observations = &evidence;
+    observations = evidence_owner;
     auto store = std::make_shared<creation_store_t> ();
     host_t host;
     release_callbacks_t release{evidence};
@@ -3449,8 +3542,9 @@ INSTANTIATE_TEST_SUITE_P (AcceptedRejectedFailedPublication,
                                            creation_case_t::publication_failed));
 TEST (ActorMaintenanceJoin, PublicEntryJoinCompletionPrecedesFirstCommand)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     host_t host;
     release_callbacks_t release{evidence};
     configure (host, first_rid, std::make_shared<fw::runtime::in_memory_location_store_t> (),
@@ -3706,7 +3800,7 @@ TEST (ActorMaintenanceJoin, RelocationPreservesAcceptedSourcesWithoutStoreRead)
         const fw::runtime::protocol::request_source_fence_t source{
           token.owner_id, static_cast<std::uint64_t> (token.lease_generation),
           descriptor.rid.to_bytes (), mode == source_case::stale_node_generation ? 2u : 1u};
-        int materialized = 0;
+        auto materialized = std::make_shared<std::atomic<int>> (0);
         store->mesh_reads = store->lease_reads = 0;
         const auto restored =
           fw::runtime::host::public_host_runtime_test_access_t::restore_accepted_spot (
@@ -3714,7 +3808,7 @@ TEST (ActorMaintenanceJoin, RelocationPreservesAcceptedSourcesWithoutStoreRead)
             .result ();
         ASSERT_TRUE (restored);
         EXPECT_TRUE (restored.value ());
-        EXPECT_EQ (materialized, 1);
+        EXPECT_EQ (materialized->load (), 1);
         EXPECT_EQ (store->mesh_reads, 0);
         EXPECT_EQ (store->lease_reads, 0);
         const auto object = host->objects ().resolve_spot ("accepted-spot");
@@ -3728,8 +3822,9 @@ TEST (ActorMaintenanceJoin, RelocationPreservesAcceptedSourcesWithoutStoreRead)
 
 TEST (ActorMaintenanceJoin, WarmLocalAcceptedRequestDoesNotReadStore)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<observed_location_store_t> ();
     host_t host;
     configure (host, first_rid, store,
@@ -3792,8 +3887,9 @@ TEST (ActorMaintenanceJoin, StaleAttemptActivationDoesNotLeaveRawIdentity)
 
 TEST (ActorMaintenanceJoin, ReadyAuthorityAcceptsLocalSendBeforeStoreWriteReturns)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<observed_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     auto observed = std::make_shared<std::atomic<bool>> (false);
@@ -3815,7 +3911,8 @@ TEST (ActorMaintenanceJoin, ReadyAuthorityAcceptsLocalSendBeforeStoreWriteReturn
     auto target_services = target.app.advanced ().services ().build_provider ();
     auto &client = target_services.get_required<fw::actor_client_t> ();
     // Callback copies own services/results; evidence outlives both hosts.
-    store->observe ([target_services, observed, sent, &evidence] () mutable -> fw::task_t<void> {
+    store->observe ([target_services, observed, sent,
+                     evidence_owner] () mutable -> fw::task_t<void> {
         const auto location = co_await target_services.get_required<fw::location_runtime_query_t> ()
                                 .find_actor_location (fw::actor_id_t (actor_id));
         if (!location || location->state != fw::location_object_state_t::ready
@@ -3831,8 +3928,8 @@ TEST (ActorMaintenanceJoin, ReadyAuthorityAcceptsLocalSendBeforeStoreWriteReturn
                 .send (fw::actor_id_t (actor_id), record_t{1})
                 .async ());
             {
-                std::lock_guard lock (evidence.mutex);
-                EXPECT_TRUE (evidence.recorded.empty ());
+                std::lock_guard lock (evidence_owner->mutex);
+                EXPECT_TRUE (evidence_owner->recorded.empty ());
             }
             sent->complete (admitted);
         }
@@ -3862,8 +3959,9 @@ TEST (ActorMaintenanceJoin, ReadyAuthorityAcceptsLocalSendBeforeStoreWriteReturn
 
 TEST (ActorMaintenanceJoin, SourcePreserveDiscardsRawIdentityPreparedBeforeTargetCas)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<observed_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t source, target;
@@ -3953,8 +4051,9 @@ TEST (ActorMaintenanceJoin, SourcePreserveDiscardsRawIdentityPreparedBeforeTarge
 
 TEST (ActorMaintenanceJoin, HostShutdownClosesOccupiedUserSpot)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     host_t host;
     configure (host, first_rid, std::make_shared<fw::runtime::in_memory_location_store_t> (),
                std::make_shared<fw::runtime::in_memory_relocation_store_t> ());
@@ -4019,8 +4118,9 @@ TEST (ActorMaintenanceJoin, HostShutdownClosesOccupiedUserSpot)
 
 TEST (ActorMaintenanceJoin, RelocationPublishesSafeToShutdown)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t source, target;
@@ -4101,8 +4201,9 @@ TEST (ActorMaintenanceJoin, RelocationPublishesSafeToShutdown)
 
 TEST (ActorMaintenanceJoin, ApplicationSignaledSpotCaptureCompletes)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t source, target;
@@ -4137,8 +4238,9 @@ class ActorHostRelocation : public testing::TestWithParam<bool>
 
 TEST_P (ActorHostRelocation, AfterRemoteActorJoin)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t entry, source, target;
@@ -4224,8 +4326,9 @@ TEST_P (ActorHostRelocation, AfterRemoteActorJoin)
 // Actor; the next packet on that connection reaches the target activation.
 TEST_P (ActorHostRelocation, ExistingSessionRelaysAfterRelocation)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t entry, source, target, session;
@@ -4306,6 +4409,21 @@ TEST_P (ActorHostRelocation, ExistingSessionRelaysAfterRelocation)
 
 INSTANTIATE_TEST_SUITE_P (FreshAndPreviousOwner, ActorHostRelocation, testing::Bool ());
 
+// Drain the queue before the locals its work items reference are destroyed, including on
+// early ASSERT exits.
+struct queue_drain_guard_t
+{
+    fw::runtime::serial_execution_queue_t &queue;
+    std::shared_ptr<fw::detail::deferred_barrier_t> *barrier = nullptr;
+    bool finished = false;
+    ~queue_drain_guard_t ()
+    {
+        if (!finished && barrier && *barrier)
+            (*barrier)->cancel ();
+        queue.drain ();
+    }
+};
+
 TEST (ActorMaintenanceJoin, ReservedLifecycleCaptureKeepsTurn)
 {
     for (const bool early : {true, false}) {
@@ -4316,6 +4434,7 @@ TEST (ActorMaintenanceJoin, ReservedLifecycleCaptureKeepsTurn)
         std::shared_ptr<fw::detail::serial_turn_t> capture_turn;
         std::vector<int> order;
         fw::task_completion_source_t<void> initialized;
+        queue_drain_guard_t guard{queue, &barrier};
         const auto capture = [&] () -> fw::task_t<void> {
             capture_turn = fw::detail::capture_current_serial_turn ();
             EXPECT_TRUE (capture_turn && capture_turn->belongs_to (&queue));
@@ -4353,6 +4472,7 @@ TEST (ActorMaintenanceJoin, ReservedLifecycleCaptureKeepsTurn)
             release (fw::result_t<void>::success ());
         }));
         queue.drain ();
+        guard.finished = true;
         EXPECT_EQ (order, (std::vector<int>{1, 2, 3}));
     }
 }
@@ -4364,6 +4484,7 @@ TEST (ActorMaintenanceJoin, CancelledReservedCaptureFinishes)
     std::optional<fw::task_t<void>> phase;
     bool ran = false;
     fw::task_completion_source_t<void> initialized;
+    queue_drain_guard_t guard{queue};
     queue.post ("cancel-capture", [&] {
         const auto barrier = queue.reserve_barrier_next ("relocation-ready", true).value ();
         phase = barrier->run ([&] () -> fw::task_t<void> {
@@ -4432,8 +4553,9 @@ TEST (ActorMaintenanceJoin, LocalDirectAdmissionUsesCurrentActorId)
 
 TEST (ActorMaintenanceJoin, RejectsWhilePreviousSourceLeaveIsPending)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t first, second;
@@ -4564,8 +4686,9 @@ class ActorRestoreCommitFailure : public ::testing::TestWithParam<bool>
 
 TEST_P (ActorRestoreCommitFailure, DiscardsPublishedIdentity)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     std::optional<bool> published;
     std::optional<fw::actor_ref_t> candidate;
     bool discarded = false;
@@ -4666,8 +4789,9 @@ INSTANTIATE_TEST_SUITE_P (ReturnOrThrow, ActorRestoreCommitFailure, ::testing::B
 
 TEST (ActorMaintenanceJoin, PreservesEarlierIdentityWhenRestoreIsRejected)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t first, second;
@@ -4720,8 +4844,9 @@ TEST (ActorMaintenanceJoin, PreservesEarlierIdentityWhenRestoreIsRejected)
 
 TEST (ActorMaintenanceJoin, RemoteJoinReturnsToPreviousSourceNode)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t first, second;
@@ -4773,8 +4898,9 @@ TEST (ActorMaintenanceJoin, RemoteJoinReturnsToPreviousSourceNode)
 // even when this node last hosted it on a different physical Session.
 TEST (ActorMaintenanceJoin, ReboundActorReturnsWithCurrentSession)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t first, second, session;
@@ -4861,8 +4987,9 @@ TEST (ActorMaintenanceJoin, ReboundActorReturnsWithCurrentSession)
 
 TEST (ActorMaintenanceJoin, ReturnAdmissionWaitsOutsideTargetLifecycleForSourceTerminal)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     host_t host;
     release_callbacks_t release{evidence};
     configure (host, first_rid, std::make_shared<fw::runtime::in_memory_location_store_t> (),
@@ -4953,9 +5080,10 @@ TEST (ActorMaintenanceJoin, ReturnAdmissionWaitsOutsideTargetLifecycleForSourceT
 
 TEST (ActorMaintenanceJoin, SameNodeMembershipPreservesReturnedActorUntilSourceCleanup)
 {
-    observations_t evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
     evidence.completion_to_hold = 3;
-    observations = &evidence;
+    observations = evidence_owner;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t first, second;
@@ -5053,11 +5181,12 @@ class ActorDeferredJoinFailure : public testing::TestWithParam<std::tuple<bool, 
 };
 TEST_P (ActorDeferredJoinFailure, FailureAndRejectionPreserveSourceActor)
 {
-    observations_t evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
     evidence.completion_to_hold = 1;
     evidence.fail_remote_factory =
       std::string_view (std::get<1> (GetParam ())) == factory_failed_spot;
-    observations = &evidence;
+    observations = evidence_owner;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t first, second;
@@ -5065,17 +5194,17 @@ TEST_P (ActorDeferredJoinFailure, FailureAndRejectionPreserveSourceActor)
     configure (first, first_rid, store, relocations);
     fw::detail::dispatch_options_access_t::set_observer_for_tests (
       first.app.add_zlink_framework ().configure_dispatch (),
-      [&evidence] (const fw::message_flow_event_t &event) {
+      [owner = evidence_owner] (const fw::message_flow_event_t &event) {
           if (event.packet_name != probe_t::packet_name)
               return;
           if (event.actor_id != actor_id || event.outcome != fw::message_flow_outcome_t::admitted
               || event.detail_stage != "canonical_application.commit_accepted_ingress")
               return;
           {
-              std::lock_guard lock (evidence.mutex);
-              evidence.probe_admission_observed = true;
+              std::lock_guard lock (owner->mutex);
+              owner->probe_admission_observed = true;
           }
-          evidence.changed.notify_all ();
+          owner->changed.notify_all ();
       });
     first.start ();
     ASSERT_TRUE (ready (first));
@@ -5329,8 +5458,9 @@ class ActorEntryPlacement : public testing::TestWithParam<entry_kind_t>
 // whose Entry Spot accepts it, and the Entry-less node never runs the factory.
 TEST_P (ActorEntryPlacement, CreatesOnlyWhereEntryAcceptsActorType)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     release_callbacks_t release{evidence};
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
@@ -5368,8 +5498,9 @@ INSTANTIATE_TEST_SUITE_P (NoEntryAndOtherTypeEntry,
 
 TEST (ActorEntryPlacementUnavailable, NoAcceptingEntryReturnsUnavailableBeforeFactory)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     host_t entryless;
     configure (entryless, first_rid, std::make_shared<fw::runtime::in_memory_location_store_t> (),
                std::make_shared<fw::runtime::in_memory_relocation_store_t> (),
@@ -5390,8 +5521,9 @@ TEST (ActorEntryPlacementUnavailable, NoAcceptingEntryReturnsUnavailableBeforeFa
 // whose Actor type the node's Entry Spot accepts.
 TEST (ActorEntryPlacementDescriptor, PublishesEntryAccepted)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     release_callbacks_t release{evidence};
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
@@ -5434,8 +5566,9 @@ class ActorEntryPlacementStaleDescriptor : public testing::TestWithParam<placeme
 // local-to-remote, remote-to-local, and remote-to-remote reselection with one operation identity.
 TEST_P (ActorEntryPlacementStaleDescriptor, TargetRejectsBeforeFactoryAndRequesterReselects)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     release_callbacks_t release{evidence};
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     std::shared_ptr<fw::location_store_t> actual_store = store;
@@ -5484,8 +5617,9 @@ INSTANTIATE_TEST_SUITE_P (LocalAndRemoteTarget,
 
 TEST (ActorEntryPlacementExisting, RequiresLiveOwnerWithoutNewCreationCandidates)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t accepting, live_view, missing_owner_view;
@@ -5537,8 +5671,9 @@ TEST (ActorEntryPlacementExisting, RequiresLiveOwnerWithoutNewCreationCandidates
 // User Spot, as a relocation target.
 TEST (ActorEntryPlacementRegression, EntrylessNodeTakesJoinAndRelocation)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     release_callbacks_t release{evidence};
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
@@ -5617,8 +5752,9 @@ TEST (ActorMaintenanceJoin, HostRelocationAcquiresUnitsAfterEarlierDeferredJoin)
     GTEST_SKIP () << "Requires the public Linux thread inventory to identify the relocation caller";
 #else
     constexpr auto remaining_actor = "remaining-member";
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<observed_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t source, joined, target;
@@ -5708,8 +5844,9 @@ TEST (ActorMaintenanceJoin, HostRelocationAcquiresUnitsAfterEarlierDeferredJoin)
 
 TEST (ActorMaintenanceJoin, RemoteJoinDoesNotLeaveLocalRelocationWork)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
     host_t source, target;
@@ -5922,9 +6059,8 @@ class join_settlement_store_t final : public fw::location_store_t
     }
     fw::task_t<fw::store_read_result_t> read (fw::store_key_t key) override
     {
-        const auto actor_authority = armed.load () && key.value == authority_key.value;
-        if (actor_authority)
-            co_await release.task ();
+        const auto actor_authority =
+          cleanup_started.task ().await_ready () && key.value == authority_key.value;
         auto result = co_await inner->read (std::move (key));
         if (actor_authority && std::holds_alternative<fw::store_missing_t> (result))
             missing.complete (fw::result_t<void>::success ());
@@ -5940,9 +6076,105 @@ class join_settlement_store_t final : public fw::location_store_t
     }
     std::shared_ptr<fw::location_store_t> inner;
     fw::store_key_t authority_key;
-    std::atomic<bool> armed{false};
+    fw::task_completion_source_t<void> cleanup_started;
     fw::task_completion_source_t<void> release;
     fw::task_completion_source_t<void> missing;
+};
+
+// Pause the source decision at its owner, after boundary/cutover can progress.
+// Every authority operation still delegates to the production Store adapter.
+class join_settlement_authority_t final : public fw::runtime::stateful::authority_relocation_port_t
+{
+    using object = fw::runtime::stateful::object_ref_t;
+    using kind = fw::runtime::stateful::object_kind_t;
+    using fence = fw::runtime::stateful::relocation_authority_fence_t;
+    using authority = fw::runtime::stateful::relocation_authority_t;
+    using published = fw::runtime::stateful::authority_publish_result_t;
+    using reference = fw::runtime::stateful::authority_relocation_reference_t;
+    using digest = fw::runtime::stateful::inventory_digest_t;
+
+  public:
+    join_settlement_authority_t (fw::location_repository_t &repository,
+                                 std::shared_ptr<join_settlement_store_t> control) :
+        _inner (repository), _control (std::move (control))
+    {
+    }
+    authority observe_relocation (const fence &value) override
+    {
+        return _inner.observe_relocation (value);
+    }
+    fw::runtime::stateful::source_relocation_settlement_t settle_source_relocation (
+      const fence &value, const std::vector<object> &participants, bool preserve) override
+    {
+        _control->cleanup_started.complete (fw::result_t<void>::success ());
+        fw::runtime::infrastructure_result ([control = _control] {
+            return control->release.task ();
+        }).value ();
+        return _inner.settle_source_relocation (value, participants, preserve);
+    }
+    std::optional<bool> owner_lease_live (const fw::location_owner_token_t &owner) override
+    {
+        return _inner.owner_lease_live (owner);
+    }
+    std::optional<std::vector<fw::runtime::stateful::relocation_participant_identity_t>>
+    list_participant_identities () override
+    {
+        return _inner.list_participant_identities ();
+    }
+    published publish (const object &source,
+                       const object &target,
+                       fw::location_owner_token_t owner,
+                       fw::object_creation_target_t placement,
+                       std::string relocation_reference,
+                       std::uint32_t checksum,
+                       digest inventory,
+                       std::vector<std::byte> payload,
+                       std::string version,
+                       fw::runtime::protocol::relocation_id_t relocation,
+                       fw::location_owner_token_t source_owner) override
+    {
+        return _inner.publish (source, target, std::move (owner), std::move (placement),
+                               std::move (relocation_reference), checksum, inventory,
+                               std::move (payload), std::move (version), relocation,
+                               std::move (source_owner));
+    }
+    std::optional<reference> read (kind type, const std::string &key) override
+    {
+        return _inner.read (type, key);
+    }
+    published publish_completion (kind type,
+                                  const std::string &key,
+                                  const std::string &version,
+                                  std::uint64_t generation,
+                                  std::string relocation_reference,
+                                  std::uint32_t checksum) override
+    {
+        return _inner.publish_completion (type, key, version, generation,
+                                          std::move (relocation_reference), checksum);
+    }
+    published replace_completion (kind type,
+                                  const std::string &key,
+                                  std::uint64_t generation,
+                                  const std::string &previous,
+                                  std::uint32_t previous_checksum,
+                                  std::string relocation_reference,
+                                  std::uint32_t checksum) override
+    {
+        return _inner.replace_completion (type, key, generation, previous, previous_checksum,
+                                          std::move (relocation_reference), checksum);
+    }
+    bool release_completion (kind type,
+                             const std::string &key,
+                             std::uint64_t generation,
+                             const std::string &relocation_reference,
+                             std::uint32_t checksum) override
+    {
+        return _inner.release_completion (type, key, generation, relocation_reference, checksum);
+    }
+
+  private:
+    fw::runtime::stateful::public_authority_store_adapter_t _inner;
+    std::shared_ptr<join_settlement_store_t> _control;
 };
 
 // Observe the real deferred Join terminal without replacing its execution gate.
@@ -6026,8 +6258,9 @@ TEST (ActorMaintenanceJoin, RelayedSourceCleanupFailureDoesNotFailDeferredJoin)
 
 TEST (ActorMaintenanceJoin, MissingAfterTargetCommitAndDestroyDoesNotCompleteOnSource)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     auto store = std::make_shared<observed_location_store_t> ();
     auto source_store = std::make_shared<join_settlement_store_t> (store);
     auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
@@ -6039,6 +6272,15 @@ TEST (ActorMaintenanceJoin, MissingAfterTargetCommitAndDestroyDoesNotCompleteOnS
     } release_store{source_store};
     release_callbacks_t release{evidence};
     configure (source, first_rid, source_store, relocations, default_follow_duration, 0, true);
+    source.app.advanced ()
+      .services ()
+      .add_factory<fw::runtime::stateful::authority_relocation_port_t> (
+        [source_store] (fw::service_provider_t &provider) {
+            return std::unique_ptr<fw::runtime::stateful::authority_relocation_port_t> (
+              std::make_unique<join_settlement_authority_t> (
+                provider.get_required<fw::location_repository_t> (), source_store));
+        },
+        fw::service_lifetime_t::singleton);
     source.start ();
     ASSERT_TRUE (ready (source));
     auto services = source.app.advanced ().services ().build_provider ();
@@ -6084,36 +6326,8 @@ TEST (ActorMaintenanceJoin, MissingAfterTargetCommitAndDestroyDoesNotCompleteOnS
                    .async ()
                    .result ());
     ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> (), second_rid));
-    const auto native =
-      fw::detail::spot_node_runtime_t (
-        fw::detail::mesh_node_runtime_t::registrations (target.app.advanced ().zlink ())
-          .front ()
-          ->spot_state)
-        .native_node ();
-    const auto candidate = fw::runtime::host::public_host_runtime_t::remote_actor_ref (
-      zlink::routing_id_t::from (second_rid), actor_id, authority.object_generation);
-    store->before_next_write_when (
-      [native, candidate, target_services,
-       source_store] (const fw::store_write_request_t &request) mutable -> fw::task_t<bool> {
-          if (!native->resolve_actor (candidate))
-              co_return false;
-          const auto location =
-            co_await target_services.get_required<fw::location_runtime_query_t> ()
-              .find_actor_location (fw::actor_id_t (actor_id));
-          if (!location || location->node_rid.to_string () != first_rid)
-              co_return false;
-          co_return std::ranges::any_of (request.conditions, [&] (const auto &condition) {
-              const auto *version = std::get_if<fw::store_version_condition_t> (&condition);
-              return version && version->key.value == source_store->authority_key.value;
-          });
-      },
-      [source_store] () -> fw::task_t<void> {
-          source_store->armed.store (true);
-          co_return;
-      });
     ASSERT_TRUE (move_to (services.get_required<fw::actor_client_t> (), evidence, local_spot, 1));
-    ASSERT_TRUE (source_store->armed.load ());
-    store->before_next_write_when ({}, {});
+    ASSERT_TRUE (source_store->cleanup_started.task ().result_for (wait_budget));
     ASSERT_TRUE (
       move_to (target_services.get_required<fw::actor_client_t> (), evidence, entry_target, 2));
     const auto entry_ready = target_services.get_required<fw::actor_client_t> ()
@@ -6813,8 +7027,9 @@ TEST (DeferredJoinReservation, DurablePrefixRejectsExtraSupplyAcquisition)
 
 TEST (ActorMaintenanceJoin, CanonicalReplayMaterializesBodyWithoutInvocationCache)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     host_t host;
     release_callbacks_t release{evidence};
     configure (host, first_rid, std::make_shared<fw::runtime::in_memory_location_store_t> (),
@@ -6879,8 +7094,9 @@ TEST (ActorMaintenanceJoin, CanonicalReplayMaterializesBodyWithoutInvocationCach
 
 TEST (ActorMaintenanceJoin, MalformedCanonicalReplaySettlesNativeTerminal)
 {
-    observations_t evidence;
-    observations = &evidence;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
     host_t host;
     release_callbacks_t release{evidence};
     configure (host, first_rid, std::make_shared<fw::runtime::in_memory_location_store_t> (),
