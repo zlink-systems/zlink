@@ -458,16 +458,16 @@ internal sealed class ZLinkCurrentSpotSendCall<TMessage>(
         var cancellationToken = CancellationToken.None;
         _submission.Claim();
         cancellationToken.ThrowIfCancellationRequested();
-        var header = ZLinkClientCallCodec.CreateEnvelope(
-            ZLinkMessageKind.Command,
-            channelName,
-            ZLinkMessageNameResolver.ResolveFromMessage(message)
-        );
         var metadata = ZLinkCallMetadata.EncodeChannel(
             _metadata,
             activation.OutboundEndpoint.IsClientServerClientChannel(channelName)
         );
-        header = header with { Metadata = metadata.Header };
+        var header = ZLinkClientCallCodec.CreateEnvelope(
+            ZLinkMessageKind.Command,
+            channelName,
+            ZLinkMessageNameResolver.ResolveFromMessage(message),
+            metadata: metadata.Header
+        );
         var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(header, message, activation.Codecs);
         var result = await activation
             .OutboundEndpoint.SendToChannelAsync(
@@ -546,17 +546,17 @@ internal sealed class ZLinkCurrentSpotRequestCall<TMessage>(
             : null;
         try
         {
-            var header = ZLinkClientCallCodec.CreateEnvelope(
-                ZLinkMessageKind.Request,
-                channelName,
-                packetName,
-                timeout
-            );
             var metadata = ZLinkCallMetadata.EncodeChannel(
                 _metadata,
                 activation.OutboundEndpoint.IsClientServerClientChannel(channelName)
             );
-            header = header with { Metadata = metadata.Header };
+            var header = ZLinkClientCallCodec.CreateEnvelope(
+                ZLinkMessageKind.Request,
+                channelName,
+                packetName,
+                timeout,
+                metadata: metadata.Header
+            );
             terminal?.SetCorrelation(header.CorrelationId);
             var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
                 header,
