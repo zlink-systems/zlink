@@ -7082,7 +7082,7 @@ int parked_request_reply_case (const std::string &requester_rid,
                      : node->pending_handoff_requests.size () == pending_handoff_capacity;
         })
         .get ();
-    if (!pending_settled || reply_calls.load (std::memory_order_acquire) != 1)
+    if (!pending_settled || reply_state->calls.load (std::memory_order_acquire) != 1)
         return 8;
     return 0;
 }
