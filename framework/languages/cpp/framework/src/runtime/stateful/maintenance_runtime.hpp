@@ -662,8 +662,8 @@ class maintenance_runtime_t
                               const object_ref_t &owner,
                               std::uint64_t participant_id,
                               const turn_record_t &turn) const;
-    task_t<stateful_error_t> abort_relocation_before_cutover (
-      std::uint64_t token, const eligible_relocation_unit_t::canonical_wire_context_t &context);
+    task_t<stateful_error_t>
+    abort_relocation_before_cutover (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<relocation_reason_t>
     prepare_target (const eligible_relocation_unit_t::canonical_wire_context_t &context,
                     const std::vector<frozen_object_state_t> &participants,

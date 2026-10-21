@@ -520,11 +520,15 @@ bool maintenance_runtime_t::register_terminal_source (
 }
 
 task_t<stateful_error_t> maintenance_runtime_t::abort_relocation_before_cutover (
-  std::uint64_t token, const eligible_relocation_unit_t::canonical_wire_context_t &context)
+  std::shared_ptr<relocation_terminal_state_t> state)
 {
-    const auto aborted = co_await _objects.abort_relocation_before_cutover (token);
-    if (aborted == stateful_error_t::none && _relocation_wire)
-        co_await _relocation_wire->unregister_terminal_sources (context.relocation);
+    const auto aborted =
+      co_await _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
+    if (aborted == stateful_error_t::none) {
+        state->metric->complete (relocation_authority_t::source_preserved);
+        if (_relocation_wire)
+            co_await _relocation_wire->unregister_terminal_sources (state->context.relocation);
+    }
     co_return aborted;
 }
 
@@ -824,9 +828,7 @@ maintenance_runtime_t::apply_relocation_settlement (
             /* The captured queue and timers, then the retained boundary and
              * post-boundary records, return to the source queue in original
              * acceptance order and dispatch reopens. */
-            if (co_await abort_relocation_before_cutover (token, state->context)
-                == stateful_error_t::none)
-                state->metric->complete (settled.outcome);
+            (void) co_await abort_relocation_before_cutover (state);
             co_return std::pair{relocation_terminal_t::blocked,
                                 relocation_reason_t::restore_failed};
         default:
@@ -949,8 +951,7 @@ maintenance_runtime_t::relocate_prepare_ready (std::shared_ptr<relocation_termin
         /* The target replied ready without every chunk — treat it as an
          * exact target failure before cutover. */
         if (abort_target_before_cutover (state->context))
-            (void) co_await abort_relocation_before_cutover (state->seal_attempt.seal.token,
-                                                             state->context);
+            (void) co_await abort_relocation_before_cutover (state);
         state->result.emplace (finish (
           {relocation_terminal_t::blocked, relocation_reason_t::restore_failed, std::nullopt}));
         co_return relocation_preparation_t{std::move (*state->result)};
@@ -1039,7 +1040,7 @@ maintenance_runtime_t::relocate_encode (std::shared_ptr<relocation_terminal_stat
         state->metric->record_bytes (state->payload.size ());
         co_return true;
     }
-    (void) co_await _objects.abort_relocation_before_cutover (state->seal_attempt.seal.token);
+    (void) co_await abort_relocation_before_cutover (state);
     state->result.emplace (finish ({failed->first, failed->second, std::nullopt}));
     co_return false;
 }
@@ -1060,8 +1061,7 @@ maintenance_runtime_t::relocate_prepare_target (std::shared_ptr<relocation_termi
         co_return detail::propagate_failure<bool> (prepared,
                                                    "relocation target preparation failed");
     if (prepared.value () != relocation_reason_t::none) {
-        (void) co_await abort_relocation_before_cutover (state->seal_attempt.seal.token,
-                                                         state->context);
+        (void) co_await abort_relocation_before_cutover (state);
         state->result.emplace (
           finish ({relocation_terminal_t::blocked, prepared.value (), std::nullopt}));
         co_return false;
@@ -1085,8 +1085,7 @@ task_t<bool> maintenance_runtime_t::relocate_boundary_and_send (
     state->batch = boundary.second;
     if (boundary_error != stateful_error_t::none) {
         (void) abort_target_before_cutover (state->context);
-        (void) co_await abort_relocation_before_cutover (state->seal_attempt.seal.token,
-                                                         state->context);
+        (void) co_await abort_relocation_before_cutover (state);
         state->result.emplace (finish (
           {relocation_terminal_t::blocked, relocation_reason_t::restore_failed, std::nullopt}));
         co_return false;
@@ -1103,8 +1102,7 @@ task_t<bool> maintenance_runtime_t::relocate_boundary_and_send (
           co_await send_boundary_records (state->context, *state->records, state->batch);
     if (!records_sent) {
         if (abort_target_before_cutover (state->context))
-            (void) co_await abort_relocation_before_cutover (state->seal_attempt.seal.token,
-                                                             state->context);
+            (void) co_await abort_relocation_before_cutover (state);
         state->result.emplace (finish (
           {relocation_terminal_t::recovery_required, state->failure, std::nullopt,
            state->records.value_or (std::vector<protocol::relocation_data_t>{}), state->handoff}));
@@ -1281,7 +1279,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     try {
         if (persisted_context.augment_frozen
             && !persisted_context.augment_frozen (state->seal_attempt.seal.participants)) {
-            (void) co_await abort_relocation_before_cutover (seal.token, persisted_context);
+            (void) co_await abort_relocation_before_cutover (state);
             co_return aggregate_relocation_result_t{
               relocation_terminal_t::blocked, relocation_reason_t::restore_failed, {}};
         }
@@ -1295,7 +1293,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
     }
     if (state->payload.empty () || state->payload.size () > encoded_upper_bound
         || state->manifest.chunk_count > protocol::relocationChunkCount) {
-        (void) co_await abort_relocation_before_cutover (seal.token, persisted_context);
+        (void) co_await abort_relocation_before_cutover (state);
         co_return aggregate_relocation_result_t{
           relocation_terminal_t::blocked, relocation_reason_t::payload_bound_exceeded, {}};
     }
@@ -1319,7 +1317,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
         target_prepare_reason = relocation_reason_t::restore_failed;
     }
     if (target_prepare_reason != relocation_reason_t::none || !chunks_sent) {
-        (void) co_await abort_relocation_before_cutover (seal.token, persisted_context);
+        (void) co_await abort_relocation_before_cutover (state);
         co_return aggregate_relocation_result_t{relocation_terminal_t::blocked,
                                                 target_prepare_reason != relocation_reason_t::none
                                                   ? target_prepare_reason
@@ -1351,7 +1349,7 @@ task_t<aggregate_relocation_result_t> maintenance_runtime_t::relocate_aggregate 
         records_sent = co_await send_boundary_records (*canonical_wire, *records, batch);
     if (!records_sent) {
         if (abort_target_before_cutover (*canonical_wire))
-            (void) co_await abort_relocation_before_cutover (seal.token, persisted_context);
+            (void) co_await abort_relocation_before_cutover (state);
         co_return aggregate_relocation_result_t{
           relocation_terminal_t::recovery_required,
           failure,

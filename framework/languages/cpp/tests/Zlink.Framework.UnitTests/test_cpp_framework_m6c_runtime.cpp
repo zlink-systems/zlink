@@ -4069,6 +4069,7 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
     namespace framework = zlink::framework;
     namespace protocol = zlink::framework::runtime::protocol;
 
+    metric_test::provider_t metric_provider;
     stateful_object_runtime_t objects;
     objects.configure_relocation_state (
       [] (const object_ref_t &, const std::string &, std::stop_token)
@@ -4090,6 +4091,7 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
       std::make_shared<framework::task_completion_source_t<relocation_reason_t>> ();
     std::uint32_t planned_chunks = 0;
     std::uint32_t sent_chunks = 0;
+    auto send_start = std::make_shared<framework::task_completion_source_t<void>> ();
     eligible_relocation_unit_t::canonical_wire_context_t wire{
       .relocation = {0x51, 0x52},
       .target_attempt_generation = 7,
@@ -4106,6 +4108,7 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
       .send_state_chunk = [&] (const protocol::relocation_state_t &) -> framework::task_t<bool> {
           ++sent_chunks;
           if (sent_chunks == 1) {
+              co_await send_start->task ();
               // A wire reply completes in the registry's existing completion turn.
               auto delivered = std::make_shared<framework::task_completion_source_t<void>> ();
               auto delivery = delivered->task ();
@@ -4127,8 +4130,20 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
       },
       .abort_target_before_cutover = [] { return true; }};
 
-    const auto result = await_task (relocation.relocate (
-      actor, "target-node", {"target-owner", 9}, 1024 * 1024, digest_with (0x31), wire, {}, 16));
+    wire.monitoring = std::make_shared<framework::detail::monitoring_runtime_state_t> ();
+    wire.mesh_name = "source-metric-mesh";
+    wire.policy = framework::detail::factory_relocation_kind_t::preserve_state;
+    auto operation = relocation.relocate (actor, "target-node", {"target-owner", 9}, 1024 * 1024,
+                                          digest_with (0x31), wire, {}, 16);
+    std::vector<metric_test::sdk::MetricData> terminal_metrics;
+    framework::task_completion_source_t<relocation_result_t> observed;
+    framework::detail::observe_task_terminal (
+      operation, [&] (const framework::result_t<relocation_result_t> &result) {
+          terminal_metrics = metric_provider.collect ();
+          observed.complete (result);
+      });
+    send_start->complete (framework::result_t<void>::success ());
+    const auto result = await_task (observed.task ());
     const auto source_resumed = objects.enqueue (actor, turn_domain_t::application, {1, {0x41}});
     test.require (planned_chunks > 1 && sent_chunks == 1
                     && result.terminal == relocation_terminal_t::blocked
@@ -4136,6 +4151,28 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
                     && source_resumed == stateful_error_t::none,
                   "an explicit target relocation failure must stop remaining state chunks, "
                   "preserve its reason, and unseal the source");
+    const auto &data = terminal_metrics;
+    const auto count = [&] (const std::string &name) {
+        double value = 0;
+        for (const auto &metric : data) {
+            if (metric.instrument_descriptor.name_ != name)
+                continue;
+            for (const auto &point : metric.point_data_attr_) {
+                if (const auto *sum = opentelemetry::nostd::get_if<metric_test::sdk::SumPointData> (
+                      &point.point_data))
+                    value += opentelemetry::nostd::get<double> (sum->value_);
+                if (const auto *histogram =
+                      opentelemetry::nostd::get_if<metric_test::sdk::HistogramPointData> (
+                        &point.point_data))
+                    value += histogram->count_;
+            }
+        }
+        return value;
+    };
+    test.require (
+      count ("zlink.relocation.started") == 1 && count ("zlink.relocation.completed") == 1
+        && count ("zlink.relocation.duration") == 1 && count ("zlink.relocation.bytes") == 1,
+      "one relocation terminal must record exactly one metric sample");
 }
 
 /* Scripted Location Store reading of one relocation unit (01 §6.1, §10). */
@@ -8547,6 +8584,10 @@ int main (int argc, char **argv)
         test_relocation_request_source_registration (test, true);
         test_relocation_request_source_registration (test, false, true);
         std::cerr << "request-registry cases=3 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--precutover-metric-terminal") {
+        test_source_relocation_failure_stops_state_chunks_and_unseals (test);
         return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--source-outcomes") {
