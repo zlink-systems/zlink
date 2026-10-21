@@ -24,12 +24,15 @@
 #include <string_view>
 #include <vector>
 
+namespace zlink::framework::runtime
+{
+struct serial_application_record_t;
+}
+
 namespace zlink::framework::detail
 {
 
 inline constexpr std::size_t max_pending_handoff_requests = 1024;
-
-class actor_join_lifecycle_reservation_t;
 
 enum class actor_move_phase_t
 {
@@ -62,7 +65,6 @@ struct pending_actor_admission_t
     std::uint64_t source_node_generation = 0;
     std::uint64_t source_owner_lease_generation = 0;
     std::optional<message_t> admission_reply;
-    std::shared_ptr<actor_join_lifecycle_reservation_t> lifecycle_reservation;
     std::vector<std::uint8_t> session_relocation_route;
     std::string session_relocation_actor_type;
     std::uint64_t session_relocation_target_owner_lease_generation = 0;
@@ -139,6 +141,7 @@ struct handoff_packet_t
     std::string content_type;
     std::map<std::string, std::string> metadata;
     bool is_request = false;
+    std::shared_ptr<runtime::serial_application_record_t> application_record;
 };
 
 /* These framework-owned metadata keys preserve the routing context needed by
@@ -216,7 +219,8 @@ class actor_transfer_coordinator_t
     bool try_reserve_source (const std::string &actor_key, std::string transfer_id = {});
     bool try_begin_local (const std::string &actor_key);
     bool try_begin_source_remote (const std::string &actor_key, std::string transfer_id = {});
-    std::vector<handoff_packet_t> cancel_move (const std::string &actor_key);
+    std::vector<handoff_packet_t> cancel_move (const std::string &actor_key,
+                                               std::string expected_source_transfer = {});
     void mark_reconcile (const std::string &actor_key,
                          std::chrono::steady_clock::duration bound,
                          std::optional<reconcile_target_context_t> context = std::nullopt);
@@ -232,16 +236,14 @@ class actor_transfer_coordinator_t
     // source-remote transfer (runtime-metrics §4.3 duration window); local
     // moves complete with nullopt.
     std::optional<std::chrono::steady_clock::duration> complete_move (const std::string &actor_key);
-    // Completes a source move while atomically taking packets that arrived
-    // after the first handoff snapshot. The caller relays the retained batch
-    // after the owner transition without leaving a race between queue drain
-    // and move completion.
-    actor_move_completion_t complete_move_and_take_backlog (const std::string &actor_key);
-    // Used by a local commit: take one replay batch while the move still
-    // blocks direct dispatch, then close the move only when no later batch is
-    // present. Messages submitted after closure enter the actor queue after
-    // the already-posted replay work.
-    actor_move_completion_t finish_move_replay (const std::string &actor_key);
+    // Queue restoration accepts the full prefix on this lane before ending
+    // the move. Without a prefix receiver, Message Follow takes one batch
+    // and ends the move at the next atomic empty-backlog observation.
+    // A deferred source completion may only finish its original reservation.
+    actor_move_completion_t
+    finish_move_replay (const std::string &actor_key,
+                        std::function<void (std::vector<handoff_packet_t>)> accept_prefix = {},
+                        std::string expected_source_transfer = {});
     bool blocks_dispatch (const std::string &actor_key) const;
     std::optional<actor_move_phase_t> phase (const std::string &actor_key) const;
     std::optional<std::string> transfer_id (const std::string &actor_key) const;
@@ -268,6 +270,7 @@ class actor_transfer_coordinator_t
     // append or the whole batch is rejected.
     bool stage_commit_backlog (const std::string &transfer_id,
                                std::vector<handoff_packet_t> backlog);
+    void prepend_source_suffix (const std::string &actor_key, std::vector<handoff_packet_t> suffix);
     std::vector<handoff_packet_t> take_backlog (const std::string &actor_key);
 
     // Message Follow route lifetime (§10.4): each committed source fence keeps
@@ -455,6 +458,10 @@ class actor_transfer_coordinator_t
                                                          handoff_packet_t &packet);
 
     void erase_move_on_lane (const std::string &actor_key);
+
+    bool blocks_dispatch_on_lane (const std::string &actor_key) const;
+    bool matches_source_reservation_on_lane (const std::string &actor_key,
+                                             const std::string &transfer_id) const;
 
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};

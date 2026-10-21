@@ -244,13 +244,23 @@ class test_serial_turn_t final : public zlink::framework::detail::serial_turn_t
     bool belongs_to (const void *owner) const noexcept override { return owner == this; }
     bool is_after_active_phase () const noexcept override { return false; }
     bool allows_yield () const noexcept override { return true; }
-    zlink::framework::result_t<void> defer (std::function<void ()> work,
-                                            std::function<void ()>) override
+    zlink::framework::result_t<void>
+    defer (std::function<zlink::framework::task_t<void> ()> work,
+           std::function<void ()>,
+           std::shared_ptr<zlink::framework::detail::deferred_barrier_t>) override
     {
-        work ();
+        auto pending = std::make_shared<zlink::framework::task_t<void>> (work ());
+        zlink::framework::detail::observe_task_terminal (
+          *pending,
+          [pending, work = std::move (work)] (const zlink::framework::result_t<void> &) {});
         return zlink::framework::result_t<void>::success ();
     }
     void cancel_deferred () noexcept override {}
+    bool finish_handler (std::function<void ()> completion, bool) override
+    {
+        completion ();
+        return release ();
+    }
 
   private:
     bool released_value = false;
@@ -1454,8 +1464,11 @@ yield_then_follow_up (zlink::framework::request_call_t<int> first,
         if (follow_up == yield_follow_up_t::second_yield) {
             (void) co_await second.yield ();
         } else {
-            const auto deferred =
-              detail::defer_current_serial_turn ([&deferred_ran] { deferred_ran.store (true); });
+            const auto deferred = detail::defer_current_serial_turn ([&deferred_ran] {
+                deferred_ran.store (true);
+                return ::zlink::framework::task_t<void> (
+                  ::zlink::framework::result_t<void>::success ());
+            });
             if (!deferred)
                 throw framework_exception_t (deferred.error_kind (), deferred.error ()
                                                                        ? deferred.error ()->what ()
@@ -1730,6 +1743,25 @@ int main (int argc, char **argv)
 
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
+    if (argc == 2 && std::string_view (argv[1]) == "--serial-terminal-adapters") {
+        bool passed = true;
+        const auto check = [&] (const char *name, bool result) {
+            std::cout << "serial-adapter case=" << name << " passed=" << result << '\n';
+            passed = result && passed;
+        };
+        check ("second-yield",
+               verify_yield_continuation_keeps_new_turn (yield_follow_up_t::second_yield));
+        check ("defer", verify_yield_continuation_keeps_new_turn (yield_follow_up_t::defer));
+        check ("facade", verify_call_facade_yield_releases_gate ());
+        check ("after-suspend",
+               verify_yield_continuation_owned_by_spot_queue (yield_reply_order_t::after_suspend));
+        check ("after-close",
+               verify_yield_continuation_owned_by_spot_queue (yield_reply_order_t::after_close));
+        check ("before-suspend",
+               verify_yield_continuation_owned_by_spot_queue (yield_reply_order_t::before_suspend));
+        return passed ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+
     if (argc == 3 && std::string (argv[1]) == "--delivery-defect") {
         run_delivery_defect (static_cast<delivery_defect_t> (std::atoi (argv[2])));
         return 1;

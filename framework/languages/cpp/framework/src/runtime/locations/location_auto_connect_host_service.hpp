@@ -189,11 +189,13 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                            * remains owned by the route registration. */
                           mesh_node->expect_peer (target.node_rid, target.endpoint,
                                                   target.lifecycle_generation,
-                                                  target.security_identity);
+                                                  target.security_identity,
+                                                  {target.owner_id, target.owner_lease_generation});
                           if (target.initiates_connection)
-                              mesh_node->connect_peer (target.node_rid, target.endpoint,
-                                                       target.lifecycle_generation,
-                                                       target.security_identity, true);
+                              mesh_node->connect_peer (
+                                target.node_rid, target.endpoint, target.lifecycle_generation,
+                                target.security_identity, true,
+                                {target.owner_id, target.owner_lease_generation});
                       }
                   }
                   if (target.initiates_connection && !manual_endpoint)
@@ -224,11 +226,13 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
               mesh_node->object_role (), !mesh_node->channel_weights ().empty (),
               [mesh_node] (const target_t &target) {
                   mesh_node->expect_peer (target.node_rid, target.endpoint,
-                                          target.lifecycle_generation, target.security_identity);
+                                          target.lifecycle_generation, target.security_identity,
+                                          {target.owner_id, target.owner_lease_generation});
                   if (target.initiates_connection)
                       mesh_node->connect_peer (target.node_rid, target.endpoint,
                                                target.lifecycle_generation,
-                                               target.security_identity, true);
+                                               target.security_identity, true,
+                                               {target.owner_id, target.owner_lease_generation});
               },
               [mesh_node] (const target_t &target) {
                   mesh_node->forget_peer (target.node_rid, target.endpoint);
