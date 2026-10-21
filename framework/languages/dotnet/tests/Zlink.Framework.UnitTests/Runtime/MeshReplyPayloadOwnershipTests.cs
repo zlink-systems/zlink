@@ -160,14 +160,13 @@ public sealed class MeshReplyPayloadOwnershipTests
         ZLinkCodecRegistryBuilder? codecs = null
     )
     {
-        var method = typeof(ZLinkClientCallCodec)
-            .GetMethods(BindingFlags.Public | BindingFlags.Static)
-            .Single(method =>
-                method.Name == "DecodeEnvelopeReplyAndDispose"
-                && method.GetParameters()[0].ParameterType == typeof(ZLinkBackendRouteReceived)
-            );
-        return (T)
-            Invoke(method.MakeGenericMethod(typeof(T)), reply, "empty", "failed", codecs, true)!;
+        return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<T>(
+            reply,
+            "empty",
+            "failed",
+            codecs,
+            true
+        );
     }
 
     private static object? Invoke(MethodInfo method, params object?[] arguments)

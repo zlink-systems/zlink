@@ -14,7 +14,10 @@ function deferred() {
 
 function fixture() {
   const source = deferred();
-  const node = { requestToNode: () => ({ high: 1n, low: 1n }) };
+  const node = {
+    requestToNode: () => ({ high: 1n, low: 1n }),
+    requestToChannel: () => ({ high: 1n, low: 1n })
+  };
   const table = { submit(operation) { operation(); return source.promise; } };
   const transport = new framework.ZLinkRuntimeRouteTransport(
     () => undefined, undefined,
@@ -56,7 +59,10 @@ test('typed completion and public admission execute one result reaction', async 
 for (const cause of ['decode', 'submission', 'encode']) {
   test(`${cause} failure reaches both public stages with the same cause`, async () => {
     const f = fixture();
-    const error = new Error(cause);
+    const error = cause === 'submission'
+      ? new framework.ZLinkBackendResultError(
+        'submit', framework.SubmitResult.Terminated, 0, { phase: 'submit' })
+      : new Error(cause);
     if (cause === 'decode') f.transport.decodeMeshReply = () => { throw error; };
     if (cause === 'encode') f.transport.encodeMessage = () => { throw error; };
     const request = f.client.requestToNode('mesh', 'peer', {}).submit();
@@ -67,8 +73,53 @@ for (const cause of ['decode', 'submission', 'encode']) {
     assert.equal(outcomes[0].status, 'rejected');
     assert.equal(outcomes[1].status, 'rejected');
     assert.equal(outcomes[0].reason, outcomes[1].reason);
-    if (cause === 'submission') assert.equal(outcomes[0].reason.cause, error);
+    if (cause === 'submission') {
+      assert.equal(outcomes[0].reason.cause, error);
+      assert.equal(outcomes[0].reason.kind, framework.ZLinkFrameworkErrorKind.ShuttingDown);
+    }
     else assert.equal(outcomes[0].reason, error);
+  });
+}
+
+for (const target of ['node', 'channel']) {
+  test(`${target} request preserves caller failure identity at both public stages`, async () => {
+    const { createAbortError } = require('../../packages/framework/dist/runtime/abort');
+    for (const failure of [
+      new TypeError('invalid argument'),
+      new RangeError('invalid range'),
+      new framework.ZLinkConfigurationException('invalid configuration'),
+      createAbortError(),
+      new DOMException('cancelled', 'AbortError'),
+      new framework.ZLinkFrameworkException(framework.ZLinkFrameworkErrorKind.Rejected, 'classified')
+    ]) {
+      const f = fixture();
+      const request = target === 'node'
+        ? f.client.requestToNode('mesh', 'peer', {}).submit()
+        : createZLinkRequest((admitted) => f.transport.requestToChannel('mesh', 'channel', undefined, {}, 1000, undefined, undefined, admitted));
+      const observed = Promise.allSettled([request, request.admitted]);
+      f.source.reject(failure);
+      const outcomes = await observed;
+      for (const outcome of outcomes) {
+        assert.equal(outcome.status, 'rejected');
+        assert.equal(outcome.reason, failure);
+      }
+    }
+  });
+  test(`unclassified ${target} submission failure rejects both public stages with InternalFailure and its original cause`, async () => {
+    const f = fixture();
+    const error = new Error('unclassified submission');
+    const request = target === 'node'
+      ? f.client.requestToNode('mesh', 'peer', {}).submit()
+      : createZLinkRequest((admitted) => f.transport.requestToChannel('mesh', 'channel', undefined, {}, 1000, undefined, undefined, admitted));
+    const observed = Promise.allSettled([request, request.admitted]);
+    f.source.reject(error);
+    const outcomes = await observed;
+    assert.equal(outcomes[0].status, 'rejected');
+    assert.equal(outcomes[1].status, 'rejected');
+    assert.equal(outcomes[0].reason, outcomes[1].reason);
+    assert.ok(outcomes[0].reason instanceof framework.ZLinkFrameworkException);
+    assert.equal(outcomes[0].reason.kind, framework.ZLinkFrameworkErrorKind.InternalFailure);
+    assert.equal(outcomes[0].reason.cause, error);
   });
 }
 

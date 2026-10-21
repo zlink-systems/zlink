@@ -70,14 +70,22 @@ internal sealed class ZLinkChannelRuntimeManager(
     )
     {
         return state
-            .RunStateAsync(() =>
-            {
-                if (state.ClientServerClientRuntimes.TryGetValue(channelName, out var runtime))
-                    return runtime;
-                throw new ZLinkConfigurationException(
-                    $"ClientServer client channel '{channelName}' is not initialized."
-                );
-            })
+            .RunStateAsync(
+                static lookup =>
+                {
+                    if (
+                        lookup.State.ClientServerClientRuntimes.TryGetValue(
+                            lookup.ChannelName,
+                            out var runtime
+                        )
+                    )
+                        return runtime;
+                    throw new ZLinkConfigurationException(
+                        $"ClientServer client channel '{lookup.ChannelName}' is not initialized."
+                    );
+                },
+                (State: state, ChannelName: channelName)
+            )
             .GetAwaiter()
             .GetResult();
     }
