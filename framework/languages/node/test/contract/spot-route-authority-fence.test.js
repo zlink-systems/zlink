@@ -42,14 +42,21 @@ function capturingTransport(capture, submissionError = new Error('captured')) {
 
 async function captureRawRequestOptions(target) {
   let captured;
+  const submissionError = new Error('captured');
   const transport = capturingTransport((options) => {
     captured = options;
-  });
+  }, submissionError);
   const request = zlink.Message.from(Buffer.from(JSON.stringify({ packetName: 'Packet' })));
   try {
     await assert.rejects(
       transport.requestRawToSpot(target, request, {}),
-      /captured/
+      (error) => {
+        assert.ok(error instanceof framework.ZLinkFrameworkException);
+        assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.InternalFailure);
+        assert.equal(error.cause, submissionError);
+        assert.match(error.cause.message, /captured/);
+        return true;
+      }
     );
   } finally {
     request.close();
