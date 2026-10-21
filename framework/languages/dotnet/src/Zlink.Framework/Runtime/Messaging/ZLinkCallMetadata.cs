@@ -12,8 +12,12 @@ internal sealed class ZLinkCallMetadata
     internal static void Set(ref ZLinkCallMetadata? metadata, string key, string value) =>
         GetOrCreate(ref metadata).Set(key, value);
 
-    internal static void Merge(ref ZLinkCallMetadata? metadata, ZLinkMessageMetadata values) =>
-        GetOrCreate(ref metadata).Merge(values);
+    internal static void Merge(ref ZLinkCallMetadata? metadata, ZLinkMessageMetadata values)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+        foreach (var pair in values.Values)
+            Set(ref metadata, pair.Key, pair.Value);
+    }
 
     private static ZLinkCallMetadata GetOrCreate(ref ZLinkCallMetadata? metadata) =>
         metadata ??= new ZLinkCallMetadata();
@@ -38,13 +42,6 @@ internal sealed class ZLinkCallMetadata
         ArgumentException.ThrowIfNullOrEmpty(key);
         ArgumentNullException.ThrowIfNull(value);
         (_values ??= new Dictionary<string, string>(StringComparer.Ordinal))[key] = value;
-    }
-
-    public void Merge(ZLinkMessageMetadata metadata)
-    {
-        ArgumentNullException.ThrowIfNull(metadata);
-        foreach (var pair in metadata.Values)
-            Set(pair.Key, pair.Value);
     }
 
     /// <summary>
