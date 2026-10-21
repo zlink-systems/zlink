@@ -8400,6 +8400,7 @@ void test_actor_join_wire_gate_records_target_authority (test_context_t &test)
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     zlink::framework::runtime::configure_handler_coroutine_executor (4);
     struct executor_shutdown_t
     {

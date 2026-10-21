@@ -10810,6 +10810,7 @@ bool verify_nested_barrier_phases (bool shared, bool cancel)
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     bool phases_passed = true;
     for (const bool shared : {false, true}) {
         for (const bool cancel_queue : {false, true})

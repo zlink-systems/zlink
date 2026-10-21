@@ -1331,6 +1331,16 @@ void verify_envelope_body_retains_native_storage ()
 
 void verify_application_owner_drain_transitions ()
 {
+    mesh::service_mailbox_t manual;
+    manual.begin_application_receive_turn ();
+    assert (manual.try_enqueue (mesh::service_mailbox_record_t{
+      "manual", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts ({{1}})}));
+    manual.end_application_receive_turn ();
+    auto manual_claim = manual.try_claim (mesh::service_mailbox_domain_t::application, 1, 4096);
+    assert (manual_claim && manual_claim->records.size () == 1);
+    assert (manual.release (*manual_claim));
+
     mesh::service_mailbox_t mailbox;
     std::vector<std::string> ready;
     int prepared = 0;
@@ -4213,6 +4223,7 @@ void verify_unadmitted_route (bool repeat_hello)
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     if (argc == 4 && std::string_view (argv[1]) == "--only") {
         const std::string_view name (argv[2]);
         const int repetitions = std::stoi (argv[3]);
