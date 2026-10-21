@@ -58,6 +58,7 @@
 #include <memory>
 #include <sstream>
 #include <thread>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -9452,15 +9453,18 @@ spot_node_runtime_t::open_local_actor_handoff (actor_ref_t actor_ref,
     const auto state = _state;
     const auto key = actor_key (actor_ref);
     // Retain lane inputs across cancellation and settle before releasing the Join turn.
-    auto [context, services] = co_await state->lane.run_task ([state, key] {
+    auto [context, executor, services] = co_await state->lane.run_task ([state, key] {
         std::shared_ptr<spot_context_state_t> context;
+        spot_serial_executor_t::actor_executor_ptr_t executor;
         const auto location = state->actor_spot_ids.find (key);
         if (location != state->actor_spot_ids.end ()) {
             const auto target = spot_node_runtime_t (state).find_context_core (location->second);
-            if (target)
+            if (target && target->_state) {
                 context = target->_state;
+                executor = context->ensure_spot_serial_executor ()->actor_executor (key);
+            }
         }
-        return std::make_pair (std::move (context), state->root_services);
+        return std::tuple{std::move (context), std::move (executor), state->root_services};
     });
     if (!state->actor_transfer_coordinator->phase (key))
         co_return result_t<void>::success ();
@@ -9472,7 +9476,6 @@ spot_node_runtime_t::open_local_actor_handoff (actor_ref_t actor_ref,
     if (!context)
         co_return fail_before_prefix (framework_error_kind_t::unavailable,
                                       "local Actor handoff target is unavailable");
-    const auto executor = context->ensure_spot_serial_executor ()->actor_executor (key);
     if (!executor)
         co_return fail_before_prefix (framework_error_kind_t::shutting_down,
                                       "local Actor handoff target queue is unavailable");

@@ -27,6 +27,8 @@ internal static class ZLinkMeshMetadataCodec
     // ZLINK_MESH_APPLICATION_METADATA_MAX (core/include/zlink/service/mesh_node.h).
     internal const int MaxEncodedSize = 1024;
 
+    internal static readonly UTF8Encoding StrictUtf8 = new(false, true);
+
     private const byte Version = 1;
     private const int MaxEntries = 255;
     private const int MaxKeyLength = 255;
@@ -40,29 +42,10 @@ internal static class ZLinkMeshMetadataCodec
     // NUL) so an invalid outbound snapshot fails fast at send time.
     public static ReadOnlyMemory<byte> Encode(ZLinkMessageMetadata? metadata)
     {
-        var values = metadata?.Values;
-        if (values is null || values.Count == 0)
+        var totalSize = MeasureEncodedLength(metadata);
+        if (totalSize == 0)
             return ReadOnlyMemory<byte>.Empty;
-
-        if (values.Count > MaxEntries)
-            throw new ArgumentException(
-                $"Application metadata may carry at most {MaxEntries} entries, but {values.Count} were provided.",
-                nameof(metadata)
-            );
-
-        var totalSize = 2;
-        foreach (var (key, value) in values)
-        {
-            ValidateKey(key);
-            ValidateValue(key, value);
-            totalSize +=
-                1 + Encoding.UTF8.GetByteCount(key) + 2 + Encoding.UTF8.GetByteCount(value);
-            if (totalSize > MaxEncodedSize)
-                throw new ArgumentException(
-                    $"Encoded application metadata exceeds the {MaxEncodedSize}-byte limit.",
-                    nameof(metadata)
-                );
-        }
+        var values = metadata!.Values;
 
         var buffer = new byte[totalSize];
         buffer[0] = Version;
@@ -97,15 +80,9 @@ internal static class ZLinkMeshMetadataCodec
         var totalSize = 2;
         foreach (var (key, value) in values)
         {
-            ValidateKey(key);
-            ValidateValue(key, value);
-            totalSize = checked(
-                totalSize
-                + 1
-                + Encoding.UTF8.GetByteCount(key)
-                + 2
-                + Encoding.UTF8.GetByteCount(value)
-            );
+            var keyLength = ValidateKey(key);
+            var valueLength = ValidateValue(key, value);
+            totalSize = checked(totalSize + 1 + keyLength + 2 + valueLength);
             if (totalSize > MaxEncodedSize)
                 throw new ArgumentException(
                     $"Encoded application metadata exceeds the {MaxEncodedSize}-byte limit.",
@@ -170,7 +147,7 @@ internal static class ZLinkMeshMetadataCodec
         return true;
     }
 
-    private static void ValidateKey(string key)
+    private static int ValidateKey(string key)
     {
         if (string.IsNullOrEmpty(key))
             throw new ArgumentException("Application metadata keys must not be empty.");
@@ -183,12 +160,14 @@ internal static class ZLinkMeshMetadataCodec
             throw new ArgumentException(
                 $"Application metadata key '{key}' must not contain a NUL character."
             );
+        return length;
     }
 
-    private static void ValidateValue(string key, string value)
+    private static int ValidateValue(string key, string value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        if (Encoding.UTF8.GetByteCount(value) > MaxValueLength)
+        var length = Encoding.UTF8.GetByteCount(value);
+        if (length > MaxValueLength)
             throw new ArgumentException(
                 $"Application metadata value for key '{key}' exceeds {MaxValueLength} UTF-8 bytes."
             );
@@ -196,6 +175,7 @@ internal static class ZLinkMeshMetadataCodec
             throw new ArgumentException(
                 $"Application metadata value for key '{key}' must not contain a NUL character."
             );
+        return length;
     }
 
     private static bool TryDecodeUtf8(ReadOnlySpan<byte> bytes, out string text)
@@ -208,7 +188,7 @@ internal static class ZLinkMeshMetadataCodec
 
         try
         {
-            text = new UTF8Encoding(false, true).GetString(bytes);
+            text = StrictUtf8.GetString(bytes);
             return true;
         }
         catch (DecoderFallbackException)

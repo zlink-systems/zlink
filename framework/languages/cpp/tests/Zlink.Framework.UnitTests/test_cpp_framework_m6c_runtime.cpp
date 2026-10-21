@@ -4422,6 +4422,8 @@ void test_relocation_request_source_registration (test_context_t &test,
     namespace framework = zlink::framework;
     namespace protocol = framework::runtime::protocol;
     namespace mesh = framework::runtime::mesh;
+    metric_test::provider_t provider;
+    auto monitoring = std::make_shared<framework::detail::monitoring_runtime_state_t> ();
     stateful_object_runtime_t objects;
     objects.configure_relocation_state (
       [] (const auto &, const auto &, std::stop_token)
@@ -4537,7 +4539,10 @@ void test_relocation_request_source_registration (test_context_t &test,
                         "matching identity must reach the original pending request owner");
           co_return true;
       },
-      .abort_target_before_cutover = [] { return true; }};
+      .abort_target_before_cutover = [] { return true; },
+      .monitoring = monitoring,
+      .mesh_name = "request-registry",
+      .policy = framework::detail::factory_relocation_kind_t::recreate};
     const auto terminal =
       aggregate
         ? await_task (relocation.relocate_aggregate (participants, "target", {"target-owner", 2},
@@ -4548,10 +4553,31 @@ void test_relocation_request_source_registration (test_context_t &test,
             .terminal;
     test.require (terminal == relocation_terminal_t::blocked,
                   "source authority must restore after Ready");
+    test.require (objects.enqueue (actor, turn_domain_t::application, {2, {0x42}})
+                    == stateful_error_t::none,
+                  "source Preserve must resume the original application queue");
     const auto retained = replies.unregister_terminal_source (wire.relocation, request.operation);
     std::cerr << "request-registry boundary=" << boundary << " aggregate=" << aggregate
               << " after-preserve=" << retained << '\n';
     test.require (!retained, "source Preserve must return the request registration lifetime");
+    int terminals = 0;
+    for (const auto &metric : provider.collect ()) {
+        if (metric.instrument_descriptor.name_ != "zlink.relocation.completed")
+            continue;
+        for (const auto &point : metric.point_data_attr_) {
+            ++terminals;
+            const auto *sum =
+              opentelemetry::nostd::get_if<metric_test::sdk::SumPointData> (&point.point_data);
+            test.require (sum && opentelemetry::nostd::get<double> (sum->value_) == 1,
+                          "source Preserve must record its terminal exactly once");
+            const auto outcome = point.attributes.find ("outcome");
+            test.require (outcome != point.attributes.end ()
+                            && opentelemetry::nostd::get<std::string> (outcome->second)
+                                 == "aborted",
+                          "resumed source authority must retain the aborted metric outcome");
+        }
+    }
+    test.require (terminals == 1, "source Preserve must emit one completed metric");
 }
 
 // Relocation §4.3: one source deadline covers Restore and remote Session readiness.

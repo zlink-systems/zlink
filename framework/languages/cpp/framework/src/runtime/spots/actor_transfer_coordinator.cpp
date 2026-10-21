@@ -321,31 +321,6 @@ actor_transfer_coordinator_t::complete_move (const std::string &actor_key)
       .get ();
 }
 
-actor_move_completion_t
-actor_transfer_coordinator_t::complete_move_and_take_backlog (const std::string &actor_key)
-{
-    return _lane
-      .run ([&, this] {
-          if (_activity_handler)
-              _activity_handler ();
-          const auto found = _moves.find (actor_key);
-          if (found == _moves.end ())
-              return actor_move_completion_t{std::nullopt, {}, true};
-          std::optional<std::chrono::steady_clock::duration> elapsed;
-          if (found->second.transfer_started_at) {
-              elapsed = std::chrono::steady_clock::now () - *found->second.transfer_started_at;
-          }
-          std::vector<handoff_packet_t> backlog;
-          if (const auto queued = _backlogs.find (actor_key); queued != _backlogs.end ()) {
-              backlog = std::move (queued->second);
-              _backlogs.erase (queued);
-          }
-          erase_move_on_lane (found->first);
-          return actor_move_completion_t{std::move (elapsed), std::move (backlog), true};
-      })
-      .get ();
-}
-
 actor_move_completion_t actor_transfer_coordinator_t::finish_move_replay (
   const std::string &actor_key,
   std::function<void (std::vector<handoff_packet_t>)> accept_prefix,

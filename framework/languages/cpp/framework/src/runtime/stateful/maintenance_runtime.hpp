@@ -595,6 +595,7 @@ class maintenance_runtime_t
 
   private:
     struct relocation_terminal_state_t;
+    class relocation_metric_operation_t;
 
     class permit_t
     {

@@ -11,6 +11,7 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/actors/actor_gateway_runtime.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/dispatch/coroutine_executor.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/execution/serial_execution_queue.hpp"
@@ -177,55 +178,38 @@ struct public_host_runtime_test_access_t
               attempt.terminal = std::make_shared<task_completion_source_t<void>> ();
           })
           .get ();
-        std::promise<void> release_index;
-        auto index_release = release_index.get_future ();
-        std::promise<void> index_entered;
-        auto index = std::async (std::launch::async, [&] {
-            host._spot_actor_index_lane
-              .run ([&] {
-                  index_entered.set_value ();
-                  // This is test-controlled lane occupancy, not a Framework wait.
-                  index_release.wait ();
-              })
-              .get ();
-        });
-        struct release_and_join_t
-        {
-            std::promise<void> &release;
-            std::future<void> &worker;
-            ~release_and_join_t ()
-            {
-                if (worker.valid ()) {
-                    release.set_value ();
-                    worker.wait ();
-                }
-            }
-        } release_and_join{release_index, index};
-        index_entered.get_future ().get ();
         std::optional<task_t<bool>> activated;
-        if (activation_started)
-            activated.emplace (host.activate_relocation_assembly (key, pending, staging));
-        auto discarded =
-          host._relocation_session_terminal_lane
-            .run ([&] {
-                auto &attempt = host._relocation_target_attempts.at (key);
-                auto cleanup = host.take_relocation_target_discard (attempt);
-                if (!cleanup)
-                    attempt.terminal->complete (result_t<void>::success ());
-                if (replaced) {
-                    attempt = public_host_runtime_t::relocation_target_attempt_t{};
-                    attempt.pending =
-                      std::make_shared<public_host_runtime_t::pending_relocation_assembly_t> (
-                        *pending);
-                } else
-                    host._relocation_target_attempts.erase (key);
-                return cleanup;
-            })
-            .get ();
-        if (!activation_started)
-            activated.emplace (host.activate_relocation_assembly (key, pending, staging));
-        release_index.set_value ();
-        index.get ();
+        std::optional<public_host_runtime_t::relocation_target_attempt_t> discarded;
+        // Keep registration pending behind this index turn. Attempt removal or
+        // replacement happens before the index FIFO advances, without waiting
+        // for an external completion from inside a state lane.
+        host._spot_actor_index_lane
+          .run ([&] {
+              if (activation_started) {
+                  activated.emplace (host.activate_relocation_assembly (key, pending, staging));
+                  EXPECT_FALSE (activated->await_ready ());
+              }
+              discarded =
+                host._relocation_session_terminal_lane
+                  .run ([&] {
+                      auto &attempt = host._relocation_target_attempts.at (key);
+                      auto cleanup = host.take_relocation_target_discard (attempt);
+                      if (!cleanup)
+                          attempt.terminal->complete (result_t<void>::success ());
+                      if (replaced) {
+                          attempt = public_host_runtime_t::relocation_target_attempt_t{};
+                          attempt.pending =
+                            std::make_shared<public_host_runtime_t::pending_relocation_assembly_t> (
+                              *pending);
+                      } else
+                          host._relocation_target_attempts.erase (key);
+                      return cleanup;
+                  })
+                  .get ();
+              if (!activation_started)
+                  activated.emplace (host.activate_relocation_assembly (key, pending, staging));
+          })
+          .get ();
         if (discarded) {
             std::vector<public_host_runtime_t::relocation_target_attempt_t> cleanup;
             cleanup.push_back (std::move (*discarded));
@@ -1052,6 +1036,7 @@ class relay_session_t final : public fw::packet_stream_session_t
 };
 constexpr auto session_rid = "join-session";
 constexpr auto stream_name = "maintenance-join-stream";
+template <typename Session = relay_session_t>
 void configure_session (host_t &host,
                         std::shared_ptr<fw::location_store_t> store,
                         std::shared_ptr<fw::relocation_store_t> relocations)
@@ -1071,7 +1056,7 @@ void configure_session (host_t &host,
       .listen ("tcp://127.0.0.1:0");
     options.add_stream_node (stream_name)
       .bind ("tcp://127.0.0.1:0")
-      .register_session<relay_session_t> ();
+      .template register_session<Session> ();
 }
 // One client connection that keeps every received View in arrival order.
 class view_client_t
@@ -1707,6 +1692,240 @@ TEST (ActorMaintenanceJoin, ConsecutiveDeferredJoinsDoNotHoldTargetSpotDuringCap
     }
 }
 
+struct sealed_gap_binding_t
+{
+    std::mutex mutex;
+    std::condition_variable changed;
+    std::optional<fw::actor_ref_t> actor;
+    std::optional<fw::session_actor_t> bound;
+    std::vector<fw::message_flow_event_t> flows;
+};
+
+class sealed_gap_session_t final : public fw::packet_stream_session_t
+{
+  public:
+    static inline std::shared_ptr<sealed_gap_binding_t> binding;
+    sealed_gap_session_t () : _binding (binding) {}
+    fw::task_t<void> on_connected (fw::stream_t &stream) override
+    {
+        const auto actor = [&] {
+            std::lock_guard lock (_binding->mutex);
+            return *_binding->actor;
+        }();
+        co_await stream.actors ().bind_or_get (actor).async ();
+        {
+            std::lock_guard lock (_binding->mutex);
+            _binding->bound = stream.actors ().bound ().front ();
+        }
+        _binding->changed.notify_all ();
+    }
+    fw::task_t<void> on_disconnected (fw::stream_t &) override { co_return; }
+    fw::task_t<void> on_error (fw::stream_t &, const fw::stream_error_t &) override { co_return; }
+    fw::task_t<void> on_packet (fw::stream_t &,
+                                const fw::session_message_context_t &,
+                                const zlink::message_t &) override
+    {
+        co_return;
+    }
+
+  private:
+    std::shared_ptr<sealed_gap_binding_t> _binding;
+};
+
+void expired_sealed_request_preserves_next_live_actor_relay (bool remote)
+{
+    namespace st = fw::runtime::stateful;
+    auto evidence_owner = std::make_shared<observations_t> ();
+    auto &evidence = *evidence_owner;
+    observations = evidence_owner;
+    auto binding = std::make_shared<sealed_gap_binding_t> ();
+    sealed_gap_session_t::binding = binding;
+    struct binding_reset_t
+    {
+        ~binding_reset_t () { sealed_gap_session_t::binding.reset (); }
+    } binding_reset;
+    auto store = std::make_shared<fw::runtime::in_memory_location_store_t> ();
+    auto relocations = std::make_shared<fw::runtime::in_memory_relocation_store_t> ();
+    host_t owner, session;
+    configure (owner, first_rid, store, relocations);
+    const auto observe = [binding] (const fw::message_flow_event_t &event) {
+        std::lock_guard lock (binding->mutex);
+        binding->flows.push_back (event);
+        binding->changed.notify_all ();
+    };
+    fw::detail::dispatch_options_access_t::set_observer_for_tests (
+      owner.app.add_zlink_framework ().configure_dispatch (), observe);
+    if (!remote)
+        owner.app.add_zlink_framework ()
+          .add_stream_node (stream_name)
+          .bind ("tcp://127.0.0.1:0")
+          .register_session<sealed_gap_session_t> ();
+    owner.start ();
+    ASSERT_TRUE (ready (owner));
+    auto services = owner.app.advanced ().services ().build_provider ();
+    const auto created = services.get_required<fw::actor_manager_t> ()
+                           .get_or_create (fw::actor_id_t (actor_id), actor_type)
+                           .async ()
+                           .result ();
+    ASSERT_TRUE (created);
+    ASSERT_TRUE (std::holds_alternative<fw::actor_create_created_t> (created.value ()));
+    const auto actor = std::get<fw::actor_create_created_t> (created.value ()).actor;
+    {
+        std::lock_guard lock (binding->mutex);
+        binding->actor = actor;
+    }
+    host_t *source = &owner;
+    if (remote) {
+        configure_session<sealed_gap_session_t> (session, store, relocations);
+        fw::detail::dispatch_options_access_t::set_observer_for_tests (
+          session.app.add_zlink_framework ().configure_dispatch (), observe);
+        session.start ();
+        ASSERT_TRUE (ready (session));
+        source = &session;
+    }
+    auto source_services = source->app.advanced ().services ().build_provider ();
+    if (remote) {
+        ASSERT_TRUE (peer_ready (services.get_required<fw::route_mesh_runtime_t> ()));
+        ASSERT_TRUE (peer_ready (source_services.get_required<fw::route_mesh_runtime_t> ()));
+    }
+    view_client_t connection (source_services.get_required<fw::framework_runtime_t> ()
+                                .listener_status (fw::listener_kind_t::stream, stream_name)
+                                .endpoint);
+    ASSERT_TRUE (connection.connect ());
+    std::optional<fw::session_actor_t> bound;
+    {
+        std::unique_lock lock (binding->mutex);
+        ASSERT_TRUE (
+          binding->changed.wait_for (lock, 2s, [&] { return binding->bound.has_value (); }));
+        bound = binding->bound;
+    }
+    const auto registration =
+      fw::detail::mesh_node_runtime_t::registrations (source->app.advanced ().zlink ()).front ();
+    const auto native = fw::detail::spot_node_runtime_t (registration->spot_state).native_node ();
+    ASSERT_TRUE (native);
+    auto &sessions = native->sessions ();
+    const auto current = sessions.current_binding (actor_id);
+    ASSERT_TRUE (current);
+    const auto sealed = sessions.seal_remote_route (
+      current->connection.connection_id, current->binding_generation, current->actor.key,
+      current->actor.object_generation, current->owner_lease_generation);
+    ASSERT_EQ (sealed.error, st::stateful_error_t::none);
+    EXPECT_EQ (sealed.last_accepted_sequence, 0u);
+    struct seal_release_t
+    {
+        st::stream_session_registry_t &sessions;
+        std::optional<st::stream_barrier_t> barrier;
+        ~seal_release_t ()
+        {
+            if (barrier)
+                (void) sessions.abort_barrier (*barrier);
+        }
+    } release{sessions, sealed.barrier};
+    fw::detail::stream_header_t request_header (
+      fw::detail::stream_message_kind_t::request, fw::stream_codec_t::json,
+      fw::detail::stream_header_flags_t::none, 17, probe_t::packet_name);
+    request_header.with_correlation_id ("sealed-expired-request");
+    request_header.with_flow ("0199a500-0000-7000-8000-000000000011", fw::flow_origin_t::inbound);
+    {
+        const fw::detail::stream_relay_dispatch_scope_t dispatch (request_header);
+        auto request =
+          bound->relay_request (zlink::message_t::from (nlohmann::json (probe_t{1}).dump ()))
+            .timeout (50ms)
+            .async ();
+        const auto expired = request.result_for (2s);
+        ASSERT_TRUE (expired);
+        EXPECT_FALSE (*expired);
+        EXPECT_EQ (expired->error_kind (), fw::framework_error_kind_t::deadline_exceeded);
+    }
+    EXPECT_EQ (native->pending_operation_count (), 0u);
+    fw::detail::stream_header_t send_header (
+      fw::detail::stream_message_kind_t::send, fw::stream_codec_t::json,
+      fw::detail::stream_header_flags_t::none, std::nullopt, record_t::packet_name);
+    send_header.with_correlation_id ("sealed-next-record");
+    send_header.with_flow ("0199a500-0000-7000-8000-000000000012", fw::flow_origin_t::inbound);
+    {
+        const fw::detail::stream_relay_dispatch_scope_t dispatch (send_header);
+        auto sent = bound->relay (zlink::message_t::from (nlohmann::json (record_t{2}).dump ()));
+        const auto accepted = sent.result_for (2s);
+        ASSERT_TRUE (accepted);
+        ASSERT_TRUE (*accepted) << "one-way must complete while the matching seal is retained";
+    }
+    EXPECT_TRUE (sessions.remote_route_sealed (actor_id));
+    ASSERT_EQ (sessions.abort_barrier (sealed.barrier), st::stateful_error_t::none);
+    release.barrier.reset ();
+    {
+        std::unique_lock lock (evidence.mutex);
+        ASSERT_TRUE (
+          evidence.changed.wait_for (lock, 2s, [&] { return !evidence.recorded.empty (); }));
+        EXPECT_EQ (evidence.recorded, (std::vector<int>{2}));
+        EXPECT_TRUE (evidence.intake_probe_values.empty ());
+    }
+    const auto receiver_route = services.get_required<fw::detail::actor_gateway_runtime_t> ()
+                                  .bound_session_route_async (actor)
+                                  .result ()
+                                  .value ();
+    ASSERT_TRUE (receiver_route);
+    EXPECT_EQ (receiver_route->session_sequence, 2u);
+    EXPECT_EQ (receiver_route->binding_generation, current->binding_generation);
+    ASSERT_TRUE (receiver_route->session_rid);
+    EXPECT_EQ (receiver_route->session_rid->to_hex (), current->connection.connection_id);
+    EXPECT_EQ (receiver_route->node_rid.to_hex (), native->status ().routing_id ().to_hex ());
+    const auto completion_deadline = std::chrono::steady_clock::now () + 2s;
+    {
+        std::unique_lock lock (binding->mutex);
+        ASSERT_TRUE (binding->changed.wait_for (lock, 2s, [&] {
+            return std::any_of (
+              binding->flows.begin (), binding->flows.end (), [] (const auto &event) {
+                  return event.packet_name == record_t::packet_name
+                         && event.detail_stage == "invoke_erased.application_handler"
+                         && event.detail_result == "result=finished success=true";
+              });
+        }));
+        std::size_t admitted = 0;
+        for (const auto &event : binding->flows) {
+            if (event.detail_stage != "canonical_application.commit_accepted_ingress")
+                continue;
+            EXPECT_NE (event.packet_name, probe_t::packet_name);
+            if (event.packet_name != record_t::packet_name)
+                continue;
+            ++admitted;
+            EXPECT_EQ (event.actor_id, actor_id);
+            EXPECT_EQ (event.correlation_id, "sealed-next-record");
+            EXPECT_EQ (event.flow_id, "0199a500-0000-7000-8000-000000000012");
+            ASSERT_TRUE (event.detail_result);
+            EXPECT_NE (event.detail_result->find ("operation_high="), std::string::npos);
+            EXPECT_NE (event.detail_result->find (" operation_low="), std::string::npos);
+            EXPECT_EQ (event.detail_result->find ("operation_high=0 operation_low=0"),
+                       std::string::npos);
+        }
+        EXPECT_EQ (admitted, 1u);
+    }
+    EXPECT_EQ (native->pending_operation_count (), 0u);
+    // Handler completion precedes the held-relay drain's final registry turn.
+    // Observe that owner within the same completion budget before a new seal.
+    while (sessions.remote_route_sealed (actor_id)
+           && std::chrono::steady_clock::now () < completion_deadline)
+        std::this_thread::yield ();
+    const auto drained = sessions.seal_remote_route (
+      current->connection.connection_id, current->binding_generation, current->actor.key,
+      current->actor.object_generation, current->owner_lease_generation);
+    ASSERT_EQ (drained.error, st::stateful_error_t::none);
+    release.barrier = drained.barrier;
+    EXPECT_EQ (drained.last_accepted_sequence, 2u);
+    EXPECT_TRUE (sessions.remote_route_seal_ready (drained.barrier));
+    ASSERT_EQ (sessions.abort_barrier (drained.barrier), st::stateful_error_t::none);
+    release.barrier.reset ();
+}
+
+TEST (BoundSessionSequenceGap, LocalExpiredHeldRequestDoesNotBlockNextLiveActor)
+{
+    expired_sealed_request_preserves_next_live_actor_relay (false);
+}
+TEST (BoundSessionSequenceGap, RemoteExpiredHeldRequestDoesNotBlockNextLiveActor)
+{
+    expired_sealed_request_preserves_next_live_actor_relay (true);
+}
+
 void actor_handler_closes_physical_session (bool remote, bool join)
 {
     auto evidence_owner = std::make_shared<observations_t> ();
@@ -2338,18 +2557,16 @@ struct native_intake_fixture_t
         record.source_routing_id = zlink::routing_id_t::from (source_id).to_bytes ();
         record.source_node_generation = 1;
         const wire::actor_route_fence_t fence{actor_id, 1, rid, 1, authority_generation, 1};
-        wire::application_payload_t::multipart_t parts;
         fw::runtime::messaging::envelope_header_t envelope;
         envelope.kind = fw::runtime::messaging::message_kind_t::command;
         envelope.channel_name = mesh_name;
         envelope.message_name = probe_t::packet_name;
-        auto encoded = fw::detail::encode_actor_packet (envelope, zlink::message_t{});
-        parts = std::move (encoded).take_items ();
+        auto parts = fw::detail::encode_actor_packet (envelope, zlink::message_t{});
         record.parts = fw::detail::backend::materialize_binding_parts (
           {wire::encode_actor_message_header (wire::command::actorSend, std::nullopt, fence,
                                               {1, sequence}),
            wire::encode_application_payload (
-             wire::application_payload_t::from_parts (std::move (parts)))});
+             wire::application_payload_t::from_parts (std::move (parts).take_items ()))});
         return record;
     }
 };
@@ -3407,6 +3624,7 @@ TEST_P (NativeIntakePendingStore, ProductionResolverUsesNoStoreDuringAcceptance)
             terminal_seen->set_value ();
         }
     });
+    store->release_all ();
     const auto result = pending.result ();
     EXPECT_TRUE (result) << (result.error () ? result.error ()->what () : "request failed");
     if (result)
@@ -3961,6 +4179,45 @@ struct join_claim_fixture_t
         executor->drain ();
     }
 };
+
+TEST (ActorMaintenanceJoinDeathTest, LocalHandoffSnapshotDoesNotWaitOnItsLaneExecutor)
+{
+    ASSERT_EXIT (
+      {
+          fw::runtime::install_host_context_hooks ();
+          fw::runtime::configure_handler_coroutine_executor (1);
+          join_claim_fixture_t fixture;
+          const auto claimed =
+            fixture.node->actor_transfer_coordinator->try_begin_local ("player:claim-actor");
+          if (!claimed)
+              std::_Exit (2);
+          auto completed = std::make_shared<std::promise<bool>> ();
+          auto terminal = completed->get_future ();
+          std::promise<void> entered;
+          std::promise<void> release;
+          auto released = release.get_future ();
+          fixture.node->lane.try_post ([&] {
+              entered.set_value ();
+              released.wait ();
+          });
+          entered.get_future ().get ();
+          auto owner = std::make_shared<fw::detail::spot_node_runtime_t> (fixture.node);
+          auto opened = owner->open_local_actor_handoff (fixture.actor);
+          fw::detail::observe_task_completion (
+            opened, [owner, completed] (const fw::result_t<fw::result_t<void>> &result) {
+                completed->set_value (result && result.value ());
+            });
+          // The snapshot queues its completion behind this executor turn. This
+          // turn claims the next node drain behind that already queued completion.
+          fixture.node->lane_executor.submit (
+            [state = fixture.node] { state->lane.try_post ([] {}); });
+          release.set_value ();
+          if (terminal.wait_for (wait_budget) != std::future_status::ready)
+              std::_Exit (3);
+          std::_Exit (terminal.get () ? 0 : 4);
+      },
+      ::testing::ExitedWithCode (0), "");
+}
 
 TEST (ActorMaintenanceJoin, LocalHandoffCancellationRetainsQueuedLaneInputs)
 {

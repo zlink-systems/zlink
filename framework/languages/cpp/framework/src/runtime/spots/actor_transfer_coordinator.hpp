@@ -240,11 +240,6 @@ class actor_transfer_coordinator_t
     // source-remote transfer (runtime-metrics §4.3 duration window); local
     // moves complete with nullopt.
     std::optional<std::chrono::steady_clock::duration> complete_move (const std::string &actor_key);
-    // Completes a source move while atomically taking packets that arrived
-    // after the first handoff snapshot. The caller relays the retained batch
-    // after the owner transition without leaving a race between queue drain
-    // and move completion.
-    actor_move_completion_t complete_move_and_take_backlog (const std::string &actor_key);
     // Queue restoration accepts the full prefix on this lane before ending
     // the move. Without a prefix receiver, Message Follow takes one batch
     // and ends the move at the next atomic empty-backlog observation.

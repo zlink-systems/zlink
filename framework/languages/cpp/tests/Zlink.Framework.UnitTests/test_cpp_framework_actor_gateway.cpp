@@ -1562,6 +1562,57 @@ int relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_
     return 0;
 }
 
+int stale_binding_registration_and_relocation_prepare_preserve_current_tenure ()
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    namespace protocol = zlink::framework::runtime::protocol;
+
+    auto state = std::make_shared<actor_gateway_state_t> ();
+    actor_gateway_runtime_t gateway (state);
+    const auto actor = test_actor_ref ("source-node", "player", "stale-binding", 7);
+    const auto session_owner = zlink::routing_id_t::from (std::string ("session-owner"));
+    const auto session_rid = zlink::routing_id_t::from (std::string ("session-rid"));
+    if (!gateway.record_bound_session_route (actor, session_owner, session_rid, 11, 17, 19, 24, 0,
+                                             1, false, "session-owner-id", 13))
+        return 1;
+
+    auto stale = *gateway.bound_session_route_async (actor).result ().value ();
+    stale.binding_generation = 23;
+    stale.authority_owner_generation = 29;
+    stale.owner_lease_generation = 37;
+    const auto registered = gateway.record_bound_session_route_transition (actor, stale);
+    const protocol::session_relocation_route_t route{
+      .sender_role = protocol::relocation_role_t::target,
+      .actor = {"stale-binding", 7},
+      .session_owner_node_routing_id = session_owner.to_bytes (),
+      .session_owner_node_generation = 11,
+      .session_owner_id = "session-owner-id",
+      .session_owner_lease_generation = 13,
+      .session_routing_id = session_rid.to_bytes (),
+      .binding_generation = 23,
+      .route = {protocol::session_relocation_route_action_t::commit, 17, 29,
+                zlink::routing_id_t::from (std::string ("target-node")).to_bytes (), 31, 0, 37}};
+    const bool prepared = gateway.prepare_session_relocation_target_route (route, 37);
+    const bool unchanged = state->sync ([&] {
+        const auto &record = state->actors_by_id.at ("stale-binding");
+        const auto &current = *record.bound_session_route;
+        return record.ref.node_rid ().value () == "source-node" && current.binding_generation == 24
+               && current.authority_owner_generation == 17 && current.owner_lease_generation == 19
+               && current.session_sequence == 1
+               && current.node_rid.to_bytes () == session_owner.to_bytes ()
+               && current.session_rid == session_rid;
+    });
+    if (registered || !registered.error ()
+        || registered.error_kind () != framework_error_kind_t::unavailable || prepared
+        || !unchanged) {
+        std::cerr << "stale binding: registered=" << static_cast<bool> (registered)
+                  << " prepared=" << prepared << " current_unchanged=" << unchanged << '\n';
+        return 2;
+    }
+    return 0;
+}
+
 int bound_session_ref_normalization_preserves_type_and_rejects_conflicts ()
 {
     using namespace zlink::framework;
@@ -2145,21 +2196,97 @@ int bound_session_relay_admission_is_exact_and_monotonic ()
         return 2;
     }
     if (!gateway.admit_session_relay (actor, session_owner, session_rid, 17, 1))
-        return 3;
-    if (gateway.admit_session_relay (actor, session_owner, session_rid, 17, 1)
-        || gateway.admit_session_relay (actor, session_owner, session_rid, 17, 3)
-        || gateway.admit_session_relay (actor, session_owner, session_rid, 18, 2)
-        || gateway.admit_session_relay (
-          actor, zlink::routing_id_t::from (std::string ("other-owner")), session_rid, 17, 2))
         return 4;
+    if (gateway.admit_session_relay (actor, session_owner, session_rid, 17, 1)
+        || gateway.admit_session_relay (
+          actor, zlink::routing_id_t::from (std::string ("other-owner")), session_rid, 17, 2)) {
+        return 7;
+    }
     if (!gateway.admit_session_relay (actor, session_owner, session_rid, 17, 2))
-        return 5;
+        return 9;
     const auto route = gateway.bound_session_route_async (actor).result ().value ();
     if (!route || route->session_sequence != 2)
-        return 6;
-    if (!gateway.destroy_actor (actor)
-        || gateway.admit_session_relay (actor, session_owner, session_rid, 17, 3))
-        return 7;
+        return 11;
+    if (!gateway.admit_session_relay (actor, session_owner, session_rid, 17, 4)
+        || gateway.admit_session_relay (actor, session_owner, session_rid, 17, 3)
+        || gateway.admit_session_relay (actor, session_owner, session_rid, 17, 4))
+        return 22;
+    const auto after_gap = gateway.bound_session_route_async (actor).result ().value ();
+    if (!after_gap || after_gap->session_sequence != 4)
+        return 23;
+
+    namespace stateful = runtime::stateful;
+    const stateful::object_ref_t owner{
+      stateful::object_kind_t::actor, "relay-actor", 3, 11, "relay-mesh", "actor-owner"};
+    auto other_owner = owner;
+    other_owner.key = "other-actor";
+    stateful::stream_session_registry_t sessions (
+      [&] (const std::string &key) -> std::optional<stateful::object_ref_t> {
+          if (key == owner.key)
+              return owner;
+          if (key == other_owner.key)
+              return other_owner;
+          return std::nullopt;
+      });
+    const auto connection = sessions.open (session_rid.to_hex (), {}, session_owner, 7);
+    const auto [binding_error, binding] = sessions.bind (connection, owner, 7, 13);
+    if (binding_error != stateful::stateful_error_t::none)
+        return 12;
+    const auto [first_error, first] = sessions.admit_inbound (binding);
+    if (first_error != stateful::stateful_error_t::none || !first || first->inbound_sequence != 1)
+        return 13;
+    if (sessions.complete_inbound (*first) != stateful::stateful_error_t::none
+        || sessions.complete_inbound (*first) == stateful::stateful_error_t::none)
+        return 14;
+    const auto [second_error, second] = sessions.admit_inbound (binding);
+    if (second_error != stateful::stateful_error_t::none || !second
+        || second->inbound_sequence != 2)
+        return 15;
+    auto wrong_binding = *second;
+    ++wrong_binding.binding.binding_generation;
+    auto wrong_sequence = *second;
+    wrong_sequence.inbound_sequence += 2;
+    if (sessions.complete_inbound (wrong_binding) == stateful::stateful_error_t::none
+        || sessions.complete_inbound (wrong_sequence) == stateful::stateful_error_t::none
+        || sessions.complete_inbound (*second) != stateful::stateful_error_t::none)
+        return 16;
+
+    const auto [third_error, third] = sessions.admit_inbound (binding);
+    const auto other_connection = sessions.open ("other-session", {}, session_owner, 7);
+    const auto [other_binding_error, other_binding] =
+      sessions.bind (other_connection, other_owner, 7, 13);
+    const auto [other_error, other] = sessions.admit_inbound (other_binding);
+    if (third_error != stateful::stateful_error_t::none || !third || third->inbound_sequence != 3
+        || other_binding_error != stateful::stateful_error_t::none
+        || other_error != stateful::stateful_error_t::none || !other)
+        return 17;
+    auto unaccepted_other_token = *third;
+    unaccepted_other_token.drain = other->drain;
+    if (sessions.complete_inbound (unaccepted_other_token) == stateful::stateful_error_t::none
+        || !gateway.destroy_actor (actor)
+        || sessions.try_seal_actor (owner).first != stateful::stateful_error_t::backpressured
+        || sessions.try_seal_actor (other_owner).first != stateful::stateful_error_t::backpressured)
+        return 18;
+    if (sessions.complete_inbound (*third) != stateful::stateful_error_t::none
+        || sessions.complete_inbound (*third) == stateful::stateful_error_t::none
+        || gateway.admit_session_relay (actor, session_owner, session_rid, 17, 3)
+        || sessions.complete_inbound (*other) != stateful::stateful_error_t::none)
+        return 19;
+    const auto [seal_error, seal] = sessions.try_seal_actor (owner);
+    if (seal_error != stateful::stateful_error_t::none
+        || sessions.abort_barrier (seal) != stateful::stateful_error_t::none)
+        return 20;
+
+    // A later accepted ingress does not invalidate an earlier completion token.
+    const auto [fourth_error, fourth] = sessions.admit_inbound (binding);
+    const auto [fifth_error, fifth] = sessions.admit_inbound (binding);
+    if (fourth_error != stateful::stateful_error_t::none || !fourth
+        || fifth_error != stateful::stateful_error_t::none || !fifth
+        || fourth->inbound_sequence != 4 || fifth->inbound_sequence != 5
+        || sessions.complete_inbound (*fourth) != stateful::stateful_error_t::none
+        || sessions.complete_inbound (*fifth) != stateful::stateful_error_t::none
+        || sessions.complete_inbound (*fourth) == stateful::stateful_error_t::none)
+        return 21;
     return 0;
 }
 
@@ -2271,7 +2398,6 @@ int bound_session_actor_dispatch_uses_current_binding_without_location_reread ()
         record.source_binding_generation = 19;
         record.source_session_sequence = sequence;
         record.actor_route = std::move (target);
-        messaging::envelope_codec_t codec;
         auto encoded = zlink::framework::detail::encode_actor_packet (
           messaging::envelope_header_t{.kind = messaging::message_kind_t::command,
                                        .channel_name = "actor",
@@ -4584,9 +4710,8 @@ int reconcile_deadline_fast_fails_without_target_commit (
                               .advertised_endpoint = "tcp://127.0.0.1:0"},
                .runtime_failures =
                  std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
-    const auto make_reply_token = [&reply_host] (
-                                    std::shared_ptr<std::atomic_int> calls,
-                                    std::shared_ptr<std::atomic_bool> was_unavailable) {
+    const auto make_reply_token = [reply_host] (std::shared_ptr<std::atomic_int> calls,
+                                                std::shared_ptr<std::atomic_bool> was_unavailable) {
         host::reply_token_t token;
         token.host = reply_host;
         token.local_reply = [calls, was_unavailable] (const std::vector<zlink::message_t> &parts) {
@@ -5903,7 +6028,7 @@ int command_38_rebind_is_owned_only_by_new_connection ()
              : 2;
 }
 
-int late_lower_generation_bind_is_rejected ()
+int late_lower_generation_bind_and_record_are_rejected ()
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -5951,11 +6076,14 @@ int late_lower_generation_bind_is_rejected ()
           return task_t<void> (result_t<void>::success ());
       },
       actor_bound_session_route_t{session_owner, stale_rid, 7, 11, 13, 17, 21, 0, 0});
+    const auto stale_record = gateway.record_bound_session_route_transition (
+      actor, actor_bound_session_route_t{session_owner, stale_rid, 7, 11, 13, 17, 20, 0, 0});
     const auto route = gateway.bound_session_route_async (actor).result ().value ();
     const auto delivered = gateway.dispatch_bound_session_send (actor, "after-stale-publish",
                                                                 stream_codec_t::message_pack,
                                                                 zlink::message_t::from ("payload"));
     return !stale_publish && stale_publish.error_kind () == framework_error_kind_t::unavailable
+               && !stale_record && stale_record.error_kind () == framework_error_kind_t::unavailable
                && route && route->session_rid == current_rid && route->binding_generation == 22
                && delivered && current_stream_received.load () == 1
                && stale_stream_received.load () == 0
@@ -6482,7 +6610,8 @@ int local_relay_failure_returns_without_waiting_for_handoff_deadline ()
              : 2;
 }
 
-int local_relay_preserves_handoff_request_route (bool has_original_operation)
+int local_relay_preserves_handoff_request_route (bool has_original_operation,
+                                                 bool expire_native = false)
 {
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
@@ -6502,8 +6631,6 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
     header.message_name = "LocalRelayProbe";
     header.content_type = "application/octet-stream";
     header.correlation_id = "local-relay-correlation";
-    header.deadline =
-      has_original_operation ? "2099-01-01T09:00:00.1234567+09:00" : "2099-01-01T00:00:00.123Z";
     const auto source = has_original_operation ? zlink::routing_id_t::from ("upstream-node")
                                                : zlink::routing_id_t::from (std::uint32_t{0});
     const auto operation = has_original_operation ? runtime::protocol::wire_operation_id_t{41, 43}
@@ -6521,6 +6648,17 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
     native_actor_relay_fixture_t fixture (node, actor);
     runtime::host::pending_operation_t native_operation;
     auto native_completion = native_operation.completion->task ();
+    const auto native_terminals = std::make_shared<std::atomic_int> (0);
+    const auto native_terminal_observed =
+      std::make_shared<task_completion_source_t<runtime::host::operation_completion_t>> ();
+    detail::observe_task_terminal (
+      native_completion, [native_terminals, native_terminal_observed] (const auto &result) {
+          native_terminals->fetch_add (1, std::memory_order_acq_rel);
+          native_terminal_observed->complete (result);
+      });
+    using operation_clock_t = runtime::foundation::operation_registry_t::clock_t;
+    operation_clock_t::time_point registered_before;
+    operation_clock_t::time_point registered_after;
     auto record = fixture.request_record (source, {operation.high, operation.low},
                                           has_original_operation ? 47 : 0);
     if (has_original_operation) {
@@ -6543,8 +6681,10 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
         const auto native_actor = fixture.reply_host->create_actor ("player", "local-relay-actor");
         auto encoded =
           encode_actor_packet (header, zlink::message_t::from (std::string ("payload")));
+        registered_before = operation_clock_t::now ();
         const auto submitted = finite_task_result (fixture.reply_host->request_to_actor (
           native_actor.ref (), encoded.items (), native_operation, std::chrono::seconds (30)));
+        registered_after = operation_clock_t::now ();
         if (!submitted || !*submitted || submitted->value () != zlink::submit_result_t::ok)
             return 7;
         bool received = false;
@@ -6639,19 +6779,70 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
             || !node->lane.run ([&] { return node->pending_handoff_requests.empty (); }).get ())
             return 4;
         node->actor_transfer_coordinator->prepend_source_suffix (key, std::move (backlog));
+        if (expire_native) {
+            const auto original_operation = native_operation.id;
+            const auto original_reply_route = record.reply_route_id;
+            if (fixture.reply_host->transport ().expire_requests (
+                  registered_before + std::chrono::seconds (30) - operation_clock_t::duration (1))
+                  != 0
+                || native_completion.await_ready ())
+                return 14;
+            // Only the observation includes the wheel's 1ms rounding bound;
+            // the request's registered timeout remains 30s.
+            const auto expiry_time =
+              registered_after + std::chrono::seconds (30) + std::chrono::milliseconds (1);
+            const auto expiry_count =
+              fixture.reply_host->transport ().expire_requests (expiry_time);
+            if (expiry_count != 1) {
+                std::cerr << "native deadline expiry count=" << expiry_count
+                          << " registration_span_ns="
+                          << std::chrono::duration_cast<std::chrono::nanoseconds> (
+                               registered_after - registered_before)
+                               .count ()
+                          << " observation_ticks=" << expiry_time.time_since_epoch ().count ()
+                          << " elapsed_since_registration_ns="
+                          << std::chrono::duration_cast<std::chrono::nanoseconds> (
+                               operation_clock_t::now () - registered_after)
+                               .count ()
+                          << '\n';
+                return 15;
+            }
+            const auto terminal = finite_task_result (native_terminal_observed->task ());
+            if (!terminal || *terminal
+                || terminal->error_kind () != framework_error_kind_t::deadline_exceeded
+                || native_operation.id != original_operation
+                || record.operation_id != original_operation
+                || record.reply_route_id != original_reply_route
+                || native_terminals->load (std::memory_order_acquire) != 1)
+                return 16;
+            spots.cancel_local_actor_handoff (actor);
+            const auto expired_at =
+              std::chrono::steady_clock::now () + std::chrono::hours (24 * 365 * 100);
+            return !native_record->native_reply && !native_record->complete_native (std::nullopt)
+                       && native_terminals->load (std::memory_order_acquire) == 1
+                       && fixture.probe->calls.load (std::memory_order_acquire) == 0
+                       && spots.cleanup_expired_actor_admissions_at (expired_at) == 0
+                       && fixture.reply_host->transport ().expire_requests (expiry_time) == 0
+                       && node->lane.run ([&] { return node->pending_handoff_requests.empty (); })
+                            .get ()
+                     ? 0
+                     : 17;
+        }
         spots.cancel_local_actor_handoff (actor);
-        const auto terminal = finite_task_result (std::move (native_completion));
+        const auto terminal = finite_task_result (native_terminal_observed->task ());
         if (!terminal || !*terminal
             || terminal->value ().record.operation_id != native_operation.id)
             return 12;
         const auto native_reply =
           decode_actor_reply (runtime::messaging::message_parts_t (terminal->value ().parts));
-        if (native_reply || native_reply.error_kind () != framework_error_kind_t::unavailable)
+        if (native_reply || native_reply.error_kind () != framework_error_kind_t::unavailable
+            || native_terminals->load (std::memory_order_acquire) != 1)
             return 13;
         const auto expired_at =
           std::chrono::steady_clock::now () + std::chrono::hours (24 * 365 * 100);
         return !native_record->native_reply && !native_record->complete_native (std::nullopt)
                    && fixture.probe->calls.load (std::memory_order_acquire) == 0
+                   && native_terminals->load (std::memory_order_acquire) == 1
                    && spots.cleanup_expired_actor_admissions_at (expired_at) == 0
                    && node->lane.run ([&] { return node->pending_handoff_requests.empty (); })
                         .get ()
@@ -6669,7 +6860,9 @@ int local_relay_preserves_handoff_request_route (bool has_original_operation)
                    && pending.first.operation_high == record.operation_id.high
                    && pending.first.operation_low == record.operation_id.low
                    && pending.second.reply_route_id == record.reply_route_id
-                   && pending.second.reply_token.has_value ();
+                   && pending.second.reply_token.has_value ()
+                   && pending.second.request_header.correlation_id == header.correlation_id
+                   && pending.second.request_header.message_name == header.message_name;
         })
         .get ();
     if (fixture.reply.wait_for (std::chrono::milliseconds::zero ()) == std::future_status::ready)
@@ -6838,7 +7031,6 @@ int parked_request_reply_case (const std::string &requester_rid,
                                      .spot_id = std::string (spot->spot_id),
                                      .actor = actor};
 
-    messaging::envelope_codec_t codec;
     auto encoded = zlink::framework::detail::encode_actor_packet (
       messaging::envelope_header_t{.kind = messaging::message_kind_t::request,
                                    .channel_name = "actor",
@@ -7063,7 +7255,6 @@ int relayed_request_without_deferred_terminal_receives_follow_reply ()
                                      .spot_id = std::string ("actor-a-user"),
                                      .actor = actor};
 
-    messaging::envelope_codec_t codec;
     auto encoded = zlink::framework::detail::encode_actor_packet (
       messaging::envelope_header_t{.kind = messaging::message_kind_t::request,
                                    .channel_name = "actor",
@@ -7627,62 +7818,72 @@ int bind_registration_contract_vectors ()
     const auto authority = number (fixture, "authority");
     int failures = 0;
     for (const auto &vector : fixture.at ("cases")) {
-        actor_gateway_runtime_t gateway;
-        const auto actor = test_actor_ref ("actor-owner", "game.actor", "registration-actor", 1);
-        const auto sink = [] (std::string, stream_codec_t, const zlink::message_t &) {
-            return task_t<void> (result_t<void>::success ());
-        };
-        const auto route = [&] (const nlohmann::json &value) {
-            return actor_bound_session_route_t{
-              zlink::routing_id_t::from (value.at ("node").get<std::string> ()),
-              zlink::routing_id_t::from (value.at ("session").get<std::string> ()),
-              1,
-              number (value, "lifecycle"),
-              authority,
-              1,
-              number (value, "generation"),
-              0,
-              0,
-              false,
-              value.at ("ownerId").get<std::string> (),
-              number (value, "lease")};
-        };
-        const auto original = route (fixture.at ("current"));
-        if (!gateway.replace_session_route (actor, sink, original))
-            return 2;
-        const auto requested = route (vector);
-        int terminals = 0;
-        const auto result = gateway.replace_session_route (
-          actor, sink, requested, stream_codec_t::message_pack,
-          [&] (const actor_bound_session_route_t &accepted) {
-              ++terminals;
-              return accepted.binding_generation == requested.binding_generation
-                     && accepted.authority_owner_generation == requested.authority_owner_generation;
-          });
-        const auto current = gateway.bound_session_route_async (actor).result ().value ();
-        const bool success = vector.at ("success").get<bool> ();
-        const bool same_identity = original.node_rid.to_hex () == requested.node_rid.to_hex ()
-                                   && original.node_generation == requested.node_generation
-                                   && original.session_rid == requested.session_rid
-                                   && original.binding_generation == requested.binding_generation;
-        const auto &expected = success && !same_identity ? requested : original;
-        const bool current_matches =
-          current && current->node_rid.to_hex () == expected.node_rid.to_hex ()
-          && current->node_generation == expected.node_generation
-          && current->session_rid == expected.session_rid
-          && current->binding_generation == expected.binding_generation
-          && current->authority_owner_generation == expected.authority_owner_generation
-          && current->session_owner_id == expected.session_owner_id
-          && current->session_owner_lease_generation == expected.session_owner_lease_generation;
-        const bool terminal_matches =
-          success ? result && terminals == 1 && result.value ().current
-                      && result.value ().current->binding_generation == requested.binding_generation
-                      && result.value ().current->authority_owner_generation == authority
-                  : !result && terminals == 0
-                      && result.error_kind () == framework_error_kind_t::unavailable;
-        if (!current_matches || !terminal_matches) {
-            std::cerr << "bind registration contract failed: " << vector.at ("name") << '\n';
-            ++failures;
+        for (const bool record : {false, true}) {
+            actor_gateway_runtime_t gateway;
+            const auto actor =
+              test_actor_ref ("actor-owner", "game.actor", "registration-actor", 1);
+            const auto sink = [] (std::string, stream_codec_t, const zlink::message_t &) {
+                return task_t<void> (result_t<void>::success ());
+            };
+            const auto route = [&] (const nlohmann::json &value) {
+                return actor_bound_session_route_t{
+                  zlink::routing_id_t::from (value.at ("node").get<std::string> ()),
+                  zlink::routing_id_t::from (value.at ("session").get<std::string> ()),
+                  1,
+                  number (value, "lifecycle"),
+                  authority,
+                  1,
+                  number (value, "generation"),
+                  0,
+                  0,
+                  false,
+                  value.at ("ownerId").get<std::string> (),
+                  number (value, "lease")};
+            };
+            const auto original = route (fixture.at ("current"));
+            if (!gateway.replace_session_route (actor, sink, original))
+                return 2;
+            const auto requested = route (vector);
+            int terminals = 0;
+            const auto result =
+              record ? gateway.record_bound_session_route_transition (actor, requested,
+                                                                      [&] { ++terminals; })
+                     : gateway.replace_session_route (
+                         actor, sink, requested, stream_codec_t::message_pack,
+                         [&] (const actor_bound_session_route_t &accepted) {
+                             ++terminals;
+                             return accepted.binding_generation == requested.binding_generation
+                                    && accepted.authority_owner_generation
+                                         == requested.authority_owner_generation;
+                         });
+            const auto current = gateway.bound_session_route_async (actor).result ().value ();
+            const bool success = vector.at ("success").get<bool> ();
+            const bool same_identity =
+              original.node_rid.to_hex () == requested.node_rid.to_hex ()
+              && original.node_generation == requested.node_generation
+              && original.session_rid == requested.session_rid
+              && original.binding_generation == requested.binding_generation;
+            const auto &expected = success && !same_identity ? requested : original;
+            const bool current_matches =
+              current && current->node_rid.to_hex () == expected.node_rid.to_hex ()
+              && current->node_generation == expected.node_generation
+              && current->session_rid == expected.session_rid
+              && current->binding_generation == expected.binding_generation
+              && current->authority_owner_generation == expected.authority_owner_generation
+              && current->session_owner_id == expected.session_owner_id
+              && current->session_owner_lease_generation == expected.session_owner_lease_generation;
+            const bool terminal_matches =
+              success
+                ? result && terminals == 1 && result.value ().current
+                    && result.value ().current->binding_generation == requested.binding_generation
+                    && result.value ().current->authority_owner_generation == authority
+                : !result && terminals == 0
+                    && result.error_kind () == framework_error_kind_t::unavailable;
+            if (!current_matches || !terminal_matches) {
+                std::cerr << "bind registration contract failed: " << vector.at ("name")
+                          << (record ? " (record)" : " (replace)") << '\n';
+                ++failures;
+            }
         }
     }
     return failures == 0 ? 0 : 1;
@@ -7974,6 +8175,8 @@ int main (int argc, char **argv)
             return local_relay_preserves_handoff_request_route (true);
         if (test == "--native-relay-operation")
             return local_relay_preserves_handoff_request_route (false);
+        if (test == "--native-relay-deadline")
+            return local_relay_preserves_handoff_request_route (false, true);
         if (test == "--native-relay-missing")
             return local_relay_failure_returns_without_waiting_for_handoff_deadline ();
         if (test == "--native-relay-replay")
@@ -8004,6 +8207,9 @@ int main (int argc, char **argv)
         return 450 + route;
     if (const auto route = local_relay_preserves_handoff_request_route (false); route != 0)
         return 455 + route;
+    if (const auto deadline = local_relay_preserves_handoff_request_route (false, true);
+        deadline != 0)
+        return 465 + deadline;
     if (const auto failure = local_relay_failure_returns_without_waiting_for_handoff_deadline ();
         failure != 0)
         return 460 + failure;
@@ -8086,7 +8292,8 @@ int main (int argc, char **argv)
         command_38 != 0) {
         return 270 + command_38;
     }
-    if (const auto monotonic = late_lower_generation_bind_is_rejected (); monotonic != 0) {
+    if (const auto monotonic = late_lower_generation_bind_and_record_are_rejected ();
+        monotonic != 0) {
         return 265 + monotonic;
     }
     if (const auto disconnect_fence = old_stream_disconnect_does_not_retire_reconnected_binding ();
@@ -8246,6 +8453,11 @@ int main (int argc, char **argv)
           relocation_target_prewarm_publishes_store_confirmed_actor_and_session_fence_atomically ();
         relocation_prewarm != 0) {
         return 370 + relocation_prewarm;
+    }
+    if (const auto stale_binding =
+          stale_binding_registration_and_relocation_prepare_preserve_current_tenure ();
+        stale_binding != 0) {
+        return 380 + stale_binding;
     }
     if (const auto normalized =
           bound_session_ref_normalization_preserves_type_and_rejects_conflicts ();

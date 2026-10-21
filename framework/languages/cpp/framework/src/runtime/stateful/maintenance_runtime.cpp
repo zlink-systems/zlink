@@ -203,9 +203,7 @@ decode_session_journal (const std::vector<std::uint8_t> &payload)
 
 } // namespace
 
-namespace
-{
-class relocation_metric_operation_t
+class maintenance_runtime_t::relocation_metric_operation_t
 {
   public:
     relocation_metric_operation_t (
@@ -278,7 +276,6 @@ class relocation_metric_operation_t
     std::map<std::string, std::string> _tags;
     std::chrono::steady_clock::time_point _started{};
 };
-}
 
 struct maintenance_runtime_t::relocation_terminal_state_t
 {

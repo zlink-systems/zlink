@@ -1315,15 +1315,6 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     std::size_t route_resolutions = 0;
     std::optional<protocol::actor_route_fence_t> invalidated;
     detail::mesh_node_runtime_t source (state);
-    source.configure_actor_route_resolver (
-      [&] (actor_ref_t) -> task_t<std::optional<runtime::spot_address_t>> {
-          ++route_resolutions;
-          co_return std::nullopt;
-      },
-      [&] (const protocol::actor_route_fence_t &route) {
-          ++invalidations;
-          invalidated = route;
-      });
 
     auto target_state = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::mesh_node_builder_state_t> ("m6b-mesh");
@@ -1332,10 +1323,41 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     target_state->core_context = core_context;
     detail::mesh_node_runtime_t target (target_state);
     target.start ();
-    source.start ();
     const auto target_descriptor =
       target.native_node ().transport ().topology ().local_descriptor ();
     const auto target_rid = target.status ().routing_id ();
+    const actor_ref_t actor = detail::actor_ref_access_t::make (
+      node_rid_t::from_string (target_rid.to_string ()), "bound.actor", "bound-actor", 7);
+    const runtime::spot_address_t route{"m6b-mesh",
+                                        target_rid,
+                                        {},
+                                        0,
+                                        {},
+                                        7,
+                                        11,
+                                        {"bound-owner", 13},
+                                        target_descriptor.lifecycle_generation};
+    const runtime::spot_address_t current_route{
+      "m6b-mesh",
+      zlink::routing_id_t::from ("current-actor-owner"),
+      {},
+      0,
+      {},
+      7,
+      12,
+      {"current-owner", 14},
+      target_descriptor.lifecycle_generation == 18 ? std::uint64_t{17} : std::uint64_t{18}};
+    assert (current_route.node_generation != route.node_generation);
+    source.configure_actor_route_resolver (
+      [&] (actor_ref_t) -> task_t<std::optional<runtime::spot_address_t>> {
+          ++route_resolutions;
+          co_return invalidations == 0 ? route : current_route;
+      },
+      [&] (const protocol::actor_route_fence_t &route) {
+          ++invalidations;
+          invalidated = route;
+      });
+    source.start ();
     source.connect_peer (target_rid, target.status ().local_endpoint (),
                          target.status ().lifecycle_generation ());
 
@@ -1352,17 +1374,14 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     assert (target.has_admitted_peer (source.status ().routing_id (),
                                       source.status ().lifecycle_generation ()));
 
-    const actor_ref_t actor = detail::actor_ref_access_t::make (
-      node_rid_t::from_string (target_rid.to_string ()), "bound.actor", "bound-actor", 7);
-    const runtime::spot_address_t route{"m6b-mesh",
-                                        target_rid,
-                                        {},
-                                        0,
-                                        {},
-                                        7,
-                                        11,
-                                        {"bound-owner", 13},
-                                        target_descriptor.lifecycle_generation};
+    const auto cached = source.resolve_application_actor_route (actor).result ().value ();
+    assert (cached);
+    assert (cached->node_rid == route.node_rid);
+    assert (cached->node_generation == route.node_generation);
+    assert (cached->authority_owner_generation == route.authority_owner_generation);
+    assert (cached->owner.lease_generation == route.owner.lease_generation);
+    assert (route_resolutions == 1);
+    const auto initial_route_resolutions = route_resolutions;
 
     const auto request_and_reply =
       [&] (protocol::request_terminal_result terminal, protocol::framework_error_code failure,
@@ -1412,7 +1431,7 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     assert (accepted);
     assert (accepted.value ().binding_generation == 19);
     assert (accepted.value ().authority_owner_generation == 11);
-    assert (route_resolutions == 0);
+    assert (route_resolutions - initial_route_resolutions == 0);
     const auto success_bytes =
       protocol::encode_stream_bind_reply (9, 0, 0, protocol::stream_bind_reply_tail_t{19, 11});
     assert (protocol::decode_stream_bind_reply (success_bytes).binding
@@ -1446,15 +1465,17 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     assert (invalidated->actor_id == "bound-actor");
     assert (invalidated->object_generation == 7);
     assert (invalidated->target_node_routing_id == target_descriptor.node_routing_id);
+    assert (invalidated->target_node_generation == route.node_generation);
     assert (invalidated->authority_owner_generation == 11);
     assert (invalidated->owner_lease_generation == 13);
+    assert (route_resolutions - initial_route_resolutions == 0);
 
     const auto actor_not_ready = request_and_reply (protocol::request_terminal_result::busy,
                                                     protocol::framework_error_code::none);
     assert (!actor_not_ready);
     assert (actor_not_ready.error_kind () == framework_error_kind_t::unavailable);
     assert (invalidations == 1);
-    assert (route_resolutions == 0);
+    assert (route_resolutions - initial_route_resolutions == 0);
 
     const auto ordinary_conflict =
       request_and_reply (protocol::request_terminal_result::conflict,
@@ -1462,7 +1483,7 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     assert (!ordinary_conflict);
     assert (ordinary_conflict.error_kind () == framework_error_kind_t::unavailable);
     assert (invalidations == 1);
-    assert (route_resolutions == 0);
+    assert (route_resolutions - initial_route_resolutions == 0);
 
     // Session-Actor binding §4: the Actor owner rejects a bind whose Session owner has no
     // admitted, lease-verified descriptor with the Unavailable representative.
@@ -1472,7 +1493,7 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     assert (!session_owner_unavailable);
     assert (session_owner_unavailable.error_kind () == framework_error_kind_t::unavailable);
     assert (invalidations == 1);
-    assert (route_resolutions == 0);
+    assert (route_resolutions - initial_route_resolutions == 0);
 
     // The route snapshot exists but its owner route cannot be used. Routing
     // spec 08 §2 ends that operation as Unavailable; error model §5 reserves
@@ -1492,7 +1513,7 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     assert (!transport_failure);
     assert (transport_failure.error_kind () == framework_error_kind_t::unavailable);
     assert (invalidations == 1);
-    assert (route_resolutions == 0);
+    assert (route_resolutions - initial_route_resolutions == 0);
 
     // The connected route admits this request, but the target withholds its
     // reply. Only this post-admission deadline expiry is DeadlineExceeded.
@@ -1533,7 +1554,15 @@ void verify_remote_bound_session_bind_returns_terminal_fences ()
     assert (!reply_timeout);
     assert (reply_timeout.error_kind () == framework_error_kind_t::deadline_exceeded);
     assert (invalidations == 1);
-    assert (route_resolutions == 0);
+    assert (route_resolutions - initial_route_resolutions == 0);
+
+    const auto refreshed = source.resolve_application_actor_route (actor).result ().value ();
+    assert (refreshed);
+    assert (refreshed->node_rid == current_route.node_rid);
+    assert (refreshed->node_generation == current_route.node_generation);
+    assert (refreshed->authority_owner_generation == current_route.authority_owner_generation);
+    assert (refreshed->owner.lease_generation == current_route.owner.lease_generation);
+    assert (route_resolutions - initial_route_resolutions == 1);
 
     source.stop ();
     target.stop ();
