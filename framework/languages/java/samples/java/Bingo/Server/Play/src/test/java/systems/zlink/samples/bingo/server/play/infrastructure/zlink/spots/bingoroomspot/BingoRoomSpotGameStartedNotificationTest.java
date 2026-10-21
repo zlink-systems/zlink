@@ -37,6 +37,55 @@ import java.util.concurrent.CompletionStage;
 
 final class BingoRoomSpotGameStartedNotificationTest {
     @Test
+    void finishedRoomRewardIsDeliveredWhenObserverMembershipCommits() {
+        var context = new RecordingSpotContext("observe:room:observer");
+        var room = new BingoRoomSpot(context, null);
+        room.applySettings(
+                systems.zlink.samples.bingo.server.play.domain.bingo.BingoRoomModels
+                        .BingoRoomSettings.createObserver("room", "observer", 200));
+        var session = new CapturedBoundSession();
+        var observer = new PlayerActor("observer", new TestActorContext("observer", session));
+        var reward =
+                BingoMessages.bingoRewardAcquiredEvent(
+                        "room", "winner", 15, "rare-golden-dauber", "Golden Dauber", "Legendary");
+        // The room finishes before the observer's membership callback.
+        context.outbound.observation =
+                Messages.GetBingoObservationRes.newBuilder()
+                        .setState(
+                                Messages.BingoRoomState.newBuilder()
+                                        .setRoomId("room")
+                                        .setStatus("Finished")
+                                        .setDrawSeq(15)
+                                        .addWinners("winner"))
+                        .setReward(reward)
+                        .build();
+        room.announceReward(reward).toCompletableFuture().join();
+        assertTrue(session.messagesOf(Messages.BingoRewardAnnouncedNotify.class).isEmpty());
+        room.onActorJoin(
+                        "observer",
+                        ZLinkMessage.of(
+                                BingoMessages.bingoRoomJoinReq(
+                                        "room", "observer", "Observer", true)))
+                .toCompletableFuture()
+                .join();
+        room.onJoinedActor(observer).toCompletableFuture().join();
+        assertEquals(
+                "Finished",
+                session.messagesOf(Messages.BingoObservationStateNotify.class)
+                        .getFirst()
+                        .getState()
+                        .getStatus());
+        assertEquals(
+                "winner",
+                session.messagesOf(Messages.BingoRewardAnnouncedNotify.class)
+                        .getFirst()
+                        .getActorId());
+        // The already published event may reach this Spot after the snapshot reply.
+        room.announceReward(reward).toCompletableFuture().join();
+        assertEquals(1, session.messagesOf(Messages.BingoRewardAnnouncedNotify.class).size());
+    }
+
+    @Test
     void secondJoinPushesGameStartedToBothPlayers() {
         String roomId = "bingo-room-regression";
         BingoRoomSpot room = new BingoRoomSpot(new TestSpotContext(roomId), null);
@@ -327,7 +376,7 @@ final class BingoRoomSpotGameStartedNotificationTest {
 
         @Override
         public ZLinkSpotRelocationReadyCall relocationReady() {
-            throw new UnsupportedOperationException();
+            return () -> {};
         }
 
         @Override
@@ -349,6 +398,7 @@ final class BingoRoomSpotGameStartedNotificationTest {
     }
 
     private static final class FakeOutbound implements ZLinkSpotOutbound {
+        Messages.GetBingoObservationRes observation;
         final CompletableFuture<Messages.GetPlayerRecordRes> recordFuture =
                 new CompletableFuture<>();
 
@@ -359,7 +409,57 @@ final class BingoRoomSpotGameStartedNotificationTest {
 
         @Override
         public ZLinkSpotRequestCall requestToSpot(String spotId, Object request) {
-            throw new UnsupportedOperationException();
+            assertEquals("room", spotId);
+            assertTrue(request instanceof Messages.GetBingoObservationReq);
+            return new ZLinkSpotRequestCall() {
+                @Override
+                public ZLinkSpotRequestCall instanceSpot() {
+                    return this;
+                }
+
+                @Override
+                public ZLinkSpotRequestCall instanceSpot(String type) {
+                    return this;
+                }
+
+                @Override
+                public ZLinkSpotRequestCall inMesh(String mesh) {
+                    return this;
+                }
+
+                @Override
+                public ZLinkSpotRequestCall metadata(String key, String value) {
+                    return this;
+                }
+
+                @Override
+                public ZLinkSpotRequestCall metadata(java.util.Map<String, String> values) {
+                    return this;
+                }
+
+                @Override
+                public ZLinkSpotRequestCall timeout(Duration timeout) {
+                    return this;
+                }
+
+                @Override
+                public <T> ZLinkRequestStage<T> submit(Class<T> replyType) {
+                    class Reply extends CompletableFuture<T> implements ZLinkRequestStage<T> {
+                        @Override
+                        public CompletionStage<Void> admitted() {
+                            return CompletableFuture.completedFuture(null);
+                        }
+                    }
+                    var reply = new Reply();
+                    reply.complete(replyType.cast(observation));
+                    return reply;
+                }
+
+                @Override
+                public <T> CompletionStage<T> yield(Class<T> replyType) {
+                    throw new AssertionError("Snapshot read must retain the observer Spot turn");
+                }
+            };
         }
 
         @Override

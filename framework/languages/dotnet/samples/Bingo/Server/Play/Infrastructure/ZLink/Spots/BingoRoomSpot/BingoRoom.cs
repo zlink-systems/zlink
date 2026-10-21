@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging;
 using Zlink.Framework.Contracts.Channels;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
+using Zlink.Framework.Contracts.Timers;
 
 namespace Bingo.Server.Play.Infrastructure.ZLink.Spots.BingoRoomSpot;
 
@@ -25,8 +26,10 @@ internal sealed class BingoRoom(
     private readonly Dictionary<string, PlayerActor> _actors = new(StringComparer.Ordinal);
     private readonly Dictionary<string, PendingJoin> _pendingJoins = new(StringComparer.Ordinal);
     private bool _cleanupStarted;
+    private IZLinkTimer? _drawTimer;
     private BingoRoomGame? _game = new(context.SpotId, DefaultSettings);
     private PlayerActor? _observerActor;
+    private int? _announcedRewardDrawSeq;
     private BingoRoomSettings _settings = DefaultSettings;
 
     internal bool IsReadyToDraw => _game?.IsReadyToDraw == true;
@@ -62,6 +65,16 @@ internal sealed class BingoRoom(
         return ValueTask.CompletedTask;
     }
 
+    public async ValueTask OnInitializeAsync(CancellationToken cancellationToken)
+    {
+        if (_game is { Status: not BingoRoomStatus.Finished })
+            _drawTimer = await Context.AddTimer<Handlers.BingoRoomDrawTimerHandler>(
+                "bingo-draw",
+                TimeSpan.FromMilliseconds(200),
+                cancellationToken: cancellationToken
+            );
+    }
+
     public ValueTask OnClosingAsync(
         ZLinkSpotClosingContext context,
         CancellationToken cleanupCancellationToken
@@ -69,7 +82,7 @@ internal sealed class BingoRoom(
     {
         _ = context;
         cleanupCancellationToken.ThrowIfCancellationRequested();
-        return ValueTask.CompletedTask;
+        return _drawTimer?.CancelAsync() ?? ValueTask.CompletedTask;
     }
 
     public async ValueTask OnJoinedActorAsync(
@@ -87,6 +100,20 @@ internal sealed class BingoRoom(
             actor.SetDisplayName(join.DisplayName);
             actor.JoinRoom(join.RoomId);
             _observerActor = actor;
+            _announcedRewardDrawSeq = null;
+            var observation = await Context
+                .Outbound.RequestToSpot(join.RoomId, new GetBingoObservationReq())
+                .InMesh(SampleNames.PlayMeshName)
+                .Async<GetBingoObservationRes>(cancellationToken);
+            await actor
+                .Context.BoundSession.Send(
+                    new BingoObservationStateNotify { State = observation.State }
+                )
+                .Async();
+            if (observation.Reward is { } reward)
+                await AnnounceRewardAsync(reward, cancellationToken);
+            else
+                Context.RelocationReady().Defer();
         }
         else
         {
@@ -139,9 +166,6 @@ internal sealed class BingoRoom(
             await actor
                 .Context.BoundSession.Send(new BingoGameStartedNotify { State = _game.Snapshot() })
                 .Async();
-
-        if (_settings.IsObserver)
-            Context.RelocationReady().Defer();
     }
 
     public async ValueTask OnLeaveActorAsync(PlayerActor actor, CancellationToken cancellationToken)
@@ -175,7 +199,9 @@ internal sealed class BingoRoom(
         )
             _observerActor = null;
         logger.LogInformation("bingo-lifecycle room-leave actor={ActorId}", actor.ActorId);
-        if (_actors.Count == 0 && _observerActor is null)
+        // The game room owns the completed result until the sample host stops.
+        // Observation can be requested after every player has left.
+        if (_settings.IsObserver && _observerActor is null)
             _ = Context.CloseAsync(cancellationToken);
     }
 
@@ -262,7 +288,7 @@ internal sealed class BingoRoom(
             eventMapper.Map(change.Events, _actors),
             cancellationToken
         );
-        if (change.State.Status == BingoRoomStatus.Finished && change.State.Winners.Count > 0)
+        if (RewardFor(change.State) is { } reward)
         {
             logger.LogInformation(
                 "bingo reward: publishing. room={RoomId}, actor={ActorId}, item={ItemId}, nodeRid={NodeRid}",
@@ -273,19 +299,7 @@ internal sealed class BingoRoom(
             );
             // --8<-- [start:doc-bingo-reward-publish]
             await Context
-                .Outbound.Publish(
-                    SampleNames.RoomChannel,
-                    SampleNames.RewardTopic,
-                    new BingoRewardAcquiredEvent
-                    {
-                        RoomId = change.State.RoomId,
-                        ActorId = change.State.Winners[0],
-                        DrawSeq = change.State.DrawSeq,
-                        ItemId = BingoRewardItems.GoldenDauberId,
-                        ItemName = BingoRewardItems.GoldenDauberName,
-                        Rarity = BingoRewardItems.LegendaryRarity,
-                    }
-                )
+                .Outbound.Publish(SampleNames.RoomChannel, SampleNames.RewardTopic, reward)
                 .Async(cancellationToken);
             // --8<-- [end:doc-bingo-reward-publish]
             logger.LogInformation(
@@ -317,6 +331,9 @@ internal sealed class BingoRoom(
         }
         foreach (var actor in actors)
             await Context.LeaveActorAsync(actor, cancellationToken);
+        // Cancellation completes after the current timer callback returns.
+        if (_drawTimer is { } timer)
+            _ = timer.CancelAsync();
     }
 
     // --8<-- [end:doc-bingo-room-cleanup]
@@ -344,6 +361,7 @@ internal sealed class BingoRoom(
             !_settings.IsObserver
             || _observerActor is null
             || !string.Equals(message.RoomId, _settings.ObservedRoomId, StringComparison.Ordinal)
+            || message.DrawSeq == _announcedRewardDrawSeq
         )
         {
             logger.LogInformation(
@@ -380,6 +398,7 @@ internal sealed class BingoRoom(
                 }
             )
             .Async();
+        _announcedRewardDrawSeq = message.DrawSeq;
         Context.RelocationReady().Defer();
     }
 
@@ -405,6 +424,30 @@ internal sealed class BingoRoom(
             actor.ActorId
         );
         return true;
+    }
+
+    internal GetBingoObservationRes Observation()
+    {
+        var state = RequireGame().Snapshot();
+        var response = new GetBingoObservationRes { State = state };
+        if (RewardFor(state) is { } reward)
+            response.Reward = reward;
+        return response;
+    }
+
+    private static BingoRewardAcquiredEvent? RewardFor(BingoRoomState state)
+    {
+        if (state.Status != BingoRoomStatus.Finished || state.Winners.Count == 0)
+            return null;
+        return new BingoRewardAcquiredEvent
+        {
+            RoomId = state.RoomId,
+            ActorId = state.Winners[0],
+            DrawSeq = state.DrawSeq,
+            ItemId = BingoRewardItems.GoldenDauberId,
+            ItemName = BingoRewardItems.GoldenDauberName,
+            Rarity = BingoRewardItems.LegendaryRarity,
+        };
     }
 
     private BingoRoomGame RequireGame()

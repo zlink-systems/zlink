@@ -46,6 +46,8 @@ internal sealed class ObserveBingoEventsHandler(IZLinkSpotManager spots)
                 }
             )
             .Defer();
+        // Subscribed acknowledges the request; the observer Spot sends its
+        // snapshot after Join commits.
         return new ObserveBingoEventsRes { Subscribed = true };
     }
 

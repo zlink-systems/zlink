@@ -33,13 +33,16 @@ import java.util.function.Function;
 public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     private static final Logger logger = LoggerFactory.getLogger(BingoRoomSpot.class);
 
+    private static final String RewardItemId = "rare-golden-dauber";
+    private static final String RewardItemName = "Golden Dauber";
+    private static final String RewardRarity = "Legendary";
+
     private final ZLinkSpotContext context;
     private final BingoRoomSettingsInitializer settingsInitializer;
     private final Map<String, PlayerActor> actors = new HashMap<>();
     private final Map<String, PlayerActor> observers = new HashMap<>();
     private final Map<String, Messages.BingoRoomJoinReq> pendingJoins = new HashMap<>();
-    private final List<Messages.BingoRewardAcquiredEvent> pendingObserverRewards =
-            new ArrayList<>();
+    private Integer announcedRewardDrawSeq;
     private BingoRoomModels.BingoRoomSettings settings =
             BingoRoomModels.BingoRoomSettings.create(
                     "two-player", 0, SampleTimings.DrawPeriod.toMillis());
@@ -87,17 +90,29 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
         if (request.getObserveOnly()) {
             pendingJoins.remove(actor.actorId());
             join(actor, request, 0, 0);
-            List<Messages.BingoRewardAcquiredEvent> pendingRewards =
-                    List.copyOf(pendingObserverRewards);
-            pendingObserverRewards.clear();
-            if (pendingRewards.isEmpty()) {
-                return CompletableFuture.completedFuture(null);
-            }
-            return CompletableFuture.allOf(
-                    pendingRewards.stream()
-                            .map(this::notifyObservers)
-                            .map(CompletionStage::toCompletableFuture)
-                            .toArray(CompletableFuture[]::new));
+            announcedRewardDrawSeq = null;
+            return context.outbound()
+                    .requestToSpot(
+                            request.getRoomId(),
+                            Messages.GetBingoObservationReq.getDefaultInstance())
+                    .inMesh(SampleNames.Mesh)
+                    .submit(Messages.GetBingoObservationRes.class)
+                    .thenCompose(
+                            observation ->
+                                    actor.push(
+                                                    Messages.BingoObservationStateNotify
+                                                            .newBuilder()
+                                                            .setState(observation.getState())
+                                                            .build())
+                                            .thenCompose(
+                                                    ignored -> {
+                                                        if (observation.hasReward())
+                                                            return announceReward(
+                                                                    observation.getReward());
+                                                        context.relocationReady().defer();
+                                                        return CompletableFuture.completedFuture(
+                                                                null);
+                                                    }));
         }
         // --8<-- [start:doc-bingo-room-join]
         return context.outbound()
@@ -129,6 +144,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     public CompletionStage<Void> onLeaveActor(PlayerActor actor) {
         if (!actors.containsKey(actor.actorId()) || game == null) {
             observers.remove(actor.actorId());
+            if (settings.observerMode() && observers.isEmpty()) context.close();
             logger.info("bingo-lifecycle room-leave actor={}", actor.actorId());
             return CompletableFuture.completedFuture(null);
         }
@@ -192,7 +208,6 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
         actor.joinRoom(request.getRoomId());
         if (request.getObserveOnly()) {
             observers.put(actor.actorId(), actor);
-            context.relocationReady().defer();
             return BingoMessages.bingoRoomJoinRes(observerJoinState(request));
         }
         actors.put(actor.actorId(), actor);
@@ -247,7 +262,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
                 .thenRun(
                         () -> {
                             // --8<-- [start:doc-relocation-ready]
-                            if (change.state().getStatus().equals("Finished")) {
+                            if (change.state().getStatus().equals(BingoRoomGame.Finished)) {
                                 context.relocationReady().defer();
                             }
                             // --8<-- [end:doc-relocation-ready]
@@ -257,14 +272,19 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     // --8<-- [end:doc-bingo-draw-timer]
 
     public CompletionStage<Void> announceReward(Messages.BingoRewardAcquiredEvent event) {
-        if (!settings.observerMode() || !event.getRoomId().equals(settings.observedRoomId())) {
+        if (!settings.observerMode()
+                || !event.getRoomId().equals(settings.observedRoomId())
+                || observers.isEmpty()
+                || (announcedRewardDrawSeq != null
+                        && event.getDrawSeq() == announcedRewardDrawSeq)) {
             return CompletableFuture.completedFuture(null);
         }
-        if (observers.isEmpty()) {
-            pendingObserverRewards.add(event);
-            return CompletableFuture.completedFuture(null);
-        }
-        return notifyObservers(event).thenRun(() -> context.relocationReady().defer());
+        return notifyObservers(event)
+                .thenRun(
+                        () -> {
+                            announcedRewardDrawSeq = event.getDrawSeq();
+                            context.relocationReady().defer();
+                        });
     }
 
     private CompletionStage<Void> notifyObservers(Messages.BingoRewardAcquiredEvent event) {
@@ -321,7 +341,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
                 game == null
                         ? BingoMessages.bingoRoomState(
                                 context.spotId(),
-                                "Running",
+                                BingoRoomGame.Running,
                                 "",
                                 false,
                                 0,
@@ -347,7 +367,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
 
     // --8<-- [start:doc-bingo-room-cleanup]
     private CompletionStage<Void> leaveFinishedActors(BingoRoomGame.Change change) {
-        if (cleanupStarted || !change.state().getStatus().equals("Finished")) {
+        if (cleanupStarted || !change.state().getStatus().equals(BingoRoomGame.Finished)) {
             return CompletableFuture.completedFuture(null);
         }
 
@@ -357,29 +377,45 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
             actor.markForDestroyAfterRoomLeave();
             leaves.add(context.leaveActor(actor).toCompletableFuture());
         }
-        return CompletableFuture.allOf(leaves.toArray(CompletableFuture[]::new));
+        return CompletableFuture.allOf(leaves.toArray(CompletableFuture[]::new))
+                .thenRun(
+                        () -> {
+                            // Cancellation completes after the active timer callback returns.
+                            if (timer != null) timer.cancel();
+                        });
     }
 
     // --8<-- [end:doc-bingo-room-cleanup]
 
+    public Messages.GetBingoObservationRes observation() {
+        if (game == null) throw new IllegalStateException("Observer room does not own game state.");
+        var state = game.snapshot();
+        var response = Messages.GetBingoObservationRes.newBuilder().setState(state);
+        var reward = rewardFor(state);
+        if (reward != null) response.setReward(reward);
+        return response.build();
+    }
+
+    private static Messages.BingoRewardAcquiredEvent rewardFor(Messages.BingoRoomState state) {
+        if (!state.getStatus().equals(BingoRoomGame.Finished) || state.getWinnersList().isEmpty())
+            return null;
+        return BingoMessages.bingoRewardAcquiredEvent(
+                state.getRoomId(),
+                state.getWinnersList().getFirst(),
+                state.getDrawSeq(),
+                RewardItemId,
+                RewardItemName,
+                RewardRarity);
+    }
+
     private CompletionStage<Void> publishWinner(BingoRoomGame.Change change) {
-        if (!change.state().getStatus().equals("Finished")
-                || change.state().getWinnersList().isEmpty()) {
+        Messages.BingoRewardAcquiredEvent reward = rewardFor(change.state());
+        if (reward == null) {
             return CompletableFuture.completedFuture(null);
         }
-        String winner = change.state().getWinnersList().getFirst();
         // --8<-- [start:doc-bingo-reward-publish]
         return context.outbound()
-                .publish(
-                        SampleNames.RoomRewardChannel,
-                        SampleNames.WinnerTopic,
-                        BingoMessages.bingoRewardAcquiredEvent(
-                                change.state().getRoomId(),
-                                winner,
-                                change.state().getDrawSeq(),
-                                "rare-golden-dauber",
-                                "Golden Dauber",
-                                "Legendary"))
+                .publish(SampleNames.RoomRewardChannel, SampleNames.WinnerTopic, reward)
                 .submit();
         // --8<-- [end:doc-bingo-reward-publish]
     }
@@ -422,7 +458,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     private Messages.BingoRoomState observerJoinState(Messages.BingoRoomJoinReq request) {
         return BingoMessages.bingoRoomState(
                 request.getRoomId(),
-                "Running",
+                BingoRoomGame.Running,
                 "",
                 false,
                 0,

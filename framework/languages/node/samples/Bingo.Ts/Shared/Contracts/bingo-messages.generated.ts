@@ -67,6 +67,14 @@ export class BingoNumberDrawnNotify {
   }
 }
 
+export class BingoObservationStateNotify {
+  state!: BingoRoomState;
+
+  constructor(values: MessageValues<BingoObservationStateNotify>) {
+    Object.assign(this, values);
+  }
+}
+
 export class BingoPayloadEnvelope {
   type!: string;
   payload!: Uint8Array;
@@ -217,6 +225,22 @@ export class DeliverPlayerJoinedMsg {
 export class DestroyBingoActorMsg {
 
   constructor(values: MessageValues<DestroyBingoActorMsg>) {
+    Object.assign(this, values);
+  }
+}
+
+export class GetBingoObservationReq {
+
+  constructor(values: MessageValues<GetBingoObservationReq>) {
+    Object.assign(this, values);
+  }
+}
+
+export class GetBingoObservationRes {
+  state!: BingoRoomState;
+  reward!: BingoRewardAcquiredEvent | null;
+
+  constructor(values: MessageValues<GetBingoObservationRes>) {
     Object.assign(this, values);
   }
 }
@@ -410,6 +434,7 @@ export const BingoGeneratedMessageConstructors = {
   BingoGameEndedNotify,
   BingoGameStartedNotify,
   BingoNumberDrawnNotify,
+  BingoObservationStateNotify,
   BingoPayloadEnvelope,
   BingoPlayerState,
   BingoRewardAcquiredEvent,
@@ -425,6 +450,8 @@ export const BingoGeneratedMessageConstructors = {
   DeliverBingoRewardAnnouncedMsg,
   DeliverPlayerJoinedMsg,
   DestroyBingoActorMsg,
+  GetBingoObservationReq,
+  GetBingoObservationRes,
   GetPlayerRecordReq,
   GetPlayerRecordRes,
   LeaveFinishedBingoRoomMsg,
@@ -562,6 +589,15 @@ const bingoDescriptors: Readonly<Partial<Record<string, readonly BingoFieldDescr
     },
     {
       "number": 4,
+      "name": "state",
+      "kind": "message:BingoRoomState",
+      "repeated": false,
+      "optional": false
+    }
+  ],
+  "BingoObservationStateNotify": [
+    {
+      "number": 1,
       "name": "state",
       "kind": "message:BingoRoomState",
       "repeated": false,
@@ -940,6 +976,23 @@ const bingoDescriptors: Readonly<Partial<Record<string, readonly BingoFieldDescr
     }
   ],
   "DestroyBingoActorMsg": [],
+  "GetBingoObservationReq": [],
+  "GetBingoObservationRes": [
+    {
+      "number": 1,
+      "name": "state",
+      "kind": "message:BingoRoomState",
+      "repeated": false,
+      "optional": false
+    },
+    {
+      "number": 2,
+      "name": "reward",
+      "kind": "message:BingoRewardAcquiredEvent",
+      "repeated": false,
+      "optional": true
+    }
+  ],
   "GetPlayerRecordReq": [
     {
       "number": 1,

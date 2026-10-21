@@ -227,6 +227,38 @@ TEST (CppFrameworkSampleParity, BingoUsesDotNetSamplePacketSurface)
     EXPECT_EQ (second_joined.reply->decode<bingo_room_join_res_t> ().state ().players_size (), 1);
 }
 
+TEST (CppFrameworkSampleParity, BingoObserverReadsSnapshotAfterMembershipCommit)
+{
+    const auto root = cpp_language_root () / "samples/Bingo";
+    const auto room = read_text_file (
+      root / "Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp");
+    const auto joined = room.substr (room.find ("task_t<void> on_actor_joined"));
+    EXPECT_NE (joined.find ("get_bingo_observation_req_t"), std::string::npos);
+    EXPECT_LT (joined.find ("observers[actor.actor_id] = &actor"), joined.find ("request_to_spot"));
+    EXPECT_NE (joined.find ("on_reward_acquired (snapshot.reward ())"), std::string::npos);
+    EXPECT_NE (joined.find ("bingo_observation_state_notify_t"), std::string::npos);
+}
+
+TEST (CppFrameworkSampleParity, BingoSnapshotReturnsRewardOnlyForAFinishedRoom)
+{
+    using namespace zlink::samples::bingo;
+    bingo_room_spot_t room ("room");
+    bingo_room_relocation_state_t state;
+    state.game.room_id = "room";
+    state.game.status = bingo_room_status_t::finished;
+    state.game.draw_seq = 15;
+    state.game.winners = {"winner"};
+    room.restore_relocation_state (state);
+    const auto finished = room.observation (get_bingo_observation_req_t{});
+    ASSERT_TRUE (finished.has_reward ());
+    EXPECT_EQ (finished.state ().draw_seq (), 15);
+    EXPECT_EQ (finished.reward ().actor_id (), "winner");
+    EXPECT_EQ (finished.reward ().item_id (), bingo_reward_items_t::golden_dauber_id);
+    state.game.status = bingo_room_status_t::running;
+    room.restore_relocation_state (state);
+    EXPECT_FALSE (room.observation (get_bingo_observation_req_t{}).has_reward ());
+}
+
 TEST (CppFrameworkSampleParity, BingoClientChecksEveryDocumentedScenarioState)
 {
     const auto root = cpp_language_root () / "samples/Bingo";
@@ -308,43 +340,40 @@ TEST (CppFrameworkSampleParity, BingoRewardSubscriptionDoesNotDriveRoomCleanup)
     EXPECT_NE (handler.find ("bingo_reward_announced_notify_t"), std::string::npos);
 }
 
-TEST (CppFrameworkSampleParity, BingoRoomClosesAfterItsLastActorLeaves)
+TEST (CppFrameworkSampleParity, BingoClosesEmptyObserverRoomsAndRetainsGameResults)
 {
     const auto room =
       read_text_file (cpp_language_root ()
                       / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/"
                         "bingo_room_spot.hpp");
 
-    EXPECT_NE (room.find ("if (actors.empty () && observers.empty ())"), std::string::npos)
-      << "Bingo room must close only after both player and observer occupancy are empty";
+    // A late observation needs the game room's completed snapshot after players leave.
+    EXPECT_EQ (room.find ("if (actors.empty () && observers.empty ())"), std::string::npos);
+    EXPECT_NE (room.find ("if (_is_observer && observers.empty ())"), std::string::npos)
+      << "Only an empty observer room closes when membership ends";
     EXPECT_NE (room.find ("_context->close ()"), std::string::npos)
-      << "Bingo room must request spot closure after its last actor leaves";
+      << "Bingo observer room must request spot closure after its last observer leaves";
+    EXPECT_EQ (room.find ("_game.leave ("), std::string::npos)
+      << "Leaving runtime membership must preserve the completed game's player snapshot";
     // Close is a lifecycle item queued behind the running OnLeaveActor
     // (handler turn and execution gate §7), as in the .NET and Node samples.
     EXPECT_EQ (room.find ("co_await _context->close ()"), std::string::npos)
       << "Bingo OnLeaveActor must request Close without awaiting its own lifecycle successor";
 }
 
-TEST (CppFrameworkSampleParity, BingoFinalCleanupGuardsRelocationAfterClose)
+TEST (CppFrameworkSampleParity, BingoRetainedGameSignalsRelocationAfterFinalCleanup)
 {
     const auto handler = read_text_file (
       cpp_language_root ()
       / "samples/Bingo/Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/Handlers/"
         "bingo_room_draw_timer_handler.hpp");
-
     const auto cleanup = handler.find ("co_await leave_finished_actors ()");
-    const auto occupancy_guard = handler.find ("if (!actors.empty () || !observers.empty ())");
     const auto relocation_defer = handler.find ("_context->relocation_ready ().defer ()");
-    EXPECT_NE (cleanup, std::string::npos);
-    EXPECT_NE (occupancy_guard, std::string::npos);
-    EXPECT_NE (relocation_defer, std::string::npos);
-    EXPECT_LT (cleanup, occupancy_guard);
-    EXPECT_LT (occupancy_guard, relocation_defer);
-    EXPECT_EQ (
-      handler.find (
-        "co_await leave_finished_actors ();\n        _context->relocation_ready ().defer ();"),
-      std::string::npos)
-      << "Bingo final cleanup must not defer relocation unconditionally after close";
+    ASSERT_NE (cleanup, std::string::npos);
+    ASSERT_NE (relocation_defer, std::string::npos);
+    EXPECT_LT (cleanup, relocation_defer);
+    EXPECT_EQ (handler.find ("if (!actors.empty () || !observers.empty ())"), std::string::npos)
+      << "A completed game result remains owned even when all players have left";
 }
 
 TEST (CppFrameworkSampleParity, DomainOwnsBingoJoinAndSupportChatTimeoutDecisions)

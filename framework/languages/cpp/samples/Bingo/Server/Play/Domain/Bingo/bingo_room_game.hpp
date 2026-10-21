@@ -93,17 +93,6 @@ class bingo_room_game_t
 
     std::optional<bingo_number_drawn_t> draw_next () { return _game.draw_next (_state); }
 
-    bingo_room_state_t leave (const std::string &actor_id)
-    {
-        _state.players.erase (
-          std::remove_if (_state.players.begin (),
-                          _state.players.end (),
-                          [&] (const auto &player) { return player.actor_id == actor_id; }),
-          _state.players.end ());
-        _state.can_start = _state.players.size () == 2;
-        return _state;
-    }
-
     const bingo_room_state_t &snapshot () const noexcept { return _state; }
 
   private:
