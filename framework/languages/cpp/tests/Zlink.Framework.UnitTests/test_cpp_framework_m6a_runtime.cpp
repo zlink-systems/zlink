@@ -1,7 +1,4 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
-#if defined(_WIN32) && !defined(NOMINMAX)
-#define NOMINMAX
-#endif
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "metric_test_reader.hpp"
@@ -45,12 +42,12 @@
 #include <string>
 #include <thread>
 #include <vector>
-#if defined(_WIN32)
-#include <windows.h>
-#else
+#if !defined(_WIN32)
 #include <dlfcn.h>
 #endif
 
+#if !defined(_WIN32)
+// Linux interposes the Core C entry point to inject a binding failure.
 namespace
 {
 std::atomic_bool fail_next_disconnect_rid{false};
@@ -58,84 +55,6 @@ std::atomic_int injected_disconnect_rid_calls{0};
 
 using disconnect_rid_fn_t = zlink_connect_result_t (*) (void *, const zlink_routing_id_t *);
 
-#if defined(_WIN32)
-disconnect_rid_fn_t next_disconnect_rid = nullptr;
-
-zlink_connect_result_t injected_disconnect_rid (void *socket, const zlink_routing_id_t *peer_rid)
-{
-    if (fail_next_disconnect_rid.exchange (false, std::memory_order_acq_rel)) {
-        injected_disconnect_rid_calls.fetch_add (1, std::memory_order_relaxed);
-        errno = EIO;
-        return ZLINK_CONNECT_INTERNAL_ERROR;
-    }
-    return next_disconnect_rid (socket, peer_rid);
-}
-
-class disconnect_rid_injection_t
-{
-  public:
-    disconnect_rid_injection_t ()
-    {
-        auto *image = reinterpret_cast<unsigned char *> (GetModuleHandleW (nullptr));
-        if (!image)
-            std::abort ();
-        auto *dos_header = reinterpret_cast<IMAGE_DOS_HEADER *> (image);
-        if (dos_header->e_magic != IMAGE_DOS_SIGNATURE)
-            std::abort ();
-        auto *nt_headers = reinterpret_cast<IMAGE_NT_HEADERS *> (image + dos_header->e_lfanew);
-        if (nt_headers->Signature != IMAGE_NT_SIGNATURE)
-            std::abort ();
-        const auto import_directory =
-          nt_headers->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-        if (!import_directory.VirtualAddress)
-            std::abort ();
-        auto *imports =
-          reinterpret_cast<IMAGE_IMPORT_DESCRIPTOR *> (image + import_directory.VirtualAddress);
-        for (auto *import = imports; import->Name; ++import) {
-            if (!import->OriginalFirstThunk)
-                continue;
-            auto *names = reinterpret_cast<IMAGE_THUNK_DATA *> (image + import->OriginalFirstThunk);
-            auto *functions = reinterpret_cast<IMAGE_THUNK_DATA *> (image + import->FirstThunk);
-            for (std::size_t index = 0; names[index].u1.AddressOfData; ++index) {
-                if (IMAGE_SNAP_BY_ORDINAL (names[index].u1.Ordinal))
-                    continue;
-                auto *name =
-                  reinterpret_cast<IMAGE_IMPORT_BY_NAME *> (image + names[index].u1.AddressOfData);
-                if (std::strcmp (reinterpret_cast<const char *> (name->Name),
-                                 "zlink_disconnect_rid")
-                    != 0)
-                    continue;
-                _slot = reinterpret_cast<void **> (&functions[index].u1.Function);
-                _original = *_slot;
-                next_disconnect_rid = reinterpret_cast<disconnect_rid_fn_t> (_original);
-                replace_import (reinterpret_cast<void *> (&injected_disconnect_rid));
-                return;
-            }
-        }
-        std::abort ();
-    }
-
-    ~disconnect_rid_injection_t () { replace_import (_original); }
-
-    disconnect_rid_injection_t (const disconnect_rid_injection_t &) = delete;
-    disconnect_rid_injection_t &operator= (const disconnect_rid_injection_t &) = delete;
-
-  private:
-    void replace_import (void *replacement)
-    {
-        DWORD prior_protection = 0;
-        if (!VirtualProtect (_slot, sizeof (*_slot), PAGE_READWRITE, &prior_protection))
-            std::abort ();
-        InterlockedExchangePointer (reinterpret_cast<void *volatile *> (_slot), replacement);
-        DWORD restored_protection = 0;
-        if (!VirtualProtect (_slot, sizeof (*_slot), prior_protection, &restored_protection))
-            std::abort ();
-    }
-
-    void **_slot = nullptr;
-    void *_original = nullptr;
-};
-#else
 disconnect_rid_fn_t native_disconnect_rid ()
 {
     static const auto function =
@@ -144,10 +63,8 @@ disconnect_rid_fn_t native_disconnect_rid ()
         std::abort ();
     return function;
 }
-#endif
 } // namespace
 
-#if !defined(_WIN32)
 extern "C" zlink_connect_result_t zlink_disconnect_rid (void *socket,
                                                         const zlink_routing_id_t *peer_rid)
 {
@@ -4015,6 +3932,7 @@ void verify_liveness_without_selected_route ()
     source.close ();
 }
 
+#if !defined(_WIN32)
 void verify_liveness_propagates_binding_failure ()
 {
     auto context = std::make_shared<zlink::context_t> ();
@@ -4029,9 +3947,6 @@ void verify_liveness_propagates_binding_failure ()
             == mesh::peer_admission_result_t::admitted);
     const auto timeout_at =
       source.liveness ().connection (remote.node_routing_id)->deadline.load ();
-#if defined(_WIN32)
-    disconnect_rid_injection_t injection;
-#endif
     const auto prior_injections = injected_disconnect_rid_calls.load (std::memory_order_relaxed);
     fail_next_disconnect_rid.store (true, std::memory_order_release);
     bool observed = false;
@@ -4047,6 +3962,7 @@ void verify_liveness_propagates_binding_failure ()
     assert (injected_disconnect_rid_calls.load (std::memory_order_relaxed) == prior_injections + 1);
     source.close ();
 }
+#endif
 
 
 // Do not pump the sender: its selected route has not completed admission.
@@ -4383,7 +4299,9 @@ int main (int argc, char **argv)
 
     if (argc == 2 && std::string_view (argv[1]) == "--liveness-not-found-contract") {
         verify_liveness_without_selected_route ();
+#if !defined(_WIN32)
         verify_liveness_propagates_binding_failure ();
+#endif
         return 0;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--liveness-physical-close") {
