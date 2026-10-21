@@ -7730,7 +7730,7 @@ final class ZLinkJavaRawMeshNode
         for (int index = 0; index < tick.timedOutNodes().size(); index++) {
             RoutingId peer = tick.timedOutNodes().get(index);
             if (disconnectAdmitted(peer, admittedConnectionId(peer))) {
-                requireStarted().disconnectRid(peer);
+                ZLinkJavaSocketSupport.disconnectRidIfPresent(requireStarted(), peer);
                 signalStateChanged(peer);
             }
         }
