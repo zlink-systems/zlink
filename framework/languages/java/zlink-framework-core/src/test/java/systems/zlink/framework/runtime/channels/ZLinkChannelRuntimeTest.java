@@ -15,10 +15,14 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ConfigResult;
+import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.errors.ZlinkRecvException;
+import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RecvResult;
+import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.ZLinkEncodedPayload;
@@ -64,6 +68,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -72,6 +77,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BooleanSupplier;
 import java.util.function.Consumer;
@@ -404,6 +410,102 @@ final class ZLinkChannelRuntimeTest {
         }
     }
 
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void meshSubmissionUnexpectedFailureContract(boolean nodeDirect, boolean asynchronous) {
+        RuntimeException original = new RuntimeException("submission failed");
+        Throwable failure = meshSubmissionFailure(nodeDirect, asynchronous, original);
+        ZLinkFrameworkException framework =
+                assertInstanceOf(ZLinkFrameworkException.class, failure);
+        assertEquals(ZLinkFrameworkErrorKind.INTERNAL_FAILURE, framework.kind());
+        assertSame(original, framework.getCause());
+    }
+
+    @ParameterizedTest
+    @CsvSource({"false,false", "false,true", "true,false", "true,true"})
+    void meshSubmissionKnownFailureContract(boolean nodeDirect, boolean asynchronous) {
+        List<RuntimeException> known = new ArrayList<>();
+        for (var kind : ZLinkFrameworkErrorKind.values()) {
+            known.add(new ZLinkFrameworkException(kind, "typed failure"));
+        }
+        known.add(new ZlinkConfigException(ConfigResult.INVALID_ARGUMENT));
+        known.add(new ZLinkConfigurationException("missing configuration"));
+        known.add(new CancellationException("cancelled"));
+        known.add(new IllegalArgumentException("invalid argument"));
+        known.add(new NullPointerException("missing argument"));
+        known.add(new IllegalStateException("invalid state"));
+        known.add(new UnsupportedOperationException("unsupported operation"));
+        for (RuntimeException original : known) {
+            assertSame(original, meshSubmissionFailure(nodeDirect, asynchronous, original));
+        }
+        var submit = new ZlinkSubmitException(SubmitResult.NOT_CONNECTED, 2);
+        var submitFailure =
+                assertInstanceOf(
+                        ZLinkFrameworkException.class,
+                        meshSubmissionFailure(nodeDirect, asynchronous, submit));
+        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, submitFailure.kind());
+        assertSame(submit, submitFailure.getCause());
+        for (var result : RequestResult.values()) {
+            if (result == RequestResult.OK) continue;
+            var original = new ZlinkRequestException(result);
+            var failure =
+                    assertInstanceOf(
+                            ZLinkFrameworkException.class,
+                            meshSubmissionFailure(nodeDirect, asynchronous, original));
+            assertEquals(
+                    switch (result) {
+                        case TIMED_OUT -> ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED;
+                        case NOT_FOUND -> ZLinkFrameworkErrorKind.NOT_FOUND;
+                        case TERMINATED -> ZLinkFrameworkErrorKind.SHUTTING_DOWN;
+                        case PROTOCOL_ERROR -> ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
+                        case REJECTED -> ZLinkFrameworkErrorKind.REJECTED;
+                        case CONFLICT, BUSY, NOT_CONNECTED, BACKPRESSURED ->
+                                ZLinkFrameworkErrorKind.UNAVAILABLE;
+                        case INVALID_ARGUMENT, INVALID_STATE ->
+                                ZLinkFrameworkErrorKind.INVALID_OPERATION;
+                        case OK, INTERNAL_ERROR, NOT_SUPPORTED ->
+                                ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+                    },
+                    failure.kind(),
+                    result.name());
+            assertSame(original, failure.getCause());
+        }
+        TimeoutException timeout = new TimeoutException("request timed out");
+        ZLinkFrameworkException deadline =
+                assertInstanceOf(
+                        ZLinkFrameworkException.class,
+                        meshSubmissionFailure(
+                                nodeDirect, asynchronous, new CompletionException(timeout)));
+        assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, deadline.kind());
+        assertSame(timeout, deadline.getCause());
+    }
+
+    private Throwable meshSubmissionFailure(
+            boolean nodeDirect, boolean asynchronous, RuntimeException original) {
+        var options = new DefaultZLinkFrameworkOptions();
+        var backend = new FakeChannelBackendAdapter();
+        backend.spotNode.submissionFailure = original;
+        backend.spotNode.asynchronousSubmissionFailure = asynchronous;
+        try (var runtime =
+                new ZLinkChannelRuntime(
+                        backend,
+                        options.registration(),
+                        new ZLinkJsonMessageSerializer(),
+                        handlers())) {
+            runtime.registerSpotRouterNode("play", backend.spotNode);
+            var call =
+                    nodeDirect
+                            ? runtime.requestToNode(
+                                    "play", RoutingId.from("target"), new TestRequest("hello"))
+                            : runtime.requestToChannel("play", new TestRequest("hello"));
+            var submitted = call.submit(TestReply.class).toCompletableFuture();
+            assertThrows(RuntimeException.class, submitted::join);
+            Throwable failure = submitted.handle((reply, error) -> error).join();
+            assertEquals(1, backend.spotNode.requestAttempts);
+            return failure instanceof CompletionException ? failure.getCause() : failure;
+        }
+    }
+
     @Test
     void meshChannelRequestTerminatesOnBackendNotConnectedWithoutFrameworkRetry() {
         DefaultZLinkFrameworkOptions options = new DefaultZLinkFrameworkOptions();
@@ -428,8 +530,11 @@ final class ZLinkChannelRuntimeTest {
                                             .toCompletableFuture()
                                             .join());
 
+            ZLinkFrameworkException framework =
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, framework.kind());
             ZlinkSubmitException terminal =
-                    assertInstanceOf(ZlinkSubmitException.class, failure.getCause());
+                    assertInstanceOf(ZlinkSubmitException.class, framework.getCause());
             assertEquals(SubmitResult.NOT_CONNECTED, terminal.getResult());
             assertEquals(1, backend.spotNode.requestAttempts);
             assertEquals(
@@ -720,8 +825,11 @@ final class ZLinkChannelRuntimeTest {
                                             .toCompletableFuture()
                                             .join());
 
+            ZLinkFrameworkException framework =
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, framework.kind());
             ZlinkSubmitException terminal =
-                    assertInstanceOf(ZlinkSubmitException.class, failure.getCause());
+                    assertInstanceOf(ZlinkSubmitException.class, framework.getCause());
             assertEquals(SubmitResult.NOT_CONNECTED, terminal.getResult());
             assertEquals(1, backend.dealer.requestAttempts);
         }
@@ -755,8 +863,11 @@ final class ZLinkChannelRuntimeTest {
                                             .toCompletableFuture()
                                             .join());
 
+            ZLinkFrameworkException framework =
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, framework.kind());
             ZlinkSubmitException terminal =
-                    assertInstanceOf(ZlinkSubmitException.class, failure.getCause());
+                    assertInstanceOf(ZlinkSubmitException.class, framework.getCause());
             assertEquals(SubmitResult.NOT_CONNECTED, terminal.getResult());
             assertEquals(1, backend.router.requestAttempts);
         }
@@ -2949,6 +3060,8 @@ final class ZLinkChannelRuntimeTest {
         private final CompletableFuture<Void> metadataObserved = new CompletableFuture<>();
         private int requestAttempts;
         private int channelClassifications;
+        private RuntimeException submissionFailure;
+        private boolean asynchronousSubmissionFailure;
         private int requestFailuresRemaining;
         private SubmitResult requestFailureResult = SubmitResult.NOT_CONNECTED;
         private Optional<Integer> channelTargetClassification = Optional.empty();
@@ -3047,6 +3160,13 @@ final class ZLinkChannelRuntimeTest {
                         operations,
                 java.util.UUID operationId,
                 CompletableFuture<Void> requestAdmission) {
+            if (submissionFailure != null) {
+                requestAttempts++;
+                if (!asynchronousSubmissionFailure) throw submissionFailure;
+                return ZLinkTestAdmissionFactory.acceptedRequest(
+                        CompletableFuture.failedFuture(new CompletionException(submissionFailure)),
+                        requestAdmission);
+            }
             lastMetadata = metadata.clone();
             return ZLinkTestAdmissionFactory.acceptedRequest(
                     CompletableFuture.completedFuture(
@@ -3074,6 +3194,13 @@ final class ZLinkChannelRuntimeTest {
                         operations,
                 java.util.UUID operationId,
                 CompletableFuture<Void> requestAdmission) {
+            if (submissionFailure != null) {
+                requestAttempts++;
+                if (!asynchronousSubmissionFailure) throw submissionFailure;
+                return ZLinkTestAdmissionFactory.acceptedRequest(
+                        CompletableFuture.failedFuture(new CompletionException(submissionFailure)),
+                        requestAdmission);
+            }
             // The backend's selection result owns absence classification.
             if (channelTargetClassification.isPresent()) {
                 return ZLinkTestAdmissionFactory.acceptedRequest(
