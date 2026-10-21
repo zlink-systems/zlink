@@ -2896,6 +2896,7 @@ public sealed class ServiceRuntimeFoundationTests
                 EffectiveMaxQueuedApplicationJobs: capacity
             )
         );
+        var resumePermitCount = applicationJobQueue.GetStatus().ResumePermitCount;
         await using var source = new ZLinkManagedMeshNode(context, "orders");
         await using var target = new ZLinkManagedMeshNode(
             context,
@@ -2935,9 +2936,52 @@ public sealed class ServiceRuntimeFoundationTests
         source.ConnectPeer(targetEndpoint, targetRid);
         target.SetRoutingId(targetRid);
         target.SetBind(targetEndpoint);
+        var pausedFlow = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        var resumedFlow = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        await using var flowRegistration = applicationJobQueue.RegisterReceiveFlowSocket(
+            new object(),
+            state =>
+            {
+                if (state == ReceiveFlowState.Paused)
+                    pausedFlow.TrySetResult();
+                else if (pausedFlow.Task.IsCompleted)
+                    resumedFlow.TrySetResult();
+            }
+        );
+
+        Task batchReady;
+        using (
+            var reservation = await applicationJobQueue.AcquireBatchAsync(
+                capacity,
+                CancellationToken.None,
+                ZLinkApplicationJobOrigin.Remote
+            )
+        )
+        {
+            await pausedFlow.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            var reserved = applicationJobQueue.GetStatus();
+            Assert.Equal(ZLinkApplicationJobQueuePressureState.Paused, reserved.PressureState);
+            Assert.Equal((ulong)capacity, reserved.ReservedSupplyPermits);
+            Assert.Equal(0UL, reserved.QueuedApplicationJobs);
+            Assert.Equal(0UL, target.Status().PendingApplicationMessages);
+
+            // A receive reservation pauses flow before any record reaches the mailbox.
+            batchReady = WaitUntilAsync(() =>
+                target.Status().PendingApplicationMessages > resumePermitCount
+            );
+            Assert.False(batchReady.IsCompleted);
+        }
+        await resumedFlow.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var resumed = applicationJobQueue.GetStatus();
+        Assert.Equal(ZLinkApplicationJobQueuePressureState.Running, resumed.PressureState);
+        Assert.Equal(0UL, resumed.PermitsInUse);
+
         target.Start();
         source.Start();
-
         await WaitUntilAsync(() =>
             source.Status().AdmittedPeerCount == 1 && target.Status().AdmittedPeerCount == 1
         );
@@ -2946,13 +2990,9 @@ public sealed class ServiceRuntimeFoundationTests
             using var payload = Message.From(new byte[] { checked((byte)index) });
             Assert.Equal(SubmitResult.Ok, source.SendToNode(targetRid, [payload]));
         }
-
-        await WaitUntilAsync(() =>
-            applicationJobQueue.GetStatus().PressureState
-            == ZLinkApplicationJobQueuePressureState.Paused
-        );
-        // Spec 04 §6 hysteresis: Paused holds until permits fall to the resume
-        // count, so a returned unused reservation may leave fewer than the pause count.
+        await batchReady;
+        // Spec 04 §3: the preadmitted records retain their queued permits
+        // until the pump starts their handlers.
         var paused = applicationJobQueue.GetStatus();
         Assert.Equal(ZLinkApplicationJobQueuePressureState.Paused, paused.PressureState);
         Assert.InRange(paused.PermitsInUse, paused.ResumePermitCount + 1, (ulong)capacity);
