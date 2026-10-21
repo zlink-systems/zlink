@@ -14,9 +14,14 @@ function(zlink_framework_cpp_add_boost_headers target_name)
     # Keep the bundled Boost tree ahead of transitive package include paths. A
     # framework target and the standalone HTTP client are linked into the same
     # consumer; selecting different Asio headers in those targets is an ABI
-    # violation even though the headers are nominally header-only.
-    target_include_directories(${target_name} BEFORE PRIVATE
-      "${ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR}")
+    # violation even though the headers are nominally header-only. In-tree
+    # consumers inherit the same tree, so a test that only links one of these
+    # targets cannot mix it with a package's Boost headers (#1867: MSVC threw
+    # asio::invalid_service_owner from two Asio versions in one executable).
+    # Package Boost paths are SYSTEM include paths, which plain include
+    # directories precede on every supported compiler.
+    target_include_directories(${target_name} BEFORE PUBLIC
+      "$<BUILD_INTERFACE:${ZLINK_FRAMEWORK_CPP_BOOST_INCLUDE_DIR}>")
   elseif(TARGET Boost::headers)
     # A static archive's PRIVATE link dependencies are exported as LINK_ONLY, so
     # without BUILD_INTERFACE the installed config would send every consumer
