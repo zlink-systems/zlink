@@ -2,6 +2,8 @@ package systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.bingo
 
 import static org.junit.jupiter.api.Assertions.assertAll;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import org.junit.jupiter.api.Test;
@@ -16,6 +18,8 @@ import systems.zlink.framework.channels.ZLinkPublishCall;
 import systems.zlink.framework.channels.ZLinkRequestCall;
 import systems.zlink.framework.channels.ZLinkRequestStage;
 import systems.zlink.framework.channels.ZLinkSendCall;
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spots.ZLinkSpotContext;
 import systems.zlink.framework.spots.ZLinkSpotOutbound;
@@ -36,6 +40,38 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 final class BingoRoomSpotGameStartedNotificationTest {
+    @Test
+    void closedRoomEndsObserverJoinButOtherRequestFailuresPropagate() {
+        for (var kind :
+                List.of(ZLinkFrameworkErrorKind.NOT_FOUND, ZLinkFrameworkErrorKind.UNAVAILABLE)) {
+            var context = new RecordingSpotContext("observe:room:observer");
+            var room = new BingoRoomSpot(context, null);
+            room.applySettings(
+                    systems.zlink.samples.bingo.server.play.domain.bingo.BingoRoomModels
+                            .BingoRoomSettings.createObserver("room", "observer", 200));
+            var session = new CapturedBoundSession();
+            var observer = new PlayerActor("observer", new TestActorContext("observer", session));
+            var failure = new ZLinkFrameworkException(kind, "Room request failed");
+            context.outbound.observationFailure = failure;
+            room.onActorJoin(
+                            "observer",
+                            ZLinkMessage.of(
+                                    BingoMessages.bingoRoomJoinReq(
+                                            "room", "observer", "Observer", true)))
+                    .toCompletableFuture()
+                    .join();
+            var callback = room.onJoinedActor(observer).toCompletableFuture();
+            if (kind == ZLinkFrameworkErrorKind.NOT_FOUND) callback.join();
+            else
+                assertSame(
+                        failure,
+                        assertThrows(java.util.concurrent.CompletionException.class, callback::join)
+                                .getCause());
+            assertTrue(session.messagesOf(Messages.BingoObservationStateNotify.class).isEmpty());
+            assertTrue(session.messagesOf(Messages.BingoRewardAnnouncedNotify.class).isEmpty());
+        }
+    }
+
     @Test
     void finishedRoomRewardIsDeliveredWhenObserverMembershipCommits() {
         var context = new RecordingSpotContext("observe:room:observer");
@@ -399,6 +435,7 @@ final class BingoRoomSpotGameStartedNotificationTest {
 
     private static final class FakeOutbound implements ZLinkSpotOutbound {
         Messages.GetBingoObservationRes observation;
+        ZLinkFrameworkException observationFailure;
         final CompletableFuture<Messages.GetPlayerRecordRes> recordFuture =
                 new CompletableFuture<>();
 
@@ -424,7 +461,7 @@ final class BingoRoomSpotGameStartedNotificationTest {
 
                 @Override
                 public ZLinkSpotRequestCall inMesh(String mesh) {
-                    return this;
+                    throw new AssertionError("InMesh requires Instance Spot intent");
                 }
 
                 @Override
@@ -451,7 +488,8 @@ final class BingoRoomSpotGameStartedNotificationTest {
                         }
                     }
                     var reply = new Reply();
-                    reply.complete(replyType.cast(observation));
+                    if (observationFailure != null) reply.completeExceptionally(observationFailure);
+                    else reply.complete(replyType.cast(observation));
                     return reply;
                 }
 

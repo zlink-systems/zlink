@@ -12,6 +12,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import org.slf4j.LoggerFactory
 import systems.zlink.framework.channels.ZLinkRouteClient
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+import systems.zlink.framework.errors.ZLinkFrameworkException
 import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpot
 import systems.zlink.framework.kotlin.await
@@ -110,16 +112,21 @@ class BingoRoomSpot(
             pendingJoins.remove(actor.actorId())
             join(actor, request, 0, 0)
             announcedRewardDrawSeq = null
+            // Observation receives results only while the game room is alive.
             val observation =
-                context
-                    .outbound()
-                    .kotlin()
-                    .requestToSpot<Messages.GetBingoObservationRes>(
-                        request.roomId,
-                        Messages.GetBingoObservationReq.getDefaultInstance(),
-                    )
-                    .inMesh(SampleNames.Mesh)
-                    .await()
+                try {
+                    context
+                        .outbound()
+                        .kotlin()
+                        .requestToSpot<Messages.GetBingoObservationRes>(
+                            request.roomId,
+                            Messages.GetBingoObservationReq.getDefaultInstance(),
+                        )
+                        .await()
+                } catch (error: ZLinkFrameworkException) {
+                    if (error.kind() == ZLinkFrameworkErrorKind.NOT_FOUND) return
+                    throw error
+                }
             actor.push(
                 Messages.BingoObservationStateNotify.newBuilder()
                     .setState(observation.state)
@@ -183,6 +190,7 @@ class BingoRoomSpot(
             record.losses,
         )
         actors.remove(actor.actorId())
+        if (actors.isEmpty() && observers.isEmpty()) context.close()
         logger.info("bingo-lifecycle room-leave actor={}", actor.actorId())
     }
 

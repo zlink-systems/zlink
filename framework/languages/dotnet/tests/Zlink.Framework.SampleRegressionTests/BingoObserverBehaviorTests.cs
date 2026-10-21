@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 using Zlink.Framework.Contracts.Actors;
 using Zlink.Framework.Contracts.Channels;
+using Zlink.Framework.Contracts.Errors;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.Contracts.Streams;
@@ -22,8 +23,11 @@ public sealed class BingoObserverBehaviorTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    [InlineData(false, ZLinkFrameworkErrorKind.NotFound)]
+    [InlineData(false, ZLinkFrameworkErrorKind.Unavailable)]
     public async Task Finished_room_reward_is_sent_after_observer_membership_commits(
-        bool earlyEvent
+        bool earlyEvent,
+        ZLinkFrameworkErrorKind? failureKind = null
     )
     {
         var reward = new BingoRewardAcquiredEvent
@@ -43,7 +47,10 @@ public sealed class BingoObserverBehaviorTests
         };
         state.Winners.Add("winner");
         var context = new ObservationContext(
-            new GetBingoObservationRes { State = state, Reward = reward }
+            new GetBingoObservationRes { State = state, Reward = reward },
+            failureKind is { } kind
+                ? new ZLinkFrameworkException(kind, "Room request failed")
+                : null
         );
         var room = new BingoRoom(
             context,
@@ -74,7 +81,21 @@ public sealed class BingoObserverBehaviorTests
             ),
             default
         );
+        if (failureKind == ZLinkFrameworkErrorKind.Unavailable)
+        {
+            var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(() =>
+                room.OnJoinedActorAsync(actor, default).AsTask()
+            );
+            Assert.Equal(failureKind, error.Kind);
+            Assert.Empty(session.Messages);
+            return;
+        }
         await room.OnJoinedActorAsync(actor, default);
+        if (failureKind == ZLinkFrameworkErrorKind.NotFound)
+        {
+            Assert.Empty(session.Messages);
+            return;
+        }
         Assert.Equal(1, context.ReadinessSignals);
         Assert.Collection(
             session.Messages,
@@ -87,7 +108,7 @@ public sealed class BingoObserverBehaviorTests
     }
 
     [Fact]
-    public async Task Retained_finished_room_stops_its_existing_draw_timer()
+    public async Task Finished_room_stops_its_existing_draw_timer_without_self_waiting()
     {
         var context = new ObservationContext(new GetBingoObservationRes());
         var room = new BingoRoom(
@@ -179,11 +200,10 @@ public sealed class BingoObserverBehaviorTests
             throw new NotSupportedException();
     }
 
-    private sealed class ObservationContext(GetBingoObservationRes response)
-        : IZLinkSpotContext,
-            IZLinkSpotOutbound,
-            IZLinkSpotRequestCall,
-            IZLinkSpotRelocationReadyCall
+    private sealed class ObservationContext(
+        GetBingoObservationRes response,
+        Exception? failure = null
+    ) : IZLinkSpotContext, IZLinkSpotOutbound, IZLinkSpotRequestCall, IZLinkSpotRelocationReadyCall
     {
         public string MeshName => "bingo.play";
         public string SpotId => "observe:room:observer";
@@ -251,7 +271,8 @@ public sealed class BingoObserverBehaviorTests
 
         public IZLinkSpotRequestCall InstanceSpot(string type) => this;
 
-        public IZLinkSpotRequestCall InMesh(string meshName) => this;
+        public IZLinkSpotRequestCall InMesh(string meshName) =>
+            throw new InvalidOperationException("InMesh requires Instance Spot intent.");
 
         public IZLinkSpotRequestCall Timeout(TimeSpan timeout) => this;
 
@@ -260,7 +281,12 @@ public sealed class BingoObserverBehaviorTests
         public IZLinkSpotRequestCall Metadata(ZLinkMessageMetadata metadata) => this;
 
         public ZLinkRequest<T> Async<T>(CancellationToken cancellationToken = default) =>
-            new(ValueTask.CompletedTask, ValueTask.FromResult((T)(object)response));
+            new(
+                ValueTask.CompletedTask,
+                failure is null
+                    ? ValueTask.FromResult((T)(object)response)
+                    : ValueTask.FromException<T>(failure)
+            );
 
         public ValueTask<T> Yield<T>(CancellationToken cancellationToken = default) =>
             throw new InvalidOperationException("Snapshot must retain the observer turn.");

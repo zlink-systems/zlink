@@ -5,6 +5,7 @@ using Bingo.Server.Play.Infrastructure.ZLink.Spots.BingoRoomSpot.Notifications;
 using Bingo.Shared.Contracts;
 using Microsoft.Extensions.Logging;
 using Zlink.Framework.Contracts.Channels;
+using Zlink.Framework.Contracts.Errors;
 using Zlink.Framework.Contracts.Messaging;
 using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.Contracts.Timers;
@@ -101,10 +102,19 @@ internal sealed class BingoRoom(
             actor.JoinRoom(join.RoomId);
             _observerActor = actor;
             _announcedRewardDrawSeq = null;
-            var observation = await Context
-                .Outbound.RequestToSpot(join.RoomId, new GetBingoObservationReq())
-                .InMesh(SampleNames.PlayMeshName)
-                .Async<GetBingoObservationRes>(cancellationToken);
+            // Observation receives results only while the game room is alive.
+            GetBingoObservationRes observation;
+            try
+            {
+                observation = await Context
+                    .Outbound.RequestToSpot(join.RoomId, new GetBingoObservationReq())
+                    .Async<GetBingoObservationRes>(cancellationToken);
+            }
+            catch (ZLinkFrameworkException error)
+                when (error.Kind == ZLinkFrameworkErrorKind.NotFound)
+            {
+                return;
+            }
             await actor
                 .Context.BoundSession.Send(
                     new BingoObservationStateNotify { State = observation.State }
@@ -199,9 +209,7 @@ internal sealed class BingoRoom(
         )
             _observerActor = null;
         logger.LogInformation("bingo-lifecycle room-leave actor={ActorId}", actor.ActorId);
-        // The game room owns the completed result until the sample host stops.
-        // Observation can be requested after every player has left.
-        if (_settings.IsObserver && _observerActor is null)
+        if (_actors.Count == 0 && _observerActor is null)
             _ = Context.CloseAsync(cancellationToken);
     }
 

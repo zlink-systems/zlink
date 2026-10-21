@@ -3,6 +3,8 @@ package systems.zlink.samples.bingo.server.play.infrastructure.zlink.spots.bingo
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
+import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.messaging.ZLinkMessage;
 import systems.zlink.framework.spots.ZLinkSpot;
 import systems.zlink.framework.spots.ZLinkSpotActorJoinResult;
@@ -27,6 +29,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 
@@ -91,28 +94,40 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
             pendingJoins.remove(actor.actorId());
             join(actor, request, 0, 0);
             announcedRewardDrawSeq = null;
+            // Observation receives results only while the game room is alive.
             return context.outbound()
                     .requestToSpot(
                             request.getRoomId(),
                             Messages.GetBingoObservationReq.getDefaultInstance())
-                    .inMesh(SampleNames.Mesh)
                     .submit(Messages.GetBingoObservationRes.class)
+                    .exceptionally(
+                            error -> {
+                                Throwable cause =
+                                        error instanceof CompletionException
+                                                ? error.getCause()
+                                                : error;
+                                if (cause instanceof ZLinkFrameworkException framework
+                                        && framework.kind() == ZLinkFrameworkErrorKind.NOT_FOUND)
+                                    return null;
+                                throw new CompletionException(cause);
+                            })
                     .thenCompose(
-                            observation ->
-                                    actor.push(
-                                                    Messages.BingoObservationStateNotify
-                                                            .newBuilder()
-                                                            .setState(observation.getState())
-                                                            .build())
-                                            .thenCompose(
-                                                    ignored -> {
-                                                        if (observation.hasReward())
-                                                            return announceReward(
-                                                                    observation.getReward());
-                                                        context.relocationReady().defer();
-                                                        return CompletableFuture.completedFuture(
-                                                                null);
-                                                    }));
+                            observation -> {
+                                if (observation == null)
+                                    return CompletableFuture.completedFuture(null);
+                                return actor.push(
+                                                Messages.BingoObservationStateNotify.newBuilder()
+                                                        .setState(observation.getState())
+                                                        .build())
+                                        .thenCompose(
+                                                ignored -> {
+                                                    if (observation.hasReward())
+                                                        return announceReward(
+                                                                observation.getReward());
+                                                    context.relocationReady().defer();
+                                                    return CompletableFuture.completedFuture(null);
+                                                });
+                            });
         }
         // --8<-- [start:doc-bingo-room-join]
         return context.outbound()
@@ -167,6 +182,7 @@ public final class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
                                     record.getWins(),
                                     record.getLosses());
                             actors.remove(actor.actorId());
+                            if (actors.isEmpty() && observers.isEmpty()) context.close();
                             logger.info("bingo-lifecycle room-leave actor={}", actor.actorId());
                         });
     }

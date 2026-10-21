@@ -7,6 +7,8 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.Test
 import systems.zlink.framework.actors.*
 import systems.zlink.framework.channels.*
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+import systems.zlink.framework.errors.ZLinkFrameworkException
 import systems.zlink.framework.messaging.ZLinkMessage
 import systems.zlink.framework.spots.*
 import systems.zlink.samples.kotlin.bingo.server.play.domain.bingo.BingoRoomSettings
@@ -23,8 +25,15 @@ class BingoObserverJoinTest {
             call(method.name, args ?: emptyArray())
         } as T
 
+    @Test fun finishedRoomRewardIsDeliveredAfterObserverMembershipCommits() = observe()
+
     @Test
-    fun finishedRoomRewardIsDeliveredAfterObserverMembershipCommits() = runBlocking {
+    fun closedRoomEndsObserverJoinButOtherRequestFailuresPropagate() {
+        observe(ZLinkFrameworkException(ZLinkFrameworkErrorKind.NOT_FOUND, "Room closed"))
+        observe(ZLinkFrameworkException(ZLinkFrameworkErrorKind.UNAVAILABLE, "Room unavailable"))
+    }
+
+    private fun observe(failure: ZLinkFrameworkException? = null) = runBlocking {
         val pushed = mutableListOf<Any>()
         val reward =
             BingoRewardAcquiredEvent(
@@ -53,7 +62,8 @@ class BingoObserverJoinTest {
                             CompletableFuture<Messages.GetBingoObservationRes>(),
                             ZLinkRequestStage<Messages.GetBingoObservationRes> {
                             init {
-                                complete(observation)
+                                if (failure == null) complete(observation)
+                                else completeExceptionally(failure)
                             }
 
                             override fun admitted() = CompletableFuture.completedFuture<Void>(null)
@@ -61,16 +71,11 @@ class BingoObserverJoinTest {
                     else -> error("Unexpected request call: $method")
                 }
             }
-        val routed =
-            publicStub<ZLinkSpotRequestCall> { method, _ ->
-                check(method == "inMesh")
-                request
-            }
         val outbound =
             publicStub<ZLinkSpotOutbound> { method, args ->
                 check(method == "requestToSpot")
                 assertEquals("room", args[0])
-                routed
+                request
             }
         val context =
             publicStub<ZLinkSpotContext> { method, _ ->
@@ -118,7 +123,23 @@ class BingoObserverJoinTest {
             )
             .toCompletableFuture()
             .join()
-        room.onJoinedActor(actor).toCompletableFuture().join()
+        val callback = room.onJoinedActor(actor).toCompletableFuture()
+        if (failure?.kind() == ZLinkFrameworkErrorKind.UNAVAILABLE) {
+            assertSame(
+                failure,
+                assertThrows(java.util.concurrent.CompletionException::class.java) {
+                        callback.join()
+                    }
+                    .cause,
+            )
+            assertTrue(pushed.isEmpty())
+            return@runBlocking
+        }
+        callback.join()
+        if (failure != null) {
+            assertTrue(pushed.isEmpty())
+            return@runBlocking
+        }
         assertEquals(2, pushed.size)
         assertEquals(state, (pushed[0] as Messages.BingoObservationStateNotify).state)
         assertEquals("winner", (pushed[1] as BingoRewardAnnouncedNotify).actorId)

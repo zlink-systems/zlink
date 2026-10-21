@@ -186,11 +186,19 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
             _pending_joins.erase (pending);
             observers[actor.actor_id] = &actor;
             _announced_reward_draw_seq.reset ();
-            const auto snapshot = co_await _context
-                                    ->request_to_spot (spot_id_t (request.room_id ()),
-                                                       get_bingo_observation_req_t{})
-                                    .in_mesh (sample_names_t::room_spot_mesh)
-                                    .async<get_bingo_observation_res_t> ();
+            // Observation receives results only while the game room is alive.
+            get_bingo_observation_res_t snapshot;
+            try {
+                snapshot = co_await _context
+                             ->request_to_spot (spot_id_t (request.room_id ()),
+                                                get_bingo_observation_req_t{})
+                             .async<get_bingo_observation_res_t> ();
+            }
+            catch (const framework_exception_t &error) {
+                if (error.kind () == framework_error_kind_t::not_found)
+                    co_return;
+                throw;
+            }
             bingo_observation_state_notify_t notification;
             *notification.mutable_state () = snapshot.state ();
             actor.push (notification);
@@ -263,8 +271,7 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
         observers.erase (actor.actor_id);
         // Membership is tracked above; the game snapshot retains the round's players.
         std::cout << "bingo-lifecycle room-leave actor=" << actor.actor_id << std::endl;
-        // The game room owns the completed result until the sample host stops.
-        if (_is_observer && observers.empty ()) {
+        if (actors.empty () && observers.empty ()) {
             // Close runs after this leave callback ends, so request it without
             // waiting here.
             (void) _context->close ();

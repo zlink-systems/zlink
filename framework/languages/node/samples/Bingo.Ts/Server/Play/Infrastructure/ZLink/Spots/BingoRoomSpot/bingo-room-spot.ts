@@ -1,5 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ZLINK_ACTOR_CLIENT, ZLINK_CHANNEL_CLIENT } from '@zlink-systems/nestjs';
+import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
 import { BingoRewardItems } from '../../../../../../Shared/Contracts/messages';
 import {
   BingoGameEndedNotify,
@@ -167,10 +168,20 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     if (request.observeOnly) {
       this.observerActors.add(actorId);
       this.announcedRewardDrawSeq = undefined;
-      const observation = await this.context.outbound
-        .requestToSpot(request.roomId, new GetBingoObservationReq({}))
-        .inMesh(SampleNames.playMeshName)
-        .submit<GetBingoObservationRes>();
+      // Observation receives results only while the game room is alive.
+      let observation: GetBingoObservationRes;
+      try {
+        observation = await this.context.outbound
+          .requestToSpot(request.roomId, new GetBingoObservationReq({}))
+          .submit<GetBingoObservationRes>();
+      } catch (error) {
+        if (
+          error instanceof ZLinkFrameworkException &&
+          error.kind === ZLinkFrameworkErrorKind.NotFound
+        )
+          return;
+        throw error;
+      }
       await actor.push(new BingoObservationStateNotify({ state: observation.state }));
       if (observation.reward != null) await this.announceReward(observation.reward);
       console.error(
@@ -242,8 +253,9 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
       `bingo-record reported actor=${actorId} wins=${record.wins} losses=${record.losses}`
     );
     console.error(`bingo-lifecycle room-leave actor=${actorId} spot=${this.context.spotId}`);
-    // The game room owns the completed result until the sample host stops.
-    // Late observers read it after every player has left.
+    if (this.cleanupStarted && this.playerIds.size === 0) {
+      void this.context.close();
+    }
   }
 
   async onDisconnectActor(_actor: PlayerActor): Promise<void> {}
