@@ -7140,9 +7140,11 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
             auto operation = std::make_shared<application_claim_owner_t> (
               std::move (*claim), weak_from_this (), dispatch, std::function<void ()>{});
             auto result = dispatch_application_claim (operation);
-            const auto dispatched = std::holds_alternative<std::size_t> (result)
-                                      ? std::get<std::size_t> (result)
-                                      : co_await std::get<task_t<std::size_t>> (std::move (result));
+            std::size_t dispatched;
+            if (const auto ready = std::get_if<std::size_t> (&result))
+                dispatched = *ready;
+            else
+                dispatched = co_await std::get<task_t<std::size_t>> (std::move (result));
             count += dispatched;
             application_dispatch_started = dispatched != 0;
         }
