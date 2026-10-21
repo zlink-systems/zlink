@@ -56,7 +56,10 @@ test('typed completion and public admission execute one result reaction', async 
 for (const cause of ['decode', 'submission', 'encode']) {
   test(`${cause} failure reaches both public stages with the same cause`, async () => {
     const f = fixture();
-    const error = new Error(cause);
+    const error = cause === 'submission'
+      ? new framework.ZLinkBackendResultError(
+        'submit', framework.SubmitResult.Terminated, 0, { phase: 'submit' })
+      : new Error(cause);
     if (cause === 'decode') f.transport.decodeMeshReply = () => { throw error; };
     if (cause === 'encode') f.transport.encodeMessage = () => { throw error; };
     const request = f.client.requestToNode('mesh', 'peer', {}).submit();
@@ -67,10 +70,26 @@ for (const cause of ['decode', 'submission', 'encode']) {
     assert.equal(outcomes[0].status, 'rejected');
     assert.equal(outcomes[1].status, 'rejected');
     assert.equal(outcomes[0].reason, outcomes[1].reason);
-    if (cause === 'submission') assert.equal(outcomes[0].reason.cause, error);
+    if (cause === 'submission') {
+      assert.equal(outcomes[0].reason.cause, error);
+      assert.equal(outcomes[0].reason.kind, framework.ZLinkFrameworkErrorKind.ShuttingDown);
+    }
     else assert.equal(outcomes[0].reason, error);
   });
 }
+
+test('unclassified node submission failure preserves identity in both public stages', async () => {
+  const f = fixture();
+  const error = new Error('unclassified submission');
+  const request = f.client.requestToNode('mesh', 'peer', {}).submit();
+  const observed = Promise.allSettled([request, request.admitted]);
+  f.source.reject(error);
+  const outcomes = await observed;
+  assert.equal(outcomes[0].status, 'rejected');
+  assert.equal(outcomes[1].status, 'rejected');
+  assert.equal(outcomes[0].reason, error);
+  assert.equal(outcomes[1].reason, error);
+});
 
 for (const throws of [false, true]) {
   test(`failure mapping preserves admission when mapper throws=${throws}`, async () => {
