@@ -70,7 +70,7 @@ void enqueue (mesh::service_mailbox_t &mailbox, bool raw_request = false)
 
 bool dispatch (host::public_host_runtime_t &target, const dispatch_t &callback)
 {
-    return target.dispatch_application_owner (owner, callback, noop, noop);
+    return target.dispatch_application_owner (owner, callback, noop, noop).result ().value ();
 }
 
 // Measure the standard-library representation of exactly one owner, record-state
@@ -185,9 +185,12 @@ void verify_prestart_terminal (host::public_host_runtime_t &target)
     const dispatch_t callback = [] (const auto &, const auto &, auto) {
         throw std::runtime_error ("malformed request reached handler");
     };
-    require (target.dispatch_application_owner (
-               owner, callback, [&] { ++started; }, [&] { ++rejected; }),
-             "malformed request was not claimed");
+    require (
+      target.dispatch_application_owner (
+              owner, callback, [&] { ++started; }, [&] { ++rejected; })
+        .result ()
+        .value (),
+      "malformed request was not claimed");
     require (started == 1 && rejected == 1 && mailbox.pending_messages (domain) == 0,
              "decode rejection did not terminalize the unstarted record");
     enqueue (mailbox);
