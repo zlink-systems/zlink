@@ -1086,7 +1086,14 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
 
     const auto run_case = [&] (bool remote, bool decline_source = false, bool cancel_source = false,
                                bool cleanup_before_cancel = false) {
-        std::atomic_int failed_leave_diagnostics{0};
+        // The observer can outlive this scope, so it owns its state.
+        struct leave_diagnostics_t
+        {
+            std::atomic_int failed{0};
+            std::atomic_int wrong_correlation{0};
+            std::atomic_int borrowed_context{0};
+        };
+        const auto diagnostics = std::make_shared<leave_diagnostics_t> ();
         const std::string case_name = remote ? "remote" : "same-node";
         const auto node = zlink::framework::test::runtime_failure_fixture<
           zlink::framework::detail::spot_node_builder_state_t> ("entry-return-" + case_name);
@@ -1171,17 +1178,16 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
             constexpr auto transfer_id = "entry-return-declined-leave";
             node->dispatch.message_flow (zlink::framework::message_flow_log_mode_t::errors);
             detail::dispatch_options_access_t::set_observer_for_tests (
-              node->dispatch, [&] (const zlink::framework::message_flow_event_t &event) {
+              node->dispatch, [diagnostics, cleanup_before_cancel,
+                               transfer_id] (const zlink::framework::message_flow_event_t &event) {
                   if (event.packet_name == "spot_actor_leave"
                       && event.result == zlink::framework::message_flow_result_t::failed
                       && event.exception) {
-                      ++failed_leave_diagnostics;
-                      test.require (event.correlation_id == transfer_id,
-                                    "source leave failure must retain its transfer correlation");
-                      if (cleanup_before_cancel)
-                          test.require (
-                            !event.spot_id && !event.actor_id,
-                            "removed source record must diagnose without borrowed context");
+                      ++diagnostics->failed;
+                      if (!(event.correlation_id == transfer_id))
+                          ++diagnostics->wrong_correlation;
+                      if (cleanup_before_cancel && (event.spot_id || event.actor_id))
+                          ++diagnostics->borrowed_context;
                   }
               });
             const auto native_source = std::make_shared<detail::service::spot_t> (
@@ -1259,17 +1265,21 @@ void test_actor_return_to_entry_spot_skips_admission_and_runs_lifecycle_callback
                             ? "source leave canceled before activation must finish retirement"
                             : "source leave declined before activation must finish retirement");
             spot_runtime.cleanup_expired_actor_admissions_at (cleanup_boundary);
+            test.require (diagnostics->wrong_correlation == 0,
+                          "source leave failure must retain its transfer correlation");
+            test.require (diagnostics->borrowed_context == 0,
+                          "removed source record must diagnose without borrowed context");
             test.require (!node->actor_instances.contains (key)
                             && node->pending_remote_source_cleanups.empty ()
                             && leave_callbacks.load (std::memory_order_acquire) == 0
-                            && failed_leave_diagnostics == 1,
+                            && diagnostics->failed == 1,
                           "terminal source leave failure must remove registry and diagnose once");
             spot_runtime.submit_remote_actor_leave (transfer_id, actor_ref, source_id,
                                                     source->object_generation, target_id,
                                                     target_fence);
             spot_runtime.cleanup_expired_actor_admissions_at (cleanup_boundary);
             test.require (leave_callbacks.load (std::memory_order_acquire) == 0
-                            && failed_leave_diagnostics == 1,
+                            && diagnostics->failed == 1,
                           "terminal source leave failure must not rerun callback or diagnostics");
             spot_runtime.request_stop ();
             spot_runtime.cancel_pending_dispatch ();
@@ -3516,14 +3526,17 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
     std::atomic<bool> stop{false};
     std::thread target_dispatch ([&] {
         while (!stop.load (std::memory_order_acquire)) {
-            (void) target.dispatch_ready ([&] (const auto &, const auto &record, auto) {
-                {
-                    std::lock_guard lock (delivered_mutex);
-                    delivered.push_back (record.operation_id.low);
-                }
-                if (record.complete_stateful_dispatch)
-                    record.complete_stateful_dispatch ();
-            });
+            // Await so the suspended coroutine cannot outlive the callback and its captures.
+            (void) target
+              .dispatch_ready ([&] (const auto &, const auto &record, auto) {
+                  {
+                      std::lock_guard lock (delivered_mutex);
+                      delivered.push_back (record.operation_id.low);
+                  }
+                  if (record.complete_stateful_dispatch)
+                      record.complete_stateful_dispatch ();
+              })
+              .result ();
             std::this_thread::yield ();
         }
     });
@@ -4333,14 +4346,14 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
       [] (const accepted_record_authority_query_t &) -> std::optional<accepted_record_authority_t> {
           return std::nullopt;
       });
-    f::task_completion_source_t<void> restoring;
+    auto restoring = std::make_shared<f::task_completion_source_t<void>> ();
     f::task_completion_source_t<bool> restore_release;
     std::atomic<unsigned> aborts{0};
     std::stop_token restore_cancellation;
     target->objects ().configure_relocation_materialization (
       [&] (const auto &, const auto &, const auto &, std::stop_token token) -> f::task_t<bool> {
           restore_cancellation = token;
-          restoring.complete (f::result_t<void>::success ());
+          restoring->complete (f::result_t<void>::success ());
           if (stop_restore)
               co_return co_await restore_release.task ();
           co_return true;
@@ -4356,17 +4369,17 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
     const auto source_node = source.topology ().local_descriptor ();
     const auto target_node = target->transport ().topology ().local_descriptor ();
     const auto session_node = session.topology ().local_descriptor ();
-    f::task_completion_source_t<void> reconciled;
+    auto reconciled = std::make_shared<f::task_completion_source_t<void>> ();
     std::atomic<bool> reconciled_carried_owner{true};
     std::atomic<unsigned> reconciles{0};
     target->configure_peer_reconcile ([&] (const auto &rid) {
         if (rid != session_node.node_routing_id)
             reconciled_carried_owner.store (false, std::memory_order_release);
         if (++reconciles == 1)
-            reconciled.complete (f::result_t<void>::success ());
+            reconciled->complete (f::result_t<void>::success ());
     });
     constexpr auto early_control_marker = "pre-ready-control-marker";
-    f::task_completion_source_t<void> early_control_drained;
+    auto early_control_drained = std::make_shared<f::task_completion_source_t<void>> ();
     std::atomic<bool> early_control_observed{false};
     std::atomic<bool> stop{false};
     std::thread target_dispatch ([&] {
@@ -4379,7 +4392,7 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
             if (saw_marker) {
                 await_task (target->dispatch_ready ([] (const auto &, const auto &, auto) {}));
                 early_control_observed.store (true, std::memory_order_release);
-                early_control_drained.complete (f::result_t<void>::success ());
+                early_control_drained->complete (f::result_t<void>::success ());
             }
             std::this_thread::yield ();
         }
@@ -4473,12 +4486,14 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
           target_node.node_routing_id,
           make_relocation_state_chunk (relocation, target_node.lifecycle_generation, coordinator,
                                        object, payload, ordinal, 1024)));
-    f::detail::observe_task_completion (ready, [&] (const auto &) {
-        restoring.complete (f::result_t<void>::success ());
-        reconciled.complete (f::result_t<void>::success ());
-        early_control_drained.complete (f::result_t<void>::success ());
-    });
-    await_task (restoring.task ());
+    // The observer can run after this test returns; it owns its sources.
+    f::detail::observe_task_completion (
+      ready, [restoring, reconciled, early_control_drained] (const auto &) {
+          restoring->complete (f::result_t<void>::success ());
+          reconciled->complete (f::result_t<void>::success ());
+          early_control_drained->complete (f::result_t<void>::success ());
+      });
+    await_task (restoring->task ());
     if (stop_restore) {
         (void) await_task (
           source.send_relocation_control (target_node.node_routing_id, relay_data));
@@ -4493,7 +4508,7 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
           target_node.node_routing_id,
           p::application_payload_t::from_parts (
             {zlink::message_t::from (std::string (early_control_marker))})));
-        await_task (early_control_drained.task ());
+        await_task (early_control_drained->task ());
         test.require (early_control_observed.load (std::memory_order_acquire),
                       "ordered marker must follow the pre-ready Data and cutover");
         test.require (!ready.await_ready () && aborts == 0,
@@ -4504,7 +4519,7 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
     }
     std::optional<f::task_t<mesh::relocation_prepare_response_t>> duplicate;
     if (!expired && !stop_restore) {
-        await_task (reconciled.task ());
+        await_task (reconciled->task ());
         test.require (reconciles != 0 && reconciled_carried_owner.load (std::memory_order_acquire),
                       "target must request reconciliation of the carried Session owner");
         test.require (!ready.await_ready (), "relay-ready must wait for the remote Session route");
@@ -6964,7 +6979,8 @@ void test_entry_spot_actor_relocation_restore_resolves_local_entry_spot (test_co
 void test_return_actor_relocation_replaces_departed_spot_instance (
   test_context_t &test, bool source_leave_fails = false, bool delayed_source_completion = false)
 {
-    std::atomic_int failed_leave_diagnostics{0};
+    // The observer can outlive this scope, so it owns its counter.
+    const auto failed_leave_diagnostics = std::make_shared<std::atomic_int> (0);
     entry_relocation_test_actor_t::create_count = 0;
     entry_relocation_test_entry_spot_t::joined_count = 0;
     entry_relocation_test_entry_spot_t::leave_count = 0;
@@ -6998,10 +7014,11 @@ void test_return_actor_relocation_replaces_departed_spot_instance (
         return;
     state->dispatch.message_flow (zlink::framework::message_flow_log_mode_t::errors);
     zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
-      state->dispatch, [&] (const zlink::framework::message_flow_event_t &event) {
+      state->dispatch,
+      [failed_leave_diagnostics] (const zlink::framework::message_flow_event_t &event) {
           if (event.packet_name == "spot_actor_leave"
               && event.result == zlink::framework::message_flow_result_t::failed && event.exception)
-              ++failed_leave_diagnostics;
+              ++*failed_leave_diagnostics;
       });
     auto authority = std::make_shared<memory_authority_store_t> ();
     runtime.bind_relocation_authority (authority);
@@ -7128,7 +7145,7 @@ void test_return_actor_relocation_replaces_departed_spot_instance (
                   "a newer exact-fenced return must retire the old source lifecycle, "
                   "suppress its late leave, and install a fresh local Actor");
     test.require (
-      failed_leave_diagnostics == (source_leave_fails ? 1 : 0),
+      *failed_leave_diagnostics == (source_leave_fails ? 1 : 0),
       "source OnLeave failure must be diagnosed once while return restores a fresh Actor");
     test.require (state->actor_generations.at (key) == first_source.object_generation,
                   "fresh return instance must retain ObjectGeneration");
@@ -7136,7 +7153,7 @@ void test_return_actor_relocation_replaces_departed_spot_instance (
         return;
     runtime.cleanup_expired_actor_admissions_at (cleanup->not_before);
     test.require (entry_relocation_test_entry_spot_t::leave_count == 1
-                    && failed_leave_diagnostics == (source_leave_fails ? 1 : 0)
+                    && *failed_leave_diagnostics == (source_leave_fails ? 1 : 0)
                     && state->actor_instances.contains (key)
                     && state->actor_instances.at (key) != old_instance
                     && state->actor_routes.at (key).node_rid.value () == "node-a",
