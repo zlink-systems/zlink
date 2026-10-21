@@ -248,9 +248,10 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
             var decoded = ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
                 reply,
                 "Channel request reply is empty.",
-                $"Channel request failed for '{packetName}'.",
+                "Channel request failed for '{0}'.",
                 runtime.Registration.Codecs,
-                runtime.Flow.CaptureEnabled
+                runtime.Flow.CaptureEnabled,
+                packetName
             );
             terminal?.Succeeded();
             return decoded;
@@ -470,9 +471,10 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
             var decoded = ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
                 reply,
                 "Node request reply is empty.",
-                $"Node request failed for '{packetName}'.",
+                "Node request failed for '{0}'.",
                 runtime.Registration.Codecs,
-                runtime.Flow.CaptureEnabled
+                runtime.Flow.CaptureEnabled,
+                packetName
             );
             terminal?.Succeeded();
             return decoded;
@@ -673,9 +675,10 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
                 return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
                     reply,
                     "SPOT route request reply is empty.",
-                    $"SPOT route request failed for '{packetName}'.",
+                    "SPOT route request failed for '{0}'.",
                     runtime.Registration.Codecs,
-                    runtime.Flow.CaptureEnabled
+                    runtime.Flow.CaptureEnabled,
+                    packetName
                 );
             },
             cancellationToken

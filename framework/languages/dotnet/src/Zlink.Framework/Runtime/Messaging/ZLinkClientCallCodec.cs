@@ -62,14 +62,16 @@ internal static class ZLinkClientCallCodec
         string emptyMessage,
         string errorMessage,
         ZLinkCodecRegistryBuilder? codecs,
-        bool validateFlow = true
+        bool validateFlow = true,
+        string? errorMessageArgument = null
     ) =>
         DecodeEnvelopeReplyAndDispose<TReply>(
             new ZLinkBackendRouteReceived(reply, null, null, null, null),
             emptyMessage,
             errorMessage,
             codecs,
-            validateFlow
+            validateFlow,
+            errorMessageArgument
         );
 
     public static TReply DecodeEnvelopeReplyAndDispose<TReply>(
@@ -77,7 +79,8 @@ internal static class ZLinkClientCallCodec
         string emptyMessage,
         string errorMessage,
         ZLinkCodecRegistryBuilder? codecs,
-        bool validateFlow = true
+        bool validateFlow = true,
+        string? errorMessageArgument = null
     )
     {
         try
@@ -88,7 +91,8 @@ internal static class ZLinkClientCallCodec
                 errorMessage,
                 codecs,
                 validateFlow,
-                reply.ApplicationPayloadView
+                reply.ApplicationPayloadView,
+                errorMessageArgument
             );
         }
         finally
@@ -106,7 +110,8 @@ internal static class ZLinkEnvelopeReplyDecoder
         string errorMessage,
         ZLinkCodecRegistryBuilder? codecs,
         bool validateFlow = true,
-        ZLinkMultipartPayloadView? applicationPayloadView = null
+        ZLinkMultipartPayloadView? applicationPayloadView = null,
+        string? errorMessageArgument = null
     )
     {
         var partCount = applicationPayloadView?.Count ?? reply.Count;
@@ -133,7 +138,11 @@ internal static class ZLinkEnvelopeReplyDecoder
             );
         }
         if (replyHeader.Kind == ZLinkMessageKind.Error)
-            throw ZLinkEnvelopeErrorMapper.CreateException(replyHeader, errorMessage);
+            throw ZLinkEnvelopeErrorMapper.CreateException(
+                replyHeader,
+                errorMessage,
+                errorMessageArgument
+            );
         if (replyHeader.Kind != ZLinkMessageKind.Response)
             throw new ZLinkFrameworkException(
                 ZLinkFrameworkErrorKind.ProtocolError,
@@ -183,9 +192,23 @@ internal static class ZLinkEnvelopeReplyDecoder
 
 internal static class ZLinkEnvelopeErrorMapper
 {
-    public static Exception CreateException(ZLinkEnvelopeHeader header, string fallbackMessage)
+    public static Exception CreateException(
+        ZLinkEnvelopeHeader header,
+        string fallbackMessage,
+        string? errorMessageArgument = null
+    )
     {
-        var message = header.ErrorMessage ?? fallbackMessage;
+        var message =
+            header.ErrorMessage
+            ?? (
+                errorMessageArgument is null
+                    ? fallbackMessage
+                    : string.Format(
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        fallbackMessage,
+                        errorMessageArgument
+                    )
+            );
         // Stale-route contract (C++ channel_runtime route reply mapping): only
         // framework-generated remote errors carry the zlink.origin=framework
         // marker. Unmarked remote errors came from the application handler and
