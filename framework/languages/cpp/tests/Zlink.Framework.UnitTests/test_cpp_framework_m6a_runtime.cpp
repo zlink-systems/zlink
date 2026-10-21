@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/allocation_counter.hpp"
 
 #include "metric_test_reader.hpp"
 
@@ -41,6 +42,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 #if !defined(_WIN32)
 #include <dlfcn.h>
@@ -142,6 +144,50 @@ mesh::service_node_descriptor_t descriptor (std::string rid,
                                            std::move (endpoint),
                                            {{"alpha", 100}, {"beta", 50}},
                                            mesh::service_node_state_t::preparing};
+}
+
+void verify_node_send_forwarding_allocations ()
+{
+    namespace fw = zlink::framework;
+    using fw::tests::count_allocations;
+    static_assert (std::is_nothrow_move_constructible_v<protocol::application_payload_t>);
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("forwarding-source"),
+      .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
+    const auto target = bytes ("missing-forwarding-target");
+    protocol::application_payload_t payload{"Forwarding", "application/octet-stream", {}};
+    assert (count_allocations ([] {}) == 0);
+    assert (count_allocations ([] {
+                auto *allocation = ::operator new (64);
+                ::operator delete (allocation);
+            })
+            == 1);
+    std::vector<std::uint8_t> copied_target, encoded_header;
+    std::shared_ptr<const mesh::admitted_peer_t> peer;
+    const auto argument_allocations = count_allocations ([&] {
+        copied_target = target;
+        encoded_header = protocol::encode_node_send_header ();
+        peer = source.topology ().peer (target);
+    });
+    assert (copied_target == target && !encoded_header.empty () && !peer);
+    std::optional<fw::task_t<zlink::submit_result_t>> ready;
+    const auto result_allocations = count_allocations ([&] {
+        ready.emplace (
+          fw::result_t<zlink::submit_result_t>::success (zlink::submit_result_t::not_connected));
+    });
+    std::optional<fw::task_t<zlink::submit_result_t>> submission;
+    const auto observed = count_allocations (
+      [&] { submission.emplace (source.send_to_node_result (target, std::move (payload))); });
+    assert (submission->await_ready ());
+    assert (submission->result ().value () == zlink::submit_result_t::not_connected);
+    // The terminal owner needs at most one coroutine frame in addition to its
+    // result state; forwarding layers do not need another asynchronous result.
+    constexpr std::size_t maximum_terminal_frames = 1;
+    const auto allowed = argument_allocations + result_allocations + maximum_terminal_frames;
+    std::fprintf (stderr,
+                  "node send allocations observed=%zu allowed=%zu arguments=%zu result=%zu\n",
+                  observed, allowed, argument_allocations, result_allocations);
+    assert (observed <= allowed);
 }
 
 protocol::actor_create_header_t actor_create_request (const mesh::service_node_descriptor_t &source,
@@ -2900,17 +2946,29 @@ void verify_raw_owner_node_send_and_liveness (
     // pending; dispatcher scheduling after an immediate admission cannot
     // produce this observation because terminal claim removes the entry.
     assert (first.pending_operation_count () == 0);
-    const protocol::application_payload_t saturated_payload{
-      "SaturatedControl", "application/octet-stream",
-      std::vector<std::uint8_t> (512u * 1024u, 0x5a)};
     std::vector<std::shared_ptr<zlink::framework::task_t<zlink::submit_result_t>>> saturated_sends;
     std::size_t saturated_received = 0;
     for (std::size_t index = 0; index < 128 && first.pending_operation_count () == 0; ++index) {
+        protocol::application_payload_t saturated_payload{
+          "SaturatedControl", "application/octet-stream",
+          std::vector<std::uint8_t> (512u * 1024u, 0x5a)};
         saturated_sends.push_back (
           std::make_shared<zlink::framework::task_t<zlink::submit_result_t>> (
-            first.send_to_node_result (second_descriptor.node_routing_id, saturated_payload)));
+            first.send_to_node_result (second_descriptor.node_routing_id,
+                                       std::move (saturated_payload))));
     }
     assert (first.pending_operation_count () != 0);
+    const auto verify_retained_payloads = [] (const mesh::service_mailbox_claim_t &claim) {
+        for (const auto &record : claim.records) {
+            const auto payload = protocol::decode_application_payload (
+              protocol::message_bytes (record.parts.back ()), false);
+            assert (payload.packet_name == "SaturatedControl");
+            const auto &body = payload.payload_bytes ();
+            assert (body.size () == 512u * 1024u);
+            assert (
+              std::all_of (body.begin (), body.end (), [] (auto byte) { return byte == 0x5a; }));
+        }
+    };
 
     // The reverse-direction probe itself is not behind the saturated route.
     // Claiming it starts one ACK binding operation, then I3 must return so the
@@ -2949,6 +3007,7 @@ void verify_raw_owner_node_send_and_liveness (
         auto claim = second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1,
                                                   1024u * 1024u);
         if (claim) {
+            verify_retained_payloads (*claim);
             saturated_received += claim->records.size ();
             assert (saturated_received <= saturated_sends.size ());
             assert (second.mailbox ().release (*claim));
@@ -2976,6 +3035,7 @@ void verify_raw_owner_node_send_and_liveness (
         assert (pumped_quiesce != mesh::raw_mesh_pump_result_t::protocol_error);
         while (auto quiesce_claim = second.mailbox ().try_claim (
                  mesh::service_mailbox_domain_t::application, 256, 16u * 1024u * 1024u)) {
+            verify_retained_payloads (*quiesce_claim);
             saturated_received += quiesce_claim->records.size ();
             assert (saturated_received <= saturated_sends.size ());
             assert (second.mailbox ().release (*quiesce_claim));
@@ -4265,6 +4325,9 @@ void verify_unadmitted_route (bool repeat_hello)
 int main (int argc, char **argv)
 {
     zlink::framework::completion_owner_t completion_owner;
+    verify_node_send_forwarding_allocations ();
+    if (argc == 2 && std::string_view (argv[1]) == "--send-forwarding-allocations")
+        return 0;
     if (argc == 4 && std::string_view (argv[1]) == "--only") {
         const std::string_view name (argv[2]);
         const int repetitions = std::stoi (argv[3]);

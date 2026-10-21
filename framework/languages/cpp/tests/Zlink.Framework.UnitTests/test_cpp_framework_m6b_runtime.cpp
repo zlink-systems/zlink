@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "runtime/mesh/mesh_node_host_service.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/allocation_counter.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "../support/request_admission_fixture.hpp"
 
@@ -2687,6 +2688,63 @@ mesh::service_node_descriptor_t descriptor (std::string rid)
             mesh::service_node_state_t::preparing};
 }
 
+void verify_host_send_forwarding_allocations ()
+{
+    using zlink::framework::tests::count_allocations;
+    auto source = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{mesh::raw_mesh_node_options_t{
+        .descriptor = descriptor ("forwarding-host"),
+        .runtime_failures =
+          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
+    const auto target = zlink::routing_id_t::from ("missing-forwarding-host");
+    for (const bool move_parts : {false, true}) {
+        std::vector<zlink::message_t> parts{zlink::message_t::from (std::string ("payload"))};
+        auto baseline_parts = parts;
+        std::vector<std::uint8_t> target_bytes;
+        std::optional<protocol::application_payload_t> payload;
+        const auto arguments = count_allocations ([&] {
+            target_bytes = target.to_bytes ();
+            if (move_parts)
+                payload.emplace (
+                  protocol::application_payload_t::from_parts (std::move (baseline_parts)));
+            else
+                payload.emplace (protocol::application_payload_t::from_parts (baseline_parts));
+        });
+        std::optional<zlink::framework::task_t<zlink::submit_result_t>> raw;
+        const auto terminal = count_allocations ([&] {
+            raw.emplace (
+              source->transport ().send_to_node_result (target_bytes, std::move (*payload)));
+        });
+        std::optional<zlink::framework::task_t<zlink::submit_result_t>> submission;
+        const auto observed = count_allocations ([&] {
+            if (move_parts)
+                submission.emplace (source->send_to_node (target, std::move (parts)));
+            else
+                submission.emplace (source->send_to_node (target, parts));
+        });
+        assert (submission->await_ready ());
+        assert (submission->result ().value () == zlink::submit_result_t::not_connected);
+        std::fprintf (
+          stderr,
+          "host send allocations move=%d observed=%zu allowed=%zu arguments=%zu terminal=%zu\n",
+          move_parts, observed, arguments + terminal, arguments, terminal);
+        assert (observed <= arguments + terminal);
+        std::vector<zlink::message_t> empty;
+        auto failed = move_parts ? source->send_to_node (target, std::move (empty))
+                                 : source->send_to_node (target, empty);
+        assert (failed.await_ready ());
+        bool preserved = false;
+        try {
+            (void) failed.result ().value ();
+        }
+        catch (const std::invalid_argument &error) {
+            preserved =
+              std::string_view (error.what ()) == "framework multipart requires at least one part";
+        }
+        assert (preserved);
+    }
+}
+
 void verify_actor_create_replays_after_reciprocal_handover ()
 {
     using completion_t = std::pair<foundation::operation_terminal_t, std::vector<std::uint8_t>>;
@@ -3716,16 +3774,25 @@ void verify_unbounded_actor_handoff_backlog ()
 
 void verify_public_host_dispatches_one_application_record_per_turn ()
 {
-    auto source = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{
-        .descriptor = descriptor ("hwm-dispatch-source"),
-        .runtime_failures =
-          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
-    auto target = std::make_shared<host::public_host_runtime_t> (
-      host::host_options_t{mesh::raw_mesh_node_options_t{
-        .descriptor = descriptor ("hwm-dispatch-target"),
-        .runtime_failures =
-          std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
+    auto source_context = std::make_shared<zlink::context_t> ();
+    auto target_context = std::make_shared<zlink::context_t> ();
+    // A fixed Core HWM makes deferred admission observable before the target is pumped.
+    source_context->options ().auto_hwm_enabled (false);
+    target_context->options ().auto_hwm_enabled (false);
+    auto source = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      .mesh =
+        mesh::raw_mesh_node_options_t{
+          .descriptor = descriptor ("hwm-dispatch-source"),
+          .runtime_failures =
+            std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      .core_context = source_context});
+    auto target = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      .mesh =
+        mesh::raw_mesh_node_options_t{
+          .descriptor = descriptor ("hwm-dispatch-target"),
+          .runtime_failures =
+            std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()},
+      .core_context = target_context});
     source->start ();
     target->start ();
     const auto target_status = target->status ();
@@ -3797,6 +3864,41 @@ void verify_public_host_dispatches_one_application_record_per_turn ()
     assert (
       target->transport ().mailbox ().pending_messages (mesh::service_mailbox_domain_t::application)
       == 0);
+    for (const bool move_parts : {false, true}) {
+        std::vector<zlink::framework::task_t<zlink::submit_result_t>> sends;
+        for (std::size_t index = 0;
+             index < 128 && source->transport ().pending_operation_count () == 0; ++index) {
+            std::vector<zlink::message_t> parts{
+              zlink::message_t::from (std::string (512u * 1024u, 'Z'))};
+            if (move_parts)
+                sends.push_back (
+                  source->send_to_node (target_status.routing_id (), std::move (parts)));
+            else
+                sends.push_back (source->send_to_node (target_status.routing_id (), parts));
+        }
+        // Caller multipart objects have all been destroyed before admission resumes.
+        assert (source->transport ().pending_operation_count () != 0);
+        std::size_t received = 0;
+        const auto retain_dispatch = [&] (const host::ready_record_t &,
+                                          const host::receive_record_t &,
+                                          std::vector<zlink::message_t> parts) {
+            assert (parts.size () == 1);
+            const auto body = protocol::message_bytes (parts.front ());
+            assert (body.size () == 512u * 1024u);
+            assert (
+              std::all_of (body.begin (), body.end (), [] (auto value) { return value == 'Z'; }));
+            ++received;
+        };
+        while (received < sends.size () && std::chrono::steady_clock::now () < receive_deadline) {
+            await_task (source->dispatch_ready (noop_dispatch));
+            await_task (target->dispatch_ready (retain_dispatch));
+            std::this_thread::yield ();
+        }
+        assert (received == sends.size ());
+        for (auto &send : sends)
+            assert (send.result ().value () == zlink::submit_result_t::ok);
+        assert (source->transport ().pending_operation_count () == 0);
+    }
 }
 
 void verify_public_host_dispatches_one_owner_claim_as_a_batch ()
@@ -8813,6 +8915,13 @@ int main (int argc, char **argv)
     zlink::framework::completion_owner_t completion_owner;
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
+    verify_host_send_forwarding_allocations ();
+    if (argc == 2 && std::string_view (argv[1]) == "--send-forwarding-allocations")
+        return 0;
+    if (argc == 2 && std::string_view (argv[1]) == "--send-payload-lifetime") {
+        verify_public_host_dispatches_one_application_record_per_turn ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--accepted-record-authority") {
         verify_discovery_owner_metadata_preserved ();
         verify_memory_accepted_record_authority ();
