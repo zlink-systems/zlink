@@ -60,6 +60,65 @@ void verify_result (detail::mesh_node_runtime_t &runtime,
     }
 }
 
+// Frozen successful conversion from 6a9bd9e89f for runtime allocation comparison.
+// This is a measurement reference, not a production task helper.
+reply_task_t reference_reply_conversion (detail::mesh_node_runtime_t &runtime,
+                                         const pending_operation_t &operation,
+                                         std::string_view operation_name)
+{
+    using reply_result_t = result_t<runtime::messaging::message_parts_t>;
+    auto source = std::make_shared<task_completion_source_t<reply_result_t>> ();
+    auto output = source->task ();
+    auto completion = runtime.await_completion (operation);
+    detail::observe_task_terminal (
+      completion, [source, operation_name] (const result_t<operation_completion_t> &result) {
+          try {
+              if (!result
+                  || result.value ().record.terminal_result
+                       != static_cast<int> (zlink::request_result_t::ok))
+                  throw std::runtime_error (std::string (operation_name));
+              source->complete (result_t<reply_result_t>::success (reply_result_t::success (
+                runtime::messaging::message_parts_t (result.value ().parts))));
+          }
+          catch (...) {
+              source->complete (
+                detail::result_access_t::failure<reply_result_t> (std::current_exception ()));
+          }
+      });
+    return output;
+}
+
+void verify_ready_wrapper_cost (detail::mesh_node_runtime_t &runtime)
+{
+    using source_t = task_completion_source_t<result_t<runtime::messaging::message_parts_t>>;
+    const auto stack_source = tests::measure_allocations ([] { source_t source; });
+    const auto shared_source =
+      tests::measure_allocations ([] { auto source = std::make_shared<source_t> (); });
+    require (shared_source.count > stack_source.count && shared_source.bytes > stack_source.bytes,
+             "completion source wrapper baseline did not allocate");
+    const auto wrapper_count = shared_source.count - stack_source.count;
+    const auto wrapper_bytes = shared_source.bytes - stack_source.bytes;
+    pending_operation_t operation;
+    operation.completion->complete (
+      result_t<operation_completion_t>::success (successful_reply ()));
+    std::optional<reply_task_t> reference;
+    std::optional<reply_task_t> actual;
+    const auto before = tests::measure_allocations ([&] {
+        reference.emplace (reference_reply_conversion (runtime, operation, "request cost fixture"));
+    });
+    const auto after = tests::measure_allocations (
+      [&] { actual.emplace (runtime.await_request_reply (operation, "request cost fixture")); });
+    require (reference->result ().value ().value ().items ().size () == 1
+               && actual->result ().value ().value ().items ().size () == 1,
+             "wrapper comparison did not execute successful runtime conversions");
+    std::cout << "ready-wrapper reference-count=" << before.count << " actual-count=" << after.count
+              << " wrapper-count=" << wrapper_count << " reference-bytes=" << before.bytes
+              << " actual-bytes=" << after.bytes << " wrapper-bytes=" << wrapper_bytes << '\n';
+    require (before.count >= wrapper_count && after.count <= before.count - wrapper_count
+               && before.bytes >= wrapper_bytes && after.bytes <= before.bytes - wrapper_bytes,
+             "ready request conversion retained the completion source wrapper allocation");
+}
+
 bool verify_cost (detail::mesh_node_runtime_t &runtime, bool ready)
 {
     std::shared_ptr<task_completion_source_t<result_t<runtime::messaging::message_parts_t>>>
@@ -230,6 +289,7 @@ int main ()
         verify_explicit_scheduler (runtime);
         verify_owner_shutdown (runtime);
         std::cout << "request reply semantics PASS\n";
+        verify_ready_wrapper_cost (runtime);
         const bool suspended_cost = verify_cost (runtime, false);
         const bool ready_cost = verify_cost (runtime, true);
         require (suspended_cost && ready_cost,

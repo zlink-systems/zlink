@@ -683,6 +683,12 @@ void observe_task_completion (task_t<T> &task, TCallback &&callback);
 template <typename T, typename TCallback>
 void observe_task_terminal (task_t<T> &task, TCallback &&callback);
 
+// Project a physical terminal in the observer's existing execution context.
+// The output state itself owns delivery; no shared completion-source wrapper
+// is needed around that already-shared state.
+template <typename TOutput, typename TInput, typename TProject>
+task_t<TOutput> project_task_terminal (task_t<TInput> &task, TProject &&project);
+
 template <typename T>
 std::optional<result_t<T>> observe_task_result_for (const task_t<T> &task,
                                                     std::chrono::milliseconds timeout,
@@ -816,6 +822,8 @@ template <typename T> class task_t
     friend void detail::observe_task_completion (task_t<TObserved> &, TCallback &&);
     template <typename TObserved, typename TCallback>
     friend void detail::observe_task_terminal (task_t<TObserved> &, TCallback &&);
+    template <typename TOutput, typename TInput, typename TProject>
+    friend task_t<TOutput> detail::project_task_terminal (task_t<TInput> &, TProject &&);
 };
 
 template <> class task_t<void>
@@ -884,6 +892,8 @@ template <> class task_t<void>
     friend void detail::observe_task_completion (task_t<TObserved> &, TCallback &&);
     template <typename TObserved, typename TCallback>
     friend void detail::observe_task_terminal (task_t<TObserved> &, TCallback &&);
+    template <typename TOutput, typename TInput, typename TProject>
+    friend task_t<TOutput> detail::project_task_terminal (task_t<TInput> &, TProject &&);
 };
 
 template <typename T> task_t<T> task_completion_source_t<T>::task () const
@@ -907,6 +917,22 @@ void observe_task_terminal (task_t<T> &task, TCallback &&callback)
 {
     task._state->on_terminal (
       std::function<void (const result_t<T> &)> (std::forward<TCallback> (callback)));
+}
+
+template <typename TOutput, typename TInput, typename TProject>
+task_t<TOutput> project_task_terminal (task_t<TInput> &task, TProject &&project)
+{
+    auto state = std::make_shared<application_task_shared_state_t<TOutput>> ();
+    observe_task_terminal (task, [state, project = std::forward<TProject> (project)] (
+                                   const result_t<TInput> &result) mutable {
+        try {
+            state->complete (project (result));
+        }
+        catch (...) {
+            state->complete (current_exception_result<TOutput> ());
+        }
+    });
+    return task_t<TOutput> (std::move (state));
 }
 
 template <typename T>
