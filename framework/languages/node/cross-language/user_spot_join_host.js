@@ -18,6 +18,7 @@ const CANONICAL_ACTOR_JOIN_PACKET = 'ZLinkFrameworkActorJoinRequest';
 // Service-wire command byte of the Actor Join header frame (offset 3, after
 // the ZM magic and the wire version).
 const ACTOR_JOIN_WIRE_COMMAND = 28;
+const RELOCATION_ACTOR_TYPE = 'cross-lang-relocation-actor-type';
 const mode = process.argv[2];
 const args = parseArgs(process.argv.slice(3));
 let userSpotTargetJoined;
@@ -426,9 +427,9 @@ async function userSpotJoinSource() {
         );
         mesh.channel(meshName).server();
         const objects = mesh.objects().server();
-        objects.addEntrySpot(RelocationEntrySpot, 'cross-lang-relocation-actor-type');
+        objects.addEntrySpot(RelocationEntrySpot, RELOCATION_ACTOR_TYPE);
         objects.addActorFactory(
-          'cross-lang-relocation-actor-type',
+          RELOCATION_ACTOR_TYPE,
           RelocationActorFactory,
           factory => factory.preserveStateWith(RelocationActorAdapter)
         );
@@ -472,7 +473,7 @@ async function userSpotJoinSource() {
 
   const actorManager = app.get(nestjs.ZLINK_ACTOR_MANAGER, { strict: false });
   const created = await actorManager
-    .getOrCreate(actorId, 'cross-lang-relocation-actor-type')
+    .getOrCreate(actorId, RELOCATION_ACTOR_TYPE)
     .inMesh(meshName)
     .request(new UserSpotActorCreateReq(7))
     .timeout(15_000)
@@ -582,13 +583,14 @@ async function userSpotJoinTarget() {
           .setPlacementWeight(100);
         mesh.channel(meshName).server();
         const objects = mesh.objects().server();
+        objects.addEntrySpot(RelocationEntrySpot, RELOCATION_ACTOR_TYPE);
         objects.addSpotFactory(
           'cross-lang-relocation-user-spot-type',
           RelocationUserSpot,
           factory => factory.disableRelocation()
         );
         objects.addActorFactory(
-          'cross-lang-relocation-actor-type',
+          RELOCATION_ACTOR_TYPE,
           RelocationActorFactory,
           factory => factory.preserveStateWith(RelocationActorAdapter)
         );
@@ -598,6 +600,7 @@ async function userSpotJoinTarget() {
     providers: [
       RelocationActorFactory,
       RelocationActorAdapter,
+      RelocationEntrySpot,
       RelocationUserSpot,
       TargetProbeHandler
     ]
