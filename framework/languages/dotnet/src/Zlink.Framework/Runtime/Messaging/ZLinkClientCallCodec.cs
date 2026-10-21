@@ -11,7 +11,8 @@ internal static class ZLinkClientCallCodec
         TimeSpan? timeout = null,
         string? topic = null,
         string? source = null,
-        bool includeDeadline = true
+        bool includeDeadline = true,
+        IReadOnlyDictionary<string, string>? metadata = null
     )
     {
         if (kind is ZLinkMessageKind.Response or ZLinkMessageKind.Error)
@@ -36,6 +37,7 @@ internal static class ZLinkClientCallCodec
             source
         )
         {
+            Metadata = metadata,
             FlowId = flow?.FlowId,
             FlowOrigin = flow?.Origin,
         };

@@ -136,16 +136,16 @@ internal sealed class ZLinkChannelSendCall<TMessage>(
 
     private IReadOnlyList<Message> EncodePayloadParts(out ReadOnlyMemory<byte> metadata)
     {
-        var header = ZLinkClientCallCodec.CreateEnvelope(
-            ZLinkMessageKind.Command,
-            channelName,
-            ZLinkMessageNameResolver.ResolveFromMessage(message)
-        );
         var selected = ZLinkCallMetadata.EncodeChannel(
             _metadata,
             runtime.IsClientServerClientChannel(channelName)
         );
-        header = header with { Metadata = selected.Header };
+        var header = ZLinkClientCallCodec.CreateEnvelope(
+            ZLinkMessageKind.Command,
+            channelName,
+            ZLinkMessageNameResolver.ResolveFromMessage(message),
+            metadata: selected.Header
+        );
         metadata = selected.Frame;
         return ZLinkClientCallCodec.EncodeEnvelopeParts(
             header,
@@ -231,9 +231,9 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
                 ZLinkMessageKind.Request,
                 channelName,
                 packetName,
-                timeout
+                timeout,
+                metadata: headerMetadata
             );
-            header = header with { Metadata = headerMetadata };
             terminal?.SetCorrelation(header.CorrelationId);
             var parts = ZLinkClientCallCodec.CopyEnvelopeParts(header, encodedBody, contentType);
             var reply = await runtime
