@@ -1186,6 +1186,12 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     zlink_framework
     Threads::Threads)
   zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_liveness_not_found_contract
+    COMMAND test_cpp_framework_m6a_runtime --liveness-not-found-contract
+    LABELS "framework-unit;framework-contract;liveness;raw-binding"
+    TIER unit
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
     NAME test_cpp_framework_liveness_physical_close
     COMMAND test_cpp_framework_m6a_runtime --liveness-physical-close
     LABELS "framework-unit;liveness"
