@@ -70,9 +70,12 @@ final class ZLinkJavaRequestCapacityContractTest {
                     assertThrows(
                             java.util.concurrent.ExecutionException.class,
                             () -> completion.get(1, TimeUnit.SECONDS));
+            var framework = assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, framework.kind());
             assertEquals(
                     RequestResult.TIMED_OUT,
-                    assertInstanceOf(ZlinkRequestException.class, failure.getCause()).getResult());
+                    assertInstanceOf(ZlinkRequestException.class, framework.getCause())
+                            .getResult());
             assertFalse(request.reply.isDone(), "binding completion must remain active");
             request.admitted.complete(null);
             var lateReply = Message.from(new byte[] {2});
@@ -430,7 +433,7 @@ final class ZLinkJavaRequestCapacityContractTest {
                             .toCompletableFuture();
             if (!initialSubmission) reply.completeExceptionally(failure);
             var terminal = assertThrows(CompletionException.class, completion::join);
-            assertSame(failure, initialSubmission && wrapped ? terminal : terminal.getCause());
+            assertSame(original, terminal.getCause());
         }
     }
 

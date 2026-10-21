@@ -138,6 +138,7 @@
         <Compile Include="Runtime/DescriptorOwnerLeaseSelectionTests.cs"/>
         <Compile Include="Runtime/ActorCreationEntryCandidateTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.cs"/>
+        <Compile Include="Runtime/EntrySpotActorDispatchTests.RequestSubmissionFailure.cs"/>
         <Compile Include="Runtime/EntrySpotActorFifoActivationTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.SessionSealTerminal.cs"/>
         <Compile Include="Runtime/AcceptedHandlerSendSealTests.cs"/>

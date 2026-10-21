@@ -816,27 +816,15 @@ internal sealed class ZLinkSpotNodeRuntime : IAsyncDisposable
                 )
                 .ConfigureAwait(false);
         }
-        catch (ZLinkRequestTerminalException terminal)
+        catch (Exception failure)
         {
-            throw ZLinkRequestFailureMapper.CreateCompletionException(
-                terminal.Result,
-                terminal.FailureErrno,
-                $"Node request to '{targetNodeRid}' failed with result '{terminal.Result}'."
-            );
-        }
-        catch (ZlinkRequestException failure)
-        {
-            throw ZLinkRequestFailureMapper.CreateCompletionException(
-                (RequestResult)(int)failure.Result,
-                $"Node request to '{targetNodeRid}' failed with result '{failure.Result}'."
-            );
-        }
-        catch (ZlinkSubmitException failure)
-        {
-            throw ZLinkRequestFailureMapper.CreateSubmitException(
+            var mapped = ZLinkRequestFailureMapper.CreateSubmitException(
                 failure,
                 $"Node request to '{targetNodeRid}'"
             );
+            if (ReferenceEquals(mapped, failure))
+                throw;
+            throw mapped;
         }
         finally
         {
