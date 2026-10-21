@@ -148,6 +148,7 @@
         <Compile Include="Runtime/FanoutAutomaticDiscoveryTests.cs"/>
         <Compile Include="Runtime/FanoutSubscriptionTests.cs"/>
         <Compile Include="Runtime/EnvelopeCodecTests.cs"/>
+        <Compile Include="Runtime/EnvelopeCodecAllocationRegressionTests.cs"/>
         <Compile Include="Runtime/MessagingHotPathWireTests.cs"/>
         <Compile Include="Runtime/ErrorReplyWireConvergenceTests.cs"/>
         <Compile Include="Runtime/EndpointConnectionsTests.cs"/>
