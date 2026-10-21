@@ -3065,15 +3065,22 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
     )
     {
         var received = Received.Create();
-        var deadlineStarted = Stopwatch.GetTimestamp();
-        while (Stopwatch.GetElapsedTime(deadlineStarted) < timeout)
+        try
         {
-            if (receive(received))
-                return received;
-            await Task.Delay(5);
+            var deadlineStarted = Stopwatch.GetTimestamp();
+            while (Stopwatch.GetElapsedTime(deadlineStarted) < timeout)
+            {
+                if (receive(received))
+                    return received;
+                await Task.Delay(5);
+            }
+            throw new TimeoutException("Expected raw record was not received.");
         }
-        received.Dispose();
-        throw new TimeoutException("Expected raw record was not received.");
+        catch
+        {
+            received.Dispose();
+            throw;
+        }
     }
 
     [Fact]
@@ -3256,10 +3263,7 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         await hosted.StartAsync(CancellationToken.None);
         try
         {
-            using var hello = await PollReceivedAsync(
-                storage => TryReceive(router, storage),
-                TimeSpan.FromSeconds(5)
-            );
+            using var hello = await ReceiveClientServerHelloAsync(router, TimeSpan.FromSeconds(5));
             ReplyAdmission(router, hello, endpoint);
             using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
             await using var observer = monitoring
@@ -3293,8 +3297,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             using var replacement = CreateClientServerRouter(context);
             replacement.SetRoutingId(serverRid);
             replacement.Bind(endpoint);
-            using var secondHello = await PollReceivedAsync(
-                storage => TryReceive(replacement, storage),
+            using var secondHello = await ReceiveClientServerHelloAsync(
+                replacement,
                 TimeSpan.FromSeconds(5)
             );
             ReplyAdmission(replacement, secondHello, endpoint);
@@ -3512,6 +3516,80 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
         }
     }
 
+    [Fact]
+    public async Task ClientServerHelloFixture_AcknowledgesProbeBeforeHello()
+    {
+        using var context = Systems.Zlink.Zlink.CreateContext();
+        using var router = CreateClientServerRouter(context);
+        using var dealer = context.CreateDealerSocket();
+        using var poller = Systems.Zlink.Zlink.CreatePoller();
+        poller.Add(dealer, PollEventFlags.PollCompletion, 1);
+        var endpoint = $"inproc://client-server-hello-{Guid.NewGuid():N}";
+        router.Bind(endpoint);
+        dealer.Connect(endpoint);
+        using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        var probe = ZLinkClientServerControlProtocol.EncodeLivenessProbe(17);
+        var probeReply = dealer
+            .Request()
+            .Message(probe)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Async(timeout.Token)
+            .Reply;
+        var hello = ZLinkClientServerControlProtocol.EncodeHello(
+            new ZLinkClientServerControlProtocol.Hello("work", "plaintext", 4096)
+        );
+        var admissionReply = dealer
+            .Request()
+            .Message(hello)
+            .Timeout(TimeSpan.FromSeconds(5))
+            .Async(timeout.Token)
+            .Reply;
+        using var received = await ReceiveClientServerHelloAsync(router, TimeSpan.FromSeconds(5));
+        Assert.True(ZLinkClientServerControlProtocol.TryDecodeHello(received.Parts, out _));
+        ReplyAdmission(router, received, endpoint);
+        var replies = Task.WhenAll(probeReply, admissionReply);
+        var events = new PollEvent[1];
+        while (!replies.IsCompleted)
+        {
+            timeout.Token.ThrowIfCancellationRequested();
+            poller.Wait(events, TimeSpan.FromMilliseconds(5));
+        }
+        var parts = await replies;
+        try
+        {
+            Assert.True(
+                ZLinkClientServerControlProtocol.TryDecodeLivenessAck(parts[0], out var probeId)
+            );
+            Assert.Equal(17UL, probeId);
+            Assert.True(ZLinkClientServerControlProtocol.TryDecodeAdmission(parts[1], out _));
+        }
+        finally
+        {
+            foreach (var reply in parts)
+                ZLinkMessageParts.DisposeAll(reply);
+        }
+    }
+
+    private static Task<Received> ReceiveClientServerHelloAsync(
+        IRouterSocket router,
+        TimeSpan timeout
+    ) =>
+        PollReceivedAsync(
+            storage =>
+            {
+                if (!TryReceive(router, storage))
+                    return false;
+                if (ZLinkClientServerControlProtocol.TryDecodeHello(storage.Parts, out _))
+                    return true;
+                // A probe from the previous admission can precede the new Hello
+                // after reconnect. Reply to it with its matching ACK.
+                ReplyLivenessProbe(storage);
+                storage.Dispose();
+                return false;
+            },
+            timeout
+        );
+
     private static IRouterSocket CreateClientServerRouter(IContext context)
     {
         var router = context.CreateRouterSocket();
@@ -3533,6 +3611,11 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
             storage => TryReceive(router, storage),
             TimeSpan.FromSeconds(5)
         );
+        return ReplyLivenessProbe(probe);
+    }
+
+    private static ulong ReplyLivenessProbe(Received probe)
+    {
         Assert.True(
             ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probe.Parts, out var probeId)
         );
