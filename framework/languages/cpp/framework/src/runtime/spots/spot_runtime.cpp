@@ -7284,6 +7284,17 @@ void spot_node_runtime_t::bind_relocation_authority (
 namespace
 {
 
+// Parameters live in the coroutine frame, unlike lambda captures, which live in the
+// closure object the caller destroys when it returns.
+task_t<void> capture_relocation_payload (
+  std::shared_ptr<std::vector<std::byte>> payload,
+  std::function<task_t<std::vector<std::byte>> (void *, std::stop_token)> capture,
+  std::shared_ptr<spot_context_state_t> context,
+  std::stop_token cancellation)
+{
+    *payload = co_await capture (context->spot_instance.get (), cancellation);
+}
+
 task_t<std::vector<std::uint8_t>>
 capture_spot_relocation_state_async (std::shared_ptr<spot_node_builder_state_t> state,
                                      runtime::stateful::object_ref_t spot,
@@ -7348,23 +7359,40 @@ capture_spot_relocation_state_async (std::shared_ptr<spot_node_builder_state_t> 
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "State-preserving Spot relocation has no capture callback");
     }
-    std::vector<std::byte> payload;
-    const auto work = [&] () -> task_t<void> {
-        payload = co_await capture (context->spot_instance.get (), cancellation);
+    // Barrier cancellation can settle the caller while the capture still runs, so the
+    // coroutine frame owns everything it touches; the caller reads payload only on success.
+    auto payload = std::make_shared<std::vector<std::byte>> ();
+    // The barrier may keep these callables after the phase, so they hold weak references;
+    // only the running frame extends the payload and the Spot context.
+    const auto work = [weak_payload = std::weak_ptr (payload), capture,
+                       weak_context = std::weak_ptr (context), cancellation] {
+        auto owned_payload = weak_payload.lock ();
+        auto owned_context = weak_context.lock ();
+        if (!owned_payload || !owned_context)
+            return task_t<void> (
+              result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                       "Spot relocation capture caller has returned"));
+        return capture_relocation_payload (std::move (owned_payload), capture,
+                                           std::move (owned_context), cancellation);
     };
     const auto barrier =
       co_await state->lane.run_task ([&] { return context->relocation_ready_barrier; });
-    const auto capture_task = [&] {
-        return context->run_serial_task ("spot-relocation-capture", work);
+    const auto capture_task = [work, weak_context = std::weak_ptr (context)] {
+        const auto owned_context = weak_context.lock ();
+        if (!owned_context)
+            return task_t<void> (
+              result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                       "Spot relocation capture caller has returned"));
+        return owned_context->run_serial_task ("spot-relocation-capture", work);
     };
     co_await (barrier ? barrier->run (capture_task) : capture_task ());
     std::vector<std::uint8_t> output;
-    if (payload.size () > max_spot_relocation_state_bytes) {
+    if (payload->size () > max_spot_relocation_state_bytes) {
         throw framework_exception_t (framework_error_kind_t::rejected,
                                      "Spot relocation state exceeds the 64 MiB limit");
     }
-    output.reserve (payload.size ());
-    for (const auto value : payload)
+    output.reserve (payload->size ());
+    for (const auto value : *payload)
         output.push_back (std::to_integer<std::uint8_t> (value));
     co_return output;
 }
@@ -13056,6 +13084,21 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
     std::optional<message_t> create_reply;
     std::shared_ptr<service::spot_t> staged_native;
     const auto id_value = std::string (spot_id);
+    // Barrier cancellation can settle this caller while the creation turn still runs, so
+    // the turn's coroutine frame owns its inputs and outputs; parameters live in the frame,
+    // unlike lambda captures. It is declared before the preparation scope so a failed
+    // creation aborts the preparation while the staged native Spot is still alive.
+    struct creation_turn_t
+    {
+        spot_lifecycle_callbacks_t lifecycle;
+        zlink::message_t request;
+        std::function<task_t<void> (void *)> staged_restore;
+        spot_create_response_t response = spot_create_response_t::accept ();
+        std::optional<message_t> create_reply;
+        std::shared_ptr<service::spot_t> staged_native;
+    };
+    const auto turn = std::make_shared<creation_turn_t> (
+      creation_turn_t{plan.lifecycle, std::move (request), staged_restore});
 
     const auto preparation = inherited_operation
                                ? inherited_operation
@@ -13091,56 +13134,81 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
               pending->second.context = context_state;
       })
       .get ();
-    spot_create_response_t response = spot_create_response_t::accept ();
+    // The barrier may keep this callable after the turn, so it holds only weak references
+    // and the running frame alone owns the turn; a failed creation then releases the
+    // staged native Spot when this caller returns.
     preparation->lifecycle
-      ->run ([&] () -> task_t<void> {
-          if (inherited_operation)
-              context_state->spot_serial_executor->attach_preparation (preparation);
-          if (plan.lifecycle.create_entry_context_instance
-              || plan.lifecycle.create_instance_context_instance
-              || plan.lifecycle.create_spot_context_instance) {
-              service_provider_t empty_services;
-              auto &activation_services = context_state->activation_scope
-                                            ? context_state->activation_scope->provider ()
-                                            : empty_services;
-              if (plan.lifecycle.create_entry_context_instance) {
-                  context_state->spot_instance = plan.lifecycle.create_entry_context_instance (
-                    entry_spot_context_t (context_state), activation_services);
-              } else if (plan.lifecycle.create_instance_context_instance) {
-                  context_state->spot_instance = plan.lifecycle.create_instance_context_instance (
-                    instance_spot_context_t (context_state), activation_services);
-              } else {
-                  context_state->spot_instance = plan.lifecycle.create_spot_context_instance (
-                    spot_context_t (context_state), activation_services);
+      ->run ([weak_turn = std::weak_ptr (turn), weak_preparation = std::weak_ptr (preparation),
+              inherited = static_cast<bool> (inherited_operation),
+              weak_context = std::weak_ptr (context_state)] {
+          auto turn = weak_turn.lock ();
+          auto preparation = weak_preparation.lock ();
+          auto context_state = weak_context.lock ();
+          if (!turn || !preparation || !context_state)
+              return task_t<void> (result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                            "Spot creation caller has returned"));
+          return [] (std::shared_ptr<creation_turn_t> turn,
+                     std::shared_ptr<spot_serial_executor_t::preparation_t> preparation,
+                     bool inherited,
+                     std::shared_ptr<spot_context_state_t> context_state) -> task_t<void> {
+              auto &plan = *turn;
+              auto &request = turn->request;
+              auto &staged_restore = turn->staged_restore;
+              auto &response = turn->response;
+              auto &create_reply = turn->create_reply;
+              auto &staged_native = turn->staged_native;
+              if (inherited)
+                  context_state->spot_serial_executor->attach_preparation (preparation);
+              if (plan.lifecycle.create_entry_context_instance
+                  || plan.lifecycle.create_instance_context_instance
+                  || plan.lifecycle.create_spot_context_instance) {
+                  service_provider_t empty_services;
+                  auto &activation_services = context_state->activation_scope
+                                                ? context_state->activation_scope->provider ()
+                                                : empty_services;
+                  if (plan.lifecycle.create_entry_context_instance) {
+                      context_state->spot_instance = plan.lifecycle.create_entry_context_instance (
+                        entry_spot_context_t (context_state), activation_services);
+                  } else if (plan.lifecycle.create_instance_context_instance) {
+                      context_state->spot_instance =
+                        plan.lifecycle.create_instance_context_instance (
+                          instance_spot_context_t (context_state), activation_services);
+                  } else {
+                      context_state->spot_instance = plan.lifecycle.create_spot_context_instance (
+                        spot_context_t (context_state), activation_services);
+                  }
+                  if (!context_state->spot_instance)
+                      throw framework_exception_t (framework_error_kind_t::internal_failure,
+                                                   "SPOT factory returned null");
               }
-              if (!context_state->spot_instance)
-                  throw framework_exception_t (framework_error_kind_t::internal_failure,
-                                               "SPOT factory returned null");
-          }
-          if (context_state->spot_instance) {
-              if (staged_restore) {
-                  co_await staged_restore (context_state->spot_instance.get ());
+              if (context_state->spot_instance) {
+                  if (staged_restore) {
+                      co_await staged_restore (context_state->spot_instance.get ());
+                  } else {
+                      auto &serializers = *context_state->channel_runtime->serializers;
+                      staged_native = attach_native_spot (context_state, false, false);
+                      if (!context_state->is_instance_spot () && plan.lifecycle.on_create)
+                          response = co_await plan.lifecycle.on_create (
+                            context_state->spot_instance.get (), request, serializers);
+                  }
+                  if (!response.accepted)
+                      co_return;
+                  create_reply = response.reply;
+                  if (!staged_restore && plan.lifecycle.on_initialize)
+                      co_await plan.lifecycle.on_initialize (context_state->spot_instance.get ());
+                  if (staged_restore)
+                      staged_native = attach_native_spot (context_state, true, false);
               } else {
-                  auto &serializers = *context_state->channel_runtime->serializers;
                   staged_native = attach_native_spot (context_state, false, false);
-                  if (!context_state->is_instance_spot () && plan.lifecycle.on_create)
-                      response = co_await plan.lifecycle.on_create (
-                        context_state->spot_instance.get (), request, serializers);
               }
-              if (!response.accepted)
-                  co_return;
-              create_reply = response.reply;
-              if (!staged_restore && plan.lifecycle.on_initialize)
-                  co_await plan.lifecycle.on_initialize (context_state->spot_instance.get ());
-              if (staged_restore)
-                  staged_native = attach_native_spot (context_state, true, false);
-          } else {
-              staged_native = attach_native_spot (context_state, false, false);
-          }
-          co_return;
+              co_return;
+          }(std::move (turn), std::move (preparation), inherited, std::move (context_state));
       })
       .result ()
       .value ();
+    auto &response = turn->response;
+    create_reply = turn->create_reply;
+    staged_native = turn->staged_native;
     if (!response.accepted) {
         return local_spot_create_result_t{spot_id, spot_create_state_t::rejected, response.reply,
                                           std::move (context)};

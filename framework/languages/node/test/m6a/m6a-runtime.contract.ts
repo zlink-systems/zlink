@@ -2253,6 +2253,7 @@ test('channel send projects absent routes and propagates other admission failure
         contentType: 'application/json',
         payload: Buffer.from('notice')
       });
+      assert.ok(pending instanceof Promise);
       if (index === 0) assert.equal(await pending, SubmitResult.NotConnected);
       else await assert.rejects(pending, (error) => error === cause);
     } finally {

@@ -141,6 +141,69 @@ void verify_timer_waits_for_creation (zlink::framework::user_spot_execution_mode
     }
 }
 
+TEST (ZLinkFrameworkSpotCloseConformance, CancelledCreationRetainsCallbackUntilLateCompletion)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    auto node = zlink::framework::test::runtime_failure_fixture<spot_node_builder_state_t> (
+      "cancelled-creation-node");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (1);
+    serializer_registry_t serializers;
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+    node->spot_factories.emplace ("preparing", std::type_index (typeid (int)));
+    std::shared_ptr<spot_context_state_t> context;
+    std::weak_ptr<void> instance;
+    std::promise<void> entered;
+    auto started = entered.get_future ();
+    task_completion_source_t<spot_create_response_t> release;
+    spot_lifecycle_callbacks_t lifecycle;
+    lifecycle.create_spot_context_instance = [&] (spot_context_t value,
+                                                  service_provider_t &) -> std::shared_ptr<void> {
+        context = spot_context_access_t::state (value);
+        auto created = std::make_shared<int> (1);
+        instance = created;
+        return created;
+    };
+    lifecycle.on_create = [&] (void *, const zlink::message_t &, serializer_registry_t &) {
+        entered.set_value ();
+        return release.task ();
+    };
+    node->spot_lifecycles.emplace ("preparing", std::move (lifecycle));
+    spot_node_runtime_t owner (node);
+    auto creating = std::async (std::launch::async, [&] {
+        try {
+            (void) owner.get_or_create_spot ("preparing", spot_id_t ("cancelled-creation"), {});
+            return false;
+        }
+        catch (const framework_exception_t &error) {
+            return error.kind () == framework_error_kind_t::shutting_down;
+        }
+    });
+    started.get ();
+    const auto barrier = context->spot_serial_executor->preparation_lifecycle ();
+    auto terminal = barrier->terminal ();
+    std::atomic_int terminal_count{0};
+    detail::observe_task_terminal (terminal, [&] (const result_t<void> &) { ++terminal_count; });
+    barrier->cancel ();
+    // Cancellation settles the caller first; the callback then completes into a returned frame.
+    const bool cancelled = creating.get ();
+    const bool callback_retained = !instance.expired ();
+    release.complete (
+      result_t<spot_create_response_t>::success (spot_create_response_t::accept ()));
+    node->worker_executor->drain ();
+    context->spot_serial_executor->close ();
+    context->serial_queue->close ();
+    node->worker_executor->drain ();
+    node->lane.run ([&] { node->spot_contexts_by_id.clear (); }).get ();
+    context.reset ();
+    EXPECT_TRUE (cancelled);
+    EXPECT_TRUE (callback_retained);
+    EXPECT_EQ (terminal_count.load (), 1);
+    EXPECT_TRUE (instance.expired ());
+}
+
 TEST (ZLinkFrameworkSpotCloseConformance, SpotWideTimerWaitsForCreationPreparation)
 {
     verify_timer_waits_for_creation (zlink::framework::user_spot_execution_mode_t::spot_wide);

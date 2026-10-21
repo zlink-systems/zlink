@@ -16,13 +16,14 @@ public sealed class ErrorContracts
         var failure = new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.Backpressured);
         var error = await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
             await ZLinkRawRequestSubmitter.SubmitAsync(
+                (Completion: completionFailure, Failure: failure),
                 Array.Empty<Message>(),
-                (_, _, _) =>
-                    completionFailure
-                        ? Task.FromException<IReadOnlyList<Message>>(failure)
-                        : throw failure,
+                static (state, _, _, _) =>
+                    state.Completion
+                        ? Task.FromException<IReadOnlyList<Message>>(state.Failure)
+                        : throw state.Failure,
                 TimeSpan.FromSeconds(1),
-                "request failed: {0}",
+                static (_, result) => $"request failed: {result}",
                 CancellationToken.None
             )
         );
@@ -53,13 +54,14 @@ public sealed class ErrorContracts
                 {
                     attempts++;
                     return await ZLinkRawRequestSubmitter.SubmitAsync(
+                        (Completion: completionFailure, Failure: failure),
                         Array.Empty<Message>(),
-                        (_, _, _) =>
-                            completionFailure
-                                ? Task.FromException<IReadOnlyList<Message>>(failure)
-                                : throw failure,
+                        static (state, _, _, _) =>
+                            state.Completion
+                                ? Task.FromException<IReadOnlyList<Message>>(state.Failure)
+                                : throw state.Failure,
                         remaining,
-                        "request failed: {0}",
+                        static (_, result) => $"request failed: {result}",
                         token
                     );
                 },
