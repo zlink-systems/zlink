@@ -5,6 +5,9 @@
 #include <cctype>
 #include <deque>
 #include <filesystem>
+#include <fstream>
+#include <random>
+#include <stdexcept>
 #include <iostream>
 #include <map>
 #include <sstream>
@@ -19,11 +22,6 @@
 
 namespace
 {
-
-bool is_cmake_build_dir (const std::filesystem::path &path)
-{
-    return std::filesystem::is_regular_file (path / "CMakeCache.txt");
-}
 
 struct layout_file_contents_t
 {
@@ -57,8 +55,6 @@ class layout_directory_entry_t
 
     bool is_regular_file () const { return std::filesystem::is_regular_file (status_); }
 
-    bool is_directory () const { return std::filesystem::is_directory (status_); }
-
     const std::filesystem::path &path () const { return entry_.path (); }
 
     const layout_file_contents_t &contents () const { return contents_; }
@@ -80,18 +76,23 @@ bool is_in_directory_tree (const std::filesystem::path &path, const std::filesys
 class layout_snapshot_t
 {
   public:
-    layout_snapshot_t ()
+    layout_snapshot_t () :
+        layout_snapshot_t (ZLINK_FRAMEWORK_CPP_SOURCE_DIR, source_paths (), [] {})
     {
-        const std::filesystem::path root{ZLINK_FRAMEWORK_CPP_SOURCE_DIR};
-        for (auto iterator = std::filesystem::recursive_directory_iterator (root);
-             iterator != std::filesystem::recursive_directory_iterator{}; ++iterator) {
-            entries_.emplace_back (*iterator);
+    }
+
+    template <typename BeforeScan>
+    layout_snapshot_t (const std::filesystem::path &root,
+                       const std::vector<std::filesystem::path> &source_paths,
+                       BeforeScan before_scan)
+    {
+        before_scan ();
+        for (const auto &path : source_paths) {
+            entries_.emplace_back (std::filesystem::directory_entry{path});
             auto &entry = entries_.back ();
-            if (entry.is_directory () && is_cmake_build_dir (entry.path ())) {
-                iterator.disable_recursion_pending ();
-            }
-            if (!entry.is_regular_file ()) {
-                continue;
+            if (!entry.is_regular_file () || !is_in_directory_tree (path, root)) {
+                throw std::runtime_error ("tracked layout source is not a regular file: "
+                                          + path.string ());
             }
             read_layout_file (entry.path (), entry.contents ());
             files_.emplace (entry.path (), &entry.contents ());
@@ -115,6 +116,36 @@ class layout_snapshot_t
     }
 
   private:
+    static std::vector<std::filesystem::path> source_paths ()
+    {
+        const std::filesystem::path root{ZLINK_FRAMEWORK_CPP_SOURCE_DIR};
+        if (std::string_view{ZLINK_FRAMEWORK_CPP_TRACKED_SOURCE_MANIFEST}.empty ()) {
+            std::vector<std::filesystem::path> paths;
+            for (auto it = std::filesystem::recursive_directory_iterator{root};
+                 it != std::filesystem::recursive_directory_iterator{}; ++it) {
+                if (it->is_directory ()
+                    && std::filesystem::exists (it->path () / "CMakeCache.txt")) {
+                    it.disable_recursion_pending ();
+                } else if (it->is_regular_file ()) {
+                    paths.push_back (it->path ());
+                }
+            }
+            return paths;
+        }
+        std::ifstream manifest{ZLINK_FRAMEWORK_CPP_TRACKED_SOURCE_MANIFEST, std::ios::binary};
+        if (!manifest) {
+            throw std::runtime_error ("layout source manifest unavailable");
+        }
+        std::vector<std::filesystem::path> paths;
+        for (std::string relative; std::getline (manifest, relative, '\0');) {
+            paths.emplace_back (std::filesystem::path{ZLINK_FRAMEWORK_CPP_SOURCE_DIR} / relative);
+        }
+        if (paths.empty () || !manifest.eof ()) {
+            throw std::runtime_error ("layout source manifest is empty or unreadable");
+        }
+        return paths;
+    }
+
     std::deque<layout_directory_entry_t> entries_;
     std::map<std::filesystem::path, const layout_file_contents_t *> files_;
     std::map<std::filesystem::path, layout_file_contents_t> other_files_;
@@ -129,23 +160,22 @@ layout_snapshot_t &layout_snapshot ()
 class layout_recursive_directory_entries_t
 {
   public:
-    explicit layout_recursive_directory_entries_t (const std::filesystem::path &root) : root_{root}
+    explicit layout_recursive_directory_entries_t (const std::filesystem::path &root,
+                                                   const layout_snapshot_t &snapshot) :
+        root_{root}, snapshot_{snapshot}
     {
-        static_cast<void> (std::filesystem::recursive_directory_iterator{root});
     }
 
     class iterator_t
     {
       public:
-        explicit iterator_t (const std::filesystem::path &root) : root_{root}
+        explicit iterator_t (const std::filesystem::path &root, const layout_snapshot_t &snapshot) :
+            root_{root}, snapshot_{snapshot}
         {
             skip_outside_root ();
         }
 
-        const layout_directory_entry_t &operator* () const
-        {
-            return layout_snapshot ().entries ()[index_];
-        }
+        const layout_directory_entry_t &operator* () const { return snapshot_.entries ()[index_]; }
 
         iterator_t &operator++ ()
         {
@@ -156,13 +186,13 @@ class layout_recursive_directory_entries_t
 
         bool operator== (std::default_sentinel_t) const
         {
-            return index_ == layout_snapshot ().entries ().size ();
+            return index_ == snapshot_.entries ().size ();
         }
 
       private:
         void skip_outside_root ()
         {
-            const auto &entries = layout_snapshot ().entries ();
+            const auto &entries = snapshot_.entries ();
             while (index_ != entries.size ()
                    && !is_in_directory_tree (entries[index_].path (), root_)) {
                 ++index_;
@@ -170,21 +200,24 @@ class layout_recursive_directory_entries_t
         }
 
         std::filesystem::path root_;
+        const layout_snapshot_t &snapshot_;
         std::size_t index_ = 0;
     };
 
-    iterator_t begin () const { return iterator_t{root_}; }
+    iterator_t begin () const { return iterator_t{root_, snapshot_}; }
 
     std::default_sentinel_t end () const { return {}; }
 
   private:
     std::filesystem::path root_;
+    const layout_snapshot_t &snapshot_;
 };
 
 layout_recursive_directory_entries_t
-layout_recursive_directory_entries (const std::filesystem::path &root)
+layout_recursive_directory_entries (const std::filesystem::path &root,
+                                    const layout_snapshot_t &snapshot = layout_snapshot ())
 {
-    return layout_recursive_directory_entries_t{root};
+    return layout_recursive_directory_entries_t{root, snapshot};
 }
 
 const layout_file_contents_t &layout_file_contents (const std::filesystem::path &path)
@@ -210,13 +243,14 @@ bool require_absent (const std::filesystem::path &path, const std::string &reaso
     return false;
 }
 
-bool public_headers_do_not_include_runtime (const std::filesystem::path &root)
+bool public_headers_do_not_include_runtime (const std::filesystem::path &root,
+                                            const layout_snapshot_t &snapshot = layout_snapshot ())
 {
     if (!std::filesystem::exists (root)) {
         return true;
     }
     bool ok = true;
-    for (const auto &entry : layout_recursive_directory_entries (root)) {
+    for (const auto &entry : layout_recursive_directory_entries (root, snapshot)) {
         if (!entry.is_regular_file ()) {
             continue;
         }
@@ -453,7 +487,8 @@ std::size_t count_occurrences (const std::string &text, const std::string &needl
     }
 }
 
-bool non_empty_directories_do_not_keep_gitkeep (const std::filesystem::path &root)
+bool non_empty_directories_do_not_keep_gitkeep (
+  const std::filesystem::path &root, const layout_snapshot_t &snapshot = layout_snapshot ())
 {
     bool ok = true;
     const std::filesystem::path roots[] = {
@@ -471,15 +506,15 @@ bool non_empty_directories_do_not_keep_gitkeep (const std::filesystem::path &roo
         if (!std::filesystem::exists (scan_root)) {
             continue;
         }
-        for (const auto &entry : layout_recursive_directory_entries (scan_root)) {
+        for (const auto &entry : layout_recursive_directory_entries (scan_root, snapshot)) {
             if (!entry.is_regular_file () || entry.path ().filename () != ".gitkeep") {
                 continue;
             }
 
             const auto dir = entry.path ().parent_path ();
             bool has_real_entry = false;
-            for (const auto &sibling : std::filesystem::directory_iterator (dir)) {
-                if (sibling.path ().filename () != ".gitkeep") {
+            for (const auto &sibling : layout_recursive_directory_entries (dir, snapshot)) {
+                if (sibling.path () != entry.path ()) {
                     has_real_entry = true;
                     break;
                 }
@@ -492,6 +527,71 @@ bool non_empty_directories_do_not_keep_gitkeep (const std::filesystem::path &roo
         }
     }
     return ok;
+}
+
+bool snapshot_ignores_removed_temporary_directory ()
+{
+    const auto root = std::filesystem::temp_directory_path ()
+                      / ("zlink-layout-contract-" + std::to_string (std::random_device{}()));
+    struct cleanup_t
+    {
+        std::filesystem::path root;
+        ~cleanup_t () { std::filesystem::remove_all (root); }
+    } cleanup{root};
+    const auto temporary = root / "temporary";
+    const auto source = root / "tracked.hpp";
+    std::filesystem::create_directories (temporary / "child");
+    layout_snapshot_t snapshot{root, {source}, [&] {
+                                   std::ofstream{source} << "#include <src/runtime/private.hpp>\n";
+                                   std::filesystem::remove_all (temporary);
+                               }};
+    if (snapshot.entries ().size () != 1 || snapshot.entries ().front ().path () != source
+        || snapshot.entries ().front ().contents ().text
+             != "#include <src/runtime/private.hpp>\n") {
+        std::cerr << "tracked source was omitted after temporary directory removal\n";
+        return false;
+    }
+    std::ostringstream diagnostics;
+    auto *original = std::cerr.rdbuf (diagnostics.rdbuf ());
+    const bool accepted = public_headers_do_not_include_runtime (root, snapshot);
+    std::cerr.rdbuf (original);
+    if (accepted
+        || diagnostics.str ().find ("public header references runtime implementation")
+             == std::string::npos) {
+        std::cerr << "tracked public-header violation was not detected\n";
+        return false;
+    }
+    std::ofstream{source} << "#pragma once\n";
+    layout_snapshot_t valid_snapshot{root, {source}, [] {}};
+    if (!public_headers_do_not_include_runtime (root, valid_snapshot)) {
+        return false;
+    }
+    const auto placeholder_dir = root / "framework/include/api";
+    const auto placeholder = placeholder_dir / ".gitkeep";
+    const auto descendant = placeholder_dir / "nested/header.hpp";
+    std::filesystem::create_directories (descendant.parent_path ());
+    std::ofstream{placeholder};
+    std::ofstream{descendant} << "#pragma once\n";
+    layout_snapshot_t placeholder_snapshot{root, {placeholder, descendant}, [] {}};
+    diagnostics.str ({});
+    original = std::cerr.rdbuf (diagnostics.rdbuf ());
+    const bool accepted_placeholder =
+      non_empty_directories_do_not_keep_gitkeep (root, placeholder_snapshot);
+    std::cerr.rdbuf (original);
+    if (accepted_placeholder
+        || diagnostics.str ().find ("non-empty framework directory still keeps placeholder")
+             == std::string::npos) {
+        std::cerr << "tracked descendant did not invalidate its parent placeholder\n";
+        return false;
+    }
+    std::filesystem::remove (descendant);
+    layout_snapshot_t empty_snapshot{root, {placeholder}, [] {}};
+    if (!non_empty_directories_do_not_keep_gitkeep (root, empty_snapshot)) {
+        return false;
+    }
+    std::cout << "snapshot kept tracked source while temporary directory was removed; rejected "
+                 "invalid header and accepted valid header\n";
+    return true;
 }
 
 bool actor_model_documents_actor_destroy_lifecycle (const std::filesystem::path &root)
@@ -1188,11 +1288,20 @@ bool location_store_public_surface_hides_domain_repositories (const std::filesys
 
 } // namespace
 
-int main ()
+int main (int argc, char **argv)
 {
+    if (argc == 2 && std::string_view{argv[1]} == "--snapshot-regression") {
+        try {
+            return snapshot_ignores_removed_temporary_directory () ? 0 : 1;
+        }
+        catch (const std::exception &error) {
+            std::cerr << "snapshot regression: " << error.what () << '\n';
+            return 1;
+        }
+    }
     const std::filesystem::path root{ZLINK_FRAMEWORK_CPP_SOURCE_DIR};
 
-    bool ok = true;
+    bool ok = snapshot_ignores_removed_temporary_directory ();
     ok &= require_exists (root / "framework/include/zlink/framework/contracts");
     ok &=
       require_exists (root / "framework/include/zlink/framework/contracts/detail/message_name.hpp");
