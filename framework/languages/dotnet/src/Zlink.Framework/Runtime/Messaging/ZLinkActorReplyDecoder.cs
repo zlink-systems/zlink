@@ -25,10 +25,17 @@ internal static class ZLinkActorReplyDecoder
         {
             throw ProtocolError("Actor request reply payload could not be decoded.", error);
         }
+        finally
+        {
+            GC.KeepAlive(reply);
+        }
     }
 
-    public static void DecodeTerminal(IReadOnlyList<Message> reply, bool captureFlow = true) =>
+    public static void DecodeTerminal(IReadOnlyList<Message> reply, bool captureFlow = true)
+    {
         _ = DecodeResponsePayload(reply, captureFlow);
+        GC.KeepAlive(reply);
+    }
 
     private static ReadOnlySpan<byte> DecodeResponsePayload(
         IReadOnlyList<Message> reply,
@@ -44,20 +51,14 @@ internal static class ZLinkActorReplyDecoder
         {
             if (reply.Count == 1)
             {
-                var frameMemory = reply[0].AsReadOnlyMemory();
-                if (
-                    !ZLinkStreamFrameCodec.TryDecode(
-                        frameMemory.Span,
-                        out var headerBytes,
-                        out payload
-                    )
-                )
+                var frame = reply[0].AsReadOnlySpan();
+                if (!ZLinkStreamFrameCodec.TryDecode(frame, out var headerBytes, out payload))
                     throw new InvalidOperationException("Actor request reply frame is invalid.");
-                // The header always sits at PrefixSize inside the frame, so
-                // re-slicing the frame memory decodes without copying the
-                // header bytes out first.
+                // The header decoder requires managed memory. Copy only that
+                // header; the reply retains the native payload until the caller
+                // finishes this synchronous decode.
                 header = ZLinkStreamProtocolDefaults.DecodeHeader(
-                    frameMemory.Slice(ZLinkStreamFrameCodec.PrefixSize, headerBytes.Length),
+                    headerBytes.ToArray(),
                     captureFlow
                 );
             }
