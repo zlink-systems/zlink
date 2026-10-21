@@ -1231,12 +1231,14 @@ void verify_mesh_stop_drains_admitted_request_completion ()
     std::optional<host::reply_token_t> delayed_reply;
     const auto admitted_deadline = std::chrono::steady_clock::now () + 2s;
     while (!delayed_reply && std::chrono::steady_clock::now () < admitted_deadline) {
-        (void) target.dispatch_ready ([&] (const host::ready_record_t &,
-                                           const host::receive_record_t &record,
-                                           std::vector<zlink::message_t>) {
-            if (record.kind == host::record_kind_t::node_request)
-                delayed_reply = record.reply_token;
-        });
+        // Await so the suspended coroutine cannot outlive the callback and its captures.
+        (void) target
+          .dispatch_ready ([&] (const host::ready_record_t &, const host::receive_record_t &record,
+                                std::vector<zlink::message_t>) {
+              if (record.kind == host::record_kind_t::node_request)
+                  delayed_reply = record.reply_token;
+          })
+          .result ();
         std::this_thread::sleep_for (1ms);
     }
     assert (delayed_reply);
