@@ -206,11 +206,6 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
     {
         var packetName = ZLinkMessageNameResolver.ResolveFromMessage(request);
         var timeout = _timeout ?? runtime.Registration.ResolveChannelRequestTimeout(channelName);
-        using var encodedBody = ZLinkClientCallCodec.EncodeEnvelopeBody(
-            request,
-            runtime.Registration.Codecs,
-            out var contentType
-        );
         var terminal = runtime.Flow.CaptureEnabled
             ? new ZLinkChannelRequestTerminalTrace(
                 runtime.Flow,
@@ -235,7 +230,11 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
                 metadata: headerMetadata
             );
             terminal?.SetCorrelation(header.CorrelationId);
-            var parts = ZLinkClientCallCodec.CopyEnvelopeParts(header, encodedBody, contentType);
+            var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
+                header,
+                request,
+                runtime.Registration.Codecs
+            );
             var reply = await runtime
                 .RequestToChannelAsync(
                     channelName,
