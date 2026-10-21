@@ -7,9 +7,21 @@
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+#include <utility>
+#endif
 
 namespace zlink::framework::runtime
 {
+
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+thread_local const offload_executor_t *offload_executor_t::_current_worker_executor = nullptr;
+
+const offload_executor_t *offload_executor_t::current_worker_executor () noexcept
+{
+    return _current_worker_executor;
+}
+#endif
 
 offload_executor_t::offload_executor_t (std::size_t worker_count, std::string thread_name) :
     offload_executor_t (worker_count == 0 ? 1 : worker_count,
@@ -205,6 +217,13 @@ void offload_executor_t::join_retired_workers_locked ()
 
 void offload_executor_t::worker_loop ()
 {
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+    struct current_worker_scope_t
+    {
+        const offload_executor_t *previous;
+        ~current_worker_scope_t () { _current_worker_executor = previous; }
+    } current_worker_scope{std::exchange (_current_worker_executor, this)};
+#endif
     const char *trace_value = std::getenv ("ZLINK_CPP_HOST_STOP_TRACE");
     const bool trace_enabled = trace_value != nullptr && std::string_view (trace_value) != "0"
                                && std::string_view (trace_value) != "";
