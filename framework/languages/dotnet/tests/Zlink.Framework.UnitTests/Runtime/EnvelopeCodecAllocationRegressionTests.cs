@@ -206,14 +206,26 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
         Assert.Equal("before", raw.GetString());
     }
 
+    // Per-call bytes over Iterations warmed calls that no GC pause interrupted.
+    // A GC suspension can retire the thread allocation context inside a call and
+    // add its unused tail to the thread counter (see ProtobufNativePayloadTests).
     private long Allocated(Action action)
     {
         for (var i = 0; i < Iterations; i++)
             action();
-        var start = GC.GetAllocatedBytesForCurrentThread();
-        for (var i = 0; i < Iterations; i++)
+        long allocated = 0;
+        for (var measured = 0; measured < Iterations; )
+        {
+            var pause = GC.GetTotalPauseDuration();
+            var before = GC.GetAllocatedBytesForCurrentThread();
             action();
-        return (GC.GetAllocatedBytesForCurrentThread() - start) / Iterations;
+            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            if (GC.GetTotalPauseDuration() != pause)
+                continue;
+            allocated += bytes;
+            measured++;
+        }
+        return allocated / Iterations;
     }
 
     private static Message ActorReply(int size) => ActorReply(new byte[size]);
