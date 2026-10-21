@@ -79,11 +79,6 @@ class actor_serial_executor_t
                                     serial_work_options_t{serial_work_lane_t::lifecycle});
     }
 
-    result_t<std::shared_ptr<detail::deferred_barrier_t>> execute_lifecycle (std::string name) const
-    {
-        return _queue->reserve_handoff_barrier (std::move (name));
-    }
-
     const queue_ptr_t &queue () const noexcept { return _queue; }
 
     const void *queue_identity () const noexcept { return _queue.get (); }

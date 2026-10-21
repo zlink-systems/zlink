@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <fstream>
 #include <functional>
 #include <future>
@@ -137,6 +138,69 @@ void verify_timer_waits_for_creation (zlink::framework::user_spot_execution_mode
         ASSERT_TRUE (closed);
         EXPECT_FALSE (closed.value ());
     }
+}
+
+TEST (ZLinkFrameworkSpotCloseConformance, CancelledCreationRetainsCallbackUntilLateCompletion)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    auto node = zlink::framework::test::runtime_failure_fixture<spot_node_builder_state_t> (
+      "cancelled-creation-node");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (1);
+    serializer_registry_t serializers;
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+    node->spot_factories.emplace ("preparing", std::type_index (typeid (int)));
+    std::shared_ptr<spot_context_state_t> context;
+    std::weak_ptr<void> instance;
+    std::promise<void> entered;
+    auto started = entered.get_future ();
+    task_completion_source_t<spot_create_response_t> release;
+    spot_lifecycle_callbacks_t lifecycle;
+    lifecycle.create_spot_context_instance = [&] (spot_context_t value,
+                                                  service_provider_t &) -> std::shared_ptr<void> {
+        context = spot_context_access_t::state (value);
+        auto created = std::make_shared<int> (1);
+        instance = created;
+        return created;
+    };
+    lifecycle.on_create = [&] (void *, const zlink::message_t &, serializer_registry_t &) {
+        entered.set_value ();
+        return release.task ();
+    };
+    node->spot_lifecycles.emplace ("preparing", std::move (lifecycle));
+    spot_node_runtime_t owner (node);
+    auto creating = std::async (std::launch::async, [&] {
+        try {
+            (void) owner.get_or_create_spot ("preparing", spot_id_t ("cancelled-creation"), {});
+            return false;
+        }
+        catch (const framework_exception_t &error) {
+            return error.kind () == framework_error_kind_t::shutting_down;
+        }
+    });
+    started.get ();
+    const auto barrier = context->spot_serial_executor->preparation_lifecycle ();
+    auto terminal = barrier->terminal ();
+    std::atomic_int terminal_count{0};
+    detail::observe_task_terminal (terminal, [&] (const result_t<void> &) { ++terminal_count; });
+    barrier->cancel ();
+    // Cancellation settles the caller first; the callback then completes into a returned frame.
+    const bool cancelled = creating.get ();
+    const bool callback_retained = !instance.expired ();
+    release.complete (
+      result_t<spot_create_response_t>::success (spot_create_response_t::accept ()));
+    node->worker_executor->drain ();
+    context->spot_serial_executor->close ();
+    context->serial_queue->close ();
+    node->worker_executor->drain ();
+    node->lane.run ([&] { node->spot_contexts_by_id.clear (); }).get ();
+    context.reset ();
+    EXPECT_TRUE (cancelled);
+    EXPECT_TRUE (callback_retained);
+    EXPECT_EQ (terminal_count.load (), 1);
+    EXPECT_TRUE (instance.expired ());
 }
 
 TEST (ZLinkFrameworkSpotCloseConformance, SpotWideTimerWaitsForCreationPreparation)
@@ -350,8 +414,13 @@ TEST (ZLinkFrameworkSpotCloseConformance, FailedPreparationDrainsYieldedTimerAnd
     std::shared_ptr<void> first_record_claim (nullptr,
                                               [state] (void *) { state->leave_callback (); });
     task_completion_source_t<void> resume;
-    const std::shared_ptr<void> release_on_exit (
-      nullptr, [&] (void *) { resume.complete (result_t<void>::success ()); });
+    task_completion_source_t<void> proceed;
+    std::promise<void> entered;
+    auto callback_entered = entered.get_future ();
+    const std::shared_ptr<void> release_on_exit (nullptr, [&] (void *) {
+        proceed.complete (result_t<void>::success ());
+        resume.complete (result_t<void>::success ());
+    });
     std::promise<void> cancelling;
     auto cancellation_started = cancelling.get_future ();
     struct observed_timer_resource_t final : timer_resource_t
@@ -374,6 +443,8 @@ TEST (ZLinkFrameworkSpotCloseConformance, FailedPreparationDrainsYieldedTimerAnd
     running->native_timer = std::make_unique<observed_timer_resource_t> (cancelling);
     running->handler_invoker = [&] (void *, void *, serializer_registry_t &,
                                     const timer_tick_t &) -> task_t<zlink::message_t> {
+        entered.set_value ();
+        co_await proceed.task ();
         terminal (false);
         co_await detail::yield_call<void> ([&] { return resume.task (); });
         resumed_with_instance = bool (state->spot_instance);
@@ -392,6 +463,7 @@ TEST (ZLinkFrameworkSpotCloseConformance, FailedPreparationDrainsYieldedTimerAnd
     auto marker = std::make_shared<std::promise<void>> ();
     auto application_drained = marker->get_future ();
     std::shared_ptr<void> cleanup_on_exit (nullptr, [&] (void *) {
+        proceed.complete (result_t<void>::success ());
         resume.complete (result_t<void>::success ());
         terminal (false);
         first_record_claim.reset ();
@@ -403,6 +475,9 @@ TEST (ZLinkFrameworkSpotCloseConformance, FailedPreparationDrainsYieldedTimerAnd
     timer_runtime_t::post_fire_count (state, running, {}, 1);
     timer_runtime_t::post_fire_count (state, pending, {}, 1);
     state->spot_serial_executor->open_preparation_admission ();
+    callback_entered.get ();
+    state->spot_serial_executor->close_preparation_admission ();
+    proceed.complete (result_t<void>::success ());
     cancellation_started.get ();
     auto drained = node->lane.run ([&] { return state->preparation_callback_terminal; }).get ();
     ASSERT_TRUE (drained);
@@ -468,9 +543,15 @@ struct observation_t
     std::optional<zf::timer_t> timer_resource;
     int timer_calls = 0;
     int timer_calls_on_closing = 0;
-    // OnActorJoined holds its lifecycle item briefly, so two opposite Joins
-    // overlap (cross-join scenario).
-    std::atomic_bool cross_join_delay{false};
+    // Both source handlers register their Actor barriers before either ends.
+    std::atomic_bool cross_join_active{false};
+    std::promise<void> cross_a_reserved;
+    std::promise<void> cross_b_reserved;
+    std::promise<void> cross_a_initial;
+    std::promise<void> cross_b_initial;
+    std::condition_variable cross_progress;
+    std::promise<void> cross_sources_released;
+    std::shared_future<void> cross_sources_release = cross_sources_released.get_future ().share ();
     std::string handler_mode;
     std::string watched_spot;
     std::shared_ptr<zf::detail::spot_context_state_t> room_state;
@@ -486,6 +567,7 @@ struct observation_t
     {
         std::lock_guard lock (mutex);
         order.push_back (std::move (event));
+        cross_progress.notify_all ();
     }
 };
 
@@ -597,8 +679,14 @@ class member_actor_t final : public zf::actor_t
                       static_cast<int> (std::get<zf::actor_join_failed_t> (completion).error_kind));
         std::lock_guard lock (current ().mutex);
         current ().notes.push_back (std::move (note));
-        if (current ().cross_join_delay.load ())
-            current ().order.push_back ("joinReply:" + std::string (_context.actor_id ().value ()));
+        const auto id = _context.actor_id ().value ();
+        if (current ().cross_join_active.load ()) {
+            current ().order.push_back ("joinReply:" + std::string (id));
+            current ().cross_progress.notify_all ();
+        } else if (id == "cross-a" || id == "cross-b") {
+            (id == "cross-a" ? current ().cross_a_initial : current ().cross_b_initial)
+              .set_value ();
+        }
         co_return;
     }
 
@@ -723,8 +811,16 @@ class close_room_spot_t final : public zf::spot_t<member_actor_t>
     // A member asked to join another room moves there (cross-join scenario).
     void member_ping (member_actor_t &actor, zf::message_context_t &, const join_room_t &request)
     {
-        if (request.room != _context.spot_id ())
+        if (request.room != _context.spot_id ()) {
             actor.context ().join_spot (zf::spot_id_t (request.room)).defer ();
+            if (current ().cross_join_active.load ()) {
+                auto &reserved = actor.context ().actor_id ().value () == "cross-a"
+                                   ? current ().cross_a_reserved
+                                   : current ().cross_b_reserved;
+                reserved.set_value ();
+                current ().cross_sources_release.wait ();
+            }
+        }
     }
 
     zf::task_t<zf::spot_actor_join_result_t> on_actor_join (std::string_view,
@@ -740,9 +836,7 @@ class close_room_spot_t final : public zf::spot_t<member_actor_t>
     {
         current ().record ("joinCompleted");
         current ().record ("joinStarted:" + _context.spot_id ());
-        if (current ().cross_join_delay.load ())
-            std::this_thread::sleep_for (300ms);
-        if (current ().cross_join_delay.load ())
+        if (current ().cross_join_active.load ())
             current ().record ("joinedDone:" + std::string (actor.context ().actor_id ().value ()));
         co_return;
     }
@@ -1348,20 +1442,19 @@ class scenario_client_t final : public zf::hosted_service_t
             const auto room_a = spot_id;
             const auto room_b = spot_id + "-b";
             (void) create_room (services, room_b);
-            // A member learns its Join result after the whole Join, including
-            // the leave from its previous room, completes.
-            const auto joins_completed = [&] {
-                std::lock_guard lock (current ().mutex);
-                return std::count (current ().notes.begin (), current ().notes.end (),
-                                   "actorJoin:accepted");
-            };
+            // Membership §4.2 sends source Leave one-way before Join completion.
+            // Observe both callbacks within the same deadline before checking order.
+            auto initial_a = current ().cross_a_initial.get_future ();
+            auto initial_b = current ().cross_b_initial.get_future ();
             join_member (services, room_a, "cross-a");
-            if (!wait_until ([&] { return joins_completed () >= 1; }))
+            if (initial_a.wait_for (3s) != std::future_status::ready)
                 throw std::runtime_error ("member cross-a did not join room A");
             join_member (services, room_b, "cross-b");
-            if (!wait_until ([&] { return joins_completed () >= 2; }))
+            if (initial_b.wait_for (3s) != std::future_status::ready)
                 throw std::runtime_error ("member cross-b did not join room B");
-            current ().cross_join_delay.store (true);
+            auto source_a_reserved = current ().cross_a_reserved.get_future ();
+            auto source_b_reserved = current ().cross_b_reserved.get_future ();
+            current ().cross_join_active.store (true);
             auto &client = services.get_required<zf::actor_client_t> ();
             auto to_b = std::async (std::launch::async, [&] {
                 return client.send (zf::actor_id_t ("cross-a"), join_room_t{room_b})
@@ -1373,16 +1466,41 @@ class scenario_client_t final : public zf::hosted_service_t
                   .async ()
                   .result ();
             });
+            const auto registration_deadline = std::chrono::steady_clock::now () + 8000ms;
+            const bool both_reserved =
+              source_a_reserved.wait_until (registration_deadline) == std::future_status::ready
+              && source_b_reserved.wait_until (registration_deadline) == std::future_status::ready;
+            current ().cross_sources_released.set_value ();
             (void) to_b.get ();
             (void) to_a.get ();
-            const auto completed = wait_until ([&] { return joins_completed () >= 4; },
-                                               std::chrono::milliseconds (8000));
+            if (!both_reserved)
+                throw std::runtime_error ("both source handlers must register their Join barrier");
+            bool completed = false;
             bool replies_after_joined = true;
             int checked_replies = 0;
+            int checked_leaves = 0;
             {
-                std::lock_guard lock (current ().mutex);
+                std::unique_lock lock (current ().mutex);
+                completed = current ().cross_progress.wait_until (lock, registration_deadline, [&] {
+                    return std::count (current ().notes.begin (), current ().notes.end (),
+                                       "actorJoin:accepted")
+                             >= 4
+                           && std::count (current ().order.begin (), current ().order.end (),
+                                          "joinReply:cross-a")
+                                == 1
+                           && std::count (current ().order.begin (), current ().order.end (),
+                                          "joinReply:cross-b")
+                                == 1
+                           && std::count_if (current ().order.begin (), current ().order.end (),
+                                             [] (const auto &event) {
+                                                 return event.starts_with ("leaveCompleted:");
+                                             })
+                                == 2;
+                });
                 std::set<std::string> joined;
                 for (const auto &event : current ().order) {
+                    if (event.starts_with ("leaveCompleted:"))
+                        ++checked_leaves;
                     if (event.starts_with ("joinedDone:")) {
                         joined.insert (event.substr (11));
                     } else if (event.starts_with ("joinReply:")) {
@@ -1392,8 +1510,10 @@ class scenario_client_t final : public zf::hosted_service_t
                 }
             }
             actual["crossJoins"] =
-              completed && replies_after_joined && checked_replies == 2 ? "completed" : "stalled";
-            current ().cross_join_delay.store (false);
+              completed && replies_after_joined && checked_replies == 2 && checked_leaves == 2
+                ? "completed"
+                : "stalled";
+            current ().cross_join_active.store (false);
             return;
         }
         if (act == "getOrCreateDuringClose") {

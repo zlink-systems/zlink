@@ -232,6 +232,8 @@ int main ()
       read_text_file (root / "framework/src/runtime/stateful/public_host_runtime.cpp");
     const auto raw_stateful_dispatch =
       read_text_file (root / "framework/src/runtime/stateful/raw_stateful_dispatch.cpp");
+    const auto raw_stateful_dispatch_header =
+      read_text_file (root / "framework/src/runtime/stateful/raw_stateful_dispatch.hpp");
     const auto monitoring_unit =
       read_text_file (root / "tests/Zlink.Framework.UnitTests/test_cpp_framework_monitoring.cpp");
     const auto actor_gateway_unit = read_text_file (
@@ -1304,16 +1306,40 @@ int main ()
         && serializer_header.find ("[this, type]") == std::string::npos,
       "CPP-OWN-008", "cached custom serializers still look up erased functions per message");
 
-    /* CPP-OWN-003 — claiming a queued stateful turn transfers the already
-     * decoded application payload instead of decoding the canonical queue
-     * bytes again. */
-    gate.require (raw_stateful_dispatch.find ("auto frozen = std::move (pending->second.frozen)")
-                      != std::string::npos
-                    && raw_stateful_dispatch.find ("auto payload = std::move (*frozen.application)")
-                         != std::string::npos
-                    && raw_stateful_dispatch.find ("owner, *turn,") == std::string::npos,
-                  "CPP-OWN-003",
-                  "stateful claim still copies pending payload or canonical turn buffers");
+    /* CPP-OWN-003 — the claimed native turn remains the sole payload owner.
+     * Handler input borrows that payload synchronously instead of copying it
+     * into a second delivery field or decoding it during claim. */
+    const auto stateful_delivery_begin =
+      raw_stateful_dispatch_header.find ("struct stateful_delivery_t");
+    const auto stateful_delivery_end =
+      raw_stateful_dispatch_header.find ("class raw_stateful_dispatch_t", stateful_delivery_begin);
+    const auto stateful_delivery =
+      stateful_delivery_begin == std::string::npos || stateful_delivery_end == std::string::npos
+        ? std::string{}
+        : raw_stateful_dispatch_header.substr (stateful_delivery_begin,
+                                               stateful_delivery_end - stateful_delivery_begin);
+    const auto stateful_claim_begin =
+      raw_stateful_dispatch.find ("raw_stateful_dispatch_t::try_claim (");
+    const auto stateful_claim_end =
+      raw_stateful_dispatch.find ("raw_stateful_dispatch_t::accept_local (", stateful_claim_begin);
+    const auto stateful_claim =
+      stateful_claim_begin == std::string::npos || stateful_claim_end == std::string::npos
+        ? std::string{}
+        : raw_stateful_dispatch.substr (stateful_claim_begin,
+                                        stateful_claim_end - stateful_claim_begin);
+    gate.require (
+      !stateful_delivery.empty () && !stateful_claim.empty ()
+        && stateful_delivery.find ("application_payload_t") == std::string::npos
+        && stateful_claim.find ("std::move (*turn)") != std::string::npos
+        && stateful_claim.find ("with_accepted_application") == std::string::npos
+        && stateful_claim.find ("decode_frozen_record") == std::string::npos
+        && public_host_runtime.find ("auto parts = with_accepted_application (")
+             != std::string::npos
+        && public_host_runtime.find ("delivery->turn,") != std::string::npos
+        && public_host_runtime.find ("return protocol::decode_application_parts (application);")
+             != std::string::npos
+        && public_host_runtime.find ("delivery->payload") == std::string::npos,
+      "CPP-OWN-003", "stateful claim still copies payload or decodes the canonical turn");
 
     /* CPP-FOLLOW-001 — Message Follow admission preserves the contract error
      * categories and rejects a revisited node before the hop ceiling. */
