@@ -1455,6 +1455,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   function(add_zlink_framework_test target_name source_file labels)
     set(tier "${ARGV3}")
     add_executable(${target_name} ${source_file})
+    zlink_framework_cpp_add_boost_headers(${target_name})
     target_link_libraries(${target_name} PRIVATE zlink::framework)
     target_link_zlink_test_harness(${target_name})
     target_include_directories(${target_name} PRIVATE
@@ -2326,7 +2327,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "unit")
   target_sources(test_cpp_framework_request_reply_cost PRIVATE
     tests/support/allocation_counter.cpp)
-  zlink_framework_cpp_add_boost_headers(test_cpp_framework_request_reply_cost)
   target_include_directories(test_cpp_framework_request_reply_cost PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
@@ -2336,7 +2336,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "unit")
   target_sources(test_cpp_framework_claim_owner_cost PRIVATE
     tests/support/allocation_counter.cpp)
-  zlink_framework_cpp_add_boost_headers(test_cpp_framework_claim_owner_cost)
   target_include_directories(test_cpp_framework_claim_owner_cost PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
@@ -2346,7 +2345,6 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "unit")
   target_sources(test_cpp_framework_ambient_scope_cost PRIVATE
     tests/support/allocation_counter.cpp)
-  zlink_framework_cpp_add_boost_headers(test_cpp_framework_ambient_scope_cost)
   add_zlink_framework_test(
     test_cpp_framework_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp
