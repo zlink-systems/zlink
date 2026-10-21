@@ -4310,18 +4310,18 @@ mesh_node_runtime_t::request_to_channel (const std::string &channel_name,
                                            std::vector<std::uint8_t> (encoded));
 }
 
-task_t<std::size_t> mesh_node_runtime_t::dispatch_ready (
-  const std::function<void (const host::ready_record_t &,
-                            const host::receive_record_t &,
-                            std::vector<zlink::message_t>)> &dispatch,
-  bool accept_application_receive,
-  const std::function<bool ()> &next_application_receive)
+task_t<std::size_t>
+mesh_node_runtime_t::dispatch_ready (std::function<void (const host::ready_record_t &,
+                                                         const host::receive_record_t &,
+                                                         std::vector<zlink::message_t>)> dispatch,
+                                     bool accept_application_receive,
+                                     std::function<bool ()> next_application_receive)
 {
     if (!dispatch)
         throw configuration_error ("MeshNode dispatch callback is required");
 
-    co_return co_await _node->dispatch_ready (dispatch, accept_application_receive,
-                                              next_application_receive);
+    co_return co_await _node->dispatch_ready (std::move (dispatch), accept_application_receive,
+                                              std::move (next_application_receive));
 }
 
 host::node_status_t mesh_node_runtime_t::status () const
