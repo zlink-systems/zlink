@@ -141,6 +141,7 @@ bool exceeds_main_baseline (const char *variable, std::size_t observed)
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     void *probe_allocation = nullptr;
     const std::size_t probe = count_allocations ([&] { probe_allocation = ::operator new (64); });
     ::operator delete (probe_allocation);

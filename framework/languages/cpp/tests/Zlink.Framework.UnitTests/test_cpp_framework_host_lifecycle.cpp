@@ -2507,6 +2507,7 @@ bool verify_relocation_target_eligibility_applies_full_narrowing ()
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     if (argc == 2 && std::string_view (argv[1]) == "accepted-source-shutdown")
         return verify_application_signaled_relocation (true) ? EXIT_SUCCESS : EXIT_FAILURE;
     if (argc == 2 && std::string_view (argv[1]) == "stopped-host-rerun")

@@ -19,6 +19,8 @@ request builder가 모은 요청을 제출하는 마지막 호출을 종결자(t
 [현재 tutorial의 blocking 응답](#3-현재-tutorial의-blocking-응답)에서 구분한다. 이 장은 그 작업이 실행되는 위치와
 continuation이 다시 시작되는 위치를 다룬다. 요청과 응답의 종류는 [Client와 요청의 생애](08-client-lifecycle.ko.md)에서 다룬다.
 
+Standalone 도구에서 비동기 task를 기다리거나 callback을 등록할 때는 `completion_owner_t`를 두는 [C++ completion owner 사용 계약](../../../common/spec/server/languages/cpp/interfaces/01-common-runtime.ko.md#41-completion-owner)을 따른다. app·host 안에서는 내부 owner를 사용한다.
+
 ## 1. 작업 실행과 재개를 구분한다
 
 <iframe class="zlink-diagram" src="/common/diagrams/http-client-cpp-coroutines.html"
