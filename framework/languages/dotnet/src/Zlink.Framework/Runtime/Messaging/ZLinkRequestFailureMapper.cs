@@ -442,6 +442,41 @@ internal static class ZLinkRequestFailureMapper
         bool completionFailure = false
     ) => ZLinkSubmitFailureMapper.CreateException(error, operationName, completionFailure);
 
+    public static Exception CreateSubmitException(
+        Exception error,
+        string operationName,
+        bool selectOne = false
+    ) =>
+        error switch
+        {
+            ZLinkRequestTerminalException terminal => selectOne
+                ? CreateChannelCompletionException(
+                    terminal.Result,
+                    terminal.FailureErrno,
+                    operationName
+                )
+                : CreateCompletionException(terminal.Result, terminal.FailureErrno, operationName),
+            ZlinkRequestException terminal => selectOne
+                ? CreateChannelCompletionException(
+                    (RequestResult)(int)terminal.Result,
+                    operationName
+                )
+                : CreateCompletionException((RequestResult)(int)terminal.Result, operationName),
+            ZlinkSubmitException submit => selectOne
+                ? CreateChannelSubmitException(submit, operationName)
+                : CreateSubmitException(submit, operationName),
+            ZLinkFrameworkException
+            or ZlinkConfigException
+            or OperationCanceledException
+            or ArgumentException
+            or InvalidOperationException => error,
+            _ => new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.InternalFailure,
+                $"{operationName} failed.",
+                innerException: error
+            ),
+        };
+
     public static Exception CreateSubmitTimeoutException(
         Exception? lastSubmitFailure,
         string operationName

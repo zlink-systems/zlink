@@ -181,7 +181,6 @@ class spot_node_builder_state_t
         std::optional<service::reply_token_t> reply_token;
         runtime::messaging::envelope_header_t request_header;
         std::chrono::steady_clock::time_point deadline;
-        std::function<void (const result_t<zlink::message_t> &)> local_reply_sink;
     };
     /* Spec 51 scopes an OperationId to the initiating source-owner lifecycle,
      * not process-wide. Keep the initiating source node and route fence in
@@ -353,7 +352,6 @@ class spot_node_builder_state_t
         std::uint64_t completion_operation_id_high = 0;
         std::uint64_t completion_operation_id_low = 0;
         std::vector<std::uint8_t> admission_reply;
-        std::shared_ptr<actor_join_lifecycle_reservation_t> lifecycle_reservation;
     };
     std::map<std::string, actor_join_relocation_recovery_t> actor_join_relocation_recoveries;
     // Message Follow relays messages that reach the committed source route
@@ -804,9 +802,8 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
                         bool current_turn = false,
                         std::function<void ()> rejected = {})
     {
-        const auto executor = current_turn && uses_spot_execution_gate ()
-                                ? actor_executor_ptr_t{}
-                                : prepare_actor_executor (actor_id);
+        const auto executor =
+          current_turn ? actor_executor_ptr_t{} : prepare_actor_executor (actor_id);
         return execute_actor (executor, std::move (name), std::move (work), std::move (options),
                               current_turn, std::move (rejected));
     }
@@ -818,10 +815,13 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
                         bool current_turn = false,
                         std::function<void ()> rejected = {})
     {
-        if (current_turn && _spot_queue && uses_spot_execution_gate ()) {
+        if (current_turn && _spot_queue) {
             options.transfer_owner_reservation = {};
-            return _spot_queue->try_post_async (std::move (name), std::move (work),
-                                                std::move (options));
+            work ([] (std::function<void ()> finish) {
+                if (finish)
+                    finish ();
+            });
+            return true;
         }
         if (!executor)
             return false;
@@ -863,16 +863,6 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
     bool actor_queue_matches (const std::string &actor_id, const void *identity) const noexcept
     {
         return actor_queue_identity (actor_id) == identity;
-    }
-
-    result_t<std::shared_ptr<detail::deferred_barrier_t>>
-    reserve_actor_handoff_barrier (const std::string &actor_id, std::string name)
-    {
-        const auto executor = actor_executor (actor_id);
-        if (!executor)
-            return result_t<std::shared_ptr<detail::deferred_barrier_t>>::failure (
-              framework_error_kind_t::shutting_down, "Actor handoff queue is unavailable");
-        return executor->execute_lifecycle (std::move (name));
     }
 
     result_t<actor_queue_submission_t>
@@ -932,7 +922,7 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
             queues = _state_lane->run ([this] { return close_on_lane (); }).get ();
         for (const auto &queue : queues)
             if (queue)
-                queue->close ();
+                queue->cancel_pending ();
     }
 
   private:
@@ -977,9 +967,8 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
         assert_on_lane ();
         auto &executor = _actor_executors[actor_id];
         if (!executor && _worker_executor) {
-            executor = std::make_shared<actor_executor_t> (
-              _worker_executor, queue_ptr_t{},
-              uses_spot_execution_gate () ? _spot_queue : queue_ptr_t{});
+            executor =
+              std::make_shared<actor_executor_t> (_worker_executor, queue_ptr_t{}, _spot_queue);
             executor->queue ()->set_application_start_policy (
               preparation_policy (std::atomic_load (&_preparation)));
             publish_actor_executor_snapshot ();
@@ -1014,9 +1003,8 @@ class spot_serial_executor_t : public std::enable_shared_from_this<spot_serial_e
     {
         assert_on_lane ();
         _actor_executors.insert_or_assign (
-          actor_id, std::make_shared<actor_executor_t> (
-                      _worker_executor, std::move (queue),
-                      uses_spot_execution_gate () ? _spot_queue : queue_ptr_t{}));
+          actor_id,
+          std::make_shared<actor_executor_t> (_worker_executor, std::move (queue), _spot_queue));
         _actor_executors.at (actor_id)->queue ()->set_application_start_policy (
           preparation_policy (std::atomic_load (&_preparation)));
         publish_actor_executor_snapshot ();
@@ -1263,7 +1251,8 @@ class spot_context_state_t : public std::enable_shared_from_this<spot_context_st
       std::function<void ()> activated = {},
       std::function<void (bool)> cancellation_observed = {},
       std::function<void ()> transfer_owner_reservation = {},
-      std::size_t transferred_owner_byte_cost = 0);
+      std::size_t transferred_owner_byte_cost = 0,
+      std::shared_ptr<serial_turn_t> accepted_turn = {});
     /* The lifecycle item completes the task. A caller that holds this Spot's turn
      * runs the work inline, so its task is already complete. */
     task_t<void> run_serial_task (std::string name, std::function<task_t<void> ()> work);
@@ -1954,7 +1943,8 @@ class spot_node_runtime_t
       serializer_registry_t &serializers,
       std::function<void ()> deferred_terminal = {},
       bool *terminal_deferred = nullptr,
-      std::function<void ()> before_application_handler = {});
+      std::function<void ()> before_application_handler = {},
+      runtime::serial_execution_queue_t::async_completion_t application_completed = {});
     void set_route_client (route_client_t route_client);
     void on_destroy_actor (std::function<result_t<void> (const actor_ref_t &)> destroy_actor);
     void on_actor_ref_updated (std::function<result_t<void> (const actor_ref_t &)> update_actor);
@@ -2130,24 +2120,26 @@ class spot_node_runtime_t
     deliver_actor_join_completion (const actor_ref_t &actor_ref,
                                    const actor_join_completion_t &completion,
                                    std::optional<spot_id_t> source_spot_id = std::nullopt);
-    task_t<result_t<void>>
-    open_local_actor_handoff (actor_ref_t actor_ref,
-                              std::optional<std::string> reservation_id = std::nullopt);
+    task_t<std::shared_ptr<runtime::serial_execution_queue_t>>
+    actor_application_queue (std::string_view actor_id) const;
+    task_t<bool> notify_actor_application_ready (
+      std::string actor_id, std::function<std::optional<runtime::serial_prefix_work_t> ()> take);
+    task_t<void> accept_actor_application_ready (
+      std::string actor_id,
+      std::shared_ptr<runtime::serial_execution_queue_t> queue,
+      std::function<std::optional<runtime::serial_prefix_work_t> ()> take);
+    task_t<void> seal_actor_application_suffix (const actor_ref_t &actor_ref,
+                                                std::function<void ()> seal);
+    task_t<std::vector<std::shared_ptr<runtime::serial_application_record_t>>>
+    take_actor_application_suffix (const actor_ref_t &actor_ref,
+                                   std::function<void ()> seal = {}) const;
+    task_t<result_t<void>> open_local_actor_handoff (actor_ref_t actor_ref,
+                                                     std::string expected_source_transfer = {});
     void cancel_local_actor_handoff (const actor_ref_t &actor_ref);
     // In-flight handoff (spot-actor §10): drains the packets preserved while the
     // actor was moving, in arrival order. The commit path calls this once to fill
     // the commit request and once more after the ack for packets that raced it.
     std::vector<handoff_packet_t> take_actor_handoff_backlog (const actor_ref_t &actor_ref);
-    request_task_t<std::optional<zlink::message_t>>
-    relay_local_actor_packet (const actor_ref_t &actor_ref,
-                              const runtime::messaging::envelope_header_t &header,
-                              const zlink::message_t &payload,
-                              const zlink::routing_id_t &source_node,
-                              const runtime::protocol::actor_route_fence_t &source_fence,
-                              std::uint8_t incoming_hop_count,
-                              runtime::protocol::wire_operation_id_t operation,
-                              std::uint64_t reply_route_id,
-                              std::chrono::milliseconds timeout);
     bool actor_transfer_in_progress (const actor_ref_t &actor_ref) const;
     bool actor_transfer_in_progress (std::string_view actor_id) const;
     // Node-local knowledge required to admit a wire actorJoin(28): the
@@ -2175,6 +2167,10 @@ class spot_node_runtime_t
     void bind_relocation_store (std::shared_ptr<runtime::stateful::relocation_store_port_t> store);
     void bind_relocation_authority (
       std::shared_ptr<runtime::stateful::authority_relocation_port_t> authority);
+    runtime::stateful::frozen_object_state_t
+    capture_relocation_state (const runtime::stateful::object_ref_t &object,
+                              const std::string &stable_type,
+                              std::stop_token cancellation) const;
     std::vector<std::uint8_t>
     capture_spot_relocation_state (const runtime::stateful::object_ref_t &spot,
                                    const std::string &stable_type,
@@ -2192,9 +2188,9 @@ class spot_node_runtime_t
     commit_relocation_materialization (const std::vector<runtime::stateful::object_ref_t> &targets);
     void abort_relocation_materialization (
       const std::vector<runtime::stateful::object_ref_t> &targets) noexcept;
-    result_t<remote_actor_transfer_t> transfer_actor_out (const actor_ref_t &actor_ref,
-                                                          std::string transfer_id = {},
-                                                          bool capture_state = true);
+    task_t<result_t<remote_actor_transfer_t>> transfer_actor_out (const actor_ref_t &actor_ref,
+                                                                  std::string transfer_id = {},
+                                                                  bool capture_state = true);
     result_t<void>
     submit_remote_actor_leave (const std::string &transfer_id,
                                const actor_ref_t &source_actor,
@@ -2278,7 +2274,10 @@ class spot_node_runtime_t
       std::optional<std::string> inbound_deadline = std::nullopt,
       std::function<void ()> transfer_owner_reservation = {},
       std::size_t transferred_owner_byte_cost = 0,
-      std::shared_ptr<actor_dispatch_admission_token_t> admission_token = {});
+      std::shared_ptr<actor_dispatch_admission_token_t> admission_token = {},
+      std::shared_ptr<runtime::serial_application_record_t> application_record = {},
+      spot_handler_registry_t::actor_queue_dispatch_t actor_queue_dispatch =
+        spot_handler_registry_t::actor_queue_dispatch_t::acquire);
     task_t<zlink::message_t> notify_actor_disconnected_erased (void *instance,
                                                                std::type_index actor_type,
                                                                actor_gateway_runtime_t gateway,
@@ -2312,7 +2311,7 @@ class spot_node_runtime_t
     std::size_t active_user_spot_count_on_lane () const;
     std::optional<std::string> spot_name_for_unlocked (const spot_id_t &spot_id) const;
 
-    std::shared_ptr<service::spot_t>
+    static std::shared_ptr<service::spot_t>
     attach_native_spot (const std::shared_ptr<spot_context_state_t> &state,
                         bool relocation_restore = false,
                         bool publish = true);
@@ -2470,13 +2469,9 @@ class spot_node_runtime_t
     // Drains a source-side handoff after a pre-commit failure while the move
     // gate remains closed. Replay is posted before the gate is removed, so a
     // new dispatch cannot overtake the preserved packets.
-    void replay_actor_handoff_until_move_closed (const actor_ref_t &actor_ref,
-                                                 std::string transfer_id);
-    task_t<void> replay_actor_handoff_until_move_closed_async (actor_ref_t actor_ref,
-                                                               std::string transfer_id);
-    task_t<void> replay_actor_handoff_core (const actor_ref_t &actor_ref,
-                                            std::string transfer_id,
-                                            std::optional<service_provider_t> root_services);
+    void replay_actor_handoff_until_move_closed (const actor_ref_t &actor_ref);
+    task_t<void> replay_actor_handoff_until_move_closed_async (actor_ref_t actor_ref);
+    task_t<void> replay_actor_handoff_core (const actor_ref_t &actor_ref);
 
     std::shared_ptr<spot_node_builder_state_t> _state;
 };
