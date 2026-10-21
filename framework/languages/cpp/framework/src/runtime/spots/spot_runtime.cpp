@@ -9293,19 +9293,21 @@ spot_node_runtime_t::take_actor_application_suffix (const actor_ref_t &actor_ref
 }
 
 task_t<result_t<void>>
-spot_node_runtime_t::open_local_actor_handoff (const actor_ref_t &actor_ref,
+spot_node_runtime_t::open_local_actor_handoff (actor_ref_t actor_ref,
                                                std::string expected_source_transfer)
 {
+    const auto state = _state;
     const auto key = actor_key (actor_ref);
-    auto context = _state->lane
-                     .run ([&] {
-                         const auto location = _state->actor_spot_ids.find (key);
-                         if (location == _state->actor_spot_ids.end ())
-                             return std::shared_ptr<spot_context_state_t>{};
-                         const auto target = find_context_core (location->second);
-                         return target ? target->_state : std::shared_ptr<spot_context_state_t>{};
-                     })
-                     .get ();
+    auto [context, services] = co_await state->lane.run_task ([state, key] {
+        std::shared_ptr<spot_context_state_t> context;
+        const auto location = state->actor_spot_ids.find (key);
+        if (location != state->actor_spot_ids.end ()) {
+            const auto target = spot_node_runtime_t (state).find_context_core (location->second);
+            if (target)
+                context = target->_state;
+        }
+        return std::make_pair (std::move (context), state->root_services);
+    });
     if (!context)
         co_return result_t<void>::failure (framework_error_kind_t::unavailable,
                                            "local Actor handoff target is unavailable");
@@ -9313,11 +9315,10 @@ spot_node_runtime_t::open_local_actor_handoff (const actor_ref_t &actor_ref,
     if (!executor)
         co_return result_t<void>::failure (framework_error_kind_t::shutting_down,
                                            "local Actor handoff target queue is unavailable");
-    auto services = _state->lane.run ([&] { return _state->root_services; }).get ();
     if (!services)
         co_return result_t<void>::failure (framework_error_kind_t::unavailable,
                                            "local Actor handoff services are unavailable");
-    auto owner = std::make_shared<spot_node_runtime_t> (_state);
+    auto owner = std::make_shared<spot_node_runtime_t> (state);
     const auto accepted = co_await executor->queue ()->adopt_application_prefix (
       [owner, actor_ref, key, context, services = std::move (*services),
        expected_source_transfer = std::move (expected_source_transfer)] () mutable {
@@ -13527,6 +13528,18 @@ void spot_node_runtime_t::close_user_spot_owner (const std::string &spot_id,
 
 bool spot_node_runtime_t::close_all_user_spots (std::chrono::steady_clock::time_point deadline_at)
 {
+    const auto remaining = [deadline_at] {
+        return std::max (std::chrono::milliseconds::zero (),
+                         std::chrono::ceil<std::chrono::milliseconds> (
+                           deadline_at - std::chrono::steady_clock::now ()));
+    };
+    // Host relocation §15: Draining finishes accepted operations. A Join stays
+    // moving until its completion ordering ends (Spot-Actor membership §4), so
+    // the shutdown Close retires its Actor only after that move closes.
+    const auto moves_closed =
+      _state->actor_transfer_coordinator.wait_for_source_completions ().result_for (remaining ());
+    if (!moves_closed || !*moves_closed)
+        return false;
     std::vector<spot_id_t> user_spots;
     std::vector<task_t<bool>> running_closes;
     _state->lane
@@ -13550,11 +13563,8 @@ bool spot_node_runtime_t::close_all_user_spots (std::chrono::steady_clock::time_
           }
       })
       .get ();
-    const auto wait_for_close = [deadline_at] (const task_t<bool> &closing) {
-        const auto remaining = std::max (std::chrono::milliseconds::zero (),
-                                         std::chrono::ceil<std::chrono::milliseconds> (
-                                           deadline_at - std::chrono::steady_clock::now ()));
-        const auto result = closing.result_for (remaining);
+    const auto wait_for_close = [&remaining] (const task_t<bool> &closing) {
+        const auto result = closing.result_for (remaining ());
         return result && result->value ();
     };
     for (const auto &closing : running_closes) {

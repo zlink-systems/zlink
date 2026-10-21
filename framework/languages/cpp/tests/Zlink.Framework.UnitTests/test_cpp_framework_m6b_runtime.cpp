@@ -100,6 +100,19 @@ struct public_host_runtime_test_access_t
     {
         host._options.mesh.dispatch = std::move (options);
     }
+    static void enqueue_lifetime_probe (public_host_runtime_t &host)
+    {
+        host._local_dispatch_completion_lane
+          .run ([&] {
+              local_application_dispatch_t record;
+              record.owner.owner_kind = owner_kind_t::node;
+              record.owner.domain = ready_domain_t::application;
+              record.record.kind = record_kind_t::node_send;
+              record.record.domain = ready_domain_t::application;
+              host._local_application_dispatches.push_back (std::move (record));
+          })
+          .get ();
+    }
     using key_t = public_host_runtime_t::relocation_attempt_key_t;
 
     static bool restore_saved (public_host_runtime_t &host,
@@ -8646,10 +8659,16 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
         assert (await_task (source->transport ().send_relocation_control (
           target_status.routing_id ().to_bytes (), chunk)));
     }
-    while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline) {
+    // Messaging hot path §4.1: a reply completes in a receive rotation, which
+    // this test drives with dispatch_ready. Both replies can arrive in
+    // different rotations, so keep rotating until both requests complete.
+    while ((!pending.await_ready () || (initial && !initial->await_ready ()))
+           && std::chrono::steady_clock::now () < deadline) {
         (void) target->dispatch_ready (dispatch);
         (void) source->dispatch_ready (dispatch);
     }
+    assert (pending.await_ready ());
+    assert (!initial || initial->await_ready ());
     const auto response = await_task (std::move (pending));
     assert (!response.ready);
     if (already_accepted) {
@@ -8712,6 +8731,78 @@ void verify_relocation_failure_code_classification_is_distinct ()
             == zlink::framework::framework_error_kind_t::internal_failure);
 }
 
+/* #2295: dispatch_ready suspends on the bound-session owner lookup, the
+ * caller's callbacks go out of scope, and the coroutine resumes and calls
+ * them. The coroutine must own the callbacks; ASan reports the use after
+ * scope when it only holds references. */
+void verify_dispatch_callbacks_survive_suspension (bool through_mesh, bool dispatch_marker)
+{
+    using namespace zlink::framework;
+    auto state = test::runtime_failure_fixture<detail::mesh_node_builder_state_t> ("m6b-mesh");
+    state->listen_endpoint = "tcp://127.0.0.1:0";
+    state->routing_id = zlink::routing_id_t::from ("callback-lifetime");
+    state->core_context = std::make_shared<zlink::context_t> ();
+    detail::mesh_node_runtime_t mesh_node (state);
+    auto release =
+      std::make_shared<task_completion_source_t<std::optional<location_owner_token_t>>> ();
+    auto entered = std::make_shared<std::atomic_bool> (false);
+    mesh_node.configure_bound_session_operations (
+      {.session_owner =
+         [release, entered] (const auto &, std::uint64_t) {
+             entered->store (true);
+             return release->task ();
+         },
+       .bind = [] (const auto &, const auto &, std::uint64_t, const auto &,
+                   auto) { return host::bound_session_bind_operation_result_t{}; },
+       .send = [] (const auto &, auto) { return stateful::stateful_error_t::conflict; },
+       .replaced = [] (const auto &) {},
+       .commit_relocation_route = [] (const auto &, const auto &, const auto &) { return false; },
+       .prepare_relocation_target_route = [] (const auto &, std::uint64_t) { return false; }});
+    mesh_node.start ();
+    auto &target = mesh_node.native_node ();
+    const auto local = target.status ();
+    const stateful::object_ref_t actor{
+      stateful::object_kind_t::actor,  "lifetime-actor", 7, 11, "m6b-mesh",
+      local.routing_id ().to_string ()};
+    const auto creation = target.objects ().begin_reserved_object (actor, "lifetime.actor", {});
+    assert (creation.error == stateful::stateful_error_t::none);
+    assert (target.objects ().commit_create (creation.attempt) == stateful::stateful_error_t::none);
+    const protocol::bound_session_bind_t bind{
+      1,
+      {actor.key, 7, local.routing_id ().to_bytes (), local.lifecycle_generation (), 11, 13},
+      zlink::routing_id_t::from ("lifetime-session").to_bytes (),
+      {protocol::bound_session_binding_state_t::active, 17}};
+    assert (target.transport ().mailbox ().try_enqueue (mesh::service_mailbox_record_t{
+      .owner = "lifetime-bind",
+      .domain = mesh::service_mailbox_domain_t::infrastructure,
+      .parts = {zlink::message_t::from (protocol::encode_bound_session_bind (bind))},
+      .source_routing_id = local.routing_id ().to_bytes (),
+      .source_node_generation = local.lifecycle_generation ()}));
+    host::public_host_runtime_test_access_t::enqueue_lifetime_probe (target);
+    std::optional<task_t<std::size_t>> pending;
+    auto calls = std::make_shared<std::array<int, 2>> ();
+    {
+        auto marker = std::make_shared<int> (42);
+        auto dispatch = [marker = dispatch_marker ? marker : nullptr, calls] (const auto &,
+                                                                              const auto &, auto) {
+            assert (!marker || *marker == 42);
+            ++(*calls)[0];
+        };
+        auto next = [marker = dispatch_marker ? nullptr : marker, calls] {
+            assert (!marker || *marker == 42);
+            ++(*calls)[1];
+            return false;
+        };
+        pending.emplace (through_mesh ? mesh_node.dispatch_ready (dispatch, true, next)
+                                      : target.dispatch_ready (dispatch, true, next));
+        assert (entered->load ());
+    }
+    release->complete (result_t<std::optional<location_owner_token_t>>::success (std::nullopt));
+    await_task (std::move (*pending));
+    assert ((*calls)[0] == 1 && (*calls)[1] == 1);
+    mesh_node.stop ();
+}
+
 } // namespace
 
 int main (int argc, char **argv)
@@ -8730,6 +8821,18 @@ int main (int argc, char **argv)
         return 0;
     }
 
+    if (argc == 3 && std::string_view (argv[1]) == "--dispatch-callback-lifetime") {
+        const std::string_view mode (argv[2]);
+        verify_dispatch_callbacks_survive_suspension (mode.starts_with ("mesh"),
+                                                      mode.ends_with ("dispatch"));
+        return 0;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--dispatch-callback-lifetime") {
+        for (const bool through_mesh : {false, true})
+            for (const bool dispatch_marker : {false, true})
+                verify_dispatch_callbacks_survive_suspension (through_mesh, dispatch_marker);
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--bind-registration-terminal") {
         verify_remote_bound_session_bind_returns_terminal_fences ();
         return 0;

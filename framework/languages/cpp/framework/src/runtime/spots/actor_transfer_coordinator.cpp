@@ -79,19 +79,28 @@ bool pending_actor_admission_t::matches_prepare (const actor_ref_t &actor,
            && completion_operation_id_low == operation_low;
 }
 
+bool actor_transfer_coordinator_t::is_source_move (const move_state_t &move) noexcept
+{
+    return move.phase == actor_move_phase_t::source_reserved
+           || move.phase == actor_move_phase_t::source_remote
+           || (move.phase == actor_move_phase_t::reconcile && move.reconcile_context);
+}
+
+std::shared_ptr<task_completion_source_t<void>>
+actor_transfer_coordinator_t::close_completion_on_lane (move_state_t &move)
+{
+    if (!move.close_completion)
+        move.close_completion = std::make_shared<task_completion_source_t<void>> ();
+    return move.close_completion;
+}
+
 task_t<void> actor_transfer_coordinator_t::wait_for_source_completion (std::string actor_key)
 {
     const auto completion = co_await _lane.run_task ([this, &actor_key] {
         const auto found = _moves.find (actor_key);
-        if (found == _moves.end ()
-            || (found->second.phase != actor_move_phase_t::source_reserved
-                && found->second.phase != actor_move_phase_t::source_remote
-                && (found->second.phase != actor_move_phase_t::reconcile
-                    || !found->second.reconcile_context)))
+        if (found == _moves.end () || !is_source_move (found->second))
             return std::shared_ptr<task_completion_source_t<void>>{};
-        if (!found->second.source_completion)
-            found->second.source_completion = std::make_shared<task_completion_source_t<void>> ();
-        return found->second.source_completion;
+        return close_completion_on_lane (found->second);
     });
     if (completion)
         co_await completion->task ();
@@ -99,23 +108,28 @@ task_t<void> actor_transfer_coordinator_t::wait_for_source_completion (std::stri
 
 task_t<void> actor_transfer_coordinator_t::wait_for_source_completions ()
 {
-    const auto keys = co_await _lane.run_task ([this] {
-        std::vector<std::string> result;
-        result.reserve (_moves.size ());
-        for (const auto &[key, move] : _moves)
-            result.push_back (key);
+    // Host maintenance waits for every move this node started. That includes
+    // a local Join until its completion ordering ends (Spot-Actor membership
+    // §4); wait_for_source_completion leaves local moves out because the Join
+    // that owns one calls it.
+    const auto completions = co_await _lane.run_task ([this] {
+        std::vector<std::shared_ptr<task_completion_source_t<void>>> result;
+        for (auto &[key, move] : _moves) {
+            if (move.phase == actor_move_phase_t::local || is_source_move (move))
+                result.push_back (close_completion_on_lane (move));
+        }
         return result;
     });
-    for (const auto &key : keys)
-        co_await wait_for_source_completion (key);
+    for (const auto &completion : completions)
+        co_await completion->task ();
 }
 
 void actor_transfer_coordinator_t::erase_move_on_lane (const std::string &actor_key)
 {
     auto move = _moves.extract (actor_key);
-    if (!move || !move.mapped ().source_completion)
+    if (!move || !move.mapped ().close_completion)
         return;
-    const auto completion = std::move (move.mapped ().source_completion);
+    const auto completion = std::move (move.mapped ().close_completion);
     // Continuations may enter the node lane or query this coordinator.
     // Deliver outside the state lane using its existing executor.
     if (!_lane_executor.try_submit_internal (
@@ -266,31 +280,6 @@ actor_transfer_coordinator_t::complete_move (const std::string &actor_key)
           }
           erase_move_on_lane (found->first);
           return elapsed;
-      })
-      .get ();
-}
-
-actor_move_completion_t
-actor_transfer_coordinator_t::complete_move_and_take_backlog (const std::string &actor_key)
-{
-    return _lane
-      .run ([&, this] {
-          if (_activity_handler)
-              _activity_handler ();
-          const auto found = _moves.find (actor_key);
-          if (found == _moves.end ())
-              return actor_move_completion_t{std::nullopt, {}, true};
-          std::optional<std::chrono::steady_clock::duration> elapsed;
-          if (found->second.transfer_started_at) {
-              elapsed = std::chrono::steady_clock::now () - *found->second.transfer_started_at;
-          }
-          std::vector<handoff_packet_t> backlog;
-          if (const auto queued = _backlogs.find (actor_key); queued != _backlogs.end ()) {
-              backlog = std::move (queued->second);
-              _backlogs.erase (queued);
-          }
-          erase_move_on_lane (found->first);
-          return actor_move_completion_t{std::move (elapsed), std::move (backlog), true};
       })
       .get ();
 }

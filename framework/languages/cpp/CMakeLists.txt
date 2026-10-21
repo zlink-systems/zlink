@@ -1284,6 +1284,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     COMMAND test_cpp_framework_m6b_runtime
     LABELS "framework-unit;framework-m6-runtime;stateful;spot;actor;stream-session"
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_dispatch_callback_lifetime
+    COMMAND test_cpp_framework_m6b_runtime --dispatch-callback-lifetime
+    LABELS "framework-unit;framework-m6-runtime;stateful"
+    TIMEOUT 30)
 
   add_executable(test_cpp_framework_reply_submit_claim
     tests/Zlink.Framework.UnitTests/test_cpp_framework_reply_submit_claim.cpp)
@@ -2124,6 +2129,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIMEOUT 120
     PROPERTIES
       RESOURCE_LOCK zlink_cpp_heavy_runtime)
+  find_program(ZLINK_FRAMEWORK_CPP_VALGRIND_EXECUTABLE NAMES valgrind)
+  if(ZLINK_FRAMEWORK_CPP_VALGRIND_EXECUTABLE)
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_local_handoff_lifetime_memcheck
+      COMMAND "${ZLINK_FRAMEWORK_CPP_VALGRIND_EXECUTABLE}"
+        --tool=memcheck --leak-check=no --error-exitcode=99
+        $<TARGET_FILE:test_cpp_framework_spot_close_conformance>
+        --gtest_filter=ActorMaintenanceJoin.LocalHandoffCancellationRetainsQueuedLaneInputs
+      LABELS "framework-regression;spot"
+      TIER unit
+      TIMEOUT 30
+      PROPERTIES
+        RESOURCE_LOCK zlink_cpp_heavy_runtime)
+  endif()
   add_zlink_framework_test(
     test_cpp_framework_handler_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_handler_registry.cpp
@@ -2252,6 +2271,16 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "framework-integration;framework-regression;framework-zlink;framework-zlink-stream;stream")
   target_link_libraries(test_cpp_framework_stream_framework PRIVATE
     zlink::stream_connector)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_stream_connection_registry_lifetime
+    COMMAND test_cpp_framework_stream_framework --connection-registry-lifetime
+    LABELS "framework-unit;stream;stream-session"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_stream_reader_retirement_tracked
+    COMMAND test_cpp_framework_stream_framework --reader-retirement-tracked
+    LABELS "framework-unit;stream;stream-session"
+    TIMEOUT 30)
   zlink_framework_cpp_add_boost_headers(
     test_cpp_framework_stream_framework)
   target_include_directories(test_cpp_framework_stream_framework PRIVATE
@@ -2300,6 +2329,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     opentelemetry-cpp::metrics)
   target_include_directories(test_cpp_framework_mesh_metrics PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_envelope_allocations
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp
+    "framework-unit;framework-regression;messaging")
+  target_use_zlink_gtest_main(test_cpp_framework_envelope_allocations)
+  target_sources(test_cpp_framework_envelope_allocations PRIVATE
+    tests/support/allocation_counter.cpp)
+  target_sources(test_cpp_framework_completion_allocations PRIVATE
+    tests/support/allocation_counter.cpp)
   add_zlink_framework_test(
     test_cpp_framework_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp
