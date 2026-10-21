@@ -648,17 +648,24 @@ internal sealed class ZLinkClientServerClientRuntime : IAsyncDisposable
     }
 
     private ReadyWaitResult SelectReady() =>
-        RunState(() =>
-        {
-            if (_readySelectionPlan?.Select() is { } ready)
-                return new ReadyWaitResult(ready, ZLinkOneWaySubmitStatus.Submitted);
-            return new ReadyWaitResult(
-                null,
-                DistinctConnections().Any(static connection => connection.AdmittedButIneligible)
-                    ? ZLinkOneWaySubmitStatus.RouteNotConnected
-                    : ZLinkOneWaySubmitStatus.Backpressured
-            );
-        });
+        AwaitStateLane(
+            _lane.RunAsync(
+                static owner =>
+                {
+                    if (owner._readySelectionPlan?.Select() is { } ready)
+                        return new ReadyWaitResult(ready, ZLinkOneWaySubmitStatus.Submitted);
+                    return new ReadyWaitResult(
+                        null,
+                        owner
+                            .DistinctConnections()
+                            .Any(static connection => connection.AdmittedButIneligible)
+                            ? ZLinkOneWaySubmitStatus.RouteNotConnected
+                            : ZLinkOneWaySubmitStatus.Backpressured
+                    );
+                },
+                this
+            )
+        );
 
     private void ScheduleStateChanged(bool selectionChanged)
     {
