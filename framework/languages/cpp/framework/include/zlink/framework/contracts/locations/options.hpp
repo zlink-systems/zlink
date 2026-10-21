@@ -17,6 +17,9 @@ inline constexpr std::uint64_t relocation_chunk_wire_limit_bytes = 67108864;
 
 namespace detail
 {
+/* The one default for session_relocation_seal_timeout. Internal option structs
+ * read it here instead of from a location_options_t{} temporary, which MSVC
+ * 19.44 fails to compile in some translation units (C1001). */
 inline constexpr std::chrono::milliseconds default_session_relocation_seal_timeout{3000};
 }
 
@@ -32,8 +35,8 @@ struct location_options_t
     std::chrono::milliseconds message_follow_duration{30000};
     /* Startup-only upper bound for an exact Session relocation route update.
      * The value must be a positive whole-millisecond duration. */
-    std::chrono::milliseconds session_relocation_seal_timeout =
-      detail::default_session_relocation_seal_timeout;
+    std::chrono::milliseconds session_relocation_seal_timeout{
+      detail::default_session_relocation_seal_timeout};
     /* Startup-only positive duration. The target waits this long for cutover
      * after the relay-ready reply, and the source keeps the boundary batch
      * retransmission copy for the same window. */

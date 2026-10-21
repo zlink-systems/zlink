@@ -1624,10 +1624,36 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     TIER integration
     TIMEOUT 30)
 
+  # Snapshot tracked and non-ignored new files on each layout build. Archives
+  # have no Git source set and retain the recursive source-tree scan.
+  set(_zlink_layout_manifest "")
+  find_package(Git QUIET)
+  if(Git_FOUND)
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" -C "${ZLINK_FRAMEWORK_CPP_DIR}" rev-parse --git-path index
+      RESULT_VARIABLE _zlink_layout_git_result
+      OUTPUT_QUIET ERROR_QUIET)
+    if(_zlink_layout_git_result EQUAL 0)
+      set(_zlink_layout_manifest "${CMAKE_CURRENT_BINARY_DIR}/layout-source-files")
+      add_custom_target(zlink_cpp_layout_manifest
+        COMMAND "${CMAKE_COMMAND}"
+          "-DGIT_EXECUTABLE=${GIT_EXECUTABLE}"
+          "-DSOURCE_DIR=${ZLINK_FRAMEWORK_CPP_DIR}"
+          "-DMANIFEST=${_zlink_layout_manifest}"
+          -P "${ZLINK_FRAMEWORK_CPP_DIR}/cmake/zlink-cpp-layout-manifest.cmake"
+        BYPRODUCTS "${_zlink_layout_manifest}"
+        VERBATIM)
+    endif()
+  endif()
+
   add_executable(test_cpp_framework_layout_contract
     tests/Zlink.Framework.ContractTests/test_cpp_framework_layout_contract.cpp)
+  if(TARGET zlink_cpp_layout_manifest)
+    add_dependencies(test_cpp_framework_layout_contract zlink_cpp_layout_manifest)
+  endif()
   target_compile_definitions(test_cpp_framework_layout_contract PRIVATE
-    ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}")
+    ZLINK_FRAMEWORK_CPP_SOURCE_DIR="${ZLINK_FRAMEWORK_CPP_DIR}"
+    ZLINK_FRAMEWORK_CPP_TRACKED_SOURCE_MANIFEST="${_zlink_layout_manifest}")
   target_compile_features(test_cpp_framework_layout_contract PRIVATE cxx_std_20)
   target_link_zlink_test_harness(test_cpp_framework_layout_contract)
   zlink_framework_cpp_add_test(
@@ -2352,6 +2378,13 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     opentelemetry-cpp::metrics)
   target_include_directories(test_cpp_framework_mesh_metrics PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_actor_header_allocations
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_header_allocations.cpp
+    "framework-unit;framework-regression;messaging")
+  target_use_zlink_gtest_main(test_cpp_framework_actor_header_allocations)
+  target_sources(test_cpp_framework_actor_header_allocations PRIVATE
+    tests/support/allocation_counter.cpp)
   add_zlink_framework_test(
     test_cpp_framework_envelope_allocations
     tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp

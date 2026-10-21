@@ -122,6 +122,7 @@ class deferred_barrier_t
     virtual result_t<void> activate_async (async_work_t work) = 0;
     // Run a phase of the reserved lifecycle operation without releasing its turn.
     virtual task_t<void> run (std::function<task_t<void> ()> work) = 0;
+    virtual task_t<void> terminal () = 0;
     virtual void cancel () noexcept = 0;
 };
 
@@ -144,9 +145,11 @@ class serial_turn_t
     virtual bool allows_yield () const noexcept = 0;
     // Execution gate §3: admission belongs to this turn, before submission.
     virtual bool claim_yield () = 0;
-    virtual result_t<void> defer (std::function<void ()> work,
-                                  std::function<void ()> cancel = {}) = 0;
+    virtual result_t<void> defer (std::function<task_t<void> ()> work,
+                                  std::function<void ()> cancel = {},
+                                  std::shared_ptr<deferred_barrier_t> barrier = {}) = 0;
     virtual void cancel_deferred () noexcept = 0;
+    virtual bool finish_handler (std::function<void ()> completion, bool succeeded) = 0;
 };
 
 std::shared_ptr<serial_turn_t> capture_current_serial_turn ();
@@ -212,15 +215,16 @@ inline bool current_serial_turn_allows_yield ()
     return turn && !turn->released () && turn->allows_yield ();
 }
 
-inline result_t<void> defer_current_serial_turn (std::function<void ()> work,
-                                                 std::function<void ()> cancel = {})
+inline result_t<void> defer_current_serial_turn (std::function<task_t<void> ()> work,
+                                                 std::function<void ()> cancel = {},
+                                                 std::shared_ptr<deferred_barrier_t> barrier = {})
 {
     auto turn = capture_current_serial_turn ();
     if (!turn || turn->released ()) {
         return result_t<void>::failure (framework_error_kind_t::not_configured,
                                         "Actor join defer requires an open Framework handler turn");
     }
-    return turn->defer (std::move (work), std::move (cancel));
+    return turn->defer (std::move (work), std::move (cancel), std::move (barrier));
 }
 
 

@@ -12,6 +12,7 @@
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
+#include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
@@ -2758,7 +2759,9 @@ void test_restore_validates_generation_before_spot_publication (test_context_t &
     int single_restore_count = 0;
     single.configure_relocation_state (
       [] (const object_ref_t &, const std::string &, std::stop_token) {
-          return std::vector<std::uint8_t>{};
+          frozen_object_state_t captured;
+          captured.application_state = std::vector<std::uint8_t>{};
+          return captured;
       },
       [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
           ++single_restore_count;
@@ -2806,7 +2809,9 @@ void test_restore_validates_generation_before_spot_publication (test_context_t &
     int aggregate_restore_count = 0;
     aggregate.configure_relocation_state (
       [] (const object_ref_t &, const std::string &, std::stop_token) {
-          return std::vector<std::uint8_t>{};
+          frozen_object_state_t captured;
+          captured.application_state = std::vector<std::uint8_t>{};
+          return captured;
       },
       [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
           ++aggregate_restore_count;
@@ -2880,7 +2885,9 @@ void test_return_relocation_replaces_departed_remnant (test_context_t &test)
     bool restore_succeeds = false;
     objects.configure_relocation_state (
       [] (const object_ref_t &, const std::string &, std::stop_token) {
-          return std::vector<std::uint8_t>{};
+          frozen_object_state_t captured;
+          captured.application_state = std::vector<std::uint8_t>{};
+          return captured;
       },
       [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
           return restore_succeeds;
@@ -2939,7 +2946,9 @@ void test_pending_restore_holds_ingress_before_rollback (test_context_t &test)
     bool release_callback = false;
     target.configure_relocation_state (
       [] (const object_ref_t &, const std::string &, std::stop_token) {
-          return std::vector<std::uint8_t>{};
+          frozen_object_state_t captured;
+          captured.application_state = std::vector<std::uint8_t>{};
+          return captured;
       },
       [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
           std::unique_lock lock (callback_mutex);
@@ -2984,7 +2993,9 @@ void test_pending_restore_holds_ingress_before_rollback (test_context_t &test)
 
     target.configure_relocation_state (
       [] (const object_ref_t &, const std::string &, std::stop_token) {
-          return std::vector<std::uint8_t>{};
+          frozen_object_state_t captured;
+          captured.application_state = std::vector<std::uint8_t>{};
+          return captured;
       },
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
     test.require (target.restore_relocation (frozen, restored_target, identity).result ().value ()
@@ -3266,14 +3277,20 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
     auto target_owner = std::make_shared<host::public_host_runtime_t> (options);
     auto &target = *target_owner;
     target.objects ().configure_relocation_state (
-      [] (const auto &, const auto &, std::stop_token) { return std::vector<std::uint8_t>{}; },
+      [] (const auto &, const auto &, std::stop_token) {
+          frozen_object_state_t captured;
+          captured.application_state = std::vector<std::uint8_t>{};
+          return captured;
+      },
       [] (const auto &, const auto &, std::stop_token) { return true; });
     target.configure_maintenance (
       {authority, std::make_shared<memory_aggregate_authority_t> (authority), roots});
-    target.configure_stateful_dispatch ([] (const accepted_record_authority_query_t &query)
-                                          -> std::optional<accepted_record_authority_t> {
-        return std::nullopt; // The Store still names the source; the exact attempt owns admission.
-    });
+    target.configure_stateful_dispatch (
+      [] (accepted_record_authority_query_t query)
+        -> zlink::framework::task_t<std::optional<accepted_record_authority_t>> {
+          co_return std::
+            nullopt; // The Store still names the source; the exact attempt owns admission.
+      });
     target.configure_session_route_owner (
       [] { return std::optional<framework::location_owner_token_t>{{"target-owner", 9}}; });
     target.start ();
@@ -3493,15 +3510,22 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
     state->core_context = core_context;
     state->listen_endpoint = "tcp://127.0.0.1:0";
     state->routing_id = zlink::routing_id_t::from ("settlement-target");
+    state->spot_state->dispatch.message_flow (framework::message_flow_log_mode_t::detailed);
+    framework::logging_builder_t logging;
+    logging.use_file ("target-cutover.flow").set_min_level (framework::log_level_t::debug);
+    detail::dispatch_options_access_t::set_logger (state->spot_state->dispatch,
+                                                   logging.create_logger ("target-cutover"));
     state->spot_state->snapshot.actor_types.push_back ("production.actor");
     auto roots = std::make_shared<memory_relocation_repository_t> ();
     auto authority = std::make_shared<memory_authority_store_t> ();
     detail::mesh_node_runtime_t target (state);
     target.configure_relocation_runtime (authority, roots);
-    target.configure_stateful_dispatch ([] (const accepted_record_authority_query_t &query)
-                                          -> std::optional<accepted_record_authority_t> {
-        return std::nullopt; // The Store still names the source; the exact attempt owns admission.
-    });
+    target.configure_stateful_dispatch (
+      [] (accepted_record_authority_query_t query)
+        -> zlink::framework::task_t<std::optional<accepted_record_authority_t>> {
+          co_return std::
+            nullopt; // The Store still names the source; the exact attempt owns admission.
+      });
     target.configure_session_route_owner (
       [] { return std::optional<framework::location_owner_token_t>{{"target-owner", 9}}; });
     target.start ();
@@ -3757,7 +3781,9 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
         stateful_object_runtime_t objects;
         objects.configure_relocation_state (
           [] (const object_ref_t &, const std::string &, std::stop_token) {
-              return std::vector<std::uint8_t>{0x41};
+              frozen_object_state_t captured;
+              captured.application_state = std::vector<std::uint8_t>{0x41};
+              return captured;
           },
           [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
               return true;
@@ -3903,7 +3929,9 @@ void test_relocation_metric_starts_only_after_unit_admission (test_context_t &te
         stateful_object_runtime_t objects;
         objects.configure_relocation_state (
           [] (const object_ref_t &, const std::string &, std::stop_token) {
-              return std::vector<std::uint8_t>{0x41};
+              frozen_object_state_t captured;
+              captured.application_state = std::vector<std::uint8_t>{0x41};
+              return captured;
           },
           [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
               return true;
@@ -3962,7 +3990,9 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
     stateful_object_runtime_t objects;
     objects.configure_relocation_state (
       [] (const object_ref_t &, const std::string &, std::stop_token) {
-          return std::vector<std::uint8_t> (256, 0x5a);
+          frozen_object_state_t captured;
+          captured.application_state = std::vector<std::uint8_t> (256, 0x5a);
+          return captured;
       },
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
     const auto actor = create_actor (objects, "live-failure-actor");
@@ -4096,7 +4126,9 @@ void test_source_settlement_after_subsequent_moves (test_context_t &test)
         stateful_object_runtime_t objects;
         objects.configure_relocation_state (
           [] (const object_ref_t &, const std::string &, std::stop_token) {
-              return std::vector<std::uint8_t>{0x41};
+              frozen_object_state_t captured;
+              captured.application_state = std::vector<std::uint8_t>{0x41};
+              return captured;
           },
           [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
               return true;
@@ -4296,6 +4328,168 @@ class settlement_authority_t final : public authority_relocation_port_t
     int settle_after_observes = 0;
 };
 
+// Ready and cutover callbacks establish the boundary; no clock advances the test.
+void test_relocation_request_source_registration (test_context_t &test,
+                                                  bool boundary,
+                                                  bool aggregate = false)
+{
+    namespace framework = zlink::framework;
+    namespace protocol = framework::runtime::protocol;
+    namespace mesh = framework::runtime::mesh;
+    metric_test::provider_t provider;
+    auto monitoring = std::make_shared<framework::detail::monitoring_runtime_state_t> ();
+    stateful_object_runtime_t objects;
+    objects.configure_relocation_state (
+      [] (const auto &, const auto &, std::stop_token) { return frozen_object_state_t{}; },
+      [] (const auto &, const auto &, std::stop_token) { return true; });
+    auto actor = create_actor (objects, "registered-request");
+    std::vector<object_ref_t> participants;
+    if (aggregate) {
+        auto peer = create_actor (objects, "a-peer");
+        const auto spot = create_spot (objects, object_kind_t::user_spot, "registry-spot");
+        for (auto *member : {&actor, &peer}) {
+            const auto move = objects.begin_membership_move (*member, spot);
+            test.require (move.first == stateful_error_t::none, "aggregate membership must begin");
+            const auto joined = objects.commit_membership_move (move.second);
+            test.require (joined.first == stateful_error_t::none,
+                          "aggregate membership must commit");
+            *member = joined.second;
+        }
+        participants = {spot, actor, peer};
+    }
+    mesh::raw_mesh_node_options_t options;
+    options.descriptor = {
+      "mesh", {'s'}, 1, 1, "tcp://127.0.0.1:0", {}, mesh::service_node_state_t::preparing};
+    options.runtime_failures = std::make_shared<framework::runtime::runtime_failure_collector_t> ();
+    mesh::raw_mesh_node_owner_t transport (options);
+    raw_stateful_dispatch_t dispatch (objects, transport);
+    raw_relocation_replay_coordinator_t replies (transport);
+    auto authority = std::make_shared<settlement_authority_t> ();
+    authority->observed_authority = relocation_authority_t::source_preserved;
+    authority->preserved_authority = relocation_authority_t::source_preserved;
+    auto roots = std::make_shared<memory_relocation_repository_t> ();
+    maintenance_runtime_t relocation (objects, authority, roots, {}, {},
+                                      std::make_shared<memory_aggregate_authority_t> (
+                                        std::make_shared<memory_authority_store_t> ()));
+    relocation.attach_relocation_wire (replies, [&] { return &dispatch; });
+    protocol::frozen_application_record_t request;
+    request.kind = protocol::frozen_record_kind_t::actor_request;
+    request.source_kind = protocol::frozen_source_kind_t::node;
+    request.source = {"source-owner", 1, {'s'}, 1};
+    request.operation = boundary ? protocol::wire_operation_id_t{0x1786, 0}
+                                 : protocol::wire_operation_id_t{0x1786, 0x1771};
+    request.operation_kind = 4;
+    request.reply_route_id = 77;
+    request.body = protocol::frozen_actor_application_body_t{
+      {actor.key, actor.object_generation, {'s'}, 1, actor.authority_owner_generation, 1},
+      {"Request", "application/json", {0x41}}};
+    const auto accept = [&] {
+        test.require (objects.enqueue (actor, turn_domain_t::application, {1, {}, 0, request})
+                        == stateful_error_t::none,
+                      "request must enter the source's accepted queue");
+    };
+    if (!boundary && !aggregate)
+        accept ();
+    eligible_relocation_unit_t::canonical_wire_context_t wire{
+      .relocation = {0x1786, 2},
+      .target_attempt_generation = 1,
+      .coordinator = {"source-owner", 1, {'s'}, 1, "v1"},
+      .target_node_routing_id = {'t'},
+      .target_node_generation = 1,
+      .application_version = 1,
+      .augment_frozen =
+        [&] (std::vector<frozen_object_state_t> &frozen) {
+            if (aggregate)
+                for (auto &participant : frozen)
+                    if (participant.owner == actor)
+                        participant.pending_application.push_back ({1, {}, 0, request});
+            return true;
+        },
+      .prepare_target = [&] (const auto &, const auto &) -> framework::task_t<relocation_reason_t> {
+          if (boundary)
+              accept ();
+          co_return relocation_reason_t::none;
+      },
+      .send_state_chunk = [] (const auto &) -> framework::task_t<bool> { co_return true; },
+      .send_relocation_data = [] (const auto &, const auto &) -> framework::task_t<bool> {
+          co_return true;
+      },
+      .send_cutover =
+        [&] (const protocol::relocation_cutover_t &cutover) -> framework::task_t<bool> {
+          // An incorrect participant fence distinguishes a retained source from
+          // an absent registration, without attempting an application reply.
+          const protocol::reply_relay_t relay{request.operation,
+                                              77,
+                                              cutover.relocation,
+                                              1,
+                                              cutover.coordinator,
+                                              aggregate ? 1u : 2u,
+                                              boundary ? 0x1786u : 0x1771u,
+                                              0,
+                                              protocol::framework_error_code::none};
+          mesh::service_mailbox_record_t message{
+            "source",
+            mesh::service_mailbox_domain_t::infrastructure,
+            framework::detail::backend::materialize_binding_parts (
+              {protocol::encode_reply_relay (relay)}),
+            {'t'},
+            std::nullopt,
+            std::nullopt,
+            1};
+          const auto observed = await_task (replies.process (message));
+          std::cerr << "request-registry boundary=" << boundary << " aggregate=" << aggregate
+                    << " at-cutover=" << static_cast<int> (observed) << '\n';
+          test.require (observed == raw_relocation_replay_result_t::stale_fence,
+                        "both saved and boundary requests must be registered before cutover");
+          auto matching = relay;
+          matching.participant_id = aggregate ? 2 : 1;
+          message.parts = framework::detail::backend::materialize_binding_parts (
+            {protocol::encode_reply_relay (matching)});
+          test.require (await_task (replies.process (message))
+                          == raw_relocation_replay_result_t::persistence_failed,
+                        "matching identity must reach the original pending request owner");
+          co_return true;
+      },
+      .abort_target_before_cutover = [] { return true; },
+      .monitoring = monitoring,
+      .mesh_name = "request-registry",
+      .policy = framework::detail::factory_relocation_kind_t::recreate};
+    const auto terminal =
+      aggregate
+        ? await_task (relocation.relocate_aggregate (participants, "target", {"target-owner", 2},
+                                                     1024 * 1024, digest_with (0x41), wire))
+            .terminal
+        : await_task (relocation.relocate (actor, "target", {"target-owner", 2}, 1024 * 1024,
+                                           digest_with (0x41), wire))
+            .terminal;
+    test.require (terminal == relocation_terminal_t::blocked,
+                  "source authority must restore after Ready");
+    test.require (objects.enqueue (actor, turn_domain_t::application, {2, {0x42}})
+                    == stateful_error_t::none,
+                  "source Preserve must resume the original application queue");
+    const auto retained = replies.unregister_terminal_source (wire.relocation, request.operation);
+    std::cerr << "request-registry boundary=" << boundary << " aggregate=" << aggregate
+              << " after-preserve=" << retained << '\n';
+    test.require (!retained, "source Preserve must return the request registration lifetime");
+    int terminals = 0;
+    for (const auto &metric : provider.collect ()) {
+        if (metric.instrument_descriptor.name_ != "zlink.relocation.completed")
+            continue;
+        for (const auto &point : metric.point_data_attr_) {
+            ++terminals;
+            const auto *sum = opentelemetry::nostd::get_if<metric_test::sdk::SumPointData> (
+              &point.point_data);
+            test.require (sum && opentelemetry::nostd::get<double> (sum->value_) == 1,
+                          "source Preserve must record its terminal exactly once");
+            const auto outcome = point.attributes.find ("outcome");
+            test.require (outcome != point.attributes.end ()
+                            && opentelemetry::nostd::get<std::string> (outcome->second) == "aborted",
+                          "resumed source authority must retain the aborted metric outcome");
+        }
+    }
+    test.require (terminals == 1, "source Preserve must emit one completed metric");
+}
+
 // Relocation §4.3: one source deadline covers Restore and remote Session readiness.
 enum class ready_boundary_case_t
 {
@@ -4343,9 +4537,8 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
     target->configure_session_route_owner (
       [] { return std::optional<f::location_owner_token_t>{{"target-owner", 9}}; });
     target->configure_stateful_dispatch (
-      [] (const accepted_record_authority_query_t &) -> std::optional<accepted_record_authority_t> {
-          return std::nullopt;
-      });
+      [] (accepted_record_authority_query_t)
+        -> f::task_t<std::optional<accepted_record_authority_t>> { co_return std::nullopt; });
     auto restoring = std::make_shared<f::task_completion_source_t<void>> ();
     f::task_completion_source_t<bool> restore_release;
     std::atomic<unsigned> aborts{0};
@@ -4634,7 +4827,9 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
     const auto configure = [] (stateful_object_runtime_t &runtime) {
         runtime.configure_relocation_state (
           [] (const object_ref_t &, const std::string &, std::stop_token) {
-              return std::vector<std::uint8_t>{1};
+              frozen_object_state_t captured;
+              captured.application_state = std::vector<std::uint8_t>{1};
+              return captured;
           },
           [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
               return true;
@@ -4647,9 +4842,9 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
     relocated.node_id = "late-target";
     relocated.authority_owner_generation += 8;
     // Relocation-flow §4.3: the temporary queue is fenced by the captured source.
-    const auto resolver = [] (const accepted_record_authority_query_t &query)
-      -> std::optional<accepted_record_authority_t> {
-        return accepted_record_authority_t{
+    const auto resolver = [] (accepted_record_authority_query_t query)
+      -> zlink::framework::task_t<std::optional<accepted_record_authority_t>> {
+        co_return accepted_record_authority_t{
           {"owner", 1, query.source_node_routing_id, query.source_node_generation}, 1};
     };
     raw_stateful_dispatch_t ingress (objects, source, resolver);
@@ -4688,7 +4883,7 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
         stateful_error_t error = stateful_error_t::not_found;
         return pump_until ([&] {
                    if (error == stateful_error_t::not_found)
-                       error = dispatch.ingest (owner);
+                       error = dispatch.ingest (owner).result ().value ();
                    return error != stateful_error_t::not_found;
                })
                && error == stateful_error_t::none;
@@ -4876,7 +5071,9 @@ void test_boundary_preserve_restores_acceptance_order (test_context_t &test)
     stateful_object_runtime_t objects;
     objects.configure_relocation_state (
       [] (const object_ref_t &, const std::string &, std::stop_token) {
-          return std::vector<std::uint8_t>{1};
+          frozen_object_state_t captured;
+          captured.application_state = std::vector<std::uint8_t>{1};
+          return captured;
       },
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
     const auto actor = create_actor (objects, "preserve-late");
@@ -4952,7 +5149,9 @@ void test_cutover_replays_over_selected_network_route (test_context_t &test)
     stateful_object_runtime_t objects;
     objects.configure_relocation_state (
       [] (const object_ref_t &, const std::string &, std::stop_token) {
-          return std::vector<std::uint8_t>{0x41};
+          frozen_object_state_t captured;
+          captured.application_state = std::vector<std::uint8_t>{0x41};
+          return captured;
       },
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
     const auto actor = create_actor (objects, "network-actor", "Z-network-source");
@@ -5122,7 +5321,9 @@ void test_source_relocation_settles_by_authority (test_context_t &test,
         stateful_object_runtime_t objects;
         objects.configure_relocation_state (
           [] (const object_ref_t &, const std::string &, std::stop_token) {
-              return std::vector<std::uint8_t> (16, 0x5a);
+              frozen_object_state_t captured;
+              captured.application_state = std::vector<std::uint8_t> (16, 0x5a);
+              return captured;
           },
           [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
               return true;
@@ -5551,16 +5752,18 @@ void test_application_relocation_remote_production_path (test_context_t &test,
           return framework::task_t<route_t> (
             framework::result_t<route_t>::success (*bound_session_route));
       });
-    source.configure_stateful_dispatch ([] (const accepted_record_authority_query_t &query)
-                                          -> std::optional<accepted_record_authority_t> {
-        return accepted_record_authority_t{
-          {"target-owner", 9, query.source_node_routing_id, query.source_node_generation}, 1};
-    });
-    target.configure_stateful_dispatch ([] (const accepted_record_authority_query_t &query)
-                                          -> std::optional<accepted_record_authority_t> {
-        return accepted_record_authority_t{
-          {"source-owner", 1, query.source_node_routing_id, query.source_node_generation}, 9};
-    });
+    source.configure_stateful_dispatch (
+      [] (accepted_record_authority_query_t query)
+        -> zlink::framework::task_t<std::optional<accepted_record_authority_t>> {
+          co_return accepted_record_authority_t{
+            {"target-owner", 9, query.source_node_routing_id, query.source_node_generation}, 1};
+      });
+    target.configure_stateful_dispatch (
+      [] (accepted_record_authority_query_t query)
+        -> zlink::framework::task_t<std::optional<accepted_record_authority_t>> {
+          co_return accepted_record_authority_t{
+            {"source-owner", 1, query.source_node_routing_id, query.source_node_generation}, 9};
+      });
     std::atomic_int late_routes{0};
     if (binding_absent)
         session_owner.configure_late_session_route_update ([&] (const auto &) { ++late_routes; });
@@ -6331,7 +6534,7 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
             [spot_state] (const object_ref_t &object, const std::string &stable_type,
                           std::stop_token cancellation) {
                 return detail::spot_node_runtime_t (spot_state)
-                  .capture_spot_relocation_state (object, stable_type, cancellation);
+                  .capture_relocation_state (object, stable_type, cancellation);
             },
             [spot_state] (const frozen_object_state_t &frozen, const object_ref_t &object,
                           std::stop_token cancellation) {
@@ -7573,7 +7776,9 @@ void test_aggregate_seal_failure_preserves_earlier_application_work (test_contex
       [&] (const object_ref_t &owner, const std::string &, std::stop_token) {
           if (owner == second)
               throw std::runtime_error ("capture failed for second participant");
-          return std::vector<std::uint8_t>{0x41};
+          frozen_object_state_t captured;
+          captured.application_state = std::vector<std::uint8_t>{0x41};
+          return captured;
       },
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
 
@@ -7643,7 +7848,7 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
     test.require (active_error == stateful_error_t::none && active && active->sequence == 1,
                   "held capture failure setup must keep the first record active");
     failed_capture.configure_relocation_state (
-      [] (const object_ref_t &, const std::string &, std::stop_token) -> std::vector<std::uint8_t> {
+      [] (const object_ref_t &, const std::string &, std::stop_token) -> frozen_object_state_t {
           throw std::runtime_error ("held capture failure");
       },
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
@@ -7878,7 +8083,9 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
     bool release_target_restore = false;
     target_hold.configure_relocation_state (
       [] (const object_ref_t &, const std::string &, std::stop_token) {
-          return std::vector<std::uint8_t>{};
+          frozen_object_state_t captured;
+          captured.application_state = std::vector<std::uint8_t>{};
+          return captured;
       },
       [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
           std::unique_lock lock (target_mutex);
@@ -7957,7 +8164,9 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
     bool release_abort_restore = false;
     target_abort.configure_relocation_state (
       [] (const object_ref_t &, const std::string &, std::stop_token) {
-          return std::vector<std::uint8_t>{};
+          frozen_object_state_t captured;
+          captured.application_state = std::vector<std::uint8_t>{};
+          return captured;
       },
       [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
           std::unique_lock lock (abort_mutex);
@@ -8003,7 +8212,9 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
                   "target relocation abort must discard its temporary hold and object reservation");
     target_abort.configure_relocation_state (
       [] (const object_ref_t &, const std::string &, std::stop_token) {
-          return std::vector<std::uint8_t>{};
+          frozen_object_state_t captured;
+          captured.application_state = std::vector<std::uint8_t>{};
+          return captured;
       },
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
     test.require (target_abort.restore_relocation (abort_frozen, abort_target, abort_identity)
@@ -8199,6 +8410,18 @@ int main (int argc, char **argv)
         }
     } executor_shutdown;
     test_context_t test;
+    if (argc == 2 && std::string_view (argv[1]) == "--target-cutover") {
+        test_relocation_target_cutover_and_authority_settlement (test);
+        std::cerr << "target-cutover failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--request-registry") {
+        test_relocation_request_source_registration (test, false);
+        test_relocation_request_source_registration (test, true);
+        test_relocation_request_source_registration (test, false, true);
+        std::cerr << "request-registry cases=3 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--source-outcomes") {
         test_source_relocation_metric_outcomes (test);
         test_relocation_metric_starts_only_after_unit_admission (test);
@@ -8354,6 +8577,9 @@ int main (int argc, char **argv)
     test_boundary_application_preserves_original_reply (test);
     test_boundary_application_preserves_original_reply (test, true);
     test_boundary_application_preserves_original_reply (test, false, true);
+    test_relocation_request_source_registration (test, false);
+    test_relocation_request_source_registration (test, true);
+    test_relocation_request_source_registration (test, false, true);
     test_boundary_preserve_restores_acceptance_order (test);
     test_cutover_replays_over_selected_network_route (test);
     test_source_relocation_settles_by_authority (test);
