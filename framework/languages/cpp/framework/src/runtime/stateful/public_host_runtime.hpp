@@ -816,11 +816,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                                        const std::vector<zlink::message_t> &parts,
                                                        pending_operation_t &operation,
                                                        std::chrono::milliseconds timeout);
+    // The coroutine owns both callbacks; a caller may discard the task.
     task_t<std::size_t> dispatch_ready (
-      const std::function<void (
-        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch,
+      std::function<void (
+        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
       bool accept_application_receive = true,
-      const std::function<bool ()> &next_application_receive = {});
+      std::function<bool ()> next_application_receive = {});
     bool dispatch_application_owner (
       const std::string &owner,
       const std::function<void (
