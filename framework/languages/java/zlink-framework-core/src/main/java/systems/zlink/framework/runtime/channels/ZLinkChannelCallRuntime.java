@@ -1,6 +1,9 @@
 package systems.zlink.framework.runtime.channels;
 
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkConfigException;
+import systems.zlink.contracts.errors.ZlinkRequestException;
+import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
@@ -25,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeoutException;
@@ -217,7 +221,19 @@ final class ZLinkChannelCallRuntime {
             return new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, cause.getMessage(), cause);
         }
-        return cause;
+        if (cause instanceof ZLinkFrameworkException
+                || cause instanceof ZlinkSubmitException
+                || cause instanceof ZlinkRequestException
+                || cause instanceof ZlinkConfigException
+                || cause instanceof CancellationException
+                || cause instanceof IllegalArgumentException
+                || cause instanceof NullPointerException
+                || cause instanceof IllegalStateException
+                || cause instanceof UnsupportedOperationException) {
+            return cause;
+        }
+        return new ZLinkFrameworkException(
+                ZLinkFrameworkErrorKind.INTERNAL_FAILURE, "channel request failed", cause);
     }
 
     static Throwable unwrap(Throwable failure) {
