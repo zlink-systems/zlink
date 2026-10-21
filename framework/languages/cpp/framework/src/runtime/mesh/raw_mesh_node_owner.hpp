@@ -120,6 +120,8 @@ class raw_mesh_node_owner_t
                                     std::shared_ptr<zlink::context_t> context = {});
     ~raw_mesh_node_owner_t () noexcept;
 
+    const dispatch_options_t &dispatch_options () const noexcept { return _options.dispatch; }
+
     raw_mesh_node_owner_t (const raw_mesh_node_owner_t &) = delete;
     raw_mesh_node_owner_t &operator= (const raw_mesh_node_owner_t &) = delete;
 
@@ -178,6 +180,7 @@ class raw_mesh_node_owner_t
                         std::uint32_t terminal_result,
                         std::uint32_t failure_code);
     std::size_t expire_requests (foundation::operation_registry_t::clock_t::time_point now);
+    std::uint64_t next_operation_sequence ();
     std::optional<foundation::call_id_t> register_local_operation (
       foundation::operation_registry_t::clock_t::time_point deadline,
       foundation::operation_registry_t::callback_t callback,
@@ -408,7 +411,6 @@ class raw_mesh_node_owner_t
     std::uint64_t
     take_reply_route_id_locked (std::optional<std::uint64_t> requested = std::nullopt);
     std::uint64_t take_operation_sequence_locked ();
-    std::uint64_t next_operation_sequence ();
     enum class send_start_state_t
     {
         started,

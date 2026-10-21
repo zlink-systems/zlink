@@ -454,11 +454,17 @@ class application_job_queue_t
         return batch;
     }
 
-    waiter_t wait_for_supply (supply_callback_t callback, origin_t origin)
+    struct supply_registration_t
+    {
+        waiter_t waiter;
+        std::optional<std::optional<permit_batch_t>> immediate;
+    };
+
+    supply_registration_t register_supply (supply_callback_t callback, origin_t origin)
     {
         if (!callback)
             throw std::invalid_argument ("Application Job Queue waiter callback is required");
-        return wait_for_supply_batch (
+        return register_supply_batch (
           [callback = std::move (callback)] (std::optional<permit_batch_t> budget) mutable {
               std::optional<permit_t> permit;
               if (budget)
@@ -468,9 +474,9 @@ class application_job_queue_t
           origin, 1);
     }
 
-    waiter_t wait_for_supply_batch (batch_supply_callback_t callback,
-                                    origin_t origin,
-                                    std::uint32_t requested)
+    supply_registration_t register_supply_batch (batch_supply_callback_t callback,
+                                                 origin_t origin,
+                                                 std::uint32_t requested)
     {
         if (!callback || requested == 0)
             throw std::invalid_argument ("Application Job Queue waiter callback is required");
@@ -507,13 +513,36 @@ class application_job_queue_t
         if (warning && _state->local_backlog_sink)
             _state->local_backlog_sink (
               *warning, _state->configuration.effective_max_queued_application_jobs);
-        if (immediate)
-            waiter->callback (std::move (immediate));
-        else if (stopped)
-            waiter->callback (std::nullopt);
-        if (!immediate && !stopped)
+        std::optional<std::optional<permit_batch_t>> supplied;
+        if (immediate || stopped)
+            supplied.emplace (std::move (immediate));
+        return {waiter_t (_state, std::move (waiter)), std::move (supplied)};
+    }
+
+    void deliver_immediate (supply_registration_t &registration, const waiter_t &waiter)
+    {
+        if (registration.immediate) {
+            waiter._waiter->callback (std::move (*registration.immediate));
+            registration.immediate.reset ();
+        } else {
             settle_released_capacity (_state);
-        return waiter_t (_state, std::move (waiter));
+        }
+    }
+
+    waiter_t wait_for_supply_batch (batch_supply_callback_t callback,
+                                    origin_t origin,
+                                    std::uint32_t requested)
+    {
+        auto registration = register_supply_batch (std::move (callback), origin, requested);
+        deliver_immediate (registration, registration.waiter);
+        return std::move (registration.waiter);
+    }
+
+    waiter_t wait_for_supply (supply_callback_t callback, origin_t origin)
+    {
+        auto registration = register_supply (std::move (callback), origin);
+        deliver_immediate (registration, registration.waiter);
+        return std::move (registration.waiter);
     }
 
     // For a caller whose own call is the wait (a synchronous public submit).
