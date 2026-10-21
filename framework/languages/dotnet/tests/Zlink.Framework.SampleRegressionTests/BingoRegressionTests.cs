@@ -5,6 +5,34 @@ namespace Zlink.Framework.SampleRegressionTests;
 public sealed partial class RegressionTests
 {
     [Fact]
+    public void Bingo_Observer_Join_Reads_The_Room_Snapshot_After_Membership_Commit()
+    {
+        var root = ResolveSampleRoot("Bingo");
+        var room = ReadSource(
+            Path.Combine(
+                root,
+                "Server",
+                "Play",
+                "Infrastructure",
+                "ZLink",
+                "Spots",
+                "BingoRoomSpot",
+                "BingoRoom.cs"
+            )
+        );
+        var joined = room[
+            room.IndexOf("public async ValueTask OnJoinedActorAsync", StringComparison.Ordinal)..
+        ];
+        joined = joined[..joined.IndexOf("else", StringComparison.Ordinal)];
+        Assert.Contains("GetBingoObservationReq", joined, StringComparison.Ordinal);
+        Assert.Contains("BingoObservationStateNotify", joined, StringComparison.Ordinal);
+        Assert.Contains("AnnounceRewardAsync", joined, StringComparison.Ordinal);
+        var request = ReadSource(Path.Combine(root, "Shared", "Contracts", "bingo_messages.proto"));
+        Assert.Contains("message GetBingoObservationRes", request, StringComparison.Ordinal);
+        Assert.Contains("BingoRewardAcquiredEvent reward", request, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Bingo_Separates_Matchmaking_Play_And_Api_Channel_Topologies()
     {
         var sampleRoot = ResolveSampleRoot("Bingo");
