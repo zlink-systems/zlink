@@ -8078,6 +8078,7 @@ int actor_typed_wire_header_contract ()
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     if (argc == 2 && std::string (argv[1]) == "--actor-typed-wire")
         return actor_typed_wire_header_contract ();
     if (const auto wire = actor_typed_wire_header_contract (); wire != 0)

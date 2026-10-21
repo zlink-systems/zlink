@@ -1899,6 +1899,7 @@ void verify_fanout_first_observation_is_complete ()
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     verify_zero_weight_target_stays_ready ();
     verify_first_observation_contains_current_status ();
     verify_reconnecting_target_status ();

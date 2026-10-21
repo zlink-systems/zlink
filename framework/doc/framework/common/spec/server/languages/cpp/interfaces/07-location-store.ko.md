@@ -14,6 +14,10 @@ Store primitive와 abstract Store class는 opt-in CMake target
 있으며 Actor·Spot application target에 의존하지 않는다. C++ namespace는 기존
 `zlink::framework`를 유지한다.
 
+같은 target은 `<zlink/framework/contracts/dispatch/task.hpp>`에서 `completion_owner_t`도
+제공한다. 공개 선언과 유일한 수명 규칙은 [Common runtime §4.1](01-common-runtime.ko.md#41-completion-owner)이
+소유한다. Store operation의 signature는 바뀌지 않는다.
+
 ## 1. Root option과 등록
 
 ```cpp
