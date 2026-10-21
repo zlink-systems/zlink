@@ -2,6 +2,7 @@ package systems.zlink.framework.runtime.binding;
 
 import systems.zlink.contracts.core.Context;
 import systems.zlink.contracts.core.RoutingId;
+import systems.zlink.contracts.errors.ZlinkConfigException;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.errors.ZlinkSubmitException;
 import systems.zlink.contracts.messaging.Message;
@@ -113,6 +114,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.BiFunction;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.LongSupplier;
@@ -314,12 +316,32 @@ final class ZLinkJavaRawMeshNode
             LongSupplier nanoTime,
             Duration livenessProbeInterval,
             Duration livenessPeerTimeout) {
+        this(
+                context,
+                meshName,
+                currentTimeMillis,
+                nanoTime,
+                livenessProbeInterval,
+                livenessPeerTimeout,
+                ZLinkJavaRawServicePort.DEFAULT_RECEIVE_POLLER);
+    }
+
+    ZLinkJavaRawMeshNode(
+            Context context,
+            String meshName,
+            LongSupplier currentTimeMillis,
+            LongSupplier nanoTime,
+            Duration livenessProbeInterval,
+            Duration livenessPeerTimeout,
+            BiFunction<RouterSocket, Boolean, ZLinkJavaSocketReceivePoller> receivePollerFactory) {
         if (meshName == null || meshName.isBlank()) {
             throw new IllegalArgumentException("meshName is required");
         }
         this.meshName = meshName;
         this.messageMetrics = ZLinkMeshMessageMetrics.forMesh(meshName);
-        this.port = new ZLinkJavaRawServicePort(context, transportStateLane, operations);
+        this.port =
+                new ZLinkJavaRawServicePort(
+                        context, transportStateLane, operations, receivePollerFactory);
         this.currentTimeMillis = Objects.requireNonNull(currentTimeMillis, "currentTimeMillis");
         this.nanoTime = Objects.requireNonNull(nanoTime, "nanoTime");
         this.liveness =
@@ -4071,13 +4093,20 @@ final class ZLinkJavaRawMeshNode
     /** Preserves a classified failure and projects each typed binding error once. */
     static Throwable requestFailure(Throwable failure) {
         Throwable cause = unwrap(failure);
-        if (cause instanceof ZLinkFrameworkException) return cause;
+        if (cause instanceof ZLinkFrameworkException
+                || cause instanceof java.util.concurrent.CancellationException
+                || cause instanceof ZlinkConfigException
+                || cause instanceof IllegalArgumentException
+                || cause instanceof NullPointerException
+                || cause instanceof IllegalStateException
+                || cause instanceof UnsupportedOperationException) return cause;
         if (cause instanceof ZLinkUserSpotOperationException typed)
             return ZLinkRequestFailureMapping.userSpotFailure(
                     typed.terminalResult(), typed.failureCode(), cause);
         RequestResult terminal = requestResult(cause);
         return terminal == null
-                ? failure
+                ? new ZLinkFrameworkException(
+                        ZLinkFrameworkErrorKind.INTERNAL_FAILURE, "Request failed.", cause)
                 : new ZLinkFrameworkException(
                         backendResult(terminal).toFrameworkErrorKind(),
                         terminal == RequestResult.BACKPRESSURED

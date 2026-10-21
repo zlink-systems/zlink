@@ -428,10 +428,6 @@ final class ZLinkChannelRuntimeTest {
         for (var kind : ZLinkFrameworkErrorKind.values()) {
             known.add(new ZLinkFrameworkException(kind, "typed failure"));
         }
-        known.add(new ZlinkSubmitException(SubmitResult.NOT_CONNECTED, 2));
-        for (var result : RequestResult.values()) {
-            if (result != RequestResult.OK) known.add(new ZlinkRequestException(result));
-        }
         known.add(new ZlinkConfigException(ConfigResult.INVALID_ARGUMENT));
         known.add(new ZLinkConfigurationException("missing configuration"));
         known.add(new CancellationException("cancelled"));
@@ -441,6 +437,38 @@ final class ZLinkChannelRuntimeTest {
         known.add(new UnsupportedOperationException("unsupported operation"));
         for (RuntimeException original : known) {
             assertSame(original, meshSubmissionFailure(nodeDirect, asynchronous, original));
+        }
+        var submit = new ZlinkSubmitException(SubmitResult.NOT_CONNECTED, 2);
+        var submitFailure =
+                assertInstanceOf(
+                        ZLinkFrameworkException.class,
+                        meshSubmissionFailure(nodeDirect, asynchronous, submit));
+        assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, submitFailure.kind());
+        assertSame(submit, submitFailure.getCause());
+        for (var result : RequestResult.values()) {
+            if (result == RequestResult.OK) continue;
+            var original = new ZlinkRequestException(result);
+            var failure =
+                    assertInstanceOf(
+                            ZLinkFrameworkException.class,
+                            meshSubmissionFailure(nodeDirect, asynchronous, original));
+            assertEquals(
+                    switch (result) {
+                        case TIMED_OUT -> ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED;
+                        case NOT_FOUND -> ZLinkFrameworkErrorKind.NOT_FOUND;
+                        case TERMINATED -> ZLinkFrameworkErrorKind.SHUTTING_DOWN;
+                        case PROTOCOL_ERROR -> ZLinkFrameworkErrorKind.PROTOCOL_ERROR;
+                        case REJECTED -> ZLinkFrameworkErrorKind.REJECTED;
+                        case CONFLICT, BUSY, NOT_CONNECTED, BACKPRESSURED ->
+                                ZLinkFrameworkErrorKind.UNAVAILABLE;
+                        case INVALID_ARGUMENT, INVALID_STATE ->
+                                ZLinkFrameworkErrorKind.INVALID_OPERATION;
+                        case OK, INTERNAL_ERROR, NOT_SUPPORTED ->
+                                ZLinkFrameworkErrorKind.INTERNAL_FAILURE;
+                    },
+                    failure.kind(),
+                    result.name());
+            assertSame(original, failure.getCause());
         }
         TimeoutException timeout = new TimeoutException("request timed out");
         ZLinkFrameworkException deadline =
@@ -502,8 +530,11 @@ final class ZLinkChannelRuntimeTest {
                                             .toCompletableFuture()
                                             .join());
 
+            ZLinkFrameworkException framework =
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, framework.kind());
             ZlinkSubmitException terminal =
-                    assertInstanceOf(ZlinkSubmitException.class, failure.getCause());
+                    assertInstanceOf(ZlinkSubmitException.class, framework.getCause());
             assertEquals(SubmitResult.NOT_CONNECTED, terminal.getResult());
             assertEquals(1, backend.spotNode.requestAttempts);
             assertEquals(
@@ -794,8 +825,11 @@ final class ZLinkChannelRuntimeTest {
                                             .toCompletableFuture()
                                             .join());
 
+            ZLinkFrameworkException framework =
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, framework.kind());
             ZlinkSubmitException terminal =
-                    assertInstanceOf(ZlinkSubmitException.class, failure.getCause());
+                    assertInstanceOf(ZlinkSubmitException.class, framework.getCause());
             assertEquals(SubmitResult.NOT_CONNECTED, terminal.getResult());
             assertEquals(1, backend.dealer.requestAttempts);
         }
@@ -829,8 +863,11 @@ final class ZLinkChannelRuntimeTest {
                                             .toCompletableFuture()
                                             .join());
 
+            ZLinkFrameworkException framework =
+                    assertInstanceOf(ZLinkFrameworkException.class, failure.getCause());
+            assertEquals(ZLinkFrameworkErrorKind.UNAVAILABLE, framework.kind());
             ZlinkSubmitException terminal =
-                    assertInstanceOf(ZlinkSubmitException.class, failure.getCause());
+                    assertInstanceOf(ZlinkSubmitException.class, framework.getCause());
             assertEquals(SubmitResult.NOT_CONNECTED, terminal.getResult());
             assertEquals(1, backend.router.requestAttempts);
         }

@@ -49,7 +49,8 @@ java_contract() (
     cd "$ROOT/framework/languages/java" || return
     ./gradlew --no-daemon --max-workers=2 :zlink-framework-core:test --rerun \
         --tests '*ZLinkChannelRuntimeTest.meshSubmissionUnexpectedFailureContract' \
-        --tests '*ZLinkChannelRuntimeTest.meshSubmissionKnownFailureContract'
+        --tests '*ZLinkChannelRuntimeTest.meshSubmissionKnownFailureContract' \
+        --tests '*ZLinkJavaRawSubmissionFailureContractTest'
 )
 
 run_contract dotnet dotnet_contract
