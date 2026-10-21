@@ -97,6 +97,12 @@ for (const terminated of [false, true]) {
         );
       } else {
         source.router.disconnectRid('expired');
+        await until(
+          [],
+          () => !source.router.routesSnapshot().some((route) => route.routingId === 'expired'),
+          'native route removed before liveness expiry'
+        );
+        assert.equal(source.raw.isPeerRouteReady('expired'), true);
         assert.deepEqual(source.raw.tickLiveness(DEFAULT_SERVICE_PEER_TIMEOUT_MS).timedOutNodes, [
           'expired'
         ]);

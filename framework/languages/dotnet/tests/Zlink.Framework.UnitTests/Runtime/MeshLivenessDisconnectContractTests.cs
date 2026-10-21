@@ -47,18 +47,34 @@ public sealed partial class StatefulServiceRuntimeTests
         owner.Start();
         peer.Start();
         peer.ConnectPeer(Assert.IsType<string>(owner.Status().LocalEndpoint), owner.RoutingId);
-        await ObserveAsync(() => owner.Status().AdmittedPeerCount == 1);
+        await ObserveAsync(() =>
+            owner.Status().AdmittedPeerCount == 1 && peer.Status().AdmittedPeerCount == 1
+        );
         poller.Arm();
         owner.SignalReceiveOwner();
         try
         {
             await poller.Held.Task.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.False(poller.HeldRouteEvent);
-            captured.Router!.DisconnectRid(peer.RoutingId);
-            var missing = Assert.Throws<ZlinkConnectException>(() =>
-                captured.Router.DisconnectRid(peer.RoutingId)
+            Assert.Equal(
+                SubmitResult.Ok,
+                owner.SendToNode(peer.RoutingId, [Message.From("before-disconnect"u8)])
             );
-            Assert.Equal(ZlinkConnectException.ErrorCode.NotFound, missing.Result);
+            await ObserveAsync(() => peer.Status().PendingApplicationMessages != 0);
+            captured.Router!.DisconnectRid(peer.RoutingId);
+            await ObserveAsync(() =>
+            {
+                try
+                {
+                    captured.Router.DisconnectRid(peer.RoutingId);
+                    return false;
+                }
+                catch (ZlinkConnectException error)
+                    when (error.Result == ZlinkConnectException.ErrorCode.NotFound)
+                {
+                    return true;
+                }
+            });
             await peer.DisposeAsync();
             Assert.Equal(1U, owner.Status().AdmittedPeerCount);
 
@@ -131,6 +147,7 @@ public sealed partial class StatefulServiceRuntimeTests
         private readonly IPoller _inner = Systems.Zlink.Zlink.CreatePoller();
         private readonly ManualResetEventSlim _release = new(false);
         private readonly ManualResetEventSlim _continue = new(false);
+        private PollEvent[] _deferred = [];
         private int _phase;
         public TaskCompletionSource Held { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -156,14 +173,35 @@ public sealed partial class StatefulServiceRuntimeTests
                 TurnCompleted.TrySetResult();
                 _continue.Wait();
             }
-            var count = _inner.Wait(destination, timeout);
-            var timerOnly = count > 0;
-            for (var i = 0; i < count; i++)
-                timerOnly &= destination[i].SourceKind == PollSourceKind.Timer;
-            if (timerOnly && Interlocked.CompareExchange(ref _phase, 2, 1) == 1)
+            if (_deferred.Length != 0)
             {
+                var deferredCount = Math.Min(destination.Length, _deferred.Length);
+                _deferred.AsSpan(0, deferredCount).CopyTo(destination);
+                _deferred = _deferred[deferredCount..];
+                return deferredCount;
+            }
+            var count = _inner.Wait(destination, timeout);
+            var timerCount = 0;
+            for (var i = 0; i < count; i++)
+                if (destination[i].SourceKind == PollSourceKind.Timer)
+                    timerCount++;
+            if (timerCount > 0 && Interlocked.CompareExchange(ref _phase, 2, 1) == 1)
+            {
+                _deferred = new PollEvent[count - timerCount];
+                var timers = 0;
+                var deferred = 0;
                 for (var i = 0; i < count; i++)
-                    HeldRouteEvent |= (destination[i].Revents & PollEventFlags.PollRoute) != 0;
+                {
+                    var ready = destination[i];
+                    if (ready.SourceKind == PollSourceKind.Timer)
+                    {
+                        destination[timers++] = ready;
+                        HeldRouteEvent |= (ready.Revents & PollEventFlags.PollRoute) != 0;
+                    }
+                    else
+                        _deferred[deferred++] = ready;
+                }
+                count = timerCount;
                 Held.TrySetResult();
                 _release.Wait();
             }
