@@ -107,6 +107,6 @@ ZLINK_CORE_SOURCE=release ZLINK_CORE_PACKAGE_PREFIX=<branch-only-cache>/<ver>/<p
 - Build trees and modes (`dev` / `release` / `release-gate`) are owned by `scripts/build-core.sh`
   and [`build-guide.md`](build-guide.md).
 - The shared local package cache (§4.1) and version synchronization are owned by
-  `scripts/local-package/` and the [development workflow](../principal/dev/development-workflow.md).
+  `scripts/local-package/` and the internal document (`zlink/dev/development-workflow.md` in the private repository zlink-systems/docs).
 - This document collects only what sits on top of those: the two paths for linking bindings against
   a local Core without a release — tests and perf.

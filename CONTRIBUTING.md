@@ -169,7 +169,7 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   `<area>/<issue-number>-<slug>` plus a worktree and lands on main through a PR. main changes only
   through PRs (document-only edits too; the only exception is release tags).
   Milestones are releases, the Project board is status. Owned by
-  [`doc/principal/dev/development-workflow.md`](doc/principal/dev/development-workflow.md).
+  internal document (`zlink/dev/development-workflow.md` in the private repository zlink-systems/docs).
 - Branches, commits, pushes and merges happen only on an explicit request, and the working
   branch follows the Issue-branch rule (`AGENTS.md` §1).
 - Commit message: `<module>: <one line>` plus a body with cause, fix, evidence numbers and
@@ -195,24 +195,10 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   binding (`<language>/vX.Y.N`) → framework (`framework-<language>/vA.B.C`). Workflows, triggers,
   channels and verification commands are owned by
   [`doc/building/release-pipeline.md`](doc/building/release-pipeline.md); accounts and secrets by
-  [`doc/building/release-accounts.md`](doc/building/release-accounts.md); ConanCenter and vcpkg go
+  internal document (`zlink/building/release-accounts.md` in the private repository zlink-systems/docs); ConanCenter and vcpkg go
   through PRs ([`doc/building/pr-drafts/`](doc/building/pr-drafts/)).
 - Supported platforms are linux-x64, linux-arm64, macos-arm64 and windows-x64. Intel
   Mac is unsupported from Core up and never appears in CI matrices or prebuilds.
 - After a release, move the baseline worktree to the new tag.
 
-## 9. Agent operating conventions
-
-- Rule text: [`AGENTS.md`](AGENTS.md) (global) and per-directory `AGENTS.md`. Documentation
-  rules: [`doc/AGENTS.md`](doc/AGENTS.md).
-- Split large work along module boundaries and run it in parallel. One job is **one cause,
-  capped at about 1.5 hours**; if no root fix lands within the cap, the job records what it
-  proved and its candidates in the summary and stops. Do not bundle several causes and a
-  refactor into one job.
-- Jobs do not loop on gates or perf measurements. The supervisor runs the gate once after the
-  job exits, reads the diff, and commits with explicit file names (never `git add -A`).
-- One job gets one Issue, one worktree and one branch (`-C <worktree>`); the job commits only on
-  that branch and the supervisor pushes, opens the PR and merges (`doc/principal/dev/development-workflow.md` §4).
-- Jobs do not modify or run `doc/**`, `core/doc/**`, `hotpath_reference.json` or
-  `scripts/local-package/**`. A needed spec change is reported as a BLOCKER and committed
-  separately by the supervisor.
+For internal operating procedures, follow `../zlink-docs/zlink/AGENTS.md`.

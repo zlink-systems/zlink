@@ -99,6 +99,6 @@ ZLINK_CORE_SOURCE=release ZLINK_CORE_PACKAGE_PREFIX=<브랜치-전용-캐시>/<v
 - 빌드 트리·모드(`dev`/`release`/`release-gate`)는 `scripts/build-core.sh`와
   [`build-guide.ko.md`](build-guide.ko.md)가 소유한다.
 - 로컬 패키지 공유 캐시(§4.1)·버전 동기화는 `scripts/local-package/`와
-  [개발 워크플로](../principal/dev/development-workflow.ko.md)가 소유한다.
+  내부 문서(비공개 저장소 zlink-systems/docs의 `zlink/dev/development-workflow.ko.md`)가 소유한다.
 - 이 문서는 그 위에서 "릴리스 없이 로컬 Core로 바인딩을 링크하는 두 경로(테스트·perf)"만 모은
   참조다.

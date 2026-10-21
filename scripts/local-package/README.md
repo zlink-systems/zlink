@@ -61,7 +61,7 @@ scripts/local-package/build-wsl.sh dotnet java node
 
 Use the commands below to query the cache key and tool versions, and to prune the cache. The
 sharing policy is owned by
-[development workflow §4.1](../../doc/principal/dev/development-workflow.md#41-shared-local-package-cache-content-addressed).
+the internal document (`zlink/dev/development-workflow.md` §4.1 in the private repository zlink-systems/docs).
 
 ```bash
 scripts/local-package/build-wsl.sh --cache-key

@@ -1,0 +1,23 @@
+name: Internal document links
+
+# 비공개 저장소(zlink-systems/docs)로 옮긴 문서의 옛 경로를 공개 파일이 가리키지 않는지 본다(#2203).
+# 참조는 문서뿐 아니라 코드·규칙 파일·workflow에도 생길 수 있어 경로 필터 없이 모든 PR에서 돈다.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Check public files have no internal document references
+        run: bash scripts/ci/check-no-internal-doc-links.sh
