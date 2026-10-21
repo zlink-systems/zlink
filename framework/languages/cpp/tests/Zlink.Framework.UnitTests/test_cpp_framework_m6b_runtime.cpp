@@ -2615,8 +2615,10 @@ void verify_host_send_forwarding_allocations ()
                 payload.emplace (protocol::application_payload_t::from_parts (baseline_parts));
         });
         std::optional<zlink::framework::task_t<zlink::submit_result_t>> raw;
-        const auto terminal = count_allocations (
-          [&] { raw.emplace (source->transport ().send_to_node_result (target_bytes, *payload)); });
+        const auto terminal = count_allocations ([&] {
+            raw.emplace (
+              source->transport ().send_to_node_result (target_bytes, std::move (*payload)));
+        });
         std::optional<zlink::framework::task_t<zlink::submit_result_t>> submission;
         const auto observed = count_allocations ([&] {
             if (move_parts)

@@ -325,11 +325,11 @@ raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
                                            std::chrono::milliseconds window,
                                            std::optional<std::uint64_t> target_authority_generation)
 {
-    const auto application =
-      turn.application_record
-        ? protocol::summarize_frozen_application_record (*turn.application_record)
-      : turn.frozen_record ? *turn.frozen_record
-                           : protocol::decode_frozen_record (turn.payload, capture_flow ());
+    auto application = turn.application_record
+                         ? protocol::summarize_frozen_application_record (*turn.application_record)
+                       : turn.frozen_record
+                         ? *turn.frozen_record
+                         : protocol::decode_frozen_record (turn.payload, capture_flow ());
     if (!application.application)
         co_return false;
     const auto sequence = turn.sequence;
@@ -393,8 +393,8 @@ raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
               std::move (complete), application.operation, session);
         else
             sent = co_await _transport->send_to_actor (target_routing_id, application.source_actor,
-                                                       target, *application.application, session,
-                                                       application.operation);
+                                                       target, std::move (*application.application),
+                                                       session, application.operation);
     } else {
         protocol::spot_route_fence_t target{owner.key, owner.object_generation,      {},
                                             0,         *target_authority_generation, 0};
@@ -408,7 +408,7 @@ raw_stateful_dispatch_t::forward_accepted (object_ref_t owner,
         else
             sent = co_await _transport->send_to_spot (
               target_routing_id, application.source_spot_id.value_or (""), target,
-              *application.application, application.operation);
+              std::move (*application.application), application.operation);
     }
     co_return sent;
 }

@@ -39,6 +39,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace mesh = zlink::framework::runtime::mesh;
@@ -112,11 +113,12 @@ void verify_node_send_forwarding_allocations ()
 {
     namespace fw = zlink::framework;
     using fw::tests::count_allocations;
+    static_assert (std::is_nothrow_move_constructible_v<protocol::application_payload_t>);
     mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
       .descriptor = descriptor ("forwarding-source"),
       .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
     const auto target = bytes ("missing-forwarding-target");
-    const protocol::application_payload_t payload{"Forwarding", "application/octet-stream", {}};
+    protocol::application_payload_t payload{"Forwarding", "application/octet-stream", {}};
     assert (count_allocations ([] {}) == 0);
     assert (count_allocations ([] {
                 auto *allocation = ::operator new (64);
@@ -138,7 +140,7 @@ void verify_node_send_forwarding_allocations ()
     });
     std::optional<fw::task_t<zlink::submit_result_t>> submission;
     const auto observed = count_allocations (
-      [&] { submission.emplace (source.send_to_node_result (target, payload)); });
+      [&] { submission.emplace (source.send_to_node_result (target, std::move (payload))); });
     assert (submission->await_ready ());
     assert (submission->result ().value () == zlink::submit_result_t::not_connected);
     // The terminal owner needs at most one coroutine frame in addition to its
@@ -2900,12 +2902,13 @@ void verify_raw_owner_node_send_and_liveness (
     std::vector<std::shared_ptr<zlink::framework::task_t<zlink::submit_result_t>>> saturated_sends;
     std::size_t saturated_received = 0;
     for (std::size_t index = 0; index < 128 && first.pending_operation_count () == 0; ++index) {
-        const protocol::application_payload_t saturated_payload{
+        protocol::application_payload_t saturated_payload{
           "SaturatedControl", "application/octet-stream",
           std::vector<std::uint8_t> (512u * 1024u, 0x5a)};
         saturated_sends.push_back (
           std::make_shared<zlink::framework::task_t<zlink::submit_result_t>> (
-            first.send_to_node_result (second_descriptor.node_routing_id, saturated_payload)));
+            first.send_to_node_result (second_descriptor.node_routing_id,
+                                       std::move (saturated_payload))));
     }
     assert (first.pending_operation_count () != 0);
     const auto verify_retained_payloads = [] (const mesh::service_mailbox_claim_t &claim) {
