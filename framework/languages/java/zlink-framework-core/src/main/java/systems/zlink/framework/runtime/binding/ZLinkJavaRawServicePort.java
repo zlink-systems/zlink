@@ -7,6 +7,7 @@ import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.messaging.Received;
 import systems.zlink.contracts.messaging.ReplyToken;
+import systems.zlink.contracts.messaging.RequestSubmission;
 import systems.zlink.contracts.messaging.RequestSubmitOperation;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
@@ -286,7 +287,14 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                                         completion, value, discardReply);
                         },
                         receivedAdmission,
-                        requestAdmission);
+                        requestAdmission,
+                        (submission, deadline, admission, admitted, terminal) -> {
+                            var reply =
+                                    ZLinkJavaSocketSupport.reply(
+                                            submission, deadline, admission, admitted);
+                            reply.whenComplete(terminal);
+                            return reply;
+                        });
         if (bindingReply != null) {
             ZLinkCompletionBridge.forwardCancellation(completion, bindingReply);
         }
@@ -311,6 +319,41 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
             systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry.PeerState
                     receivedAdmission,
             CompletableFuture<Void> requestAdmission) {
+        return requestMessagesTo(
+                router,
+                target,
+                messages,
+                timeout,
+                decodeReply,
+                mapFailure,
+                terminal,
+                receivedAdmission,
+                requestAdmission,
+                ZLinkJavaSocketSupport::observeReply);
+    }
+
+    @FunctionalInterface
+    private interface ReplyObserver {
+        CompletionStage<List<Message>> observe(
+                RequestSubmission submission,
+                long deadlineNanos,
+                Runnable admission,
+                CompletableFuture<Void> requestAdmission,
+                BiConsumer<List<Message>, Throwable> terminal);
+    }
+
+    private <T> CompletionStage<?> requestMessagesTo(
+            RouterSocket router,
+            RoutingId target,
+            List<Message> messages,
+            Duration timeout,
+            Function<List<Message>, T> decodeReply,
+            Function<Throwable, T> mapFailure,
+            BiConsumer<T, Throwable> terminal,
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceLivenessRegistry.PeerState
+                    receivedAdmission,
+            CompletableFuture<Void> requestAdmission,
+            ReplyObserver replyObserver) {
         long startedAt = System.nanoTime();
         List<Message> ownedMessages = claimMessages(messages);
         boolean replyOwns = false;
@@ -340,17 +383,20 @@ final class ZLinkJavaRawServicePort implements AutoCloseable {
                                 return submit.timeout(timeout).submit();
                             });
             CompletionStage<List<Message>> bindingReply =
-                    ZLinkJavaSocketSupport.reply(
-                            submission, deadlineNanos, admission, requestAdmission);
-            bindingReply.whenComplete(
-                    (reply, failure) -> {
-                        try {
-                            deliverTerminal(reply, failure, decodeReply, mapFailure, terminal);
-                        } finally {
-                            if (reply != null) Message.closeAll(reply);
-                            Message.closeAll(ownedMessages);
-                        }
-                    });
+                    replyObserver.observe(
+                            submission,
+                            deadlineNanos,
+                            admission,
+                            requestAdmission,
+                            (reply, failure) -> {
+                                try {
+                                    deliverTerminal(
+                                            reply, failure, decodeReply, mapFailure, terminal);
+                                } finally {
+                                    if (reply != null) Message.closeAll(reply);
+                                    Message.closeAll(ownedMessages);
+                                }
+                            });
             replyOwns = true;
             return bindingReply;
         } catch (RuntimeException failure) {
