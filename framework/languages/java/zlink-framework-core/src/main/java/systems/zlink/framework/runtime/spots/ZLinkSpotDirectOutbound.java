@@ -28,20 +28,14 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
-import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 final class ZLinkSpotDirectOutbound {
     private final ZLinkSpotRouteMessages messages;
-    private final Executor handlerExecutor;
     private final ZLinkMessageFlowTracer flow;
 
-    ZLinkSpotDirectOutbound(
-            ZLinkSpotRouteMessages messages,
-            Executor handlerExecutor,
-            ZLinkMessageFlowTracer flow) {
+    ZLinkSpotDirectOutbound(ZLinkSpotRouteMessages messages, ZLinkMessageFlowTracer flow) {
         this.messages = messages;
-        this.handlerExecutor = handlerExecutor;
         this.flow = flow;
     }
 
@@ -256,7 +250,7 @@ final class ZLinkSpotDirectOutbound {
             closeRequestParts.run();
             result.completeExceptionally(ex);
         }
-        return result.thenApplyAsync(reply -> reply, handlerExecutor);
+        return result;
     }
 
     CompletionStage<Void> submitPublish(
