@@ -257,27 +257,16 @@ internal sealed class ZLinkSpotOutboundTransport(
                 )
                 .ConfigureAwait(false);
         }
-        catch (ZLinkRequestTerminalException terminal)
+        catch (Exception failure)
         {
-            throw ZLinkRequestFailureMapper.CreateChannelCompletionException(
-                terminal.Result,
-                terminal.FailureErrno,
-                $"Channel request to '{channelName}' failed with result '{terminal.Result}'."
-            );
-        }
-        catch (ZlinkRequestException failure)
-        {
-            throw ZLinkRequestFailureMapper.CreateChannelCompletionException(
-                (RequestResult)(int)failure.Result,
-                $"Channel request to '{channelName}' failed with result '{failure.Result}'."
-            );
-        }
-        catch (ZlinkSubmitException failure)
-        {
-            throw ZLinkRequestFailureMapper.CreateChannelSubmitException(
+            var mapped = ZLinkRequestFailureMapper.CreateSubmitException(
                 failure,
-                $"Channel request to '{channelName}'"
+                $"Channel request to '{channelName}'",
+                selectOne: true
             );
+            if (ReferenceEquals(mapped, failure))
+                throw;
+            throw mapped;
         }
         finally
         {
@@ -326,27 +315,15 @@ internal sealed class ZLinkSpotOutboundTransport(
                 )
                 .ConfigureAwait(false);
         }
-        catch (ZLinkRequestTerminalException terminal)
+        catch (Exception failure)
         {
-            throw ZLinkRequestFailureMapper.CreateCompletionException(
-                terminal.Result,
-                terminal.FailureErrno,
-                $"SPOT request to '{targetSpotId}' on node '{targetNodeRid}' failed with result '{terminal.Result}'."
-            );
-        }
-        catch (ZlinkRequestException failure)
-        {
-            throw ZLinkRequestFailureMapper.CreateCompletionException(
-                (RequestResult)(int)failure.Result,
-                $"SPOT request to '{targetSpotId}' on node '{targetNodeRid}' failed with result '{failure.Result}'."
-            );
-        }
-        catch (ZlinkSubmitException failure)
-        {
-            throw ZLinkRequestFailureMapper.CreateSubmitException(
+            var mapped = ZLinkRequestFailureMapper.CreateSubmitException(
                 failure,
                 $"SPOT request to '{targetSpotId}' on node '{targetNodeRid}'"
             );
+            if (ReferenceEquals(mapped, failure))
+                throw;
+            throw mapped;
         }
         finally
         {
