@@ -1914,6 +1914,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_executable(test_cpp_framework_state_lane
     tests/Zlink.Framework.UnitTests/test_cpp_framework_state_lane.cpp)
   target_use_zlink_gtest_main(test_cpp_framework_state_lane)
+  target_sources(test_cpp_framework_state_lane PRIVATE
+    tests/support/allocation_counter.cpp)
   target_link_libraries(test_cpp_framework_state_lane PRIVATE
     zlink::framework)
   target_include_directories(test_cpp_framework_state_lane PRIVATE

@@ -8,6 +8,7 @@
 #include "runtime/stateful/stateful_object_runtime.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include "../support/scope_exit.hpp"
+#include "../support/allocation_counter.hpp"
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
 #include "runtime/execution/infrastructure_wait_guard.hpp"
 #endif
@@ -15,6 +16,7 @@
 #include <gtest/gtest.h>
 
 #include <atomic>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <map>
@@ -104,6 +106,36 @@ TEST (ZLinkStateLane, RunReturnsTheResultOfTheWork)
     state_lane_t lane (executor);
 
     EXPECT_EQ (42, lane.run ([] { return 42; }).get ());
+}
+
+TEST (ZLinkStateLane, UncontendedRunOnlyAllocatesItsReturnedFuture)
+{
+    using zlink::framework::tests::count_allocations;
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    struct work_t
+    {
+        std::array<int, 128> values{};
+        int operator() () const { return std::accumulate (values.begin (), values.end (), 0); }
+    };
+    work_t work;
+    work.values.front () = 42;
+    EXPECT_EQ (0u, count_allocations ([] {}));
+    EXPECT_EQ (1u, count_allocations ([] {
+                   auto *allocation = ::operator new (64);
+                   ::operator delete (allocation);
+               }));
+    const auto returned_future_allocations = count_allocations ([] {
+        auto completion = std::make_shared<std::promise<int>> ();
+        auto result = completion->get_future ();
+        completion->set_value (42);
+        (void) result.get ();
+    });
+    int observed = 0;
+    const auto submission_allocations =
+      count_allocations ([&] { observed = lane.run (work).get (); });
+    EXPECT_EQ (42, observed);
+    EXPECT_EQ (returned_future_allocations, submission_allocations);
 }
 
 TEST (ZLinkStateLaneDeathTest, CleanupContinuationReleasesWorkerForPendingLaneAndAttachment)
