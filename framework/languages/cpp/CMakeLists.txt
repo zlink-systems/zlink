@@ -2406,6 +2406,48 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_sources(test_cpp_framework_completion_allocations PRIVATE
     tests/support/allocation_counter.cpp)
   add_zlink_framework_test(
+    test_cpp_framework_request_observer_lifetime
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_request_observer_lifetime.cpp
+    "framework-unit;framework-regression;messaging" "unit")
+  target_sources(test_cpp_framework_request_observer_lifetime PRIVATE
+    tests/support/allocation_counter.cpp)
+  target_include_directories(test_cpp_framework_request_observer_lifetime PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_request_observer_lifetime)
+  set(ZLINK_FRAMEWORK_CPP_REQUEST_OBSERVER_BASELINE_ARCHIVE "" CACHE FILEPATH
+    "Exact PIC Framework archive for the request observer allocation comparison")
+  if(ZLINK_FRAMEWORK_CPP_REQUEST_OBSERVER_BASELINE_ARCHIVE AND UNIX AND NOT APPLE)
+    get_target_property(_observer_link_dependencies zlink_framework LINK_LIBRARIES)
+    foreach(_observer_version baseline current)
+      set(_observer_target request_observer_${_observer_version})
+      add_library(${_observer_target} MODULE EXCLUDE_FROM_ALL
+        tests/Zlink.Framework.UnitTests/test_cpp_framework_request_observer_lifetime.cpp
+        tests/support/allocation_counter.cpp)
+      target_compile_features(${_observer_target} PRIVATE cxx_std_20)
+      target_compile_definitions(${_observer_target} PRIVATE ZLINK_REQUEST_OBSERVER_DSO)
+      target_compile_options(${_observer_target} PRIVATE -fvisibility=hidden)
+      target_include_directories(${_observer_target} PRIVATE
+        ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
+        ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+        ${ZLINK_FRAMEWORK_CPP_DIR}/common/include
+        ${ZLINK_FRAMEWORK_CPP_DIR}/tests/support
+        ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+      zlink_framework_cpp_add_boost_headers(${_observer_target})
+      if(_observer_version STREQUAL "baseline")
+        set(_observer_archive "${ZLINK_FRAMEWORK_CPP_REQUEST_OBSERVER_BASELINE_ARCHIVE}")
+      else()
+        set(_observer_archive "$<TARGET_FILE:zlink_framework>")
+        add_dependencies(${_observer_target} zlink_framework)
+      endif()
+      target_link_libraries(${_observer_target} PRIVATE
+        -Wl,--whole-archive "${_observer_archive}" -Wl,--no-whole-archive
+        ${_observer_link_dependencies})
+      # The executable-only version script would also hide the fixture entry.
+      set_property(TARGET ${_observer_target} PROPERTY LINK_OPTIONS
+        -Wl,-Bsymbolic -Wl,--exclude-libs,ALL)
+    endforeach()
+  endif()
+  add_zlink_framework_test(
     test_cpp_framework_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp
     "framework-unit;framework-regression;messaging")
