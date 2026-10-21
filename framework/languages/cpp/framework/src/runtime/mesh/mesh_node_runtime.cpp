@@ -4117,20 +4117,18 @@ task_t<result_t<runtime::messaging::message_parts_t>>
 mesh_node_runtime_t::await_request_reply (const host::pending_operation_t &operation,
                                           std::string_view operation_name)
 {
-    std::optional<result_t<host::operation_completion_t>> completion;
-    try {
-        completion =
-          result_t<host::operation_completion_t>::success (co_await await_completion (operation));
-    }
-    catch (const std::exception &) {
-        completion = detail::result_access_t::failure<host::operation_completion_t> (
-          std::current_exception ());
-    }
-    if (auto failure = request_completion_failure (*completion, operation_name))
-        co_return detail::result_access_t::failure<runtime::messaging::message_parts_t> (
-          std::move (failure));
-    co_return result_t<runtime::messaging::message_parts_t>::success (
-      runtime::messaging::message_parts_t (std::move (completion->value ().parts)));
+    using reply_result_t = result_t<runtime::messaging::message_parts_t>;
+    auto completion = await_completion (operation);
+    return detail::project_task_terminal<reply_result_t> (
+      completion, [operation_name] (const result_t<host::operation_completion_t> &result) {
+          auto failure = request_completion_failure (result, operation_name);
+          auto reply = failure
+                         ? detail::result_access_t::failure<runtime::messaging::message_parts_t> (
+                             std::move (failure))
+                         : reply_result_t::success (
+                             runtime::messaging::message_parts_t (result.value ().parts));
+          return result_t<reply_result_t>::success (std::move (reply));
+      });
 }
 
 std::optional<zlink::submit_result_t>
