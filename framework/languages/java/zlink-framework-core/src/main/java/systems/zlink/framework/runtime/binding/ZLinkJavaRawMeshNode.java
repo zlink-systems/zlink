@@ -7720,6 +7720,7 @@ final class ZLinkJavaRawMeshNode
                 // failure must not stop the service receive pump.
             }
         }
+<<<<<<< HEAD
         tick.timedOutNodes()
                 .forEach(
                         peer -> {
@@ -7728,6 +7729,15 @@ final class ZLinkJavaRawMeshNode
                                 signalStateChanged(peer);
                             }
                         });
+=======
+        for (int index = 0; index < tick.timedOutNodes().size(); index++) {
+            RoutingId peer = tick.timedOutNodes().get(index);
+            if (disconnectAdmitted(peer, admittedConnectionId(peer))) {
+                ZLinkJavaSocketSupport.disconnectRidIfPresent(requireStarted(), peer);
+                signalStateChanged(peer);
+            }
+        }
+>>>>>>> ab478d8 (fix(framework): liveness가 이미 없는 physical RID 정리 때 NOT_FOUND를 완료로 받기 (0.30.2) (#2369))
     }
 
     private CompletionStage<Void> sendLiveness(RoutingId target, List<byte[]> frames) {

@@ -359,10 +359,12 @@ export class RawServiceMeshRuntime {
       if (router.disconnectRid !== undefined) {
         router.disconnectRid(nodeRoutingId);
       } else {
-        router.disconnect(endpoint);
+        try {
+          router.disconnect(endpoint);
+        } catch (error) {
+          if (!isAlreadyDisconnectedError(error)) throw error;
+        }
       }
-    } catch (error) {
-      if (!isAlreadyDisconnectedError(error)) throw error;
     } finally {
       if (current !== undefined) this.removePeer(current);
       this.topology.forgetNotRequired(nodeRoutingId);
