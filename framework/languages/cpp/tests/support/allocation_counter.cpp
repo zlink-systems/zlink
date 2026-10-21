@@ -10,11 +10,17 @@ namespace zlink::framework::tests
 thread_local bool tracking_allocations = false;
 thread_local std::size_t tracked_allocation_count = 0;
 thread_local std::size_t tracked_allocation_size = 0;
+thread_local std::size_t tracked_allocation_bytes = 0;
+thread_local std::size_t largest_allocation = 0;
 
 void record_allocation (std::size_t size) noexcept
 {
-    if (tracking_allocations && (tracked_allocation_size == 0 || tracked_allocation_size == size))
+    if (tracking_allocations && (tracked_allocation_size == 0 || tracked_allocation_size == size)) {
         ++tracked_allocation_count;
+        tracked_allocation_bytes += size;
+        if (size > largest_allocation)
+            largest_allocation = size;
+    }
 }
 
 void *allocate_bytes (std::size_t size)
