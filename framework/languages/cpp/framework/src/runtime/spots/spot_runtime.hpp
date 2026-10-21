@@ -137,7 +137,7 @@ class spot_node_builder_state_t
     std::shared_ptr<channel_runtime_state_t> channel_runtime;
     dispatch_options_t dispatch;
     runtime::location_lifecycle_t *location_lifecycle = nullptr;
-    runtime::spot_address_resolver_t *spot_location_resolver = nullptr;
+    std::shared_ptr<runtime::spot_address_resolver_t> spot_location_resolver;
     std::optional<service_provider_t> root_services;
     std::shared_ptr<std::atomic_bool> drain_flag;
     std::function<framework_runtime_state_t ()> host_phase;
@@ -1880,7 +1880,7 @@ class spot_node_runtime_t
     void record_core_actor_transfer_activation (std::string actor_id,
                                                 std::uint64_t membership_epoch);
     void bind_location_lifecycle (runtime::location_lifecycle_t &lifecycle);
-    void bind_spot_location_resolver (runtime::spot_address_resolver_t &resolver);
+    void bind_spot_location_resolver (std::shared_ptr<runtime::spot_address_resolver_t> resolver);
     void bind_service_provider (service_provider_t &services);
     void bind_drain_flag (std::shared_ptr<std::atomic_bool> flag);
     void bind_host_phase (std::function<framework_runtime_state_t ()> read_phase);

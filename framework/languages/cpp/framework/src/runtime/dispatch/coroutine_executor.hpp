@@ -88,8 +88,17 @@ class coroutine_executor_t
     void drain ();
     void post_native_continuation (std::function<void ()> work);
     bool is_current () noexcept;
+    void bind_completion_dispatcher (detail::completion_dispatcher_borrow_t dispatcher)
+    {
+        _completion_dispatcher = dispatcher;
+    }
+    detail::completion_dispatcher_borrow_t completion_dispatcher () const
+    {
+        return _completion_dispatcher;
+    }
 
   private:
+    detail::completion_dispatcher_borrow_t _completion_dispatcher{};
     std::mutex _mutex;
     bool _drained = false;
     boost::asio::thread_pool _pool;
@@ -100,7 +109,8 @@ coroutine_executor_t &handler_coroutine_executor ();
 // host calls it when its runtime starts; without it Framework tasks behave as
 // plain provider tasks (no runtime scheduler, no blocking rejection).
 void install_host_context_hooks () noexcept;
-void configure_handler_coroutine_executor (std::size_t worker_count);
+void configure_handler_coroutine_executor (std::size_t worker_count,
+                                           detail::completion_dispatcher_borrow_t dispatcher = {});
 void shutdown_handler_coroutine_executor () noexcept;
 
 } // namespace zlink::framework::runtime

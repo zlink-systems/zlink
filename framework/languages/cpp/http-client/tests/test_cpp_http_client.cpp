@@ -2213,6 +2213,7 @@ TEST (ZLinkHttpClient, RejectsHttpsHostnameMismatch)
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     testing::InitGoogleTest (&argc, argv);
     return RUN_ALL_TESTS ();
 }

@@ -256,6 +256,7 @@ int expect_existing_completion_turn ()
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     int failures = 0;
     auto check = [&] (const char *name, int result) {
         std::cout << name << " result=" << result << std::endl;

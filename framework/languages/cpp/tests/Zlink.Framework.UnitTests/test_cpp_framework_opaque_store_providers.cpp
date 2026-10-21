@@ -3,6 +3,7 @@
 #include "runtime/locations/in_memory_store_providers.hpp"
 #include "runtime/locations/location_runtime.hpp"
 #include "../support/manual_deadlines.hpp"
+#include "../support/aggregate_page_read_fixture.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/provider_location_repository.hpp"
 #include "runtime/locations/provider_relocation_repository.hpp"
@@ -3392,6 +3393,12 @@ TEST (CppFrameworkOpaqueLocationStore, AggregatePrepareAdoptsPeerLockAfterCondit
             .result ()
             .value ()));
     EXPECT_EQ (source_capacity, capacity_record (provider, source_descriptor));
+}
+
+TEST (CppFrameworkOpaqueLocationStore, AggregatePageReadKeepsSourceVersionUntilCommit)
+{
+    in_memory_location_store_t provider;
+    zlink::framework::test::aggregate_page_read_keeps_source_version_until_commit (provider, bytes);
 }
 
 TEST (CppFrameworkOpaqueLocationStore, AggregateCommitRechecksFenceAfterTransientConflicts)
