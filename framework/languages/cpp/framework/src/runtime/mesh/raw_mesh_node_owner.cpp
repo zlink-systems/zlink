@@ -848,13 +848,14 @@ void raw_mesh_node_owner_t::expect_peer (service_node_descriptor_t expected_desc
     if (expected_descriptor.node_routing_id.empty ()
         || expected_descriptor.advertised_endpoint.empty ())
         return;
-    return _lane
-      .run ([this, expected_descriptor = std::move (expected_descriptor)] () mutable {
+    _lane
+      .run ([this, &expected_descriptor] {
           std::lock_guard lifecycle_lock (_lifecycle_mutex);
           _expected_peers.insert_or_assign (expected_descriptor.node_routing_id,
-                                            std::move (expected_descriptor));
+                                            expected_descriptor);
       })
       .get ();
+    _topology.project_discovered_peer (expected_descriptor);
 }
 
 void raw_mesh_node_owner_t::forget_peer (const std::vector<std::uint8_t> &node_routing_id,
