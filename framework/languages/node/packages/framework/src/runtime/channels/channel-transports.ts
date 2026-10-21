@@ -4,11 +4,11 @@ import {
   rejectZLinkRequestReply,
   type ZLinkRequestResult
 } from '../messaging/request-result';
-import { ZLinkFrameworkException } from '../../contracts';
+import { ZLinkFrameworkErrorKind, ZLinkFrameworkException } from '../../contracts';
 import type { Message } from '../../contracts/Common/Message';
 import { DEFAULT_REQUEST_TIMEOUT_MS } from '../../contracts/Configuration/Registration';
 import { ZLinkSpotKind } from '../../contracts/Spots';
-import { throwIfAborted } from '../abort';
+import { isAbortError, throwIfAborted } from '../abort';
 import type { ZLinkBackendMeshNode, ZLinkBackendSpot } from '../backend/contracts';
 import {
   closeMeshCompletion,
@@ -1251,7 +1251,19 @@ function mapMeshSubmissionError(error: unknown, operation: string): unknown {
       error
     );
   }
-  return error;
+  if (
+    isAbortError(error) ||
+    error instanceof ZLinkConfigurationException ||
+    error instanceof TypeError ||
+    error instanceof RangeError
+  ) {
+    return error;
+  }
+  return new ZLinkFrameworkException(
+    ZLinkFrameworkErrorKind.InternalFailure,
+    `${operation} failed.`,
+    error
+  );
 }
 
 export function meshRequestFailure(

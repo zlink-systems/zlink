@@ -1,6 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
+const { createAbortError } = require('../../packages/framework/dist/runtime/abort');
 
 function fixture(submit, codecs) {
   const table = new framework.ZLinkMeshCompletionTable();
@@ -69,7 +70,7 @@ for (const raw of [false, true]) {
     }
   });
 
-  test(`Spot ${raw ? 'raw ' : ''}request classifies stale fences and preserves untyped failures`, async () => {
+  test(`Spot ${raw ? 'raw ' : ''}request classifies stale fences and preserves caller failures`, async () => {
     const stale = new framework.ServiceStaleGenerationError('spot', 'entry');
     const staleFixture = fixture(() => {
       throw stale;
@@ -83,7 +84,8 @@ for (const raw of [false, true]) {
       new DOMException('cancelled', 'AbortError'),
       new framework.ZLinkConfigurationException('invalid configuration'),
       new TypeError('invalid argument'),
-      new Error('unclassified failure'),
+      new RangeError('invalid argument range'),
+      createAbortError(),
       new framework.ZLinkFrameworkException(
         framework.ZLinkFrameworkErrorKind.Rejected,
         'classified'
@@ -93,6 +95,26 @@ for (const raw of [false, true]) {
         throw failure;
       });
       await assert.rejects(reply(transport, undefined, raw), (error) => error === failure);
+    }
+  });
+
+  test(`Spot ${raw ? 'raw ' : ''}request wraps unknown submission failures with their original cause`, async () => {
+    for (const failure of [
+      new Error('unclassified failure'),
+      new SyntaxError('programming failure'),
+      new ReferenceError('programming failure'),
+      new EvalError('programming failure'),
+      { detail: 'unknown failure' },
+      'failure'
+    ]) {
+      const { transport, table } = fixture(() => { throw failure; });
+      await assert.rejects(reply(transport, undefined, raw), (error) => {
+        assert.ok(error instanceof framework.ZLinkFrameworkException);
+        assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.InternalFailure);
+        assert.equal(error.cause, failure);
+        return true;
+      });
+      assert.equal(table.pendingCount, 0);
     }
   });
 
@@ -134,39 +156,48 @@ test('Spot request maps preparation failures through the same reply failure mapp
   assert.equal(table.pendingCount, 0);
 });
 
-test('shared submission mapping preserves untyped failures for node, channel and Spot sends', async () => {
-  for (const failure of [new TypeError('invalid argument'), new Error('unclassified failure')]) {
-    const fail = () => {
-      throw failure;
-    };
-    const node = {
-      routingId: 'local',
-      sendToNode: fail,
-      sendToChannel: fail,
-      entrySpot: () => ({ sendToSpot: fail })
-    };
-    const transport = new framework.ZLinkRuntimeRouteTransport(
-      () => undefined,
-      undefined,
-      () => ({ meshNode: () => node }),
-      undefined,
-      () => true,
-      undefined,
-      undefined,
-      () => false
-    );
-    for (const pending of [
-      () => transport.submit('mesh', 'peer', 'Probe', { value: 1 }),
-      () => transport.submitToChannel('mesh', 'channel', 'Probe', { value: 1 }),
-      () => transport.sendToSpot(target, { value: 1 }, { packetName: 'Probe' })
-    ]) {
-      await assert.rejects(
-        async () => pending(),
-        (error) => error === failure
+for (const path of ['node synchronous', 'node asynchronous', 'channel', 'Spot']) {
+  test(`${path} send preserves caller failures and wraps unknown execution failures`, async () => {
+    const callerFailures = [
+      new TypeError('invalid argument'),
+      new RangeError('invalid range'),
+      new framework.ZLinkConfigurationException('invalid configuration'),
+      createAbortError(),
+      new DOMException('cancelled', 'AbortError'),
+      new framework.ZLinkFrameworkException(framework.ZLinkFrameworkErrorKind.Rejected, 'classified')
+    ];
+    for (const failure of [...callerFailures, new Error('unclassified failure'), { detail: 'unknown failure' }]) {
+      const fail = () => {
+        if (path === 'node asynchronous') return Promise.reject(failure);
+        throw failure;
+      };
+      const node = {
+        routingId: 'local',
+        sendToNode: fail,
+        sendToChannel: fail,
+        entrySpot: () => ({ sendToSpot: fail })
+      };
+      const transport = new framework.ZLinkRuntimeRouteTransport(
+        () => undefined, undefined,
+        () => ({ meshNode: () => node }),
+        undefined, () => true, undefined, undefined, () => false
       );
+      await assert.rejects(async () => {
+        if (path === 'channel') return transport.submitToChannel('mesh', 'channel', 'Probe', { value: 1 });
+        if (path === 'Spot') return transport.sendToSpot(target, { value: 1 }, { packetName: 'Probe' });
+        return transport.submit('mesh', 'peer', 'Probe', { value: 1 });
+      }, (error) => {
+        if (callerFailures.includes(failure)) assert.equal(error, failure);
+        else {
+          assert.ok(error instanceof framework.ZLinkFrameworkException);
+          assert.equal(error.kind, framework.ZLinkFrameworkErrorKind.InternalFailure);
+          assert.equal(error.cause, failure);
+        }
+        return true;
+      });
     }
-  }
-});
+  });
+}
 
 for (const raw of [false, true]) {
   test(`Spot ${raw ? 'raw ' : ''}request retains remote terminal classification and physical submission`, async () => {

@@ -14,7 +14,10 @@ function deferred() {
 
 function fixture() {
   const source = deferred();
-  const node = { requestToNode: () => ({ high: 1n, low: 1n }) };
+  const node = {
+    requestToNode: () => ({ high: 1n, low: 1n }),
+    requestToChannel: () => ({ high: 1n, low: 1n })
+  };
   const table = { submit(operation) { operation(); return source.promise; } };
   const transport = new framework.ZLinkRuntimeRouteTransport(
     () => undefined, undefined,
@@ -78,18 +81,47 @@ for (const cause of ['decode', 'submission', 'encode']) {
   });
 }
 
-test('unclassified node submission failure preserves identity in both public stages', async () => {
-  const f = fixture();
-  const error = new Error('unclassified submission');
-  const request = f.client.requestToNode('mesh', 'peer', {}).submit();
-  const observed = Promise.allSettled([request, request.admitted]);
-  f.source.reject(error);
-  const outcomes = await observed;
-  assert.equal(outcomes[0].status, 'rejected');
-  assert.equal(outcomes[1].status, 'rejected');
-  assert.equal(outcomes[0].reason, error);
-  assert.equal(outcomes[1].reason, error);
-});
+for (const target of ['node', 'channel']) {
+  test(`${target} request preserves caller failure identity at both public stages`, async () => {
+    const { createAbortError } = require('../../packages/framework/dist/runtime/abort');
+    for (const failure of [
+      new TypeError('invalid argument'),
+      new RangeError('invalid range'),
+      new framework.ZLinkConfigurationException('invalid configuration'),
+      createAbortError(),
+      new DOMException('cancelled', 'AbortError'),
+      new framework.ZLinkFrameworkException(framework.ZLinkFrameworkErrorKind.Rejected, 'classified')
+    ]) {
+      const f = fixture();
+      const request = target === 'node'
+        ? f.client.requestToNode('mesh', 'peer', {}).submit()
+        : createZLinkRequest((admitted) => f.transport.requestToChannel('mesh', 'channel', undefined, {}, 1000, undefined, undefined, admitted));
+      const observed = Promise.allSettled([request, request.admitted]);
+      f.source.reject(failure);
+      const outcomes = await observed;
+      for (const outcome of outcomes) {
+        assert.equal(outcome.status, 'rejected');
+        assert.equal(outcome.reason, failure);
+      }
+    }
+  });
+  test(`unclassified ${target} submission failure rejects both public stages with InternalFailure and its original cause`, async () => {
+    const f = fixture();
+    const error = new Error('unclassified submission');
+    const request = target === 'node'
+      ? f.client.requestToNode('mesh', 'peer', {}).submit()
+      : createZLinkRequest((admitted) => f.transport.requestToChannel('mesh', 'channel', undefined, {}, 1000, undefined, undefined, admitted));
+    const observed = Promise.allSettled([request, request.admitted]);
+    f.source.reject(error);
+    const outcomes = await observed;
+    assert.equal(outcomes[0].status, 'rejected');
+    assert.equal(outcomes[1].status, 'rejected');
+    assert.equal(outcomes[0].reason, outcomes[1].reason);
+    assert.ok(outcomes[0].reason instanceof framework.ZLinkFrameworkException);
+    assert.equal(outcomes[0].reason.kind, framework.ZLinkFrameworkErrorKind.InternalFailure);
+    assert.equal(outcomes[0].reason.cause, error);
+  });
+}
 
 for (const throws of [false, true]) {
   test(`failure mapping preserves admission when mapper throws=${throws}`, async () => {
