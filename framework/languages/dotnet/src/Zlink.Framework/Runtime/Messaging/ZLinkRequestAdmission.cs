@@ -24,20 +24,33 @@ internal sealed class ZLinkRequestAdmission
     )
     {
         var admission = new ZLinkRequestAdmission();
+        ValueTask<TReply> reply;
+        try
+        {
+            reply = execute(state, admission);
+        }
+        catch (Exception error)
+        {
+            return new ZLinkRequest<TReply>(
+                new ValueTask(admission._completion.Task),
+                ObserveAsync(ValueTask.FromException<TReply>(error), admission)
+            );
+        }
+        // Once transport/mailbox has completed admission, the existing async
+        // execution owns the reply without a further admission observer.
         return new ZLinkRequest<TReply>(
             new ValueTask(admission._completion.Task),
-            ObserveAsync(state, execute, admission)
+            admission.IsAdmitted ? reply : ObserveAsync(reply, admission)
         );
 
         static async ValueTask<TReply> ObserveAsync(
-            TState state,
-            Func<TState, ZLinkRequestAdmission, ValueTask<TReply>> execute,
+            ValueTask<TReply> completion,
             ZLinkRequestAdmission admission
         )
         {
             try
             {
-                var reply = await execute(state, admission).ConfigureAwait(false);
+                var reply = await completion.ConfigureAwait(false);
                 // A successful reply proves admission even when the execution
                 // path did not expose its earlier acceptance notification.
                 admission.Complete();
