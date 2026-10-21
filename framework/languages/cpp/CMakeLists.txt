@@ -2321,6 +2321,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_request_reply_cost PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_claim_owner_cost
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_owner_cost.cpp
+    "framework-unit;framework-contract;framework-regression;messaging")
+  target_sources(test_cpp_framework_claim_owner_cost PRIVATE
+    tests/support/allocation_counter.cpp)
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_claim_owner_cost)
+  target_include_directories(test_cpp_framework_claim_owner_cost PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp
     "framework-unit;framework-regression;messaging")
