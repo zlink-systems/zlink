@@ -19,6 +19,8 @@ A terminator is the final call that submits the request accumulated by a request
 distinguishes the current 0.18.x tutorial. This chapter covers where that work runs and where
 its continuation resumes. [Client and Request Lifecycle](08-client-lifecycle.en.md) covers request and response shapes.
 
+When a standalone tool awaits asynchronous tasks or registers callbacks, it follows the [C++ completion owner contract](../../../common/spec/server/languages/cpp/interfaces/01-common-runtime.en.md#41-completion-owner) by keeping a `completion_owner_t`. Apps and hosts supply their internal owner.
+
 ## 1. Execution and resumption
 
 <iframe class="zlink-diagram" src="/common/diagrams/http-client-cpp-coroutines-en.html"

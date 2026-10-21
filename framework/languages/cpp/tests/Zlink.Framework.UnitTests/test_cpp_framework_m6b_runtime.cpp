@@ -8221,10 +8221,14 @@ void verify_draining_target_relocation_prepare (bool already_accepted)
         assert (await_task (source->transport ().send_relocation_control (
           target_status.routing_id ().to_bytes (), chunk)));
     }
-    while (!pending.await_ready () && std::chrono::steady_clock::now () < deadline) {
+    // Both requests need receive turns; the second reply may arrive first.
+    while ((!pending.await_ready () || (initial && !initial->await_ready ()))
+           && std::chrono::steady_clock::now () < deadline) {
         (void) target->dispatch_ready (dispatch);
         (void) source->dispatch_ready (dispatch);
     }
+    assert (pending.await_ready ());
+    assert (!initial || initial->await_ready ());
     const auto response = await_task (std::move (pending));
     assert (!response.ready);
     if (already_accepted) {
@@ -8291,6 +8295,7 @@ void verify_relocation_failure_code_classification_is_distinct ()
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
     if (argc == 2 && std::string_view (argv[1]) == "--bind-registration-terminal") {
