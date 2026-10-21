@@ -183,6 +183,7 @@
         <Compile Include="Runtime/SharedAsyncDisposalTests.cs"/>
         <Compile Include="Runtime/SubmitAdmissionRuntimeTests.cs"/>
         <Compile Include="Runtime/DirectRequestWaitCostTests.cs"/>
+        <Compile Include="Runtime/SendRequestCostTests.cs"/>
         <Compile Include="Runtime/FanoutPublishAdmissionTests.cs"/>
         <Compile Include="Runtime/BackendSocketOptionsMapperTests.cs"/>
         <Compile Include="Runtime/ChannelNoEligibleMemberTests.cs"/>
