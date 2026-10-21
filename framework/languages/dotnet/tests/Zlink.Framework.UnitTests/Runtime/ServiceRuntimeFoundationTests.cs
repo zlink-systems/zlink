@@ -2954,13 +2954,9 @@ public sealed class ServiceRuntimeFoundationTests
         );
 
         Task batchReady;
-        using (
-            var reservation = await applicationJobQueue.AcquireBatchAsync(
-                capacity,
-                CancellationToken.None,
-                ZLinkApplicationJobOrigin.Remote
-            )
-        )
+        var reservedCount = applicationJobQueue.TryReserveBatch(capacity);
+        Assert.Equal(capacity, reservedCount);
+        try
         {
             await pausedFlow.Task.WaitAsync(TimeSpan.FromSeconds(5));
             var reserved = applicationJobQueue.GetStatus();
@@ -2974,6 +2970,10 @@ public sealed class ServiceRuntimeFoundationTests
             batchReady = WaitUntilAsync(() =>
                 target.Status().PendingApplicationMessages > resumePermitCount
             );
+        }
+        finally
+        {
+            applicationJobQueue.ReleaseReserved(reservedCount);
         }
         await resumedFlow.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var resumed = applicationJobQueue.GetStatus();
