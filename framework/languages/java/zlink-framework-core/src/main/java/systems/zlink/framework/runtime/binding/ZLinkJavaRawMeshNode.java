@@ -4679,16 +4679,19 @@ final class ZLinkJavaRawMeshNode
 
     private List<Message> encodeApplicationFrames(
             byte[] header, byte[] metadata, List<Message> parts) {
-        List<Message> frames = new ArrayList<>();
+        Message headerFrame = Message.from(header);
+        Message metadataFrame = null;
+        Message bodyFrame = null;
         try {
-            frames.add(Message.from(header));
             if (metadata != null && metadata.length != 0) {
-                frames.add(Message.from(metadata));
+                metadataFrame = Message.from(metadata);
+                bodyFrame = wire.encodeFrameworkMultipartMessage(parts);
+                return List.of(headerFrame, metadataFrame, bodyFrame);
             }
-            frames.add(wire.encodeFrameworkMultipartMessage(parts));
-            return frames;
+            bodyFrame = wire.encodeFrameworkMultipartMessage(parts);
+            return List.of(headerFrame, bodyFrame);
         } catch (RuntimeException | Error failure) {
-            Message.closeAll(frames);
+            Message.closeAll(new Message[] {headerFrame, metadataFrame, bodyFrame});
             throw failure;
         }
     }
