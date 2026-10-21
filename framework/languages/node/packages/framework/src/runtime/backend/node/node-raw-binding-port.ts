@@ -133,6 +133,7 @@ class NodeRawHostPort implements ZLinkRawHostPort {
 }
 
 abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSocketPort {
+  protected readonly received = new Received();
   private readonly endpoints = new Set<string>();
   private readonly monitors = new Set<NodeRawMonitorPort>();
   private readonly eventLoopPoller: ZLinkNodeEventLoopPoller;
@@ -214,6 +215,7 @@ abstract class NodeRawSocketPort<TSocket extends Socket> implements ZLinkRawSock
     }
     this.endpoints.clear();
     try {
+      this.received.close();
       this.socket.close();
     } catch (error) {
       throw new AggregateError([error], 'Raw socket cleanup failed.');
@@ -347,7 +349,13 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
 
   receive(dontWait = false): ZLinkRawReceivedRecord | undefined {
     this.requireOpen();
-    return receiveRecord(this.socket, dontWait, this.nextRequestSequence, this.replyParts);
+    return receiveRecord(
+      this.socket,
+      this.received,
+      dontWait,
+      this.nextRequestSequence,
+      this.replyParts
+    );
   }
 }
 
@@ -392,7 +400,7 @@ class NodeRawDealerPort extends NodeRawSocketPort<DealerSocket> implements ZLink
 
   receive(dontWait = false): ZLinkRawReceivedRecord | undefined {
     this.requireOpen();
-    return receiveRecord(this.socket, dontWait);
+    return receiveRecord(this.socket, this.received, dontWait);
   }
 }
 
@@ -468,8 +476,8 @@ const EMPTY_SOURCE_ROUTE = Buffer.alloc(0);
 
 /**
  * One received binding record. The payload Buffers are the binding's own
- * `data()` storage, retained under the runtime payload policy instead of a
- * second Framework copy; closing the record releases the binding handles.
+ * `data()` storage, retained under the runtime payload policy. The socket owns
+ * the reusable binding envelope; snapshots survive its next receive or close.
  */
 class NodeRawReceivedRecord implements ZLinkRawReceivedRecord {
   readonly sourceRid: string;
@@ -478,10 +486,9 @@ class NodeRawReceivedRecord implements ZLinkRawReceivedRecord {
   readonly requestSeq?: bigint;
   readonly reply?: (parts: readonly Uint8Array[]) => void;
   readonly parts: readonly Buffer[];
-  private closed = false;
 
   constructor(
-    private readonly received: Received,
+    received: Received,
     nextRequestSequence: (() => bigint) | undefined,
     reply: RawReceivedReply | undefined
   ) {
@@ -508,21 +515,19 @@ class NodeRawReceivedRecord implements ZLinkRawReceivedRecord {
   }
 
   close(): void {
-    if (this.closed) return;
-    this.closed = true;
-    this.received.close();
+    // Reading each binding payload above retained JS-owned storage and released
+    // its native frame. Only the managed record owns these snapshots now.
   }
 }
 
 function receiveRecord(
   socket: Pick<RouterSocket | DealerSocket, 'recv'>,
+  received: Received,
   dontWait: boolean,
   nextRequestSequence?: () => bigint,
   reply?: RawReceivedReply
 ): ZLinkRawReceivedRecord | undefined {
-  const received = new Received();
   if (!socket.recv(received, dontWait ? RecvFlags.DontWait : RecvFlags.None)) {
-    received.close();
     return undefined;
   }
   try {
