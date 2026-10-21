@@ -13,6 +13,7 @@
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "runtime/streams/stream_header_encoder.hpp"
 
 #include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
@@ -576,20 +577,30 @@ runtime::messaging::message_parts_t
 encode_actor_packet (const runtime::messaging::envelope_header_t &header, zlink::message_t body)
 {
     using runtime::messaging::message_kind_t;
-    stream_header_t wire (
+    stream_header_view_t wire{
+      header.metadata,
       header.kind == message_kind_t::command ? stream_message_kind_t::send
                                              : stream_message_kind_t::request,
-      stream_codec_from_content_type (header.content_type), stream_header_flags_t::none,
+      stream_codec_from_content_type (header.content_type),
+      stream_header_flags_t::none,
       header.kind == message_kind_t::command ? std::nullopt
                                              : std::make_optional (actor_wire_request_sequence),
-      header.message_name, stream_metadata_t (header.metadata));
-    if (!header.correlation_id.empty ())
-        wire.with_correlation_id (header.correlation_id);
-    if (header.flow_id && header.flow_origin)
-        wire.with_flow (*header.flow_id, *header.flow_origin);
-    stream_runtime_t::propagate_flow (wire);
-    auto encoded = stream_runtime_t (nullptr).encode_header (wire);
-    return {zlink::message_t::from (std::move (encoded.value ())), std::move (body)};
+      header.message_name,
+      header.correlation_id.empty ()
+        ? std::nullopt
+        : std::make_optional (std::string_view (header.correlation_id)),
+      std::nullopt,
+      std::nullopt,
+      std::nullopt};
+    // Match the owning header's empty-id and incomplete-pair semantics.
+    if (header.flow_id && header.flow_origin) {
+        if (!header.flow_id->empty ())
+            wire.flow_id = *header.flow_id;
+        wire.flow_origin = header.flow_origin;
+    }
+    propagate_stream_header_flow (wire);
+    auto encoded = encode_stream_header_message (wire);
+    return {std::move (encoded.value ()), std::move (body)};
 }
 
 result_t<runtime::messaging::envelope_header_t>

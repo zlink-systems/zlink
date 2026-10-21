@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "stream_runtime.hpp"
+#include "stream_header_encoder.hpp"
 
 #include <zlink/framework/contracts/configuration/zlink_builder.hpp>
 #include <zlink/detail/stream_packet_name.hpp>
@@ -15,6 +16,9 @@
 
 #include <nlohmann/json.hpp>
 #include <algorithm>
+#include <cassert>
+#include <cstring>
+#include <span>
 #include <chrono>
 #include <cstddef>
 #include <limits>
@@ -1134,13 +1138,6 @@ result_t<void> validate_name (std::string_view name, bool allow_reserved)
     return result_t<void>::success ();
 }
 
-void append_u64 (std::vector<std::uint8_t> &bytes, std::uint64_t value)
-{
-    for (int shift = 56; shift >= 0; shift -= 8) {
-        bytes.push_back (static_cast<std::uint8_t> ((value >> shift) & 0xff));
-    }
-}
-
 void append_u16 (std::vector<std::uint8_t> &bytes, std::uint16_t value)
 {
     bytes.push_back (static_cast<std::uint8_t> ((value >> 8) & 0xff));
@@ -1163,31 +1160,58 @@ std::uint64_t read_u64 (const std::vector<std::uint8_t> &bytes, std::size_t &off
     return value;
 }
 
+stream_header_view_t borrow_header (const stream_header_t &header)
+{
+    return {header.metadata ().values (),
+            header.kind (),
+            header.codec (),
+            header.flags (),
+            header.request_seq (),
+            header.packet_name (),
+            header.correlation_id (),
+            header.flow_id (),
+            header.flow_origin (),
+            header.actor_slot ()};
+}
+// Stream writes propagate the ambient pair only while tracing is enabled;
+// control packets and headers with an explicit id preserve their fields.
+const runtime::flow_value_t *
+ambient_stream_header_flow (stream_message_kind_t kind, std::optional<std::string_view> existing_id)
+{
+    if (!existing_id && kind != stream_message_kind_t::control) {
+        if (const auto &flow = runtime::flow_context_t::current ();
+            flow && !flow->flow_id.empty ()
+            && runtime::flow_context_t::tracing (flow->diagnostics_mode))
+            return &*flow;
+    }
+    return nullptr;
+}
 } // namespace
 
 void stream_runtime_t::propagate_flow (stream_header_t &header)
 {
-    /* Stream writes propagate the ambient flow (flow-correlation §3.2);
-     * control packets never carry the pair. The diagnostics_mode re-check
-     * keeps a flow scope that was entered before a runtime flip to Off from
-     * materializing 36 bytes on the wire (flow-correlation §4). */
-    if (!header.flow_id () && header.kind () != stream_message_kind_t::control) {
-        if (const auto &flow = runtime::flow_context_t::current ();
-            flow && !flow->flow_id.empty ()
-            && runtime::flow_context_t::tracing (flow->diagnostics_mode)) {
-            header.with_flow (flow->flow_id, flow->origin);
-        }
+    if (const auto *flow = ambient_stream_header_flow (header.kind (), header.flow_id ()))
+        header.with_flow (flow->flow_id, flow->origin);
+}
+
+void propagate_stream_header_flow (stream_header_view_t &header)
+{
+    if (const auto *flow = ambient_stream_header_flow (header.kind, header.flow_id)) {
+        header.flow_id = flow->flow_id;
+        header.flow_origin = flow->origin;
     }
 }
 
-result_t<void> stream_runtime_t::validate_header (const stream_header_t &header)
+namespace
 {
-    if (!known_kind (header.kind ()) || !known_codec (header.codec ())) {
+result_t<void> validate_stream_header (const stream_header_view_t &header)
+{
+    if (!known_kind (header.kind) || !known_codec (header.codec)) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "STREAM header contains unknown kind or codec");
     }
 
-    const auto raw_flags = static_cast<std::uint8_t> (header.flags ());
+    const auto raw_flags = static_cast<std::uint8_t> (header.flags);
     constexpr auto known_flags =
       static_cast<std::uint8_t> (stream_header_flags_t::has_request_seq)
       | static_cast<std::uint8_t> (stream_header_flags_t::has_metadata)
@@ -1199,65 +1223,65 @@ result_t<void> stream_runtime_t::validate_header (const stream_header_t &header)
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "STREAM header contains unknown flags");
     }
-    if (header.flow_id ().has_value () != header.flow_origin ().has_value ()) {
+    if (header.flow_id.has_value () != header.flow_origin.has_value ()) {
         return result_t<void>::failure (
           framework_error_kind_t::protocol_error,
           "STREAM header flow id and origin must be present together");
     }
-    if (header.flow_id () && !runtime::flow_id_t::is_valid (*header.flow_id ())) {
+    if (header.flow_id && !runtime::flow_id_t::is_valid (*header.flow_id)) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "STREAM header flow id must be UUIDv7");
     }
-    if (header.flow_origin ()) {
-        const auto raw_origin = static_cast<std::uint8_t> (*header.flow_origin ());
+    if (header.flow_origin) {
+        const auto raw_origin = static_cast<std::uint8_t> (*header.flow_origin);
         if (raw_origin < 1 || raw_origin > 4) {
             return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                             "STREAM header flow origin is invalid");
         }
-        if (header.kind () == stream_message_kind_t::control) {
+        if (header.kind == stream_message_kind_t::control) {
             return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                             "STREAM control packet must not carry flow fields");
         }
     }
-    if (header.actor_slot () && *header.actor_slot () == 0) {
+    if (header.actor_slot && *header.actor_slot == 0) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "STREAM actor slot must not be zero");
     }
 
-    const bool is_reply = header.kind () == stream_message_kind_t::response
-                          || header.kind () == stream_message_kind_t::error;
+    const bool is_reply =
+      header.kind == stream_message_kind_t::response || header.kind == stream_message_kind_t::error;
     if (!is_reply) {
-        if (auto valid_name = validate_name (header.packet_name (),
-                                             header.kind () == stream_message_kind_t::control);
+        if (auto valid_name =
+              validate_name (header.packet_name, header.kind == stream_message_kind_t::control);
             !valid_name) {
             return valid_name;
         }
     }
 
-    const bool has_request_seq = header.request_seq ().has_value ();
-    const bool has_metadata = !header.metadata ().empty ();
-    if (header.kind () == stream_message_kind_t::send && has_request_seq) {
+    const bool has_request_seq = header.request_seq.has_value ();
+    const bool has_metadata = !header.metadata.empty ();
+    if (header.kind == stream_message_kind_t::send && has_request_seq) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "STREAM send packet must not contain request sequence");
     }
-    if ((header.kind () == stream_message_kind_t::request
-         || header.kind () == stream_message_kind_t::response)
+    if ((header.kind == stream_message_kind_t::request
+         || header.kind == stream_message_kind_t::response)
         && !has_request_seq) {
         return result_t<void>::failure (
           framework_error_kind_t::protocol_error,
           "STREAM request and response packets require request sequence");
     }
-    if (has_request_seq && *header.request_seq () == 0) {
+    if (has_request_seq && *header.request_seq == 0) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "STREAM request sequence must not be zero");
     }
-    if (header.kind () == stream_message_kind_t::error && header.codec () != stream_codec_t::json) {
+    if (header.kind == stream_message_kind_t::error && header.codec != stream_codec_t::json) {
         return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                         "STREAM error packet must use JSON codec");
     }
-    if (header.kind () == stream_message_kind_t::control) {
-        if (header.flags () != stream_header_flags_t::none || header.codec () != stream_codec_t::raw
-            || has_request_seq || has_metadata || header.actor_slot ()) {
+    if (header.kind == stream_message_kind_t::control) {
+        if (header.flags != stream_header_flags_t::none || header.codec != stream_codec_t::raw
+            || has_request_seq || has_metadata || header.actor_slot) {
             return result_t<void>::failure (framework_error_kind_t::protocol_error,
                                             "STREAM control packet must be raw and flagless");
         }
@@ -1265,97 +1289,157 @@ result_t<void> stream_runtime_t::validate_header (const stream_header_t &header)
     return result_t<void>::success ();
 }
 
+} // namespace
+
+result_t<void> stream_runtime_t::validate_header (const stream_header_t &header)
+{
+    return validate_stream_header (borrow_header (header));
+}
+
+namespace
+{
+struct stream_header_layout_t
+{
+    std::size_t size;
+    std::uint16_t metadata_size;
+    stream_header_flags_t flags;
+};
+
+result_t<stream_header_layout_t> measure_header (const stream_header_view_t &header)
+{
+    using layout_result_t = result_t<stream_header_layout_t>;
+    if ((header.kind == stream_message_kind_t::response
+         || header.kind == stream_message_kind_t::error)
+        && !header.packet_name.empty ()) {
+        return layout_result_t::failure (framework_error_kind_t::protocol_error,
+                                         "STREAM response and error packet names must be empty");
+    }
+    if (auto valid = validate_stream_header (header); !valid)
+        return layout_result_t::failure (valid.error_kind (), valid.error ()->what ());
+    auto flags = header.flags;
+    if (header.request_seq)
+        flags = flags | stream_header_flags_t::has_request_seq;
+    if (!header.metadata.empty ())
+        flags = flags | stream_header_flags_t::has_metadata;
+    if (header.correlation_id)
+        flags = flags | stream_header_flags_t::has_correlation_id;
+    if (header.correlation_id
+        && header.correlation_id->size () > std::numeric_limits<std::uint8_t>::max ()) {
+        return layout_result_t::failure (framework_error_kind_t::protocol_error,
+                                         "STREAM correlation id is too large");
+    }
+    if (header.flow_id)
+        flags = flags | stream_header_flags_t::has_flow_id;
+    if (header.actor_slot)
+        flags = flags | stream_header_flags_t::has_actor_slot;
+    std::size_t metadata_size = 0;
+    if (!header.metadata.empty ()) {
+        if (header.metadata.size () > std::numeric_limits<std::uint8_t>::max ())
+            return layout_result_t::failure (framework_error_kind_t::protocol_error,
+                                             "STREAM metadata item count is too large");
+        metadata_size = sizeof (std::uint8_t);
+        for (const auto &[key, value] : header.metadata) {
+            if (key.empty () || key.size () > std::numeric_limits<std::uint8_t>::max ()
+                || value.size () > std::numeric_limits<std::uint16_t>::max ())
+                return layout_result_t::failure (framework_error_kind_t::protocol_error,
+                                                 "STREAM metadata key or value is too large");
+            metadata_size +=
+              sizeof (std::uint8_t) + key.size () + sizeof (std::uint16_t) + value.size ();
+        }
+        if (metadata_size > std::numeric_limits<std::uint16_t>::max ())
+            return layout_result_t::failure (framework_error_kind_t::protocol_error,
+                                             "STREAM metadata is too large");
+    }
+    // Marker, kind, codec, flags and packet-name length precede variable fields.
+    const auto size =
+      sizeof (runtime::flow_id_t::format_marker) + sizeof (header.kind) + sizeof (header.codec)
+      + sizeof (header.flags) + sizeof (std::uint8_t)
+      + (header.request_seq ? sizeof (std::uint64_t) : 0) + header.packet_name.size ()
+      + (metadata_size ? sizeof (std::uint16_t) + metadata_size : 0)
+      + (header.correlation_id ? sizeof (std::uint8_t) + header.correlation_id->size () : 0)
+      + (header.flow_id ? header.flow_id->size () + sizeof (std::uint8_t) : 0)
+      + (header.actor_slot ? sizeof (std::uint16_t) : 0);
+    if (size > std::numeric_limits<std::uint16_t>::max ())
+        return layout_result_t::failure (framework_error_kind_t::protocol_error,
+                                         "STREAM encoded header exceeds its 16-bit wire length");
+    return layout_result_t::success ({size, static_cast<std::uint16_t> (metadata_size), flags});
+}
+
+void write_header (const stream_header_view_t &header,
+                   const stream_header_layout_t &layout,
+                   std::span<std::byte> output)
+{
+    std::size_t offset = 0;
+    const auto byte = [&] (std::uint8_t value) {
+        output[offset++] = static_cast<std::byte> (value);
+    };
+    const auto integer = [&] (std::uint64_t value, unsigned width) {
+        for (unsigned index = width; index != 0; --index)
+            byte (static_cast<std::uint8_t> (
+              value >> ((index - 1) * std::numeric_limits<std::uint8_t>::digits)));
+    };
+    const auto text = [&] (std::string_view value) {
+        if (!value.empty ())
+            std::memcpy (output.data () + offset, value.data (), value.size ());
+        offset += value.size ();
+    };
+    byte (runtime::flow_id_t::format_marker);
+    byte (static_cast<std::uint8_t> (header.kind));
+    byte (static_cast<std::uint8_t> (header.codec));
+    byte (static_cast<std::uint8_t> (layout.flags));
+    if (header.request_seq)
+        integer (*header.request_seq, sizeof (std::uint64_t));
+    byte (static_cast<std::uint8_t> (header.packet_name.size ()));
+    text (header.packet_name);
+    if (!header.metadata.empty ()) {
+        integer (layout.metadata_size, sizeof (std::uint16_t));
+        byte (static_cast<std::uint8_t> (header.metadata.size ()));
+        for (const auto &[key, value] : header.metadata) {
+            byte (static_cast<std::uint8_t> (key.size ()));
+            text (key);
+            integer (value.size (), sizeof (std::uint16_t));
+            text (value);
+        }
+    }
+    if (header.correlation_id) {
+        byte (static_cast<std::uint8_t> (header.correlation_id->size ()));
+        text (*header.correlation_id);
+    }
+    if (header.flow_id) {
+        text (*header.flow_id);
+        byte (static_cast<std::uint8_t> (*header.flow_origin));
+    }
+    if (header.actor_slot)
+        integer (*header.actor_slot, sizeof (std::uint16_t));
+    assert (offset == output.size ());
+}
+} // namespace
+
 result_t<std::vector<std::uint8_t>>
 stream_runtime_t::encode_header (const stream_header_t &header) const
 {
-    if ((header.kind () == stream_message_kind_t::response
-         || header.kind () == stream_message_kind_t::error)
-        && !header.packet_name ().empty ()) {
-        return result_t<std::vector<std::uint8_t>>::failure (
-          framework_error_kind_t::protocol_error,
-          "STREAM response and error packet names must be empty");
-    }
-    if (auto valid = validate_header (header); !valid) {
-        return result_t<std::vector<std::uint8_t>>::failure (valid.error_kind (),
-                                                             valid.error ()->what ());
-    }
-
-    auto flags = header.flags ();
-    if (header.request_seq ()) {
-        flags = flags | stream_header_flags_t::has_request_seq;
-    }
-    if (!header.metadata ().empty ()) {
-        flags = flags | stream_header_flags_t::has_metadata;
-    }
-    const auto correlation = header.correlation_id ();
-    if (correlation) {
-        flags = flags | stream_header_flags_t::has_correlation_id;
-    }
-    if (correlation && correlation->size () > std::numeric_limits<std::uint8_t>::max ()) {
-        return result_t<std::vector<std::uint8_t>>::failure (framework_error_kind_t::protocol_error,
-                                                             "STREAM correlation id is too large");
-    }
-    const auto flow = header.flow_id ();
-    if (flow) {
-        flags = flags | stream_header_flags_t::has_flow_id;
-    }
-    if (header.actor_slot ()) {
-        flags = flags | stream_header_flags_t::has_actor_slot;
-    }
-
-    std::vector<std::uint8_t> bytes;
-    bytes.push_back (runtime::flow_id_t::format_marker);
-    bytes.push_back (static_cast<std::uint8_t> (header.kind ()));
-    bytes.push_back (static_cast<std::uint8_t> (header.codec ()));
-    bytes.push_back (static_cast<std::uint8_t> (flags));
-    if (header.request_seq ()) {
-        append_u64 (bytes, *header.request_seq ());
-    }
-    bytes.push_back (static_cast<std::uint8_t> (header.packet_name ().size ()));
-    bytes.insert (bytes.end (), header.packet_name ().begin (), header.packet_name ().end ());
-    if (!header.metadata ().empty ()) {
-        if (header.metadata ().values ().size () > std::numeric_limits<std::uint8_t>::max ()) {
-            return result_t<std::vector<std::uint8_t>>::failure (
-              framework_error_kind_t::protocol_error, "STREAM metadata item count is too large");
-        }
-        std::vector<std::uint8_t> metadata_bytes;
-        metadata_bytes.push_back (static_cast<std::uint8_t> (header.metadata ().values ().size ()));
-        for (const auto &[key, value] : header.metadata ().values ()) {
-            if (key.empty () || key.size () > std::numeric_limits<std::uint8_t>::max ()
-                || value.size () > std::numeric_limits<std::uint16_t>::max ()) {
-                return result_t<std::vector<std::uint8_t>>::failure (
-                  framework_error_kind_t::protocol_error,
-                  "STREAM metadata key or value is too large");
-            }
-            metadata_bytes.push_back (static_cast<std::uint8_t> (key.size ()));
-            metadata_bytes.insert (metadata_bytes.end (), key.begin (), key.end ());
-            append_u16 (metadata_bytes, static_cast<std::uint16_t> (value.size ()));
-            metadata_bytes.insert (metadata_bytes.end (), value.begin (), value.end ());
-        }
-        if (metadata_bytes.size () > std::numeric_limits<std::uint16_t>::max ()) {
-            return result_t<std::vector<std::uint8_t>>::failure (
-              framework_error_kind_t::protocol_error, "STREAM metadata is too large");
-        }
-        append_u16 (bytes, static_cast<std::uint16_t> (metadata_bytes.size ()));
-        bytes.insert (bytes.end (), metadata_bytes.begin (), metadata_bytes.end ());
-    }
-    if (correlation) {
-        bytes.push_back (static_cast<std::uint8_t> (correlation->size ()));
-        bytes.insert (bytes.end (), correlation->begin (), correlation->end ());
-    }
-    if (flow) {
-        bytes.insert (bytes.end (), flow->begin (), flow->end ());
-        bytes.push_back (static_cast<std::uint8_t> (*header.flow_origin ()));
-    }
-    if (header.actor_slot ()) {
-        append_u16 (bytes, *header.actor_slot ());
-    }
-    if (bytes.size () > std::numeric_limits<std::uint16_t>::max ()) {
-        return result_t<std::vector<std::uint8_t>>::failure (
-          framework_error_kind_t::protocol_error,
-          "STREAM encoded header exceeds its 16-bit wire length");
-    }
+    const auto view = borrow_header (header);
+    const auto layout = measure_header (view);
+    if (!layout)
+        return result_t<std::vector<std::uint8_t>>::failure (layout.error_kind (),
+                                                             layout.error ()->what ());
+    std::vector<std::uint8_t> bytes (layout.value ().size);
+    write_header (view, layout.value (), std::as_writable_bytes (std::span (bytes)));
     return result_t<std::vector<std::uint8_t>>::success (std::move (bytes));
+}
+
+result_t<zlink::message_t> encode_stream_header_message (const stream_header_view_t &header)
+{
+    const auto layout = measure_header (header);
+    if (!layout)
+        return result_t<zlink::message_t>::failure (layout.error_kind (), layout.error ()->what ());
+    zlink::message_t message (layout.value ().size);
+    // message_t::from historically returns an invalid message on allocation
+    // failure. Preserve that result without accessing its absent storage.
+    if (message.valid ())
+        write_header (header, layout.value (),
+                      std::span<std::byte> (message.data (), layout.value ().size));
+    return result_t<zlink::message_t>::success (std::move (message));
 }
 
 result_t<void> stream_runtime_t::validate_frame_representation (std::size_t header_size,
