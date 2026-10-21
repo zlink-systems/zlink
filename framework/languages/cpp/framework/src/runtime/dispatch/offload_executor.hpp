@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <functional>
 #include <mutex>
+#include <memory>
 #include <optional>
 #include <queue>
 #include <string>
@@ -19,6 +20,25 @@ namespace zlink::framework::runtime
 class offload_executor_t
 {
   public:
+    class role_t
+    {
+      public:
+        virtual ~role_t () = default;
+        // Returns true after transferring the receive role.
+        // Exceptions preserve the dedicated receive thread's terminate policy.
+        virtual bool run_until_handoff () = 0;
+    };
+
+    template <typename Work> static void run_application_turn (Work &&work) noexcept
+    {
+        try {
+            work ();
+        }
+        catch (...) {
+            // The application owner converts failures into task completions.
+        }
+    }
+
     explicit offload_executor_t (std::size_t worker_count = 1,
                                  std::string thread_name = "zlink-offload");
     offload_executor_t (std::size_t min_worker_count,
@@ -35,6 +55,12 @@ class offload_executor_t
     // Internal scheduling retains its separate entry point because shutdown
     // handling differs from public worker submission.
     virtual bool try_submit_internal (std::function<void ()> work);
+    // Initial placement uses the workers already created by the constructor.
+    bool start_role (std::shared_ptr<role_t> role);
+    // Only the current holder calls this, at a receive rotation boundary.
+    bool try_assign_role (std::shared_ptr<role_t> role);
+    // Seals submission and drains application work while receive roles keep progressing.
+    void drain_application ();
     void submit (std::function<void ()> work);
     void request_stop () noexcept;
     void drain ();
@@ -46,6 +72,8 @@ class offload_executor_t
     std::size_t owned_thread_count () const;
 
   private:
+    friend struct offload_executor_test_access_t;
+
     struct work_item_t
     {
         std::function<void (std::stop_token)> work;
@@ -61,6 +89,7 @@ class offload_executor_t
     std::condition_variable _ready;
     std::condition_variable _empty;
     std::queue<work_item_t> _queue;
+    std::queue<std::shared_ptr<role_t>> _roles;
     // [0, _live_workers) run worker_loop; the rest have returned.
     std::vector<std::thread> _workers;
     std::vector<std::stop_source *> _active_cancellations;
@@ -70,6 +99,7 @@ class offload_executor_t
     std::string _thread_name;
     bool _stopping = false;
     std::size_t _active = 0;
+    std::size_t _role_active = 0;
     std::size_t _live_workers = 0;
     std::size_t _idle_workers = 0;
 };

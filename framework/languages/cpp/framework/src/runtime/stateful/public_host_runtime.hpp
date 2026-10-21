@@ -1260,6 +1260,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     runtime::offload_executor_t _peer_endpoint_lane_executor;
     runtime::state_lane_t _peer_endpoint_lane{_peer_endpoint_lane_executor};
     std::atomic<std::uint64_t> _next_operation{1};
+    std::unique_ptr<completion_owner_t> _completion_owner;
     bool _started = false;
     bool _closing = false;
 };
