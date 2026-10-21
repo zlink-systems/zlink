@@ -182,6 +182,78 @@ TEST (ActorHeaderAllocations, SharedValidationRejectsMalformedFields)
     }
 }
 
+// The pre-change public-accessor body is the timing baseline; both variants
+// remain indirect calls so the benchmark cannot inline away that baseline.
+void original_accessor_flow (detail::stream_header_t &header)
+{
+    if (!header.flow_id () && header.kind () != detail::stream_message_kind_t::control) {
+        if (const auto &flow = fw::runtime::flow_context_t::current ();
+            flow && !flow->flow_id.empty ()
+            && fw::runtime::flow_context_t::tracing (flow->diagnostics_mode))
+            header.with_flow (flow->flow_id, flow->origin);
+    }
+}
+
+TEST (ActorHeaderAllocations, OwningFlowAlternatingBenchmark)
+{
+    if (!std::getenv ("ZLINK_STREAM_FLOW_BENCH"))
+        GTEST_SKIP () << "Set ZLINK_STREAM_FLOW_BENCH=1 for public STREAM flow timing";
+    std::uint64_t checksum = 0;
+    constexpr std::size_t iterations = 1000000;
+    for (const bool ambient_off : {false, true}) {
+        std::optional<fw::runtime::flow_value_t> ambient;
+        if (ambient_off)
+            ambient.emplace (fw::runtime::flow_value_t{
+              "01960000-0000-7000-8000-000000000002", fw::flow_origin_t::inbound,
+              fw::message_flow_log_mode_t::off, std::nullopt});
+        fw::runtime::flow_context_t::scope_t scope (std::move (ambient));
+        detail::stream_header_t header (detail::stream_message_kind_t::send,
+                                        fw::stream_codec_t::json,
+                                        detail::stream_header_flags_t::none, std::nullopt, "ping");
+        const auto run = [&] (bool legacy, std::size_t count) {
+            using propagation_t = void (*) (detail::stream_header_t &);
+            propagation_t volatile propagate =
+              legacy ? &original_accessor_flow : &detail::stream_runtime_t::propagate_flow;
+            const auto start = std::chrono::steady_clock::now ();
+            for (std::size_t index = 0; index < count; ++index)
+                propagate (header);
+            const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds> (
+                                   std::chrono::steady_clock::now () - start)
+                                   .count ();
+            checksum += header.packet_name ().size () + count;
+            return static_cast<double> (elapsed) / static_cast<double> (count);
+        };
+        (void) run (true, 20000);
+        (void) run (false, 20000);
+        std::array<double, 9> original{}, actual{};
+        for (std::size_t pair = 0; pair < original.size (); ++pair) {
+            if (pair % 2 == 0) {
+                original[pair] = run (true, iterations);
+                actual[pair] = run (false, iterations);
+            } else {
+                actual[pair] = run (false, iterations);
+                original[pair] = run (true, iterations);
+            }
+            std::cout << "stream_flow_pair ambient_off=" << ambient_off << " pair=" << pair
+                      << " A_ns=" << original[pair] << " B_ns=" << actual[pair] << '\n';
+        }
+        std::sort (original.begin (), original.end ());
+        std::sort (actual.begin (), actual.end ());
+        const auto original_allocations =
+          count_allocations ([&] { original_accessor_flow (header); });
+        const auto actual_allocations =
+          count_allocations ([&] { detail::stream_runtime_t::propagate_flow (header); });
+        EXPECT_EQ (original_allocations, 0u);
+        EXPECT_EQ (actual_allocations, 0u);
+        std::cout << "stream_flow_summary ambient_off=" << ambient_off << " A_ns=" << original[4]
+                  << " B_ns=" << actual[4] << " B_over_A=" << actual[4] / original[4]
+                  << " A_new=" << original_allocations << " B_new=" << actual_allocations << '\n';
+        EXPECT_FALSE (header.flow_id ());
+    }
+    std::cout << "stream_flow_checksum=" << checksum << '\n';
+    EXPECT_NE (checksum, 0u);
+}
+
 TEST (ActorHeaderAllocations, AlternatingBenchmark)
 {
     if (!std::getenv ("ZLINK_ACTOR_HEADER_BENCH"))

@@ -1173,29 +1173,32 @@ stream_header_view_t borrow_header (const stream_header_t &header)
             header.flow_origin (),
             header.actor_slot ()};
 }
+// Stream writes propagate the ambient pair only while tracing is enabled;
+// control packets and headers with an explicit id preserve their fields.
+const runtime::flow_value_t *
+ambient_stream_header_flow (stream_message_kind_t kind, std::optional<std::string_view> existing_id)
+{
+    if (!existing_id && kind != stream_message_kind_t::control) {
+        if (const auto &flow = runtime::flow_context_t::current ();
+            flow && !flow->flow_id.empty ()
+            && runtime::flow_context_t::tracing (flow->diagnostics_mode))
+            return &*flow;
+    }
+    return nullptr;
+}
 } // namespace
 
 void stream_runtime_t::propagate_flow (stream_header_t &header)
 {
-    auto view = borrow_header (header);
-    propagate_stream_header_flow (view);
-    if (!header.flow_id () && view.flow_id)
-        header.with_flow (std::string (*view.flow_id), *view.flow_origin);
+    if (const auto *flow = ambient_stream_header_flow (header.kind (), header.flow_id ()))
+        header.with_flow (flow->flow_id, flow->origin);
 }
 
 void propagate_stream_header_flow (stream_header_view_t &header)
 {
-    /* Stream writes propagate the ambient flow (flow-correlation §3.2);
-     * control packets never carry the pair. The diagnostics_mode re-check
-     * keeps a flow scope that was entered before a runtime flip to Off from
-     * materializing 36 bytes on the wire (flow-correlation §4). */
-    if (!header.flow_id && header.kind != stream_message_kind_t::control) {
-        if (const auto &flow = runtime::flow_context_t::current ();
-            flow && !flow->flow_id.empty ()
-            && runtime::flow_context_t::tracing (flow->diagnostics_mode)) {
-            header.flow_id = flow->flow_id;
-            header.flow_origin = flow->origin;
-        }
+    if (const auto *flow = ambient_stream_header_flow (header.kind, header.flow_id)) {
+        header.flow_id = flow->flow_id;
+        header.flow_origin = flow->origin;
     }
 }
 
