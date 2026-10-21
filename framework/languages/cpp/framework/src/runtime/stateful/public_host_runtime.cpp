@@ -7604,7 +7604,7 @@ task_t<std::size_t> public_host_runtime_t::continue_application_claim (
 
 task_t<bool> public_host_runtime_t::dispatch_application_owner (
   std::string owner,
-  const std::function<void (
+  std::function<void (
     const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
   std::function<void ()> started,
   std::function<void ()> rejected)
@@ -7618,7 +7618,7 @@ task_t<bool> public_host_runtime_t::dispatch_application_owner (
         for (std::size_t index = 0; index < claim->records.size (); ++index)
             started ();
         auto operation = std::make_shared<application_claim_owner_t> (
-          std::move (*claim), weak_from_this (), dispatch, std::move (rejected));
+          std::move (*claim), weak_from_this (), std::move (dispatch), std::move (rejected));
         auto result = dispatch_application_claim (operation);
         if (std::holds_alternative<std::size_t> (result))
             return task_t<bool> (result_t<bool>::success (true));

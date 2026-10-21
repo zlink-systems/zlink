@@ -7,6 +7,7 @@
 #include "runtime_failure_fixture.hpp"
 
 #include <atomic>
+#include <array>
 #include <cstdint>
 #include <iostream>
 #include <stdexcept>
@@ -124,7 +125,7 @@ auto ownership_baseline ()
         require (completed.result ().value (), "result calibration failed");
     });
 }
-bool verify_cost (host::public_host_runtime_t &target, bool channel)
+bool verify_cost (host::public_host_runtime_t &target, bool channel, bool owning_callback = false)
 {
     mesh::service_mailbox_t mailbox;
     enqueue (mailbox, false, channel);
@@ -135,8 +136,6 @@ bool verify_cost (host::public_host_runtime_t &target, bool channel)
         require (mailbox.release (*claim), "baseline release failed");
     });
     const auto ownership = ownership_baseline ();
-    const auto limit_count = claim_cost.count + ownership.count;
-    const auto limit_bytes = claim_cost.bytes + ownership.bytes;
     struct observation_t
     {
         std::size_t calls = 0, starts = 0, rejects = 0;
@@ -145,7 +144,7 @@ bool verify_cost (host::public_host_runtime_t &target, bool channel)
         std::shared_ptr<int> injected;
         std::thread::id caller = std::this_thread::get_id ();
     } state{.channel = channel};
-    const dispatch_t callback = [&state] (const auto &, const auto &record, auto) {
+    const dispatch_t invoke = [&state] (const auto &, const auto &record, auto) {
         require (std::this_thread::get_id () == state.caller,
                  "ordinary claim left the allocation measurement thread");
         ++state.calls;
@@ -156,6 +155,21 @@ bool verify_cost (host::public_host_runtime_t &target, bool channel)
         if (state.inject)
             state.injected = std::make_shared<int> (1);
     };
+    // A real drain callback may own heap storage. Permit exactly the API's
+    // input copy; moving that argument into the claim must not clone it again.
+    const dispatch_t callback =
+      owning_callback ? dispatch_t ([invoke, padding = std::array<std::uint64_t, 8>{}] (
+                                      const auto &ready, const auto &record, auto parts) {
+          require (padding.front () == 0, "callback capture changed");
+          invoke (ready, record, std::move (parts));
+      })
+                      : invoke;
+    const auto input_copy = tests::measure_allocations ([&] {
+        const auto copy = callback;
+        require (static_cast<bool> (copy), "callback copy calibration failed");
+    });
+    const auto limit_count = claim_cost.count + ownership.count + input_copy.count;
+    const auto limit_bytes = claim_cost.bytes + ownership.bytes + input_copy.bytes;
     const std::function<void ()> started = [&state] { ++state.starts; };
     const std::function<void ()> rejected = [&state] { ++state.rejects; };
     const auto measure = [&] {
@@ -168,17 +182,17 @@ bool verify_cost (host::public_host_runtime_t &target, bool channel)
         });
     };
     const auto actual = measure ();
-    std::cout << "ordinary-claim channel=" << channel << " count=" << actual.count
-              << " bytes=" << actual.bytes << " limit-count=" << limit_count
-              << " limit-bytes=" << limit_bytes << std::endl;
+    std::cout << "ordinary-claim channel=" << channel << " owning=" << owning_callback
+              << " count=" << actual.count << " bytes=" << actual.bytes
+              << " limit-count=" << limit_count << " limit-bytes=" << limit_bytes << std::endl;
     require (state.calls == 1 && state.starts == 1 && state.rejects == 0,
              "ordinary claim accounting changed");
     require (target.transport ().mailbox ().pending_messages (domain) == 0,
              "claim was not returned");
     state.inject = true;
     const auto bad = measure ();
-    std::cout << "injected-claim channel=" << channel << " count=" << bad.count
-              << " bytes=" << bad.bytes << std::endl;
+    std::cout << "injected-claim channel=" << channel << " owning=" << owning_callback
+              << " count=" << bad.count << " bytes=" << bad.bytes << std::endl;
     require (bad.count > limit_count && bad.bytes > limit_bytes,
              "allocation guard accepted injected ownership cost");
     return actual.count <= limit_count && actual.bytes <= limit_bytes;
@@ -426,7 +440,9 @@ int main ()
         verify_suspended_actor (true);
         const auto node_cost = verify_cost (*target, false);
         const auto channel_cost = verify_cost (*target, true);
-        require (node_cost && channel_cost,
+        const auto owning_node_cost = verify_cost (*target, false, true);
+        const auto owning_channel_cost = verify_cost (*target, true, true);
+        require (node_cost && channel_cost && owning_node_cost && owning_channel_cost,
                  "ordinary claim exceeded synchronous ownership count/byte bounds");
         target->close ();
         return 0;
