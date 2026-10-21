@@ -516,7 +516,8 @@ class NodeRawReceivedRecord implements ZLinkRawReceivedRecord {
 
   close(): void {
     // Reading each binding payload above retained JS-owned storage and released
-    // its native frame. Only the managed record owns these snapshots now.
+    // its native frame. The socket clears its reusable envelope; these record
+    // snapshots need no native cleanup.
   }
 }
 
