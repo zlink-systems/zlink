@@ -7,6 +7,11 @@
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
+#include "runtime/mesh/mesh_node_host_service.hpp"
+#include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/stateful/accepted_actor_record.hpp"
+#include "runtime/stateful/public_store_adapters.hpp"
 #include "runtime/streams/stream_runtime.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
@@ -111,6 +116,11 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
     auto &events = events_state->events;
     const auto owner_rid = zlink::routing_id_t::from ("seal-relay-owner");
     auto app = app_t::create ();
+    app.logging ()
+      .use_file (close_owner       ? "seal-retention-close.flow"
+                 : request_timeout ? "seal-retention-request.flow"
+                                   : "seal-retention-one-way.flow")
+      .set_min_level (log_level_t::debug);
     app.set_message_flow_mode (message_flow_log_mode_t::normal);
     app.add_zlink_framework ([&] (zlink_framework_options_t &options) {
         options.add_route_mesh ("seal-relay-mesh")
@@ -223,14 +233,29 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         EXPECT_TRUE (sessions.close (connection));
     else
         EXPECT_EQ (sessions.abort_barrier (seal.barrier), stateful::stateful_error_t::none);
+    const auto expect_source_accepted_twice = [&] (std::chrono::steady_clock::time_point deadline) {
+        // A drop precedes the drain's final lane turn that releases the seal.
+        while (sessions.remote_route_sealed (actor_object.key)
+               && std::chrono::steady_clock::now () < deadline)
+            std::this_thread::yield ();
+        ASSERT_FALSE (sessions.remote_route_sealed (actor_object.key));
+        const auto observed = sessions.seal_remote_route (
+          connection.connection_id, binding.binding_generation, actor_object.key,
+          actor_object.object_generation, binding.owner_lease_generation);
+        ASSERT_EQ (observed.error, stateful::stateful_error_t::none);
+        EXPECT_EQ (observed.last_accepted_sequence, 2u);
+        EXPECT_TRUE (sessions.remote_route_seal_ready (observed.barrier));
+        EXPECT_EQ (sessions.abort_barrier (observed.barrier), stateful::stateful_error_t::none);
+    };
     ASSERT_EQ (completed.wait_for (2s), std::future_status::ready);
     const auto terminal = completed.get ();
     if (request_timeout) {
         EXPECT_FALSE (terminal);
         EXPECT_EQ (terminal.error_kind (), framework_error_kind_t::deadline_exceeded);
         EXPECT_EQ (native->pending_operation_count (), 0u);
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
         std::unique_lock lock (events_mutex);
-        ASSERT_TRUE (events_changed.wait_for (lock, 2s, [&] {
+        ASSERT_TRUE (events_changed.wait_until (lock, deadline, [&] {
             return std::any_of (events.begin (), events.end (), [] (const auto &event) {
                 return event.packet_name == "AfterExpired"
                        && event.outcome == message_flow_outcome_t::dropped;
@@ -238,15 +263,15 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         }));
         lock.unlock ();
         ASSERT_TRUE (gateway.bound_session_route_async (actor).result ().value ());
-        EXPECT_EQ (gateway.bound_session_route_async (actor).result ().value ()->session_sequence,
-                   2u);
+        expect_source_accepted_twice (deadline);
         EXPECT_EQ (native->pending_operation_count (), 0u);
     } else {
         EXPECT_TRUE (terminal) << "delivery failure must not change accepted caller completion";
     }
     if (other_bound) {
+        const auto deadline = std::chrono::steady_clock::now () + 2s;
         std::unique_lock lock (events_mutex);
-        ASSERT_TRUE (events_changed.wait_for (lock, 2s, [&] {
+        ASSERT_TRUE (events_changed.wait_until (lock, deadline, [&] {
             return std::count_if (events.begin (), events.end (),
                                   [] (const auto &event) {
                                       return event.outcome == message_flow_outcome_t::dropped
@@ -263,8 +288,7 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         }
         lock.unlock ();
         EXPECT_TRUE (sessions.remote_route_sealed ("seal-other-actor"));
-        EXPECT_EQ (gateway.bound_session_route_async (actor).result ().value ()->session_sequence,
-                   2u);
+        expect_source_accepted_twice (deadline);
         ASSERT_EQ (sessions.abort_barrier (other_barrier), stateful::stateful_error_t::none);
         lock.lock ();
         ASSERT_TRUE (events_changed.wait_for (lock, 2s, [&] {
@@ -337,12 +361,12 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
       "entry",
       {"player"}});
     target->configure_stateful_dispatch (
-      [] (const stateful::accepted_record_authority_query_t &query)
-        -> std::optional<stateful::accepted_record_authority_t> {
-          return stateful::accepted_record_authority_t{{"seal-wire-source-owner", 17,
-                                                        query.source_node_routing_id,
-                                                        query.source_node_generation},
-                                                       37};
+      [] (stateful::accepted_record_authority_query_t query)
+        -> zlink::framework::task_t<std::optional<stateful::accepted_record_authority_t>> {
+          co_return stateful::accepted_record_authority_t{{"seal-wire-source-owner", 17,
+                                                           query.source_node_routing_id,
+                                                           query.source_node_generation},
+                                                          37};
       });
     target->start ();
     const auto target_status = target->status ();
@@ -452,12 +476,25 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
 
 TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_same_correlation)
 {
+    namespace host = runtime::host;
+    namespace protocol = runtime::protocol;
+    runtime::in_memory_location_repository_t authority_repository;
+    const auto target_owner =
+      std::get<owner_lease_claimed_t> (
+        authority_repository.claim_owner_lease ("seal-dedup-target-owner", 30s).result ().value ())
+        .token;
+    logging_builder_t logging;
+    logging.use_file ("session-native.flow").set_min_level (log_level_t::debug);
     auto source_state = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::mesh_node_builder_state_t> ("seal-dedup-mesh");
     source_state->core_context = std::make_shared<zlink::context_t> ();
     source_state->listen_endpoint = "tcp://127.0.0.1:0";
     source_state->routing_id = zlink::routing_id_t::from ("seal-dedup-owner");
     auto node = source_state->spot_state;
+    node->snapshot.actor_types.push_back ("player");
+    node->dispatch.message_flow (message_flow_log_mode_t::detailed);
+    dispatch_options_access_t::set_logger (node->dispatch,
+                                           logging.create_logger ("session-native"));
     node->worker_executor = std::make_shared<runtime::offload_executor_t> (1, "seal-dedup-worker");
     serializer_registry_t serializers;
     node->channel_runtime =
@@ -508,7 +545,125 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
     services.add_singleton<serializer_registry_t> ();
     node->root_services = services.build_provider ();
     mesh_node_runtime_t source (source_state);
+    source.configure_stateful_dispatch (
+      [target_owner] (stateful::accepted_record_authority_query_t query)
+        -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          co_return stateful::accepted_record_authority_t{
+            {"seal-dedup-source-owner", 17, query.source_node_routing_id,
+             query.source_node_generation},
+            static_cast<std::uint64_t> (target_owner.lease_generation)};
+      });
     source.start ();
+    const auto native_actor = source.create_actor ("player", "seal-dedup-actor", {}, 2s);
+    ASSERT_EQ (native_actor.ref ().object_generation (), actor.object_generation ());
+    const auto native_object = source.native_node ().resolve_actor (native_actor.ref ());
+    ASSERT_TRUE (native_object);
+    spot_node_runtime_t spots (node);
+    spots.record_actor_spot (actor, spot->spot_id);
+    const auto status = source.status ();
+    const auto published =
+      authority_repository
+        .update_mesh_node (
+          mesh_node_descriptor_t{
+            .mesh_name = "seal-dedup-mesh",
+            .rid = status.routing_id (),
+            .lifecycle_generation = status.lifecycle_generation (),
+            .descriptor_revision = 1,
+            .endpoint = status.local_endpoint (),
+            .application_version = 1,
+            .object_capabilities = {{.object_kind = placement_object_kind_t::actor,
+                                     .stable_type = "player"}},
+            .object_role = object_role_t::server,
+            .capacity = {.actors = {.limit = 1}},
+            .state = framework_runtime_state_t::serving,
+            .security_identity = "seal-dedup-fixture",
+            .owner_id = target_owner.owner_id,
+            .lease_generation = target_owner.lease_generation},
+          location_write_intent_t::new_claim)
+        .result ()
+        .value ();
+    ASSERT_EQ (published.status, location_write_status_t::stored);
+    const object_creation_key_t authority_key{placement_object_kind_t::actor,
+                                              std::string (actor.actor_id ().value ())};
+    const object_creation_target_t placement{"seal-dedup-mesh", actor.node_rid (),
+                                             status.lifecycle_generation (), target_owner};
+    const auto reserved =
+      std::get<object_reserved_t> (authority_repository
+                                     .reserve ({.key = authority_key,
+                                                .intent = {.stable_type = "player"},
+                                                .target = placement,
+                                                .capacity_bundle = {.actor_slots = 1}})
+                                     .result ()
+                                     .value ());
+    ASSERT_EQ (reserved.fence.object_generation, actor.object_generation ());
+    const auto authority_payload =
+      runtime::encode_actor_authority_payload (runtime::actor_authority_payload_t{
+        .stable_type = "player",
+        .actor_id = authority_key.global_id,
+        .current_spot_id = source.native_node ().entry_spot ().spot_id (),
+        .current_spot_generation = status.lifecycle_generation (),
+        .current_spot_kind = runtime::actor_authority_spot_kind_t::entry,
+        .owner_id = target_owner.owner_id,
+        .owner_lease_generation = static_cast<std::uint64_t> (target_owner.lease_generation),
+        .mesh_name = placement.mesh_name,
+        .node_rid = placement.node_rid,
+        .node_generation = placement.node_lifecycle_generation});
+    const auto committed = std::get<object_committed_t> (
+      authority_repository.commit ({authority_key, reserved.fence, authority_payload})
+        .result ()
+        .value ());
+    ASSERT_EQ (committed.ready.authority_owner_generation,
+               native_object->authority_owner_generation);
+    spots.bind_relocation_authority (
+      std::make_shared<stateful::public_authority_store_adapter_t> (authority_repository));
+    std::mutex received_mutex;
+    std::optional<protocol::actor_route_fence_t> received_actor_route;
+    std::optional<zlink::routing_id_t> received_source;
+    std::optional<zlink::routing_id_t> received_session;
+    std::uint64_t received_binding_generation = 0;
+    std::uint64_t received_session_sequence = 0;
+    protocol::wire_operation_id_t received_operation;
+    std::uint64_t received_reply_route = 0;
+    dispatch_loop_t source_loop (
+      source.native_node (),
+      [&] (const host::ready_record_t &owner, const host::receive_record_t &record,
+           std::vector<zlink::message_t> parts) {
+          if (record.kind != host::record_kind_t::actor_request)
+              return;
+          ASSERT_TRUE (record.application_record);
+          ASSERT_TRUE (record.application_record->payload);
+          ASSERT_TRUE (record.application_record->payload->application_record);
+          const auto *accepted_body = std::get_if<protocol::frozen_actor_application_body_t> (
+            &record.application_record->payload->application_record->body);
+          ASSERT_NE (accepted_body, nullptr);
+          if (record.actor_route)
+              EXPECT_EQ (*record.actor_route, accepted_body->target);
+          {
+              std::lock_guard lock (received_mutex);
+              received_actor_route = accepted_body->target;
+              received_source = record.source_node_rid;
+              received_session = record.source_session_rid;
+              received_binding_generation = record.source_binding_generation;
+              received_session_sequence = record.source_session_sequence;
+              received_operation = {record.operation_id.high, record.operation_id.low};
+              received_reply_route = record.reply_route_id;
+          }
+          const auto header = runtime::decode_mesh_record_header (record, parts, true);
+          ASSERT_TRUE (header);
+          ASSERT_TRUE (header.value ());
+          const auto complete = [record] {
+              if (record.complete_stateful_dispatch)
+                  record.complete_stateful_dispatch ();
+          };
+          bool deferred = false;
+          const auto handled = spots.dispatch_mesh_record (
+            owner, record, parts, header.value (), *node->root_services, serializers, complete,
+            &deferred, record.before_application_handler);
+          EXPECT_TRUE (handled);
+          if (!deferred)
+              complete ();
+      },
+      [] {});
     actor_gateway_runtime_t gateway;
     gateway.on_relay ([&] (const actor_ref_t &target, const actor_context_t &,
                            const stream_header_t &header, const zlink::message_t &payload,
@@ -557,19 +712,96 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
     EXPECT_EQ (executions.load (std::memory_order_relaxed), 2u);
     const auto original = delivered_operation;
     const auto original_reply_route = delivered_reply_route;
-    const auto replay = [&] (runtime::protocol::wire_operation_id_t operation,
-                             std::string payload) {
+    std::optional<protocol::actor_route_fence_t> original_route;
+    std::optional<zlink::routing_id_t> original_source;
+    std::optional<zlink::routing_id_t> original_session;
+    std::uint64_t original_binding_generation = 0;
+    std::uint64_t original_session_sequence = 0;
+    {
+        std::lock_guard lock (received_mutex);
+        original_route = received_actor_route;
+        original_source = received_source;
+        original_session = received_session;
+        original_binding_generation = received_binding_generation;
+        original_session_sequence = received_session_sequence;
+        EXPECT_EQ (original, received_operation);
+        EXPECT_EQ (original_reply_route, received_reply_route);
+    }
+    ASSERT_TRUE (original_route);
+    ASSERT_TRUE (original_source);
+    const auto replay = [&] (runtime::protocol::wire_operation_id_t operation, std::string payload,
+                             const protocol::actor_route_fence_t *target =
+                               nullptr) -> result_t<std::optional<zlink::message_t>> {
         runtime::messaging::envelope_header_t header;
         header.kind = runtime::messaging::message_kind_t::request;
+        header.channel_name = "actor";
         header.message_name = "SessionIdentityRequest";
         header.content_type = "application/json";
         header.correlation_id = "same-upstream-correlation";
-        return source
-          .relay_application_actor (actor, header, zlink::message_t::from (std::move (payload)), 2s,
-                                    source.status ().routing_id (), {}, 0, operation,
-                                    original_reply_route)
-          .result ();
+        auto encoded = encode_actor_packet (header, zlink::message_t::from (std::move (payload)));
+        auto parts = std::move (encoded).take_items ();
+        // Redeliver the received operation at the Framework ingress boundary.
+        // Submitting another local client request would allocate a new operation.
+        host::receive_record_t record{.kind = host::record_kind_t::actor_request,
+                                      .domain = host::ready_domain_t::application};
+        record.operation_id = {operation.high, operation.low};
+        record.source_node_rid = *original_source;
+        record.source_session_rid = original_session;
+        record.source_binding_generation = original_binding_generation;
+        record.source_session_sequence = original_session_sequence;
+        record.reply_route_id = original_reply_route;
+        record.actor_route = target ? std::optional{*target} : original_route;
+        runtime::protocol::actor_message_header_t actor_header;
+        actor_header.operation = operation;
+        actor_header.correlation = original_reply_route;
+        actor_header.target = *record.actor_route;
+        if (original_session)
+            actor_header.bound_session_source =
+              protocol::actor_message_header_t::bound_session_source_t{
+                original_session->to_bytes (), original_binding_generation,
+                original_session_sequence};
+        record.application_record = std::make_shared<runtime::serial_application_record_t> ();
+        record.application_record->payload.emplace ();
+        record.application_record->payload->application_record = stateful::accepted_actor_record (
+          actor_header,
+          {"seal-dedup-source-owner", 17, record.source_node_rid.to_bytes (),
+           source.status ().lifecycle_generation ()},
+          protocol::application_payload_t::from_parts (parts), true);
+        auto replied = std::make_shared<std::promise<std::vector<zlink::message_t>>> ();
+        auto reply = replied->get_future ();
+        auto reply_calls = std::make_shared<std::atomic_uint32_t> (0);
+        record.reply_token.host = node->native_node;
+        record.reply_token.local_reply = [replied, reply_calls] (const auto &response) {
+            if (reply_calls->fetch_add (1) != 0)
+                return false;
+            replied->set_value (response);
+            return true;
+        };
+        const host::ready_record_t owner{.owner_kind = host::owner_kind_t::actor,
+                                         .domain = host::ready_domain_t::application,
+                                         .actor = actor};
+        const auto decoded = runtime::decode_mesh_record_header (record, parts, true);
+        if (!decoded || !decoded.value ())
+            return result_t<std::optional<zlink::message_t>>::failure (
+              framework_error_kind_t::protocol_error, "replayed request header was invalid");
+        bool deferred = false;
+        if (!spots.dispatch_mesh_record (
+              owner, record, parts, decoded.value (), *node->root_services, serializers, [] {},
+              &deferred))
+            return result_t<std::optional<zlink::message_t>>::failure (
+              framework_error_kind_t::internal_failure, "replayed request was not dispatched");
+        if (reply.wait_for (2s) != std::future_status::ready)
+            return result_t<std::optional<zlink::message_t>>::failure (
+              framework_error_kind_t::deadline_exceeded, "replayed request did not reply");
+        EXPECT_EQ (reply_calls->load (), 1u);
+        runtime::messaging::message_parts_t response (reply.get ());
+        return decode_actor_reply (response);
     };
+    auto stale_route = *original_route;
+    ++stale_route.owner_lease_generation;
+    const auto stale = replay (original, "stale-owner-result", &stale_route);
+    EXPECT_FALSE (stale);
+    EXPECT_EQ (executions.load (std::memory_order_relaxed), 2u);
     const auto duplicate = replay (original, "second-session-result");
     ASSERT_TRUE (duplicate);
     ASSERT_TRUE (duplicate.value ());
@@ -581,6 +813,7 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
     ASSERT_TRUE (high_result);
     ASSERT_TRUE (high_result.value ());
     EXPECT_EQ (high_result.value ()->to_string (), "other-high-result");
+    EXPECT_EQ (executions.load (std::memory_order_relaxed), 3u);
     auto other_low = original;
     other_low.low ^= 0x100;
     const auto low_result = replay (other_low, "other-low-result");
