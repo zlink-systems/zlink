@@ -5294,6 +5294,10 @@ TEST (ActorEntryPlacementRegression, EntrylessNodeTakesJoinAndRelocation)
     ASSERT_TRUE (*result);
     EXPECT_EQ (result->value ().outcome, fw::relocation_outcome_t::relocated)
       << "reason=" << static_cast<int> (result->value ().reason);
+    // The actor now lives on the target; a request before the accepting node admits that
+    // peer is RouteNotConnected (Unavailable), so wait for the route as the other cases do.
+    ASSERT_TRUE (
+      peer_ready (accepting_services.get_required<fw::route_mesh_runtime_t> (), third_rid));
     auto probe = accepting_services.get_required<fw::actor_client_t> ()
                    .request (fw::actor_id_t (actor_id), probe_t{7})
                    .timeout (wait_budget)
