@@ -29,6 +29,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
 import java.util.function.BooleanSupplier;
 import java.util.function.Supplier;
 
@@ -86,49 +87,81 @@ final class ZLinkJavaSocketSupport {
             long deadlineNanos,
             Runnable admission,
             CompletableFuture<Void> requestAdmission) {
+        CompletableFuture<List<Message>> result = new CompletableFuture<>();
+        observeReply(
+                submission,
+                deadlineNanos,
+                admission,
+                requestAdmission,
+                (parts, failure) -> completeReply(result, parts, failure),
+                result);
+        return result;
+    }
+
+    /** Reports the binding terminal directly to an already registered request owner. */
+    static CompletionStage<List<Message>> observeReply(
+            RequestSubmission submission,
+            long deadlineNanos,
+            Runnable admission,
+            CompletableFuture<Void> requestAdmission,
+            BiConsumer<List<Message>, Throwable> terminal) {
+        return observeReply(submission, deadlineNanos, admission, requestAdmission, terminal, null);
+    }
+
+    private static CompletionStage<List<Message>> observeReply(
+            RequestSubmission submission,
+            long deadlineNanos,
+            Runnable admission,
+            CompletableFuture<Void> requestAdmission,
+            BiConsumer<List<Message>, Throwable> terminal,
+            CompletableFuture<List<Message>> standalone) {
         SubmitResult submitResult = submission.result();
         CompletionStage<List<Message>> bindingReply = submission.reply();
-        CompletableFuture<List<Message>> result = new CompletableFuture<>();
+        CompletionStage<Void> admitted = null;
         if (submitResult == SubmitResult.OK) {
             // Admitted at submit: nothing waits for admission and only the reply can be cancelled.
             if (requestAdmission != null) requestAdmission.complete(null);
-            bindingReply.whenComplete(
-                    (parts, failure) -> completeReply(result, parts, failure, admission));
-            ZLinkCompletionBridge.forwardCancellation(result, bindingReply);
-            return result;
+        } else {
+            admitted = admission(submitResult, submission::admitted);
+            admitted.whenComplete(
+                    (ignored, failure) -> {
+                        if (failure == null && requestAdmission != null)
+                            requestAdmission.complete(null);
+                    });
         }
-        CompletionStage<Void> admitted = admission(submitResult, submission::admitted);
-        admitted.whenComplete(
-                (ignored, failure) -> {
-                    if (failure != null) result.completeExceptionally(failure);
-                    else if (requestAdmission != null) requestAdmission.complete(null);
-                });
+        // Binding completes reply with the same cause when admission fails. Reply is the
+        // single terminal source, including the payload cleanup performed by its observer.
         bindingReply.whenComplete(
-                (parts, failure) -> completeReply(result, parts, failure, admission));
-        ZLinkCompletionBridge.forwardCancellation(result, admitted, bindingReply);
-        if (submitResult == SubmitResult.BACKPRESSURED && !result.isDone()) {
+                (parts, failure) -> {
+                    if (failure == null && admission != null) admission.run();
+                    terminal.accept(parts, failure);
+                });
+        if (standalone != null) {
+            if (admitted == null)
+                ZLinkCompletionBridge.forwardCancellation(standalone, bindingReply);
+            else ZLinkCompletionBridge.forwardCancellation(standalone, admitted, bindingReply);
+        }
+        if (standalone != null
+                && submitResult == SubmitResult.BACKPRESSURED
+                && !standalone.isDone()) {
             var deadline =
                     ZLinkProcessExecutionLanes.deadlines()
                             .schedule(
                                     () -> {
-                                        result.completeExceptionally(
+                                        standalone.completeExceptionally(
                                                 new ZlinkRequestException(RequestResult.TIMED_OUT));
                                     },
                                     Math.max(0L, deadlineNanos - System.nanoTime()),
                                     TimeUnit.NANOSECONDS);
-            result.whenComplete((ignored, failure) -> deadline.cancel(false));
+            standalone.whenComplete((ignored, failure) -> deadline.cancel(false));
         }
-        return result;
+        return bindingReply;
     }
 
     private static void completeReply(
-            CompletableFuture<List<Message>> result,
-            List<Message> parts,
-            Throwable failure,
-            Runnable admission) {
+            CompletableFuture<List<Message>> result, List<Message> parts, Throwable failure) {
         if (failure != null) result.completeExceptionally(failure);
         else {
-            if (admission != null) admission.run();
             ZLinkCompletionBridge.completeOrDiscard(result, parts, Message::closeAll);
         }
     }
