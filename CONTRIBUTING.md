@@ -201,4 +201,4 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   Mac is unsupported from Core up and never appears in CI matrices or prebuilds.
 - After a release, move the baseline worktree to the new tag.
 
-For internal operating procedures, follow `../zlink-docs/zlink/AGENTS.md`.
+Internal operating procedures are owned by `zlink/AGENTS.md` in the private repository zlink-systems/docs (see the head of `AGENTS.md`).

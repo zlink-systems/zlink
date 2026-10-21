@@ -195,4 +195,4 @@ ZLINK_CORE_SOURCE=local bash bindings/python/tests/run_tests.sh
   Core부터 지원하지 않으며 CI matrix·prebuild에 넣지 않는다.
 - 릴리스 뒤 baseline worktree를 새 태그로 갱신한다.
 
-내부 운영 절차는 `../zlink-docs/zlink/AGENTS.md`를 따른다.
+내부 운영 절차는 비공개 저장소 zlink-systems/docs의 `zlink/AGENTS.md`가 소유한다(`AGENTS.md` 머리 참고).
