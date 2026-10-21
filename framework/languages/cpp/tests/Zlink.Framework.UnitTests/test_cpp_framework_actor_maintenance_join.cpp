@@ -64,6 +64,28 @@ struct spot_node_runtime_test_access_t
 
 namespace zlink::framework::runtime::stateful
 {
+struct stateful_object_runtime_test_access_t
+{
+    static std::promise<void> hold_lane (stateful_object_runtime_t &objects)
+    {
+        return hold_lane (objects._lane);
+    }
+
+    static std::promise<void> hold_lane (runtime::state_lane_t &lane)
+    {
+        std::promise<void> release, entered;
+        auto held = release.get_future ().share ();
+        auto running = entered.get_future ();
+        if (!lane.try_post ([held, &entered] {
+                entered.set_value ();
+                held.wait ();
+            }))
+            throw std::runtime_error ("state lane is closed");
+        running.wait ();
+        return release;
+    }
+};
+
 struct raw_stateful_dispatch_test_access_t
 {
     static std::array<std::size_t, 3> spot_records (raw_stateful_dispatch_t &raw)
@@ -89,6 +111,32 @@ namespace zlink::framework::runtime::host
 // Reproduce a superseded assembly at the activation boundary without timing races.
 struct public_host_runtime_test_access_t
 {
+    static std::promise<void> hold_objects (public_host_runtime_t &host)
+    {
+        return stateful::stateful_object_runtime_test_access_t::hold_lane (host._objects);
+    }
+
+    static std::promise<void> hold_dispatch (public_host_runtime_t &host)
+    {
+        return stateful::stateful_object_runtime_test_access_t::hold_lane (
+          host._local_dispatch_completion_lane);
+    }
+
+    static void lifecycle_turn (public_host_runtime_t &host, std::function<void ()> work)
+    {
+        host._lifecycle_configuration_lane.run (std::move (work)).get ();
+    }
+
+    static task_t<zlink::submit_result_t> join (actor_handle_t &actor,
+                                                const zlink::routing_id_t &rid,
+                                                const std::string &spot,
+                                                std::uint64_t generation,
+                                                pending_operation_t &operation,
+                                                std::chrono::milliseconds timeout)
+    {
+        co_return co_await actor.join_spot (rid, spot, generation, {}, operation, timeout);
+    }
+
     static task_t<std::size_t>
     dispatch_claim (public_host_runtime_t &host,
                     std::shared_ptr<mesh::service_mailbox_claim_t> claim,
@@ -4954,6 +5002,84 @@ TEST (ActorMaintenanceJoin, CancelledReservedCaptureFinishes)
     EXPECT_FALSE (ran);
     queue.drain ();
 }
+
+enum class join_held_lane_t
+{
+    objects,
+    dispatch,
+    closing,
+    stale_target
+};
+class ActorLocalJoinLane : public ::testing::TestWithParam<join_held_lane_t>
+{
+};
+
+TEST_P (ActorLocalJoinLane, PendingSubmissionDoesNotHoldLifecycleTurn)
+{
+    namespace host = fw::runtime::host;
+    using access_t = host::public_host_runtime_test_access_t;
+    const auto rid = zlink::routing_id_t::from (first_rid);
+    auto node = std::make_shared<host::public_host_runtime_t> (host::host_options_t{
+      fw::test::runtime_failure_options (fw::runtime::mesh::raw_mesh_node_options_t{
+        .descriptor = {mesh_name,
+                       rid.to_bytes (),
+                       1,
+                       1,
+                       "tcp://127.0.0.1:0",
+                       {},
+                       fw::runtime::mesh::service_node_state_t::preparing}})});
+    node->start ();
+    auto actor =
+      node->create_reserved_actor (actor_type, {fw::runtime::stateful::object_kind_t::actor,
+                                                actor_id, 1, 1, mesh_name, rid.to_string ()});
+    const fw::runtime::stateful::object_ref_t target{
+      fw::runtime::stateful::object_kind_t::user_spot,
+      maintenance_spot,
+      1,
+      1,
+      mesh_name,
+      rid.to_string ()};
+    const auto created = node->objects ().begin_reserved_object (target, room_type, {});
+    ASSERT_EQ (created.error, fw::runtime::stateful::stateful_error_t::none);
+    ASSERT_EQ (node->objects ().commit_create (created.attempt),
+               fw::runtime::stateful::stateful_error_t::none);
+    auto release = GetParam () == join_held_lane_t::dispatch ? access_t::hold_dispatch (*node)
+                                                             : access_t::hold_objects (*node);
+    host::pending_operation_t operation;
+    auto generation = target.object_generation;
+    if (GetParam () == join_held_lane_t::stale_target)
+        ++generation;
+    auto joining = access_t::join (actor, rid, target.key, generation, operation, wait_budget);
+    EXPECT_FALSE (joining.await_ready ());
+    // A pending lookup or dispatch must leave lifecycle progress available.
+    // The fixture releases the occupied lane without a timer or another worker.
+    if (GetParam () == join_held_lane_t::closing)
+        node->close ();
+    access_t::lifecycle_turn (*node, [&] { release.set_value (); });
+    ASSERT_EQ (joining.result ().value (), GetParam () == join_held_lane_t::closing
+                                             ? zlink::submit_result_t::terminated
+                                             : zlink::submit_result_t::ok);
+    if (GetParam () == join_held_lane_t::stale_target) {
+        const auto completed = operation.completion->task ().result ();
+        ASSERT_TRUE (completed);
+        EXPECT_EQ (completed.value ().record.terminal_result,
+                   static_cast<int> (fw::runtime::protocol::request_terminal_result::conflict));
+        EXPECT_EQ (
+          completed.value ().record.failure_errno,
+          static_cast<int> (fw::runtime::protocol::framework_error_code::spotGenerationStale));
+    }
+    if (GetParam () == join_held_lane_t::closing)
+        EXPECT_TRUE (node->objects ().find (fw::runtime::stateful::object_kind_t::actor, actor_id,
+                                            fw::runtime::stateful::object_state_t::ready));
+    node->close ();
+}
+
+INSTANTIATE_TEST_SUITE_P (OccupiedLane,
+                          ActorLocalJoinLane,
+                          ::testing::Values (join_held_lane_t::objects,
+                                             join_held_lane_t::dispatch,
+                                             join_held_lane_t::closing,
+                                             join_held_lane_t::stale_target));
 
 TEST (ActorMaintenanceJoin, LocalDirectAdmissionUsesCurrentActorId)
 {

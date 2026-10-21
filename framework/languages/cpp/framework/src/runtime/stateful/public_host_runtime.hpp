@@ -565,12 +565,12 @@ class actor_handle_t
                                             const std::vector<zlink::message_t> &parts,
                                             pending_operation_t &operation,
                                             std::chrono::milliseconds timeout);
-    zlink::submit_result_t join_spot (const zlink::routing_id_t &target_node_rid,
-                                      const std::string &target_spot_id,
-                                      std::uint64_t target_spot_generation,
-                                      const std::vector<zlink::message_t> &parts,
-                                      pending_operation_t &operation,
-                                      std::chrono::milliseconds timeout);
+    task_t<zlink::submit_result_t> join_spot (const zlink::routing_id_t &target_node_rid,
+                                              const std::string &target_spot_id,
+                                              std::uint64_t target_spot_generation,
+                                              const std::vector<zlink::message_t> &parts,
+                                              pending_operation_t &operation,
+                                              std::chrono::milliseconds timeout);
     task_t<zlink::submit_result_t> send_to (const actor_ref_t &target,
                                             const std::vector<zlink::message_t> &parts,
                                             zlink::send_flags_t flags = zlink::send_flags_t::none,
@@ -861,6 +861,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     }
 
     std::optional<stateful::object_ref_t> resolve_actor (const actor_ref_t &actor) const;
+    task_t<std::optional<stateful::object_ref_t>>
+    resolve_actor_async (const actor_ref_t &actor) const;
     std::optional<stateful::object_ref_t> resolve_spot (const std::string &spot_id) const;
     // Relocation flow §4.2: the execution queue that owns a participant's application turns,
     // where its source seal cut runs; without it the cut runs at the mailbox alone.
@@ -881,6 +883,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     cut_relocation_source (std::vector<stateful::object_ref_t> participants,
                            std::shared_ptr<stateful::relocation_seal_binding_t> binding);
     std::optional<stateful::object_ref_t> resolve_actor (std::string_view actor_id) const;
+    task_t<std::optional<stateful::object_ref_t>> resolve_actor_async (std::string actor_id) const;
     void attach_relocation_terminals (stateful::maintenance_runtime_t &maintenance);
 
     struct instance_activation_ready_t
@@ -936,12 +939,13 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     bool enqueue_completion (const pending_operation_t &operation,
                              receive_record_t record,
                              std::vector<zlink::message_t> parts);
-    zlink::submit_result_t begin_local_actor_join (const actor_ref_t &actor,
-                                                   const std::string &target_spot_id,
-                                                   std::uint64_t target_spot_generation,
-                                                   const std::vector<zlink::message_t> &parts,
-                                                   pending_operation_t &operation,
-                                                   std::chrono::milliseconds timeout);
+    task_t<zlink::submit_result_t>
+    begin_local_actor_join (const actor_ref_t &actor,
+                            const std::string &target_spot_id,
+                            std::uint64_t target_spot_generation,
+                            const std::vector<zlink::message_t> &parts,
+                            pending_operation_t &operation,
+                            std::chrono::milliseconds timeout);
     bool complete_local_actor_join (pending_operation_t operation,
                                     std::string actor_type,
                                     stateful::membership_token_t membership,

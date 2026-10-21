@@ -2517,8 +2517,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
         host::pending_operation_t operation;
         const std::vector<zlink::message_t> parts{request};
         const auto submitted =
-          handle.join_spot (target.node_rid, spot_id_t (target.spot_id), target.object_generation,
-                            parts, operation, timeout);
+          co_await handle.join_spot (target.node_rid, spot_id_t (target.spot_id),
+                                     target.object_generation, parts, operation, timeout);
         if (submitted != zlink::submit_result_t::ok) {
             co_return result_t<actor_join_reply_t>::failure (
               framework_error_kind_t::internal_failure, "Actor Spot join was not submitted");

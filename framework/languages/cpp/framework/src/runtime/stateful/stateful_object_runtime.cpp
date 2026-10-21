@@ -645,39 +645,44 @@ std::pair<stateful_error_t, membership_token_t>
 stateful_object_runtime_t::begin_membership_move (const object_ref_t &actor,
                                                   const object_ref_t &target_spot)
 {
-    return _lane
-      .run ([&, this] () -> std::pair<stateful_error_t, membership_token_t> {
-          stateful_error_t actor_error = stateful_error_t::none;
-          auto *actor_record = find_record_locked (actor, actor_error);
-          if (actor_record == nullptr) {
-              return {actor_error, {}};
-          }
-          stateful_error_t spot_error = stateful_error_t::none;
-          auto *spot_record = find_record_locked (target_spot, spot_error);
-          if (spot_record == nullptr) {
-              return {spot_error, {}};
-          }
-          if (actor.kind != object_kind_t::actor || target_spot.kind != object_kind_t::user_spot) {
-              return {stateful_error_t::invalid, {}};
-          }
-          if (state_on_lane (*actor_record) == object_state_t::moving) {
-              return {stateful_error_t::moving, {}};
-          }
-          if (actor_record->queue.application_active) {
-              return {stateful_error_t::conflict, {}};
-          }
-          if (actor_record->state != object_state_t::ready
-              || state_on_lane (*spot_record) != object_state_t::ready) {
-              return {stateful_error_t::conflict, {}};
-          }
-          membership_token_t token{_next_membership_token++, actor_record->reference,
-                                   spot_record->reference};
-          actor_record->state = object_state_t::moving;
-          _membership_moves.emplace (token.value,
-                                     membership_move_t{token, actor_record->membership});
-          return {stateful_error_t::none, token};
-      })
-      .get ();
+    return begin_membership_move_async (actor, target_spot).result ().value ();
+}
+
+task_t<std::pair<stateful_error_t, membership_token_t>>
+stateful_object_runtime_t::begin_membership_move_async (const object_ref_t &actor,
+                                                        const object_ref_t &target_spot)
+{
+    return _lane.run_task ([this, actor,
+                            target_spot] () -> std::pair<stateful_error_t, membership_token_t> {
+        stateful_error_t actor_error = stateful_error_t::none;
+        auto *actor_record = find_record_locked (actor, actor_error);
+        if (actor_record == nullptr) {
+            return {actor_error, {}};
+        }
+        stateful_error_t spot_error = stateful_error_t::none;
+        auto *spot_record = find_record_locked (target_spot, spot_error);
+        if (spot_record == nullptr) {
+            return {spot_error, {}};
+        }
+        if (actor.kind != object_kind_t::actor || target_spot.kind != object_kind_t::user_spot) {
+            return {stateful_error_t::invalid, {}};
+        }
+        if (state_on_lane (*actor_record) == object_state_t::moving) {
+            return {stateful_error_t::moving, {}};
+        }
+        if (actor_record->queue.application_active) {
+            return {stateful_error_t::conflict, {}};
+        }
+        if (actor_record->state != object_state_t::ready
+            || state_on_lane (*spot_record) != object_state_t::ready) {
+            return {stateful_error_t::conflict, {}};
+        }
+        membership_token_t token{_next_membership_token++, actor_record->reference,
+                                 spot_record->reference};
+        actor_record->state = object_state_t::moving;
+        _membership_moves.emplace (token.value, membership_move_t{token, actor_record->membership});
+        return {stateful_error_t::none, token};
+    });
 }
 
 std::pair<stateful_error_t, membership_token_t>

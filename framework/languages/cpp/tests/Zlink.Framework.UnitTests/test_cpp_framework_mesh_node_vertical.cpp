@@ -769,8 +769,9 @@ void verify_local_join_timeout_releases_membership ()
     const auto rid = runtime.status ().routing_id ();
     const auto generation = target.status ().lifecycle_generation ();
     host::pending_operation_t expired;
-    assert (actor.join_spot (rid, "join-timeout-spot", generation, {}, expired, 25ms)
-            == zlink::submit_result_t::ok);
+    assert (
+      actor.join_spot (rid, "join-timeout-spot", generation, {}, expired, 25ms).result ().value ()
+      == zlink::submit_result_t::ok);
     assert (runtime.transport ().expire_requests (std::chrono::steady_clock::now () + 1s) == 1);
     auto first = expired.completion->task ();
     assert (!first.result ());
@@ -782,8 +783,9 @@ void verify_local_join_timeout_releases_membership ()
     // The expired queued control is skipped, and the same Actor can start
     // another membership move because the terminal owner released its token.
     auto &retried = expired;
-    assert (actor.join_spot (rid, "join-timeout-spot", generation, {}, retried, 1s)
-            == zlink::submit_result_t::ok);
+    assert (
+      actor.join_spot (rid, "join-timeout-spot", generation, {}, retried, 1s).result ().value ()
+      == zlink::submit_result_t::ok);
     bool replied = false;
     (void) runtime
       .dispatch_ready ([&] (const host::ready_record_t &, const host::receive_record_t &record,

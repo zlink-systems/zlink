@@ -898,24 +898,27 @@ zlink::submit_result_t actor_handle_t::join_entry_spot (const zlink::routing_id_
     }
     const auto entry = _host->entry_spot ();
     return join_spot (target_node_rid, entry.spot_id (), entry.status ().lifecycle_generation (),
-                      parts, operation, timeout);
+                      parts, operation, timeout)
+      .result ()
+      .value ();
 }
 
-zlink::submit_result_t actor_handle_t::join_spot (const zlink::routing_id_t &target_node_rid,
-                                                  const std::string &target_spot_id,
-                                                  std::uint64_t target_spot_generation,
-                                                  const std::vector<zlink::message_t> &parts,
-                                                  pending_operation_t &operation,
-                                                  std::chrono::milliseconds timeout)
+task_t<zlink::submit_result_t>
+actor_handle_t::join_spot (const zlink::routing_id_t &target_node_rid,
+                           const std::string &target_spot_id,
+                           std::uint64_t target_spot_generation,
+                           const std::vector<zlink::message_t> &parts,
+                           pending_operation_t &operation,
+                           std::chrono::milliseconds timeout)
 {
     if (!_host) {
-        return zlink::submit_result_t::invalid_handle;
+        co_return zlink::submit_result_t::invalid_handle;
     }
     if (target_node_rid.to_bytes () != _host->status ().routing_id ().to_bytes ()) {
-        return zlink::submit_result_t::not_connected;
+        co_return zlink::submit_result_t::not_connected;
     }
-    return _host->begin_local_actor_join (_actor, target_spot_id, target_spot_generation, parts,
-                                          operation, timeout);
+    co_return co_await _host->begin_local_actor_join (
+      _actor, target_spot_id, target_spot_generation, parts, operation, timeout);
 }
 
 task_t<zlink::submit_result_t> actor_handle_t::send_to (const actor_ref_t &target,
@@ -8110,24 +8113,35 @@ bool public_host_runtime_t::reply (const reply_token_t &token,
 std::optional<stateful::object_ref_t>
 public_host_runtime_t::resolve_actor (const actor_ref_t &actor) const
 {
-    auto current = resolve_actor (actor.actor_id ().value ());
+    return resolve_actor_async (actor).result ().value ();
+}
+
+task_t<std::optional<stateful::object_ref_t>>
+public_host_runtime_t::resolve_actor_async (const actor_ref_t &actor) const
+{
+    auto current = co_await resolve_actor_async (std::string (actor.actor_id ().value ()));
     if (current && current->object_generation != actor.object_generation ())
-        return std::nullopt;
-    return current;
+        co_return std::nullopt;
+    co_return current;
 }
 
 std::optional<stateful::object_ref_t>
 public_host_runtime_t::resolve_actor (std::string_view actor_id) const
 {
-    return _spot_actor_index_lane
-      .run ([&] () -> std::optional<stateful::object_ref_t> {
-          const auto found = _actors.find (std::string (actor_id));
+    return resolve_actor_async (std::string (actor_id)).result ().value ();
+}
+
+task_t<std::optional<stateful::object_ref_t>>
+public_host_runtime_t::resolve_actor_async (std::string actor_id) const
+{
+    return _spot_actor_index_lane.run_task (
+      [this, actor_id = std::move (actor_id)] () -> std::optional<stateful::object_ref_t> {
+          const auto found = _actors.find (actor_id);
           if (found == _actors.end ()) {
               return std::nullopt;
           }
           return found->second.second;
-      })
-      .get ();
+      });
 }
 
 std::optional<stateful::object_ref_t>
@@ -8262,7 +8276,7 @@ bool public_host_runtime_t::enqueue_completion (const pending_operation_t &opera
       });
 }
 
-zlink::submit_result_t
+task_t<zlink::submit_result_t>
 public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
                                                const std::string &target_spot_id,
                                                std::uint64_t target_spot_generation,
@@ -8270,91 +8284,111 @@ public_host_runtime_t::begin_local_actor_join (const actor_ref_t &actor,
                                                pending_operation_t &operation,
                                                std::chrono::milliseconds timeout)
 {
-    return _lifecycle_configuration_lane
-      .run ([&] {
-          if (!_started || _closing)
-              return zlink::submit_result_t::terminated;
-          const auto current = resolve_actor (actor);
-          const auto target = resolve_spot (target_spot_id);
-          //  Spec 32-framework-error-model:129-136 — typed Rejected is reserved for
-          //  the application callback decision. A Framework prerequisite failure
-          //  carries a classified wire terminal on the completion instead of a
-          //  synthesized rejection, and the consumer maps it to the public kind.
-          auto fail = [&] (std::uint32_t terminal_result, std::uint32_t failure_errno) {
-              register_local_completion (operation, timeout);
-              receive_record_t completion;
-              completion.kind = record_kind_t::completion;
-              completion.domain = ready_domain_t::infrastructure;
-              completion.operation_id = operation.id;
-              completion.operation_kind = operation_kind_t::actor_join;
-              completion.source_node_rid = status ().routing_id ();
-              completion.terminal_result = static_cast<int> (terminal_result);
-              completion.failure_errno = static_cast<int> (failure_errno);
-              (void) enqueue_completion (operation, std::move (completion), {});
-              return zlink::submit_result_t::ok;
-          };
-          if (!current || !target) {
-              return fail (102, 0); // notFound: the join source or target doesn't exist.
-          }
-          if (target->object_generation != target_spot_generation) {
-              return fail (107, 33); // spotGenerationStale -> InvalidOperation.
-          }
-          auto [error, membership] = _objects.begin_membership_move (*current, *target);
-          if (error != stateful::stateful_error_t::none) {
-              const auto classified = stateful_failure_pair (error);
-              return fail (classified.first, classified.second);
-          }
+    const auto current = co_await resolve_actor_async (actor);
+    auto target = co_await _objects.resolve_spot_async (target_spot_id);
+    // The objects owner validates the caller's target incarnation as it begins
+    // the move. Do not make a second generation decision in the host lane.
+    if (target)
+        target->object_generation = target_spot_generation;
+    auto [error, membership] =
+      std::pair{stateful::stateful_error_t::not_found, stateful::membership_token_t{}};
+    if (current && target)
+        std::tie (error, membership) =
+          co_await _objects.begin_membership_move_async (*current, *target);
+    auto waiter = membership.value != 0 && _options.mesh.application_jobs
+                    ? std::make_shared<application_job_queue_t::waiter_t> ()
+                    : nullptr;
+    // Registration and its failure rollback can wait for other state owners.
+    // Neither operation may retain the lifecycle turn.
+    try {
+        register_local_completion (
+          operation, timeout, {},
+          [host = shared_from_this (), membership, cleanup = local_request_wait_cleanup (waiter)] {
+              if (cleanup)
+                  cleanup ();
+              if (membership.value != 0)
+                  (void) host->_objects.abort_membership_move (membership);
+          });
+    }
+    catch (const framework_exception_t &failure) {
+        if (failure.kind () == framework_error_kind_t::shutting_down)
+            co_return zlink::submit_result_t::terminated;
+        throw;
+    }
+    task_t<zlink::submit_result_t> dispatch{
+      result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated)};
+    try {
+        co_await _lifecycle_configuration_lane.run_task ([&] {
+            if (!_started || _closing)
+                return;
+            //  Spec 32-framework-error-model:129-136 — typed Rejected is reserved for
+            //  the application callback decision. A Framework prerequisite failure
+            //  carries a classified wire terminal on the completion instead of a
+            //  synthesized rejection, and the consumer maps it to the public kind.
+            auto fail = [&] (std::uint32_t terminal_result, std::uint32_t failure_errno) {
+                receive_record_t completion;
+                completion.kind = record_kind_t::completion;
+                completion.domain = ready_domain_t::infrastructure;
+                completion.operation_id = operation.id;
+                completion.operation_kind = operation_kind_t::actor_join;
+                completion.source_node_rid = status ().routing_id ();
+                completion.terminal_result = static_cast<int> (terminal_result);
+                completion.failure_errno = static_cast<int> (failure_errno);
+                (void) enqueue_completion (operation, std::move (completion), {});
+                dispatch = task_t<zlink::submit_result_t>{
+                  result_t<zlink::submit_result_t>::success (zlink::submit_result_t::ok)};
+            };
+            if (error != stateful::stateful_error_t::none) {
+                const auto classified = stateful_failure_pair (error);
+                fail (classified.first, classified.second);
+                return;
+            }
 
-          auto waiter = _options.mesh.application_jobs
-                          ? std::make_shared<application_job_queue_t::waiter_t> ()
-                          : nullptr;
-          register_local_completion (operation, timeout, {},
-                                     [host = shared_from_this (), membership,
-                                      cleanup = local_request_wait_cleanup (waiter)] {
-                                         if (cleanup)
-                                             cleanup ();
-                                         (void) host->_objects.abort_membership_move (membership);
-                                     });
 
-          const auto actor_type =
-            std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor));
-          std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
-          ready_record_t owner{.owner_kind = owner_kind_t::spot,
-                               .domain = ready_domain_t::application,
-                               .spot_id = target_spot_id};
-          receive_record_t record;
-          record.kind = record_kind_t::spot_control;
-          record.domain = ready_domain_t::application;
-          record.operation_id = operation.id;
-          record.operation_kind = operation_kind_t::actor_join;
-          record.source_node_rid = status ().routing_id ();
-          record.actor_control = actor_control_t{lifecycle_kind_t::joined, actor};
-          record.reply_token.local_actor_join =
-            [weak, operation, actor_type, membership] (const actor_join_operation_result_t &result,
-                                                       const std::vector<zlink::message_t> &reply) {
+            const auto actor_type =
+              std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor));
+            std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
+            ready_record_t owner{.owner_kind = owner_kind_t::spot,
+                                 .domain = ready_domain_t::application,
+                                 .spot_id = target_spot_id};
+            receive_record_t record;
+            record.kind = record_kind_t::spot_control;
+            record.domain = ready_domain_t::application;
+            record.operation_id = operation.id;
+            record.operation_kind = operation_kind_t::actor_join;
+            record.source_node_rid = status ().routing_id ();
+            record.actor_control = actor_control_t{lifecycle_kind_t::joined, actor};
+            record.reply_token.local_actor_join = [weak, operation, actor_type, membership] (
+                                                    const actor_join_operation_result_t &result,
+                                                    const std::vector<zlink::message_t> &reply) {
                 const auto host = weak.lock ();
                 return host
                        && host->complete_local_actor_join (operation, actor_type, membership,
                                                            result, reply);
             };
-          _local_dispatch_completion_lane
-            .run ([&] {
-                try {
-                    admit_local_application (
-                      local_application_dispatch_t{std::move (owner), std::move (record), parts},
-                      waiter);
-                }
-                catch (...) {
-                    _transport->unregister_local_operation (operation.id);
-                    (void) _objects.abort_membership_move (membership);
-                    throw;
-                }
-            })
-            .get ();
-          _transport->signal_activity ();
-          return zlink::submit_result_t::ok;
-      })
-      .get ();
+            dispatch = _local_dispatch_completion_lane.run_task (
+              [&, owner = std::move (owner), record = std::move (record), waiter] () mutable {
+                  admit_local_application (
+                    local_application_dispatch_t{std::move (owner), std::move (record), parts},
+                    waiter);
+                  _transport->signal_activity ();
+                  return zlink::submit_result_t::ok;
+              });
+        });
+        const auto submitted = co_await dispatch;
+        if (submitted != zlink::submit_result_t::ok) {
+            _transport->unregister_local_operation (operation.id);
+            if (membership.value != 0)
+                (void) _objects.abort_membership_move (membership);
+        }
+        co_return submitted;
+    }
+    catch (...) {
+        _transport->unregister_local_operation (operation.id);
+        if (membership.value != 0)
+            (void) _objects.abort_membership_move (membership);
+        throw;
+    }
 }
 
 bool public_host_runtime_t::complete_local_actor_join (pending_operation_t operation,
