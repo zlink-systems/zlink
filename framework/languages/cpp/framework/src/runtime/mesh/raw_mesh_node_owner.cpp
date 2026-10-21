@@ -914,8 +914,14 @@ task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_to_node_result (
   const std::vector<std::uint8_t> &target_routing_id,
   const protocol::application_payload_t &application_payload)
 {
-    co_return co_await send_with_header_result (
-      target_routing_id, protocol::encode_node_send_header (), application_payload);
+    try {
+        return send_with_header_result (target_routing_id, protocol::encode_node_send_header (),
+                                        application_payload);
+    }
+    catch (...) {
+        return task_t<zlink::submit_result_t> (
+          detail::current_exception_result<zlink::submit_result_t> ());
+    }
 }
 
 task_t<zlink::submit_result_t> raw_mesh_node_owner_t::send_logical_multicast (
