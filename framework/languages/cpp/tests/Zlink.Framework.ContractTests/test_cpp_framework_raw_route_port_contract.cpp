@@ -964,6 +964,7 @@ static void verify_request_deadline_preserves_timeout_boundary ()
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     verify_request_deadline_preserves_timeout_boundary ();
     verify_pending_send_route_removal_and_shutdown ();
     verify_immediate_request_has_no_framework_deadline ();

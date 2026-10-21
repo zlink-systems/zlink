@@ -215,6 +215,7 @@ fw::task_t<int> run ()
 
 int main ()
 {
+    fw::completion_owner_t completion_owner;
     const auto result = run ().result ();
     if (!result) {
         std::cerr << "http client failed: " << result.error ()->what () << std::endl;
