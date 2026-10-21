@@ -170,6 +170,7 @@ internal sealed class ZLinkDeferredActorJoin(
     private async ValueTask RunAsync(CancellationToken cancellationToken)
     {
         var barrier = Interlocked.Exchange(ref _barrier, null);
+        ZLinkActorSerialExecutor.Turn turn = default;
         try
         {
             ZLinkFrameworkErrorKind? failure = null;
@@ -206,7 +207,7 @@ internal sealed class ZLinkDeferredActorJoin(
             // The deferred Join runs as its reserved barrier's turn, and every
             // outcome, including an elapsed deadline, completes inside that
             // turn. The reservation is therefore always claimed and released.
-            using var turn = await reservedBarrier.ClaimAsync().ConfigureAwait(false);
+            turn = await reservedBarrier.ClaimAsync().ConfigureAwait(false);
             await actorState.Handoff.WithdrawDeferredSuffixAsync().ConfigureAwait(false);
             // Re-enter the flow captured at registration, but only while the
             // live level still allows capture (spec 27 §4): an On→Off flip
@@ -313,10 +314,19 @@ internal sealed class ZLinkDeferredActorJoin(
         }
         finally
         {
-            barrier?.Discard();
-            var replay = actorState.Handoff.EndDeferredJoinCapture();
-            actorState.ReleaseDeferredJoinBarrier();
-            ReplayDeferredJoinFrames(replay);
+            try
+            {
+                barrier?.Discard();
+                var replay = actorState.Handoff.EndDeferredJoinCapture();
+                actorState.ReleaseDeferredJoinBarrier();
+                ReplayDeferredJoinFrames(replay);
+            }
+            finally
+            {
+                // The next Actor turn must observe the completed Join's claim
+                // released, including when the completion callback fails.
+                turn.Dispose();
+            }
         }
     }
 

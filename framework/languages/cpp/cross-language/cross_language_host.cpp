@@ -1064,9 +1064,8 @@ class relocation_actor_adapter_t final : public fw::actor_relocation_adapter_t<r
     }
 };
 
-/* Source-side Entry Spot: onCreateActor is the JoinEntrySpot admission-free
- * placement (spec 15:489). It both starts the deferred join and answers the
- * target's owner probe while the Actor still lives here. */
+/* Both roles accept initial Actor creation through this Entry Spot. The source
+ * also starts the deferred join and answers the target's owner probe. */
 class relocation_entry_spot_t final : public fw::entry_spot_t<relocation_actor_t>
 {
   public:
@@ -1696,22 +1695,17 @@ int main (int argc, char **argv)
                                                user_spot_discovery_probe_req_t,
                                                user_spot_discovery_probe_res_t> (
                   user_spot_discovery_probe_req_t::packet_name);
+                mesh.add_entry_spot<relocation_entry_spot_t> (
+                  [] (fw::entry_spot_context_t context) {
+                      return std::make_shared<relocation_entry_spot_t> (std::move (context));
+                  });
                 if (target) {
-                    /* Same shape as the .NET and Node targets: a Spot factory
-                     * and the Actor factory (so the arriving Actor can be
-                     * materialized here), but no Entry Spot -- this node must
-                     * not be an Entry-Spot placement candidate at all. */
                     mesh.add_spot_factory<relocation_user_spot_t> (
                       cross_lang_user_spot_type,
                       [] (fw::spot_context_t context) {
                           return std::make_shared<relocation_user_spot_t> (std::move (context));
                       },
                       [] (auto &factory) { factory.disable_relocation (); });
-                } else {
-                    mesh.add_entry_spot<relocation_entry_spot_t> (
-                      [] (fw::entry_spot_context_t context) {
-                          return std::make_shared<relocation_entry_spot_t> (std::move (context));
-                      });
                 }
                 mesh.add_actor_factory<relocation_actor_t, relocation_actor_factory_t> (
                   cross_lang_actor_type, std::make_shared<relocation_actor_factory_t> (),
