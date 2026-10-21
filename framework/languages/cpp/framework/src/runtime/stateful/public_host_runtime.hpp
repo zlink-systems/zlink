@@ -246,7 +246,7 @@ struct host_options_t
     std::chrono::milliseconds owner_lease_fencing_margin{5'000};
     std::shared_ptr<zlink::context_t> core_context;
     std::chrono::milliseconds session_relocation_seal_timeout =
-      location_options_t{}.session_relocation_seal_timeout;
+      detail::default_session_relocation_seal_timeout;
     std::chrono::milliseconds user_spot_operation_replay_retention = std::chrono::minutes (5);
 };
 
@@ -816,11 +816,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                                        const std::vector<zlink::message_t> &parts,
                                                        pending_operation_t &operation,
                                                        std::chrono::milliseconds timeout);
+    // The coroutine owns both callbacks; a caller may discard the task.
     task_t<std::size_t> dispatch_ready (
-      const std::function<void (
-        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch,
+      std::function<void (
+        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
       bool accept_application_receive = true,
-      const std::function<bool ()> &next_application_receive = {});
+      std::function<bool ()> next_application_receive = {});
     bool dispatch_application_owner (
       const std::string &owner,
       const std::function<void (

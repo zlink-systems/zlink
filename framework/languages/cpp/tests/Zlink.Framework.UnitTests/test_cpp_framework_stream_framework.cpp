@@ -27,8 +27,10 @@
 #include <chrono>
 #include <condition_variable>
 #include <cstdint>
+#include <cstdlib>
 #include <deque>
 #include <exception>
+#include <functional>
 #include <future>
 #include <iostream>
 #include <limits>
@@ -1169,6 +1171,134 @@ int descriptor_unavailable_replacement_records_drop ()
     return result;
 }
 
+// Starts an Actor binding on connect and leaves it pending, so the Actor is
+// bound to the Session when the client disconnects.
+class held_retirement_session_t final : public zlink::framework::packet_stream_session_t
+{
+  public:
+    explicit held_retirement_session_t (zlink::framework::actor_ref_t actor) :
+        _actor (std::move (actor))
+    {
+    }
+    std::promise<void> connected;
+    std::optional<zlink::framework::request_task_t<zlink::framework::session_actor_t>> binding;
+    zlink::framework::task_t<void> on_connected (zlink::framework::stream_t &stream) override
+    {
+        binding.emplace (stream.actors ().bind (_actor).async ());
+        connected.set_value ();
+        co_return;
+    }
+    zlink::framework::task_t<void> on_disconnected (zlink::framework::stream_t &) override
+    {
+        co_return;
+    }
+    zlink::framework::task_t<void> on_error (zlink::framework::stream_t &,
+                                             const zlink::framework::stream_error_t &) override
+    {
+        co_return;
+    }
+    zlink::framework::task_t<void> on_packet (zlink::framework::stream_t &,
+                                              const zlink::framework::session_message_context_t &,
+                                              const zlink::message_t &) override
+    {
+        co_return;
+    }
+
+  private:
+    zlink::framework::actor_ref_t _actor;
+};
+
+/* #2295 round 2: a WebSocket connection's retirement waits on the bound Actor's
+ * disconnect. The listener must track it like a Core session retirement, so
+ * session drain reports it and stop () waits for it before MeshNode stops. */
+int reader_retirement_is_tracked_until_complete ()
+{
+    using namespace zlink::framework;
+    using namespace std::chrono_literals;
+    detail::configure_stream_dispatch_executor ();
+    service_collection_t services;
+    handler_registry_t handlers;
+    serializer_registry_t serializers;
+    auto builder = test::runtime_failure_builder ();
+    detail::zlink_builder_access_t::bind_shared_core_context (
+      builder, std::make_shared<zlink::context_t> ());
+    services.add_singleton<detail::actor_gateway_runtime_t> ();
+    services.add_factory<session_actor_manager_t> (
+      [] (service_provider_t &provider) {
+          return std::make_unique<session_actor_manager_t> (
+            provider.get_required<detail::actor_gateway_runtime_t> ().manager ());
+      },
+      service_lifetime_t::scoped);
+    held_retirement_session_t session (detail::actor_ref_access_t::make (
+      node_rid_t::from_string ("held-actor-node"), "player", "held-actor", 1));
+    auto connected = session.connected.get_future ();
+    zlink_framework_options_t options (services, handlers, serializers, builder);
+    options.add_route_mesh ("held-mesh")
+      .set_routing_id (zlink::routing_id_t::from ("held-node"))
+      .listen (loopback_tcp_any_port);
+    // With a MeshNode, tcp:// sessions use the Core socket path. WebSocket
+    // uses the per-connection reader path under test.
+    options.add_stream_node ("held-stream")
+      .bind ("ws://127.0.0.1:0/held")
+      .register_session ("held-session");
+    options.apply ();
+    for (const auto &registration : detail::mesh_node_runtime_t::registrations (builder))
+        registration->core_context = detail::zlink_builder_access_t::shared_core_context (builder);
+    auto provider = services.build_provider ();
+    auto mesh = detail::mesh_node_runtime_t::from (builder, "held-mesh");
+    mesh->bind_serializers (serializers);
+    auto route =
+      std::make_shared<task_completion_source_t<std::optional<runtime::spot_address_t>>> ();
+    auto route_entered = std::make_shared<std::promise<void>> ();
+    mesh->configure_actor_route_resolver ([route, route_entered] (actor_ref_t) {
+        route_entered->set_value ();
+        return route->task ();
+    });
+    auto disconnect = std::make_shared<task_completion_source_t<void>> ();
+    auto disconnect_entered = std::make_shared<std::promise<void>> ();
+    provider.get_required<detail::actor_gateway_runtime_t> ().on_disconnect (
+      [disconnect, disconnect_entered] (const actor_ref_t &, const auto &) {
+          disconnect_entered->set_value ();
+          return disconnect->task ();
+      });
+    mesh->start ();
+    auto runtime = detail::stream_runtime_t::from (builder);
+    auto listeners = std::make_shared<runtime::listener_status_registry_t> ();
+    runtime::stream_host_service_t host (
+      std::make_shared<runtime::runtime_failure_collector_t> (), runtime, runtime.snapshots (),
+      {{"held-session",
+        [&session] (service_provider_t &) -> packet_stream_session_t & { return session; }}},
+      30s, mesh, {}, listeners);
+    host.start (provider);
+    boost::asio::io_context io;
+    boost::beast::websocket::stream<boost::asio::ip::tcp::socket> client (io);
+    client.next_layer ().connect (
+      {boost::asio::ip::make_address ("127.0.0.1"),
+       endpoint_port (listener_endpoint (*listeners, listener_kind_t::stream, "held-stream"))});
+    client.handshake ("127.0.0.1", "/held");
+    auto route_started = route_entered->get_future ();
+    auto disconnect_started = disconnect_entered->get_future ();
+    int result = 0;
+    if (connected.wait_for (5s) != std::future_status::ready
+        || route_started.wait_for (5s) != std::future_status::ready)
+        result = 1;
+    boost::system::error_code ignored;
+    client.next_layer ().close (ignored);
+    if (result == 0 && disconnect_started.wait_for (5s) != std::future_status::ready)
+        result = 2;
+    // The retirement is held on the Actor's disconnect. The deadline has
+    // already passed, so this only reads whether the listener tracks it.
+    if (result == 0 && host.drain_sessions_until (std::chrono::steady_clock::now ()))
+        result = 3;
+    route->complete (result_t<std::optional<runtime::spot_address_t>>::success (std::nullopt));
+    disconnect->complete (result_t<void>::success ());
+    host.stop ();
+    mesh->stop ();
+    provider.close ();
+    detail::shutdown_stream_dispatch_executor ();
+    return result;
+}
+
 #ifdef ZLINK_FRAMEWORK_STREAM_TEST_WITH_OPENSSL
 class close_probe_session_t final : public zlink::framework::packet_stream_session_t
 {
@@ -1226,7 +1356,7 @@ int transport_bound_close (bool tls, bool remote = false)
       .set_routing_id (zlink::routing_id_t::from ("transport-close-owner"))
       .listen (loopback_tcp_any_port);
     auto listener = options.add_stream_node ("transport-close-stream");
-    listener.bind (tls ? "tls://127.0.0.1:*" : "ws://127.0.0.1:*/close")
+    listener.bind (tls ? "tls://127.0.0.1:0" : "ws://127.0.0.1:0/close")
       .register_session ("close-session");
     if (tls)
         listener.set_tls_server (ZLINK_FRAMEWORK_STREAM_TEST_CERT, ZLINK_FRAMEWORK_STREAM_TEST_KEY,
@@ -1361,6 +1491,13 @@ int transport_bound_close (bool tls, bool remote = false)
         return 344;
     if (!closed || !sessions.is_current (other_binding))
         return 345;
+    /* The bound close is the subject of this case. The Session's binding to
+     * "actor-owner", a node that never answers, is incidental. Remove it
+     * before cleanup releases the disconnected dispatch, so the reader's
+     * retirement does not wait out the remote tombstone deadline in stop. */
+    if (const auto [unbind_error, unbound] = sessions.unbind (binding);
+        unbind_error != stateful::stateful_error_t::none || !unbound)
+        return 348;
     // The native socket must already be closed when the close task completes.
     auto &socket = tls ? tls_client.next_layer () : ws_client.next_layer ();
     socket.non_blocking (true);
@@ -1378,6 +1515,36 @@ int transport_bound_close (bool tls, bool remote = false)
 int main (int argc, char **argv)
 {
     zlink::framework::completion_owner_t completion_owner;
+    if (argc == 2 && std::string_view (argv[1]) == "--reader-retirement-tracked")
+        return reader_retirement_is_tracked_until_complete ();
+    if (argc == 2 && std::string_view (argv[1]) == "--connection-registry-lifetime") {
+        /* #2295: the last reference to a connection state is released after
+         * MeshNode has released the host that owns the session registry. The
+         * state's destructor must not use the registry. */
+        using namespace zlink::framework;
+        auto builder = test::runtime_failure_builder ();
+        builder.stream ("lifetime-stream").bind ("tcp://127.0.0.1:0").register_session ("session");
+        auto runtime = detail::stream_runtime_t::from (builder);
+        auto stream = runtime.open_session ("lifetime-stream");
+        service_collection_t services;
+        auto provider = services.build_provider ();
+        auto options = test::runtime_failure_options (runtime::mesh::raw_mesh_node_options_t{
+          .descriptor = {"lifetime-mesh",
+                         {'l', 'i', 'f', 'e'},
+                         1,
+                         1,
+                         "tcp://127.0.0.1:0",
+                         {},
+                         runtime::mesh::service_node_state_t::preparing}});
+        auto node = std::make_shared<runtime::host::public_host_runtime_t> (
+          runtime::host::host_options_t{std::move (options)});
+        std::weak_ptr<runtime::host::public_host_runtime_t> owner = node;
+        auto retained =
+          runtime::stream_host_service_test_access_t::retain_connection (provider, stream, *node);
+        node.reset ();
+        retained.reset ();
+        return owner.expired () ? 0 : 1;
+    }
 #ifdef ZLINK_FRAMEWORK_STREAM_TEST_WITH_OPENSSL
     if (argc == 2 && std::string_view (argv[1]) == "--tls-bound-close")
         return transport_bound_close (true);
@@ -1451,18 +1618,40 @@ int main (int argc, char **argv)
 
     zlink::framework::zlink_builder_t zlink = zlink::framework::test::runtime_failure_builder ();
     zlink.stream ("client-stream").bind ("tcp://0.0.0.0:9200").register_session ("client");
-    std::atomic_bool saw_stream_session_flow{false};
-    std::vector<zlink::framework::message_flow_event_t> stream_flow_events;
+    // The stream dispatch executor can emit after this scope ends, so the observer owns the state.
+    struct flow_state_t
+    {
+        std::atomic_bool saw_stream_session_flow{false};
+        std::mutex mutex;
+        std::vector<zlink::framework::message_flow_event_t> events;
+
+        std::vector<zlink::framework::message_flow_event_t> snapshot ()
+        {
+            const std::lock_guard lock (mutex);
+            return events;
+        }
+
+        bool none_of (
+          const std::function<bool (const zlink::framework::message_flow_event_t &)> &predicate)
+        {
+            const std::lock_guard lock (mutex);
+            return std::none_of (events.begin (), events.end (), predicate);
+        }
+    };
+    const auto flow_state = std::make_shared<flow_state_t> ();
     zlink::framework::dispatch_options_t flow_options;
     flow_options.message_flow (zlink::framework::message_flow_log_mode_t::normal);
     zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
-      flow_options, [&] (const zlink::framework::message_flow_event_t &event) {
-          stream_flow_events.push_back (event);
+      flow_options, [flow_state] (const zlink::framework::message_flow_event_t &event) {
+          {
+              const std::lock_guard lock (flow_state->mutex);
+              flow_state->events.push_back (event);
+          }
           if (event.surface == zlink::framework::dispatch_error_surface_t::stream_session
               && event.outcome == zlink::framework::message_flow_outcome_t::received
               && event.stream_session_id
               && *event.stream_session_id == zlink::routing_id_t::from ("stream-rid").to_hex ())
-              saw_stream_session_flow.store (true, std::memory_order_release);
+              flow_state->saw_stream_session_flow.store (true, std::memory_order_release);
       });
     zlink::framework::detail::apply_dispatch_options (zlink, flow_options);
     zlink::framework::serializer_registry_t serializers;
@@ -1760,12 +1949,13 @@ int main (int argc, char **argv)
                                   zlink::message_t::from (std::string ("payload")))) {
         return 8;
     }
-    if (!saw_stream_session_flow.load (std::memory_order_acquire))
+    if (!flow_state->saw_stream_session_flow.load (std::memory_order_acquire))
         return 229;
     // Spec 26 §2.1: the typed handler start of a STREAM packet records `dispatched` once, after `received`.
     {
         std::vector<zlink::framework::message_flow_outcome_t> move_phases;
-        for (const auto &event : stream_flow_events) {
+        const auto flow_events = flow_state->snapshot ();
+        for (const auto &event : flow_events) {
             if (event.surface == zlink::framework::dispatch_error_surface_t::stream_session
                 && event.packet_name == std::optional<std::string> ("move"))
                 move_phases.push_back (event.outcome);
@@ -1879,13 +2069,11 @@ int main (int argc, char **argv)
     stale_send_header.with_actor_slot (2);
     if (!runtime.dispatch_packet (actor_session, actor_stream, stale_send_header,
                                   zlink::message_t::from (std::string ("stale-send")))
-        || actor_session.events.size () != 1
-        || std::none_of (
-          stream_flow_events.begin (), stream_flow_events.end (), [] (const auto &event) {
-              return event.outcome == zlink::framework::message_flow_outcome_t::dropped
-                     && event.message_kind == zlink::framework::dispatch_message_kind_t::send
-                     && event.reason == zlink::framework::message_flow_reason_t::stale_target;
-          })) {
+        || actor_session.events.size () != 1 || flow_state->none_of ([] (const auto &event) {
+               return event.outcome == zlink::framework::message_flow_outcome_t::dropped
+                      && event.message_kind == zlink::framework::dispatch_message_kind_t::send
+                      && event.reason == zlink::framework::message_flow_reason_t::stale_target;
+           })) {
         return 324;
     }
     bool hidden_until_bound = false;
@@ -2347,7 +2535,7 @@ int main (int argc, char **argv)
     zlink::framework::zlink_framework_options_t mutual_tls_options (
       mutual_tls_services, mutual_tls_handlers, mutual_tls_serializers, mutual_tls_zlink);
     mutual_tls_options.add_stream_node ("mutual-tls-listener")
-      .bind ("tls://127.0.0.1:*")
+      .bind ("tls://127.0.0.1:0")
       .set_tls_server (ZLINK_FRAMEWORK_STREAM_TEST_CERT, ZLINK_FRAMEWORK_STREAM_TEST_KEY, true)
       .register_session ("mutual-tls-listener-session");
     mutual_tls_options.apply ();
@@ -3256,7 +3444,10 @@ int main (int argc, char **argv)
     if (!error_close_stop_finished) {
         error_close_stop_thread.detach ();
         error_close_mesh->stop ();
-        return 320;
+        // The detached thread still uses error_close_host and the stop promise on this
+        // stack. Leave without unwinding so nothing it touches is destroyed.
+        std::cout.flush ();
+        std::_Exit (320);
     }
     error_close_stop_thread.join ();
     error_close_mesh->stop ();

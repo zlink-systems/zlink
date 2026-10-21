@@ -3,6 +3,7 @@ package systems.zlink.framework.runtime.spots;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import org.junit.jupiter.api.Test;
+
 import systems.zlink.framework.locations.ZLinkPlacementObjectKind;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRuntimeMetricProbe;
 

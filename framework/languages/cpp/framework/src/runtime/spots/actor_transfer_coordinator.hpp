@@ -398,7 +398,7 @@ class actor_transfer_coordinator_t
         actor_move_phase_t phase;
         std::string transfer_id;
         std::optional<std::chrono::steady_clock::time_point> transfer_started_at;
-        std::shared_ptr<task_completion_source_t<void>> source_completion;
+        std::shared_ptr<task_completion_source_t<void>> close_completion;
         // reconcile is entered for a genuinely ambiguous outcome (e.g. the
         // FINALIZE/cutover submission itself failed, so the source cannot
         // tell whether the target ever received it) where nothing today
@@ -417,6 +417,9 @@ class actor_transfer_coordinator_t
     {
         return move.phase == actor_move_phase_t::source_remote;
     }
+    static bool is_source_move (const move_state_t &move) noexcept;
+    static std::shared_ptr<task_completion_source_t<void>>
+    close_completion_on_lane (move_state_t &move);
 
     struct message_follow_route_t
     {

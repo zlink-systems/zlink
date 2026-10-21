@@ -253,12 +253,13 @@ int main ()
                                std::nullopt);
     if (!connection->await_write ())
         return 2;
-    std::promise<error_code_t> terminal;
-    auto terminal_result = terminal.get_future ();
+    // The callback owns the promise: it may run after an early return.
+    auto terminal = std::make_shared<std::promise<error_code_t>> ();
+    auto terminal_result = terminal->get_future ();
     detail::submit_request_async (
       state, packet_t{.name = "expires", .payload = {2}}, std::chrono::milliseconds (10),
-      [&] (result_t<detail::request_reply_t> result) {
-          terminal.set_value (*result.error_code ());
+      [terminal] (result_t<detail::request_reply_t> result) {
+          terminal->set_value (*result.error_code ());
       },
       true);
     if (terminal_result.wait_for (std::chrono::seconds (5)) != std::future_status::ready)

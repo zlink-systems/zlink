@@ -167,7 +167,7 @@ class mesh_node_runtime_t
       host::spot_route_fence_resolver_t resolver,
       std::chrono::milliseconds owner_lease_fencing_margin = std::chrono::seconds (5),
       std::chrono::milliseconds session_relocation_seal_timeout =
-        location_options_t{}.session_relocation_seal_timeout);
+        detail::default_session_relocation_seal_timeout);
     void configure_actor_route_resolver (
       std::function<task_t<std::optional<runtime::spot_address_t>> (actor_ref_t)> resolver,
       std::function<void (const runtime::protocol::actor_route_fence_t &)> invalidator = {});
@@ -417,12 +417,13 @@ class mesh_node_runtime_t
     await_request_reply (const host::pending_operation_t &operation,
                          std::string_view operation_name);
 
+    // The coroutine owns both callbacks; a caller may discard the task.
     task_t<std::size_t>
-    dispatch_ready (const std::function<void (const host::ready_record_t &,
-                                              const host::receive_record_t &,
-                                              std::vector<zlink::message_t>)> &dispatch,
+    dispatch_ready (std::function<void (const host::ready_record_t &,
+                                        const host::receive_record_t &,
+                                        std::vector<zlink::message_t>)> dispatch,
                     bool accept_application_receive = true,
-                    const std::function<bool ()> &next_application_receive = {});
+                    std::function<bool ()> next_application_receive = {});
     host::node_status_t status () const;
     task_t<std::tuple<std::vector<std::string>, std::int32_t, std::int32_t>>
     monitoring_configuration_async () const;
@@ -616,7 +617,7 @@ class mesh_node_runtime_t
     std::function<void (const runtime::protocol::actor_route_fence_t &)> _actor_route_invalidator;
     std::chrono::milliseconds _owner_lease_fencing_margin{5'000};
     std::chrono::milliseconds _session_relocation_seal_timeout =
-      location_options_t{}.session_relocation_seal_timeout;
+      detail::default_session_relocation_seal_timeout;
     host::actor_create_operation_target_t _actor_create_target;
     runtime::offload_executor_t _observed_spot_authority_lane_executor;
     mutable runtime::state_lane_t _observed_spot_authority_lane{

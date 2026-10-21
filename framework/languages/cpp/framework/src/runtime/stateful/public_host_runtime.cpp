@@ -6809,10 +6809,10 @@ bool public_host_runtime_t::dispatch_bound_session_send (
 }
 
 task_t<std::size_t> public_host_runtime_t::dispatch_ready (
-  const std::function<void (
-    const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch,
+  std::function<void (
+    const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
   bool accept_application_receive,
-  const std::function<bool ()> &next_application_receive)
+  std::function<bool ()> next_application_receive)
 {
     if (!dispatch) {
         throw std::invalid_argument ("framework public host dispatch callback is required");

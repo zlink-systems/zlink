@@ -99,6 +99,7 @@
         <Compile Include="Runtime/MeshMailboxReadinessTests.cs"/>
         <Compile Include="Runtime/MeshPermitHandoffTests.cs"/>
         <Compile Include="Runtime/MeshReceiveWakeTests.cs"/>
+        <Compile Include="Runtime/ReceiveClaimCostTests.cs"/>
         <Compile Include="Runtime/MeshReplyPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/MeshOutboundPayloadOwnershipTests.cs"/>
         <Compile Include="Runtime/MeshMonitorHotPathTests.cs"/>
@@ -147,6 +148,7 @@
         <Compile Include="Runtime/FanoutAutomaticDiscoveryTests.cs"/>
         <Compile Include="Runtime/FanoutSubscriptionTests.cs"/>
         <Compile Include="Runtime/EnvelopeCodecTests.cs"/>
+        <Compile Include="Runtime/EnvelopeCodecAllocationRegressionTests.cs"/>
         <Compile Include="Runtime/MessagingHotPathWireTests.cs"/>
         <Compile Include="Runtime/ErrorReplyWireConvergenceTests.cs"/>
         <Compile Include="Runtime/EndpointConnectionsTests.cs"/>
@@ -179,6 +181,7 @@
         <Compile Include="Runtime/LogicalMulticastSubmitTests.cs"/>
         <Compile Include="Runtime/SharedAsyncDisposalTests.cs"/>
         <Compile Include="Runtime/SubmitAdmissionRuntimeTests.cs"/>
+        <Compile Include="Runtime/DirectRequestWaitCostTests.cs"/>
         <Compile Include="Runtime/FanoutPublishAdmissionTests.cs"/>
         <Compile Include="Runtime/BackendSocketOptionsMapperTests.cs"/>
         <Compile Include="Runtime/ChannelNoEligibleMemberTests.cs"/>
@@ -224,6 +227,7 @@
         <Compile Include="Runtime/StreamSessionForcedCleanupTests.cs"/>
         <Compile Include="Runtime/StreamFlowEndToEndTests.cs"/>
         <Compile Include="Runtime/StreamRequestRoundTripLatencyTests.cs"/>
+        <Compile Include="Runtime/StreamFrameWriteTests.cs"/>
         <Compile Include="Runtime/SessionJobQueueLoadTests.cs"/>
         <Compile Include="Runtime/TimerLifecycleTests.cs"/>
         <Compile Include="Runtime/ActivationReadyTests.cs"/>

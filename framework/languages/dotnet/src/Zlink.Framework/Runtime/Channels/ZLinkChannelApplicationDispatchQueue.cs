@@ -175,18 +175,25 @@ internal sealed class ZLinkChannelReplyGate
     private int _activeReplies;
     private TaskCompletionSource? _repliesDrained;
 
-    internal async ValueTask<bool> TryInvokeAsync(Action reply)
+    internal ValueTask<bool> TryInvokeAsync(Action reply) =>
+        reply is null
+            ? ValueTask.FromException<bool>(new ArgumentNullException(nameof(reply)))
+            : TryInvokeAsync(static callback => callback(), reply);
+
+    internal async ValueTask<bool> TryInvokeAsync<TState>(Action<TState> reply, TState state)
     {
         ArgumentNullException.ThrowIfNull(reply);
-        if (!await _lane.RunAsync(BeginReply).ConfigureAwait(false))
+        if (!await _lane.RunAsync(static self => self.BeginReply(), this).ConfigureAwait(false))
             return false;
         try
         {
-            reply();
+            reply(state);
         }
         finally
         {
-            var completed = await _lane.RunAsync(CompleteReply).ConfigureAwait(false);
+            var completed = await _lane
+                .RunAsync(static self => self.CompleteReply(), this)
+                .ConfigureAwait(false);
             completed?.TrySetResult();
         }
         return true;
@@ -231,6 +238,9 @@ internal sealed class ZLinkChannelReplyGate
     }
 
     internal bool TryInvoke(Action reply) => AwaitStateLane(TryInvokeAsync(reply));
+
+    internal bool TryInvoke<TState>(Action<TState> reply, TState state) =>
+        AwaitStateLane(TryInvokeAsync(reply, state));
 
     internal void Close() => AwaitStateLane(CloseAsync());
 }

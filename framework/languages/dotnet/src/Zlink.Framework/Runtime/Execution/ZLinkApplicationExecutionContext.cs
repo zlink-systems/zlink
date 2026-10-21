@@ -44,12 +44,12 @@ internal static class ZLinkApplicationExecutionContext
             );
     }
 
-    public static IDisposable Push(ZLinkApplicationExecutionScope scope)
+    public static Scope Push(ZLinkApplicationExecutionScope scope)
     {
         var previous = CurrentScope.Value;
         var claim = new ZLinkApplicationExecutionClaim();
         CurrentScope.Value = scope with { Claim = claim };
-        return new Revert(previous, claim);
+        return new Scope(previous, claim);
     }
 
     public static ZLinkSerialTurn RequireYieldTurn(string operation) =>
@@ -152,7 +152,7 @@ internal static class ZLinkApplicationExecutionContext
         );
     }
 
-    private sealed class Revert(
+    internal readonly struct Scope(
         ZLinkApplicationExecutionScope? previous,
         ZLinkApplicationExecutionClaim claim
     ) : IDisposable
