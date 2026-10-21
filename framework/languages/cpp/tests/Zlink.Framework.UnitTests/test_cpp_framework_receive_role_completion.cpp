@@ -51,12 +51,17 @@ int main ()
     std::promise<runtime::foundation::operation_terminal_t> completed;
     auto terminal = completed.get_future ();
     // Expiry contributes an E5 completion and no ordinary receive record.
-    const auto operation = node->native_node ().transport ().register_local_operation (
-      runtime::foundation::operation_registry_t::clock_t::time_point::min (),
-      [&] (runtime::foundation::operation_terminal_t result, zlink::message_t) {
-          assert (detail::current_completion_owner () != nullptr);
-          completed.set_value (result);
-      });
+    const auto operation =
+      node->native_node ()
+        .transport ()
+        .register_local_operation_async (
+          runtime::foundation::operation_registry_t::clock_t::time_point::min (),
+          [&] (runtime::foundation::operation_terminal_t result, zlink::message_t) {
+              assert (detail::current_completion_owner () != nullptr);
+              completed.set_value (result);
+          })
+        .result ()
+        .value ();
     assert (operation);
     assert (terminal.wait_for (1s) == std::future_status::ready);
     assert (terminal.get () == runtime::foundation::operation_terminal_t::timed_out);
@@ -65,25 +70,33 @@ int main ()
     auto callback_running = callback_entered.get_future ();
     auto released = release_callback.get_future ();
     std::atomic_size_t callbacks{0};
-    assert (node->native_node ().transport ().register_local_operation (
-      runtime::foundation::operation_registry_t::clock_t::time_point::min (),
-      [&] (runtime::foundation::operation_terminal_t result, zlink::message_t) {
-          assert (detail::current_completion_owner () != nullptr);
-          assert (result == runtime::foundation::operation_terminal_t::timed_out);
-          callback_entered.set_value ();
-          assert (released.wait_for (5s) == std::future_status::ready);
-          ++callbacks;
-      }));
+    assert (node->native_node ()
+              .transport ()
+              .register_local_operation_async (
+                runtime::foundation::operation_registry_t::clock_t::time_point::min (),
+                [&] (runtime::foundation::operation_terminal_t result, zlink::message_t) {
+                    assert (detail::current_completion_owner () != nullptr);
+                    assert (result == runtime::foundation::operation_terminal_t::timed_out);
+                    callback_entered.set_value ();
+                    assert (released.wait_for (5s) == std::future_status::ready);
+                    ++callbacks;
+                })
+              .result ()
+              .value ());
     assert (callback_running.wait_for (1s) == std::future_status::ready);
     std::promise<runtime::foundation::operation_terminal_t> shutdown_terminal;
     auto shutdown_delivered = shutdown_terminal.get_future ();
-    assert (node->native_node ().transport ().register_local_operation (
-      runtime::foundation::operation_registry_t::clock_t::time_point::max (),
-      [&] (runtime::foundation::operation_terminal_t result, zlink::message_t) {
-          assert (detail::current_completion_owner () != nullptr);
-          ++callbacks;
-          shutdown_terminal.set_value (result);
-      }));
+    assert (node->native_node ()
+              .transport ()
+              .register_local_operation_async (
+                runtime::foundation::operation_registry_t::clock_t::time_point::max (),
+                [&] (runtime::foundation::operation_terminal_t result, zlink::message_t) {
+                    assert (detail::current_completion_owner () != nullptr);
+                    ++callbacks;
+                    shutdown_terminal.set_value (result);
+                })
+              .result ()
+              .value ());
     service.request_stop ();
     auto stopping = std::async (std::launch::async, [&] {
         stop_started.set_value ();

@@ -2929,7 +2929,7 @@ void verify_raw_owner_node_send_and_liveness (
     const auto verify_retained_payloads = [] (const mesh::service_mailbox_claim_t &claim) {
         for (const auto &record : claim.records) {
             const auto payload = protocol::decode_application_payload (
-              protocol::message_bytes (record.parts.back ()), false);
+              protocol::message_bytes (record->parts.back ()), false);
             assert (payload.packet_name == "SaturatedControl");
             const auto &body = payload.payload_bytes ();
             assert (body.size () == 512u * 1024u);
@@ -3956,7 +3956,7 @@ void verify_liveness_without_selected_route ()
     assert (await_task (source.send_to_node (live.node_routing_id, payload)));
     assert (await_task (survivor.send_to_node (local.node_routing_id, payload)));
     for (auto *receiver : {&source, &survivor}) {
-        std::optional<mesh::service_mailbox_claim_t> claim;
+        std::shared_ptr<mesh::service_mailbox_claim_t> claim;
         while (!claim && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
             (void) await_task (receiver->pump_one (now));
             claim =
@@ -3964,7 +3964,7 @@ void verify_liveness_without_selected_route ()
         }
         assert (claim && claim->records.size () == 1);
         assert (protocol::decode_application_payload (
-                  protocol::message_bytes (claim->records.front ().parts.at (1)))
+                  protocol::message_bytes (claim->records.front ()->parts.at (1)))
                 == payload);
         assert (receiver->mailbox ().release (*claim));
     }
