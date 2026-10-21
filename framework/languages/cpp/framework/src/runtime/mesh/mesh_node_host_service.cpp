@@ -2452,8 +2452,9 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
               [spot_resolver,
                mesh_name] (zlink::routing_id_t target_node_rid, std::string target_spot_id,
                            std::uint64_t) -> task_t<std::optional<host::route_fence_t>> {
+                  const auto resolver = spot_resolver;
                   const auto resolved = co_await await_result (
-                    spot_resolver->resolve_spot_address (mesh_name, std::move (target_spot_id)));
+                    resolver->resolve_spot_address (mesh_name, std::move (target_spot_id)));
                   if (!resolved || !resolved.value ())
                       co_return std::nullopt;
                   const auto &address = *resolved.value ();

@@ -1461,7 +1461,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation,
     EXPECT_EQ (2, activations.load ());
 }
 
-TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBeforeNextColdActivation)
+// Routing §2.2: ShuttingDown is not a stale-route result. A separate cache
+// invalidation, such as a Message Follow notice, enables the next authority read.
+TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalKeepsRouteUntilInvalidation)
 {
     namespace messaging = zlink::framework::runtime::messaging;
 
@@ -1555,9 +1557,23 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
     EXPECT_EQ (0, direct_requests.load ());
     EXPECT_EQ (1, ready_failures.load ());
     EXPECT_EQ (0, cold_activations.load ());
-    EXPECT_FALSE (resolver.addresses.contains ("player-alice"));
+    EXPECT_TRUE (resolver.addresses.contains ("player-alice"));
 
-    const auto rehydrated = client.request_to_spot ("player-alice", request_t{2})
+    const auto still_closing = client.request_to_spot ("player-alice", request_t{2})
+                                 .instance_spot ("player-quest")
+                                 .in_mesh ("gamequest")
+                                 .async<reply_t> ()
+                                 .result ();
+    ASSERT_FALSE (still_closing);
+    EXPECT_EQ (zlink::framework::framework_error_kind_t::shutting_down,
+               still_closing.error_kind ());
+    EXPECT_TRUE (resolver.addresses.contains ("player-alice"));
+    EXPECT_EQ (2, ready_failures.load ());
+    EXPECT_EQ (0, cold_activations.load ());
+
+    resolver.invalidate_spot_address ("player-alice");
+
+    const auto rehydrated = client.request_to_spot ("player-alice", request_t{3})
                               .instance_spot ("player-quest")
                               .in_mesh ("gamequest")
                               .async<reply_t> ()
@@ -1565,9 +1581,9 @@ TEST (ZLinkFrameworkInstanceSpotActivation, ClosingOwnerTerminalInvalidatesBefor
     ASSERT_TRUE (rehydrated);
     EXPECT_EQ (3, rehydrated.value ().value);
     EXPECT_EQ (0, direct_requests.load ());
-    EXPECT_EQ (1, ready_failures.load ());
+    EXPECT_EQ (2, ready_failures.load ());
     EXPECT_EQ (1, cold_activations.load ());
-    EXPECT_EQ (2, resolver.reads.load ());
+    EXPECT_EQ (3, resolver.reads.load ());
 }
 
 // Failover policy §4.4: an Instance intent request whose cached Ready route the

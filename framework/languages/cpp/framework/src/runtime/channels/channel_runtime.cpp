@@ -920,6 +920,18 @@ namespace zlink::framework
 namespace
 {
 
+void invalidate_stale_spot_route (runtime::spot_address_resolver_t &resolver,
+                                  std::string_view target,
+                                  const framework_exception_t *error)
+{
+    // Routing §2.2: only a stale route result invalidates the next call's cache.
+    if (error
+        && (error->kind () == framework_error_kind_t::not_found
+            || error->kind () == framework_error_kind_t::unavailable)
+        && detail::error_origin (*error) != detail::error_origin_t::application)
+        resolver.invalidate_spot_address (target);
+}
+
 channel_capability_snapshot_t &capability_snapshot (detail::capability_builder_state_t &state)
 {
     return state.target == nullptr ? state.snapshot : *state.target;
@@ -2252,12 +2264,7 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
           address->spot_generation, packet_name, message_type, std::move (encode_payload),
           metadata);
     }
-    if (!submitted
-        && (submitted.error_kind () == framework_error_kind_t::not_found
-            || submitted.error_kind () == framework_error_kind_t::unavailable
-            || submitted.error_kind () == framework_error_kind_t::shutting_down)) {
-        resolver->invalidate_spot_address (target);
-    }
+    invalidate_stale_spot_route (*resolver, target, submitted.error ());
     co_return submitted;
 }
 
@@ -2352,15 +2359,7 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_me
           std::move (encode_payload), timeout, std::move (metadata)));
     }
     catch (const framework_exception_t &error) {
-        /* Framework의 NotFound/Unavailable/ShuttingDown terminal은 기존 주소를 무효화한다.
-         * 현재 operation은 terminal로 끝나고 다음 호출이 global SpotId를 조회한다.
-         * application-origin 실패의 주소는 기존 규칙대로 유지한다. */
-        if ((error.kind () == framework_error_kind_t::not_found
-             || error.kind () == framework_error_kind_t::unavailable
-             || error.kind () == framework_error_kind_t::shutting_down)
-            && detail::error_origin (error) != detail::error_origin_t::application) {
-            resolver->invalidate_spot_address (target);
-        }
+        invalidate_stale_spot_route (*resolver, target, &error);
         throw;
     }
 }

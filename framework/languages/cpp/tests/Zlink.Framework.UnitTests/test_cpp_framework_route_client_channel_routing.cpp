@@ -947,6 +947,7 @@ void run_late_spot_terminal (
                      .async<route_reply_t> ();
     EXPECT_EQ (pending.result ().error_kind (), framework_error_kind_t::shutting_down);
     // The caller observed the terminal; the resolver owner may release it now.
+    channel.bind_spot_address_resolver (nullptr);
     release_resolver ();
     physical_reply.complete (
       result_t<result_t<message_parts_t>>::success (result_t<message_parts_t>::failure (
@@ -957,7 +958,7 @@ void run_late_spot_terminal (
 }
 } // namespace
 
-TEST (CppFrameworkRouteClientChannelRouting, LateSpotTerminalKeepsResolverAfterCallerRelease)
+TEST (CppFrameworkRouteClientChannelRouting, LateSpotTerminalDoesNotReachReleasedResolver)
 {
     const auto invalidations = std::make_shared<std::atomic<unsigned>> (0u);
     auto resolver = std::make_shared<late_terminal_resolver_probe_t> (invalidations);
@@ -970,6 +971,7 @@ TEST (CppFrameworkRouteClientChannelRouting, LateSpotTerminalKeepsResolverAfterC
     EXPECT_TRUE (owned_after_release)
       << "the caller's release ended the resolver while its Spot operation still ran";
     EXPECT_EQ (invalidations->load (), 1u);
+    EXPECT_TRUE (observed.expired ()) << "the terminal retained the resolver";
 }
 
 TEST (CppFrameworkRouteClientChannelRouting, LateSpotTerminalAfterResolverDestroyedAsan)
@@ -981,4 +983,90 @@ TEST (CppFrameworkRouteClientChannelRouting, LateSpotTerminalAfterResolverDestro
 #else
     GTEST_SKIP () << "destroys the resolver; meaningful only under AddressSanitizer";
 #endif
+}
+
+TEST (CppFrameworkRouteClientChannelRouting, SpotTerminalInvalidatesOnlyStaleRoutes)
+{
+    using namespace zlink::framework;
+    using runtime::messaging::message_parts_t;
+    class cached_resolver_t final : public runtime::spot_address_resolver_t
+    {
+      public:
+        task_t<std::optional<runtime::spot_address_t>>
+        resolve_spot_address (std::string, std::string spot_id) override
+        {
+            if (!cached) {
+                ++store_reads;
+                cached = runtime::spot_address_t{
+                  "admission-mesh", zlink::routing_id_t::from ("target"), std::move (spot_id), 1};
+            }
+            return task_t<std::optional<runtime::spot_address_t>> (
+              result_t<std::optional<runtime::spot_address_t>>::success (cached));
+        }
+        void invalidate_spot_address (std::string_view) override
+        {
+            ++invalidations;
+            cached.reset ();
+        }
+        void invalidate_all_routes_after_store_recovery () override { cached.reset (); }
+        std::optional<runtime::spot_address_t> cached;
+        unsigned store_reads = 0;
+        unsigned invalidations = 0;
+    };
+
+    for (const auto kind :
+         {framework_error_kind_t::shutting_down, framework_error_kind_t::not_found,
+          framework_error_kind_t::unavailable}) {
+        for (const bool request : {false, true}) {
+            for (const auto origin :
+                 {detail::error_origin_t::unspecified, detail::error_origin_t::framework,
+                  detail::error_origin_t::application}) {
+                SCOPED_TRACE (static_cast<int> (kind));
+                SCOPED_TRACE (request);
+                SCOPED_TRACE (static_cast<int> (origin));
+                serializer_registry_t serializers;
+                add_int_serializer<route_event_t> (serializers, "application/x-route-event");
+                add_int_serializer<route_request_t> (serializers, "application/x-route-request");
+                add_int_serializer<route_reply_t> (serializers, "application/x-route-reply");
+                auto builder = test::runtime_failure_builder ();
+                auto channel = detail::channel_runtime_t::from (builder.message_bus ());
+                channel.bind_serializers (serializers);
+                const auto resolver_owner = std::make_shared<cached_resolver_t> ();
+                channel.bind_spot_address_resolver (resolver_owner);
+                channel.bind_spot_mesh_transport (
+                  "admission-mesh",
+                  [kind, origin] (const zlink::routing_id_t &, const std::string &, std::uint64_t,
+                                  message_parts_t) -> task_t<result_t<void>> {
+                      co_return detail::result_access_t::failure<void> (detail::with_error_origin (
+                        framework_exception_t (kind, "target terminal"), origin));
+                  },
+                  [kind, origin] (const zlink::routing_id_t &, const std::string &, std::uint64_t,
+                                  message_parts_t, std::chrono::milliseconds)
+                    -> request_task_t<result_t<message_parts_t>> {
+                      co_return detail::result_access_t::failure<message_parts_t> (
+                        detail::with_error_origin (framework_exception_t (kind, "target terminal"),
+                                                   origin));
+                  });
+                auto client = builder.route_client (serializers);
+                for (unsigned call = 0; call != 2; ++call) {
+                    if (request) {
+                        auto pending = client.request_to_spot ("cached-spot", route_request_t{7})
+                                         .async<route_reply_t> ();
+                        EXPECT_EQ (pending.result ().error_kind (), kind);
+                        (void) detail::request_task_access_t::physical_reply (pending).result ();
+                    } else {
+                        EXPECT_EQ (client.send_to_spot ("cached-spot", route_event_t{7})
+                                     .async ()
+                                     .result ()
+                                     .error_kind (),
+                                   kind);
+                    }
+                }
+                const bool stale = kind != framework_error_kind_t::shutting_down
+                                   && origin != detail::error_origin_t::application;
+                EXPECT_EQ (resolver_owner->store_reads, stale ? 2u : 1u);
+                EXPECT_EQ (resolver_owner->invalidations, stale ? 2u : 0u);
+            }
+        }
+    }
 }
