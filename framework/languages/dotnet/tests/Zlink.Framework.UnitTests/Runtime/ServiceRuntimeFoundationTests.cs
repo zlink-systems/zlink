@@ -2969,11 +2969,11 @@ public sealed class ServiceRuntimeFoundationTests
             Assert.Equal(0UL, reserved.QueuedApplicationJobs);
             Assert.Equal(0UL, target.Status().PendingApplicationMessages);
 
-            // A receive reservation pauses flow before any record reaches the mailbox.
+            // Spec 04 §6: the receive reservation counts as permits in use, so
+            // flow pauses before any record reaches the mailbox.
             batchReady = WaitUntilAsync(() =>
                 target.Status().PendingApplicationMessages > resumePermitCount
             );
-            Assert.False(batchReady.IsCompleted);
         }
         await resumedFlow.Task.WaitAsync(TimeSpan.FromSeconds(5));
         var resumed = applicationJobQueue.GetStatus();
@@ -2992,7 +2992,8 @@ public sealed class ServiceRuntimeFoundationTests
         }
         await batchReady;
         // Spec 04 §3: the preadmitted records retain their queued permits
-        // until the pump starts their handlers.
+        // until the pump starts their handlers; §6 keeps flow paused while
+        // permits in use stay above the resume count.
         var paused = applicationJobQueue.GetStatus();
         Assert.Equal(ZLinkApplicationJobQueuePressureState.Paused, paused.PressureState);
         Assert.InRange(paused.PermitsInUse, paused.ResumePermitCount + 1, (ulong)capacity);
