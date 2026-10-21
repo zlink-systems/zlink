@@ -904,12 +904,17 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
           options.signal
         );
       } catch (error) {
-        throw mapMeshSubmissionError(
-          error,
-          `MeshNode '${meshName}' request to Spot '${spotRouteTarget.spotId}'`
-        );
+        completionPromise = Promise.reject(error);
       }
-      return this.waitForMeshReply<TReply>(meshName, completionPromise);
+      return prepareZLinkRequestReply(
+        completionPromise,
+        (completion) => this.decodeMeshReply<TReply>(meshName, completion),
+        (error) =>
+          mapMeshSubmissionError(
+            error,
+            `MeshNode '${meshName}' request to Spot '${spotRouteTarget.spotId}'`
+          )
+      );
     } catch (error) {
       return rejectZLinkRequestReply(error);
     }
@@ -998,9 +1003,9 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
         payload,
         options.timeoutMs
       );
-      let completionPromise: Promise<ZLinkMeshCompletion>;
+      let completion: ZLinkMeshCompletion;
       try {
-        completionPromise = this.completionTable(meshName).submit(
+        completion = await this.completionTable(meshName).submit(
           () =>
             node
               .entrySpot()
@@ -1025,7 +1030,6 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
           `MeshNode '${meshName}' raw request to Spot '${spotRouteTarget.spotId}'`
         );
       }
-      const completion = await completionPromise;
       if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
         try {
           throw meshRequestFailure(meshName, completion.terminalResult, completion.failureErrno);
@@ -1126,15 +1130,6 @@ export class ZLinkRuntimeRouteTransport implements ZLinkRouteClientTransport {
     );
   }
 
-  private waitForMeshReply<TReply>(
-    meshName: string,
-    completionPromise: Promise<ZLinkMeshCompletion>
-  ): ZLinkRequestResult<TReply> {
-    return prepareZLinkRequestReply(completionPromise, (completion) =>
-      this.decodeMeshReply<TReply>(meshName, completion)
-    );
-  }
-
   private decodeMeshReply<TReply>(meshName: string, completion: ZLinkMeshCompletion): TReply {
     try {
       if (completion.terminalResult !== 0 || completion.failureErrno !== 0) {
@@ -1220,7 +1215,7 @@ function mapMeshSubmitResult(result: number): ZLinkSubmitResult {
   return classifySubmitResult(result, 'Mesh submission');
 }
 
-function mapMeshSubmissionError(error: unknown, operation: string): Error {
+function mapMeshSubmissionError(error: unknown, operation: string): unknown {
   if (error instanceof ZLinkFrameworkException) {
     return error;
   }
@@ -1256,14 +1251,7 @@ function mapMeshSubmissionError(error: unknown, operation: string): Error {
       error
     );
   }
-  return createInternalFrameworkException(
-    ZLinkFrameworkInternalErrorKind.RouteNotConnected,
-    `${operation} failed before native submission completed: ${
-      error instanceof Error ? error.message : String(error)
-    }`,
-    true,
-    error
-  );
+  return error;
 }
 
 export function meshRequestFailure(
