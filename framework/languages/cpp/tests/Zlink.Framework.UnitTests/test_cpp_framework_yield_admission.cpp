@@ -152,6 +152,7 @@ bool verify_ready_await_stays_in_same_turn ()
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     const bool pending = verify_two_calls (false);
     const bool ready = verify_two_calls (true);
     const bool same_ready_turn = verify_ready_await_stays_in_same_turn ();

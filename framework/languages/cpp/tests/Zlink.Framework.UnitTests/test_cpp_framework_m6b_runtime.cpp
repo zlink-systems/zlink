@@ -8807,6 +8807,7 @@ void verify_dispatch_callbacks_survive_suspension (bool through_mesh, bool dispa
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     // This test drives runtime parts without a host.
     zlink::framework::runtime::install_host_context_hooks ();
     if (argc == 2 && std::string_view (argv[1]) == "--accepted-record-authority") {
