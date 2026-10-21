@@ -158,10 +158,10 @@ final class RouteSendCall implements ZLinkSendCall {
                         contentType,
                         Map.of());
         try {
-            return ZLinkOneWayCalls.adaptOneWay(router.send(target, parts))
-                    .whenComplete((ignored, failure) -> parts.forEach(Message::close));
+            return ZLinkOneWayCalls.adaptOneWay(
+                    ZLinkOneWayCalls.closeAfterAdmission(router.send(target, parts), parts));
         } catch (RuntimeException | Error failure) {
-            parts.forEach(Message::close);
+            Message.closeAll(parts);
             return CompletableFuture.failedFuture(failure);
         }
     }
@@ -180,25 +180,21 @@ final class RouteSendCall implements ZLinkSendCall {
                         metadata.values());
         try {
             if (node.routingId().equals(target)) {
-                return submitLocal(node, target, metadata.encode(), sendParts)
-                        .thenCompose(ZLinkOneWayCalls::oneWayStatus)
-                        .whenComplete((ignored, failure) -> sendParts.forEach(Message::close));
+                return ZLinkOneWayCalls.closeAfterAdmission(
+                                submitLocal(node, target, metadata.encode(), sendParts), sendParts)
+                        .thenCompose(ZLinkOneWayCalls::oneWayStatus);
             }
             Optional<Integer> classified = node.classifyNodeSendTarget(target);
             if (classified.isPresent()) {
-                sendParts.forEach(Message::close);
+                Message.closeAll(sendParts);
                 return ZLinkOneWayCalls.oneWayStatus(classified.orElseThrow());
             }
             CompletionStage<Void> submission =
                     node.sendToNode(target, metadata.encode(), sendParts);
-            if (ZLinkOneWayCalls.isImmediateAdmission(submission)) {
-                sendParts.forEach(Message::close);
-                return submission;
-            }
-            return ZLinkOneWayCalls.adaptOneWay(submission)
-                    .whenComplete((ignored, failure) -> sendParts.forEach(Message::close));
+            return ZLinkOneWayCalls.adaptOneWay(
+                    ZLinkOneWayCalls.closeAfterAdmission(submission, sendParts));
         } catch (RuntimeException | Error failure) {
-            sendParts.forEach(Message::close);
+            Message.closeAll(sendParts);
             return CompletableFuture.failedFuture(failure);
         }
     }
@@ -739,10 +735,9 @@ final class ChannelSendCall implements ZLinkSendCall {
                         contentType,
                         metadata == null ? Map.of() : metadata.values());
         try {
-            return client.send(parts)
-                    .whenComplete((ignored, failure) -> parts.forEach(Message::close));
+            return ZLinkOneWayCalls.closeAfterAdmission(client.send(parts), parts);
         } catch (RuntimeException | Error failure) {
-            parts.forEach(Message::close);
+            Message.closeAll(parts);
             return CompletableFuture.failedFuture(failure);
         }
     }
@@ -759,10 +754,10 @@ final class ChannelSendCall implements ZLinkSendCall {
                         contentType,
                         metadata.values());
         try {
-            return node.sendToChannel(channelName, metadata.encode(), parts)
-                    .whenComplete((ignored, failure) -> parts.forEach(Message::close));
+            return ZLinkOneWayCalls.closeAfterAdmission(
+                    node.sendToChannel(channelName, metadata.encode(), parts), parts);
         } catch (RuntimeException | Error failure) {
-            parts.forEach(Message::close);
+            Message.closeAll(parts);
             return CompletableFuture.failedFuture(failure);
         }
     }

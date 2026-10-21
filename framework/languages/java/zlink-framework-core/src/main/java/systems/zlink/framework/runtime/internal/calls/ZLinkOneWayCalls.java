@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime.internal.calls;
 
 import systems.zlink.contracts.errors.ZlinkSubmitException;
+import systems.zlink.contracts.messaging.Message;
 import systems.zlink.contracts.sockets.RequestResult;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
@@ -8,6 +9,7 @@ import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
@@ -88,8 +90,18 @@ public final class ZLinkOneWayCalls {
     }
 
     /** True when the binding accepted this send before returning to Framework. */
-    public static boolean isImmediateAdmission(CompletionStage<Void> submission) {
+    public static boolean isImmediateAdmission(CompletionStage<?> submission) {
         return submission == IMMEDIATE_ADMISSION;
+    }
+
+    /** Releases send payloads when binding admission becomes terminal. */
+    public static <T> CompletionStage<T> closeAfterAdmission(
+            CompletionStage<T> submission, List<Message> messages) {
+        if (isImmediateAdmission(submission)) {
+            Message.closeAll(messages);
+            return submission;
+        }
+        return submission.whenComplete((ignored, failure) -> Message.closeAll(messages));
     }
 
     public static CompletionStage<Void> adaptOneWay(CompletionStage<Void> submission) {
