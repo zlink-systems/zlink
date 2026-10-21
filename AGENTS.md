@@ -4,7 +4,9 @@
 디렉터리의 `AGENTS.md`가 소유한다. `CLAUDE.md`는 이 파일을 단일 진입점으로 참조한다.
 사람용 절차와 위치(빌드, gate, 성능 판정, 릴리스, 판정 기록)는 [`CONTRIBUTING.ko.md`](./CONTRIBUTING.ko.md)가 소유한다.
 내부 운영 절차(sub-agent 운영, 감독자 리뷰, 보드·worktree 위치)는 비공개 저장소 zlink-systems/docs의
-`zlink/AGENTS.md`가 소유한다. 로컬 사본은 이 저장소의 형제 폴더 `../zlink-docs`이다.
+`zlink/AGENTS.md`가 소유한다. 세션을 시작할 때 `bash scripts/dev/internal-docs.sh`를 실행하고 출력된 파일을 읽는다.
+이 스크립트는 어느 머신·worktree에서든 기본 사본 옆 `zlink-docs`에 저장소를 받거나 최신화하고, Claude sub-agent 정의를
+`~/.claude/agents/`로 복사한다. 받을 권한이 없으면 공개 규칙만 따른다.
 
 ## 1. 작업 시작과 변경 보호
 
