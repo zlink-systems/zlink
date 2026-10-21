@@ -143,8 +143,8 @@ import {
   ZLinkBackendResultError,
   type ZLinkBackendMessageLike as MessageLike
 } from '../runtime-values';
-import { translateBindingResultError } from './node-backend-adapter-support';
-import { disconnectStreamPeer } from './node-socket-backend-adapter';
+import { translateBindingResultError, toNativeRoutingId } from './node-backend-adapter-support';
+import { disconnectSocketPeer } from './node-socket-backend-adapter';
 const DEFAULT_NATIVE_ACTIVE_CAPACITY = 10_000;
 const UNSTARTED_DIAGNOSTIC_ENDPOINT = 'inproc://not-started';
 
@@ -2220,7 +2220,7 @@ class RawStreamSessionService implements StreamSessionService {
         case SubmitResult.Terminated:
           // Let the socket monitor drive the existing STREAM close/unbind
           // lifecycle instead of maintaining a second session-close state.
-          disconnectStreamPeer(this.stream, target);
+          disconnectSocketPeer(this.stream, toNativeRoutingId(target));
           throw new ZLinkBackendResultError('submit', error.result, error.nativeErrno, {
             cause: error
           });

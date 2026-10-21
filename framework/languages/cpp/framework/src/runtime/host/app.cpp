@@ -1353,7 +1353,7 @@ void app_t::_apply_zlink_framework ()
         const auto resolver_location_options = options.location_options ();
         _state->services.add_factory<runtime::store_location_resolvers_t> (
           [resolver_location_options, actor_location_observer] (service_provider_t &provider) {
-              return std::make_unique<runtime::store_location_resolvers_t> (
+              return std::make_shared<runtime::store_location_resolvers_t> (
                 provider.get_required<runtime::live_location_reader_t> (),
                 resolver_location_options, actor_location_observer);
           },
@@ -1362,9 +1362,12 @@ void app_t::_apply_zlink_framework ()
     if (!_state->services.contains (std::type_index (typeid (runtime::spot_address_resolver_t)))) {
         _state->services.add_factory<runtime::spot_address_resolver_t> (
           [] (service_provider_t &provider) {
-              return std::shared_ptr<runtime::spot_address_resolver_t> (
-                detail::service_scope_access_t::resolve_shared<
-                  runtime::store_location_resolvers_t> (provider));
+              // Shares the store resolvers' ownership: runtimes that bind this
+              // resolver keep it for their late operations.
+              const auto resolvers = detail::service_scope_access_t::get_required_shared<
+                runtime::store_location_resolvers_t> (provider);
+              return std::shared_ptr<runtime::spot_address_resolver_t> (resolvers,
+                                                                        resolvers.get ());
           },
           service_lifetime_t::singleton);
     }
@@ -1472,13 +1475,13 @@ void app_t::_apply_zlink_framework ()
     *actor_mesh_name = application_mesh_name;
     {
         auto provider = _state->services.build_provider ();
-        channel_runtime.bind_spot_address_resolver (
-          detail::service_scope_access_t::resolve_shared<runtime::spot_address_resolver_t> (
-            provider));
+        const auto spot_resolver =
+          detail::service_scope_access_t::get_required_shared<runtime::spot_address_resolver_t> (
+            provider);
+        channel_runtime.bind_spot_address_resolver (spot_resolver);
         provider.get_required<runtime::store_location_resolvers_t> ().set_actor_mesh_name (
           application_mesh_name);
         auto &location_lifecycle = provider.get_required<runtime::location_lifecycle_t> ();
-        auto &spot_resolver = provider.get_required<runtime::spot_address_resolver_t> ();
         auto route_client = provider.get_required<route_client_t> ();
         for (const auto &registration : mesh_node_registrations) {
             registration->spot_state->dispatch = options.configure_dispatch ();
@@ -2259,12 +2262,18 @@ void app_t::_apply_zlink_framework ()
           });
         actor_gateway_runtime.on_join_spot (
           [application_mesh, actor_gateway_runtime,
-           spot_locations = &_state->services.build_provider ()
-                               .get_required<runtime::spot_address_resolver_t> ()] (
-            const actor_ref_t &actor, spot_id_t target_spot, const zlink::message_t &request,
-            std::string packet_name, std::string content_type,
-            std::chrono::milliseconds timeout) -> task_t<detail::actor_join_reply_t> {
-              auto located = co_await spot_locations->resolve_spot_address ({}, target_spot);
+           spot_locations =
+             [&] {
+                 auto provider = _state->services.build_provider ();
+                 return detail::service_scope_access_t::get_required_shared<
+                   runtime::spot_address_resolver_t> (provider);
+             }()] (const actor_ref_t &actor, spot_id_t target_spot, const zlink::message_t &request,
+                   std::string packet_name, std::string content_type,
+                   std::chrono::milliseconds timeout) -> task_t<detail::actor_join_reply_t> {
+              const auto resolver = spot_locations;
+              const auto mesh = application_mesh;
+              const auto gateway = actor_gateway_runtime;
+              auto located = co_await resolver->resolve_spot_address ({}, target_spot);
               if (!located) {
                   co_return result_t<detail::actor_join_reply_t>::failure (
                     framework_error_kind_t::not_found, "target Spot location was not found");
@@ -2276,14 +2285,13 @@ void app_t::_apply_zlink_framework ()
                     "target Spot lifecycle generation was not published");
               }
               if (target.owner.lease_generation > 0) {
-                  application_mesh->observe_spot_authority (
+                  mesh->observe_spot_authority (
                     target.node_rid, target.spot_id, target.object_generation,
                     target.node_generation, target.authority_owner_generation,
                     static_cast<std::uint64_t> (target.owner.lease_generation));
               }
-              const auto bound_session =
-                co_await actor_gateway_runtime.bound_session_route_async (actor);
-              co_return co_await application_mesh->join_application_actor_to_spot (
+              const auto bound_session = co_await gateway.bound_session_route_async (actor);
+              co_return co_await mesh->join_application_actor_to_spot (
                 actor, target, request, timeout,
                 bound_session ? std::make_optional (bound_session->node_rid) : std::nullopt,
                 bound_session ? bound_session->session_rid : std::nullopt, std::move (packet_name),
@@ -2966,6 +2974,8 @@ app_t &app_t::add_hosted_service (std::unique_ptr<hosted_service_t> service)
 
 int app_t::run (int argc, char **argv)
 try {
+    const completion_owner_t completion_owner;
+    const auto completion_dispatcher = detail::borrow_completion_dispatcher ();
     _apply_zlink_framework ();
     _state->config.load_cli (argc, argv);
     detail::serializer_registry_access_t::freeze (_state->serializers);
@@ -2990,7 +3000,8 @@ try {
     try {
         runtime::install_host_context_hooks ();
         runtime::configure_handler_coroutine_executor (
-          _state->framework_options ? _state->framework_options->handler_coroutine_workers () : 0);
+          _state->framework_options ? _state->framework_options->handler_coroutine_workers () : 0,
+          completion_dispatcher);
         _state->start_hosted_services (provider, started);
         (void) detail::app_state_t::enter_serving_after_publication (
           _state->status_access, _state->startup_publication ());

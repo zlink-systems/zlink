@@ -5,6 +5,7 @@ import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.monitoring.ZLinkFlowOrigin;
+import systems.zlink.framework.runtime.binding.ZLinkJavaDurableRequest;
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendDealerSocket;
@@ -212,12 +213,7 @@ final class ZLinkChannelCallRuntime {
     }
 
     static Throwable requestFailure(Throwable failure) {
-        Throwable cause = unwrap(failure);
-        if (cause instanceof TimeoutException) {
-            return new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.DEADLINE_EXCEEDED, cause.getMessage(), cause);
-        }
-        return cause;
+        return ZLinkJavaDurableRequest.requestFailure(failure);
     }
 
     static Throwable unwrap(Throwable failure) {

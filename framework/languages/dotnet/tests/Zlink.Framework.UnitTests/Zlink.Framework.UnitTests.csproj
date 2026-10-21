@@ -45,6 +45,7 @@
         <Compile Include="Runtime/SessionFailureClassificationTests.cs"/>
         <Compile Include="Runtime/SpotShutdownExecutionTests.cs"/>
         <Compile Include="Runtime/MeshLivenessPhysicalCloseTests.cs"/>
+        <Compile Include="Runtime/MeshLivenessDisconnectContractTests.cs"/>
         <Compile Include="Runtime/RequestAdmissionStageTests.cs"/>
         <Compile Include="Runtime/SpotRequestSourceDiscoveryTests.cs"/>
         <Compile Include="Runtime/SourceRequestOwnerContractTests.cs"/>
@@ -138,6 +139,7 @@
         <Compile Include="Runtime/DescriptorOwnerLeaseSelectionTests.cs"/>
         <Compile Include="Runtime/ActorCreationEntryCandidateTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.cs"/>
+        <Compile Include="Runtime/EntrySpotActorDispatchTests.RequestSubmissionFailure.cs"/>
         <Compile Include="Runtime/EntrySpotActorFifoActivationTests.cs"/>
         <Compile Include="Runtime/EntrySpotActorDispatchTests.SessionSealTerminal.cs"/>
         <Compile Include="Runtime/AcceptedHandlerSendSealTests.cs"/>

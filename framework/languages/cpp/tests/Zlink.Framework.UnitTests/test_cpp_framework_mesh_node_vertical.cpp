@@ -574,6 +574,7 @@ void enqueue_application_route (
 
 void verify_route_internal_packets_precede_application_dispatch ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
     namespace host = zlink::framework::runtime::host;
@@ -887,6 +888,7 @@ class expired_actor_bind_session_t final : public zlink::framework::packet_strea
 
 void verify_actor_route_resolver_preserves_unavailable ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     using namespace zlink::framework;
     auto registration = make_named_node ("actor-route-unavailable", "actor-route-unavailable-node");
     const auto actor = detail::actor_ref_access_t::make (
@@ -1042,6 +1044,7 @@ read_mesh_state (faulting_mesh_location_repository_t &store,
 
 void verify_server_descriptor_publishes_framework_entry_spot_without_application_entry ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     auto registration = make_named_node ("descriptor-entry", "descriptor-entry-node");
     registration->object_role = zlink::framework::object_role_t::server;
     assert (!registration->spot_state->snapshot.entry_spot_name);
@@ -1076,6 +1079,7 @@ void verify_server_descriptor_publishes_framework_entry_spot_without_application
 
 void verify_descriptor_retire_order_and_pre_seal_rollback ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     using zlink::framework::framework_runtime_state_t;
 
     auto first = make_named_node ("vertical-order", "order-a");
@@ -1194,6 +1198,7 @@ class local_route_probe_handler_t
 
 void verify_local_node_submit_bridge ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     auto registration = make_node ("tcp://127.0.0.1:0", "local-route-node");
     registration->handlers.on_send<local_route_probe_handler_t, local_route_probe_message_t> (
       "vertical-mesh", "LocalRouteProbe", &local_route_probe_handler_t::handle);
@@ -1373,6 +1378,7 @@ void verify_local_node_submit_bridge ()
 // assertion would have failed pre-fix and pins the fix now.
 void verify_direct_target_falls_through_absent_location_store_entry ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     auto registration = make_node ("tcp://127.0.0.1:0", "location-gate-node");
     registration->object_role = zlink::framework::object_role_t::none;
 
@@ -1438,6 +1444,7 @@ void verify_direct_target_falls_through_absent_location_store_entry ()
 // raw-service-mesh-runtime.ts knownTarget gate.
 void verify_request_to_never_admitted_target_reports_not_found ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     auto registration = make_node ("tcp://127.0.0.1:0", "never-admitted-request-node");
     registration->object_role = zlink::framework::object_role_t::none;
 
@@ -2502,6 +2509,7 @@ void verify_fixed_drain_callback_barrier ()
 
 void verify_accepted_handler_push_after_host_seal (bool shutdown)
 {
+    zlink::framework::completion_owner_t completion_owner;
     using namespace zlink::framework;
     auto registration = make_named_node ("accepted-send-mesh", "accepted-send-node");
     serializer_registry_t serializers;
@@ -2762,6 +2770,7 @@ int run_cross_process_delivery ()
     if (child < 0)
         return 1;
     if (child == 0) {
+        zlink::framework::completion_owner_t completion_owner;
         close (endpoint_pipe[0]);
         close (direct_ack_pipe[0]);
         close (channel_ack_pipe[0]);
@@ -2868,6 +2877,7 @@ int run_cross_process_delivery ()
             exit_code = 11;
         else if (!actor)
             exit_code = 10;
+        completion_owner.close ();
         _exit (exit_code);
     }
 
@@ -2894,6 +2904,7 @@ int run_cross_process_delivery ()
     const pid_t reciprocal_child = fork ();
     assert (reciprocal_child >= 0);
     if (reciprocal_child == 0) {
+        zlink::framework::completion_owner_t completion_owner;
         close (reciprocal_child_ready_pipe[0]);
         close (reciprocal_child_stop_pipe[1]);
         close (reciprocal_child_endpoint_pipe[0]);
@@ -2913,8 +2924,10 @@ int run_cross_process_delivery ()
         (void) read (reciprocal_child_stop_pipe[0], &stop, sizeof (stop));
         close (reciprocal_child_stop_pipe[0]);
         reciprocal_node.stop ();
+        completion_owner.close ();
         _exit (ready == 1 && stop == 1 ? 0 : 13);
     }
+    zlink::framework::completion_owner_t completion_owner;
     close (reciprocal_child_ready_pipe[1]);
     close (reciprocal_child_stop_pipe[0]);
     close (reciprocal_child_endpoint_pipe[1]);

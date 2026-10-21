@@ -2453,7 +2453,8 @@ class provider_location_repository_t final : public location_repository_t
         const auto &entry = (*entries)[*lock->entry_index];
         if (entry.authority_key != authority_key)
             co_return std::nullopt;
-        co_return decode_authority (entry.before, raw_version, store_now);
+        co_return decode_authority (entry.before, store_version_t{lock->expected_store_version},
+                                    store_now);
     }
 
     task_t<bool> authority_mutation_locked_async (std::string authority_key,

@@ -1910,7 +1910,7 @@ resolve_target_spot_generation (std::shared_ptr<detail::spot_node_builder_state_
     if (!state) {
         co_return std::nullopt;
     }
-    runtime::spot_address_resolver_t *resolver = nullptr;
+    std::shared_ptr<runtime::spot_address_resolver_t> resolver;
     std::string mesh_name;
     std::shared_ptr<service::spot_t> local_spot;
     state->lane
@@ -12127,7 +12127,7 @@ void spot_node_runtime_t::invalidate_message_follow_route (
     const auto *source = std::get_if<runtime::protocol::spot_route_fence_t> (&notice.source);
     if (!source)
         return;
-    auto *resolver = _state->lane.run ([&] { return _state->spot_location_resolver; }).get ();
+    const auto resolver = _state->lane.run ([&] { return _state->spot_location_resolver; }).get ();
     if (!resolver)
         return;
     runtime::spot_address_t expected;
@@ -13864,7 +13864,7 @@ std::optional<spot_route_t> spot_node_runtime_t::resolve_spot (spot_id_t spot_id
     {
         std::optional<spot_route_t> local;
         std::vector<std::function<std::optional<spot_route_t> (spot_id_t)>> resolvers;
-        runtime::spot_address_resolver_t *location_resolver = nullptr;
+        std::shared_ptr<runtime::spot_address_resolver_t> location_resolver;
         std::string mesh_name;
     };
     auto plan =
@@ -14557,9 +14557,10 @@ void spot_node_runtime_t::bind_host_phase (std::function<framework_runtime_state
     _state->lane.run ([&] { _state->host_phase = std::move (read_phase); }).get ();
 }
 
-void spot_node_runtime_t::bind_spot_location_resolver (runtime::spot_address_resolver_t &resolver)
+void spot_node_runtime_t::bind_spot_location_resolver (
+  std::shared_ptr<runtime::spot_address_resolver_t> resolver)
 {
-    _state->lane.run ([&] { _state->spot_location_resolver = &resolver; }).get ();
+    _state->lane.run ([&] { _state->spot_location_resolver = std::move (resolver); }).get ();
 }
 
 std::shared_ptr<service::mesh_node_t> spot_node_runtime_t::native_node () const

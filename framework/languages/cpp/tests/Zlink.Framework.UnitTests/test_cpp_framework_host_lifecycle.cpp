@@ -2766,6 +2766,7 @@ bool verify_relocated_actor_follow_and_shutdown (bool aggregate = false,
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     if (argc == 2 && std::string_view (argv[1]) == "relocation-missing-source")
         return verify_relocated_actor_follow_and_shutdown (false, true) ? EXIT_SUCCESS
                                                                         : EXIT_FAILURE;

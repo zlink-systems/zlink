@@ -13799,6 +13799,25 @@ public sealed partial class EntrySpotActorDispatchTests
                 ?? throw new InvalidOperationException("Dispatch handler was not attached.")
             ).Invoke(info);
 
+        public Func<
+            IReadOnlyList<Message>,
+            ValueTask<ZLinkBackendRouteReceived>
+        >? ChannelRequestSubmissionHandler { get; set; }
+
+        public ValueTask<ZLinkBackendRouteReceived> RequestToChannelAsync(
+            string channelName,
+            IReadOnlyList<Message> parts,
+            SendFlags flags,
+            TimeSpan timeout,
+            CancellationToken cancellationToken,
+            ReadOnlyMemory<byte> metadata = default,
+            ZLinkRequestAdmission? requestAdmission = null
+        ) =>
+            ChannelRequestSubmissionHandler?.Invoke(parts)
+            ?? ValueTask.FromException<ZLinkBackendRouteReceived>(
+                new NotSupportedException("No channel request configured.")
+            );
+
         public bool RequestToChannel(
             string channelName,
             Message message,
@@ -14438,6 +14457,15 @@ public sealed partial class EntrySpotActorDispatchTests
         public ZLinkBackendActorJoinEntrySpotResult? EntrySpotJoinResult { get; set; }
 
         public IReadOnlyList<Message> EntrySpotJoinReplyParts { get; set; } = [];
+
+        public Func<
+            IReadOnlyList<Message>,
+            ValueTask<ZLinkBackendRouteReceived>
+        >? ChannelRequestSubmissionHandler
+        {
+            get => _entrySpot.ChannelRequestSubmissionHandler;
+            set => _entrySpot.ChannelRequestSubmissionHandler = value;
+        }
 
         public Exception? NodeRequestFailure { get; set; }
 

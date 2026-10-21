@@ -246,6 +246,54 @@ public:
 저장한 값을 다시 반환할 수 없는 type이면 `protocol_error`로 끝난다. 첫 호출이 실패했다면 저장한
 exception을 다시 전달한다.
 
+### 4.1 Completion owner
+
+```cpp
+namespace zlink::framework {
+
+// provider-abstractions가 제공하는 process completion dispatcher의 수명 owner다.
+// 생성하면 공유 dispatcher 참조를 얻는다. 동시에 활성인 dispatcher는 하나다.
+// Host와 app도 같은 타입을 내부에서 보유하므로 기존 host/app 호출 코드는 바뀌지 않는다.
+// Standalone 호출자는 비동기 callback을 등록하기 전에 이 owner를 생성하고,
+// 자신이 시작한 등록과 provider의 결과 게시가 끝날 때까지 live owner를 유지한다.
+// task_t, task_completion_source_t의 대기 등록과 native continuation은 활성 owner를
+// 빌려 쓰며 그 수명을 연장하지 않는다. 첫 callback 등록 또는 native 재개 캡처 때
+// live owner가 없으면 invalid_operation으로 실패하고 callback을 수락하지 않는다.
+// 이 경로는 dispatcher를 자동으로 생성하지 않는다. Callback을 등록하지 않는
+// ready 값의 생성·소비와 result()/result_for()의 blocking 반환에는 owner가 필요 없다.
+class completion_owner_t {
+public:
+ completion_owner_t();
+ completion_owner_t(const completion_owner_t &) = delete;
+ completion_owner_t &operator=(const completion_owner_t &) = delete;
+ completion_owner_t(completion_owner_t &&) = delete;
+ completion_owner_t &operator=(completion_owner_t &&) = delete;
+
+ // close와 같다. Live owner를 dispatcher 완료 turn에서 소멸하면 아래 실행 문맥
+ // 조건을 위반하며 noexcept 소멸자의 예외는 std::terminate로 끝난다.
+ ~completion_owner_t() noexcept;
+
+ // 호출 전에 이 owner를 사용하는 외부 producer를 멈추고 외부 provider operation을
+ // 완료 또는 취소해야 한다. close와 외부의 새 등록·결과 게시를 동시에 진행하지 않는다.
+ // 이미 닫혔으면 아무 일도 하지 않는다. 다른 owner가 남으면 자기 참조만 놓는다.
+ // 마지막 owner는 이미 수락해 게시했거나 실행 중인 callback을 drain한 뒤 worker를
+ // join하고 반환한다. 이미 수락한 turn의 후속 재개도 이 drain에 포함된다.
+ // 활성 dispatcher가 있으면 다른 owner도 이를 공유한다. 새 dispatcher가 필요할
+ // 때에는 이전 dispatcher의 join이 끝날 때까지 생성을 기다린다.
+ // 생성과 live owner의 close는 dispatcher 완료 turn 밖에서 호출한다.
+ // 이 문맥을 위반한 생성 또는 close는 invalid_operation으로 실패한다.
+ // 실패한 close는 owner를 닫지 않으므로 완료 turn 밖에서 다시 닫을 수 있다.
+ void close();
+};
+
+} // namespace zlink::framework
+```
+
+위 수명 규칙은 host/app의 내부 owner와 standalone owner 모두에 적용한다. 정상적인 소멸자
+실행만으로도 같은 drain·join이 끝난다. 호출자는 owner를 닫거나 소멸한 뒤에 process를 종료한다.
+Owner가 해제되지 않은 채 process가 끝나는 경우에는 암묵적인 전역 drain이 없으며 남은 callback의
+완료를 보장하지 않는다. Callback이 참조하는 application 자원도 owner 종료가 끝날 때까지 유지한다.
+
 ## 5. Serialization
 
 Framework는 typed JSON serializer를 기본 경로로 사용한다. Handler와 messaging API는 payload type을
