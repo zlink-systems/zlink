@@ -13485,7 +13485,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 );
             }
         }
-        catch (ZlinkException) { }
+        catch (ZlinkConnectException error)
+            when (error.Result == ZlinkConnectException.ErrorCode.NotFound) { }
     }
 
     private void DisconnectTransport(ZLinkMeshConnectionIntent intent)
@@ -13497,7 +13498,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             lock (_socketGate)
                 _socket.Disconnect(intent.Endpoint);
         }
-        catch (ZlinkException) { }
+        catch (ZlinkConnectException error)
+            when (error.Result == ZlinkConnectException.ErrorCode.NotFound) { }
     }
 
     private void Publish(

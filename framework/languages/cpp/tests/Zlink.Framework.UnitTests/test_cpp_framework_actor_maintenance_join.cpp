@@ -1531,7 +1531,16 @@ void expired_sealed_request_preserves_next_live_actor_relay (bool remote)
     const auto drained = sessions.seal_remote_route (
       current->connection.connection_id, current->binding_generation, current->actor.key,
       current->actor.object_generation, current->owner_lease_generation);
-    ASSERT_EQ (drained.error, st::stateful_error_t::none);
+    ASSERT_EQ (drained.error, st::stateful_error_t::none)
+      << " binding_generation=" << current->binding_generation
+      << " expected_owner_lease=" << current->owner_lease_generation
+      << " current_binding_generation="
+      << (drained.binding ? drained.binding->binding_generation : 0)
+      << " current_owner_lease=" << (drained.binding ? drained.binding->owner_lease_generation : 0)
+      << " current_actor=" << (drained.binding ? drained.binding->actor.key : "<absent>")
+      << " expected_actor_generation=" << current->actor.object_generation
+      << " current_actor_generation="
+      << (drained.binding ? drained.binding->actor.object_generation : 0);
     release.barrier = drained.barrier;
     EXPECT_EQ (drained.last_accepted_sequence, 2u);
     EXPECT_TRUE (sessions.remote_route_seal_ready (drained.barrier));

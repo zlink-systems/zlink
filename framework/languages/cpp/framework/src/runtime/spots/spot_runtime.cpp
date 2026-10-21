@@ -1875,7 +1875,7 @@ resolve_target_spot_generation (std::shared_ptr<detail::spot_node_builder_state_
     if (!state) {
         co_return std::nullopt;
     }
-    runtime::spot_address_resolver_t *resolver = nullptr;
+    std::shared_ptr<runtime::spot_address_resolver_t> resolver;
     std::string mesh_name;
     std::shared_ptr<service::spot_t> local_spot;
     state->lane
@@ -9329,20 +9329,22 @@ spot_node_runtime_t::open_local_actor_handoff (actor_ref_t actor_ref,
 {
     const auto state = _state;
     const auto key = actor_key (actor_ref);
-    auto [context, services] = co_await state->lane.run_task ([state, key] {
+    auto [context, executor, services] = co_await state->lane.run_task ([state, key] {
         std::shared_ptr<spot_context_state_t> context;
+        std::shared_ptr<runtime::actor_serial_executor_t> executor;
         const auto location = state->actor_spot_ids.find (key);
         if (location != state->actor_spot_ids.end ()) {
             const auto target = spot_node_runtime_t (state).find_context_core (location->second);
-            if (target)
+            if (target) {
                 context = target->_state;
+                executor = context->ensure_spot_serial_executor ()->actor_executor (key);
+            }
         }
-        return std::make_pair (std::move (context), state->root_services);
+        return std::make_tuple (std::move (context), std::move (executor), state->root_services);
     });
     if (!context)
         co_return result_t<void>::failure (framework_error_kind_t::unavailable,
                                            "local Actor handoff target is unavailable");
-    const auto executor = context->ensure_spot_serial_executor ()->actor_executor (key);
     if (!executor)
         co_return result_t<void>::failure (framework_error_kind_t::shutting_down,
                                            "local Actor handoff target queue is unavailable");
@@ -11942,7 +11944,7 @@ void spot_node_runtime_t::invalidate_message_follow_route (
     const auto *source = std::get_if<runtime::protocol::spot_route_fence_t> (&notice.source);
     if (!source)
         return;
-    auto *resolver = _state->lane.run ([&] { return _state->spot_location_resolver; }).get ();
+    const auto resolver = _state->lane.run ([&] { return _state->spot_location_resolver; }).get ();
     if (!resolver)
         return;
     runtime::spot_address_t expected;
@@ -13679,7 +13681,7 @@ std::optional<spot_route_t> spot_node_runtime_t::resolve_spot (spot_id_t spot_id
     {
         std::optional<spot_route_t> local;
         std::vector<std::function<std::optional<spot_route_t> (spot_id_t)>> resolvers;
-        runtime::spot_address_resolver_t *location_resolver = nullptr;
+        std::shared_ptr<runtime::spot_address_resolver_t> location_resolver;
         std::string mesh_name;
     };
     auto plan =
@@ -14379,9 +14381,10 @@ void spot_node_runtime_t::bind_host_phase (std::function<framework_runtime_state
     _state->lane.run ([&] { _state->host_phase = std::move (read_phase); }).get ();
 }
 
-void spot_node_runtime_t::bind_spot_location_resolver (runtime::spot_address_resolver_t &resolver)
+void spot_node_runtime_t::bind_spot_location_resolver (
+  std::shared_ptr<runtime::spot_address_resolver_t> resolver)
 {
-    _state->lane.run ([&] { _state->spot_location_resolver = &resolver; }).get ();
+    _state->lane.run ([&] { _state->spot_location_resolver = std::move (resolver); }).get ();
 }
 
 std::shared_ptr<service::mesh_node_t> spot_node_runtime_t::native_node () const

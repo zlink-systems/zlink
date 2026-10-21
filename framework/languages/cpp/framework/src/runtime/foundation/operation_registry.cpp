@@ -40,8 +40,11 @@ struct operation_completion_item_t
 {
     explicit operation_completion_item_t (
       operation_registry_t::callback_t callback,
-      std::shared_ptr<operation_registry_drain_state_t> drain_state) :
-        callback (std::move (callback)), drain_state (std::move (drain_state))
+      std::shared_ptr<operation_registry_drain_state_t> drain_state,
+      detail::completion_dispatcher_borrow_t dispatcher) :
+        callback (std::move (callback)),
+        drain_state (std::move (drain_state)),
+        dispatcher (std::move (dispatcher))
     {
         this->drain_state->admit ();
     }
@@ -57,6 +60,7 @@ struct operation_completion_item_t
         request_metric.complete (terminal);
     }
 
+    detail::completion_dispatcher_borrow_t dispatcher{};
     operation_registry_t::callback_t callback;
     std::shared_ptr<operation_registry_drain_state_t> drain_state;
     operation_terminal_t terminal = operation_terminal_t::transport_failed;
@@ -112,7 +116,7 @@ void post_completions (operation_completion_chain_t completions) noexcept
                   // A consumer failure must still release its drain reservation.
               }
           },
-          false, owner);
+          false, owner, std::move (completion->dispatcher));
         (void) completion.release ();
     }
 }
@@ -169,8 +173,8 @@ bool operation_registry_t::register_operation (call_id_t id,
         return false;
     try {
         index_deadline (id, deadline, inserted.first->second);
-        auto completion =
-          std::make_unique<operation_completion_item_t> (std::move (callback), _drain_state);
+        auto completion = std::make_unique<operation_completion_item_t> (
+          std::move (callback), _drain_state, detail::borrow_completion_dispatcher ());
         completion->request_metric = std::move (request_metric);
         completion->request_metric.start ();
         inserted.first->second.completion = std::move (completion);
@@ -446,8 +450,8 @@ std::size_t operation_registry_t::shutdown ()
         }
     }
     post_completions (std::move (completions));
-    // Only this registry's callback may release its final owner without
-    // waiting for its own reservation. Other completion turns still drain.
+    // A callback cannot wait for its own reservation. Other completion turns
+    // still drain before registry shutdown returns.
     if (detail::current_completion_owner () != _drain_state.get ())
         _drain_state->wait ();
     return stopped;

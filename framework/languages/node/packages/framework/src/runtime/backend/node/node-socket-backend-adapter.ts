@@ -330,9 +330,9 @@ export function wrapSocket<T extends { close(): void }>(
       );
     },
     disconnectPeer(routingId: unknown): void {
-      disconnectStreamPeer(
+      disconnectSocketPeer(
         nativeInstance as T & { disconnectRid(value: unknown): void },
-        routingId
+        toNativeRoutingId(routingId)
       );
     },
     async bindActor(
@@ -376,15 +376,15 @@ export function nodeEventLoopPollerOf(socket: object): ZLinkNodeEventLoopPoller 
   return poller;
 }
 
-export function disconnectStreamPeer(
+export function disconnectSocketPeer(
   socket: { disconnectRid(routingId: unknown): void },
   routingId: unknown
 ): void {
   try {
-    socket.disconnectRid(toNativeRoutingId(routingId));
+    socket.disconnectRid(routingId);
   } catch (error) {
     // An absent RID has already completed the physical close. The existing
-    // session lifecycle still owns local cleanup and unbind.
+    // logical lifecycle still owns local cleanup and unbind.
     if (!isBindingNotFound(error)) throw error;
   }
 }
