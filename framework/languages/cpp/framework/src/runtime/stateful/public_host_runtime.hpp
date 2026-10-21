@@ -859,6 +859,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::optional<stateful::object_ref_t> resolve_spot (const std::string &spot_id) const;
 
   private:
+    class application_claim_owner_t;
+
     std::optional<stateful::object_ref_t> resolve_actor (std::string_view actor_id) const;
 
     struct instance_activation_ready_t

@@ -418,6 +418,8 @@ class mesh_node_runtime_t
     void observe_request_failure (const host::pending_operation_t &operation,
                                   const std::shared_ptr<task_completion_source_t<void>> &admitted,
                                   std::string_view operation_name);
+    // The reply projection keeps operation_name until the reply completes, so it must
+    // name a string with static storage duration (callers pass literals).
     task_t<result_t<runtime::messaging::message_parts_t>>
     await_request_reply (const host::pending_operation_t &operation,
                          std::string_view operation_name);
