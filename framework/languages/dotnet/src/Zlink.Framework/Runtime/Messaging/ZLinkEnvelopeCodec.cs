@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.Buffers.Text;
-using System.Collections.Concurrent;
 using System.Collections.Immutable;
 using System.Text;
 using System.Text.Encodings.Web;
@@ -134,12 +133,11 @@ internal static class ZLinkEnvelopeCodec
 {
     private const int MaximumCorrelationIdBytes = 64;
     private const string JsonContentType = "application/json";
-    private static readonly UTF8Encoding StrictMetadataUtf8 = new(false, true);
     private const int MaximumSimpleHeaderCacheEntries = 4096;
     private static readonly ZLinkStateLane CacheLane = new();
     private static ImmutableDictionary<SimpleHeaderKey, HeaderPlan> SimpleHeaderCache =
         ImmutableDictionary<SimpleHeaderKey, HeaderPlan>.Empty;
-    private static readonly ConcurrentQueue<SimpleHeaderKey> SimpleHeaderCacheOrder = new();
+    private static readonly Queue<SimpleHeaderKey> SimpleHeaderCacheOrder = new();
     private static HeaderCacheEntry[] DecodedHeaderCache = [];
 
     public static string DefaultContentType => JsonContentType;
@@ -260,7 +258,7 @@ internal static class ZLinkEnvelopeCodec
                     $"Envelope body type is ZLinkMessage, but body instance is '{body?.GetType()}'."
                 );
 
-            return message.ToRawMessage(codecs ?? new ZLinkCodecRegistryBuilder(), out contentType);
+            return message.ToRawMessage(codecs, out contentType);
         }
 
         var hasSerializer = TryResolveBodySerializer(
@@ -692,7 +690,7 @@ internal static class ZLinkEnvelopeCodec
 
         try
         {
-            _ = DecodeHeader(message);
+            _ = DecodeHeader(bytes, validateFlow: true);
             return true;
         }
         catch (ZLinkEnvelopeProtocolException)
@@ -743,25 +741,27 @@ internal static class ZLinkEnvelopeCodec
             return bodyMessage;
 
         if (bodyType == typeof(ZLinkMessage))
-            return ZLinkMessage.FromEnvelopePayload(
-                contentType,
-                bodyMessage,
-                codecs ?? new ZLinkCodecRegistryBuilder()
-            );
+            return ZLinkMessage.FromEnvelopePayload(contentType, bodyMessage, codecs);
 
         if (bodyType == typeof(ReadOnlyMemory<byte>))
             return bodyMessage.AsReadOnlyMemory();
 
-        if (bodyMessage.Size == 0)
-            return bodyType.IsValueType ? Activator.CreateInstance(bodyType) : null;
+        // The span reads native storage; keep its owner reachable until decoding ends.
+        try
+        {
+            var body = bodyMessage.AsReadOnlySpan();
+            if (body.IsEmpty)
+                return bodyType.IsValueType ? Activator.CreateInstance(bodyType) : null;
 
-        if (serializer is IZLinkMessageSpanDeserializer spanDeserializer)
-            return spanDeserializer.Deserialize(bodyMessage.AsReadOnlySpan(), bodyType);
+            if (serializer is IZLinkMessageSpanDeserializer spanDeserializer)
+                return spanDeserializer.Deserialize(body, bodyType);
 
-        return serializer.Deserialize(
-            ZLinkEncodedPayload.FromOwned(bodyMessage.AsReadOnlyMemory()),
-            bodyType
-        );
+            return serializer.Deserialize(ZLinkEncodedPayload.FromOwned(body.ToArray()), bodyType);
+        }
+        finally
+        {
+            GC.KeepAlive(bodyMessage);
+        }
     }
 
     internal static object? DecodeBody(
@@ -778,20 +778,16 @@ internal static class ZLinkEnvelopeCodec
         if (bodyType == typeof(Message))
             return Message.From(body);
         if (bodyType == typeof(ZLinkMessage))
-            return ZLinkMessage.FromEncoded(
-                contentType,
-                parts.GetMemory(1),
-                codecs ?? new ZLinkCodecRegistryBuilder()
-            );
+            return ZLinkMessage.FromEncoded(contentType, body.ToArray(), codecs);
         if (bodyType == typeof(ReadOnlyMemory<byte>))
-            return parts.GetMemory(1);
+            return (ReadOnlyMemory<byte>)body.ToArray();
         if (body.IsEmpty)
             return bodyType.IsValueType ? Activator.CreateInstance(bodyType) : null;
 
         if (serializer is IZLinkMessageSpanDeserializer spanDeserializer)
             return spanDeserializer.Deserialize(body, bodyType);
 
-        return serializer.Deserialize(ZLinkEncodedPayload.FromOwned(parts.GetMemory(1)), bodyType);
+        return serializer.Deserialize(ZLinkEncodedPayload.FromOwned(body.ToArray()), bodyType);
     }
 
     internal static IZLinkMessageSerializer ResolveReceivedSerializer(
@@ -921,8 +917,8 @@ internal static class ZLinkEnvelopeCodec
             {
                 foreach (var (key, value) in metadata)
                 {
-                    _ = StrictMetadataUtf8.GetByteCount(key);
-                    _ = StrictMetadataUtf8.GetByteCount(value);
+                    _ = ZLinkMeshMetadataCodec.StrictUtf8.GetByteCount(key);
+                    _ = ZLinkMeshMetadataCodec.StrictUtf8.GetByteCount(value);
                 }
             }
             catch (EncoderFallbackException)
