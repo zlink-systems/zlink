@@ -28,6 +28,12 @@ int main ()
     auto &store = *owned_store;
     services.add_singleton<location_repository_t> (
       std::unique_ptr<location_repository_t> (owned_store.release ()));
+    services.add_factory<runtime::live_location_reader_t> (
+      [] (service_provider_t &provider) {
+          return std::make_unique<runtime::live_location_reader_t> (
+            provider.get_required<location_repository_t> ());
+      },
+      service_lifetime_t::singleton);
     services.add_singleton<runtime::location_runtime_t> (
       std::make_unique<runtime::location_runtime_t> (store));
     auto resolvers = std::make_shared<runtime::store_location_resolvers_t> (store);
