@@ -22,6 +22,11 @@
 #include "../../samples/SupportChat/Shared/Contracts/messages.hpp"
 
 #include "../support/read_text_file.hpp"
+#include "../support/runtime_failure_fixture.hpp"
+#include "runtime/spots/spot_runtime.hpp"
+#include "runtime/actors/actor_gateway_runtime.hpp"
+#include "runtime/messaging/envelope_codec.hpp"
+#include <zlink/codecs/protobuf.hpp>
 
 #include <gtest/gtest.h>
 
@@ -29,6 +34,7 @@
 #include <cctype>
 #include <chrono>
 #include <filesystem>
+#include <future>
 #include <optional>
 #include <string>
 #include <utility>
@@ -225,6 +231,171 @@ TEST (CppFrameworkSampleParity, BingoUsesDotNetSamplePacketSurface)
     ASSERT_TRUE (second_joined.accepted);
     ASSERT_TRUE (second_joined.reply);
     EXPECT_EQ (second_joined.reply->decode<bingo_room_join_res_t> ().state ().players_size (), 1);
+}
+
+
+namespace
+{
+class bingo_observation_resolver_t final : public zlink::framework::runtime::spot_address_resolver_t
+{
+  public:
+    zlink::framework::task_t<std::optional<zlink::framework::runtime::spot_address_t>>
+    resolve_spot_address (std::string mesh, std::string spot) override
+    {
+        co_return zlink::framework::runtime::spot_address_t{
+          zlink::samples::bingo::sample_names_t::room_spot_mesh, zlink::routing_id_t::from ("play"),
+          std::move (spot), 1};
+    }
+    void invalidate_spot_address (std::string_view) override {}
+    void invalidate_all_routes_after_store_recovery () override {}
+};
+
+void check_bingo_observer_join (std::optional<zlink::framework::framework_error_kind_t> failure)
+{
+    using namespace zlink::framework;
+    using namespace zlink::framework::detail;
+    using namespace zlink::samples::bingo;
+    serializer_registry_t serializers;
+    codec_registration_context_t codecs (serializers);
+    zlink::framework_codecs::protobuf ().register_framework_codecs (codecs);
+    auto builder = zlink::framework::test::runtime_failure_builder ();
+    auto transport = channel_runtime_t::from (builder.message_bus ());
+    bingo_observation_resolver_t resolver;
+    transport.bind_spot_address_resolver (resolver);
+    bingo_room_spot_t game ("room");
+    bingo_room_relocation_state_t final_state;
+    final_state.game.room_id = "room";
+    final_state.game.status = bingo_room_status_t::finished;
+    final_state.game.draw_seq = 15;
+    final_state.game.winners = {"winner"};
+    game.restore_relocation_state (final_state);
+    auto observation = game.observation (get_bingo_observation_req_t{});
+    runtime::messaging::envelope_codec_t wire;
+    transport.bind_spot_mesh_transport (
+      sample_names_t::room_spot_mesh, {},
+      [&] (const zlink::routing_id_t &, const std::string &spot, std::uint64_t,
+           runtime::messaging::message_parts_t parts, std::chrono::milliseconds)
+        -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
+          EXPECT_EQ (spot, "room");
+          co_await request_admitted_t{};
+          if (failure)
+              co_return result_t<runtime::messaging::message_parts_t>::failure (
+                *failure, "Room request failed");
+          auto header = wire.decode_header (parts).value ();
+          header.kind = runtime::messaging::message_kind_t::response;
+          co_return result_t<runtime::messaging::message_parts_t>::success (
+            wire.encode_parts (header, observation, serializers));
+      });
+    auto state = std::make_shared<spot_context_state_t> ();
+    state->node =
+      zlink::framework::test::runtime_failure_fixture<spot_node_builder_state_t> ("observer");
+    state->node->route_client =
+      std::make_shared<const route_client_t> (builder.route_client (serializers));
+    state->mesh_name = sample_names_t::room_spot_mesh;
+    state->spot_id = spot_id_t ("observe:room:observer");
+    state->relocation_coordination_mode = spot_relocation_coordination_mode_t::application_signaled;
+    state->serial_executor = std::make_shared<runtime::offload_executor_t> (1);
+    state->serial_queue = std::make_shared<runtime::serial_execution_queue_t> (
+      *state->serial_executor, runtime::serial_execution_queue_options_t{});
+    auto room = std::make_shared<bingo_room_spot_t> (spot_context_access_t::create (state));
+    state->spot_instance = room;
+    bingo_room_relocation_state_t observer_state;
+    observer_state.is_observer = true;
+    observer_state.observed_room_id = "room";
+    room->restore_relocation_state (observer_state);
+    auto gateway_state = std::make_shared<actor_gateway_state_t> ();
+    gateway_state->serializers = &serializers;
+    actor_gateway_runtime_t gateway (gateway_state);
+    actor_ref_t actor_ref (actor_id_t ("observer"), 1, sample_names_t::room_spot_mesh,
+                           node_rid_t::from_string ("play"));
+    std::vector<std::string> packets;
+    std::promise<void> delivered;
+    auto delivery = delivered.get_future ();
+    ASSERT_TRUE (gateway.bind_session_sink (
+      actor_ref,
+      [&] (std::string packet, stream_codec_t, const zlink::message_t &body) -> task_t<void> {
+          packets.push_back (packet);
+          if (packets.size () == 1)
+              EXPECT_EQ (serializers.get<bingo_observation_state_notify_t> ()
+                           .deserialize (encoded_payload_from_raw (body))
+                           .state ()
+                           .status (),
+                         bingo_room_status_t::finished);
+          else
+              EXPECT_EQ (serializers.get<bingo_reward_announced_notify_t> ()
+                           .deserialize (encoded_payload_from_raw (body))
+                           .actor_id (),
+                         "winner");
+          if (packets.size () == 2)
+              delivered.set_value ();
+          co_return;
+      }));
+    player_actor_t actor;
+    actor.actor_id = "observer";
+    actor.set_actor_context (gateway.actor_context (actor_ref));
+    bingo_room_join_req_t join;
+    join.set_actor_id ("observer");
+    join.set_room_id ("room");
+    join.set_observe_only (true);
+    ASSERT_TRUE (room->on_actor_join ("observer", message_t::from (join)).result ());
+    auto result =
+      state->run_serial_task ("observer-join", [&] { return room->on_actor_joined (actor); })
+        .result ();
+    if (failure && *failure != framework_error_kind_t::not_found) {
+        EXPECT_FALSE (result);
+        EXPECT_EQ (result.error_kind (), *failure);
+    } else {
+        EXPECT_TRUE (result) << (result.error () ? result.error ()->what () : "");
+    }
+    state->drain_serial ();
+    if (!failure)
+        ASSERT_EQ (delivery.wait_for (std::chrono::seconds (1)), std::future_status::ready);
+    EXPECT_EQ (packets.size (), failure ? 0 : 2);
+    state->spot_instance.reset ();
+}
+} // namespace
+
+TEST (CppFrameworkSampleParity, BingoLiveRoomDeliversConfirmedRewardAfterObserverJoin)
+{
+    check_bingo_observer_join (std::nullopt);
+}
+
+TEST (CppFrameworkSampleParity, BingoClosedRoomEndsObserverJoinWithoutHidingOtherFailures)
+{
+    check_bingo_observer_join (zlink::framework::framework_error_kind_t::not_found);
+    check_bingo_observer_join (zlink::framework::framework_error_kind_t::unavailable);
+}
+
+TEST (CppFrameworkSampleParity, BingoObserverReadsSnapshotAfterMembershipCommit)
+{
+    const auto root = cpp_language_root () / "samples/Bingo";
+    const auto room = read_text_file (
+      root / "Server/Play/Infrastructure/ZLink/Spots/BingoRoomSpot/bingo_room_spot.hpp");
+    const auto joined = room.substr (room.find ("task_t<void> on_actor_joined"));
+    EXPECT_NE (joined.find ("get_bingo_observation_req_t"), std::string::npos);
+    EXPECT_LT (joined.find ("observers[actor.actor_id] = &actor"), joined.find ("request_to_spot"));
+    EXPECT_NE (joined.find ("on_reward_acquired (snapshot.reward ())"), std::string::npos);
+    EXPECT_NE (joined.find ("bingo_observation_state_notify_t"), std::string::npos);
+}
+
+TEST (CppFrameworkSampleParity, BingoSnapshotReturnsRewardOnlyForAFinishedRoom)
+{
+    using namespace zlink::samples::bingo;
+    bingo_room_spot_t room ("room");
+    bingo_room_relocation_state_t state;
+    state.game.room_id = "room";
+    state.game.status = bingo_room_status_t::finished;
+    state.game.draw_seq = 15;
+    state.game.winners = {"winner"};
+    room.restore_relocation_state (state);
+    const auto finished = room.observation (get_bingo_observation_req_t{});
+    ASSERT_TRUE (finished.has_reward ());
+    EXPECT_EQ (finished.state ().draw_seq (), 15);
+    EXPECT_EQ (finished.reward ().actor_id (), "winner");
+    EXPECT_EQ (finished.reward ().item_id (), bingo_reward_items_t::golden_dauber_id);
+    state.game.status = bingo_room_status_t::running;
+    room.restore_relocation_state (state);
+    EXPECT_FALSE (room.observation (get_bingo_observation_req_t{}).has_reward ());
 }
 
 TEST (CppFrameworkSampleParity, BingoClientChecksEveryDocumentedScenarioState)
