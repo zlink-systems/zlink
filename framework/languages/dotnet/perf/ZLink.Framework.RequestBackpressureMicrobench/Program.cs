@@ -5,7 +5,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 
 if (args.Length is < 2 or > 3)
-    throw new ArgumentException("baseline candidate [registration|blocked] required");
+    throw new ArgumentException("baseline candidate [registration|blocked|admitted] required");
 var mode = args.Length == 3 ? args[2] : "registration";
 var before = new Snapshot(args[0]);
 var after = new Snapshot(args[1]);
@@ -41,6 +41,37 @@ foreach (var snapshot in new[] { before, after })
         snapshot.TestType.GetMethod("None_token_completes_normally")!.Invoke(instance, null)!;
     await (Task)
         snapshot.TestType.GetMethod("Disposal_unregisters_cancellation")!.Invoke(instance, null)!;
+}
+if (mode == "admitted")
+{
+    foreach (var snapshot in new[] { before, after })
+        for (var warmup = 0; warmup < 8; warmup++)
+            await snapshot.RunAdmitted(1024);
+    for (var pair = 0; pair < 16; pair++)
+    {
+        var sequence = pair % 2 == 0 ? new[] { before, after } : new[] { after, before };
+        foreach (var snapshot in sequence)
+        {
+            var measured = await snapshot.RunAdmitted(4096);
+            Console.WriteLine(
+                JsonSerializer.Serialize(
+                    new
+                    {
+                        mode,
+                        pair,
+                        version = ReferenceEquals(snapshot, before) ? "before" : "after",
+                        nsPerSubmission = measured[0],
+                        producerBytesPerSubmission = measured[1],
+                        wholeFixtureCpuMs = measured[2],
+                        gen0 = measured[3],
+                        gen1 = measured[4],
+                        gen2 = measured[5],
+                    }
+                )
+            );
+        }
+    }
+    return;
 }
 if (mode == "blocked")
 {
@@ -113,6 +144,7 @@ sealed class Snapshot : AssemblyLoadContext
     private readonly string directory;
     private readonly MethodInfo entry;
     private readonly MethodInfo blockedEntry;
+    private readonly MethodInfo? admittedEntry;
     internal readonly Type TestType;
     internal string FrameworkHash { get; }
     internal string HarnessHash { get; }
@@ -139,6 +171,9 @@ sealed class Snapshot : AssemblyLoadContext
             true
         )!;
         entry = TestType.GetMethod("MeasureRegistration")!;
+        admittedEntry = harness
+            .GetType("Zlink.Framework.UnitTests.Runtime.RequestAdmissionObservationTests")
+            ?.GetMethod("MeasureAcceptedAdmission");
         blockedEntry = harness
             .GetType("Zlink.Framework.UnitTests.Runtime.SubmitAdmissionRuntimeTests", true)!
             .GetMethod("MeasureBackpressuredSubmission")!;
@@ -149,6 +184,13 @@ sealed class Snapshot : AssemblyLoadContext
         var file = Path.Combine(directory, name.Name + ".dll");
         return File.Exists(file) ? LoadFromAssemblyPath(file) : null;
     }
+
+    internal Task<double[]> RunAdmitted(int count) =>
+        (Task<double[]>)
+            (
+                admittedEntry
+                ?? throw new InvalidOperationException("Admission benchmark entry missing")
+            ).Invoke(null, [count])!;
 
     internal Task<double[]> RunBlocked(int count) =>
         (Task<double[]>)blockedEntry.Invoke(null, [count])!;
