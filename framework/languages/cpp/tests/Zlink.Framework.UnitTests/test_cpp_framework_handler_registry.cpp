@@ -408,6 +408,7 @@ bool verify_filter_snapshot_reuse (zlink::framework::service_provider_t &provide
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
 #ifdef __linux__
     // Execution gate §10: call and filter counts must not allocate OS workers.
     const auto executor = zlink::framework::detail::handler_invocation_executor ();

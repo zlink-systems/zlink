@@ -8719,6 +8719,7 @@ bool verify_teardown_observes_actor_handoff_terminal ()
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     if (argc == 2 && std::string_view (argv[1]) == "--aggregate-membership-pending")
         return verify_relocation_membership_pending_releases_root_turn () ? EXIT_SUCCESS
                                                                           : EXIT_FAILURE;

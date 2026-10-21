@@ -18,6 +18,11 @@ implementation can implement the Store by linking only this target,
 without depending on an Actor/Spot application target. The C++
 namespace keeps the existing `zlink::framework`.
 
+The same target also provides `completion_owner_t` through
+`<zlink/framework/contracts/dispatch/task.hpp>`. Its public declaration and sole
+lifetime rules are owned by [Common runtime §4.1](01-common-runtime.en.md#41-completion-owner).
+Store operation signatures do not change.
+
 ## 1. Root Option And Registration
 
 ```cpp
