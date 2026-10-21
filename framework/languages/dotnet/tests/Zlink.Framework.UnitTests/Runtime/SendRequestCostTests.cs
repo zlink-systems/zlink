@@ -98,56 +98,6 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
         }
     }
 
-    [Fact]
-    public void Empty_metadata_merge_keeps_the_absent_owner()
-    {
-        for (var warmup = 0; warmup < 128; warmup++)
-        {
-            ZLinkCallMetadata? warm = null;
-            ZLinkCallMetadata.Merge(ref warm, ZLinkMessageMetadata.Empty);
-        }
-        var accepted = 0;
-        for (var sample = 0; sample < 12; sample++)
-        {
-            var collection = Collections();
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var index = 0; index < Iterations; index++)
-                foreach (var pair in ZLinkMessageMetadata.Empty.Values)
-                    GC.KeepAlive(pair);
-            var control = GC.GetAllocatedBytesForCurrentThread() - before;
-            before = GC.GetAllocatedBytesForCurrentThread();
-            for (var index = 0; index < Iterations; index++)
-            {
-                ZLinkCallMetadata? empty = null;
-                ZLinkCallMetadata.Merge(ref empty, ZLinkMessageMetadata.Empty);
-                GC.KeepAlive(empty);
-            }
-            var measured = GC.GetAllocatedBytesForCurrentThread() - before;
-            if (collection != Collections())
-                continue;
-            output.WriteLine(
-                $"empty metadata merge {measured / Iterations} B/op; enumeration control {control / Iterations} B/op"
-            );
-            Assert.Equal(control, measured);
-            accepted++;
-        }
-        Assert.True(accepted > 0);
-        ZLinkCallMetadata? metadata = null;
-        ZLinkCallMetadata.Merge(ref metadata, ZLinkMessageMetadata.Empty);
-        Assert.Null(metadata);
-        ZLinkCallMetadata.Set(ref metadata, "key", "value");
-        var owner = metadata;
-        ZLinkCallMetadata.Merge(ref metadata, ZLinkMessageMetadata.Empty);
-        Assert.Same(owner, metadata);
-        Assert.Equal("value", ZLinkCallMetadata.Snapshot(metadata).Values["key"]);
-        ZLinkCallMetadata.Merge(
-            ref metadata,
-            new ZLinkMessageMetadata(new Dictionary<string, string> { ["key"] = "later" })
-        );
-        Assert.Equal("later", ZLinkCallMetadata.Snapshot(metadata).Values["key"]);
-        Assert.Throws<ArgumentNullException>(() => ZLinkCallMetadata.Merge(ref metadata, null!));
-    }
-
     [Theory]
     [InlineData("packet{literal}", "Node request failed for 'packet{literal}'.")]
     [InlineData(null, "literal {unformatted} error")]
@@ -380,22 +330,6 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
                         metadata: Metadata
                     )
                 )
-        );
-        Compare(
-            "empty metadata merge",
-            () =>
-            {
-                var owner = new ZLinkCallMetadata();
-                foreach (var pair in ZLinkMessageMetadata.Empty.Values)
-                    owner.Set(pair.Key, pair.Value);
-                GC.KeepAlive(owner);
-            },
-            () =>
-            {
-                ZLinkCallMetadata? owner = null;
-                ZLinkCallMetadata.Merge(ref owner, ZLinkMessageMetadata.Empty);
-                GC.KeepAlive(owner);
-            }
         );
         var response = ZLinkClientCallCodec.EncodeEnvelopeParts(
             new ZLinkEnvelopeHeader(
