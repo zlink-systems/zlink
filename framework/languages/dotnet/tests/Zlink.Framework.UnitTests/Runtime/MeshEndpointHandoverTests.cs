@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Runtime.ExceptionServices;
 using Systems.Zlink.Framework.Runtime.Protocol;
 using Zlink.Framework.Runtime.Backend.Contracts;
 
@@ -247,9 +249,33 @@ public sealed partial class StatefulServiceRuntimeTests
     private sealed class CapturingMeshSocketContext(IContext inner) : IContext
     {
         public IRouterSocket? Router { get; private set; }
+        public ZlinkConnectException? DisconnectFailure { get; set; }
+        public int DisconnectRidCalls { get; private set; }
         public IContextOptions Options => inner.Options;
 
-        public IRouterSocket CreateRouterSocket() => Router = inner.CreateRouterSocket();
+        public IRouterSocket CreateRouterSocket()
+        {
+            var router = inner.CreateRouterSocket();
+            Router = router;
+            if (DisconnectFailure is null)
+                return router;
+
+            var proxy = DispatchProxy.Create<IRouterSocket, CapturingRouterSocketProxy>();
+            ((CapturingRouterSocketProxy)(object)proxy).Initialize(
+                router,
+                () =>
+                {
+                    DisconnectRidCalls++;
+                    if (DisconnectFailure is not { } failure)
+                        return;
+                    DisconnectFailure = null;
+                    throw failure;
+                }
+            );
+            return proxy;
+        }
+
+        public void DisposeCapturedRouter() => Router?.Dispose();
 
         public IPairSocket CreatePairSocket() => inner.CreatePairSocket();
 
@@ -276,5 +302,34 @@ public sealed partial class StatefulServiceRuntimeTests
         public void Dispose() => inner.Dispose();
 
         public ValueTask DisposeAsync() => inner.DisposeAsync();
+
+        public class CapturingRouterSocketProxy : DispatchProxy
+        {
+            private IRouterSocket _inner = null!;
+            private Action? _beforeDisconnectRid;
+            internal IRouterSocket Inner => _inner;
+
+            public void Initialize(IRouterSocket inner, Action beforeDisconnectRid)
+            {
+                _inner = inner;
+                _beforeDisconnectRid = beforeDisconnectRid;
+            }
+
+            protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
+            {
+                ArgumentNullException.ThrowIfNull(targetMethod);
+                if (targetMethod.Name == nameof(IRouterSocket.DisconnectRid))
+                    _beforeDisconnectRid?.Invoke();
+                try
+                {
+                    return targetMethod.Invoke(_inner, args);
+                }
+                catch (TargetInvocationException error) when (error.InnerException is not null)
+                {
+                    ExceptionDispatchInfo.Capture(error.InnerException).Throw();
+                    throw;
+                }
+            }
+        }
     }
 }

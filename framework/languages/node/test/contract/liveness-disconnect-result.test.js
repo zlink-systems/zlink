@@ -70,9 +70,9 @@ async function until(peers, predicate, label) {
   assert.ok(predicate(), label);
 }
 
-for (const terminated of [false, true]) {
-  test(`liveness preserves native disconnect result and receive progress (terminated=${terminated})`, async (t) => {
-    const clock = { now: 0, id: terminated ? 'error' : 'absent' };
+for (const injectBindingFailure of [false, true]) {
+  test(`liveness preserves native disconnect result and receive progress (injected=${injectBindingFailure})`, async (t) => {
+    const clock = { now: 0, id: injectBindingFailure ? 'error' : 'absent' };
     t.mock.method(performance, 'now', () => clock.now);
     const context = zlink.createContext();
     const source = peer('source', context, clock);
@@ -85,17 +85,22 @@ for (const terminated of [false, true]) {
         () => source.raw.isPeerRouteReady('expired') && expired.raw.isPeerRouteReady('source'),
         'initial native handshake'
       );
-      // No receive rotation runs between the physical removal and expiry.
-      // Core owns the result; the retained logical admission still expires.
-      if (terminated) {
-        context.shutdown();
+      if (injectBindingFailure) {
+        // Inject the binding result at the disconnect boundary. The logical
+        // admission remains until that call succeeds or reports NOT_FOUND.
+        const bindingFailure = new zlink.ConnectError(zlink.ConnectResult.InternalError, 156);
+        const disconnect = t.mock.method(source.raw.router, 'disconnectRid', () => {
+          throw bindingFailure;
+        });
         assert.throws(
           () => source.raw.tickLiveness(DEFAULT_SERVICE_PEER_TIMEOUT_MS),
-          (error) =>
-            error instanceof zlink.ConnectError &&
-            error.result === zlink.ConnectResult.InternalError
+          (error) => error === bindingFailure && error.result === zlink.ConnectResult.InternalError
         );
+        assert.equal(disconnect.mock.calls.length, 1);
+        assert.equal(source.raw.isPeerRouteReady('expired'), true);
       } else {
+        // No receive rotation runs between the physical removal and expiry.
+        // Core owns the result; the retained logical admission still expires.
         source.router.disconnectRid('expired');
         await until(
           [],
