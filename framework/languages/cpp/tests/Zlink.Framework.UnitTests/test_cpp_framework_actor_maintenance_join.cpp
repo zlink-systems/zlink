@@ -3836,6 +3836,8 @@ TEST_P (ActorHostRelocation, AfterRemoteActorJoin)
         configure (target, "join-third", store, relocations, source_follow_duration, 0, true);
         target.start ();
         ASSERT_TRUE (ready (target));
+        ASSERT_TRUE (
+          peer_ready (entry_services.get_required<fw::route_mesh_runtime_t> (), third_rid));
     }
     auto relocation = source.app.relocate (
       {.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget});
@@ -3935,6 +3937,7 @@ TEST_P (ActorHostRelocation, ExistingSessionRelaysAfterRelocation)
         configure (target, "join-third", store, relocations, source_follow_duration, 0, true);
         target.start ();
         ASSERT_TRUE (ready (target));
+        ASSERT_TRUE (peer_ready (session_routes, third_rid));
     }
     auto relocation = source.app.relocate (
       {.mode = fw::relocation_mode_t::planned_maintenance, .deadline = wait_budget});
