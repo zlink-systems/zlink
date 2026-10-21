@@ -100,12 +100,8 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
     private CancellationTokenRegistration RegisterCancellation(CancellationToken cancellationToken)
     {
         return cancellationToken.Register(
-            static state =>
-            {
-                var cancellation = (CancellationState<TResult>)state!;
-                cancellation.Completion.Cancel(cancellation.Token);
-            },
-            new CancellationState<TResult>(this, cancellationToken)
+            static (state, token) => ((ZLinkRequestCompletion<TResult>)state!).Cancel(token),
+            this
         );
     }
 
@@ -124,11 +120,6 @@ internal sealed class ZLinkRequestCompletion<TResult> : IDisposable
             this
         );
     }
-
-    private sealed record CancellationState<T>(
-        ZLinkRequestCompletion<T> Completion,
-        CancellationToken Token
-    );
 
     private sealed record TimeoutState<T>(
         TaskCompletionSource<T> Completion,

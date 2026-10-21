@@ -8,6 +8,86 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class SubmitAdmissionRuntimeTests
 {
+    public static async Task<double[]> MeasureBackpressuredSubmission(int iterations)
+    {
+        using var process = System.Diagnostics.Process.GetCurrentProcess();
+        var cpu = process.TotalProcessorTime;
+        var gc0 = GC.CollectionCount(0);
+        var gc1 = GC.CollectionCount(1);
+        var gc2 = GC.CollectionCount(2);
+        long ticks = 0,
+            bytes = 0;
+        for (var index = 0; index < iterations; index++)
+        {
+            using var pair = new AdmissionPair();
+            using var fillCancellation = new CancellationTokenSource();
+            Task? fillAdmission = null;
+            for (var sequence = 0; sequence < 32; sequence++)
+            {
+                using var filler = Message.From(AdmissionPair.Payload(sequence));
+                var submission = pair.Client.Send().Message(filler).Async(fillCancellation.Token);
+                if (submission.Result == SubmitResult.Backpressured)
+                {
+                    fillAdmission = submission.Admitted;
+                    break;
+                }
+            }
+            try
+            {
+                using var cancellation = new CancellationTokenSource();
+                using var payload = Message.From(AdmissionPair.Payload(100));
+                var operation = new CountingRequestSubmitOperation(
+                    pair.Client.Request().Message(payload).Timeout(TimeSpan.FromSeconds(5))
+                );
+                var allocated = GC.GetAllocatedBytesForCurrentThread();
+                var started = System.Diagnostics.Stopwatch.GetTimestamp();
+                var pending = ZLinkRequestSubmissionOutcome.SubmitAndAwaitReplyAsync(
+                    operation,
+                    TimeSpan.FromSeconds(5),
+                    cancellation.Token
+                );
+                ticks += System.Diagnostics.Stopwatch.GetTimestamp() - started;
+                bytes +=
+                    GC.GetAllocatedBytesForCurrentThread() - allocated - operation.AllocatedBytes;
+                if (operation.LastSubmission.Result != SubmitResult.Backpressured)
+                    throw new InvalidOperationException(
+                        "The native request was not backpressured."
+                    );
+                cancellation.Cancel();
+                try
+                {
+                    ZLinkMessageParts.DisposeAll(await pending.ConfigureAwait(false));
+                    throw new InvalidOperationException(
+                        "A blocked canceled request completed successfully."
+                    );
+                }
+                catch (OperationCanceledException) when (cancellation.IsCancellationRequested) { }
+            }
+            finally
+            {
+                fillCancellation.Cancel();
+                if (fillAdmission is not null)
+                {
+                    try
+                    {
+                        await fillAdmission.ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                        when (fillCancellation.IsCancellationRequested) { }
+                }
+            }
+        }
+        return
+        [
+            ticks * 1_000_000_000.0 / System.Diagnostics.Stopwatch.Frequency / iterations,
+            (double)bytes / iterations,
+            (process.TotalProcessorTime - cpu).TotalMilliseconds,
+            GC.CollectionCount(0) - gc0,
+            GC.CollectionCount(1) - gc1,
+            GC.CollectionCount(2) - gc2,
+        ];
+    }
+
     [Theory]
     [InlineData(ZlinkSubmitException.ErrorCode.Backpressured, false)]
     [InlineData(ZlinkSubmitException.ErrorCode.Backpressured, true)]
