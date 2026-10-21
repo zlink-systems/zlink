@@ -417,12 +417,13 @@ class mesh_node_runtime_t
     await_request_reply (const host::pending_operation_t &operation,
                          std::string_view operation_name);
 
+    // The coroutine owns both callbacks; a caller may discard the task.
     task_t<std::size_t>
-    dispatch_ready (const std::function<void (const host::ready_record_t &,
-                                              const host::receive_record_t &,
-                                              std::vector<zlink::message_t>)> &dispatch,
+    dispatch_ready (std::function<void (const host::ready_record_t &,
+                                        const host::receive_record_t &,
+                                        std::vector<zlink::message_t>)> dispatch,
                     bool accept_application_receive = true,
-                    const std::function<bool ()> &next_application_receive = {});
+                    std::function<bool ()> next_application_receive = {});
     host::node_status_t status () const;
     task_t<std::tuple<std::vector<std::string>, std::int32_t, std::int32_t>>
     monitoring_configuration_async () const;
