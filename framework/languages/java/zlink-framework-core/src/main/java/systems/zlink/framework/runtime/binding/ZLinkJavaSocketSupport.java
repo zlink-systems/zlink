@@ -1,8 +1,5 @@
 package systems.zlink.framework.runtime.binding;
 
-import systems.zlink.contracts.core.RoutingId;
-import systems.zlink.contracts.errors.ConnectResult;
-import systems.zlink.contracts.errors.ZlinkConnectException;
 import systems.zlink.contracts.errors.ZlinkRecvException;
 import systems.zlink.contracts.errors.ZlinkRequestException;
 import systems.zlink.contracts.messaging.Message;
@@ -16,7 +13,6 @@ import systems.zlink.contracts.messaging.SendSubmitOperation;
 import systems.zlink.contracts.sockets.RecvFlags;
 import systems.zlink.contracts.sockets.RecvResult;
 import systems.zlink.contracts.sockets.RequestResult;
-import systems.zlink.contracts.sockets.RouterSocket;
 import systems.zlink.contracts.sockets.SendFlags;
 import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.runtime.internal.ZLinkCompletionBridge;
@@ -53,17 +49,6 @@ final class ZLinkJavaSocketSupport {
                 return false;
             }
             throw ex;
-        }
-    }
-
-    /** An already absent physical RID satisfies liveness teardown. */
-    static void disconnectRidIfPresent(RouterSocket socket, RoutingId peer) {
-        try {
-            socket.disconnectRid(peer);
-        } catch (ZlinkConnectException failure) {
-            if (failure.getResult() != ConnectResult.NOT_FOUND) {
-                throw failure;
-            }
         }
     }
 
