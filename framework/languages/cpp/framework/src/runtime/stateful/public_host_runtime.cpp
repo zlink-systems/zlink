@@ -7470,7 +7470,7 @@ public_host_runtime_t::dispatch_application_claim (
                               owner->handoff (ready, record, std::move (parts));
                           });
                         self->_transport->signal_activity ();
-                    }(shared_from_this (), *native_owner, std::move (mailbox_record),
+                    }(shared_from_this (), std::move (*native_owner), std::move (mailbox_record),
                       release_mailbox_reservation, operation);
                     return continue_application_claim (operation, std::move (pending));
                 }
