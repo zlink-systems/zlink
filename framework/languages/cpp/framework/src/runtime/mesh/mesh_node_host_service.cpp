@@ -3,11 +3,7 @@
 #include "runtime/diagnostics/mesh_trace.hpp"
 
 #include "runtime/mesh/mesh_node_host_service.hpp"
-<<<<<<< HEAD
-=======
 #include "runtime/configuration/service_scope.hpp"
-#include "runtime/dispatch/completion_turn.hpp"
->>>>>>> 026db81 (fix(cpp): Spot request의 늦은 terminal이 해제된 resolver에 닿지 않게 소유 (#2385) (#2406))
 #include "runtime/stateful/accepted_actor_record.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/execution/task_result.hpp"
