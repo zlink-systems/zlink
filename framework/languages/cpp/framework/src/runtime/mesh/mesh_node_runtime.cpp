@@ -4190,17 +4190,21 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
                                    const std::vector<zlink::message_t> &parts,
                                    std::vector<std::uint8_t> metadata)
 {
-    if (!_node) {
-        throw configuration_error ("MeshNode has not started");
+    try {
+        if (!_node)
+            throw configuration_error ("MeshNode has not started");
+        bool unknown_target = false;
+        if (const auto classified = classify_node_target_from_topology (target, unknown_target))
+            return task_t<zlink::submit_result_t> (
+              result_t<zlink::submit_result_t>::success (*classified));
+        if (unknown_target)
+            return send_to_unknown_node (target, parts);
+        (void) metadata;
+        return _node->send_to_node (target, parts);
     }
-    bool unknown_target = false;
-    if (const auto classified = classify_node_target_from_topology (target, unknown_target))
-        co_return *classified;
-    if (unknown_target)
-        if (const auto classified = co_await classify_unknown_node_target (target))
-            co_return *classified;
-    (void) metadata;
-    co_return co_await _node->send_to_node (target, parts);
+    catch (...) {
+        return task_t<zlink::submit_result_t> (current_exception_result<zlink::submit_result_t> ());
+    }
 }
 
 task_t<zlink::submit_result_t>
@@ -4208,16 +4212,29 @@ mesh_node_runtime_t::send_to_node (const zlink::routing_id_t &target,
                                    std::vector<zlink::message_t> &&parts,
                                    std::vector<std::uint8_t> metadata)
 {
-    if (!_node) {
-        throw configuration_error ("MeshNode has not started");
+    try {
+        if (!_node)
+            throw configuration_error ("MeshNode has not started");
+        bool unknown_target = false;
+        if (const auto classified = classify_node_target_from_topology (target, unknown_target))
+            return task_t<zlink::submit_result_t> (
+              result_t<zlink::submit_result_t>::success (*classified));
+        if (unknown_target)
+            return send_to_unknown_node (target, std::move (parts));
+        (void) metadata;
+        return _node->send_to_node (target, std::move (parts));
     }
-    bool unknown_target = false;
-    if (const auto classified = classify_node_target_from_topology (target, unknown_target))
+    catch (...) {
+        return task_t<zlink::submit_result_t> (current_exception_result<zlink::submit_result_t> ());
+    }
+}
+
+task_t<zlink::submit_result_t>
+mesh_node_runtime_t::send_to_unknown_node (zlink::routing_id_t target,
+                                           std::vector<zlink::message_t> parts)
+{
+    if (const auto classified = co_await classify_unknown_node_target (target))
         co_return *classified;
-    if (unknown_target)
-        if (const auto classified = co_await classify_unknown_node_target (target))
-            co_return *classified;
-    (void) metadata;
     co_return co_await _node->send_to_node (target, std::move (parts));
 }
 
