@@ -2036,6 +2036,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     NAME test_cpp_framework_lane_getters
     COMMAND test_cpp_framework_lane_getters
     LABELS "framework-unit;framework-contract;framework-regression;execution"
+    TIER unit
     TIMEOUT 30)
   add_executable(test_cpp_framework_state_lane
     tests/Zlink.Framework.UnitTests/test_cpp_framework_state_lane.cpp)
