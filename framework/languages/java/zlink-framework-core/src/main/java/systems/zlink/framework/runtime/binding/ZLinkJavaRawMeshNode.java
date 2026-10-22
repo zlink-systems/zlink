@@ -1480,7 +1480,7 @@ final class ZLinkJavaRawMeshNode
         ZLinkServiceTopologyRegistry admitted = topology;
         if (admitted != null
                 && !automaticNotRequiredPeers.containsKey(targetNodeRid)
-                && admitted.peerFromOwner(targetNodeRid).isPresent()) {
+                && admitted.peerOrNullFromOwner(targetNodeRid) != null) {
             return Optional.empty();
         }
         Map.Entry<Long, PeerIntent> selectedIntent = null;
@@ -1493,7 +1493,7 @@ final class ZLinkJavaRawMeshNode
         if (selectedIntent != null) {
             PeerIntent intent = selectedIntent.getValue();
             if (isReadyPeer(intent)
-                    || (topology != null && topology.peerFromOwner(targetNodeRid).isPresent())) {
+                    || (topology != null && topology.peerOrNullFromOwner(targetNodeRid) != null)) {
                 return Optional.empty();
             }
             if (notRequiredPeers.contains(targetNodeRid)) {
@@ -1509,7 +1509,7 @@ final class ZLinkJavaRawMeshNode
             return Optional.of(ZLinkOneWayCalls.TARGET_NOT_FOUND);
         }
         ZLinkServiceTopologyRegistry current = topology;
-        return current != null && current.peerFromOwner(targetNodeRid).isPresent()
+        return current != null && current.peerOrNullFromOwner(targetNodeRid) != null
                 ? Optional.empty()
                 : Optional.of(ZLinkOneWayCalls.TARGET_NOT_FOUND);
     }
@@ -1879,11 +1879,10 @@ final class ZLinkJavaRawMeshNode
         if (routingId().equals(nodeRid)) {
             return lifecycleGeneration();
         }
-        return topology == null
-                ? 0L
-                : topology.peerFromOwner(nodeRid)
-                        .map(peer -> peer.descriptor().lifecycleGeneration())
-                        .orElse(0L);
+        ZLinkServiceTopologyRegistry current = topology;
+        ZLinkServiceTopologyRegistry.Peer peer =
+                current == null ? null : current.peerOrNullFromOwner(nodeRid);
+        return peer == null ? 0L : peer.descriptor().lifecycleGeneration();
     }
 
     CompletionStage<Void> sendNode(RoutingId target, byte[] metadata, List<Message> parts) {
@@ -1893,7 +1892,7 @@ final class ZLinkJavaRawMeshNode
         List<Message> frames =
                 encodeApplicationFrames(wire.encodeNodeSendHeader(flags), metadata, parts);
         try {
-            if (topology == null || topology.peerFromOwner(target).isEmpty()) {
+            if (topology == null || topology.peerOrNullFromOwner(target) == null) {
                 return CompletableFuture.failedFuture(
                         new ZlinkSubmitException(SubmitResult.NOT_CONNECTED));
             }

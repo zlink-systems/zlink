@@ -180,15 +180,17 @@ public final class ZLinkServiceTopologyRegistry {
     }
 
     public Optional<Peer> peer(RoutingId nodeRoutingId) {
-        return inStateLane(() -> peerOnLane(nodeRoutingId));
+        return Optional.ofNullable(peerOrNullFromOwner(nodeRoutingId));
     }
 
     public Optional<Peer> peerFromOwner(RoutingId nodeRoutingId) {
-        return stateLane.isOnLane() ? peerOnLane(nodeRoutingId) : peer(nodeRoutingId);
+        return Optional.ofNullable(peerOrNullFromOwner(nodeRoutingId));
     }
 
-    private Optional<Peer> peerOnLane(RoutingId nodeRoutingId) {
-        return Optional.ofNullable(peers.get(nodeRoutingId));
+    public Peer peerOrNullFromOwner(RoutingId nodeRoutingId) {
+        return stateLane.isOnLane()
+                ? peers.get(nodeRoutingId)
+                : inStateLane(() -> peers.get(nodeRoutingId));
     }
 
     public List<Peer> peers() {

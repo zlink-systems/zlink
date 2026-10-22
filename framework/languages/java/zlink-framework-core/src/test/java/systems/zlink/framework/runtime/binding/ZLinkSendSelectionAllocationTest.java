@@ -47,16 +47,24 @@ public final class ZLinkSendSelectionAllocationTest {
                                 byte[] value = PAYLOAD;
                                 for (int i = 0; i < SENDS; i++) {
                                     observed = Optional.of(value);
+                                    observed = Long.valueOf(10_000L + i);
                                     observed = (Supplier<byte[]>) () -> value;
                                 }
                             },
                             true);
             long[] actual = record(() -> send(fixture, SENDS), false);
+            long[] direct = record(() -> sendDirect(fixture, SENDS), false);
             System.out.printf(
                     "sends=%d controlOptionals=%d selectionOptionals=%d controlSuppliers=%d selectionSuppliers=%d%n",
                     SENDS, control[0], actual[0], control[1], actual[1]);
             assertEquals(SENDS, control[0]);
             assertEquals(SENDS, control[1]);
+            assertEquals(SENDS, control[2]);
+            System.out.printf(
+                    "directSends=%d directOptionals=%d directSuppliers=%d directBoxedLifecycles=%d%n",
+                    SENDS, direct[0], direct[1], direct[2]);
+            assertEquals(0, direct[2], "lifecycle generation remains a primitive value");
+            assertEquals(0, direct[0], "direct send uses the topology peer without an Optional");
             assertEquals(0, actual[0], "owner selection uses the existing peer directly");
             assertEquals(0, actual[1], "owner selection does not need a captured turn adapter");
         }
@@ -70,6 +78,25 @@ public final class ZLinkSendSelectionAllocationTest {
                 fixture.source
                         .spotNode()
                         .sendToChannel(CHANNEL, null, java.util.List.of(payload))
+                        .toCompletableFuture()
+                        .join();
+            }
+        }
+        assertTrue(fixture.deliveries.await(10, TimeUnit.SECONDS));
+        assertNull(fixture.receiveFailure.get());
+    }
+
+    private static void sendDirect(ZLinkSendFrameContainerAllocationTest.Fixture fixture, int count)
+            throws Exception {
+        fixture.deliveries = new CountDownLatch(count);
+        for (int i = 0; i < count; i++) {
+            assertTrue(
+                    fixture.source.spotNode().classifyNodeSendTarget(fixture.targetId).isEmpty());
+            assertNotEquals(0, fixture.source.nodeLifecycleGeneration(fixture.targetId));
+            try (var payload = Message.from(PAYLOAD)) {
+                fixture.source
+                        .spotNode()
+                        .sendToNode(fixture.targetId, java.util.List.of(payload))
                         .toCompletableFuture()
                         .join();
             }
@@ -130,13 +157,15 @@ public final class ZLinkSendSelectionAllocationTest {
                 recording.stop();
                 recording.dump(file);
             }
-            long[] count = new long[2];
+            long[] count = new long[3];
             try (var events = new RecordingFile(file)) {
                 while (events.hasMoreEvents()) {
                     var event = events.readEvent();
                     assertNotEquals("jdk.DataLoss", event.getEventType().getName());
                     if (!event.getEventType().getName().equals("jdk.ObjectAllocationOutsideTLAB")
                             || event.getStackTrace() == null) continue;
+                    if (event.getThread().getJavaThreadId() != Thread.currentThread().threadId())
+                        continue;
                     String owner = null;
                     for (var frame : event.getStackTrace().getFrames()) {
                         String candidate = frame.getMethod().getType().getName();
@@ -162,8 +191,11 @@ public final class ZLinkSendSelectionAllocationTest {
                                                                             .startsWith(
                                                                                     "lambda$main$"))
                                     : owner != null
-                                            && owner.startsWith(
-                                                    ZLinkServiceTopologyRegistry.class.getName())
+                                            && (owner.startsWith(
+                                                            ZLinkServiceTopologyRegistry.class
+                                                                    .getName())
+                                                    || owner.equals(
+                                                            ZLinkJavaRawMeshNode.class.getName()))
                                             && event.getStackTrace().getFrames().stream()
                                                     .anyMatch(
                                                             frame ->
@@ -176,12 +208,13 @@ public final class ZLinkSendSelectionAllocationTest {
                                                                                                     .getName())
                                                                             && frame.getMethod()
                                                                                     .getName()
-                                                                                    .equals(
-                                                                                            "sendChannel"));
+                                                                                    .matches(
+                                                                                            "sendChannel|sendNode|nodeLifecycleGeneration|classifyNodeSendTarget"));
                     if (!included) continue;
                     String type = event.getClass("objectClass").getName();
                     if (type.equals(Optional.class.getName())) count[0]++;
                     if (type.contains("$$Lambda")) count[1]++;
+                    if (type.equals(Long.class.getName())) count[2]++;
                 }
             }
             return count;
