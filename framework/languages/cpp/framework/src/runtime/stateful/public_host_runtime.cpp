@@ -4904,8 +4904,7 @@ public_host_runtime_t::stage_relocation_record (const stateful::object_ref_t &ta
                                      : protocol::framework_error_code::requestFailed;
           return _relocation_wire->register_terminal_target (
             {relay, frozen_record.source, reply,
-             [] (protocol::reply_relay_ack_status_t) { return true; }, [] { return true; },
-             data.coordinator.node_routing_id});
+             [] (protocol::reply_relay_ack_status_t) { return true; }, [] { return true; }});
       });
     co_return staged == stateful::stateful_error_t::none;
 }
@@ -7326,15 +7325,6 @@ bool public_host_runtime_t::dispatch_stateful_delivery (
     auto delivery = std::optional<stateful::stateful_delivery_t>{std::move (claimed)};
     receive_record_t record;
     try {
-        if (delivery->request
-            && delivery->frozen.source.node_routing_id == _options.mesh.descriptor.node_routing_id
-            && delivery->frozen.source.node_generation
-                 == _options.mesh.descriptor.lifecycle_generation
-            && !_transport->operation_pending (
-              call_id_t{delivery->frozen.operation.high, delivery->frozen.operation.low})) {
-            (void) _stateful_dispatch->complete (*delivery, std::nullopt);
-            return false;
-        }
         const auto &frozen = delivery->frozen;
         ready_record_t owner;
         owner.domain = ready_domain_t::application;

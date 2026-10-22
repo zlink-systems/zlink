@@ -3819,19 +3819,6 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
     }
 }
 
-task_t<std::optional<runtime::spot_address_t>>
-mesh_node_runtime_t::resolve_application_actor_route (actor_ref_t actor) const
-{
-    if (!_actor_route_resolver)
-        co_return std::nullopt;
-    const auto resolved = co_await _actor_route_resolver (actor);
-    if (!resolved || resolved->object_generation != actor.object_generation ()
-        || resolved->authority_owner_generation == 0 || resolved->node_generation == 0
-        || resolved->owner.lease_generation <= 0)
-        co_return std::nullopt;
-    co_return resolved;
-}
-
 request_task_t<runtime::protocol::stream_bind_reply_tail_t>
 mesh_node_runtime_t::bind_application_actor_session (const actor_ref_t &actor,
                                                      const zlink::routing_id_t &session_rid,

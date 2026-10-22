@@ -341,7 +341,6 @@ struct raw_relocation_terminal_target_registration_t
     std::optional<protocol::application_payload_t> application_reply;
     std::function<bool (protocol::reply_relay_ack_status_t)> persist_ack;
     std::function<bool ()> persist_source_lease_expiry;
-    std::vector<std::uint8_t> relay_destination_node_routing_id;
 };
 
 class raw_relocation_replay_coordinator_t
