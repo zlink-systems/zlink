@@ -17,6 +17,40 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class ActorHandoffTests
 {
     [Fact]
+    public async Task Restored_source_prefix_remains_owned_by_the_next_relocation_barrier()
+    {
+        var state = new ZLinkActorRuntimeState("actor-1");
+        using var turn = await state.ReserveHandoffRestoreBarrier().ClaimAsync();
+        using var dispatch = state.EnterDispatch();
+        state.Handoff.BeginCapture();
+        Capture(state, "before", "session-1");
+        state.Handoff.SealCapture();
+        Capture(state, "held", "session-1");
+        var delivered = new List<string>();
+        state.Handoff.AbortCapture(
+            (frame, start) =>
+                state.AdmitDurablePrefix([
+                    new ZLinkActorDurableRecord(
+                        _ =>
+                        {
+                            state.Handoff.ClaimDurableFrame(frame);
+                            delivered.Add(DecodeBody(frame));
+                            return ValueTask.CompletedTask;
+                        },
+                        ct => new ValueTask(start.WaitAsync(ct)),
+                        OnWithdrawable: take => frame.Withdraw = take,
+                        Ready: () => state.Handoff.DurablePrefixCanRun
+                    ),
+                ])[0]
+        );
+        Assert.False(state.Handoff.IsSourceMigrationInProgress);
+        Assert.Empty(delivered);
+        await state.BeginHandoffCaptureAsync(CancellationToken.None);
+        Assert.Equal(new[] { "before", "held" }, state.Handoff.SnapshotFrames().Select(DecodeBody));
+        _ = state.Handoff.AbortCapture();
+    }
+
+    [Fact]
     public async Task A_new_relocation_captures_the_unstarted_prefix_at_its_lifecycle_barrier()
     {
         var state = new ZLinkActorRuntimeState("actor-1");
@@ -779,6 +813,49 @@ public sealed class ActorHandoffTests
             ["before-seal", "before-boundary", "after-boundary"],
             state.Handoff.AbortCapture().Select(DecodeBody)
         );
+    }
+
+    [Fact]
+    public void Abort_restore_acknowledges_only_FIFO_accepted_records_without_waiting_for_handlers()
+    {
+        var state = new ZLinkActorRuntimeState("actor-1");
+        state.Handoff.BeginCapture();
+        Capture(state, "before", "session-1");
+        state.Handoff.SealCapture();
+        Capture(state, "held", "session-1");
+        var restored = state.Handoff.WaitForSourceCompletionAsync(CancellationToken.None);
+        var handlers = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var accepted = new List<ZLinkActorHandoffFrame>();
+        var refused = new InvalidOperationException("FIFO rejected the second record.");
+        Assert.Same(
+            refused,
+            Assert.Throws<InvalidOperationException>(() =>
+                state.Handoff.AbortCapture(
+                    (frame, start) =>
+                    {
+                        Assert.False(start.IsCompleted);
+                        if (accepted.Count != 0)
+                            throw refused;
+                        accepted.Add(frame);
+                        return handlers.Task;
+                    }
+                )
+            )
+        );
+        Assert.True(state.Handoff.BlocksLocalDispatch);
+        Assert.False(restored.IsCompleted);
+        Assert.Equal("held", DecodeBody(Assert.Single(state.Handoff.BeginAbortCaptureRestore())));
+        state.Handoff.AbortCapture(
+            (frame, _) =>
+            {
+                accepted.Add(frame);
+                return handlers.Task;
+            }
+        );
+        Assert.True(restored.IsCompletedSuccessfully);
+        Assert.False(handlers.Task.IsCompleted);
+        Assert.False(state.Handoff.BlocksLocalDispatch);
+        Assert.Equal(new[] { "before", "held" }, accepted.Select(DecodeBody));
     }
 
     [Fact]
