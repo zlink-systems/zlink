@@ -1488,10 +1488,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         .CompleteAsync(request.HandoffId)
                         .ConfigureAwait(false);
                 }
-                LogActorHandoff(
-                    $"handoff_completion_failed_after_commit actor={request.ActorId} "
-                        + $"kind={MapPostCommitActorJoinFailure(lifecycleFailure)}"
-                );
+
                 return;
             }
             var canonicalMaintenance = actorState.Handoff.IsCanonicalMaintenanceHandoff(
@@ -2951,10 +2948,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                 .ConfigureAwait(false);
             await _actorHandoffAdmissions.CompleteAsync(request.HandoffId).ConfigureAwait(false);
         }
-        LogActorHandoff(
-            $"handoff_completion_failed_after_commit actor={request.ActorId} "
-                + $"kind={MapPostCommitActorJoinFailure(lifecycleFailure)}"
-        );
     }
 
     private async ValueTask DeliverFailedTransferredActorJoinAsync(
@@ -2964,6 +2957,18 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken
     )
     {
+        if (Flow.DispatchErrorsEnabled)
+            Flow.TraceDispatchError(
+                new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.ActorRelocation,
+                    ZLinkDispatchMessageKind.Control,
+                    ZLinkDispatchErrorReporter.ReasonFrom(failure),
+                    ZLinkDispatchErrorAction.FailCaller,
+                    "OnJoinedActor",
+                    ActorId: request.ActorId,
+                    Exception: failure
+                )
+            );
         if (request.OperationIdHigh == 0 && request.OperationIdLow == 0)
             return;
 
