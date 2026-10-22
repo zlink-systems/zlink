@@ -362,7 +362,7 @@ final class ZLinkYieldAdmissionTest {
     }
 
     @Test
-    void deferredLifecycleCallbackKeepsItsTurnUntilActualCallbackYields() {
+    void asynchronousLifecycleCallbackKeepsItsRecordUntilPublicYield() {
         var executor = new ZLinkManualExecutor();
         var callbacks = new ZLinkManualExecutor();
         var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
@@ -377,11 +377,12 @@ final class ZLinkYieldAdmissionTest {
                                 try (var scope =
                                         ZLinkSuspendInvocationContext.enterApplicationExecution(
                                                 application())) {
-                                    ZLinkSerialExecutionQueue.deferCurrentReleaseUntil(
-                                            callbackResult);
                                     ZLinkSerialExecutionQueue.propagateCurrent(callbacks)
                                             .execute(
                                                     () -> {
+                                                        assertTrue(
+                                                                queue.isCurrent(),
+                                                                "callback must resume the owning lifecycle record");
                                                         try {
                                                             call(pool, submissions, remote)
                                                                     .yield()
