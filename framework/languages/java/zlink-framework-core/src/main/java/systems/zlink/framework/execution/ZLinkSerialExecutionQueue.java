@@ -57,7 +57,6 @@ public final class ZLinkSerialExecutionQueue {
     public static final int DEFAULT_LIFECYCLE_BURST_LIMIT = 8;
     public static final Duration DEFAULT_OWNER_TIME_BUDGET = Duration.ofMillis(10);
     private static final ThreadLocal<SerialTurn> CURRENT = new ThreadLocal<>();
-    private static final ThreadLocal<Boolean> CURRENT_RELEASE_DEFERRED = new ThreadLocal<>();
     // Arbitrary executors may block or execute inline; worker services already
     // provide the asynchronous boundary. Compatibility dispatch is process-wide.
     private static final ExecutorService DRAIN_EXECUTOR =
@@ -2092,7 +2091,7 @@ public final class ZLinkSerialExecutionQueue {
 
     /** Reports whether the calling turn belongs to a timer queue of this Spot. */
     public static boolean isCurrentTimerOf(ZLinkSerialExecutionQueue owner) {
-        SerialTurn current = CURRENT.get();
+        SerialTurn current = currentTurn();
         return current != null && current.queue.timerOwner == owner;
     }
 
@@ -2307,10 +2306,8 @@ public final class ZLinkSerialExecutionQueue {
         boolean releaseGateOnIncompleteStage =
                 lanePolicy.releasesGateOnIncompleteStage() && entry.relocationBoundary == null;
         SerialTurn previous = CURRENT.get();
-        Boolean previousDeferred = CURRENT_RELEASE_DEFERRED.get();
         SerialTurn physical = new SerialTurn(this, gate, entry);
         CURRENT.set(physical);
-        CURRENT_RELEASE_DEFERRED.set(false);
         try (var serial =
                         systems.zlink.framework.runtime.internal.handlers
                                 .ZLinkSuspendInvocationContext.enterSerialExecutionTurn(
@@ -2334,8 +2331,7 @@ public final class ZLinkSerialExecutionQueue {
                             gate.complete(null);
                         }
                     });
-            if (releaseGateOnIncompleteStage
-                    && !Boolean.TRUE.equals(CURRENT_RELEASE_DEFERRED.get())) {
+            if (releaseGateOnIncompleteStage) {
                 gate.complete(null);
             }
         } catch (RuntimeException | Error error) {
@@ -2346,11 +2342,6 @@ public final class ZLinkSerialExecutionQueue {
                 CURRENT.remove();
             } else {
                 CURRENT.set(previous);
-            }
-            if (previousDeferred == null) {
-                CURRENT_RELEASE_DEFERRED.remove();
-            } else {
-                CURRENT_RELEASE_DEFERRED.set(previousDeferred);
             }
         }
         // The drain observes this gate only after operation.get() and context restoration return.
@@ -2393,13 +2384,10 @@ public final class ZLinkSerialExecutionQueue {
         if (!queue.lanePolicy.releasesGateOnIncompleteStage()) {
             CompletableFuture<Void> gate = turn.gate;
             stage.whenComplete(
-                    (value, error) -> {
-                        try {
-                            queue.executor.execute(
+                    (value, error) ->
+                            queue.submitWorker(
                                     () -> {
-                                        runWithContext(
-                                                turn,
-                                                null,
+                                        runWithInvocationContext(
                                                 serialContext,
                                                 application,
                                                 actorDispatch,
@@ -2411,14 +2399,13 @@ public final class ZLinkSerialExecutionQueue {
                                                         managed.complete(value);
                                                     }
                                                 });
-                                    });
-                        } catch (RuntimeException rejected) {
-                            managed.completeExceptionally(rejected);
-                            if (gate != null) {
-                                gate.complete(null);
-                            }
-                        }
-                    });
+                                    },
+                                    rejected -> {
+                                        managed.completeExceptionally(rejected);
+                                        if (gate != null) {
+                                            gate.complete(null);
+                                        }
+                                    }));
             return managed;
         }
         queue.suspendContinuation(turn.entry);
@@ -2722,8 +2709,6 @@ public final class ZLinkSerialExecutionQueue {
     public static Executor propagateCurrent(Executor executor) {
         Objects.requireNonNull(executor, "executor");
         return command -> {
-            SerialTurn physical = CURRENT.get();
-            Boolean deferred = CURRENT_RELEASE_DEFERRED.get();
             Object serialTurn =
                     systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
                             .currentSerialExecutionTurn();
@@ -2736,9 +2721,7 @@ public final class ZLinkSerialExecutionQueue {
             ZLinkFlowContext.State flow = ZLinkFlowContext.current();
             executor.execute(
                     () ->
-                            runWithContext(
-                                    physical,
-                                    deferred,
+                            runWithInvocationContext(
                                     serialTurn,
                                     application,
                                     actorDispatch,
@@ -2755,28 +2738,6 @@ public final class ZLinkSerialExecutionQueue {
                                         }
                                     }));
         };
-    }
-
-    private static void runWithContext(
-            SerialTurn physical,
-            Boolean deferred,
-            Object serialTurn,
-            systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationContext
-                            .ApplicationExecution
-                    application,
-            String actorDispatch,
-            ZLinkFlowContext.State flow,
-            Runnable command) {
-        SerialTurn previous = CURRENT.get();
-        Boolean previousDeferred = CURRENT_RELEASE_DEFERRED.get();
-        setOrRemove(CURRENT, physical);
-        setOrRemove(CURRENT_RELEASE_DEFERRED, deferred);
-        try {
-            runWithInvocationContext(serialTurn, application, actorDispatch, flow, command);
-        } finally {
-            setOrRemove(CURRENT, previous);
-            setOrRemove(CURRENT_RELEASE_DEFERRED, previousDeferred);
-        }
     }
 
     private static void runWithInvocationContext(
@@ -2802,26 +2763,6 @@ public final class ZLinkSerialExecutionQueue {
                         flow == null ? () -> {} : ZLinkFlowContext.enter(flow)) {
             command.run();
         }
-    }
-
-    private static <T> void setOrRemove(ThreadLocal<T> local, T value) {
-        if (value == null) {
-            local.remove();
-        } else {
-            local.set(value);
-        }
-    }
-
-    public static <T> CompletionStage<T> deferCurrentReleaseUntil(CompletionStage<T> entered) {
-        Objects.requireNonNull(entered, "entered");
-        SerialTurn turn = currentTurn();
-        CompletableFuture<Void> gate = turn == null ? null : turn.gate;
-        if (gate == null) {
-            return entered;
-        }
-        CURRENT_RELEASE_DEFERRED.set(true);
-        entered.whenComplete((ignored, error) -> gate.complete(null));
-        return entered;
     }
 
     private static SerialTurn currentTurn() {
