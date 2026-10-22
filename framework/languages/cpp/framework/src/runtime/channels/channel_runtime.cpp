@@ -1427,7 +1427,8 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
                                      "route channel or SPOT mesh '" + router_channel_id
                                        + "' is not registered");
     }
-    // The transport boundary: this task is the public route send result.
+    // The transport boundary: this task is the public route send result. The encoder
+    // runs before the first suspension, so callers may pass a borrowed encoder.
     try {
         runtime::messaging::client_call_codec_t codec;
         auto parts = codec.encode_node_send_parts (router_channel_id, packet_name, target_node_rid,
@@ -1474,7 +1475,8 @@ task_t<void> route_client_t::submit_channel_send_erased (
         throw framework_exception_t (framework_error_kind_t::not_found,
                                      "ChannelName '" + channel_name + "' is not registered");
     }
-    // The transport boundary: this task is the public route send result.
+    // The transport boundary: this task is the public route send result. Both paths
+    // run the encoder before the first suspension, so callers may pass a borrowed encoder.
     try {
         if (const auto *client_server = std::get_if<0> (&*channel_transport)) {
             auto serialized = encode_payload (*state->serializers);
