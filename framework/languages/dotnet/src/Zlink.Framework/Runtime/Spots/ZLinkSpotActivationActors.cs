@@ -389,28 +389,6 @@ internal abstract partial class ZLinkSpotActivation
             cancellationToken
         );
 
-    internal ValueTask ReplayAbortedActorHandoffAsync(
-        ZLinkActorRuntimeState actorState,
-        IReadOnlyList<ZLinkActorHandoffFrame> frames,
-        CancellationToken cancellationToken
-    )
-    {
-        if (frames.Count == 0)
-            return ValueTask.CompletedTask;
-
-        var actorRef =
-            actorState.NativeActorRef
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Actor '{actorState.ActorId}' does not have a native Actor ref during handoff rollback."
-            );
-        return _dispatcher.DispatchActorFramesAsync(
-            ZLinkActorHandoffFrames.Restore(actorRef, frames),
-            _serial,
-            cancellationToken
-        );
-    }
-
     internal ValueTask RestoreActorAfterFailedHandoffAsync(
         IZLinkActor actor,
         CancellationToken cancellationToken
