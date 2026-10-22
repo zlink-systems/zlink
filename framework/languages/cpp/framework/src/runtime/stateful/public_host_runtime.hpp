@@ -985,11 +985,20 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              foundation::operation_terminal_t terminal,
                              zlink::message_t payload);
     task_t<std::size_t> dispatch_user_spot_operations ();
-    task_t<std::size_t> dispatch_application_claim (
-      std::shared_ptr<mesh::service_mailbox_claim_t> claim,
-      const std::function<void (
-        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
-      std::shared_ptr<application_claim_batch_t> batch = {});
+    using application_claim_result_t = std::variant<std::size_t, task_t<std::size_t>>;
+    task_t<std::size_t>
+    dispatch_application_claim (std::shared_ptr<mesh::service_mailbox_claim_t> claim,
+                                mesh::service_mailbox_t::application_dispatch_t dispatch,
+                                std::shared_ptr<application_claim_batch_t> batch = {});
+    application_claim_result_t
+    dispatch_application_claim (const std::shared_ptr<application_claim_batch_t> &batch);
+    task_t<std::size_t>
+    continue_application_claim (std::shared_ptr<application_claim_batch_t> batch,
+                                task_t<void> pending);
+    void
+    fail_application_claim (const std::shared_ptr<application_claim_batch_t> &batch,
+                            std::exception_ptr error,
+                            mesh::service_mailbox_settlement_t release_mailbox_reservation = {});
     task_t<bool>
     dispatch_native_spot (stateful::object_ref_t object,
                           mesh::service_mailbox_t::claim_handle_t slot,
