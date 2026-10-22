@@ -117,12 +117,116 @@ internal sealed class ZLinkChannelReceiveLoop(
                             )
                             .GetAwaiter()
                             .GetResult();
+<<<<<<< HEAD
                         // PostAsync either handed ownership to the queue or ran the
                         // rejection callback. Keep the storage local until that result is
                         // known so a pre-handoff exception is returned by this loop's
                         // finally block.
                         received = null;
                         admission = null;
+=======
+                        var startedAt = System.Diagnostics.Stopwatch.GetTimestamp();
+                        var records = 0;
+                        long bytes = 0;
+                        while (reservation.Count != 0 && !cancellationToken.IsCancellationRequested)
+                        {
+                            if (ZLinkReceiveBatchBudget.IsExhausted(records, bytes, startedAt))
+                                break;
+                            Received? received = null;
+                            ZLinkApplicationJobQueueLease? admission = null;
+                            try
+                            {
+                                received = receiveStoragePool.Rent();
+                                if (!router.Recv(received, RecvFlags.DontWait))
+                                    break;
+                                admission = reservation.Claim()!;
+                                records++;
+                                bytes = checked(
+                                    bytes + ZLinkReceiveBatchBudget.MeasureParts(received.Parts)
+                                );
+
+                                if (
+                                    received.ReplyToken is null
+                                    && received.Parts.Count == 1
+                                    && received.Parts[0].Size == 0
+                                )
+                                    continue;
+                                if (received.RoutingId is not { } applicationSource)
+                                    continue;
+                                var admitted = AwaitStateLane(
+                                    identity.ObserveReceivedRecordAsync(
+                                        applicationSource,
+                                        received.RouteGeneration,
+                                        System.Diagnostics.Stopwatch.GetTimestamp()
+                                    )
+                                );
+                                if (ZLinkClientServerControlProtocol.IsControl(received.Parts))
+                                {
+                                    ReplyClientServerControl(
+                                        router,
+                                        received,
+                                        identity,
+                                        errorSink,
+                                        cancellationToken
+                                    );
+                                    continue;
+                                }
+                                if (!admitted.Found)
+                                    continue;
+                                var admittedMaximumMessageBytes = admitted.MaximumMessageBytes;
+                                if (
+                                    !ZLinkClientServerMessageBound.Fits(
+                                        received.Parts,
+                                        admittedMaximumMessageBytes
+                                    )
+                                )
+                                {
+                                    clientServerDispatcher.RejectMessageTooLarge(
+                                        channelName,
+                                        router,
+                                        received,
+                                        applicationDispatch.ReplyGate,
+                                        admittedMaximumMessageBytes
+                                    );
+                                    continue;
+                                }
+                                var owned = received;
+                                var envelope = clientServerDispatcher.ReadHeader(
+                                    received.Parts,
+                                    channelName,
+                                    admission
+                                );
+                                _ = applicationDispatch
+                                    .PostAsync(
+                                        new ClientServerDispatchWork(
+                                            channelName,
+                                            router,
+                                            owned,
+                                            receiveStoragePool,
+                                            applicationDispatch.ReplyGate,
+                                            admittedMaximumMessageBytes,
+                                            admission,
+                                            envelope
+                                        ),
+                                        cancellationToken
+                                    )
+                                    .GetAwaiter()
+                                    .GetResult();
+                                // PostAsync either handed ownership to the queue or ran the
+                                // rejection callback. Keep the storage local until that result is
+                                // known so a pre-handoff exception is returned by this loop's
+                                // finally block.
+                                received = null;
+                                admission = null;
+                            }
+                            finally
+                            {
+                                if (received is { } storage)
+                                    receiveStoragePool.Return(storage);
+                                admission?.Dispose();
+                            }
+                        }
+>>>>>>> 0502e75 (fix(framework): trace Channel receive and handler phases (#2412))
                     }
                     catch (Exception) when (cancellationToken.IsCancellationRequested)
                     {

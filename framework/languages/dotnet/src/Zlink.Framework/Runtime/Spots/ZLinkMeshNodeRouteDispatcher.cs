@@ -178,7 +178,8 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
         var handlerRegistry = new ZLinkHandlerRegistry(channelEndpoints);
         var handlerDispatcher = new ZLinkHandlerDispatcher(
             services.GetRequiredService<IServiceScopeFactory>(),
-            registration
+            registration,
+            dispatchErrors
         );
         var routeInvoker = new ZLinkRouteHandlerInvoker(handlerDispatcher, registration.Codecs);
         var commandPipeline = new ZLinkChannelCommandDispatchPipeline(
@@ -278,13 +279,47 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
             ct => DispatchBatchAsync([received], ct)
         );
 
-    private static async ValueTask QueueChannelAsync(
+    private async ValueTask QueueChannelAsync(
         ZLinkChannelApplicationDispatchQueue<ChannelDispatchWork> queue,
         ZLinkBackendRouteReceived received,
         ZLinkEnvelopeHeader? header,
         CancellationToken cancellationToken
     )
     {
+        using (
+            var flow = ZLinkFlowContext.Enter(
+                header?.FlowId,
+                header?.FlowOrigin,
+                _dispatchErrors.Flow.CaptureEnabled,
+                ZLinkFlowOrigin.Inbound
+            )
+        )
+        {
+            if (
+                header is not null
+                && header.Kind is ZLinkMessageKind.Command or ZLinkMessageKind.Request
+            )
+            {
+                if (ZLinkFlowContext.Current is { } current)
+                {
+                    header.FlowId = current.FlowId;
+                    header.FlowOrigin = current.Origin;
+                }
+                var scope = new ZLinkDispatchFlowScope(
+                    ZLinkDispatchErrorSurface.RouteMeshChannel,
+                    _dispatchErrors.Flow.CaptureEnabled,
+                    header.Kind == ZLinkMessageKind.Request
+                        ? ZLinkDispatchMessageKind.Request
+                        : ZLinkDispatchMessageKind.Send,
+                    header.MessageName,
+                    received.ChannelName,
+                    header.ContentType,
+                    header.CorrelationId
+                );
+                scope.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Received);
+                scope.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Admitted);
+            }
+        }
         var completion = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously
         );
@@ -711,19 +746,6 @@ internal sealed class ZLinkMeshNodeRouteDispatcher : IAsyncDisposable
         CancellationToken cancellationToken
     )
     {
-        var scope = new ZLinkDispatchFlowScope(
-            ZLinkDispatchErrorSurface.Channel,
-            _dispatchErrors.Flow.CaptureEnabled,
-            header.Kind == ZLinkMessageKind.Request
-                ? ZLinkDispatchMessageKind.Request
-                : ZLinkDispatchMessageKind.Send,
-            header.MessageName,
-            channelName,
-            header.ContentType,
-            header.CorrelationId
-        );
-        scope.Trace(_dispatchErrors, ZLinkMessageFlowOutcome.Received);
-
         switch (header.Kind)
         {
             case ZLinkMessageKind.Request:

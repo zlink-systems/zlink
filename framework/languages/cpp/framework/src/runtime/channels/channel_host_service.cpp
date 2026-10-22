@@ -13,6 +13,7 @@
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/dispatch/offload_executor.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
+#include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/fanout/fanout_subscription.hpp"
 #include "runtime/transport/listener_identity.hpp"
 
@@ -208,7 +209,69 @@ class channel_host_service_t::server_loop_t
         auto shared_parts =
           std::make_shared<zlink::framework::runtime::messaging::message_parts_t> (
             std::move (request_parts));
-        const auto rejection_routing_id = routing_id;
+        detail::message_flow_tracer_t flow (_runtime.dispatch_options_ref ());
+        if (flow.enabled_for (message_flow_outcome_t::received)) {
+            auto header = messaging::envelope_codec_t{}.decode_header (*shared_parts, true);
+            if (header && header.value ().kind != messaging::message_kind_t::publish) {
+                auto flow_scope =
+                  flow_context_t::enter (header.value ().flow_id, header.value ().flow_origin,
+                                         flow.mode (), flow_origin_t::inbound, std::nullopt);
+                if (!header.value ().flow_id && flow_context_t::current ()) {
+                    header.value ().flow_id = flow_context_t::current ()->flow_id;
+                    header.value ().flow_origin = flow_context_t::current ()->origin;
+                    auto parts = std::move (*shared_parts).take_items ();
+                    parts[0] = messaging::envelope_codec_t{}.encode_header (header.value ());
+                    *shared_parts = messaging::message_parts_t (std::move (parts));
+                }
+
+                flow.trace (message_flow_outcome_t::received,
+                            header.value ().flow_id ? std::string_view (*header.value ().flow_id)
+                                                    : std::string_view{},
+                            [&] {
+                                message_flow_event_t event{message_flow_outcome_t::received,
+                                                           dispatch_error_surface_t::channel,
+                                                           header.value ().kind
+                                                               == messaging::message_kind_t::request
+                                                             ? dispatch_message_kind_t::request
+                                                             : dispatch_message_kind_t::send,
+                                                           header.value ().message_name,
+                                                           _channel_name,
+                                                           std::nullopt,
+                                                           header.value ().correlation_id,
+                                                           std::nullopt,
+                                                           std::nullopt,
+                                                           std::nullopt,
+                                                           std::nullopt};
+                                event.flow_id = header.value ().flow_id;
+                                event.flow_origin = header.value ().flow_origin;
+
+                                return event;
+                            });
+                flow.trace (message_flow_outcome_t::admitted,
+                            header.value ().flow_id ? std::string_view (*header.value ().flow_id)
+                                                    : std::string_view{},
+                            [&] {
+                                message_flow_event_t event{message_flow_outcome_t::admitted,
+                                                           dispatch_error_surface_t::channel,
+                                                           header.value ().kind
+                                                               == messaging::message_kind_t::request
+                                                             ? dispatch_message_kind_t::request
+                                                             : dispatch_message_kind_t::send,
+                                                           header.value ().message_name,
+                                                           _channel_name,
+                                                           std::nullopt,
+                                                           header.value ().correlation_id,
+                                                           std::nullopt,
+                                                           std::nullopt,
+                                                           std::nullopt,
+                                                           std::nullopt};
+                                event.flow_id = header.value ().flow_id;
+                                event.flow_origin = header.value ().flow_origin;
+
+                                return event;
+                            });
+            }
+        }
         received->close ();
         auto work = [this, routing_id = std::move (routing_id), reply_token, shared_parts,
                      application_job] () mutable {
@@ -227,10 +290,65 @@ class channel_host_service_t::server_loop_t
                   std::move (routing_id), std::move (reply_token), std::move (reply.value ())});
             }
             catch (...) {
+                const auto failure = std::current_exception ();
+                detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ())
+                  .report_lazy ([&] {
+                      auto decoded = messaging::envelope_codec_t{}.decode_header (
+                        *shared_parts,
+                        detail::message_flow_tracer_t (_runtime.dispatch_options_ref ())
+                          .flow_tracing ());
+                      message_dispatch_error_event_t event{
+                        dispatch_error_surface_t::channel,
+                        decoded && decoded.value ().kind == messaging::message_kind_t::request
+                          ? dispatch_message_kind_t::request
+                          : dispatch_message_kind_t::send,
+                        dispatch_error_reason_t::handler_exception,
+                        dispatch_error_action_t::drop,
+                        decoded ? std::optional<std::string> (decoded.value ().message_name)
+                                : std::nullopt,
+                        _channel_name,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        std::nullopt,
+                        decoded ? std::optional<std::string> (decoded.value ().correlation_id)
+                                : std::nullopt,
+                        failure};
+                      if (decoded) {
+                          event.flow_id = decoded.value ().flow_id;
+                          event.flow_origin = decoded.value ().flow_origin;
+                      }
+                      return event;
+                  });
             }
         };
         if (!_handler_executor || !_handler_executor->try_submit_internal (std::move (work))) {
-            (void) rejection_routing_id;
+            detail::dispatch_error_reporter_t (_runtime.dispatch_options_ref ()).report_lazy ([&] {
+                auto decoded = messaging::envelope_codec_t{}.decode_header (
+                  *shared_parts,
+                  detail::message_flow_tracer_t (_runtime.dispatch_options_ref ()).flow_tracing ());
+                message_dispatch_error_event_t event{
+                  dispatch_error_surface_t::channel,
+                  decoded && decoded.value ().kind == messaging::message_kind_t::request
+                    ? dispatch_message_kind_t::request
+                    : dispatch_message_kind_t::send,
+                  dispatch_error_reason_t::shutdown,
+                  dispatch_error_action_t::drop,
+                  decoded ? std::optional<std::string> (decoded.value ().message_name)
+                          : std::nullopt,
+                  _channel_name,
+                  std::nullopt,
+                  std::nullopt,
+                  std::nullopt,
+                  std::nullopt,
+                  decoded ? std::optional<std::string> (decoded.value ().correlation_id)
+                          : std::nullopt};
+                if (decoded) {
+                    event.flow_id = decoded.value ().flow_id;
+                    event.flow_origin = decoded.value ().flow_origin;
+                }
+                return event;
+            });
         }
     }
 

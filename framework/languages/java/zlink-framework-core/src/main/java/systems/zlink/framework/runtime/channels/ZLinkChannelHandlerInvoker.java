@@ -88,6 +88,17 @@ final class ZLinkChannelHandlerInvoker {
             Message payload,
             Map<String, String> metadata,
             String wireContentType) {
+        return invokeSendHandler(
+                channelName, registration, payload, metadata, wireContentType, null);
+    }
+
+    CompletionStage<Void> invokeSendHandler(
+            String channelName,
+            ChannelSendHandlerRegistration registration,
+            Message payload,
+            Map<String, String> metadata,
+            String wireContentType,
+            Runnable beforeHandler) {
         Object message;
         try {
             message = deserializePayload(payload, registration.messageType(), wireContentType);
@@ -109,12 +120,19 @@ final class ZLinkChannelHandlerInvoker {
                                             ZLinkHandlerDispatchKind.CHANNEL_SEND,
                                             context,
                                             handlers,
+<<<<<<< HEAD
                                             () ->
                                                     invokeSendHandlerCore(
                                                             registration,
                                                             message,
                                                             context,
                                                             handlers))
+=======
+                                            registration.handlerType(),
+                                            registration.invocation(),
+                                            message,
+                                            beforeHandler)
+>>>>>>> 0502e75 (fix(framework): trace Channel receive and handler phases (#2412))
                                     .thenApply(ignored -> null));
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
@@ -160,6 +178,17 @@ final class ZLinkChannelHandlerInvoker {
             Message payload,
             Map<String, String> metadata,
             String wireContentType) {
+        return invokeRequestHandler(
+                channelName, registration, payload, metadata, wireContentType, null);
+    }
+
+    CompletionStage<Message> invokeRequestHandler(
+            String channelName,
+            ChannelRequestHandlerRegistration registration,
+            Message payload,
+            Map<String, String> metadata,
+            String wireContentType,
+            Runnable beforeHandler) {
         Object request;
         try {
             request = deserializePayload(payload, registration.requestType(), wireContentType);
@@ -181,12 +210,19 @@ final class ZLinkChannelHandlerInvoker {
                                             ZLinkHandlerDispatchKind.CHANNEL_REQUEST,
                                             context,
                                             handlers,
+<<<<<<< HEAD
                                             () ->
                                                     invokeRequestHandlerCore(
                                                             registration,
                                                             request,
                                                             context,
                                                             handlers)))
+=======
+                                            registration.handlerType(),
+                                            registration.invocation(),
+                                            request,
+                                            beforeHandler))
+>>>>>>> 0502e75 (fix(framework): trace Channel receive and handler phases (#2412))
                     .thenApply(
                             reply ->
                                     ZLinkMessagePayloads.message(
@@ -246,12 +282,19 @@ final class ZLinkChannelHandlerInvoker {
                                             ZLinkHandlerDispatchKind.CLASSIC_FANOUT,
                                             context,
                                             handlers,
+<<<<<<< HEAD
                                             () ->
                                                     invokePublishHandlerCore(
                                                             registration,
                                                             message,
                                                             context,
                                                             handlers))
+=======
+                                            registration.handlerType(),
+                                            registration.invocation(),
+                                            message,
+                                            null)
+>>>>>>> 0502e75 (fix(framework): trace Channel receive and handler phases (#2412))
                                     .thenApply(ignored -> null));
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
@@ -303,6 +346,24 @@ final class ZLinkChannelHandlerInvoker {
             Message payload,
             Map<String, String> metadata,
             String wireContentType) {
+        return invokeRouteSendHandler(
+                channelName,
+                registration,
+                sourceRoutingId,
+                payload,
+                metadata,
+                wireContentType,
+                null);
+    }
+
+    CompletionStage<Void> invokeRouteSendHandler(
+            String channelName,
+            ChannelRouteSendHandlerRegistration registration,
+            RoutingId sourceRoutingId,
+            Message payload,
+            Map<String, String> metadata,
+            String wireContentType,
+            Runnable beforeHandler) {
         Object message;
         try {
             message = deserializePayload(payload, registration.messageType(), wireContentType);
@@ -325,12 +386,19 @@ final class ZLinkChannelHandlerInvoker {
                                             ZLinkHandlerDispatchKind.NODE_DIRECT_SEND,
                                             context,
                                             handlers,
+<<<<<<< HEAD
                                             () ->
                                                     invokeRouteSendHandlerCore(
                                                             registration,
                                                             message,
                                                             context,
                                                             handlers))
+=======
+                                            registration.handlerType(),
+                                            registration.invocation(),
+                                            message,
+                                            beforeHandler)
+>>>>>>> 0502e75 (fix(framework): trace Channel receive and handler phases (#2412))
                                     .thenApply(ignored -> null));
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
@@ -366,6 +434,24 @@ final class ZLinkChannelHandlerInvoker {
             Message payload,
             Map<String, String> metadata,
             String wireContentType) {
+        return invokeRouteRequestHandler(
+                channelName,
+                registration,
+                sourceRoutingId,
+                payload,
+                metadata,
+                wireContentType,
+                null);
+    }
+
+    CompletionStage<Message> invokeRouteRequestHandler(
+            String channelName,
+            ChannelRouteRequestHandlerRegistration registration,
+            RoutingId sourceRoutingId,
+            Message payload,
+            Map<String, String> metadata,
+            String wireContentType,
+            Runnable beforeHandler) {
         Object request;
         try {
             request = deserializePayload(payload, registration.requestType(), wireContentType);
@@ -388,12 +474,19 @@ final class ZLinkChannelHandlerInvoker {
                                             ZLinkHandlerDispatchKind.NODE_DIRECT_REQUEST,
                                             context,
                                             handlers,
+<<<<<<< HEAD
                                             () ->
                                                     invokeRouteRequestHandlerCore(
                                                             registration,
                                                             request,
                                                             context,
                                                             handlers))
+=======
+                                            registration.handlerType(),
+                                            registration.invocation(),
+                                            request,
+                                            beforeHandler)
+>>>>>>> 0502e75 (fix(framework): trace Channel receive and handler phases (#2412))
                                     .thenApply(
                                             reply ->
                                                     ZLinkMessagePayloads.message(
@@ -438,6 +531,7 @@ final class ZLinkChannelHandlerInvoker {
         return meshName == null || meshName.isBlank() ? legacyChannelName : meshName;
     }
 
+<<<<<<< HEAD
     private CompletionStage<Void> invokeRouteSendHandlerCore(
             ChannelRouteSendHandlerRegistration registration,
             Object message,
@@ -449,6 +543,61 @@ final class ZLinkChannelHandlerInvoker {
                     .invocation()
                     .invoke(handler, message, context)
                     .thenApply(ignored -> null);
+=======
+    private CompletionStage<Object> invokeWithFilters(
+            ZLinkHandlerDispatchKind dispatchKind,
+            ZLinkMessageContext context,
+            ZLinkHandlerInstanceOwner handlers,
+            Class<?> handlerType,
+            PreparedMethod invocation,
+            Object message,
+            Runnable beforeHandler) {
+        if (filterTypes.isEmpty())
+            return invokeHandlerCore(
+                    handlerType, invocation, handlers, message, context, beforeHandler);
+        var filterContext = new DefaultHandlerFilterContext(context, dispatchKind);
+        return ZLinkFilterPipeline.invoke(
+                        filterTypes,
+                        handlers,
+                        filterContext,
+                        () ->
+                                invokeHandlerCore(
+                                        handlerType,
+                                        invocation,
+                                        handlers,
+                                        message,
+                                        context,
+                                        beforeHandler))
+                .thenApply(
+                        result -> {
+                            if (!result.handlerInvoked()
+                                    && (filterContext.dispatchKind()
+                                                    == ZLinkHandlerDispatchKind.CHANNEL_REQUEST
+                                            || filterContext.dispatchKind()
+                                                    == ZLinkHandlerDispatchKind
+                                                            .NODE_DIRECT_REQUEST)) {
+                                throw new ZLinkFrameworkException(
+                                        ZLinkFrameworkErrorKind.REJECTED,
+                                        "A handler filter rejected '"
+                                                + filterContext.packetName()
+                                                + "'.");
+                            }
+                            return result.value();
+                        });
+    }
+
+    private static CompletionStage<Object> invokeHandlerCore(
+            Class<?> handlerType,
+            PreparedMethod invocation,
+            ZLinkHandlerInstanceOwner handlers,
+            Object message,
+            ZLinkMessageContext context,
+            Runnable beforeHandler) {
+        try {
+            Object handler = handlers.instance(handlerType);
+            if (beforeHandler != null) beforeHandler.run();
+            return invocation.invoke(handler, message, context);
+>>>>>>> 0502e75 (fix(framework): trace Channel receive and handler phases (#2412))
         } catch (RuntimeException ex) {
             return CompletableFuture.failedFuture(ex);
         }
