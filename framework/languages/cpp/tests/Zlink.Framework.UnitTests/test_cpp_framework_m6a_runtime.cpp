@@ -195,7 +195,9 @@ void verify_node_request_submit_cost ()
     namespace fw = zlink::framework;
     using fw::tests::count_allocations;
     bool no_target_copies = true;
+    bool no_extra_lane_allocations = true;
     for (const std::size_t target_size : {127u, 193u}) {
+        std::size_t missing_peer_allocations = 0;
         for (const bool ready_peer : {false, true}) {
             mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
               .descriptor = descriptor ("request-submit-source"),
@@ -227,6 +229,31 @@ void verify_node_request_submit_cost ()
               target.size ());
             assert (submission->await_ready ());
             assert (submission->result () && !submission->result ().value ());
+            std::vector<std::uint8_t> encoded;
+            const auto encode_allocations =
+              count_allocations ([&] { encoded = protocol::encode_application_payload (payload); });
+            assert (!encoded.empty ());
+            const auto full_allocations = count_allocations ([&] {
+                submission.emplace (source.request_to_node (
+                  target, payload, 1s, [&] (auto, auto) { callback_called = true; }));
+            });
+            assert (submission->await_ready ());
+            assert (submission->result () && !submission->result ().value ());
+            if (!ready_peer) {
+                missing_peer_allocations = full_allocations;
+            } else {
+                // Both public calls create the same request task layers. The
+                // Ready/no-port path additionally encodes the payload and enters
+                // the owner lane; that synchronous turn needs no future state.
+                const auto expected = missing_peer_allocations + encode_allocations;
+                std::fprintf (
+                  stderr,
+                  "node request lane target=%zu missing=%zu ready=%zu encode=%zu expected=%zu\n",
+                  target_size, missing_peer_allocations, full_allocations, encode_allocations,
+                  expected);
+                no_extra_lane_allocations =
+                  no_extra_lane_allocations && full_allocations == expected;
+            }
             assert (!callback_called);
             assert (source.expire_requests (foundation::operation_registry_t::clock_t::now ())
                     == 0);
@@ -236,6 +263,7 @@ void verify_node_request_submit_cost ()
             no_target_copies = no_target_copies && observed == borrowed_baseline;
         }
     }
+    assert (no_extra_lane_allocations);
     assert (no_target_copies);
 }
 
