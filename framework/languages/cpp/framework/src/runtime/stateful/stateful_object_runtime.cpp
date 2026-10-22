@@ -391,14 +391,12 @@ bool stateful_object_runtime_t::finalized_relocation_source (object_kind_t kind,
                                                              const std::string &key,
                                                              std::uint64_t object_generation) const
 {
-    return _lane
-      .run ([&] {
-          const auto object = _objects.find (object_key_t{kind, key});
-          return object != _objects.end ()
-                 && object->second.reference.object_generation == object_generation
-                 && finalized_relocation_source_on_lane (object->second);
-      })
-      .get ();
+    return _lane.run_sync ([&] {
+        const auto object = _objects.find (object_key_t{kind, key});
+        return object != _objects.end ()
+               && object->second.reference.object_generation == object_generation
+               && finalized_relocation_source_on_lane (object->second);
+    });
 }
 
 bool stateful_object_runtime_t::finalized_relocation_source_on_lane (
@@ -469,30 +467,26 @@ create_result_t stateful_object_runtime_t::activate_instance (
 std::optional<object_ref_t> stateful_object_runtime_t::find (
   object_kind_t kind, const std::string &key, std::optional<object_state_t> required_state) const
 {
-    return _lane
-      .run ([&, this] () -> std::optional<object_ref_t> {
-          const auto record = _objects.find ({kind, key});
-          if (record == _objects.end ()
-              || (required_state && record->second.state != *required_state)) {
-              return std::nullopt;
-          }
-          return record->second.reference;
-      })
-      .get ();
+    return _lane.run_sync ([&, this] () -> std::optional<object_ref_t> {
+        const auto record = _objects.find ({kind, key});
+        if (record == _objects.end ()
+            || (required_state && record->second.state != *required_state)) {
+            return std::nullopt;
+        }
+        return record->second.reference;
+    });
 }
 
 std::optional<object_ref_t> stateful_object_runtime_t::resolve_spot (const std::string &key) const
 {
-    return _lane
-      .run ([&, this] () -> std::optional<object_ref_t> {
-          for (const auto kind : {object_kind_t::user_spot, object_kind_t::instance_spot}) {
-              const auto record = _objects.find ({kind, key});
-              if (record != _objects.end ())
-                  return record->second.reference;
-          }
-          return std::nullopt;
-      })
-      .get ();
+    return _lane.run_sync ([&, this] () -> std::optional<object_ref_t> {
+        for (const auto kind : {object_kind_t::user_spot, object_kind_t::instance_spot}) {
+            const auto record = _objects.find ({kind, key});
+            if (record != _objects.end ())
+                return record->second.reference;
+        }
+        return std::nullopt;
+    });
 }
 
 stateful_error_t stateful_object_runtime_t::set_subscription (const object_ref_t &spot,

@@ -482,12 +482,10 @@ void actor_transfer_coordinator_t::activate_message_follow (
 bool actor_transfer_coordinator_t::matches_message_follow_source (
   const std::string &actor_key, const runtime::protocol::actor_route_fence_t &source_fence) const
 {
-    return _lane
-      .run ([&, this] {
-          return matches_message_follow_source_unlocked (actor_key, source_fence,
-                                                         std::chrono::steady_clock::now ());
-      })
-      .get ();
+    return _lane.run_sync ([&, this] {
+        return matches_message_follow_source_unlocked (actor_key, source_fence,
+                                                       std::chrono::steady_clock::now ());
+    });
 }
 
 bool actor_transfer_coordinator_t::matches_message_follow_source_unlocked (
@@ -506,12 +504,10 @@ bool actor_transfer_coordinator_t::matches_message_follow_source_unlocked (
 actor_transfer_dispatch_state_snapshot_t actor_transfer_coordinator_t::project_dispatch_state (
   const std::string &actor_key, const runtime::protocol::actor_route_fence_t *source_fence) const
 {
-    return _lane
-      .run ([&, this] {
-          return project_dispatch_state_unlocked (actor_key, source_fence,
-                                                  std::chrono::steady_clock::now ());
-      })
-      .get ();
+    return _lane.run_sync ([&, this] {
+        return project_dispatch_state_unlocked (actor_key, source_fence,
+                                                std::chrono::steady_clock::now ());
+    });
 }
 
 actor_transfer_dispatch_state_snapshot_t
@@ -618,28 +614,24 @@ bool actor_transfer_coordinator_t::message_follow_targets_node (
 
 bool actor_transfer_coordinator_t::has_message_follow_route (const std::string &actor_key) const
 {
-    return _lane
-      .run ([&, this] {
-          const auto found = _message_follow_routes.find (actor_key);
-          if (found == _message_follow_routes.end ())
-              return false;
-          const auto now = std::chrono::steady_clock::now ();
-          return std::ranges::any_of (found->second,
-                                      [&] (const auto &route) { return route.remove_at > now; });
-      })
-      .get ();
+    return _lane.run_sync ([&, this] {
+        const auto found = _message_follow_routes.find (actor_key);
+        if (found == _message_follow_routes.end ())
+            return false;
+        const auto now = std::chrono::steady_clock::now ();
+        return std::ranges::any_of (found->second,
+                                    [&] (const auto &route) { return route.remove_at > now; });
+    });
 }
 
 std::optional<runtime::protocol::actor_route_fence_t>
 actor_transfer_coordinator_t::message_follow_source_for_generation (const std::string &actor_key,
                                                                     std::uint64_t generation) const
 {
-    return _lane
-      .run ([&, this] {
-          return message_follow_source_for_generation_unlocked (actor_key, generation,
-                                                                std::chrono::steady_clock::now ());
-      })
-      .get ();
+    return _lane.run_sync ([&, this] {
+        return message_follow_source_for_generation_unlocked (actor_key, generation,
+                                                              std::chrono::steady_clock::now ());
+    });
 }
 
 std::optional<runtime::protocol::actor_route_fence_t>

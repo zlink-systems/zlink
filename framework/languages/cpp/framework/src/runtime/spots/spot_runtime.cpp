@@ -1878,18 +1878,15 @@ resolve_target_spot_generation (std::shared_ptr<detail::spot_node_builder_state_
     std::shared_ptr<runtime::spot_address_resolver_t> resolver;
     std::string mesh_name;
     std::shared_ptr<service::spot_t> local_spot;
-    state->lane
-      .run ([&] {
-          mesh_name = state->snapshot.name;
-          resolver = state->spot_location_resolver;
-          const auto local = state->native_spots_by_id.find (target_spot_id);
-          if (local != state->native_spots_by_id.end ()
-              && detail::effective_spot_node_rid (state->snapshot)
-                   == target_node_rid.to_string ()) {
-              local_spot = local->second;
-          }
-      })
-      .get ();
+    state->lane.run_sync ([&] {
+        mesh_name = state->snapshot.name;
+        resolver = state->spot_location_resolver;
+        const auto local = state->native_spots_by_id.find (target_spot_id);
+        if (local != state->native_spots_by_id.end ()
+            && detail::effective_spot_node_rid (state->snapshot) == target_node_rid.to_string ()) {
+            local_spot = local->second;
+        }
+    });
     if (local_spot) {
         const auto generation = local_spot->status ().lifecycle_generation ();
         if (generation != 0) {
@@ -4682,17 +4679,14 @@ task_t<zlink::message_t> spot_handler_registry_t::invoke_erased (
                       }
                   }
                   const auto owner = state->state_lane_owner ();
-                  const auto current =
-                    owner ? owner->lane
-                              .run ([&] {
-                                  const auto found =
-                                    owner->spot_contexts_by_id.find (std::string (state->spot_id));
-                                  return found == owner->spot_contexts_by_id.end ()
-                                           ? std::shared_ptr<detail::spot_context_state_t>{}
-                                           : detail::spot_context_access_t::state (found->second);
-                              })
-                              .get ()
-                          : std::shared_ptr<detail::spot_context_state_t>{};
+                  const auto current = owner ? owner->lane.run_sync ([&] {
+                      const auto found =
+                        owner->spot_contexts_by_id.find (std::string (state->spot_id));
+                      return found == owner->spot_contexts_by_id.end ()
+                               ? std::shared_ptr<detail::spot_context_state_t>{}
+                               : detail::spot_context_access_t::state (found->second);
+                  })
+                                             : std::shared_ptr<detail::spot_context_state_t>{};
                   if (retained_message && !current) {
                       const auto original =
                         std::static_pointer_cast<const detail::instance_spot_retained_message_t> (
@@ -5499,7 +5493,7 @@ publish_call_t spot_publisher_client_t::publish_raw (std::string channel_name,
     }
 
     auto native_node =
-      _manager._state->lane.run ([&] { return _manager._state->native_node.lock (); }).get ();
+      _manager._state->lane.run_sync ([&] { return _manager._state->native_node.lock (); });
     if (!native_node) {
         return publish_call_t (result_t<void>::failure (
           framework_error_kind_t::unavailable, "logical multicast route mesh is not connected"));
@@ -5519,7 +5513,7 @@ publish_call_t spot_publisher_client_t::publish_raw (std::string channel_name,
         auto publisher = native_node->entry_spot ();
         auto encoded_metadata = detail::mesh_metadata_codec_t::encode (metadata);
         if (capture) {
-            const auto mesh_name = state->lane.run ([&] { return state->snapshot.name; }).get ();
+            const auto mesh_name = state->lane.run_sync ([&] { return state->snapshot.name; });
             co_await publisher.publish (
               channel_name, topic, std::move (parts), std::move (encoded_metadata),
               [state, channel_name, mesh_name, topic] (const zlink::routing_id_t &target,
@@ -12050,20 +12044,18 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                                                 admission_token->initial_authority_fence ()
                                                   .has_value (),
                                                 admission_token->initial_authority_fence ()}
-        : _state->lane
-            .run ([&] {
-                actor_relay_prefence_state_snapshot_t snapshot;
-                snapshot.retiring = _state->retiring_actor_keys.contains (key);
-                if (snapshot.retiring)
-                    return snapshot;
-                snapshot.authority_projected = admitted_message_follow_target != nullptr;
-                const auto current = _state->actor_authority_fences.find (key);
-                snapshot.has_current_authority = current != _state->actor_authority_fences.end ();
-                if (snapshot.has_current_authority && snapshot.authority_projected)
-                    snapshot.authority_fence = current->second;
-                return snapshot;
-            })
-            .get ();
+        : _state->lane.run_sync ([&] {
+              actor_relay_prefence_state_snapshot_t snapshot;
+              snapshot.retiring = _state->retiring_actor_keys.contains (key);
+              if (snapshot.retiring)
+                  return snapshot;
+              snapshot.authority_projected = admitted_message_follow_target != nullptr;
+              const auto current = _state->actor_authority_fences.find (key);
+              snapshot.has_current_authority = current != _state->actor_authority_fences.end ();
+              if (snapshot.has_current_authority && snapshot.authority_projected)
+                  snapshot.authority_fence = current->second;
+              return snapshot;
+          });
     if (prefence_snapshot.retiring) {
         co_return result_t<std::optional<zlink::message_t>>::failure (
           framework_error_kind_t::not_found, "actor destruction is pending");
@@ -12088,14 +12080,12 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
     if (admitted_message_follow_target != nullptr) {
         auto current_fence = prefence_snapshot.authority_fence;
         if (!prefence_snapshot.authority_projected) {
-            current_fence = _state->lane
-                              .run ([&] {
-                                  const auto current = _state->actor_authority_fences.find (key);
-                                  return current == _state->actor_authority_fences.end ()
-                                           ? std::optional<runtime::protocol::actor_route_fence_t>{}
-                                           : std::make_optional (current->second);
-                              })
-                              .get ();
+            current_fence = _state->lane.run_sync ([&] {
+                const auto current = _state->actor_authority_fences.find (key);
+                return current == _state->actor_authority_fences.end ()
+                         ? std::optional<runtime::protocol::actor_route_fence_t>{}
+                         : std::make_optional (current->second);
+            });
         }
         // The exact adoption fence gates only when this node retains state
         // that could be confused with an older incarnation: a recorded
@@ -13746,15 +13736,13 @@ std::optional<spot_route_t> spot_node_runtime_t::resolve_spot (spot_id_t spot_id
 
 std::optional<spot_id_t> spot_node_runtime_t::actor_spot (const actor_ref_t &actor_ref) const
 {
-    return _state->lane
-      .run ([&] () -> std::optional<spot_id_t> {
-          const auto found = _state->actor_spot_ids.find (actor_key (actor_ref));
-          if (found == _state->actor_spot_ids.end ()) {
-              return std::nullopt;
-          }
-          return found->second;
-      })
-      .get ();
+    return _state->lane.run_sync ([&] () -> std::optional<spot_id_t> {
+        const auto found = _state->actor_spot_ids.find (actor_key (actor_ref));
+        if (found == _state->actor_spot_ids.end ()) {
+            return std::nullopt;
+        }
+        return found->second;
+    });
 }
 
 result_t<bool> spot_node_runtime_t::release_local_actor (const actor_ref_t &actor_ref)
@@ -13863,15 +13851,13 @@ void spot_node_runtime_t::record_actor_spot (const actor_ref_t &actor_ref, spot_
 
 std::optional<spot_route_t> spot_node_runtime_t::actor_route (const actor_ref_t &actor_ref) const
 {
-    return _state->lane
-      .run ([&] () -> std::optional<spot_route_t> {
-          const auto found = _state->actor_routes.find (actor_key (actor_ref));
-          if (found == _state->actor_routes.end ()) {
-              return std::nullopt;
-          }
-          return found->second;
-      })
-      .get ();
+    return _state->lane.run_sync ([&] () -> std::optional<spot_route_t> {
+        const auto found = _state->actor_routes.find (actor_key (actor_ref));
+        if (found == _state->actor_routes.end ()) {
+            return std::nullopt;
+        }
+        return found->second;
+    });
 }
 
 bool spot_node_runtime_t::matches_actor_message_follow_source (
@@ -14065,28 +14051,26 @@ void spot_node_runtime_t::cancel_timers () noexcept
 std::optional<actor_ref_t>
 spot_node_runtime_t::current_actor_ref (const actor_ref_t &actor_ref) const
 {
-    return _state->lane
-      .run ([&] () -> std::optional<actor_ref_t> {
-          const auto key = actor_key (actor_ref);
-          const auto found = _state->actor_generations.find (key);
-          if (found == _state->actor_generations.end ()) {
-              return std::nullopt;
-          }
-          // The recorded location can be this node's own local spot, or (after a
-          // relocation this node followed away, e.g. a Message Follow route) a
-          // route naming the remote current owner; report whichever this node
-          // actually knows rather than always claiming local ownership.
-          auto node_rid_value = detail::effective_spot_node_rid (_state->snapshot);
-          if (const auto routed = _state->actor_routes.find (key);
-              routed != _state->actor_routes.end ()) {
-              node_rid_value = std::string (routed->second.node_rid.value ());
-          }
-          return ::zlink::framework::detail::actor_ref_access_t::make (
-            node_rid_t::from_string (node_rid_value),
-            std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
-            std::string (actor_ref.actor_id ().value ()), found->second);
-      })
-      .get ();
+    return _state->lane.run_sync ([&] () -> std::optional<actor_ref_t> {
+        const auto key = actor_key (actor_ref);
+        const auto found = _state->actor_generations.find (key);
+        if (found == _state->actor_generations.end ()) {
+            return std::nullopt;
+        }
+        // The recorded location can be this node's own local spot, or (after a
+        // relocation this node followed away, e.g. a Message Follow route) a
+        // route naming the remote current owner; report whichever this node
+        // actually knows rather than always claiming local ownership.
+        auto node_rid_value = detail::effective_spot_node_rid (_state->snapshot);
+        if (const auto routed = _state->actor_routes.find (key);
+            routed != _state->actor_routes.end ()) {
+            node_rid_value = std::string (routed->second.node_rid.value ());
+        }
+        return ::zlink::framework::detail::actor_ref_access_t::make (
+          node_rid_t::from_string (node_rid_value),
+          std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref)),
+          std::string (actor_ref.actor_id ().value ()), found->second);
+    });
 }
 
 void spot_node_runtime_t::attach_native_node (std::shared_ptr<service::mesh_node_t> node)
@@ -14459,14 +14443,12 @@ spot_node_runtime_t::send_spot_mesh_parts_exact (const spot_id_t &source_spot_id
                                                  std::uint64_t target_spot_generation,
                                                  runtime::messaging::message_parts_t parts) const
 {
-    const auto source = _state->lane
-                          .run ([&] {
-                              const auto found = _state->native_spots_by_id.find (source_spot_id);
-                              if (found != _state->native_spots_by_id.end ())
-                                  return found->second;
-                              return std::shared_ptr<service::spot_t>{};
-                          })
-                          .get ();
+    const auto source = _state->lane.run_sync ([&] {
+        const auto found = _state->native_spots_by_id.find (source_spot_id);
+        if (found != _state->native_spots_by_id.end ())
+            return found->second;
+        return std::shared_ptr<service::spot_t>{};
+    });
     if (!source || target_spot_generation == 0) {
         throw framework_exception_t (
           framework_error_kind_t::not_found,
@@ -15055,24 +15037,21 @@ bool spot_node_runtime_t::dispatch_mesh_record (
                 spot_id_t spot_id;
                 std::uint64_t authority_owner_generation = 0;
             };
-            const auto dispatch_snapshot =
-              _state->lane
-                .run ([&] {
-                    spot_route_dispatch_state_snapshot_t result;
-                    // A registered activation without an instance has been
-                    // detached after its seal; admission refuses it (admit).
-                    const auto context = find_context_core (spot_id_t (owner.spot_id));
-                    if (!context || !context->_state)
-                        return result;
-                    result.context_state = context->_state;
-                    result.spot_instance = context->_state->spot_instance;
-                    result.location_lifecycle =
-                      context->_state->node ? context->_state->node->location_lifecycle : nullptr;
-                    result.spot_id = context->_state->spot_id;
-                    result.authority_owner_generation = context->_state->authority_owner_generation;
+            const auto dispatch_snapshot = _state->lane.run_sync ([&] {
+                spot_route_dispatch_state_snapshot_t result;
+                // A registered activation without an instance has been
+                // detached after its seal; admission refuses it (admit).
+                const auto context = find_context_core (spot_id_t (owner.spot_id));
+                if (!context || !context->_state)
                     return result;
-                })
-                .get ();
+                result.context_state = context->_state;
+                result.spot_instance = context->_state->spot_instance;
+                result.location_lifecycle =
+                  context->_state->node ? context->_state->node->location_lifecycle : nullptr;
+                result.spot_id = context->_state->spot_id;
+                result.authority_owner_generation = context->_state->authority_owner_generation;
+                return result;
+            });
             if (!dispatch_snapshot.context_state) {
                 reply_error (detail::make_framework_origin_exception (
                   framework_error_kind_t::unavailable, "Spot route owner is no longer registered"));
