@@ -25,6 +25,17 @@ namespace zlink::framework::runtime
 
 namespace state_lane_internal
 {
+template <typename T> struct task_result_t
+{
+    using value_t = T;
+    static constexpr bool asynchronous = false;
+};
+template <typename T> struct task_result_t<task_t<T>>
+{
+    using value_t = T;
+    static constexpr bool asynchronous = true;
+};
+
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
 template <typename T> class boxed_future_t;
 inline bool pending_wait_is_unsafe (std::future_status status,
@@ -321,14 +332,25 @@ class state_lane_t
 #endif
     }
 
-    template <typename Work>
-    auto run_task (Work &&work) -> task_t<std::invoke_result_t<std::decay_t<Work> &>>
+    template <typename Work> auto run_task (Work &&work)
     {
-        using value_t = std::invoke_result_t<std::decay_t<Work> &>;
+        using work_result_t = std::invoke_result_t<std::decay_t<Work> &>;
+        using traits_t = state_lane_internal::task_result_t<work_result_t>;
+        using value_t = typename traits_t::value_t;
+        using invocation_t =
+          std::conditional_t<traits_t::asynchronous, task_t<value_t>, result_t<value_t>>;
         throw_if_reentrant ();
-        auto invoke_work = [work = std::forward<Work> (work)] () mutable {
+        auto invoke_work = [work = std::forward<Work> (work)] () mutable -> invocation_t {
+            const auto failed = [] (result_t<value_t> error) -> invocation_t {
+                if constexpr (traits_t::asynchronous)
+                    return task_t<value_t> (std::move (error));
+                else
+                    return error;
+            };
             try {
-                if constexpr (std::is_void_v<value_t>) {
+                if constexpr (traits_t::asynchronous) {
+                    return std::invoke (work);
+                } else if constexpr (std::is_void_v<value_t>) {
                     std::invoke (work);
                     return result_t<void>::success ();
                 } else {
@@ -336,35 +358,44 @@ class state_lane_t
                 }
             }
             catch (const framework_exception_t &) {
-                return detail::result_access_t::failure<value_t> (std::current_exception ());
+                return failed (
+                  detail::result_access_t::failure<value_t> (std::current_exception ()));
             }
             catch (const std::exception &error) {
-                return result_t<value_t>::failure (framework_error_kind_t::internal_failure,
-                                                   error.what ());
+                return failed (result_t<value_t>::failure (framework_error_kind_t::internal_failure,
+                                                           error.what ()));
             }
             catch (...) {
-                return result_t<value_t>::failure (framework_error_kind_t::internal_failure,
-                                                   "unhandled state lane exception");
+                return failed (result_t<value_t>::failure (framework_error_kind_t::internal_failure,
+                                                           "unhandled state lane exception"));
             }
         };
-        std::optional<result_t<value_t>> inline_result;
+        std::optional<invocation_t> inline_result;
         if (schedule_drain (true, [&] { inline_result.emplace (invoke_work ()); })) {
-            // No task has been published yet. Both the lane scope and its
-            // drain claim have ended before any caller can observe completion.
-            return task_t<value_t> (std::move (*inline_result));
+            // The lane scope and drain claim end before the caller observes either result.
+            if constexpr (traits_t::asynchronous)
+                return std::move (*inline_result);
+            else
+                return task_t<value_t> (std::move (*inline_result));
         }
         auto completion = std::make_shared<task_completion_source_t<value_t>> ();
         auto task = completion->task ();
         if (!enqueue (
               [this, completion, invoke_work = std::move (invoke_work)] () mutable {
                   auto result = invoke_work ();
-                  if (!_executor.try_submit_internal (
-                        [completion, result = std::move (result)] () mutable {
-                            completion->complete (std::move (result));
-                        })) {
-                      completion->complete (result_t<value_t>::failure (
-                        framework_error_kind_t::shutting_down, "state lane is closed"));
-                  }
+                  auto deliver = [executor = &_executor, completion] (result_t<value_t> terminal) {
+                      if (!executor->try_submit_internal (
+                            [completion, result = std::move (terminal)] () mutable {
+                                completion->complete (std::move (result));
+                            })) {
+                          completion->complete (result_t<value_t>::failure (
+                            framework_error_kind_t::shutting_down, "state lane is closed"));
+                      }
+                  };
+                  if constexpr (traits_t::asynchronous)
+                      detail::observe_task_completion (result, std::move (deliver));
+                  else
+                      deliver (std::move (result));
               },
               [completion] (std::exception_ptr) {
                   completion->complete (result_t<value_t>::failure (
@@ -373,8 +404,7 @@ class state_lane_t
             throw std::runtime_error ("state lane is closed");
         schedule_drain (true);
         // A pending lane result needs its caller's scope-exit handoff even
-        // when executor shutdown rejects the physical result delivery. Task
-        // wrappers themselves do not add another continuation turn.
+        // when executor shutdown rejects the physical result delivery.
         return detail::with_task_resume_scheduler (std::move (task),
                                                    detail::capture_runtime_scope_exit_scheduler ());
     }
