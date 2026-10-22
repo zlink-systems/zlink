@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
 using Zlink.Framework.AspNetCore;
 using Zlink.Framework.Runtime.Execution;
+using Zlink.Framework.Runtime.Service;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -109,6 +110,84 @@ public sealed class RequestSerialCostTests(ITestOutputHelper output)
                 )
                 .ConfigureAwait(false);
             return admission.Accepted;
+        }
+    }
+
+    // Spec 08 §4.3 W1 / §4.1 I4: a worker claims an owner's FIFO prefix in one
+    // mailbox turn and returns the claim with one posted turn. Neither turn
+    // creates a per-claim closure or delegate.
+    [Fact]
+    public async Task Owned_mailbox_claim_allocates_only_its_lane_turns()
+    {
+        var ready = 0;
+        var mailbox = new ZLinkMeshNodeOwnedMailbox(
+            static _ => { },
+            static _ => { },
+            () => ready++,
+            static _ => { }
+        );
+        await using var lane = new ZLinkStateLane();
+        using var batch = new MeshReceiveBatch();
+        try
+        {
+            for (var index = 0; index < 128; index++)
+            {
+                Claim();
+                Control(lane);
+            }
+            var accepted = 0;
+            for (var sample = 0; sample < 12; sample++)
+            {
+                long actual = 0;
+                long baseline = 0;
+                var collection = Collections();
+                for (var index = 0; index < Iterations; index++)
+                {
+                    actual += Claim();
+                    var before = GC.GetAllocatedBytesForCurrentThread();
+                    Control(lane);
+                    baseline += GC.GetAllocatedBytesForCurrentThread() - before;
+                }
+                if (collection != Collections())
+                    continue;
+                output.WriteLine(
+                    $"owned mailbox claim {actual / Iterations} B/op; lane turn + post control {baseline / Iterations} B/op"
+                );
+                // Same turn kinds as the control; the execution-context maps
+                // they build depend on the caller's ambient values.
+                Assert.True(
+                    actual <= baseline,
+                    $"owned mailbox claim {actual}B, lane turn + post {baseline}B per {Iterations}"
+                );
+                accepted++;
+            }
+            Assert.True(accepted > 0);
+            Assert.True(ready > 0);
+        }
+        finally
+        {
+            mailbox.Dispose();
+        }
+
+        long Claim()
+        {
+            Assert.True(
+                mailbox.TryEnqueue(new ZLinkMeshQueuedRecord(default, Array.Empty<Message>(), 0))
+            );
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var claimed = mailbox.ClaimAndDrainAsync(batch, 1).GetAwaiter().GetResult();
+            mailbox.Release();
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.True(claimed);
+            batch.Reset();
+            return allocated;
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        static void Control(ZLinkStateLane lane)
+        {
+            GC.KeepAlive(lane.RunAsync(static value => value, false).GetAwaiter().GetResult());
+            lane.TryPost(static _ => { }, lane);
         }
     }
 
