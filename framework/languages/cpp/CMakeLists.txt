@@ -2509,6 +2509,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_route_payload_ownership.cpp)
   target_use_zlink_gtest_main(test_cpp_framework_route_payload_ownership)
   target_link_libraries(test_cpp_framework_route_payload_ownership PRIVATE zlink::framework)
+  target_sources(test_cpp_framework_route_payload_ownership PRIVATE
+    tests/support/allocation_counter.cpp)
   target_include_directories(test_cpp_framework_route_payload_ownership PRIVATE
     framework/src ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   zlink_framework_cpp_add_test(
