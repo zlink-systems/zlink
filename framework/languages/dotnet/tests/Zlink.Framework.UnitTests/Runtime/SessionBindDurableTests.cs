@@ -236,4 +236,80 @@ public sealed partial class EntrySpotActorDispatchTests
             await runtime.StopAsync(CancellationToken.None);
         }
     }
+
+    // Session-Actor binding §5: a cached row that already describes the submitted ActorRef
+    // supplies the fence without a Store read (#2507).
+    [Fact]
+    public async Task SessionBind_CachedRowOfTheSubmittedActorRef_IsUsedWithoutAStoreRead()
+    {
+        var node = new CapturingSpotNode();
+        Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBind38? sent = null;
+        node.CanonicalBindHandler = (request, _, _) =>
+        {
+            sent = request;
+            return ValueTask.FromException<Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.RequestSpecificTailCase2?>(
+                new ZLinkFrameworkException(ZLinkFrameworkErrorKind.Unavailable, "Captured.")
+            );
+        };
+        var (runtime, actor) = await CreateStartedRuntimeAsync(node, preseedActorOwnership: false);
+        try
+        {
+            var rows = runtime.Services.GetRequiredService<ZLinkStoreLocationResolvers>();
+            var key = new ZLinkActorLocationKey(actor.ActorId);
+            var cachedRow = await rows.ResolveActorRowAsync(key);
+            Assert.NotNull(cachedRow);
+
+            // The Store moves on; a Store read would now return a row for another owner,
+            // which does not describe the submitted ActorRef and fails the bind before send.
+            var store = new ZLinkProviderLocationRepository(
+                runtime.Registration.Locations.StoreInstance!
+            );
+            var newOwner = RoutingId.From("relocated-owner");
+            Assert.NotNull(
+                await AuthorityLocationTestFixture.PublishActorAsync(
+                    store,
+                    cachedRow with
+                    {
+                        ActorRef = cachedRow.ActorRef with { NodeRid = newOwner },
+                        OwnerNodeRid = newOwner,
+                        OwnerNodeGeneration = 7,
+                    },
+                    replace: true
+                )
+            );
+
+            var context = new ZLinkSessionContext(
+                runtime,
+                new RetainedOutboundCapturingStream(RoutingId.From("cached-session")),
+                new RelaySessionHandlerRegistry(),
+                static () => ValueTask.CompletedTask,
+                static _ => ValueTask.CompletedTask
+            );
+            await Assert.ThrowsAsync<ZLinkFrameworkException>(async () =>
+                await context.ActorCoordinator.BindActorAsync(
+                    context,
+                    cachedRow.ActorRef,
+                    CancellationToken.None
+                )
+            );
+
+            Assert.NotNull(sent);
+            var fence = sent.Actor;
+            Assert.Equal(cachedRow.ActorRef.NodeRid, RoutingId.From(fence.TargetNodeRid.Value));
+            Assert.Equal(cachedRow.OwnerNodeGeneration, fence.TargetNodeGeneration.Value);
+            Assert.Equal(
+                cachedRow.AuthorityOwnerGeneration,
+                fence.ExpectedAuthorityOwnerGeneration.Value
+            );
+            // The cache still holds the row the bind used: no Store read replaced it.
+            Assert.Equal(
+                cachedRow.ActorRef.NodeRid,
+                (await rows.ResolveActorRowAsync(key))!.ActorRef.NodeRid
+            );
+        }
+        finally
+        {
+            await runtime.StopAsync(CancellationToken.None);
+        }
+    }
 }

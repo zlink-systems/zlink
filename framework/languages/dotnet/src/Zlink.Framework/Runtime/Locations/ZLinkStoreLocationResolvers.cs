@@ -227,9 +227,8 @@ internal sealed class ZLinkStoreLocationResolvers : IZLinkMeshNodeLocationResolv
     }
 
     /// <summary>Reads the Actor's current row from the Location Store, never from the route
-    /// cache, and caches the result. A Session bind fences on this read: its fence describes
-    /// the Actor reference the caller read from the same Store, not a route cached for an
-    /// earlier owner (Session-Actor binding §5).</summary>
+    /// cache, and caches the result. A Session bind reads here when the cached row describes
+    /// another Actor reference than the one it binds (Session-Actor binding §5).</summary>
     internal async ValueTask<ZLinkResolvedActorLocation?> ReadActorRowAsync(
         ZLinkActorLocationKey key,
         CancellationToken cancellationToken = default
