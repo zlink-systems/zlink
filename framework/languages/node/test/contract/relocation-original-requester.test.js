@@ -199,7 +199,8 @@ for (const mode of ['off', 'errors', 'normal', 'detailed']) {
         (bytes) => Buffer.from(bytes),
         () => {}
       );
-      const header = protocol.decodeStreamHeader(parts[0]);
+      assert.equal(parts.length, 1);
+      const header = protocol.decodeStreamHeader(protocol.decodeStreamFrame(parts[0]).header);
       assert.equal(header.flowId, enabled ? '01900000-0000-7000-8000-000000000001' : undefined);
       assert.equal(header.flowOrigin, enabled ? 'Inbound' : undefined);
       assert.equal(header.correlationId, 'original-A');
@@ -226,9 +227,12 @@ for (const targetRid of ['C', 'D']) {
         (bytes) => Buffer.from(bytes),
         () => {}
       );
-      assert.equal(protocol.decodeStreamHeader(parts[0]).requestSeq, 55n);
-      assert.equal(protocol.decodeStreamHeader(parts[0]).correlationId, 'original-A');
-      assert.deepEqual(JSON.parse(parts[1].toString()), { answer: 42 });
+      assert.equal(parts.length, 1);
+      const frame = protocol.decodeStreamFrame(parts[0]);
+      const header = protocol.decodeStreamHeader(frame.header);
+      assert.equal(header.requestSeq, 55n);
+      assert.equal(header.correlationId, 'original-A');
+      assert.deepEqual(JSON.parse(Buffer.from(frame.payload).toString()), { answer: 42 });
       assert.deepEqual(f.leaseReads, ['owner-A']);
       assert.deepEqual(f.acks[0].requestSource, f.source);
       assert.equal(f.acks[0].status, 'terminalReceived');
