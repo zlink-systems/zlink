@@ -31,7 +31,8 @@ class gamequest_client_scenario_t
               const std::string &api_b_stream_endpoint,
               const std::string &api_a_http_url,
               const std::string &api_b_http_url,
-              const std::string &owner_loss_release_file)
+              const std::string &owner_loss_release_file,
+              const std::string &close_replay_release_file)
     {
         try {
             auto api_a_core = connect (api_a_stream_endpoint);
@@ -237,22 +238,12 @@ class gamequest_client_scenario_t
                             .result ();
             ensure (closed && closed.value ().ok, "player-alice ClosePlayerQuestMsg failed");
 
-            /* Close is one-way. A call that still resolves the retired owner
-             * ends with a stale terminal, and the Framework does not resubmit
-             * it, so the next call resolves the next owner. A call that
-             * arrives after the Close reaches the next owner directly. Either
-             * way initialization replays the durable event stream. */
-            const auto get_progress = [&alice_b] {
-                return alice_b.request (get_quest_progress_req_t{"player-alice"})
-                  .packet_name (get_quest_progress_req_t::packet_name)
-                  .async<get_quest_progress_res_t> ()
-                  .result ();
-            };
-            auto after_close = get_progress ();
-            const bool stale = !after_close
-                               && after_close.error_code ()
-                                    == zlink::stream_connector::error_code_t::remote_error;
-            auto rehydrated = stale ? get_progress () : std::move (after_close);
+            std::cout << "gamequest-close-replay-armed player=player-alice\n" << std::flush;
+            wait_for_release (close_replay_release_file, "close replay");
+            const auto rehydrated = alice_b.request (get_quest_progress_req_t{"player-alice"})
+                                      .packet_name (get_quest_progress_req_t::packet_name)
+                                      .async<get_quest_progress_res_t> ()
+                                      .result ();
             ensure (
               rehydrated
                 && has_progress (rehydrated.value ().active_quests, quest_ids_t::first_hunt, 4),
@@ -339,7 +330,7 @@ class gamequest_client_scenario_t
                     "owner-failure owner did not process the setup event");
             std::cout << "gamequest-owner-loss-stage-ready player=player-owner-failure"
                       << std::endl;
-            wait_for_release (owner_loss_release_file);
+            wait_for_release (owner_loss_release_file, "owner loss");
 
             auto unavailable = owner_failure
                                  .request (kill_monster_req_t{"player-owner-failure",
@@ -393,16 +384,16 @@ class gamequest_client_scenario_t
           });
     }
 
-    static void wait_for_release (const std::string &release_file)
+    static void wait_for_release (const std::string &release_file, const std::string &stage)
     {
-        ensure (!release_file.empty (), "owner-loss release file is required");
+        ensure (!release_file.empty (), (stage + " release file is required").c_str ());
         for (int attempt = 0; attempt < 300; ++attempt) {
             if (std::filesystem::exists (release_file)) {
                 return;
             }
             std::this_thread::sleep_for (std::chrono::milliseconds (100));
         }
-        throw std::runtime_error ("timed out waiting for owner-loss release");
+        throw std::runtime_error ("timed out waiting for " + stage + " release");
     }
 
     static void dump_initial_join_quests (const std::string &player_id,
