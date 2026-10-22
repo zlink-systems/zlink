@@ -46,7 +46,9 @@ class BingoEntrySpot(
 
     // --8<-- [end:doc-bingo-entry-destroy]
 
-    override suspend fun onLeaveActorSuspending(actor: PlayerActor) {}
+    override suspend fun onLeaveActorSuspending(actor: PlayerActor) {
+        logger.info("bingo-lifecycle entry-leave actor={}", actor.actorId())
+    }
 
     override suspend fun onDisconnectActorSuspending(actor: PlayerActor) {
         actor.markDisconnected()
