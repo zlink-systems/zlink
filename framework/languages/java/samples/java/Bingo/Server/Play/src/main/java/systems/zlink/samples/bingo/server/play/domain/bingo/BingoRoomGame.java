@@ -9,9 +9,9 @@ import java.util.List;
 import java.util.Queue;
 
 public final class BingoRoomGame {
-    private static final String WaitingForPlayers = "WaitingForPlayers";
-    private static final String Running = "Running";
-    private static final String Finished = "Finished";
+    public static final String WaitingForPlayers = "WaitingForPlayers";
+    public static final String Running = "Running";
+    public static final String Finished = "Finished";
 
     private final String roomId;
     private final BingoRoomModels.BingoRoomSettings settings;
