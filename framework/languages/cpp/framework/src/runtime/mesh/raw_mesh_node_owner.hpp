@@ -497,7 +497,7 @@ class raw_mesh_node_owner_t
     void send_descriptor_update_on_lane (const service_node_descriptor_t &descriptor,
                                          const std::vector<admitted_peer_t> &peers);
     task_t<bool> request_with_header (
-      std::vector<std::uint8_t> target_routing_id,
+      const std::vector<std::uint8_t> &target_routing_id,
       const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
       const protocol::application_payload_t &application_payload,
       std::chrono::milliseconds timeout,

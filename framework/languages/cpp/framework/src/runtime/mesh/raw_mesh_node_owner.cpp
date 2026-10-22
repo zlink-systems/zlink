@@ -1159,7 +1159,7 @@ void raw_mesh_node_owner_t::trace_admission_phase (const std::vector<std::uint8_
 }
 
 task_t<bool> raw_mesh_node_owner_t::request_with_header (
-  std::vector<std::uint8_t> target_routing_id,
+  const std::vector<std::uint8_t> &target_routing_id,
   const std::function<std::vector<std::uint8_t> (std::uint64_t)> &header,
   const protocol::application_payload_t &application_payload,
   std::chrono::milliseconds timeout,
@@ -1193,7 +1193,7 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
       _lane
         .run ([this, &header, &request_metric, request = std::move (request), requested_correlation,
                timeout, callback = std::move (callback),
-               target_routing_id = std::move (target_routing_id),
+               &target_routing_id,
                encoded_payload = std::move (encoded_payload),
                admission = std::move (admission)] () mutable {
             std::shared_ptr<detail::backend::raw_route_port_t> port;
