@@ -571,7 +571,6 @@ final class ChannelSendCall implements ZLinkSendCall {
     private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
     private final ZLinkChannelSocketRegistry sockets;
-    private final Duration defaultTimeout;
     private final Message payload;
     private final String packetName;
     private final String contentType;
@@ -581,14 +580,12 @@ final class ChannelSendCall implements ZLinkSendCall {
             ZLinkChannelCallRuntime runtime,
             String channelName,
             ZLinkChannelSocketRegistry sockets,
-            Duration defaultTimeout,
             Message payload,
             String packetName) {
         this(
                 runtime,
                 channelName,
                 sockets,
-                defaultTimeout,
                 payload,
                 packetName,
                 ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
@@ -599,7 +596,6 @@ final class ChannelSendCall implements ZLinkSendCall {
             ZLinkChannelCallRuntime runtime,
             String channelName,
             ZLinkChannelSocketRegistry sockets,
-            Duration defaultTimeout,
             Message payload,
             String packetName,
             String contentType,
@@ -608,7 +604,6 @@ final class ChannelSendCall implements ZLinkSendCall {
                 runtime,
                 channelName,
                 sockets,
-                defaultTimeout,
                 payload,
                 packetName,
                 contentType,
@@ -620,7 +615,6 @@ final class ChannelSendCall implements ZLinkSendCall {
             ZLinkChannelCallRuntime runtime,
             String channelName,
             ZLinkChannelSocketRegistry sockets,
-            Duration defaultTimeout,
             Message payload,
             String packetName,
             String contentType,
@@ -630,7 +624,6 @@ final class ChannelSendCall implements ZLinkSendCall {
         this.runtime = runtime;
         this.channelName = channelName;
         this.sockets = sockets;
-        this.defaultTimeout = defaultTimeout;
         this.payload = payload;
         this.packetName = packetName;
         this.contentType = contentType;
@@ -643,7 +636,6 @@ final class ChannelSendCall implements ZLinkSendCall {
                 runtime,
                 channelName,
                 sockets,
-                defaultTimeout,
                 payload,
                 packetName,
                 contentType,
@@ -657,7 +649,6 @@ final class ChannelSendCall implements ZLinkSendCall {
                 runtime,
                 channelName,
                 sockets,
-                defaultTimeout,
                 payload,
                 packetName,
                 contentType,

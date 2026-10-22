@@ -11,7 +11,6 @@ import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 
-import java.time.Duration;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 
@@ -82,13 +81,7 @@ final class ZLinkSendPacketNameTest {
             ZLinkSendAdmissionAllocationTest.Fixture fixture, Message payload, String name) {
         return switch (fixture.kind) {
             case CLIENT, MESH_CHANNEL ->
-                    new ChannelSendCall(
-                            fixture.runtime,
-                            CHANNEL,
-                            fixture.sockets,
-                            Duration.ofSeconds(1),
-                            payload,
-                            name);
+                    new ChannelSendCall(fixture.runtime, CHANNEL, fixture.sockets, payload, name);
             default ->
                     new RouteSendCall(
                             fixture.runtime,

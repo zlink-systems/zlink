@@ -1029,14 +1029,7 @@ public final class ZLinkChannelRuntime
         String packetName = ZLinkPayloadEncoding.resolvePacketName(message);
         Message payload = ZLinkPayloadEncoding.encodeMessage(serializer, message, contentType);
         return new ChannelSendCall(
-                callRuntime,
-                channelName,
-                sockets,
-                defaultRequestTimeout,
-                payload,
-                packetName,
-                contentType,
-                null);
+                callRuntime, channelName, sockets, payload, packetName, contentType, null);
     }
 
     private ZLinkPayloadEncoding.EncodedPayload encodePayload(Object message) {

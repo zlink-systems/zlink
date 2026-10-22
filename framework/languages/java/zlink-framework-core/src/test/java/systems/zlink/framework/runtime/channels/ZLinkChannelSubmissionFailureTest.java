@@ -338,7 +338,6 @@ final class ZLinkChannelSubmissionFailureTest {
                                                         runtime,
                                                         "orders",
                                                         sockets(node),
-                                                        TIMEOUT,
                                                         payload,
                                                         "command")
                                                 .submit());
