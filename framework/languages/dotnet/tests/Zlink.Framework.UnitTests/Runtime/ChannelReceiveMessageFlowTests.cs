@@ -246,14 +246,18 @@ public sealed class ChannelReceiveMessageFlowTests(Xunit.Abstractions.ITestOutpu
             null
         );
         var message = new FlowRequest();
+        // Steady per-call bytes: the value most calls allocate. An extra allocation on the
+        // channel path adds to every call, while a one-time runtime allocation (tier-up,
+        // storage growth) lands in one call only and must not decide the comparison.
         async Task<long> Measure(ZLinkHandlerDispatchKind kind)
         {
-            long total = 0;
+            var counts = new Dictionary<long, int>();
             for (var index = 0; index < 256; index++)
             {
                 probe.Pending = new TaskCompletionSource<FlowReply>(
                     TaskCreationOptions.RunContinuationsAsynchronously
                 );
+                var pause = GC.GetTotalPauseDuration();
                 var before = GC.GetAllocatedBytesForCurrentThread();
                 var invocation = dispatcher.DispatchAsync(
                     endpoint,
@@ -263,18 +267,20 @@ public sealed class ChannelReceiveMessageFlowTests(Xunit.Abstractions.ITestOutpu
                     CancellationToken.None
                 );
                 var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+                var paused = GC.GetTotalPauseDuration() != pause;
                 Assert.False(invocation.IsCompleted);
                 probe.Pending.SetResult(new FlowReply());
                 await invocation;
-                if (index >= 128)
-                    total += bytes;
+                if (index >= 128 && !paused)
+                    counts[bytes] = counts.GetValueOrDefault(bytes) + 1;
             }
-            return total;
+            // On a tie, report the larger value so a real per-call cost is never hidden.
+            return counts.MaxBy(static entry => (entry.Value, entry.Key)).Key;
         }
         var direct = await Measure(ZLinkHandlerDispatchKind.NodeDirectRequest);
         var channel = await Measure(ZLinkHandlerDispatchKind.ChannelRequest);
         output.WriteLine(
-            $"Off suspended invocation allocation: filtered={filtered}, direct={direct / 128} B, channel={channel / 128} B."
+            $"Off suspended invocation allocation: filtered={filtered}, direct={direct} B, channel={channel} B."
         );
         Assert.True(direct > 0);
         Assert.Equal(direct, channel);
