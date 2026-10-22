@@ -20,6 +20,7 @@ import systems.zlink.framework.runtime.configuration.DefaultZLinkFrameworkOption
 import systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer;
 import systems.zlink.framework.runtime.internal.backend.*;
 import systems.zlink.framework.runtime.internal.calls.ZLinkOneWayCalls;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 
 import java.lang.management.ManagementFactory;
 import java.lang.reflect.Proxy;
@@ -157,7 +158,7 @@ public final class ZLinkSendAdmissionAllocationTest {
                 try {
                     assertTrue(closed, kind.name());
                 } finally {
-                    Message.closeAll(fixture.parts);
+                    ZLinkFrameworkMultipartView.closeAll(fixture.parts);
                 }
             }
         }
@@ -176,7 +177,7 @@ public final class ZLinkSendAdmissionAllocationTest {
             try {
                 assertTrue(fixture.parts.stream().allMatch(Message::empty));
             } finally {
-                Message.closeAll(fixture.parts);
+                ZLinkFrameworkMultipartView.closeAll(fixture.parts);
             }
             fixture.localSubmission =
                     CompletableFuture.completedFuture(ZLinkOneWayCalls.ROUTE_NOT_CONNECTED);
@@ -404,7 +405,7 @@ public final class ZLinkSendAdmissionAllocationTest {
         public void close() {
             runtime.beginClose();
             sockets.closeAll();
-            Message.closeAll(parts);
+            ZLinkFrameworkMultipartView.closeAll(parts);
         }
     }
 }
