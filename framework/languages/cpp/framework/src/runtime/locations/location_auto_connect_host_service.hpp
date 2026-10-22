@@ -62,6 +62,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
       std::vector<channel_snapshot_t> channels,
       handler_registry_t &handlers,
       serializer_registry_t &serializers,
+      std::function<framework_runtime_state_t ()> framework_state,
       std::map<std::string, std::string> client_server_advertise_hosts = {},
       std::map<std::string, std::string> fanout_publisher_advertise_hosts = {},
       std::set<std::string> route_mesh_client_channels = {},
@@ -76,6 +77,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         _channels (std::move (channels)),
         _handlers (&handlers),
         _serializers (&serializers),
+        _framework_state (std::move (framework_state)),
         _client_server_advertise_hosts (std::move (client_server_advertise_hosts)),
         _fanout_publisher_advertise_hosts (std::move (fanout_publisher_advertise_hosts)),
         _route_mesh_client_channels (std::move (route_mesh_client_channels)),
@@ -140,7 +142,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             if (!_client_server)
                 _client_server = std::make_shared<client_server::client_server_location_runtime_t> (
                   _bus, _channels, *_runtime, *_store, *_store, services, *_serializers, *_handlers,
-                  _client_server_advertise_hosts, _listener_statuses);
+                  _framework_state, _client_server_advertise_hosts, _listener_statuses);
             _client_server->start ();
             _client_server_started = true;
         }
@@ -154,8 +156,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             if (!_fanout)
                 _fanout = std::make_shared<fanout::fanout_location_runtime_t> (
                   _bus, _channels, *_runtime, *_store, *_store, services, *_serializers, *_handlers,
-                  detail::handler_invocation_executor (), _fanout_publisher_advertise_hosts,
-                  _listener_statuses);
+                  _framework_state, detail::handler_invocation_executor (),
+                  _fanout_publisher_advertise_hosts, _listener_statuses);
             _fanout->start ();
         }
 
@@ -189,13 +191,11 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                            * remains owned by the route registration. */
                           mesh_node->expect_peer (target.node_rid, target.endpoint,
                                                   target.lifecycle_generation,
-                                                  target.security_identity,
-                                                  {target.owner_id, target.owner_lease_generation});
+                                                  target.security_identity);
                           if (target.initiates_connection)
-                              mesh_node->connect_peer (
-                                target.node_rid, target.endpoint, target.lifecycle_generation,
-                                target.security_identity, true,
-                                {target.owner_id, target.owner_lease_generation});
+                              mesh_node->connect_peer (target.node_rid, target.endpoint,
+                                                       target.lifecycle_generation,
+                                                       target.security_identity, true);
                       }
                   }
                   if (target.initiates_connection && !manual_endpoint)
@@ -226,13 +226,11 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
               mesh_node->object_role (), !mesh_node->channel_weights ().empty (),
               [mesh_node] (const target_t &target) {
                   mesh_node->expect_peer (target.node_rid, target.endpoint,
-                                          target.lifecycle_generation, target.security_identity,
-                                          {target.owner_id, target.owner_lease_generation});
+                                          target.lifecycle_generation, target.security_identity);
                   if (target.initiates_connection)
                       mesh_node->connect_peer (target.node_rid, target.endpoint,
                                                target.lifecycle_generation,
-                                               target.security_identity, true,
-                                               {target.owner_id, target.owner_lease_generation});
+                                               target.security_identity, true);
               },
               [mesh_node] (const target_t &target) {
                   mesh_node->forget_peer (target.node_rid, target.endpoint);
@@ -285,8 +283,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         std::string key;
         zlink::routing_id_t node_rid = zlink::routing_id_t::from (std::uint32_t{0});
         std::string endpoint;
-        std::string owner_id;
-        std::int64_t owner_lease_generation = 0;
+        std::shared_ptr<const mesh_node_descriptor_t> original;
         std::uint64_t lifecycle_generation = 0;
         std::chrono::system_clock::time_point updated_at{};
         std::string security_identity;
@@ -351,7 +348,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     void run_loop (std::optional<std::chrono::steady_clock::time_point> observed)
     {
         auto stopped = _stop_requested.task ();
-        std::vector<std::pair<loop_t *, std::vector<mesh_node_descriptor_t>>> snapshots;
+        std::vector<
+          std::pair<loop_t *, std::shared_ptr<const live_location_reader_t::mesh_sources_t>>>
+          snapshots;
         snapshots.reserve (_loops.size ());
         while (!stopped.await_ready ()) {
             for (auto &loop : _loops) {
@@ -372,7 +371,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             const bool published = republish_after_store_recovery (intent);
             for (auto &[loop, descriptors] : snapshots) {
                 try {
-                    reconcile (*loop, descriptors, published);
+                    reconcile (*loop, std::move (descriptors), published);
                 }
                 catch (const std::exception &error) {
                     handle_loop_failure (*loop, "tick", error.what ());
@@ -410,17 +409,10 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     }
 
 
-    std::vector<mesh_node_descriptor_t> read_descriptors (const loop_t &loop)
+    std::shared_ptr<const live_location_reader_t::mesh_sources_t>
+    read_descriptors (const loop_t &loop)
     {
-        std::vector<mesh_node_descriptor_t> descriptors;
-        location_page_request_t page;
-        do {
-            auto result = _live_store->list_mesh_nodes (loop.mesh_name, page).result ().value ();
-            descriptors.insert (descriptors.end (), result.items.begin (), result.items.end ());
-            page.continuation_token = result.continuation_token;
-        } while (page.continuation_token);
-
-        return descriptors;
+        return _live_store->poll_mesh_sources (loop.mesh_name).result ().value ();
     }
 
     bool republish_after_store_recovery (location_write_intent_t intent) noexcept
@@ -446,8 +438,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     }
 
 
-    void
-    reconcile (loop_t &loop, const std::vector<mesh_node_descriptor_t> &descriptors, bool published)
+    void reconcile (loop_t &loop,
+                    std::shared_ptr<const live_location_reader_t::mesh_sources_t> descriptors,
+                    bool published)
     {
         const bool was_recovering = loop.recovering_from_store_failure;
         if (!published) {
@@ -463,7 +456,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 _route_cache->invalidate_all_routes_after_store_recovery ();
         }
 
-        auto desired = select_endpoint_winners (compute_desired (loop, descriptors));
+        auto desired = select_endpoint_winners (compute_desired (loop, std::move (descriptors)));
         loop.last_desired.clear ();
         for (const auto &[key, target] : desired) {
             if (target.accepting_work)
@@ -506,7 +499,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                 connect (loop, target);
                 loop.active[key] = target;
             } else if (current->second.endpoint != target.endpoint
-                       || current->second.owner_id != target.owner_id
+                       || current->second.original->owner_id != target.original->owner_id
                        || current->second.lifecycle_generation != target.lifecycle_generation) {
                 disconnect (loop, current->second);
                 /* A descriptor replacement is a two-phase lifecycle change.
@@ -528,19 +521,24 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
 
 
     static std::map<std::string, target_t>
-    compute_desired (const loop_t &loop, const std::vector<mesh_node_descriptor_t> &descriptors)
+    compute_desired (const loop_t &loop,
+                     std::shared_ptr<const live_location_reader_t::mesh_sources_t> originals)
     {
+        const auto &descriptors = *originals;
         std::map<std::string, target_t> desired;
         const auto local =
           loop.local_rid
             ? std::find_if (descriptors.begin (), descriptors.end (),
-                            [&loop] (const mesh_node_descriptor_t &descriptor) {
-                                return descriptor.mesh_name == loop.mesh_name
+                            [&loop] (const auto &source) {
+                                const auto &descriptor = source.descriptor;
+                                return source.available () && descriptor.mesh_name == loop.mesh_name
                                        && descriptor.rid.to_hex () == loop.local_rid->to_hex ();
                             })
             : descriptors.end ();
-        for (const auto &descriptor : descriptors) {
-            if (descriptor.mesh_name != loop.mesh_name || descriptor.endpoint.empty ()
+        for (const auto &source : descriptors) {
+            const auto &descriptor = source.descriptor;
+            if (!source.available () || descriptor.mesh_name != loop.mesh_name
+                || descriptor.endpoint.empty ()
                 || (loop.local_rid && descriptor.rid.to_hex () == loop.local_rid->to_hex ())
                 || (!loop.local_endpoint.empty () && descriptor.endpoint == loop.local_endpoint)
                 || descriptor.state == framework_runtime_state_t::stopped
@@ -553,7 +551,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
                   remote_has_server_channel))
                 continue;
             if (!loop.local_object_role && local != descriptors.end ()
-                && mesh::route_mesh_connection_not_required (*local, descriptor))
+                && mesh::route_mesh_connection_not_required (local->descriptor, descriptor))
                 continue;
             /* Both sides retain the discovery expectation so inbound
              * admission can validate endpoint and security. Only the lower
@@ -563,9 +561,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
               || loop.local_rid->to_hex () < descriptor.rid.to_hex ();
             const auto key = descriptor.rid.to_hex ();
             desired.emplace (
-              key, target_t{key, descriptor.rid, descriptor.endpoint, descriptor.owner_id,
-                            descriptor.lease_generation, descriptor.lifecycle_generation,
-                            descriptor.updated_at,
+              key, target_t{key, descriptor.rid, descriptor.endpoint,
+                            std::shared_ptr<const mesh_node_descriptor_t> (originals, &descriptor),
+                            descriptor.lifecycle_generation, descriptor.updated_at,
                             location_auto_connect_detail::to_service_wire_admission_identity (
                               descriptor.security_identity),
                             initiates_connection,
@@ -580,8 +578,8 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             return candidate.accepting_work;
         if (candidate.updated_at != current.updated_at)
             return candidate.updated_at > current.updated_at;
-        if (candidate.owner_lease_generation != current.owner_lease_generation)
-            return candidate.owner_lease_generation > current.owner_lease_generation;
+        if (candidate.original->lease_generation != current.original->lease_generation)
+            return candidate.original->lease_generation > current.original->lease_generation;
         if (candidate.lifecycle_generation != current.lifecycle_generation)
             return candidate.lifecycle_generation > current.lifecycle_generation;
         return candidate.key > current.key;
@@ -635,6 +633,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
     std::vector<channel_snapshot_t> _channels;
     handler_registry_t *_handlers;
     serializer_registry_t *_serializers;
+    const std::function<framework_runtime_state_t ()> _framework_state;
     std::map<std::string, std::string> _client_server_advertise_hosts;
     std::map<std::string, std::string> _fanout_publisher_advertise_hosts;
     std::set<std::string> _route_mesh_client_channels;
