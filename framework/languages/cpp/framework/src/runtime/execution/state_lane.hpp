@@ -335,8 +335,8 @@ class state_lane_t
                     return result_t<value_t>::success (std::invoke (work));
                 }
             }
-            catch (const framework_exception_t &error) {
-                return result_t<value_t>::failure (error.kind (), error.what ());
+            catch (const framework_exception_t &) {
+                return detail::result_access_t::failure<value_t> (std::current_exception ());
             }
             catch (const std::exception &error) {
                 return result_t<value_t>::failure (framework_error_kind_t::internal_failure,

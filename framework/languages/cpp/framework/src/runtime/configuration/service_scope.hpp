@@ -18,6 +18,11 @@ enum class service_scope_kind_t
 class service_scope_access_t
 {
   public:
+    template <typename T> static std::shared_ptr<T> resolve_shared (service_provider_t &provider)
+    {
+        return std::static_pointer_cast<T> (provider.resolve (std::type_index (typeid (T))));
+    }
+
     static service_provider_t create_child (service_provider_t &provider,
                                             service_scope_kind_t kind);
     static service_scope_kind_t kind (const service_provider_t &provider) noexcept;
