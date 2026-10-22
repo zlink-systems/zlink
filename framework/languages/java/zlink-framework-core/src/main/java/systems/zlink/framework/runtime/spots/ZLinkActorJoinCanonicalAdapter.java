@@ -12,6 +12,10 @@ import systems.zlink.framework.runtime.actors.ZLinkActorRuntime;
 import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendActorRef;
 import systems.zlink.framework.runtime.internal.backend.ZLinkInternalMeshNode;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorAction;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorReason;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchErrorSurface;
+import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessageKind;
 import systems.zlink.framework.runtime.internal.locations.ZLinkStoreCancellation;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkActorJoinRelocationPort;
 import systems.zlink.framework.runtime.internal.service.ZLinkActorJoinRecoveryCodec;
@@ -608,6 +612,17 @@ final class ZLinkActorJoinCanonicalAdapter implements ZLinkActorJoinRelocationPo
                             admission.operationId(), actorRef, admission.reply());
         } else {
             Throwable cause = unwrap(lifecycleFailure);
+            if (spots.dispatchErrorsEnabled()) {
+                spots.reportDispatchError(
+                        DispatchFailureReport.of(
+                                        ZLinkDispatchErrorSurface.ACTOR_RELOCATION,
+                                        ZLinkDispatchMessageKind.CONTROL,
+                                        ZLinkDispatchErrorReason.HANDLER_EXCEPTION,
+                                        ZLinkDispatchErrorAction.FAIL_CALLER)
+                                .packetName("OnJoinedActor")
+                                .actorId(actor.context().actorId())
+                                .error(cause));
+            }
             ZLinkFrameworkErrorKind kind =
                     cause instanceof ZLinkFrameworkException framework
                             ? framework.kind()
