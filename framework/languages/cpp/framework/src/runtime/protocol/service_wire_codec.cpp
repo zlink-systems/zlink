@@ -2836,9 +2836,9 @@ std::vector<std::uint8_t> encode_application_payload (const application_payload_
 namespace
 {
 template <typename RetainBody>
-application_payload_t decode_application_payload_bytes (std::span<const std::uint8_t> bytes,
-                                                        bool capture_flow,
-                                                        RetainBody retain_body)
+auto decode_application_payload_bytes (std::span<const std::uint8_t> bytes,
+                                       bool capture_flow,
+                                       RetainBody retain_body)
 {
     if (bytes.size () < 5
         || (bytes[0] != application_payload_version
@@ -2851,9 +2851,10 @@ application_payload_t decode_application_payload_bytes (std::span<const std::uin
     if (body_length != bytes.size () - offset) {
         throw service_wire_error_t ("application payload body length does not match frame");
     }
-    application_payload_t result;
-    result.packet_name = read_text8 (bytes, offset, "packet name");
-    result.content_type = read_text8 (bytes, offset, "content type");
+    const auto packet_name = read_text8_view (bytes, offset, "packet name");
+    const auto content_type = read_text8_view (bytes, offset, "content type");
+    std::optional<std::string_view> flow_id;
+    std::optional<flow_origin_t> flow_origin;
     const auto payload_length = read_u32 (bytes, offset);
     if (payload_length > bytes.size () - offset) {
         throw service_wire_error_t ("application payload length does not match frame");
@@ -2862,12 +2863,12 @@ application_payload_t decode_application_payload_bytes (std::span<const std::uin
     offset += payload_length;
     if (has_flow) {
         if (capture_flow) {
-            result.flow_id = read_text8 (bytes, offset, "flow id");
-            if (!flow_id_t::is_valid (*result.flow_id) || offset >= bytes.size ()
+            flow_id = read_text8_view (bytes, offset, "flow id");
+            if (!flow_id_t::is_valid (*flow_id) || offset >= bytes.size ()
                 || !valid_flow_origin (bytes[offset])) {
                 throw service_wire_error_t ("application payload flow context is invalid");
             }
-            result.flow_origin = static_cast<flow_origin_t> (bytes[offset++]);
+            flow_origin = static_cast<flow_origin_t> (bytes[offset++]);
         } else {
             /* flow-correlation §4: the pair is observation-only — skip it
              * structurally without semantic validation or materialization. */
@@ -2882,17 +2883,25 @@ application_payload_t decode_application_payload_bytes (std::span<const std::uin
     if (offset != bytes.size ()) {
         throw service_wire_error_t ("application payload has trailing fields");
     }
-    retain_body (result, body);
-    return result;
+    return retain_body (packet_name, content_type, body, flow_id, flow_origin);
 }
 } // namespace
 
 application_payload_t decode_application_payload (std::span<const std::uint8_t> bytes,
                                                   bool capture_flow)
 {
-    return decode_application_payload_bytes (bytes, capture_flow, [] (auto &result, auto body) {
-        result.payload_bytes ().assign (body.begin (), body.end ());
-    });
+    return decode_application_payload_bytes (
+      bytes, capture_flow,
+      [] (auto packet_name, auto content_type, auto body, auto flow_id, auto flow_origin) {
+          application_payload_t result;
+          result.packet_name = packet_name;
+          result.content_type = content_type;
+          result.payload_bytes ().assign (body.begin (), body.end ());
+          if (flow_id)
+              result.flow_id.emplace (*flow_id);
+          result.flow_origin = flow_origin;
+          return result;
+      });
 }
 
 namespace
@@ -2923,9 +2932,10 @@ application_payload_t::multipart_t decode_application_parts (zlink::message_t &&
     application_payload_t::multipart_t parts;
     try {
         (void) decode_application_payload_bytes (
-          message_bytes (owner->bytes), capture_flow, [owner, &parts] (auto &result, auto body) {
-              if (result.packet_name != framework_multipart_packet_name
-                  || result.content_type != framework_multipart_content_type)
+          message_bytes (owner->bytes), capture_flow,
+          [owner, &parts] (auto packet_name, auto content_type, auto body, auto, auto) {
+              if (packet_name != framework_multipart_packet_name
+                  || content_type != framework_multipart_content_type)
                   throw service_wire_error_t (
                     "framework application payload profile is unsupported");
               parts = decode_application_parts_bytes (body, [owner] (auto part) {
