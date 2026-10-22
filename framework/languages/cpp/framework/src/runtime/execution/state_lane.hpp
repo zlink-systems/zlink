@@ -259,6 +259,51 @@ class state_lane_t
         return result;
     }
 
+    // Keeps synchronous owner entry on the same FIFO lane without publishing
+    // a future when this caller can complete its own turn inline.
+    template <typename Work>
+    auto run_sync (Work &&work) -> std::invoke_result_t<std::decay_t<Work> &>
+    {
+        using value_t = std::invoke_result_t<std::decay_t<Work> &>;
+        using stored_t = std::conditional_t<
+          std::is_void_v<value_t>, bool,
+          std::conditional_t<std::is_reference_v<value_t>,
+                             std::add_pointer_t<std::remove_reference_t<value_t>>, value_t>>;
+        throw_if_reentrant ();
+        struct inline_turn_t
+        {
+            Work &work;
+            std::optional<stored_t> result;
+            std::exception_ptr error;
+        } turn{work};
+        if (schedule_drain (true, [&turn] {
+                try {
+                    if constexpr (std::is_void_v<value_t>) {
+                        std::invoke (turn.work);
+                    } else if constexpr (std::is_reference_v<value_t>) {
+                        auto &&value = std::invoke (turn.work);
+                        turn.result.emplace (std::addressof (value));
+                    } else {
+                        turn.result.emplace (std::invoke (turn.work));
+                    }
+                }
+                catch (...) {
+                    turn.error = std::current_exception ();
+                }
+            })) {
+            // Admission, current-lane scope and drain ownership have ended.
+            if (turn.error)
+                std::rethrow_exception (turn.error);
+            if constexpr (std::is_reference_v<value_t>)
+                return static_cast<value_t> (**turn.result);
+            else if constexpr (!std::is_void_v<value_t>)
+                return std::move (*turn.result);
+            else
+                return;
+        }
+        return run (std::forward<Work> (work)).get ();
+    }
+
     template <typename Work> auto run_checked (Work &&work)
     {
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD

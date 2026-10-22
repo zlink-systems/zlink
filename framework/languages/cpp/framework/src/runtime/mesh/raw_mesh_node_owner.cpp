@@ -1263,13 +1263,12 @@ raw_mesh_node_owner_t::start_send (std::vector<std::uint8_t> target_routing_id,
                                    bool needs_public_completion,
                                    detail::backend::raw_send_stage_trace_t trace)
 {
-    return _lane
-      .run ([this, parts = std::move (parts), trace = std::move (trace), needs_public_completion,
-             target_routing_id = std::move (target_routing_id)] () mutable {
-          return start_send_on_lane (std::move (target_routing_id), std::move (parts),
-                                     needs_public_completion, std::move (trace));
-      })
-      .get ();
+    return _lane.run_sync ([this, parts = std::move (parts), trace = std::move (trace),
+                            needs_public_completion,
+                            target_routing_id = std::move (target_routing_id)] () mutable {
+        return start_send_on_lane (std::move (target_routing_id), std::move (parts),
+                                   needs_public_completion, std::move (trace));
+    });
 }
 
 raw_mesh_node_owner_t::send_start_result_t
@@ -1432,11 +1431,9 @@ raw_mesh_node_owner_t::send_start_state_t
 raw_mesh_node_owner_t::submit_header_only (const std::vector<std::uint8_t> &target_routing_id,
                                            std::vector<std::uint8_t> header)
 {
-    return _lane
-      .run ([this, &target_routing_id, &header] {
-          return submit_header_only_on_lane (target_routing_id, std::move (header));
-      })
-      .get ();
+    return _lane.run_sync ([this, &target_routing_id, &header] {
+        return submit_header_only_on_lane (target_routing_id, std::move (header));
+    });
 }
 
 raw_mesh_node_owner_t::send_start_state_t raw_mesh_node_owner_t::submit_header_only_on_lane (

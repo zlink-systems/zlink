@@ -1,10 +1,12 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 #include <cstddef>
+#include <optional>
 #include <utility>
 namespace zlink::framework::tests
 {
 extern thread_local bool tracking_allocations;
+extern thread_local std::optional<std::size_t> allocations_before_failure;
 extern thread_local std::size_t tracked_allocation_count;
 extern thread_local std::size_t tracked_allocation_size;
 extern thread_local std::size_t tracked_allocation_bytes;
