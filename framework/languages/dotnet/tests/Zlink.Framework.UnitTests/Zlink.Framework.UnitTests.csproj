@@ -125,6 +125,7 @@
         <Compile Include="Runtime/ChannelApplicationDispatchQueueShutdownTests.cs"/>
         <Compile Include="Runtime/ClientServerChannelRuntimeTests.cs"/>
         <Compile Include="Runtime/ChannelEnvelopeHandoffTests.cs"/>
+        <Compile Include="Runtime/ChannelReceiveMessageFlowTests.cs"/>
         <Compile Include="Runtime/ClientServerLivenessLaneTests.cs"/>
         <Compile Include="Runtime/ClientServerClientAckTests.cs"/>
         <Compile Include="Runtime/ClientServerLoopOwnershipTests.cs"/>
