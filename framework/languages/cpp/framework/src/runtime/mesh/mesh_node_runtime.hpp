@@ -402,8 +402,6 @@ class mesh_node_runtime_t
     task_t<void> retire_application_actor_session (runtime::stateful::stream_binding_t binding,
                                                    zlink::routing_id_t session_rid,
                                                    std::chrono::milliseconds timeout);
-    task_t<std::optional<runtime::spot_address_t>>
-    resolve_application_actor_route (actor_ref_t actor) const;
 
     task_t<void> notify_application_actor_disconnected (const actor_ref_t &actor,
                                                         runtime::stateful::stream_binding_t binding,

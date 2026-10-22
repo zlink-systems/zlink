@@ -279,10 +279,70 @@ void test_owner_timeout_before_commit_leaves_no_stale_completion_child ()
     test_context_socket_close_zero_linger (router);
 }
 
+size_t selected_route_count (void *router_)
+{
+    // A zero-capacity snapshot reports the selected route count; with a route
+    // it is BUFFER_TOO_SMALL and leaves POLLROUTE readiness unchanged.
+    size_t count = 0;
+    const zlink_config_result_t rc =
+      zlink_router_routes_snapshot (router_, NULL, 0, &count);
+    TEST_ASSERT_TRUE (rc == ZLINK_CONFIG_OK || rc == ZLINK_CONFIG_BUFFER_TOO_SMALL);
+    return count;
+}
+
+// A completion poller registered while a temporary transport owner holds its
+// lease must not detach that owner's executor. The handshake, pair READY and
+// attach commands that follow belong to Core progress, and the application
+// neither waits on the poller nor calls another command-draining API here.
+void test_completion_poller_registration_keeps_transport_owner_progress ()
+{
+    void *server = test_context_socket (ZLINK_SOCKET_ROUTER);
+    void *client = test_context_socket (ZLINK_SOCKET_ROUTER);
+    const int zero = 0;
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_option (server, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_option (client, ZLINK_OPT_LINGER, &zero, sizeof (zero)));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_routing_id (server, "held-server", strlen ("held-server")));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_routing_id (client, "held-client", strlen ("held-client")));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_set_router_option (client, ZLINK_ROUTER_OPT_CONNECT_ROUTING_ID,
+                                                    "held-server", strlen ("held-server")));
+    char endpoint[MAX_SOCKET_STRING];
+    bind_loopback_ipv4 (server, endpoint, sizeof endpoint);
+
+    // Hold the same lease a session holds from its owner request until its
+    // pipe is admitted, then register the completion poller under it.
+    zlink::socket_base_t *const core = as_socket_handle (client).socket;
+    TEST_ASSERT_EQUAL_INT (0, core->acquire_transport_pair_owner_progress ());
+    void *poller = zlink_poller_new ();
+    TEST_ASSERT_NOT_NULL (poller);
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONFIG_OK,
+                           zlink_poller_add (poller, client, NULL, ZLINK_POLLCOMPLETION));
+    TEST_ASSERT_EQUAL_INT (ZLINK_CONNECT_OK, zlink_connect (client, endpoint));
+
+    // Only the route snapshot, which drains no commands, observes progress.
+    size_t routes = 0;
+    for (int waited_ms = 0; waited_ms < 2000 && routes == 0; waited_ms += 5) {
+        routes = selected_route_count (client);
+        if (routes == 0)
+            msleep (5);
+    }
+    core->release_transport_pair_owner_progress ();
+    TEST_ASSERT_EQUAL_INT (ZLINK_CLOSE_OK, zlink_poller_destroy (&poller));
+    TEST_ASSERT_EQUAL_UINT (1, routes);
+
+    test_context_socket_close_zero_linger (client);
+    test_context_socket_close_zero_linger (server);
+}
+
 int main ()
 {
     setup_test_environment ();
     UNITY_BEGIN ();
     RUN_TEST (test_owner_timeout_before_commit_leaves_no_stale_completion_child);
+    RUN_TEST (test_completion_poller_registration_keeps_transport_owner_progress);
     return UNITY_END ();
 }
