@@ -33,6 +33,9 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-jdk8:1.9.0")
     implementation(kotlin("stdlib"))
+    testImplementation(platform("org.junit:junit-bom:5.11.4"))
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
 
 
@@ -40,3 +43,5 @@ application {
     mainClass.set("systems.zlink.samples.kotlin.bingo.server.play.ProgramKt")
     applicationDefaultJvmArgs = listOf("--enable-native-access=ALL-UNNAMED")
 }
+
+tasks.withType<Test>().configureEach { useJUnitPlatform() }
