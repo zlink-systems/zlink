@@ -410,13 +410,13 @@ stateful_error_t raw_stateful_dispatch_t::commit_accepted_ingress (const object_
                 const messaging::message_parts_t parts (
                   protocol::decode_application_parts (*admitted_application));
                 if (parts.size () != 0) {
-                    const auto header =
-                      actor ? detail::decode_actor_packet_header (
-                                parts, request ? detail::stream_message_kind_t::request
-                                               : detail::stream_message_kind_t::send,
-                                tracer.capture_enabled ())
-                            : messaging::envelope_codec_t{}.decode_header (
-                                parts[0], tracer.capture_enabled ());
+                    const auto header = actor ? detail::decode_actor_packet_header (
+                                                  parts,
+                                                  request ? detail::stream_message_kind_t::request
+                                                          : detail::stream_message_kind_t::send,
+                                                  tracer.capture_enabled ())
+                                              : messaging::envelope_codec_t{}.decode_header (
+                                                  parts[0], tracer.capture_enabled ());
                     if (header) {
                         event.packet_name = header.value ().message_name;
                         event.channel_name = header.value ().channel_name;
