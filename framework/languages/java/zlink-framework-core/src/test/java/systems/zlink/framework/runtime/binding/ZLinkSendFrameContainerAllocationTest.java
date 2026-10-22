@@ -13,7 +13,6 @@ import systems.zlink.contracts.core.RoutingId;
 import systems.zlink.contracts.core.Zlink;
 import systems.zlink.contracts.messaging.Message;
 import systems.zlink.framework.configuration.ZLinkApplicationJobQueueProfile;
-import systems.zlink.framework.runtime.channels.ZLinkSendAdmissionAllocationTest;
 import systems.zlink.framework.runtime.internal.dispatch.ZLinkApplicationJobQueue;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 
@@ -78,11 +77,12 @@ public final class ZLinkSendFrameContainerAllocationTest {
 
     public static void main(String[] args) throws Exception {
         if (args.length == 2 && args[0].equals("--benchmark")) {
-            ZLinkSendAdmissionAllocationTest.benchmarkPaths(
-                    Path.of(args[1]),
-                    ZLinkSendFrameContainerAllocationTest.class,
-                    List.of("2", "3"),
-                    2_000);
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest
+                    .benchmarkPaths(
+                            Path.of(args[1]),
+                            ZLinkSendFrameContainerAllocationTest.class,
+                            List.of("2", "3"),
+                            2_000);
             return;
         }
         long excessObjects = 0;

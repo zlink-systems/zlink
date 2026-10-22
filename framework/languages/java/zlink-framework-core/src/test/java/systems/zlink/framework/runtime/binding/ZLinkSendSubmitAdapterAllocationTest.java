@@ -42,7 +42,7 @@ public final class ZLinkSendSubmitAdapterAllocationTest {
 
     public static void main(String[] args) throws Exception {
         if (args.length == 2 && args[0].equals("--benchmark")) {
-            systems.zlink.framework.runtime.channels.ZLinkSendAdmissionAllocationTest
+            systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest
                     .benchmarkPaths(
                             java.nio.file.Path.of(args[1]),
                             ZLinkSendSubmitAdapterAllocationTest.class,
