@@ -157,9 +157,11 @@ TEST (CppFrameworkRouteClientChannelRouting, PendingNodeRequestRetainsReplacedTr
     runtime.bind_mesh_node_transport (
       "held-mesh", {},
       [lifetime,
-       &physical_reply] (const zlink::routing_id_t &, message_parts_t,
+       &physical_reply] (const zlink::routing_id_t &target, message_parts_t,
                          std::chrono::milliseconds) -> request_task_t<result_t<message_parts_t>> {
-          co_return co_await physical_reply.task ();
+          auto reply = co_await physical_reply.task ();
+          EXPECT_EQ (target.to_string (), "target");
+          co_return reply;
       });
     lifetime.reset ();
     {
@@ -545,6 +547,38 @@ void verify_mesh_request_admission (bool to_spot)
 TEST (CppFrameworkRouteClientChannelRouting, NodeRequestPublishesItsOwnAdmissionBeforeReply)
 {
     verify_mesh_request_admission (false);
+}
+
+namespace
+{
+std::atomic_uint node_request_resumptions{0};
+
+zlink::framework::detail::task_scheduler_t
+count_node_request_resumption (zlink::framework::detail::completion_dispatcher_borrow_t *)
+{
+    return [] (std::function<void ()> &&resume) {
+        ++node_request_resumptions;
+        resume ();
+    };
+}
+} // namespace
+
+TEST (CppFrameworkRouteClientChannelRouting, NodeEnvelopeConversionDoesNotSuspend)
+{
+    using namespace zlink::framework;
+    const detail::runtime_execution_hooks_t hooks{
+      [] () -> detail::completion_dispatcher_borrow_t { return nullptr; },
+      &count_node_request_resumption, [] { return detail::task_scheduler_t{}; }, [] {}};
+    struct restore_hooks_t
+    {
+        ~restore_hooks_t () { detail::set_runtime_execution_hooks (nullptr); }
+    } restore;
+    node_request_resumptions = 0;
+    detail::set_runtime_execution_hooks (&hooks);
+    verify_mesh_request_admission (false);
+    // The public typed decoder still awaits the physical reply. Envelope
+    // conversion propagates that same terminal without a second suspension.
+    EXPECT_EQ (node_request_resumptions.load (), 1u);
 }
 
 TEST (CppFrameworkRouteClientChannelRouting, SpotRequestPublishesItsOwnAdmissionBeforeReply)
