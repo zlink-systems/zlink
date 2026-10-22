@@ -90,23 +90,21 @@ bool dispatch (host::public_host_runtime_t &target,
       .value ();
 }
 
-// Calibrate a single claim owner with the existing cursor/accounting locals
-// moved into its lifetime, reservation children and one final result state.
+// Calibrate the canonical batch: originals and retain marks share one buffer,
+// while the producer claim owns credit settlement and the owner FIFO.
 // No fixed frame, control-block or std::function SBO byte size is assumed.
 struct record_state_t
 {
+    std::optional<mesh::service_mailbox_record_t> original;
     std::atomic_bool retained{false};
-    std::atomic_bool released{false};
 };
 struct owner_layout_t
 {
-    mesh::service_mailbox_claim_t claim;
-    std::weak_ptr<host::public_host_runtime_t> host;
+    std::vector<record_state_t> records{1};
+    std::shared_ptr<mesh::service_mailbox_claim_t> claim;
     dispatch_t dispatch;
     std::function<void ()> rejected;
     std::size_t index = 0, count = 0, handed_off = 0;
-    std::atomic_size_t remaining{1};
-    std::vector<record_state_t> records{1};
 };
 auto ownership_baseline ()
 {
@@ -117,7 +115,7 @@ auto ownership_baseline ()
             shared->records[index].retained = true;
         };
         const std::function<void ()> finish = [shared, index] {
-            shared->records[index].released = true;
+            shared->records[index].original.reset ();
         };
         retain ();
         finish ();
@@ -133,7 +131,9 @@ bool verify_cost (host::public_host_runtime_t &target, bool channel, bool owning
         auto claim = mailbox.try_claim_owner (domain, claim_owner (channel), 1,
                                               runtime::dispatch_limits::receive_batch_bytes);
         require (static_cast<bool> (claim), "baseline claim failed");
-        require (mailbox.release (*claim), "baseline release failed");
+        auto original = mailbox.take ({claim, 0});
+        require (original.has_value (), "baseline original transfer failed");
+        require (original->transferred (), "baseline release failed");
     });
     const auto ownership = ownership_baseline ();
     struct observation_t
@@ -195,6 +195,8 @@ bool verify_cost (host::public_host_runtime_t &target, bool channel, bool owning
               << " count=" << bad.count << " bytes=" << bad.bytes << std::endl;
     require (bad.count > limit_count && bad.bytes > limit_bytes,
              "allocation guard accepted injected ownership cost");
+    std::cout << "allocation-guard channel=" << channel << " owning=" << owning_callback
+              << " injected-rejected=true" << std::endl;
     return actual.count <= limit_count && actual.bytes <= limit_bytes;
 }
 void verify_retained_batch (host::public_host_runtime_t &target)
