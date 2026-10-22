@@ -28,25 +28,29 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
 
     @Override
     public Message get(int index) {
-        if (closed) {
-            throw new IllegalStateException("multipart view is closed");
-        }
-        Object value = parts[index];
+        Object value = partValue(index);
+        Message materialized;
         if (value instanceof ByteBuffer bytes) {
-            Message materialized = Message.from(bytes);
-            parts[index] = materialized;
-            return materialized;
+            materialized = Message.from(bytes);
+        } else if (value instanceof byte[] bytes) {
+            materialized = Message.from(bytes);
+        } else {
+            return (Message) value;
         }
-        return (Message) value;
+        parts[index] = materialized;
+        return materialized;
     }
 
     /**
-     * Outbound envelope parts: the encoded header stays in heap storage and is written once into
-     * the frame that carries it. Closing the view releases {@code body}.
+     * Outbound envelope parts: the owned header bytes are retained directly until the transport
+     * writes or materializes them. Closing the view releases {@code body}.
      */
     public static ZLinkFrameworkMultipartView encoded(byte[] header, Message body) {
         return new ZLinkFrameworkMultipartView(
-                new Object[] {ByteBuffer.wrap(header), Objects.requireNonNull(body, "body")}, null);
+                new Object[] {
+                    Objects.requireNonNull(header, "header"), Objects.requireNonNull(body, "body")
+                },
+                null);
     }
 
     /**
@@ -54,29 +58,44 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
      * record's frame owner is alive; a part already materialized is read in place.
      */
     public static ByteBuffer buffer(List<Message> parts, int index) {
-        ByteBuffer bytes = unmaterialized(parts, index);
-        return bytes != null ? bytes.duplicate() : parts.get(index).dataBuffer();
+        Object value = partValue(parts, index);
+        if (value instanceof ByteBuffer bytes) return bytes.duplicate();
+        if (value instanceof byte[] bytes) return ByteBuffer.wrap(bytes);
+        return ((Message) value).dataBuffer();
     }
 
     /** The byte length of one part, without materializing it. */
     static int partSize(List<Message> parts, int index) {
-        ByteBuffer bytes = unmaterialized(parts, index);
-        return bytes != null ? bytes.remaining() : parts.get(index).size();
+        Object value = partValue(parts, index);
+        if (value instanceof byte[] bytes) {
+            return bytes.length;
+        }
+        return value instanceof ByteBuffer bytes ? bytes.remaining() : ((Message) value).size();
     }
 
     /** Writes one part once into {@code target}, without materializing it. */
     static void writePart(List<Message> parts, int index, ByteBuffer target) {
-        ByteBuffer bytes = unmaterialized(parts, index);
-        if (bytes != null) target.put(bytes.duplicate());
-        else parts.get(index).copyTo(target);
+        Object value = partValue(parts, index);
+        if (value instanceof byte[] bytes) {
+            target.put(bytes);
+        } else if (value instanceof ByteBuffer bytes) {
+            target.put(bytes.duplicate());
+        } else {
+            ((Message) value).copyTo(target);
+        }
     }
 
-    private static ByteBuffer unmaterialized(List<Message> parts, int index) {
-        if (!(parts instanceof ZLinkFrameworkMultipartView view)) return null;
-        if (view.closed) {
+    private static Object partValue(List<Message> parts, int index) {
+        return parts instanceof ZLinkFrameworkMultipartView view
+                ? view.partValue(index)
+                : parts.get(index);
+    }
+
+    private Object partValue(int index) {
+        if (closed) {
             throw new IllegalStateException("multipart view is closed");
         }
-        return view.parts[index] instanceof ByteBuffer bytes ? bytes : null;
+        return parts[index];
     }
 
     /** Releases received parts; a retained list releases its storage once, by itself. */
