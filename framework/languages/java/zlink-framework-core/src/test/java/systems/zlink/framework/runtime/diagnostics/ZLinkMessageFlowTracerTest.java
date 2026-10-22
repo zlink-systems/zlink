@@ -68,8 +68,7 @@ class ZLinkMessageFlowTracerTest {
 
         var off = tracer(options(ZLinkMessageFlowLogMode.OFF));
         assertEquals(
-                0L,
-                minimumAllocated.apply(() -> off.begin(ZLinkMessageFlowOutcome.DISPATCHED)));
+                0L, minimumAllocated.apply(() -> off.begin(ZLinkMessageFlowOutcome.DISPATCHED)));
 
         var normal = tracer(options(ZLinkMessageFlowLogMode.NORMAL));
         assertTrue(
