@@ -25,6 +25,7 @@
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/locations/pending_creation_projection.hpp"
 #include "runtime/utils/poll_interval_wait.hpp"
+#include "runtime/utils/weak_runtime_owner.hpp"
 #include "runtime/timers/async_delay.hpp"
 #include "runtime/locations/location_runtime.hpp"
 #include "runtime/locations/live_location_reader.hpp"
@@ -2206,9 +2207,11 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             const auto registration = _registrations[index];
             const auto source = _nodes[index];
             registration->spot_state->create_user_spot =
-              [this, source] (bool exclusive, std::optional<spot_id_t> spot_id,
-                              std::string stable_type, std::optional<std::string> mesh_name,
-                              std::optional<message_t> request, std::chrono::milliseconds timeout) {
+              [this, weak_source = std::weak_ptr (source)] (
+                bool exclusive, std::optional<spot_id_t> spot_id, std::string stable_type,
+                std::optional<std::string> mesh_name, std::optional<message_t> request,
+                std::chrono::milliseconds timeout) {
+                  const auto source = detail::lock_runtime_owner (weak_source);
                   return create_user_spot (source, exclusive, std::move (spot_id),
                                            std::move (stable_type), std::move (mesh_name),
                                            std::move (request), timeout);
@@ -2216,12 +2219,16 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
             registration->spot_state->find_user_spot = [this] (spot_id_t spot_id) {
                 return find_user_spot (std::move (spot_id));
             };
-            registration->spot_state->close_user_spot = [this, source] (spot_ref_t spot) {
-                return close_user_spot (source, std::move (spot));
+            registration->spot_state->close_user_spot =
+              [this, weak_source = std::weak_ptr (source)] (spot_ref_t spot) -> task_t<bool> {
+                const auto source = detail::lock_runtime_owner (weak_source);
+                co_return co_await close_user_spot (source, std::move (spot));
             };
             registration->spot_state->begin_user_spot_close =
-              [source] (const spot_id_t &spot_id, std::uint64_t object_generation,
-                        std::uint64_t authority_owner_generation) {
+              [weak_source = std::weak_ptr (source)] (const spot_id_t &spot_id,
+                                                      std::uint64_t object_generation,
+                                                      std::uint64_t authority_owner_generation) {
+                  const auto source = detail::lock_runtime_owner (weak_source);
                   return source->native_node ().begin_local_user_spot_close (
                     std::string (spot_id), object_generation, authority_owner_generation);
               };
@@ -2229,9 +2236,12 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
               [this] { return current_location_owner (); });
             _nodes[index]->configure_user_spot_operations (
               store,
-              [this, registration, source] (const stateful::object_ref_t &object,
-                                            const std::string &stable_type,
-                                            const std::vector<std::byte> &payload) {
+              [this, weak_registration = std::weak_ptr (registration),
+               weak_source = std::weak_ptr (source)] (const stateful::object_ref_t &object,
+                                                      const std::string &stable_type,
+                                                      const std::vector<std::byte> &payload) {
+                  const auto source = detail::lock_runtime_owner (weak_source);
+                  const auto registration = detail::lock_runtime_owner (weak_registration);
                   std::vector<std::uint8_t> rid_bytes;
                   rid_bytes.reserve (object.key.size ());
                   for (const auto value : object.key)
@@ -2283,8 +2293,10 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                       || created->state == spot_create_state_t::existing,
                     std::move (application_reply), std::move (preparation_terminal)};
               },
-              [registration] (const std::string &spot_id, host::spot_close_begin_t begin,
-                              host::spot_close_done_t done) {
+              [weak_registration = std::weak_ptr (registration)] (const std::string &spot_id,
+                                                                  host::spot_close_begin_t begin,
+                                                                  host::spot_close_done_t done) {
+                  const auto registration = detail::lock_runtime_owner (weak_registration);
                   // The materializer registers the activation under this local id.
                   std::vector<std::uint8_t> rid_bytes;
                   rid_bytes.reserve (spot_id.size ());
@@ -2301,18 +2313,20 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                       framework_error_kind_t::not_configured,
                       "Instance Spot factories require a Relocation Store");
                 registration->spot_state->admit_instance_spot_idle_eviction =
-                  [source] (const spot_id_t &spot_id, std::string_view stable_type,
-                            std::uint64_t object_generation,
-                            std::uint64_t authority_owner_generation,
-                            std::function<void ()> close_local) {
+                  [weak_source = std::weak_ptr (source)] (
+                    const spot_id_t &spot_id, std::string_view stable_type,
+                    std::uint64_t object_generation, std::uint64_t authority_owner_generation,
+                    std::function<void ()> close_local) {
+                      const auto source = detail::lock_runtime_owner (weak_source);
                       return source->native_node ().evict_instance_spot (
                         std::string (stable_type), std::string (spot_id), object_generation,
                         authority_owner_generation, std::move (close_local));
                   };
                 registration->spot_state->begin_instance_spot_close =
-                  [source] (const spot_id_t &spot_id, std::string_view stable_type,
-                            std::uint64_t object_generation,
-                            std::uint64_t authority_owner_generation) {
+                  [weak_source = std::weak_ptr (source)] (
+                    const spot_id_t &spot_id, std::string_view stable_type,
+                    std::uint64_t object_generation, std::uint64_t authority_owner_generation) {
+                      const auto source = detail::lock_runtime_owner (weak_source);
                       return source->native_node ().begin_instance_spot_close (
                         std::string (stable_type), std::string (spot_id), object_generation,
                         authority_owner_generation);
@@ -2320,9 +2334,11 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                 _nodes[index]->configure_instance_spot_operations (
                   store, instance_relocations, [this] { return current_location_owner (); },
                   host::instance_spot_activation_materializer_t{
-                    [registration] (const protocol::instance_spot_activation_header_t &request,
-                                    const authority_snapshot_t &snapshot,
-                                    std::function<task_t<void> (bool)> &preparation_terminal) {
+                    [weak_registration = std::weak_ptr (registration)] (
+                      const protocol::instance_spot_activation_header_t &request,
+                      const authority_snapshot_t &snapshot,
+                      std::function<task_t<void> (bool)> &preparation_terminal) {
+                        const auto registration = detail::lock_runtime_owner (weak_registration);
                         if (snapshot.allocation.object_kind
                               != placement_object_kind_t::instance_spot
                             || snapshot.allocation.stable_type != request.target.stable_type
@@ -2344,10 +2360,11 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                         return created.state == spot_create_state_t::created
                                || created.state == spot_create_state_t::existing;
                     },
-                    [this, registration, &services] (
+                    [this, weak_registration = std::weak_ptr (registration), &services] (
                       std::shared_ptr<const protocol::instance_activation_recovery_t>
                         original_command,
                       std::function<task_t<zlink::message_t> (std::function<void ()> &)> missing) {
+                        const auto registration = detail::lock_runtime_owner (weak_registration);
                         const auto &request = original_command->activation;
                         const auto &metadata = original_command->metadata;
                         const auto &application = original_command->application_payload;
@@ -2423,7 +2440,9 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                           });
                         return output;
                     },
-                    [registration] (protocol::instance_spot_activation_header_t request) {
+                    [weak_registration = std::weak_ptr (registration)] (
+                      protocol::instance_spot_activation_header_t request) {
+                        const auto registration = detail::lock_runtime_owner (weak_registration);
                         const auto select = registration->spot_state->select_instance_spot_target;
                         if (select)
                             return select (std::move (request));
@@ -2432,8 +2451,10 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                             result_t<protocol::instance_spot_activation_header_t>::success (
                               std::move (request))));
                     },
-                    [registration] (const std::string &stable_type)
+                    [weak_registration =
+                       std::weak_ptr (registration)] (const std::string &stable_type)
                       -> std::optional<detail::factory_relocation_kind_t> {
+                        const auto registration = detail::lock_runtime_owner (weak_registration);
                         const auto &types = registration->spot_state->snapshot.instance_spot_names;
                         if (std::find (types.begin (), types.end (), stable_type) == types.end ())
                             return std::nullopt;
@@ -2443,8 +2464,10 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                  ? std::nullopt
                                  : std::make_optional (found->second.kind);
                     },
-                    [registration] (const protocol::instance_spot_activation_header_t &request,
-                                    const authority_snapshot_t &snapshot) {
+                    [weak_registration = std::weak_ptr (registration)] (
+                      const protocol::instance_spot_activation_header_t &request,
+                      const authority_snapshot_t &snapshot) {
+                        const auto registration = detail::lock_runtime_owner (weak_registration);
                         return detail::spot_node_runtime_t (registration->spot_state)
                           .matches_instance_activation (
                             request.target.spot_id, request.target.stable_type,
@@ -2530,9 +2553,12 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                   }
               };
             node->configure_actor_create_operations (
-              [node, store,
-               registration] (const protocol::actor_create_header_t &request,
-                              host::actor_create_operation_target_completion_t completion) {
+              [weak_node = std::weak_ptr (node), store,
+               weak_registration = std::weak_ptr (registration)] (
+                const protocol::actor_create_header_t &request,
+                host::actor_create_operation_target_completion_t completion) {
+                  const auto registration = detail::lock_runtime_owner (weak_registration);
+                  const auto node = detail::lock_runtime_owner (weak_node);
                   execute_actor_create_operation_target (node, store, registration, request,
                                                          completion);
               });
@@ -2543,29 +2569,38 @@ task_t<void> mesh_node_host_service_t::start (service_provider_t &services)
                                             status.local_endpoint ());
             }
             node->native_node ().objects ().configure_relocation_state (
-              [registration] (const stateful::object_ref_t &spot, const std::string &stable_type,
-                              std::stop_token cancellation) {
+              [weak_registration = std::weak_ptr (registration)] (
+                const stateful::object_ref_t &spot, const std::string &stable_type,
+                std::stop_token cancellation) {
+                  const auto registration = detail::lock_runtime_owner (weak_registration);
                   return detail::spot_node_runtime_t (registration->spot_state)
                     .capture_relocation_state (spot, stable_type, cancellation);
               },
-              [registration] (const stateful::frozen_object_state_t &frozen,
-                              const stateful::object_ref_t &target, std::stop_token cancellation) {
+              [weak_registration = std::weak_ptr (registration)] (
+                const stateful::frozen_object_state_t &frozen, const stateful::object_ref_t &target,
+                std::stop_token cancellation) {
+                  const auto registration = detail::lock_runtime_owner (weak_registration);
                   return detail::spot_node_runtime_t (registration->spot_state)
                     .restore_spot_relocation_state (frozen, target, cancellation);
               });
             node->native_node ().objects ().configure_relocation_materialization (
-              [registration] (const stateful::frozen_object_state_t &frozen,
-                              const stateful::object_ref_t &target,
-                              const std::optional<stateful::object_ref_t> &target_spot,
-                              std::stop_token cancellation) {
+              [weak_registration = std::weak_ptr (registration)] (
+                const stateful::frozen_object_state_t &frozen, const stateful::object_ref_t &target,
+                const std::optional<stateful::object_ref_t> &target_spot,
+                std::stop_token cancellation) {
+                  const auto registration = detail::lock_runtime_owner (weak_registration);
                   return detail::spot_node_runtime_t (registration->spot_state)
                     .materialize_relocation_state (frozen, target, target_spot, cancellation);
               },
-              [registration] (const std::vector<stateful::object_ref_t> &targets) {
+              [weak_registration = std::weak_ptr (registration)] (
+                const std::vector<stateful::object_ref_t> &targets) {
+                  const auto registration = detail::lock_runtime_owner (weak_registration);
                   return detail::spot_node_runtime_t (registration->spot_state)
                     .commit_relocation_materialization (targets);
               },
-              [registration] (const std::vector<stateful::object_ref_t> &targets) {
+              [weak_registration = std::weak_ptr (registration)] (
+                const std::vector<stateful::object_ref_t> &targets) {
+                  const auto registration = detail::lock_runtime_owner (weak_registration);
                   detail::spot_node_runtime_t (registration->spot_state)
                     .abort_relocation_materialization (targets);
               });
