@@ -2328,6 +2328,11 @@ class spot_node_runtime_t
                                       std::optional<node_rid_t> target_node_rid = std::nullopt,
                                       std::exception_ptr exception = nullptr) const;
 
+    static task_t<std::optional<std::chrono::steady_clock::time_point>>
+    read_pending_management_activity_async (
+      std::shared_ptr<spot_node_builder_state_t> state,
+      std::optional<std::chrono::steady_clock::time_point> next);
+
     static std::string actor_key (const actor_ref_t &actor_ref)
     {
         return actor_key (::zlink::framework::detail::actor_ref_access_t::actor_type (actor_ref),

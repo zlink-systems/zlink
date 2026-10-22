@@ -1452,6 +1452,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     COMMAND zlink_cpp_framework_mesh_node_vertical_test
     LABELS "framework-unit;framework-zlink;framework-zlink-channel;framework-zlink-spot;framework-zlink-actor-gateway"
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME zlink_cpp_framework_mesh_management_async_test
+    COMMAND zlink_cpp_framework_mesh_node_vertical_test --management-async
+    LABELS "framework-unit;framework-zlink;framework-zlink-spot"
+    TIMEOUT 30)
 
   find_package(GTest QUIET)
   if(NOT GTest_FOUND)

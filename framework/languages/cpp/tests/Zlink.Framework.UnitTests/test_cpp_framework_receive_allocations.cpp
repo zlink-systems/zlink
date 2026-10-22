@@ -1,9 +1,13 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "allocation_counter.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/spots/spot_runtime.hpp"
+#include "../support/runtime_failure_fixture.hpp"
 #include <gtest/gtest.h>
 
 #include <array>
+#include <future>
+#include <thread>
 #include <cstdio>
 #include <limits>
 #include <memory>
@@ -225,5 +229,58 @@ TEST (ReceiveAllocations, InfrastructureFrameFailureReleasesTheClaim)
         EXPECT_TRUE (mailbox.release (*next));
         runtime->close ();
     }
+}
+TEST (ReceiveAllocations, IdleSpotManagementOwnsOnlyItsReadyResult)
+{
+    using next_t = std::optional<std::chrono::steady_clock::time_point>;
+    auto state = fw::test::runtime_failure_fixture<fw::detail::spot_node_builder_state_t> (
+      "receive-management");
+    fw::detail::spot_node_runtime_t runtime (state);
+    ASSERT_FALSE (runtime.advance_management_async (false).result ().value ());
+    for (const bool include_next : {false, true}) {
+        std::optional<fw::result_t<next_t>> expected;
+        const auto baseline = fw::tests::measure_allocations ([&] {
+            fw::task_t<next_t> ready (fw::result_t<next_t>::success (std::nullopt));
+            expected.emplace (ready.result ());
+        });
+        std::optional<fw::result_t<next_t>> result;
+        const auto actual = fw::tests::measure_allocations ([&] {
+            auto pending = runtime.advance_management_async (include_next);
+            EXPECT_TRUE (pending.await_ready ());
+            result.emplace (pending.result ());
+        });
+        ASSERT_TRUE (*result);
+        EXPECT_EQ (result->value (), expected->value ());
+        EXPECT_EQ (actual.count, baseline.count);
+        EXPECT_EQ (actual.bytes, baseline.bytes);
+        std::printf ("idle management next=%d actual=%zu/%zu ready=%zu/%zu\n", include_next,
+                     actual.count, actual.bytes, baseline.count, baseline.bytes);
+    }
+}
+
+TEST (ReceiveAllocations, PendingManagementKeepsTemporaryOwnerState)
+{
+    auto state = fw::test::runtime_failure_fixture<fw::detail::spot_node_builder_state_t> (
+      "pending-management");
+    std::promise<void> entered, release;
+    auto released = release.get_future ();
+    std::thread blocker ([&] {
+        state->lane
+          .run ([&] {
+              entered.set_value ();
+              released.wait ();
+          })
+          .get ();
+    });
+    entered.get_future ().get ();
+    // The temporary facade disappears while the state-lane snapshot is pending.
+    auto pending = fw::detail::spot_node_runtime_t (state).next_management_activity_async ();
+    const bool suspended = !pending.await_ready ();
+    release.set_value ();
+    blocker.join ();
+    const auto result = pending.result ();
+    EXPECT_TRUE (suspended);
+    ASSERT_TRUE (result);
+    EXPECT_FALSE (result.value ());
 }
 } // namespace
