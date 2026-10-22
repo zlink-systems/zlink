@@ -18,6 +18,7 @@ import systems.zlink.framework.runtime.internal.messaging.ZLinkOwnedMessageSeria
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAllocationTest;
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 
+import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.util.Optional;
 import java.util.concurrent.CompletionException;
@@ -46,7 +47,7 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
         }
 
         @Override
-        public <T> T deserializeBorrowed(Message value, Class<T> type) {
+        public <T> T deserializeBorrowed(ByteBuffer value, Class<T> type) {
             throw new AssertionError();
         }
 
