@@ -1,5 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
+#include "../support/committed_authority_fixture.hpp"
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/stateful_ingress_fixture.hpp"
 #include "../support/request_admission_fixture.hpp"
 #include "metric_test_reader.hpp"
 #include "runtime/diagnostics/monitoring_runtime.hpp"
@@ -18,6 +20,7 @@
 #include "runtime/messaging/request_failure_mapper.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
 #include "runtime/timers/timer_runtime.hpp"
@@ -2223,9 +2226,10 @@ void test_generation_barrier_quiesces_yield_spot_and_timer (test_context_t &test
     test.require (objects.enqueue (actor, turn_domain_t::application, {21, {21}})
                     == stateful_error_t::none,
                   "sealed ingress must be retained for same-generation abort");
-    test.require (objects.abort_relocation (seal.token) == stateful_error_t::none,
+    test.require (objects.abort_relocation_before_cutover (seal.token).result ().value ()
+                    == stateful_error_t::none,
                   "same-generation abort must reopen the seal");
-    test.require (objects.commit_relocation_aggregate (seal.token, "node-b").first
+    test.require (objects.finalize_relocation_cutover (seal.token).result ().value ()
                     == stateful_error_t::not_found,
                   "stale commit must not mutate an aborted generation");
 
@@ -2245,9 +2249,11 @@ void test_generation_barrier_quiesces_yield_spot_and_timer (test_context_t &test
     const auto [second_error, second_seal] =
       await_task (objects.try_seal_relocation_aggregate ({actor, spot}));
     test.require (second_error == stateful_error_t::none
-                    && objects.abort_relocation (seal.token) == stateful_error_t::not_found,
+                    && objects.abort_relocation_before_cutover (seal.token).result ().value ()
+                         == stateful_error_t::not_found,
                   "stale abort must not reopen a newer generation");
-    test.require (objects.abort_relocation (second_seal.token) == stateful_error_t::none
+    test.require (objects.abort_relocation_before_cutover (second_seal.token).result ().value ()
+                      == stateful_error_t::none
                     && objects.enqueue (actor, turn_domain_t::application, {22, {22}})
                          == stateful_error_t::none,
                   "the current pre-Cutover abort must reopen application ingress");
@@ -2263,7 +2269,8 @@ void test_close_eligibility_preserves_execution_and_deletion_is_fenced (test_con
     const auto [claim_error, claim] = objects.try_claim (spot, turn_domain_t::application);
     test.require (claim_error == stateful_error_t::none && claim && claim->sequence == 1,
                   "Spot lane must be active before eligibility is read");
-    test.require (objects.can_close_spot (spot) == std::pair{stateful_error_t::none, true},
+    test.require (objects.can_close_spot_async (spot).result ().value ()
+                    == std::pair{stateful_error_t::none, true},
                   "eligibility must return without waiting for the active application turn");
     test.require (objects.find (object_kind_t::user_spot, spot.key) == spot
                     && objects.register_timer (spot, {1, 1000, 1000, 1}) == stateful_error_t::none
@@ -2281,20 +2288,25 @@ void test_close_eligibility_preserves_execution_and_deletion_is_fenced (test_con
                   "the execution owner completes application work before local release");
     auto stale = spot;
     ++stale.object_generation;
-    test.require (objects.can_close_spot (stale).first == stateful_error_t::generation_stale
+    test.require (objects.can_close_spot_async (stale).result ().value ().first
+                      == stateful_error_t::generation_stale
                     && objects.close_spot (stale).first == stateful_error_t::generation_stale
                     && objects.find (object_kind_t::user_spot, spot.key) == spot,
                   "stale eligibility and deletion must preserve the current generation");
     const auto actor = create_actor (objects, "closing-member");
-    const auto [join_error, join] = objects.begin_membership_move (actor, spot);
-    const auto [membership_error, member] = objects.commit_membership_move (join);
+    const auto [join_error, join] =
+      objects.begin_membership_move_async (actor, spot).result ().value ();
+    const auto [membership_error, member] =
+      objects.commit_membership_move_async (join).result ().value ();
     test.require (join_error == stateful_error_t::none && membership_error == stateful_error_t::none
-                    && objects.can_close_spot (spot) == std::pair{stateful_error_t::none, false}
+                    && objects.can_close_spot_async (spot).result ().value ()
+                         == std::pair{stateful_error_t::none, false}
                     && objects.close_spot (spot) == std::pair{stateful_error_t::none, false}
                     && objects.find (object_kind_t::user_spot, spot.key) == spot,
                   "active Actor membership keeps eligibility false and preserves the Spot");
     test.require (objects.destroy_actor (member) == stateful_error_t::none
-                    && objects.can_close_spot (spot) == std::pair{stateful_error_t::none, true},
+                    && objects.can_close_spot_async (spot).result ().value ()
+                         == std::pair{stateful_error_t::none, true},
                   "removing the last member makes the same exact Spot eligible");
     test.require (objects.close_spot (spot) == std::pair{stateful_error_t::none, true}
                     && !objects.find (object_kind_t::user_spot, spot.key)
@@ -2625,6 +2637,11 @@ void test_spot_restore_stages_before_publication (test_context_t &test)
                               .mesh_name = "mesh",
                               .node_id = "target"};
 
+    auto committed_target = target;
+    committed_target.authority_owner_generation = 12;
+    runtime.bind_relocation_authority (
+      std::make_shared<zlink::framework::test::committed_authority_fixture_t> (committed_target));
+
     auto oversized = frozen;
     oversized.application_state.assign (64u * 1024u * 1024u + 1u, 0x5a);
     test.require (!runtime.restore_spot_relocation_state (oversized, target)
@@ -2659,6 +2676,9 @@ void test_spot_restore_stages_before_publication (test_context_t &test)
                                      owner->spot_contexts_by_id.at ("staged-spot"));
                                })
                                .get ();
+        test.require (
+          context->authority_owner_generation == committed_target.authority_owner_generation,
+          "Spot admission must use the committed authority, not its staging prediction");
         context
           ->run_serial_task ("after-restored-target-commit",
                              [] () -> zlink::framework::task_t<void> { co_return; })
@@ -2758,10 +2778,11 @@ void test_restore_validates_generation_before_spot_publication (test_context_t &
                   "single stale-generation setup must close the old Spot");
     int single_restore_count = 0;
     single.configure_relocation_state (
-      [] (const object_ref_t &, const std::string &, std::stop_token) {
+      [] (const object_ref_t &, const std::string &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           frozen_object_state_t captured;
           captured.application_state = std::vector<std::uint8_t>{};
-          return captured;
+          co_return captured;
       },
       [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
           ++single_restore_count;
@@ -2784,14 +2805,14 @@ void test_restore_validates_generation_before_spot_publication (test_context_t &
     test.require (
       single.restore_relocation (single_frozen, single_target, single_identity).result ().value ()
           == stateful_error_t::generation_stale
-        && single_restore_count == 0 && single.inventory ().empty (),
+        && single_restore_count == 0 && single.inventory_async ().result ().value ().empty (),
       "stale single restore must not publish application Spot state");
 
     single_frozen.owner.object_generation = 2;
     single_target.object_generation = 2;
     const auto fresh_single =
       single.restore_relocation (single_frozen, single_target, single_identity).result ().value ();
-    const auto single_inventory = single.inventory ();
+    const auto single_inventory = single.inventory_async ().result ().value ();
     test.require (fresh_single == stateful_error_t::none && single_restore_count == 1
                     && single_inventory.size () == 1
                     && single_inventory.front ().owner == single_target,
@@ -2800,18 +2821,21 @@ void test_restore_validates_generation_before_spot_publication (test_context_t &
     stateful_object_runtime_t aggregate;
     const auto holder = create_spot (aggregate, object_kind_t::user_spot, "entry:holder");
     const auto old_actor = create_actor (aggregate, "stale-actor");
-    const auto [join_error, join] = aggregate.begin_membership_move (old_actor, holder);
-    const auto [commit_error, joined_actor] = aggregate.commit_membership_move (join);
+    const auto [join_error, join] =
+      aggregate.begin_membership_move_async (old_actor, holder).result ().value ();
+    const auto [commit_error, joined_actor] =
+      aggregate.commit_membership_move_async (join).result ().value ();
     test.require (join_error == stateful_error_t::none && commit_error == stateful_error_t::none
                     && aggregate.destroy_actor (joined_actor) == stateful_error_t::none
                     && aggregate.close_spot (holder) == std::pair{stateful_error_t::none, true},
                   "aggregate stale-generation setup must retain Actor history");
     int aggregate_restore_count = 0;
     aggregate.configure_relocation_state (
-      [] (const object_ref_t &, const std::string &, std::stop_token) {
+      [] (const object_ref_t &, const std::string &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           frozen_object_state_t captured;
           captured.application_state = std::vector<std::uint8_t>{};
-          return captured;
+          co_return captured;
       },
       [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
           ++aggregate_restore_count;
@@ -2848,7 +2872,7 @@ void test_restore_validates_generation_before_spot_publication (test_context_t &
             .result ()
             .value ()
           == stateful_error_t::generation_stale
-        && aggregate_restore_count == 0 && aggregate.inventory ().empty (),
+        && aggregate_restore_count == 0 && aggregate.inventory_async ().result ().value ().empty (),
       "one stale Actor must reject the aggregate before Spot publication");
 
     participants[1].owner.object_generation = 2;
@@ -2857,7 +2881,7 @@ void test_restore_validates_generation_before_spot_publication (test_context_t &
       aggregate.restore_relocation_aggregate (participants, aggregate_targets, aggregate_identity)
         .result ()
         .value ();
-    const auto aggregate_inventory = aggregate.inventory ();
+    const auto aggregate_inventory = aggregate.inventory_async ().result ().value ();
     test.require (fresh_aggregate == stateful_error_t::none && aggregate_restore_count == 1
                     && aggregate_inventory.size () == 2
                     && std::any_of (aggregate_inventory.begin (), aggregate_inventory.end (),
@@ -2884,10 +2908,11 @@ void test_return_relocation_replaces_departed_remnant (test_context_t &test)
     stateful_object_runtime_t objects;
     bool restore_succeeds = false;
     objects.configure_relocation_state (
-      [] (const object_ref_t &, const std::string &, std::stop_token) {
+      [] (const object_ref_t &, const std::string &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           frozen_object_state_t captured;
           captured.application_state = std::vector<std::uint8_t>{};
-          return captured;
+          co_return captured;
       },
       [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
           return restore_succeeds;
@@ -2899,9 +2924,10 @@ void test_return_relocation_replaces_departed_remnant (test_context_t &test)
     test.require (objects.begin_relocation_boundary (sealed.seal.token).first
                     == stateful_error_t::none,
                   "departing Spot must cross the ingress boundary");
-    test.require (objects.finalize_relocation_cutover (sealed.seal.token) == stateful_error_t::none,
+    test.require (objects.finalize_relocation_cutover (sealed.seal.token).result ().value ()
+                    == stateful_error_t::none,
                   "cutover must finalize and leave the source record behind");
-    test.require (objects.inventory ().size () == 1,
+    test.require (objects.inventory_async ().result ().value ().size () == 1,
                   "the departed record stays on the source as a `moving` remnant");
 
     frozen_object_state_t frozen{.owner = spot,
@@ -2931,7 +2957,7 @@ void test_return_relocation_replaces_departed_remnant (test_context_t &test)
     restore_succeeds = true;
     const auto retried =
       objects.restore_relocation (frozen, returning, identity).result ().value ();
-    const auto returned_inventory = objects.inventory ();
+    const auto returned_inventory = objects.inventory_async ().result ().value ();
     test.require (retried == stateful_error_t::none && returned_inventory.size () == 1
                     && returned_inventory.front ().owner == returning,
                   "the return retry must replace the remnant instead of wedging");
@@ -2945,10 +2971,11 @@ void test_pending_restore_holds_ingress_before_rollback (test_context_t &test)
     bool callback_entered = false;
     bool release_callback = false;
     target.configure_relocation_state (
-      [] (const object_ref_t &, const std::string &, std::stop_token) {
+      [] (const object_ref_t &, const std::string &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           frozen_object_state_t captured;
           captured.application_state = std::vector<std::uint8_t>{};
-          return captured;
+          co_return captured;
       },
       [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
           std::unique_lock lock (callback_mutex);
@@ -2988,19 +3015,20 @@ void test_pending_restore_holds_ingress_before_rollback (test_context_t &test)
     callback_condition.notify_all ();
     restoring.join ();
     test.require (ingress == stateful_error_t::none && restore_result == stateful_error_t::conflict
-                    && target.inventory ().empty (),
+                    && target.inventory_async ().result ().value ().empty (),
                   "pending restore must hold ingress until rollback discards it");
 
     target.configure_relocation_state (
-      [] (const object_ref_t &, const std::string &, std::stop_token) {
+      [] (const object_ref_t &, const std::string &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           frozen_object_state_t captured;
           captured.application_state = std::vector<std::uint8_t>{};
-          return captured;
+          co_return captured;
       },
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
     test.require (target.restore_relocation (frozen, restored_target, identity).result ().value ()
                       == stateful_error_t::none
-                    && target.inventory ().size () == 1,
+                    && target.inventory_async ().result ().value ().size () == 1,
                   "callback failure rollback must release the fresh retry");
 }
 
@@ -3024,6 +3052,64 @@ void test_public_relocation_store_adapter (test_context_t &test)
 
 void test_public_authority_store_adapter (test_context_t &test)
 {
+    {
+        namespace runtime = zlink::framework::runtime;
+        const auto now = std::chrono::system_clock::now ();
+        public_memory_authority_store_t spots;
+        const zlink::framework::location_owner_token_t source_owner{"source-owner", 1};
+        const zlink::framework::location_owner_token_t target_owner{"target-owner", 2};
+        const auto payload = runtime::encode_user_spot_authority_payload (
+          {.state = runtime::user_spot_authority_state_t::ready,
+           .stable_type = "matchmaker",
+           .spot_id = "matchmaking",
+           .owner_id = source_owner.owner_id,
+           .owner_lease_generation = 1,
+           .mesh_name = "mesh",
+           .node_rid = zlink::framework::node_rid_t::from_string ("source"),
+           .node_generation = 1});
+        spots.snapshot =
+          zlink::framework::authority_snapshot_t{"1", payload, 1, 1, source_owner, now};
+        spots.snapshot->allocation.state = zlink::framework::placement_allocation_state_t::active;
+        spots.snapshot->allocation.object_kind =
+          zlink::framework::placement_object_kind_t::user_spot;
+        spots.snapshot->allocation.stable_type = "matchmaker";
+        spots.snapshot->allocation.target = {
+          "mesh", zlink::framework::node_rid_t::from_string ("source"), 1, source_owner};
+        spots.owner_lease_read =
+          zlink::framework::owner_lease_found_t{source_owner, now + std::chrono::minutes (1), now};
+        runtime::store_location_resolvers_t before (spots);
+        test.require (
+          before.resolve_spot_address ("mesh", "matchmaking").result ().value ().has_value (),
+          "Ready Spot must resolve before relocation");
+        public_authority_store_adapter_t adapter (spots);
+        const object_ref_t source{object_kind_t::user_spot, "matchmaking", 1, 1, "mesh", "source"};
+        auto target = source;
+        target.node_id = "target";
+        const zlink::framework::object_creation_target_t placement{
+          "mesh", zlink::framework::node_rid_t::from_string ("target"), 2, target_owner};
+        const auto published = adapter.publish (source, target, target_owner, placement,
+                                                "spot-root", 42, digest_with (9));
+        test.require (published.status == authority_publish_status_t::published,
+                      "single Spot authority must commit to target");
+        // Complete the test repository's placement projection as the real Store does.
+        spots.snapshot->allocation.target = placement;
+        spots.owner_lease_read =
+          zlink::framework::owner_lease_found_t{target_owner, now + std::chrono::minutes (1), now};
+        runtime::store_location_resolvers_t after (spots);
+        const auto located = after.resolve_spot_address ("mesh", "matchmaking").result ().value ();
+        test.require (
+          located && located->node_rid.to_string () == "target" && located->object_generation == 1
+            && located->authority_owner_generation == spots.snapshot->authority_owner_generation,
+          "fresh resolver must locate a committed single Spot before completion cleanup");
+        runtime::store_location_resolvers_t other (spots);
+        test.require (!other.resolve_spot_address ("mesh", "other-spot").result ().value (),
+                      "relocation metadata must not authorize a different Spot ID");
+        spots.snapshot->payload.pop_back ();
+        runtime::store_location_resolvers_t malformed (spots);
+        test.require (!malformed.resolve_spot_address ("mesh", "matchmaking").result ().value (),
+                      "truncated relocation authority must not produce a Spot address");
+    }
+
     public_memory_authority_store_t store;
     const auto source_application_payload =
       zlink::framework::runtime::encode_actor_authority_payload (
@@ -3277,10 +3363,11 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
     auto target_owner = std::make_shared<host::public_host_runtime_t> (options);
     auto &target = *target_owner;
     target.objects ().configure_relocation_state (
-      [] (const auto &, const auto &, std::stop_token) {
+      [] (const auto &, const auto &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           frozen_object_state_t captured;
           captured.application_state = std::vector<std::uint8_t>{};
-          return captured;
+          co_return captured;
       },
       [] (const auto &, const auto &, std::stop_token) { return true; });
     target.configure_maintenance (
@@ -3433,7 +3520,7 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
         return authority->publish_count;
     };
     const auto staged = [&] (const std::string &actor_id) {
-        const auto objects = target.objects ().inventory ();
+        const auto objects = target.objects ().inventory_async ().result ().value ();
         return std::any_of (objects.begin (), objects.end (), [&] (const object_inventory_t &item) {
             return item.owner.key == actor_id;
         });
@@ -3472,7 +3559,7 @@ void test_relocation_target_shutdown (test_context_t &test, int mode)
         }
         test.require (pump_until ([&] { return shutdown.await_ready (); }, 3s),
                       "CAS settlement must finish target shutdown");
-        const auto active = target.objects ().inventory ();
+        const auto active = target.objects ().inventory_async ().result ().value ();
         test.require (std::any_of (active.begin (), active.end (),
                                    [] (const auto &item) {
                                        return item.owner.key == "shutdown-target"
@@ -3675,7 +3762,7 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
         return authority->publish_count;
     };
     const auto staged = [&] (const std::string &actor_id) {
-        const auto objects = target.native_node ().objects ().inventory ();
+        const auto objects = target.native_node ().objects ().inventory_async ().result ().value ();
         return std::any_of (objects.begin (), objects.end (), [&] (const object_inventory_t &item) {
             return item.owner.key == actor_id;
         });
@@ -3691,7 +3778,9 @@ void test_relocation_target_cutover_and_authority_settlement (test_context_t &te
     // retransmitted whole batch replaces the partial copy before cutover.
     const auto [twin, twin_ready] = prepare ("cutover-twins", {0x71, 0x02});
     const auto target_actor = [&] () -> std::optional<object_ref_t> {
-        for (const auto &item : target.native_node ().objects ().inventory ())
+        const auto inventory =
+          target.native_node ().objects ().inventory_async ().result ().value ();
+        for (const auto &item : inventory)
             if (item.owner.key == "cutover-twins")
                 return item.owner;
         return std::nullopt;
@@ -3780,10 +3869,11 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
         auto monitoring = std::make_shared<fw::detail::monitoring_runtime_state_t> ();
         stateful_object_runtime_t objects;
         objects.configure_relocation_state (
-          [] (const object_ref_t &, const std::string &, std::stop_token) {
+          [] (const object_ref_t &, const std::string &,
+              std::stop_token) -> fw::task_t<frozen_object_state_t> {
               frozen_object_state_t captured;
-              captured.application_state = std::vector<std::uint8_t>{0x41};
-              return captured;
+              captured.application_state = {0x41};
+              co_return captured;
           },
           [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
               return true;
@@ -3806,8 +3896,9 @@ void test_source_relocation_metric_outcomes (test_context_t &test)
         maintenance_runtime_t relocation (objects, authority, roots);
         relocation.bind_delay_owner (delays);
         if (scenario == "cleanup-error")
-            relocation.attach_committed_terminal (
-              [] (const object_ref_t &) { throw std::runtime_error ("source cleanup failed"); });
+            relocation.attach_committed_terminal ([] (const object_ref_t &, const auto &) {
+                throw std::runtime_error ("source cleanup failed");
+            });
         eligible_relocation_unit_t::canonical_wire_context_t wire{
           .relocation = {0x2278, 1},
           .target_attempt_generation = 1,
@@ -3928,10 +4019,11 @@ void test_relocation_metric_starts_only_after_unit_admission (test_context_t &te
         metric_test::provider_t provider;
         stateful_object_runtime_t objects;
         objects.configure_relocation_state (
-          [] (const object_ref_t &, const std::string &, std::stop_token) {
+          [] (const object_ref_t &, const std::string &,
+              std::stop_token) -> fw::task_t<frozen_object_state_t> {
               frozen_object_state_t captured;
-              captured.application_state = std::vector<std::uint8_t>{0x41};
-              return captured;
+              captured.application_state = {0x41};
+              co_return captured;
           },
           [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
               return true;
@@ -3987,12 +4079,14 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
     namespace framework = zlink::framework;
     namespace protocol = zlink::framework::runtime::protocol;
 
+    metric_test::provider_t metric_provider;
     stateful_object_runtime_t objects;
     objects.configure_relocation_state (
-      [] (const object_ref_t &, const std::string &, std::stop_token) {
+      [] (const object_ref_t &, const std::string &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           frozen_object_state_t captured;
           captured.application_state = std::vector<std::uint8_t> (256, 0x5a);
-          return captured;
+          co_return captured;
       },
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
     const auto actor = create_actor (objects, "live-failure-actor");
@@ -4007,6 +4101,7 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
       std::make_shared<framework::task_completion_source_t<relocation_reason_t>> ();
     std::uint32_t planned_chunks = 0;
     std::uint32_t sent_chunks = 0;
+    auto send_start = std::make_shared<framework::task_completion_source_t<void>> ();
     eligible_relocation_unit_t::canonical_wire_context_t wire{
       .relocation = {0x51, 0x52},
       .target_attempt_generation = 7,
@@ -4023,6 +4118,7 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
       .send_state_chunk = [&] (const protocol::relocation_state_t &) -> framework::task_t<bool> {
           ++sent_chunks;
           if (sent_chunks == 1) {
+              co_await send_start->task ();
               // A wire reply completes in the registry's existing completion turn.
               auto delivered = std::make_shared<framework::task_completion_source_t<void>> ();
               auto delivery = delivered->task ();
@@ -4044,8 +4140,20 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
       },
       .abort_target_before_cutover = [] { return true; }};
 
-    const auto result = await_task (relocation.relocate (
-      actor, "target-node", {"target-owner", 9}, 1024 * 1024, digest_with (0x31), wire, {}, 16));
+    wire.monitoring = std::make_shared<framework::detail::monitoring_runtime_state_t> ();
+    wire.mesh_name = "source-metric-mesh";
+    wire.policy = framework::detail::factory_relocation_kind_t::preserve_state;
+    auto operation = relocation.relocate (actor, "target-node", {"target-owner", 9}, 1024 * 1024,
+                                          digest_with (0x31), wire, {}, 16);
+    std::vector<metric_test::sdk::MetricData> terminal_metrics;
+    framework::task_completion_source_t<relocation_result_t> observed;
+    framework::detail::observe_task_terminal (
+      operation, [&] (const framework::result_t<relocation_result_t> &result) {
+          terminal_metrics = metric_provider.collect ();
+          observed.complete (result);
+      });
+    send_start->complete (framework::result_t<void>::success ());
+    const auto result = await_task (observed.task ());
     const auto source_resumed = objects.enqueue (actor, turn_domain_t::application, {1, {0x41}});
     test.require (planned_chunks > 1 && sent_chunks == 1
                     && result.terminal == relocation_terminal_t::blocked
@@ -4053,6 +4161,28 @@ void test_source_relocation_failure_stops_state_chunks_and_unseals (test_context
                     && source_resumed == stateful_error_t::none,
                   "an explicit target relocation failure must stop remaining state chunks, "
                   "preserve its reason, and unseal the source");
+    const auto &data = terminal_metrics;
+    const auto count = [&] (const std::string &name) {
+        double value = 0;
+        for (const auto &metric : data) {
+            if (metric.instrument_descriptor.name_ != name)
+                continue;
+            for (const auto &point : metric.point_data_attr_) {
+                if (const auto *sum = opentelemetry::nostd::get_if<metric_test::sdk::SumPointData> (
+                      &point.point_data))
+                    value += opentelemetry::nostd::get<double> (sum->value_);
+                if (const auto *histogram =
+                      opentelemetry::nostd::get_if<metric_test::sdk::HistogramPointData> (
+                        &point.point_data))
+                    value += histogram->count_;
+            }
+        }
+        return value;
+    };
+    test.require (
+      count ("zlink.relocation.started") == 1 && count ("zlink.relocation.completed") == 1
+        && count ("zlink.relocation.duration") == 1 && count ("zlink.relocation.bytes") == 1,
+      "one relocation terminal must record exactly one metric sample");
 }
 
 /* Scripted Location Store reading of one relocation unit (01 §6.1, §10). */
@@ -4125,10 +4255,12 @@ void test_source_settlement_after_subsequent_moves (test_context_t &test)
                              || scenario == "target-different-object";
         stateful_object_runtime_t objects;
         objects.configure_relocation_state (
-          [] (const object_ref_t &, const std::string &, std::stop_token) {
+          [] (const object_ref_t &, const std::string &, std::stop_token)
+            -> zlink::framework::task_t<
+              zlink::framework::runtime::stateful::frozen_object_state_t> {
               frozen_object_state_t captured;
               captured.application_state = std::vector<std::uint8_t>{0x41};
-              return captured;
+              co_return captured;
           },
           [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
               return true;
@@ -4152,7 +4284,8 @@ void test_source_settlement_after_subsequent_moves (test_context_t &test)
         int unavailable = 0;
         int cutover_calls = 0;
         std::vector<std::uint64_t> forwarded_generations;
-        relocation.attach_committed_terminal ([&] (const object_ref_t &) { ++committed; });
+        relocation.attach_committed_terminal (
+          [&] (const object_ref_t &, const auto &) { ++committed; });
         relocation.attach_unavailable_terminal ([&] (const object_ref_t &) { ++unavailable; });
         eligible_relocation_unit_t::canonical_wire_context_t wire{
           .relocation = {0x1878, 1},
@@ -4340,7 +4473,10 @@ void test_relocation_request_source_registration (test_context_t &test,
     auto monitoring = std::make_shared<framework::detail::monitoring_runtime_state_t> ();
     stateful_object_runtime_t objects;
     objects.configure_relocation_state (
-      [] (const auto &, const auto &, std::stop_token) { return frozen_object_state_t{}; },
+      [] (const auto &, const auto &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
+          co_return frozen_object_state_t{};
+      },
       [] (const auto &, const auto &, std::stop_token) { return true; });
     auto actor = create_actor (objects, "registered-request");
     std::vector<object_ref_t> participants;
@@ -4348,9 +4484,11 @@ void test_relocation_request_source_registration (test_context_t &test,
         auto peer = create_actor (objects, "a-peer");
         const auto spot = create_spot (objects, object_kind_t::user_spot, "registry-spot");
         for (auto *member : {&actor, &peer}) {
-            const auto move = objects.begin_membership_move (*member, spot);
+            const auto move =
+              objects.begin_membership_move_async (*member, spot).result ().value ();
             test.require (move.first == stateful_error_t::none, "aggregate membership must begin");
-            const auto joined = objects.commit_membership_move (move.second);
+            const auto joined =
+              objects.commit_membership_move_async (move.second).result ().value ();
             test.require (joined.first == stateful_error_t::none,
                           "aggregate membership must commit");
             *member = joined.second;
@@ -4754,7 +4892,8 @@ void test_relocation_ready_boundary (test_context_t &test, ready_boundary_case_t
             test.require (response.failed->failure_code
                             == static_cast<std::uint32_t> (p::framework_error_code::workerTimedOut),
                           "an expired source deadline must preserve DeadlineExceeded");
-        test.require (aborts == 1 && target->objects ().inventory ().empty (),
+        test.require (aborts == 1
+                        && target->objects ().inventory_async ().result ().value ().empty (),
                       "failed target readiness must discard staging exactly once");
     } else {
         test.require (response.ready.has_value (),
@@ -4827,10 +4966,12 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
     stateful_object_runtime_t restored;
     const auto configure = [] (stateful_object_runtime_t &runtime) {
         runtime.configure_relocation_state (
-          [] (const object_ref_t &, const std::string &, std::stop_token) {
+          [] (const object_ref_t &, const std::string &, std::stop_token)
+            -> zlink::framework::task_t<
+              zlink::framework::runtime::stateful::frozen_object_state_t> {
               frozen_object_state_t captured;
               captured.application_state = std::vector<std::uint8_t>{1};
-              return captured;
+              co_return captured;
           },
           [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
               return true;
@@ -4861,8 +5002,10 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
       "late ingress target must restore before boundary");
     const foundation::call_id_t occupied{src.lifecycle_generation, 77};
     test.require (source
-                    .register_local_operation (
+                    .register_local_operation_async (
                       std::chrono::steady_clock::now () + 5s, [] (auto, auto) {}, occupied)
+                    .result ()
+                    .value ()
                     .has_value (),
                   "source must reserve its independent local operation before forwarding");
     std::vector<framework::task_t<bool>> submissions;
@@ -4880,11 +5023,16 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
     test.require (boundary.first == stateful_error_t::none, "late ingress boundary must open");
     std::atomic<int> completed{0};
     bool reply_matches = true;
-    const auto pump_ingress = [&] (raw_stateful_dispatch_t &dispatch, const object_ref_t &owner) {
+    const auto pump_ingress = [&] (stateful_object_runtime_t &runtime,
+                                   mesh::raw_mesh_node_owner_t &transport,
+                                   raw_stateful_dispatch_t &dispatch, const object_ref_t &owner) {
         stateful_error_t error = stateful_error_t::not_found;
         return pump_until ([&] {
                    if (error == stateful_error_t::not_found)
-                       error = dispatch.ingest (owner).result ().value ();
+                       error = zlink::framework::test::ingest_stateful_mailbox_record (
+                                 runtime, transport, dispatch, owner)
+                                 .result ()
+                                 .value ();
                    return error != stateful_error_t::not_found;
                })
                && error == stateful_error_t::none;
@@ -4931,7 +5079,7 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
             },
             protocol::wire_operation_id_t{0x1087, id}, std::nullopt, id)),
           "original request must submit");
-        const auto accepted = pump_ingress (ingress, actor);
+        const auto accepted = pump_ingress (objects, source, ingress, actor);
         test.require (accepted, "boundary ingress must be accepted with its pending reply route");
         if (!accepted || submissions.size () != submitted_before + 1)
             return false;
@@ -4939,7 +5087,7 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
                       "accepted ingress must use the application transport");
         if (id == 92)
             return true;
-        const auto delivered = pump_ingress (destination, relocated);
+        const auto delivered = pump_ingress (restored, target, destination, relocated);
         test.require (delivered, "forwarded application must retain the target fence");
         return delivered;
     };
@@ -4953,9 +5101,12 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
           {actor.key, actor.object_generation, dst.node_routing_id, dst.lifecycle_generation,
            relocated.authority_owner_generation, 1},
           {"ActorPacket", "application/json", {static_cast<std::uint8_t> (id)}}};
-        return destination.stage_relocated (
-          relocated, {0, protocol::encode_frozen_application_record (record).canonical_bytes},
-          [] (const auto &) { return true; });
+        return destination
+          .stage_relocated (
+            relocated, {0, protocol::encode_frozen_application_record (record).canonical_bytes},
+            [] (const auto &) { return true; })
+          .result ()
+          .value ();
     };
     test.require (stage (1) == stateful_error_t::none, "saved work must stage first");
     if (!request (77))
@@ -4967,31 +5118,40 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
                     {"ActorPacket", "application/json", {80}}, std::nullopt,
                     protocol::wire_operation_id_t{0x1087, 80})),
                   "original one-way send must submit");
-    const auto send_accepted = pump_ingress (ingress, actor);
+    const auto send_accepted = pump_ingress (objects, source, ingress, actor);
     test.require (send_accepted, "source must accept the original one-way send");
     if (!send_accepted)
         return;
     test.require (await_task (std::move (submissions.back ()))
-                    && pump_ingress (destination, relocated),
+                    && pump_ingress (restored, target, destination, relocated),
                   "target must accept the forwarded one-way send");
     test.require (stage (2) == stateful_error_t::none,
                   "verified boundary must stage after late arrival");
     test.require (restored.try_claim (relocated, turn_domain_t::application).first
                     == stateful_error_t::moving,
                   "late ingress before owner commit must remain gated");
+    relocation_ingress_batch_t committed;
     test.require (
       restored.commit_relocation_restore (relocated, identity) == stateful_error_t::none
-        && objects.finalize_relocation_cutover (
-             sealed.seal.token,
-             [&, no_follow] (const object_ref_t &owner, const turn_record_t &turn) {
-                 submissions.push_back (ingress.forward_accepted (
-                   owner, turn, dst.node_routing_id, dst.lifecycle_generation, 1, 5s,
-                   no_follow ? std::nullopt
-                             : std::optional<std::uint64_t>{relocated.authority_owner_generation}));
-             })
+        && objects
+               .finalize_relocation_cutover (
+                 sealed.seal.token,
+                 [&, no_follow] (const object_ref_t &owner, const turn_record_t &turn) {
+                     submissions.push_back (ingress.forward_accepted (
+                       owner, turn, dst.node_routing_id, dst.lifecycle_generation, 1, 5s,
+                       no_follow
+                         ? std::nullopt
+                         : std::optional<std::uint64_t>{relocated.authority_owner_generation}));
+                 },
+                 &committed)
+               .result ()
+               .value ()
              == stateful_error_t::none,
       "owner commit must release the target queue and source retained copy");
-    ingress.release_relocated_payloads (actor);
+    test.require (committed.participants.size () == 1, "source must return its committed prefix");
+    if (committed.participants.empty ())
+        return;
+    ingress.release_relocated_payloads (actor, committed.participants.front ().records);
     if (source_expired) {
         test.require (completed.load () == 0,
                       "source expiry must precede the original request terminal");
@@ -5017,7 +5177,7 @@ void test_boundary_application_preserves_original_reply (test_context_t &test,
                          src.lifecycle_generation, actor.authority_owner_generation, 1},
                         {"ActorPacket", "application/json", {93}}, std::nullopt,
                         protocol::wire_operation_id_t{0x1087, 93}))
-                        && pump_ingress (ingress, actor)
+                        && pump_ingress (objects, source, ingress, actor)
                         && await_task (std::move (submissions.back ())),
                       "late noFollow send must discard only its own accepted record");
     }
@@ -5071,10 +5231,11 @@ void test_boundary_preserve_restores_acceptance_order (test_context_t &test)
 {
     stateful_object_runtime_t objects;
     objects.configure_relocation_state (
-      [] (const object_ref_t &, const std::string &, std::stop_token) {
+      [] (const object_ref_t &, const std::string &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           frozen_object_state_t captured;
           captured.application_state = std::vector<std::uint8_t>{1};
-          return captured;
+          co_return captured;
       },
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
     const auto actor = create_actor (objects, "preserve-late");
@@ -5093,7 +5254,7 @@ void test_boundary_preserve_restores_acceptance_order (test_context_t &test)
                     && boundary.second.participants.front ().records.front ().sequence == 2
                     && forwarded == std::vector<std::uint64_t>{3, 4},
                   "boundary prefix must remain immutable while late acceptance forwards once");
-    test.require (objects.abort_relocation_before_cutover (sealed.seal.token)
+    test.require (objects.abort_relocation_before_cutover (sealed.seal.token).result ().value ()
                     == stateful_error_t::none,
                   "Preserve must restore accepted ingress");
     for (std::uint64_t expected : {1u, 2u, 3u, 4u}) {
@@ -5149,10 +5310,11 @@ void test_cutover_replays_over_selected_network_route (test_context_t &test)
 
     stateful_object_runtime_t objects;
     objects.configure_relocation_state (
-      [] (const object_ref_t &, const std::string &, std::stop_token) {
+      [] (const object_ref_t &, const std::string &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           frozen_object_state_t captured;
           captured.application_state = std::vector<std::uint8_t>{0x41};
-          return captured;
+          co_return captured;
       },
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
     const auto actor = create_actor (objects, "network-actor", "Z-network-source");
@@ -5244,7 +5406,7 @@ void test_cutover_replays_over_selected_network_route (test_context_t &test)
                           continue;
                       }
                       const auto control = protocol::decode_relocation_control (
-                        protocol::message_bytes (claim->records.front ().parts.front ()));
+                        protocol::message_bytes (claim->records.front ()->parts.front ()));
                       if (const auto *data = std::get_if<protocol::relocation_data_t> (&control)) {
                           received_batch.push_back (protocol::encode_relocation_control (*data));
                       } else {
@@ -5321,10 +5483,12 @@ void test_source_relocation_settles_by_authority (test_context_t &test,
                        bool submitted_ok = false, bool change_route = false) {
         stateful_object_runtime_t objects;
         objects.configure_relocation_state (
-          [] (const object_ref_t &, const std::string &, std::stop_token) {
+          [] (const object_ref_t &, const std::string &, std::stop_token)
+            -> zlink::framework::task_t<
+              zlink::framework::runtime::stateful::frozen_object_state_t> {
               frozen_object_state_t captured;
               captured.application_state = std::vector<std::uint8_t> (16, 0x5a);
-              return captured;
+              co_return captured;
           },
           [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
               return true;
@@ -5592,7 +5756,7 @@ void test_source_completion_wait_scope (test_context_t &test)
     auto delivered = terminal.get_future ();
     detail::actor_transfer_coordinator_t coordinator;
     const std::string key = "player:source-completion";
-    test.require (coordinator.try_begin_source_remote (key, "source-completion"),
+    test.require (coordinator.try_begin_source_remote (key, "source-completion").has_value (),
                   "source completion fixture must begin its source move");
     auto waiting = coordinator.wait_for_source_completion (key);
     const bool suspended = !waiting.await_ready ();
@@ -5787,7 +5951,8 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     std::promise<void> order_marker_received;
     auto marker_received = order_marker_received.get_future ();
     session_owner.configure_session_route_owner ([&] {
-        const auto inventory = target.native_node ().objects ().inventory ();
+        const auto inventory =
+          target.native_node ().objects ().inventory_async ().result ().value ();
         const auto active =
           std::find_if (inventory.begin (), inventory.end (), [] (const auto &item) {
               return item.owner.key == "production-remote-actor";
@@ -5937,7 +6102,8 @@ void test_application_relocation_remote_production_path (test_context_t &test,
     target_descriptor.owner_id = "target-owner";
     target_descriptor.lease_generation = 9;
 
-    const auto bound_source_object = source.native_node ().resolve_actor (actor);
+    const auto bound_source_object =
+      source.native_node ().resolve_actor_async (actor).result ().value ();
     test.require (bound_source_object.has_value (),
                   "production relocation must resolve the bound Actor before Session sealing");
     if (!bound_source_object) {
@@ -6631,7 +6797,7 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
                     && source_objects.commit_create (created_spot.attempt)
                          == stateful_error_t::none,
                   "production aggregate User Spot must be created");
-    const auto actor = source.native_node ().resolve_actor (actor_handle);
+    const auto actor = source.native_node ().resolve_actor_async (actor_handle).result ().value ();
     const auto spot = source_objects.find (object_kind_t::user_spot, "production-aggregate-spot");
     if (!actor || !spot) {
         test.require (false, "production aggregate participants must resolve");
@@ -6639,8 +6805,10 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
         target.stop ();
         return;
     }
-    const auto [join_error, join] = source_objects.begin_membership_move (*actor, *spot);
-    const auto [commit_error, joined_actor] = source_objects.commit_membership_move (join);
+    const auto [join_error, join] =
+      source_objects.begin_membership_move_async (*actor, *spot).result ().value ();
+    const auto [commit_error, joined_actor] =
+      source_objects.commit_membership_move_async (join).result ().value ();
     test.require (join_error == stateful_error_t::none && commit_error == stateful_error_t::none,
                   "production aggregate Actor must join its User Spot");
 
@@ -6723,7 +6891,10 @@ void test_application_user_spot_aggregate_remote_production_path (test_context_t
     };
     try {
         const auto source_spot_state =
-          source_spots.capture_spot_relocation_state (*spot, "production.aggregate.spot");
+          source_spots.capture_relocation_state (*spot, "production.aggregate.spot", {})
+            .result ()
+            .value ()
+            .application_state;
         test.require (source_spot_state == std::vector<std::uint8_t>{19},
                       "production aggregate source Spot adapter must be capturable");
     }
@@ -7265,7 +7436,8 @@ void test_return_actor_relocation_replaces_departed_spot_instance (
     const auto entry_id = state->spot_ids_by_name.at ("entry");
     state->actor_authority_fences.erase (key);
     if (delayed_source_completion) {
-        test.require (state->actor_transfer_coordinator.try_begin_source_remote (key, "return-a-b"),
+        test.require (state->actor_transfer_coordinator->try_begin_source_remote (key, "return-a-b")
+                        .has_value (),
                       "fixture must retain the previous source Join until publication");
     } else {
         zlink::framework::detail::record_actor_route_unlocked (
@@ -7273,7 +7445,7 @@ void test_return_actor_relocation_replaces_departed_spot_instance (
           zlink::framework::spot_route_t{zlink::framework::node_rid_t::from_string ("node-b"),
                                          zlink::framework::spot_id_t ("spot-b"), "entry"},
           1);
-        state->actor_transfer_coordinator.activate_message_follow (
+        state->actor_transfer_coordinator->activate_message_follow (
           key, source_fence, returned_source,
           zlink::framework::spot_route_t{zlink::framework::node_rid_t::from_string ("node-b"),
                                          zlink::framework::spot_id_t ("spot-b"), "entry"},
@@ -7774,12 +7946,13 @@ void test_aggregate_seal_failure_preserves_earlier_application_work (test_contex
     const auto first_bytes = objects.pending_bytes (first, turn_domain_t::application);
     const auto second_bytes = objects.pending_bytes (second, turn_domain_t::application);
     objects.configure_relocation_state (
-      [&] (const object_ref_t &owner, const std::string &, std::stop_token) {
+      [&] (const object_ref_t &owner, const std::string &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           if (owner == second)
               throw std::runtime_error ("capture failed for second participant");
           frozen_object_state_t captured;
           captured.application_state = std::vector<std::uint8_t>{0x41};
-          return captured;
+          co_return captured;
       },
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
 
@@ -7849,8 +8022,11 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
     test.require (active_error == stateful_error_t::none && active && active->sequence == 1,
                   "held capture failure setup must keep the first record active");
     failed_capture.configure_relocation_state (
-      [] (const object_ref_t &, const std::string &, std::stop_token) -> frozen_object_state_t {
+      [] (const object_ref_t &, const std::string &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           throw std::runtime_error ("held capture failure");
+
+          co_return zlink::framework::runtime::stateful::frozen_object_state_t{};
       },
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
 
@@ -7943,7 +8119,9 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
     const object_ref_t membership_target{
       object_kind_t::user_spot, "membership-only-target", 1, 1, "mesh", "node-b"};
     const auto [membership_error, membership_move] =
-      count_limited.begin_remote_membership_move (membership_actor, membership_target);
+      count_limited.begin_remote_membership_move_async (membership_actor, membership_target)
+        .result ()
+        .value ();
     test.require (
       membership_error == stateful_error_t::none
         && count_limited.enqueue (membership_actor, turn_domain_t::application, {1, {7}})
@@ -7977,7 +8155,7 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
                   "source relocation ingress must remain held beyond the configured "
                   "application-lane record capacity");
     if (membership_error == stateful_error_t::none) {
-        test.require (count_limited.abort_membership_move (membership_move)
+        test.require (count_limited.abort_membership_move_async (membership_move).result ().value ()
                         == stateful_error_t::none,
                       "membership-only movement must release its independent hold");
     }
@@ -7987,9 +8165,11 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
                       "aggregate hold count test must release its active turn");
     }
     count_sealing.join ();
-    test.require (count_error == stateful_error_t::none
-                    && count_limited.abort_relocation (count_seal.token) == stateful_error_t::none,
-                  "aggregate hold count test must close its relocation generation");
+    test.require (
+      count_error == stateful_error_t::none
+        && count_limited.abort_relocation_before_cutover (count_seal.token).result ().value ()
+             == stateful_error_t::none,
+      "aggregate hold count test must close its relocation generation");
     bool source_abort_fifo = count_error == stateful_error_t::none;
     for (std::uint64_t sequence = 1; sequence <= 2049; ++sequence) {
         const auto [claim_error, claimed] =
@@ -8073,9 +8253,11 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
                       "aggregate hold byte test must release its active turn");
     }
     byte_sealing.join ();
-    test.require (byte_error == stateful_error_t::none
-                    && byte_limited.abort_relocation (byte_seal.token) == stateful_error_t::none,
-                  "aggregate hold byte test must close its relocation generation");
+    test.require (
+      byte_error == stateful_error_t::none
+        && byte_limited.abort_relocation_before_cutover (byte_seal.token).result ().value ()
+             == stateful_error_t::none,
+      "aggregate hold byte test must close its relocation generation");
 
     stateful_object_runtime_t target_hold;
     std::mutex target_mutex;
@@ -8083,10 +8265,11 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
     bool target_restore_entered = false;
     bool release_target_restore = false;
     target_hold.configure_relocation_state (
-      [] (const object_ref_t &, const std::string &, std::stop_token) {
+      [] (const object_ref_t &, const std::string &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           frozen_object_state_t captured;
           captured.application_state = std::vector<std::uint8_t>{};
-          return captured;
+          co_return captured;
       },
       [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
           std::unique_lock lock (target_mutex);
@@ -8164,10 +8347,11 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
     bool abort_restore_entered = false;
     bool release_abort_restore = false;
     target_abort.configure_relocation_state (
-      [] (const object_ref_t &, const std::string &, std::stop_token) {
+      [] (const object_ref_t &, const std::string &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           frozen_object_state_t captured;
           captured.application_state = std::vector<std::uint8_t>{};
-          return captured;
+          co_return captured;
       },
       [&] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) {
           std::unique_lock lock (abort_mutex);
@@ -8212,10 +8396,11 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
                     && !target_abort.find (abort_target.kind, abort_target.key),
                   "target relocation abort must discard its temporary hold and object reservation");
     target_abort.configure_relocation_state (
-      [] (const object_ref_t &, const std::string &, std::stop_token) {
+      [] (const object_ref_t &, const std::string &, std::stop_token)
+        -> zlink::framework::task_t<zlink::framework::runtime::stateful::frozen_object_state_t> {
           frozen_object_state_t captured;
           captured.application_state = std::vector<std::uint8_t>{};
-          return captured;
+          co_return captured;
       },
       [] (const frozen_object_state_t &, const object_ref_t &, std::stop_token) { return true; });
     test.require (target_abort.restore_relocation (abort_frozen, abort_target, abort_identity)
@@ -8232,7 +8417,10 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
     const object_ref_t remote_membership_target{
       object_kind_t::user_spot, "membership-normal-target", 1, 1, "mesh", "node-b"};
     const auto [normal_move_error, normal_move] =
-      normal_lane_caps.begin_remote_membership_move (membership_capped, remote_membership_target);
+      normal_lane_caps
+        .begin_remote_membership_move_async (membership_capped, remote_membership_target)
+        .result ()
+        .value ();
     test.require (
       normal_move_error == stateful_error_t::none
         && normal_lane_caps.enqueue (
@@ -8247,11 +8435,12 @@ void test_relocation_hold_restores_without_dedicated_limits (test_context_t &tes
              == stateful_error_t::none,
       "membership-only movement must retain work beyond former lane limits");
     if (normal_move_error == stateful_error_t::none)
-        (void) normal_lane_caps.abort_membership_move (normal_move);
+        (void) normal_lane_caps.abort_membership_move_async (normal_move).result ().value ();
 
     const auto closing_capped =
       create_spot (normal_lane_caps, object_kind_t::user_spot, "closing-normal-cap");
-    const auto [close_error, close_eligible] = normal_lane_caps.can_close_spot (closing_capped);
+    const auto [close_error, close_eligible] =
+      normal_lane_caps.can_close_spot_async (closing_capped).result ().value ();
     test.require (
       close_error == stateful_error_t::none && close_eligible
         && normal_lane_caps.enqueue (
@@ -8421,6 +8610,10 @@ int main (int argc, char **argv)
         test_relocation_request_source_registration (test, true);
         test_relocation_request_source_registration (test, false, true);
         std::cerr << "request-registry cases=3 failures=" << test.failures << '\n';
+        return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
+    }
+    if (argc == 2 && std::string_view (argv[1]) == "--precutover-metric-terminal") {
+        test_source_relocation_failure_stops_state_chunks_and_unseals (test);
         return test.failures == 0 ? EXIT_SUCCESS : EXIT_FAILURE;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--source-outcomes") {
