@@ -3,6 +3,7 @@
 #include "runtime/diagnostics/mesh_trace.hpp"
 #include "runtime/diagnostics/diagnostic_event_sink.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
@@ -2745,7 +2746,65 @@ raw_mesh_pump_result_t
 raw_mesh_node_owner_t::enqueue_received (service_mailbox_record_t record,
                                          raw_mesh_pump_result_t accepted_result)
 {
-    if (_mailbox.try_enqueue (std::move (record)))
+    detail::message_flow_tracer_t flow (_options.dispatch);
+    std::function<void ()> admitted;
+    std::optional<message_flow_event_t> event;
+    if (flow.enabled_for (message_flow_outcome_t::received)
+        && record.domain == service_mailbox_domain_t::application && record.parts.size () >= 2) {
+        const auto wire = protocol::decode_header (protocol::message_bytes (record.parts.front ()));
+        if (wire.kind == protocol::command::channelSend
+            || wire.kind == protocol::command::channelRequest) {
+            const auto payload = protocol::decode_application_payload (
+              protocol::message_bytes (record.parts[1]), true);
+            if (payload.packet_name == protocol::framework_multipart_packet_name
+                && payload.content_type == protocol::framework_multipart_content_type) {
+                auto parts = protocol::decode_application_parts (payload);
+                messaging::message_parts_t encoded (std::move (parts));
+                auto decoded = messaging::envelope_codec_t{}.decode_header (encoded, true);
+                if (decoded) {
+                    auto &header = decoded.value ();
+                    auto scope =
+                      flow_context_t::enter (header.flow_id, header.flow_origin, flow.mode (),
+                                             flow_origin_t::inbound, std::nullopt);
+                    if (!header.flow_id && flow_context_t::current ()) {
+                        header.flow_id = flow_context_t::current ()->flow_id;
+                        header.flow_origin = flow_context_t::current ()->origin;
+                        auto updated = std::move (encoded).take_items ();
+                        updated[0] = messaging::envelope_codec_t{}.encode_header (header);
+                        record.parts[1] =
+                          zlink::message_t::from (protocol::encode_application_payload (
+                            protocol::application_payload_t::from_parts (std::move (updated))));
+                    }
+                    event.emplace (message_flow_event_t{
+                      message_flow_outcome_t::received,
+                      dispatch_error_surface_t::route_mesh_channel,
+                      wire.kind == protocol::command::channelRequest
+                        ? dispatch_message_kind_t::request
+                        : dispatch_message_kind_t::send,
+                      header.message_name, header.channel_name, header.topic, header.correlation_id,
+                      std::string (record.source_routing_id.begin (),
+                                   record.source_routing_id.end ()),
+                      std::nullopt, std::nullopt, std::nullopt});
+                    event->flow_id = header.flow_id;
+                    event->flow_origin = header.flow_origin;
+                    event->mesh_name = _options.descriptor.mesh_name;
+                    event->channel_route_kind = "route_mesh";
+                    flow.trace (message_flow_outcome_t::received,
+                                event->flow_id ? std::string_view (*event->flow_id)
+                                               : std::string_view{},
+                                [&] { return *event; });
+                    admitted = [&] {
+                        event->outcome = message_flow_outcome_t::admitted;
+                        flow.trace (message_flow_outcome_t::admitted,
+                                    event->flow_id ? std::string_view (*event->flow_id)
+                                                   : std::string_view{},
+                                    [&] { return *event; });
+                    };
+                }
+            }
+        }
+    }
+    if (_mailbox.try_enqueue (std::move (record), admitted))
         return accepted_result;
     return raw_mesh_pump_result_t::backpressured;
 }
