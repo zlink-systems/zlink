@@ -1024,6 +1024,12 @@ void consume_native_message_value (napi_env env, napi_value value)
     napi_valuetype value_type = napi_undefined;
     if (napi_typeof (env, value, &value_type) != napi_ok || value_type != napi_object)
         return;
+    // HOT PATH: init_msg_from_value copies napi_is_buffer parts as
+    // bytes, so they never carry Message ownership. Skip the property probe,
+    // which walks the whole Buffer prototype chain on every successful send.
+    bool is_buffer = false;
+    if (napi_is_buffer (env, value, &is_buffer) == napi_ok && is_buffer)
+        return;
     bool has_native_message = false;
     if (napi_has_named_property (env, value, "nativeMessage", &has_native_message) != napi_ok
         || !has_native_message)
