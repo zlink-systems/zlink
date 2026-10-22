@@ -108,6 +108,7 @@ fanout_location_runtime_t::fanout_location_runtime_t (
   service_provider_t &services,
   serializer_registry_t &serializers,
   const handler_registry_t &handlers,
+  std::function<framework_runtime_state_t ()> framework_state,
   std::shared_ptr<offload_executor_t> dispatch_executor,
   std::map<std::string, std::string> publisher_advertise_hosts,
   std::shared_ptr<listener_status_registry_t> listener_statuses,
@@ -121,7 +122,7 @@ fanout_location_runtime_t::fanout_location_runtime_t (
     _store (&store),
     _leases (&leases),
     _services (services),
-    _framework_runtime (&_services.get_required<framework_runtime_t> ()),
+    _framework_state (std::move (framework_state)),
     _serializers (&serializers),
     _handlers (&handlers),
     _application_jobs (
@@ -180,6 +181,7 @@ void fanout_location_runtime_t::start ()
         _application_supply = std::make_unique<application_supply_slot_t> (
           _application_jobs, [this] { _wake_timer.signal (); });
         for (const auto &channel : _channels) {
+            _locations->register_metric_scope ("channel", channel.name);
             if (channel.publisher.enabled && channel.publisher.discovery)
                 start_publisher (channel, owner);
             if (channel.subscriber.enabled && channel.subscriber.discovery)
@@ -272,7 +274,7 @@ void fanout_location_runtime_t::run ()
                 publish_snapshot_changes ();
             }
             catch (...) {
-                _locations->record_store_error ();
+                _channel_runtime.runtime_failures ()->report (std::current_exception ());
             }
             next_reconcile = now + _locations->options ().polling_interval;
         }
@@ -473,7 +475,7 @@ fanout_location_runtime_t::build_snapshot_locked (const std::string &channel_nam
     const auto host_state = _stop.load (std::memory_order_acquire)
                               ? (_subscriber_poller ? framework_runtime_state_t::draining
                                                     : framework_runtime_state_t::stopped)
-                              : _framework_runtime->status ().state;
+                              : _framework_state ();
     result.state = detail::topology_state_for_host (host_state, result.ready_publisher_count > 0
                                                                   ? topology_state_t::ready
                                                                   : topology_state_t::degraded);

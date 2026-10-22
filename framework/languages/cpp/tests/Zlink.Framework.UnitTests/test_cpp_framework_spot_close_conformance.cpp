@@ -2,6 +2,7 @@
 // Runs framework/runtime/conformance/spot-close-v1.json against an in-process
 // app with a Location Store (Spot address messaging §7, §9; gate §7).
 
+#include "../support/committed_authority_fixture.hpp"
 #include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
@@ -36,6 +37,44 @@
 
 namespace
 {
+
+TEST (ActorEntryPlacementRegression, ReadyContinuationAwaitsBusySpotInventory)
+{
+    namespace fw = zlink::framework;
+    auto node = fw::test::runtime_failure_fixture<fw::detail::spot_node_builder_state_t> (
+      "inventory-continuation");
+    fw::detail::spot_node_runtime_t runtime (node);
+    std::promise<void> ready, occupied, release, yielded;
+    auto ready_seen = ready.get_future ();
+    auto occupied_seen = occupied.get_future ().share ();
+    auto released = release.get_future ().share ();
+    auto suspended = yielded.get_future ();
+    std::optional<fw::task_t<std::size_t>> query;
+    auto count_after_ready = [&] () -> fw::task_t<std::size_t> {
+        (void) co_await runtime.relocation_ready_async ();
+        ready.set_value ();
+        occupied_seen.wait ();
+        node->lane_executor.submit ([&] { yielded.set_value (); });
+        co_return co_await runtime.active_user_spot_count_async ();
+    };
+    node->lane_executor.submit ([&] { query.emplace (count_after_ready ()); });
+    ready_seen.get ();
+    std::jthread holder ([&] {
+        node->lane
+          .run ([&] {
+              occupied.set_value ();
+              released.wait ();
+          })
+          .get ();
+    });
+    // The executor marker follows the inventory continuation after it yields.
+    // A blocking query aborts before that marker can run.
+    suspended.get ();
+    release.set_value ();
+    holder.join ();
+    ASSERT_TRUE (query.has_value ());
+    ASSERT_EQ (query->result ().value (), 0u);
+}
 
 // Spot timer §1: a native expiry must remain queued while creation is preparing.
 // A FIFO worker marker follows the expiry's runnable queue consumer. All fixtures
@@ -356,6 +395,8 @@ void verify_target_staging_commit (bool initialize_throws)
                                            .key = "staged-timer-spot",
                                            .object_generation = 1,
                                            .authority_owner_generation = 1};
+    owner.bind_relocation_authority (
+      std::make_shared<zlink::framework::test::committed_authority_fixture_t> (target));
     frozen.owner = target;
     ASSERT_TRUE (owner.restore_spot_relocation_state (frozen, target));
     const auto initializes_before_commit = initializes->load ();

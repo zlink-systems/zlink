@@ -185,10 +185,16 @@ class location_runtime_t
 
     std::optional<location_owner_token_t> current_owner_token () const
     {
+        const auto observation = current_owner_observation ();
+        return observation ? std::make_optional (*observation) : std::nullopt;
+    }
+
+    std::shared_ptr<const location_owner_token_t> current_owner_observation () const
+    {
         const auto lease = std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire);
-        return owner_lease_usable (*lease, std::chrono::steady_clock::now ())
-                 ? lease->token
-                 : std::optional<location_owner_token_t>{};
+        if (!owner_lease_usable (*lease, std::chrono::steady_clock::now ()))
+            return {};
+        return {lease, &*lease->token};
     }
 
     task_t<std::optional<location_owner_token_t>> current_owner_token_task () const
@@ -208,6 +214,17 @@ class location_runtime_t
     {
         _monitoring = std::move (monitoring);
     }
+
+    task_t<void> register_metric_scope (std::string kind, std::string name)
+    {
+        return _lane.run_task ([this, kind = std::move (kind), name = std::move (name)] () mutable {
+            const auto scope = std::pair{std::move (kind), std::move (name)};
+            if (std::find (_metric_scopes.begin (), _metric_scopes.end (), scope)
+                == _metric_scopes.end ())
+                _metric_scopes.push_back (scope);
+        });
+    }
+
 
     void set_draining (bool value) noexcept
     {
@@ -321,7 +338,6 @@ class location_runtime_t
             return true;
         }
         catch (const std::exception &error) {
-            record_store_error ();
             record_failure (error.what ());
             return false;
         }
@@ -336,17 +352,6 @@ class location_runtime_t
           started_at,
           requested_deadline_at.value_or (started_at + _options.owner_lease_renew_timeout),
           cancellation);
-    }
-
-    /* Store access failed (read or register): one error count per failure
-     * (runtime-metrics §4.5 store.errors). The polling and write surfaces all
-     * report here so the counter aggregates store health in one series. */
-    void record_store_error () const
-    {
-        runtime_metrics_t metrics (_monitoring);
-        if (metrics.enabled ()) {
-            metrics.counter ("zlink.location.store.errors", "{error}", 1);
-        }
     }
 
     void record_runtime_failure (std::string message) const
@@ -400,7 +405,7 @@ class location_runtime_t
             if (result.error () == nullptr)
                 co_return detail::propagate_failure<bool> (
                   result, "Location descriptor publication failed");
-            record_store_error ();
+
             co_await _lane.run_task (
               [this, message = std::string (result.error ()->what ())] () mutable {
                   record_failure_on_lane (std::move (message));
@@ -466,18 +471,23 @@ class location_runtime_t
         }
     }
 
-    /* Discovered peer total observed on the auto-connect polling tick
-     * (runtime-metrics §7.2: the polling diff doubles as the gauge source, so
-     * observable freshness follows the tick cadence). */
-    void observe_discovered_peers (std::size_t count) const
+
+  private:
+    void record_lease_metric_on_lane (bool failure, double seconds = 0) const
     {
         runtime_metrics_t metrics (_monitoring);
-        if (metrics.enabled ()) {
-            metrics.observable ("zlink.location.peers", "{peer}", static_cast<double> (count));
+        if (!metrics.enabled ())
+            return;
+        for (const auto &[kind, name] : _metric_scopes) {
+            const std::map<std::string, std::string> tags{{"scope_kind", kind},
+                                                          {"scope_name", name}};
+            if (failure)
+                metrics.counter ("zlink.location.owner_lease.renew.failures", "{failure}", 1, tags);
+            else
+                metrics.histogram ("zlink.location.owner_lease.renew.lateness", "s", seconds, tags);
         }
     }
 
-  private:
     static bool owner_lease_usable (const owner_lease_snapshot_t &lease,
                                     std::chrono::steady_clock::time_point now) noexcept
     {
@@ -581,7 +591,7 @@ class location_runtime_t
               }
           });
         attempt.reset ();
-        auto result = co_await ready;
+        auto result = co_await std::move (ready);
         if (auto active = weak_attempt.lock ()) {
             if (auto heartbeat = active->heartbeat.lock ()) {
                 std::lock_guard lock (heartbeat->gate);
@@ -648,7 +658,7 @@ class location_runtime_t
             if (!response->has_value ()) {
                 failure = response->error () ? response->error ()->what ()
                                              : "owner lease confirmation read failed";
-                runtime->record_store_error ();
+
                 failed = true;
             } else {
                 const auto read = response->value ();
@@ -657,7 +667,6 @@ class location_runtime_t
             }
         }
         catch (const std::exception &error) {
-            runtime->record_store_error ();
             failure = error.what ();
             failed = true;
         }
@@ -667,7 +676,8 @@ class location_runtime_t
     }
 
     static task_t<lease_renew_outcome_t>
-    heartbeat_renew_once_async (std::weak_ptr<heartbeat_attempt_t> weak_attempt)
+    heartbeat_renew_once_async (std::weak_ptr<heartbeat_attempt_t> weak_attempt,
+                                double lateness_seconds = 0)
     {
         auto attempt = weak_attempt.lock ();
         if (!attempt)
@@ -679,8 +689,12 @@ class location_runtime_t
         const auto started_at = attempt->started_at;
         std::optional<std::string> unexpected_failure;
         try {
-            const auto owner_token = co_await lease_lane (
-              attempt, [runtime] { return runtime->current_owner_token_unchecked (); });
+            const auto owner_token =
+              co_await lease_lane (attempt, [runtime, metrics_enabled, lateness_seconds] {
+                  if (metrics_enabled && lateness_seconds > 0)
+                      runtime->record_lease_metric_on_lane (false, lateness_seconds);
+                  return runtime->current_owner_token_unchecked ();
+              });
             if (auto heartbeat = attempt->heartbeat.lock ();
                 heartbeat && heartbeat->stop.load (std::memory_order_acquire))
                 co_return outcome;
@@ -742,8 +756,10 @@ class location_runtime_t
                         co_return outcome;
                     }
                     if (metrics_enabled)
-                        metrics.counter ("zlink.location.owner_lease.renew.failures", "{failure}",
-                                         1);
+                        co_await lease_lane (attempt, [runtime] {
+                            runtime->record_lease_metric_on_lane (true);
+                            return true;
+                        });
                     co_await heartbeat_failure (attempt, std::move (failure));
                     co_return outcome;
                 }
@@ -782,7 +798,10 @@ class location_runtime_t
                     }
                 }
                 if (metrics_enabled)
-                    metrics.counter ("zlink.location.owner_lease.renew.failures", "{failure}", 1);
+                    co_await lease_lane (attempt, [runtime] {
+                        runtime->record_lease_metric_on_lane (true);
+                        return true;
+                    });
                 co_await heartbeat_failure (attempt, std::move (failure));
                 co_return outcome;
             }
@@ -820,7 +839,6 @@ class location_runtime_t
             outcome.message = "owner lease claim was rejected";
         }
         catch (const std::exception &error) {
-            runtime->record_store_error ();
             unexpected_failure = error.what ();
         }
         if (unexpected_failure)
@@ -842,7 +860,6 @@ class location_runtime_t
                     if (!read_response) {
                         record_failure ("owner lease cancellation read timed out");
                     } else if (!read_response->has_value ()) {
-                        record_store_error ();
                         record_failure (read_response->error ()
                                           ? read_response->error ()->what ()
                                           : "owner lease cancellation read failed");
@@ -863,7 +880,6 @@ class location_runtime_t
                     if (!released) {
                         record_failure ("owner lease cancellation release timed out");
                     } else if (!released->has_value ()) {
-                        record_store_error ();
                         record_failure (released->error ()
                                           ? released->error ()->what ()
                                           : "owner lease cancellation release failed");
@@ -872,7 +888,6 @@ class location_runtime_t
             }
         }
         catch (const std::exception &error) {
-            record_store_error ();
             record_failure (error.what ());
         }
         _lane.run_checked ([this] { clear_owner_lease_on_lane (); }).get ();
@@ -982,11 +997,8 @@ class location_runtime_t
               this, started_at, started_at + _options.owner_lease_renew_timeout, heartbeat);
             heartbeat->current = attempt;
             lock.unlock ();
-            if (const runtime_metrics_t metrics (_monitoring);
-                metrics.enabled () && lateness > lateness.zero ())
-                metrics.histogram ("zlink.location.owner_lease.renew.lateness", "s",
-                                   std::chrono::duration<double> (lateness).count ());
-            attempt->task.emplace (heartbeat_renew_once_async (attempt));
+            attempt->task.emplace (heartbeat_renew_once_async (
+              attempt, std::chrono::duration<double> (lateness).count ()));
             detail::observe_task_terminal (*attempt->task,
                                            [weak_heartbeat = std::weak_ptr{heartbeat}] (
                                              const result_t<lease_renew_outcome_t> &) {
@@ -1026,6 +1038,7 @@ class location_runtime_t
     location_options_t _options;
     std::string _owner_id;
     std::atomic_bool _draining = false;
+    std::vector<std::pair<std::string, std::string>> _metric_scopes;
     std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
     std::atomic_bool _started = false;
     std::thread _heartbeat;

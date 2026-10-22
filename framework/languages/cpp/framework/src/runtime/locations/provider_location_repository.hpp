@@ -7,6 +7,7 @@
 #include "runtime/locations/location_record_fields.hpp"
 #include "runtime/locations/aggregate_inventory.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/relocation_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/location_store_limits.hpp"
 #include "runtime/execution/task_result.hpp"
@@ -15,6 +16,8 @@
 
 #include "base64.hpp"
 #include "sha256.hpp"
+#include "runtime/diagnostics/capacity_metrics.hpp"
+#include "runtime/diagnostics/runtime_metrics.hpp"
 
 #include <nlohmann/json.hpp>
 
@@ -61,24 +64,51 @@ class provider_location_repository_t final : public location_repository_t
     class provider_boundary_t final : public location_store_t
     {
       public:
-        explicit provider_boundary_t (location_store_t &provider) noexcept : _provider (provider) {}
+        explicit provider_boundary_t (location_store_t &provider,
+                                      provider_location_repository_t &repository) noexcept :
+            _provider (provider), _repository (repository)
+        {
+        }
 
         task_t<store_read_result_t> read (store_key_t key) override
         {
             try {
-                co_return co_await _provider.read (std::move (key));
+                auto result = co_await _provider.read (key);
+                if (is_capacity_key (key) && _repository._capacity_metrics.contains (key.value)) {
+                    const auto *found = std::get_if<store_found_t> (&result);
+                    _repository.confirm_capacity (
+                      key.value,
+                      found ? decode_capacity_record (found->value.bytes) : capacity_record_t{});
+                }
+                co_return result;
             }
             catch (...) {
+                _repository.record_store_error ("read");
                 rethrow_provider_failure ();
             }
         }
 
         task_t<store_write_result_t> write (store_write_request_t request) override
         {
+            return write_as (std::move (request), "compare_exchange");
+        }
+
+        task_t<store_write_result_t> write_as (store_write_request_t request, const char *operation)
+        {
             try {
-                co_return co_await _provider.write (std::move (request));
+                auto result = co_await _provider.write (request);
+                if (std::holds_alternative<store_write_applied_t> (result)) {
+                    for (const auto &mutation : request.mutations)
+                        if (const auto *put = std::get_if<store_put_t> (&mutation);
+                            put && is_capacity_key (put->key)
+                            && _repository._capacity_metrics.contains (put->key.value))
+                            _repository.confirm_capacity (put->key.value,
+                                                          decode_capacity_record (put->bytes));
+                }
+                co_return result;
             }
             catch (...) {
+                _repository.record_store_error (operation);
                 rethrow_provider_failure ();
             }
         }
@@ -89,6 +119,7 @@ class provider_location_repository_t final : public location_repository_t
                 co_return co_await _provider.scan (std::move (request));
             }
             catch (...) {
+                _repository.record_store_error ("read");
                 rethrow_provider_failure ();
             }
         }
@@ -120,10 +151,25 @@ class provider_location_repository_t final : public location_repository_t
         }
 
         location_store_t &_provider;
+        provider_location_repository_t &_repository;
     };
 
   public:
-    explicit provider_location_repository_t (location_store_t &store) noexcept : _store (store) {}
+    explicit provider_location_repository_t (
+      location_store_t &store,
+      std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring = {}) :
+        _monitoring (monitoring
+                       ? std::move (monitoring)
+                       : std::make_shared<framework::detail::monitoring_runtime_state_t> ()),
+        _capacity_metrics (_monitoring),
+        _store (store, *this)
+    {
+    }
+
+    task_t<void> refresh_capacity_metrics (std::string mesh_name, zlink::routing_id_t rid) override
+    {
+        (void) co_await _store.read (key_capacity (mesh_name, rid.to_string ()));
+    }
 
     task_t<owner_lease_claim_result_t>
     claim_owner_lease (std::string owner_id, std::chrono::milliseconds lease_ttl) override
@@ -187,7 +233,7 @@ class provider_location_repository_t final : public location_repository_t
         store_write_request_t request;
         request.conditions.push_back (version_condition (key, found->value.version));
         request.mutations.push_back (store_put_t{key, found->value.bytes, lease_ttl});
-        auto result = co_await write_async (std::move (request));
+        auto result = co_await write_async (std::move (request), nullptr, {}, "lease_renew");
         if (std::holds_alternative<store_write_conflict_t> (result))
             co_return owner_lease_renew_result_t{owner_lease_stale_t{}};
         const auto &applied = std::get<store_write_applied_t> (result);
@@ -204,7 +250,7 @@ class provider_location_repository_t final : public location_repository_t
             co_return owner_lease_release_result_t{owner_lease_stale_t{}};
         store_write_request_t result_request{{version_condition (key, found->value.version)},
                                              {store_delete_t{key}}};
-        auto result = co_await write_async (std::move (result_request));
+        auto result = co_await write_async (std::move (result_request), nullptr, {}, "release");
         co_return std::holds_alternative<store_write_applied_t> (result)
           ? owner_lease_release_result_t{owner_lease_released_t{}}
           : owner_lease_release_result_t{owner_lease_stale_t{}};
@@ -213,6 +259,8 @@ class provider_location_repository_t final : public location_repository_t
     task_t<location_write_result_t> update_mesh_node (mesh_node_descriptor_t descriptor,
                                                       location_write_intent_t intent) override
     {
+        _capacity_metrics.register_local (
+          key_capacity (descriptor.mesh_name, descriptor.rid.to_string ()).value, descriptor);
         const auto key = key_mesh (descriptor.mesh_name, descriptor.rid);
         auto current = co_await _store.read (key);
         if (const auto *found = std::get_if<store_found_t> (&current)) {
@@ -661,7 +709,8 @@ class provider_location_repository_t final : public location_repository_t
                 co_return false;
             const auto spot = decode_authority (spot_row->value.bytes, spot_row->value.version,
                                                 spot_row->value.store_now);
-            const auto ready = decode_ready_user_spot_authority_payload (spot.payload);
+            const auto ready =
+              stateful::authority_relocation_payload_codec_t::decode_ready_user_spot (spot);
             if (!ready || ready->spot_id != member->current_spot_id
                 || spot.allocation.object_kind != placement_object_kind_t::user_spot
                 || spot.allocation.state != placement_allocation_state_t::active
@@ -907,7 +956,8 @@ class provider_location_repository_t final : public location_repository_t
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Actor is not steady Ready");
             if (current.allocation.object_kind == placement_object_kind_t::user_spot) {
-                const auto spot = decode_ready_user_spot_authority_payload (current.payload);
+                const auto spot =
+                  stateful::authority_relocation_payload_codec_t::decode_ready_user_spot (current);
                 if (!spot || spot->spot_id != request->key.global_id
                     || spot->stable_type != request->intent.stable_type)
                     throw framework_exception_t (framework_error_kind_t::unavailable,
@@ -1076,7 +1126,14 @@ class provider_location_repository_t final : public location_repository_t
             throw framework_exception_t (
               framework_error_kind_t::unavailable,
               "User Spot member release exceeds one Location Store batch");
-        const auto written = co_await write_async (std::move (write_request));
+        const auto result = co_await await_result (write_async (std::move (write_request)));
+        if (request)
+            record_instance_takeover (
+              *request, !result ? "failed"
+                        : std::holds_alternative<store_write_applied_t> (result.value ())
+                          ? "claimed"
+                          : "lost");
+        const auto written = result.value ();
         co_return std::holds_alternative<store_write_applied_t> (written)
           ? stale_authority_reclaim_result_t::reclaimed
           : stale_authority_reclaim_result_t::conflict;
@@ -2206,6 +2263,13 @@ class provider_location_repository_t final : public location_repository_t
   private:
     using json_t = nlohmann::json;
     static constexpr std::string_view prefix = "zlink:v11:";
+    static constexpr std::string_view capacity_record_kind = "capacity:";
+    static bool is_capacity_key (const store_key_t &key) noexcept
+    {
+        const std::string_view value = key.value;
+        return value.starts_with (prefix)
+               && value.substr (prefix.size ()).starts_with (capacity_record_kind);
+    }
     static constexpr std::uint64_t max_generation =
       static_cast<std::uint64_t> (std::numeric_limits<std::int64_t>::max ());
     inline static const store_key_t counter_key{std::string (prefix) + "owner-counter"};
@@ -2478,7 +2542,8 @@ class provider_location_repository_t final : public location_repository_t
     task_t<store_write_result_t>
     write_async (store_write_request_t request,
                  const creation_terminal_record_t *terminal = nullptr,
-                 std::chrono::system_clock::time_point terminal_store_now = {})
+                 std::chrono::system_clock::time_point terminal_store_now = {},
+                 const char *operation = "compare_exchange")
     {
         if (terminal) {
             const auto terminal_retention = std::chrono::ceil<std::chrono::milliseconds> (
@@ -2491,13 +2556,13 @@ class provider_location_repository_t final : public location_repository_t
             request.mutations.push_back (
               store_put_t{terminal_key, terminal->terminal_envelope, terminal_retention});
         }
-        auto first = co_await await_result (_store.write (request));
+        auto first = co_await await_result (_store.write_as (request, operation));
         if (first)
             co_return first.value ();
         if (auto applied = co_await reconcile_write_async (request))
             co_return store_write_result_t{std::move (*applied)};
         if (first.error () != nullptr && detail::is_transient_error (first.error ()->kind ())) {
-            auto retried = co_await await_result (_store.write (request));
+            auto retried = co_await await_result (_store.write_as (request, operation));
             if (retried)
                 co_return retried.value ();
             if (auto applied = co_await reconcile_write_async (request))
@@ -2851,8 +2916,8 @@ class provider_location_repository_t final : public location_repository_t
 
     static store_key_t key_capacity (std::string_view mesh_name, std::string_view node_rid)
     {
-        return {std::string (prefix) + "capacity:" + encode_uri_component (mesh_name) + ":"
-                + encode_uri_component (node_rid)};
+        return {std::string (prefix) + std::string (capacity_record_kind)
+                + encode_uri_component (mesh_name) + ":" + encode_uri_component (node_rid)};
     }
 
     static std::string prefix_client_server (std::string_view channel_name)
@@ -4140,6 +4205,43 @@ class provider_location_repository_t final : public location_repository_t
           detail::make_cancellation_exception ("location store operation was cancelled")));
     }
 
+    void record_instance_takeover (const object_reserve_request_t &request,
+                                   const char *outcome) const
+    {
+        runtime_metrics_t metrics (_monitoring);
+        if (metrics.enabled () && request.key.kind == placement_object_kind_t::instance_spot)
+            metrics.counter ("zlink.instance_spot.takeovers", "{takeover}", 1,
+                             {{"mesh_name", request.target.mesh_name},
+                              {"instance_spot_type", request.intent.stable_type},
+                              {"outcome", outcome}});
+    }
+    void record_store_error (const char *operation) const
+    {
+        runtime_metrics_t metrics (_monitoring);
+        if (metrics.enabled ())
+            metrics.counter ("zlink.location.store.errors", "{error}", 1,
+                             {{"operation", operation}});
+    }
+    void confirm_capacity (const std::string &key, const capacity_record_t &record)
+    {
+        _capacity_metrics.confirm (key, [&] (placement_capacity_t &value) {
+            value.actors.active = record.actors.active;
+            value.actors.reserved = record.actors.pending;
+            value.spots.active = record.spots.active;
+            value.spots.reserved = record.spots.pending;
+            for (auto &type : value.spot_types) {
+                const auto type_key =
+                  record.format == capacity_record_format_t::node_compatible
+                    ? node_capacity_type_key (type.object_kind, type.stable_type)
+                    : canonical_capacity_type_key (type.object_kind, type.stable_type);
+                const auto found = record.spot_types.find (type_key);
+                type.usage.active = found == record.spot_types.end () ? 0 : found->second.active;
+                type.usage.reserved = found == record.spot_types.end () ? 0 : found->second.pending;
+            }
+        });
+    }
+    std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
+    capacity_metrics_t _capacity_metrics;
     provider_boundary_t _store;
 };
 

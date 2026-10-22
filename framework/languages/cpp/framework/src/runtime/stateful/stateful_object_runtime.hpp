@@ -2,6 +2,9 @@
 #pragma once
 
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/stateful/object_ref.hpp"
+#include "runtime/diagnostics/mesh_request_metrics.hpp"
+#include "runtime/spots/actor_transfer_coordinator.hpp"
 
 #include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
@@ -9,13 +12,12 @@
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
 #include <array>
-#include <condition_variable>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <map>
-#include <mutex>
 #include <memory>
 #include <tuple>
 #include <optional>
@@ -27,17 +29,11 @@
 namespace zlink::framework::runtime
 {
 struct serial_application_record_t;
+class serial_execution_queue_t;
 }
 
 namespace zlink::framework::runtime::stateful
 {
-
-enum class object_kind_t
-{
-    actor,
-    user_spot,
-    instance_spot
-};
 
 enum class object_state_t
 {
@@ -58,19 +54,8 @@ enum class stateful_error_t
     moving,
     conflict,
     backpressured,
-    instance_manager_create_forbidden
-};
-
-struct object_ref_t
-{
-    object_kind_t kind = object_kind_t::actor;
-    std::string key;
-    std::uint64_t object_generation = 0;
-    std::uint64_t authority_owner_generation = 0;
-    std::string mesh_name;
-    std::string node_id;
-
-    friend bool operator== (const object_ref_t &, const object_ref_t &) = default;
+    instance_manager_create_forbidden,
+    unavailable
 };
 
 struct placement_candidate_t
@@ -267,10 +252,54 @@ struct relocation_ingress_batch_t
     std::vector<participant_t> participants;
 };
 
+struct retained_relocation_source_t
+{
+    object_ref_t owner;
+    protocol::request_source_fence_t fence;
+};
+
+// Relocation flow §4.2: the existing seal attempt as the actual execution owner binds it.
+// Preparing the attempt does not activate it; the owner sets bound in the producer cut that
+// takes the participants' accepted, unstarted originals. Abort clears it on the state lane.
+struct relocation_seal_binding_t
+{
+    std::atomic_bool bound{false};
+    // The Kernel invokes this outside StateLane after restoring or committing the source.
+    std::function<task_t<void> (bool)> finish;
+};
+
+struct stateful_object_runtime_test_access_t;
+
 class stateful_object_runtime_t
 {
+    friend struct stateful_object_runtime_test_access_t;
+
   public:
-    using relocation_state_capture_t = std::function<frozen_object_state_t (
+    task_t<void> configure_population_metrics (std::string mesh_name)
+    {
+        return _lane.run_task ([this, mesh_name = std::move (mesh_name)] () mutable {
+            if (_actor_metric)
+                return;
+            _metric_mesh = std::move (mesh_name);
+            auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
+            if (!dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ())) {
+                auto meter = provider->GetMeter ("zlink.framework");
+                if (!meter)
+                    return;
+                _actor_metric =
+                  meter->CreateDoubleUpDownCounter ("zlink.actor.count", "", "{actor}");
+                if (_actor_metric) {
+                    _actor_metric->Add (0, {{"mesh_name", _metric_mesh}});
+                    for (const auto &[key, object] : _objects)
+                        record_actor_population (object, 1);
+                }
+            }
+        });
+    }
+
+    task_t<void> retire_population_metrics_async ();
+
+    using relocation_state_capture_t = std::function<task_t<frozen_object_state_t> (
       const object_ref_t &, const std::string &, std::stop_token)>;
     using relocation_state_restore_t =
       std::function<bool (const frozen_object_state_t &, const object_ref_t &, std::stop_token)>;
@@ -286,8 +315,20 @@ class stateful_object_runtime_t
                                   std::stop_token)>;
     using relocation_state_commit_t = std::function<bool (const std::vector<object_ref_t> &)>;
     using relocation_state_abort_t = std::function<void (const std::vector<object_ref_t> &)>;
+    // Relocation flow §4.2 cut S of the participants' actual execution owner. In one producer
+    // step it binds the attempt and takes the accepted, unstarted originals; it returns after
+    // those originals entered their source FIFOs ahead of later ingress. The result holds the
+    // owner's exported native suffix per participant, merged like the Actor suffix, or nullopt
+    // when the attempt did not bind. Without a configured owner the attempt binds on the lane.
+    using relocation_source_cut_t =
+      std::function<task_t<std::optional<std::vector<std::vector<turn_record_t>>>> (
+        std::vector<object_ref_t>, std::shared_ptr<relocation_seal_binding_t>, std::stop_token)>;
 
     stateful_object_runtime_t ();
+    const std::shared_ptr<detail::actor_transfer_coordinator_t> &actor_transfers () const noexcept
+    {
+        return _actor_transfers;
+    }
     ~stateful_object_runtime_t ();
 
     void configure_relocation_state (relocation_state_capture_t capture,
@@ -295,9 +336,11 @@ class stateful_object_runtime_t
     void configure_relocation_materialization (relocation_state_materialize_t materialize,
                                                relocation_state_commit_t commit,
                                                relocation_state_abort_t abort);
+    void configure_relocation_cut (relocation_source_cut_t cut);
 
     void replace_placement_candidates (std::vector<placement_candidate_t> candidates);
     create_result_t begin_create (const create_request_t &request);
+    task_t<create_result_t> begin_create_async (create_request_t request);
     create_result_t begin_reserved_object (const object_ref_t &reserved,
                                            const std::string &stable_type,
                                            std::vector<std::uint8_t> creation_request);
@@ -314,6 +357,7 @@ class stateful_object_runtime_t
                                             const object_ref_t &committed,
                                             const relocation_restore_identity_t &identity);
     stateful_error_t commit_create (std::uint64_t attempt);
+    task_t<stateful_error_t> commit_create_async (std::uint64_t attempt);
     stateful_error_t abort_create (std::uint64_t attempt);
     create_result_t activate_instance (create_request_t request,
                                        const std::function<bool (const object_ref_t &)> &factory);
@@ -321,9 +365,17 @@ class stateful_object_runtime_t
     // with the object's claim gate.
     std::optional<object_ref_t>
     find (object_kind_t kind,
-          const std::string &key,
-          std::optional<object_state_t> required_state = object_state_t::ready) const;
-    std::optional<object_ref_t> resolve_spot (const std::string &key) const;
+          std::string key,
+          std::optional<object_state_t> required_state = object_state_t::ready,
+          std::optional<retained_relocation_source_t> *retained = nullptr) const;
+    task_t<std::optional<object_ref_t>>
+    find_async (object_kind_t kind,
+                std::string key,
+                std::optional<object_state_t> required_state = std::nullopt,
+                std::optional<retained_relocation_source_t> *retained = nullptr) const;
+    task_t<std::optional<object_ref_t>>
+    resolve_spot_async (std::string key,
+                        std::optional<retained_relocation_source_t> *retained = nullptr) const;
     stateful_error_t set_subscription (const object_ref_t &spot,
                                        const std::string &channel_name,
                                        const std::string &topic);
@@ -337,27 +389,70 @@ class stateful_object_runtime_t
     bool finalized_relocation_source (object_kind_t kind,
                                       const std::string &key,
                                       std::uint64_t object_generation) const;
+    task_t<std::optional<retained_relocation_source_t>>
+    retained_relocation_source (object_ref_t owner) const;
 
-    std::pair<stateful_error_t, membership_token_t>
-    begin_membership_move (const object_ref_t &actor, const object_ref_t &target_spot);
-    std::pair<stateful_error_t, membership_token_t>
-    begin_remote_membership_move (const object_ref_t &actor, object_ref_t target_spot);
-    std::pair<stateful_error_t, object_ref_t>
-    commit_membership_move (const membership_token_t &token);
-    stateful_error_t abort_membership_move (const membership_token_t &token);
+    task_t<std::pair<stateful_error_t, membership_token_t>>
+    begin_membership_move_async (const object_ref_t &actor, const object_ref_t &target_spot);
+    task_t<std::pair<stateful_error_t, membership_token_t>>
+    begin_remote_membership_move_async (const object_ref_t &actor, object_ref_t target_spot);
+    task_t<std::pair<stateful_error_t, object_ref_t>>
+    commit_membership_move_async (membership_token_t token);
+    task_t<stateful_error_t> abort_membership_move_async (membership_token_t token);
     std::optional<std::string> actor_membership (const object_ref_t &actor) const;
     stateful_error_t destroy_actor (const object_ref_t &actor);
+    task_t<stateful_error_t> destroy_actor_async (object_ref_t actor);
     std::pair<stateful_error_t, bool> close_spot (const object_ref_t &spot);
-    std::pair<stateful_error_t, bool> can_close_spot (const object_ref_t &spot) const;
+    task_t<std::pair<stateful_error_t, bool>> close_spot_async (const object_ref_t &spot);
+    task_t<std::pair<stateful_error_t, bool>> can_close_spot_async (const object_ref_t &spot) const;
 
-    stateful_error_t enqueue (const object_ref_t &owner,
-                              turn_domain_t domain,
-                              turn_record_t record,
-                              std::function<void ()> *accepted_delivery = nullptr,
-                              bool restored = false,
-                              bool *relocation_handoff = nullptr);
+    stateful_error_t
+    enqueue (const object_ref_t &owner, turn_domain_t domain, turn_record_t record);
+    struct enqueue_outcome_t
+    {
+        stateful_error_t error = stateful_error_t::none;
+        std::function<void ()> delivery;
+        bool relocation_handoff = false;
+    };
+    using posted_enqueue_t =
+      runtime::state_lane_internal::result_bridge_t<enqueue_outcome_t>::future_t;
+    // Posts the turn to the state lane in caller order without waiting for it. The
+    // caller keeps owner alive until it reads the outcome.
+    posted_enqueue_t post_enqueue (const object_ref_t &owner,
+                                   turn_domain_t domain,
+                                   turn_record_t record,
+                                   bool restored);
+    struct admitted_turn_t
+    {
+        stateful_error_t error = stateful_error_t::none;
+        turn_record_t turn;
+        // Relocation flow §4.2: admitted after the cut S of its owner's bound seal.
+        bool after_cut = false;
+    };
+    // Places one application turn in the lane turn that admits it. admit receives the binding
+    // of the owner's seal attempt, or null, and may take the canonical mailbox original there,
+    // so no accepted original is between its take and its FIFO when a later turn reads it.
+    // The caller keeps owner alive until it reads the outcome.
+    template <class Admit>
+    task_t<enqueue_outcome_t>
+    enqueue_admitted (const object_ref_t &owner, Admit admit, bool restored)
+    {
+        return _lane.run_task ([this, &owner, admit = std::move (admit), restored] () mutable {
+            return admit_on_lane (owner, admit, restored);
+        });
+    }
+    template <class Admit>
+    posted_enqueue_t post_admitted (const object_ref_t &owner, Admit admit, bool restored)
+    {
+        return _lane.run ([this, &owner, admit = std::move (admit), restored] () mutable {
+            return admit_on_lane (owner, admit, restored);
+        });
+    }
     std::pair<stateful_error_t, std::optional<turn_record_t>>
     try_claim (const object_ref_t &owner, turn_domain_t domain, std::string *stable_type = nullptr);
+    task_t<std::pair<stateful_error_t, std::optional<turn_record_t>>>
+    try_claim_async (object_ref_t owner, turn_domain_t domain, std::string *stable_type = nullptr);
+    task_t<stateful_error_t> complete_claim_async (object_ref_t owner, turn_domain_t domain);
     stateful_error_t complete_claim (const object_ref_t &owner, turn_domain_t domain);
     stateful_error_t yield_claim (const object_ref_t &owner, turn_record_t continuation);
     std::size_t pending (const object_ref_t &owner, turn_domain_t domain) const;
@@ -369,9 +464,10 @@ class stateful_object_runtime_t
                                          std::uint64_t timer_id,
                                          std::vector<std::uint8_t> payload);
     std::vector<logical_timer_t> timers (const object_ref_t &owner) const;
-    std::vector<object_inventory_t> inventory () const;
+    task_t<std::vector<object_inventory_t>> inventory_async () const;
     task_t<std::vector<object_inventory_t>> actor_inventory () const;
-    task_t<std::optional<std::vector<object_inventory_t>>> try_begin_maintenance_inventory ();
+    task_t<std::optional<std::vector<object_inventory_t>>>
+    try_begin_maintenance_inventory (bool actors_only = false);
     task_t<void> end_maintenance_inventory ();
     task_t<aggregate_relocation_seal_attempt_t>
     try_seal_relocation_aggregate (const std::vector<object_ref_t> &participants,
@@ -382,18 +478,17 @@ class stateful_object_runtime_t
     // this method returns; no callback runs while the aggregate mutex is held.
     std::pair<stateful_error_t, relocation_ingress_batch_t> begin_relocation_boundary (
       std::uint64_t token,
-      std::function<void (const object_ref_t &, const turn_record_t &)> deliver = {});
+      std::function<void (const object_ref_t &, const turn_record_t &)> deliver = {},
+      protocol::request_source_fence_t source_fence = {});
     // Only an exact target abort before Cutover may reopen source dispatch.
-    stateful_error_t abort_relocation_before_cutover (std::uint64_t token);
+    task_t<stateful_error_t> abort_relocation_before_cutover (std::uint64_t token);
     // Makes the source permanently follow-only once Cutover has been queued
     // (or its enqueue outcome is uncertain).
-    stateful_error_t finalize_relocation_cutover (
+    task_t<stateful_error_t> finalize_relocation_cutover (
       std::uint64_t token,
       std::optional<std::function<void (const object_ref_t &, const turn_record_t &)>> deliver =
-        std::nullopt);
-    stateful_error_t abort_relocation (std::uint64_t token);
-    std::pair<stateful_error_t, std::vector<object_ref_t>>
-    commit_relocation_aggregate (std::uint64_t token, std::string target_node_id);
+        std::nullopt,
+      relocation_ingress_batch_t *committed = nullptr);
     task_t<stateful_error_t>
     restore_relocation (frozen_object_state_t frozen,
                         object_ref_t target,
@@ -417,6 +512,9 @@ class stateful_object_runtime_t
                                         const relocation_restore_identity_t &identity);
 
   private:
+    std::pair<stateful_error_t, object_ref_t>
+    commit_membership_move_on_lane (const membership_token_t &token);
+    stateful_error_t abort_membership_move_on_lane (const membership_token_t &token);
     struct object_key_t
     {
         object_kind_t kind;
@@ -452,6 +550,7 @@ class stateful_object_runtime_t
         queue_t queue;
         std::map<std::uint64_t, logical_timer_t> timers;
         std::set<std::pair<std::string, std::string>> subscriptions;
+        // Handle of the source seal attempt in _relocation_seals; zero without one.
         std::uint64_t barrier_generation = 0;
     };
 
@@ -466,12 +565,50 @@ class stateful_object_runtime_t
         std::vector<object_key_t> keys;
         std::vector<object_ref_t> sources;
         std::vector<frozen_object_state_t> frozen;
+        // The only authority on whether the actual execution owner has cut S.
+        std::shared_ptr<relocation_seal_binding_t> binding;
         relocation_ingress_phase_t ingress_phase = relocation_ingress_phase_t::holding;
         std::vector<std::vector<turn_record_t>> boundary_application;
         std::function<void (const object_ref_t &, const turn_record_t &)> deliver;
+        protocol::request_source_fence_t source_fence;
     };
 
+    std::optional<retained_relocation_source_t>
+    retained_relocation_source_on_lane (const object_record_t &object) const;
     bool finalized_relocation_source_on_lane (const object_record_t &object) const;
+    std::optional<std::uint64_t>
+    relocation_source_seal_on_lane (const object_record_t &object) const;
+    // The object's state as its owners observe it (relocation flow §4.2): an existing
+    // source seal attempt reads as moving; the record keeps creation, membership move and
+    // restore. Ingress follows the attempt's binding instead.
+    std::pair<stateful_error_t, std::optional<turn_record_t>>
+    claim_on_lane (const object_ref_t &owner, turn_domain_t domain, std::string *stable_type);
+    stateful_error_t complete_claim_on_lane (const object_ref_t &owner, turn_domain_t domain);
+    object_state_t state_on_lane (const object_record_t &object) const;
+    bool sealed_by_on_lane (const object_record_t &object, std::uint64_t token) const;
+    const relocation_seal_binding_t *seal_binding_on_lane (const object_record_t &object) const;
+    template <class Admit>
+    enqueue_outcome_t admit_on_lane (const object_ref_t &owner, Admit &admit, bool restored)
+    {
+        enqueue_outcome_t outcome;
+        auto *object = find_record_locked (owner, outcome.error);
+        if (object == nullptr)
+            return outcome;
+        auto admitted = admit (seal_binding_on_lane (*object));
+        if (admitted.error != stateful_error_t::none) {
+            outcome.error = admitted.error;
+            return outcome;
+        }
+        return place_application_on_lane (*object, owner, std::move (admitted.turn),
+                                          admitted.after_cut, restored);
+    }
+    enqueue_outcome_t place_application_on_lane (object_record_t &object,
+                                                 const object_ref_t &owner,
+                                                 turn_record_t record,
+                                                 bool after_cut,
+                                                 bool restored);
+    void activate_object_on_lane (object_record_t &object);
+    void finalize_relocation_source_on_lane (relocation_seal_state_t &seal);
     static bool valid_text (const std::string &value);
     static bool same_exact_ref (const object_ref_t &left, const object_ref_t &right);
     /* Return-relocation remnant (spec 28 §2/§8): after this node handed an
@@ -480,8 +617,8 @@ class stateful_object_runtime_t
      * relocates back here the incoming restore carries a strictly newer,
      * Store-validated authority generation, so that leftover is a replaceable
      * local remnant and must never veto the restore. */
-    static bool replaceable_relocation_remnant (const object_record_t &record,
-                                                const object_ref_t &target);
+    bool replaceable_relocation_remnant (const object_record_t &record,
+                                         const object_ref_t &target) const;
     static object_key_t key_for (const object_ref_t &reference);
     const object_record_t *find_closeable_spot_locked (const object_ref_t &spot,
                                                        stateful_error_t &error) const;
@@ -495,15 +632,39 @@ class stateful_object_runtime_t
     static std::size_t retained_bytes (const turn_record_t &record) noexcept;
     void move_held_application_locked (object_record_t &object);
     void release_pending_capacity_locked (const object_record_t &record);
-    void notify_quiescence () noexcept;
-    void wait_for_quiescence_change (std::uint64_t observed);
+    void notify_quiescence ();
+
+    std::shared_ptr<detail::actor_transfer_coordinator_t> _actor_transfers =
+      std::make_shared<detail::actor_transfer_coordinator_t> ();
+    std::vector<object_inventory_t> inventory_on_lane (bool actors_only) const;
 
     runtime::offload_executor_t _lane_executor;
     mutable runtime::state_lane_t _lane{_lane_executor};
-    std::mutex _quiescence_mutex;
-    std::condition_variable _quiescence;
-    std::atomic_uint64_t _quiescence_epoch = 0;
+    // Lane-owned waiters of a seal; empty unless a seal waits for active turns.
+    std::vector<std::shared_ptr<task_completion_source_t<void>>> _quiescence_waiters;
     std::vector<placement_candidate_t> _candidates;
+    using object_iterator_t = std::map<object_key_t, object_record_t>::iterator;
+    void record_actor_population (const object_record_t &object, double delta)
+    {
+        if (_actor_metric && object.reference.kind == object_kind_t::actor
+            && object.state != object_state_t::creating
+            && object.state != object_state_t::recovering
+            && !finalized_relocation_source_on_lane (object))
+            _actor_metric->Add (delta, {{"mesh_name", _metric_mesh}});
+    }
+    void erase_object_on_lane (object_iterator_t found)
+    {
+        if (found != _objects.end ()) {
+            record_actor_population (found->second, -1);
+            _objects.erase (found);
+        }
+    }
+    void erase_object_on_lane (const object_key_t &key)
+    {
+        erase_object_on_lane (_objects.find (key));
+    }
+    std::string _metric_mesh;
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::UpDownCounter<double>> _actor_metric;
     std::map<object_key_t, object_record_t> _objects;
     std::map<object_key_t, std::uint64_t> _last_generation;
     std::map<std::uint64_t, object_key_t> _attempts;
@@ -515,6 +676,8 @@ class stateful_object_runtime_t
     relocation_state_materialize_t _relocation_state_materialize;
     relocation_state_commit_t _relocation_state_commit;
     relocation_state_abort_t _relocation_state_abort;
+    relocation_source_cut_t _relocation_cut;
+    // Protects the object set after preceding Join claims have terminalized.
     bool _maintenance_inventory_active = false;
     std::uint64_t _next_attempt = 1;
     std::uint64_t _next_membership_token = 1;

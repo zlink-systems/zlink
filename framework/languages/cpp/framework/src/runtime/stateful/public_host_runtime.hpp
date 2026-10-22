@@ -1,8 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
-#include <variant>
-
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/diagnostics/instance_spot_metrics.hpp"
 #include "runtime/dispatch/application_record.hpp"
@@ -17,6 +15,7 @@
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/operations/exactly_once_table.hpp"
 #include "runtime/operations/call_id.hpp"
+#include "runtime/diagnostics/instance_spot_metrics.hpp"
 
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/Contracts/Messaging/message.hpp>
@@ -52,6 +51,12 @@
 #include <utility>
 #include <vector>
 
+namespace zlink::framework::runtime
+{
+class live_location_reader_t;
+struct serial_application_target_t;
+}
+
 namespace zlink::framework::runtime::stateful
 {
 class raw_relocation_replay_coordinator_t;
@@ -67,6 +72,7 @@ namespace zlink::framework::runtime::host
 {
 // Test-only access to the relocation terminal state (defined by unit tests).
 struct public_host_runtime_test_access_t;
+struct application_claim_batch_t;
 
 namespace relocation_detail
 {
@@ -456,6 +462,8 @@ struct instance_spot_activation_materializer_t
                         const authority_snapshot_t &)>
       matches_local;
 
+    std::vector<std::string> metric_types;
+
     explicit operator bool () const noexcept
     {
         return static_cast<bool> (prepare) && static_cast<bool> (dispatch);
@@ -494,12 +502,11 @@ class actor_transfer_token_t
 {
   public:
     actor_transfer_token_t () = default;
-    bool valid () const noexcept;
-    bool commit (std::uint64_t membership_epoch);
-    bool activate ();
-    void abort () noexcept;
+    task_t<bool> commit (std::uint64_t membership_epoch);
+    task_t<bool> activate ();
 
   private:
+    task_t<bool> commit_membership ();
     friend class public_host_runtime_t;
     std::weak_ptr<public_host_runtime_t> _host;
     stateful::membership_token_t _membership;
@@ -556,16 +563,16 @@ class actor_handle_t
                     stateful::object_ref_t object);
 
     const actor_ref_t &ref () const noexcept;
-    zlink::submit_result_t join_entry_spot (const zlink::routing_id_t &target_node_rid,
-                                            const std::vector<zlink::message_t> &parts,
-                                            pending_operation_t &operation,
-                                            std::chrono::milliseconds timeout);
-    zlink::submit_result_t join_spot (const zlink::routing_id_t &target_node_rid,
-                                      const std::string &target_spot_id,
-                                      std::uint64_t target_spot_generation,
-                                      const std::vector<zlink::message_t> &parts,
-                                      pending_operation_t &operation,
-                                      std::chrono::milliseconds timeout);
+    task_t<zlink::submit_result_t> join_entry_spot (const zlink::routing_id_t &target_node_rid,
+                                                    const std::vector<zlink::message_t> &parts,
+                                                    pending_operation_t &operation,
+                                                    std::chrono::milliseconds timeout);
+    task_t<zlink::submit_result_t> join_spot (const zlink::routing_id_t &target_node_rid,
+                                              const std::string &target_spot_id,
+                                              std::uint64_t target_spot_generation,
+                                              const std::vector<zlink::message_t> &parts,
+                                              pending_operation_t &operation,
+                                              std::chrono::milliseconds timeout);
     task_t<zlink::submit_result_t> send_to (const actor_ref_t &target,
                                             const std::vector<zlink::message_t> &parts,
                                             zlink::send_flags_t flags = zlink::send_flags_t::none,
@@ -612,13 +619,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                        std::optional<zlink::routing_id_t> expected = std::nullopt,
                        std::uint64_t expected_lifecycle_generation = 0,
                        std::string security_identity = "default",
-                       bool automatic = false,
-                       location_owner_token_t owner = {});
+                       bool automatic = false);
     void expect_peer (const std::string &endpoint,
                       const zlink::routing_id_t &expected,
                       std::uint64_t expected_lifecycle_generation,
-                      std::string security_identity,
-                      location_owner_token_t owner = {});
+                      std::string security_identity);
     void forget_peer (const std::string &endpoint, const zlink::routing_id_t &expected);
     void disconnect_peer (const std::string &endpoint) noexcept;
     bool disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
@@ -631,8 +636,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<bool> send_message_follow (const std::vector<std::uint8_t> &target_routing_id,
                                       const protocol::message_follow_notice_t &notice);
     stateful::stateful_object_runtime_t &objects () noexcept;
-    stateful::stateful_error_t destroy_application_actor (std::string_view actor_id,
-                                                          std::uint64_t object_generation);
+    task_t<stateful::stateful_error_t>
+    destroy_application_actor_async (std::string actor_id, std::uint64_t object_generation);
     stateful::stream_session_registry_t &sessions () noexcept;
     void
     configure_maintenance (stateful::maintenance_provider_set_t providers,
@@ -713,14 +718,15 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                               std::function<void ()> close_local);
     void configure_session_route_owner (
       std::function<std::optional<location_owner_token_t> ()> owner_resolver);
+    void configure_stateful_dispatch (stateful::accepted_record_authority_resolver_t resolver,
+                                      live_location_reader_t *sources = nullptr);
     void configure_stateful_dispatch (
-      std::function<task_t<std::optional<stateful::accepted_record_authority_t>> (
-        stateful::accepted_record_authority_query_t)> resolver);
-    void
-    configure_stateful_dispatch (std::function<std::optional<location_owner_token_t> ()> owner);
+      std::function<std::shared_ptr<const location_owner_token_t> ()> owner,
+      live_location_reader_t *sources = nullptr);
     task_t<std::optional<stateful::accepted_record_authority_t>>
-    accepted_record_authority (const stateful::accepted_record_authority_query_t &query,
-                               const std::optional<location_owner_token_t> &owner) const;
+    accepted_record_authority (stateful::accepted_record_authority_query_t query,
+                               std::shared_ptr<const location_owner_token_t> owner,
+                               live_location_reader_t *sources = nullptr) const;
     void forward_relocation_application (const stateful::object_ref_t &owner,
                                          const stateful::turn_record_t &record,
                                          const std::vector<std::uint8_t> &target_routing_id,
@@ -764,7 +770,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                std::chrono::milliseconds timeout);
     task_t<bool> cutover_relocation_remote (const zlink::routing_id_t &target_node,
                                             protocol::relocation_cutover_t cutover);
-    task_t<stateful::stateful_error_t> ingest_stateful (stateful::object_ref_t owner);
     task_t<bool> route_session_remote (const zlink::routing_id_t &session_owner_node,
                                        protocol::session_relocation_route_t route);
     std::size_t recover_instance_spot_activations ();
@@ -783,6 +788,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
 
     spot_handle_t entry_spot ();
     spot_handle_t get_or_create_spot (std::string spot_id);
+    task_t<spot_handle_t> get_or_create_spot_async (std::string spot_id);
     actor_handle_t create_actor (std::string actor_type, std::string actor_id);
     actor_handle_t create_reserved_actor (std::string actor_type, stateful::object_ref_t reserved);
     task_t<zlink::submit_result_t> send_to_actor (
@@ -844,9 +850,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     task_t<std::pair<bool, std::optional<std::chrono::steady_clock::time_point>>>
     next_dispatch_activity_async ();
     void signal_dispatch_activity () noexcept;
-    bool prepare_actor_transfer (const actor_transfer_prepare_t &prepare,
-                                 actor_transfer_token_t &token,
-                                 actor_transfer_prepare_result_t &result);
+    task_t<bool> prepare_actor_transfer_async (const actor_transfer_prepare_t &prepare,
+                                               actor_transfer_token_t &token,
+                                               actor_transfer_prepare_result_t &result);
     bool reply (const reply_token_t &token, const std::vector<zlink::message_t> &parts);
 
     static actor_ref_t remote_actor_ref (const zlink::routing_id_t &node,
@@ -857,11 +863,29 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
           node_rid_t::from_string (node.to_string ()), {}, std::move (actor_id), generation);
     }
 
-    std::optional<stateful::object_ref_t> resolve_actor (const actor_ref_t &actor) const;
-    std::optional<stateful::object_ref_t> resolve_spot (const std::string &spot_id) const;
+    task_t<std::optional<stateful::object_ref_t>>
+    resolve_actor_async (const actor_ref_t &actor) const;
+    task_t<std::optional<stateful::object_ref_t>> resolve_spot_async (std::string spot_id) const;
+    // Relocation flow §4.2: the execution queue that owns a participant's application turns,
+    // where its source seal cut runs; without it the cut runs at the mailbox alone.
+    using relocation_gate_t =
+      std::function<task_t<std::shared_ptr<runtime::serial_execution_queue_t>> (
+        const stateful::object_ref_t &)>;
+    using native_spot_target_t =
+      std::function<task_t<std::shared_ptr<runtime::serial_application_target_t>> (
+        std::string, std::optional<protocol::spot_route_fence_t>)>;
+    void configure_relocation_gate (relocation_gate_t gate,
+                                    native_spot_target_t target = {},
+                                    mesh::service_mailbox_t::application_dispatch_t resume = {});
 
   private:
-    std::optional<stateful::object_ref_t> resolve_actor (std::string_view actor_id) const;
+    // Relocation flow §4.2 cut S of a source seal (stateful_object_runtime_t
+    // relocation_source_cut_t), run in the first participant's execution queue.
+    task_t<std::optional<std::vector<std::vector<stateful::turn_record_t>>>>
+    cut_relocation_source (std::vector<stateful::object_ref_t> participants,
+                           std::shared_ptr<stateful::relocation_seal_binding_t> binding);
+    task_t<std::optional<stateful::object_ref_t>> resolve_actor_async (std::string actor_id) const;
+    void attach_relocation_terminals (stateful::maintenance_runtime_t &maintenance);
 
     struct instance_activation_ready_t
     {
@@ -907,8 +931,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     actor_ref_t framework_actor_ref (const stateful::object_ref_t &object,
                                      std::string actor_type) const;
     call_id_t next_operation ();
+    task_t<std::optional<mesh::raw_mesh_node_owner_t::local_operation_reservation_t>>
+    prepare_local_completion (pending_operation_t &operation);
     void register_local_completion (
       pending_operation_t &operation,
+      const mesh::raw_mesh_node_owner_t::local_operation_reservation_t &reservation,
       std::chrono::milliseconds timeout,
       spot_request_completion_t completion = {},
       std::function<void ()> incomplete = {},
@@ -916,18 +943,19 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     bool enqueue_completion (const pending_operation_t &operation,
                              receive_record_t record,
                              std::vector<zlink::message_t> parts);
-    zlink::submit_result_t begin_local_actor_join (const actor_ref_t &actor,
-                                                   const std::string &target_spot_id,
-                                                   std::uint64_t target_spot_generation,
-                                                   const std::vector<zlink::message_t> &parts,
-                                                   pending_operation_t &operation,
-                                                   std::chrono::milliseconds timeout);
+    task_t<zlink::submit_result_t>
+    begin_local_actor_join (const actor_ref_t &actor,
+                            const std::string &target_spot_id,
+                            std::uint64_t target_spot_generation,
+                            const std::vector<zlink::message_t> &parts,
+                            pending_operation_t &operation,
+                            std::chrono::milliseconds timeout);
     bool complete_local_actor_join (pending_operation_t operation,
                                     std::string actor_type,
                                     stateful::membership_token_t membership,
                                     const actor_join_operation_result_t &result,
                                     const std::vector<zlink::message_t> &parts);
-    zlink::submit_result_t enqueue_local_actor_message (
+    task_t<zlink::submit_result_t> enqueue_local_actor_message (
       const actor_ref_t &target,
       record_kind_t kind,
       const std::vector<zlink::message_t> &parts,
@@ -937,14 +965,18 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       std::chrono::milliseconds timeout = {},
       std::uint64_t authority_owner_generation = 0,
       std::uint64_t owner_lease_generation = 0);
-    zlink::submit_result_t enqueue_local_spot_send (const protocol::spot_route_fence_t &target,
-                                                    const std::vector<zlink::message_t> &parts);
-    zlink::submit_result_t enqueue_local_spot_request (const protocol::spot_route_fence_t &target,
-                                                       const std::vector<zlink::message_t> &parts,
-                                                       pending_operation_t &operation,
-                                                       std::chrono::milliseconds timeout,
-                                                       std::span<const std::uint8_t> metadata,
-                                                       spot_request_completion_t completion = {});
+    task_t<zlink::submit_result_t>
+    enqueue_local_spot_send (const protocol::spot_route_fence_t &target,
+                             const std::vector<zlink::message_t> &parts,
+                             std::string source_spot_id = {});
+    task_t<zlink::submit_result_t>
+    enqueue_local_spot_request (const protocol::spot_route_fence_t &target,
+                                const std::vector<zlink::message_t> &parts,
+                                pending_operation_t &operation,
+                                std::chrono::milliseconds timeout,
+                                std::span<const std::uint8_t> metadata,
+                                spot_request_completion_t completion = {},
+                                std::string source_spot_id = {});
     task_t<std::optional<route_fence_t>>
     resolve_spot_route_fence (zlink::routing_id_t target_node_rid,
                               std::string target_spot_id,
@@ -956,15 +988,27 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              foundation::operation_terminal_t terminal,
                              zlink::message_t payload);
     task_t<std::size_t> dispatch_user_spot_operations ();
-    struct application_claim_owner_t;
     using application_claim_result_t = std::variant<std::size_t, task_t<std::size_t>>;
-    application_claim_result_t
-    dispatch_application_claim (const std::shared_ptr<application_claim_owner_t> &operation);
     task_t<std::size_t>
-    continue_application_claim (std::shared_ptr<application_claim_owner_t> operation,
+    dispatch_application_claim (std::shared_ptr<mesh::service_mailbox_claim_t> claim,
+                                mesh::service_mailbox_t::application_dispatch_t dispatch,
+                                std::shared_ptr<application_claim_batch_t> batch = {});
+    application_claim_result_t
+    dispatch_application_claim (const std::shared_ptr<application_claim_batch_t> &batch);
+    task_t<std::size_t>
+    continue_application_claim (std::shared_ptr<application_claim_batch_t> batch,
                                 task_t<void> pending);
-    void fail_application_claim (const std::shared_ptr<application_claim_owner_t> &operation,
-                                 std::exception_ptr error);
+    void
+    fail_application_claim (const std::shared_ptr<application_claim_batch_t> &batch,
+                            std::exception_ptr error,
+                            mesh::service_mailbox_settlement_t release_mailbox_reservation = {});
+    task_t<bool>
+    dispatch_native_spot (stateful::object_ref_t object,
+                          mesh::service_mailbox_t::claim_handle_t slot,
+                          stateful::claimed_ingress_t query,
+                          std::shared_ptr<const local_application_dispatch_t> application,
+                          std::optional<stateful::retained_relocation_source_t> retained,
+                          mesh::service_mailbox_t::application_dispatch_t dispatch);
     task_t<bool> notify_stateful_owner (const stateful::object_ref_t &owner);
     bool claim_stateful_owner (const stateful::object_ref_t &object,
                                const mesh::service_mailbox_t::application_dispatch_t &dispatch);
@@ -973,6 +1017,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              const std::function<void (const ready_record_t &,
                                                        const receive_record_t &,
                                                        std::vector<zlink::message_t>)> &dispatch);
+    bool
+    dispatch_stateful_delivery (const stateful::object_ref_t &object,
+                                stateful::stateful_delivery_t delivery,
+                                std::function<void ()> before_application_handler,
+                                std::string actor_type,
+                                const mesh::service_mailbox_t::application_dispatch_t &dispatch);
     bool dispatch_bound_session_send (const mesh::service_mailbox_record_t &record);
 
     host_options_t _options;
@@ -983,6 +1033,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::shared_ptr<mesh::raw_mesh_node_owner_t> _transport;
     std::unique_ptr<stateful::raw_relocation_replay_coordinator_t> _relocation_wire;
     std::unique_ptr<stateful::raw_stateful_dispatch_t> _stateful_dispatch;
+    // The lease observation of this node; local publication reads its source original from it.
+    std::function<std::shared_ptr<const location_owner_token_t> ()> _local_lease_observation;
     stateful::stateful_object_runtime_t _objects;
     stateful::stream_session_registry_t _sessions;
     std::unique_ptr<stateful::maintenance_runtime_t> _maintenance;
@@ -1186,9 +1238,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                            const stateful::object_ref_t &target,
                                            const protocol::relocation_object_t &wire_object,
                                            std::uint64_t participant_id);
-    bool stage_relocation_record (const stateful::object_ref_t &target,
-                                  const protocol::relocation_data_t &data,
-                                  std::uint64_t participant_id);
+    task_t<bool> stage_relocation_record (const stateful::object_ref_t &target,
+                                          const protocol::relocation_data_t &data,
+                                          std::uint64_t participant_id);
     void poll_relocation_target_attempts ();
     static bool relocation_target_wire_ready (const relocation_target_attempt_t &attempt) noexcept;
     static bool relocation_target_terminal (const relocation_target_attempt_t &attempt);
@@ -1205,6 +1257,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     /* Cutover wait measured from the relay-ready reply
      * (relocation_cutover_wait_timeout snapshot, default 1000 ms). */
     std::chrono::milliseconds _relocation_cutover_wait{1000};
+    std::shared_ptr<runtime::relocation_metrics_t> _relocation_metrics;
+    std::map<std::string, std::shared_ptr<runtime::instance_spot_admission_metrics_t>>
+      _instance_admission_metrics;
     relocation_target_metrics_t _relocation_target_metrics;
     struct user_spot_terminal_record_t
     {
@@ -1265,8 +1320,20 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     mutable runtime::state_lane_t _local_dispatch_completion_lane{
       _local_dispatch_completion_lane_executor};
     std::deque<local_application_dispatch_t> _local_application_dispatches;
+    relocation_gate_t _relocation_gate;
+    native_spot_target_t _native_spot_target;
+    mesh::service_mailbox_t::application_dispatch_t _relocation_resume;
     void publish_local_application (local_application_dispatch_t dispatch);
-    task_t<stateful::object_ref_t> accept_local_application (local_application_dispatch_t dispatch);
+    task_t<void> ingest_cut_original (stateful::object_ref_t owner,
+                                      mesh::service_mailbox_record_t original);
+    // dispatch is the query of the shared original application, which stays read-only until
+    // the state lane takes the original; original receives the taken record.
+    task_t<std::optional<stateful::object_ref_t>>
+    accept_local_application (stateful::raw_stateful_dispatch_t::ingress_original_t ingress,
+                              local_application_dispatch_t dispatch,
+                              std::shared_ptr<const local_application_dispatch_t> application,
+                              std::optional<mesh::request_source_t> source_original,
+                              std::optional<mesh::service_mailbox_record_t> &original);
     void
     admit_local_application (local_application_dispatch_t dispatch,
                              const std::shared_ptr<application_job_queue_t::waiter_t> &waiter = {},
@@ -1285,7 +1352,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     runtime::offload_executor_t _spot_actor_index_lane_executor;
     mutable runtime::state_lane_t _spot_actor_index_lane{_spot_actor_index_lane_executor};
     std::map<std::string, std::string> _peer_endpoints;
-    std::function<void (const std::vector<std::uint8_t> &)> _peer_reconcile;
     runtime::offload_executor_t _peer_endpoint_lane_executor;
     runtime::state_lane_t _peer_endpoint_lane{_peer_endpoint_lane_executor};
     std::atomic<std::uint64_t> _next_operation{1};

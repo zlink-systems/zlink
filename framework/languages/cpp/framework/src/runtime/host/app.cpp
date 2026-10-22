@@ -42,6 +42,7 @@
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/diagnostics/runtime_metrics.hpp"
+#include "runtime/diagnostics/host_state_metric.hpp"
 #include "runtime/diagnostics/runtime_observation.hpp"
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
@@ -438,6 +439,7 @@ class app_state_t
     struct relocation_operation_t
     {
         std::mutex mutex;
+        std::chrono::steady_clock::time_point metric_started{};
         bool started = false;
         bool terminal = false;
         bool shutdown_requested = false;
@@ -473,6 +475,7 @@ class app_state_t
     struct termination_operation_t
     {
         std::mutex mutex;
+        std::chrono::steady_clock::time_point metric_started{};
         bool started = false;
         bool terminal = false;
         termination_result_t result{};
@@ -490,7 +493,7 @@ class app_state_t
     };
 
     std::shared_ptr<std::atomic_bool> draining = std::make_shared<std::atomic_bool> (false);
-    std::atomic<framework_runtime_state_t> runtime_state = framework_runtime_state_t::preparing;
+    runtime::host_state_metric_t runtime_state;
     std::function<task_t<bool> ()> startup_publication = [] {
         return task_t<bool> (result_t<bool>::success (true));
     };
@@ -1282,20 +1285,20 @@ void app_t::_apply_zlink_framework ()
     if (_state->services.contains (std::type_index (typeid (relocation_store_t)))
         && !_state->services.contains (std::type_index (typeid (relocation_repository_t)))) {
         _state->services.add_factory<relocation_repository_t> (
-          [] (service_provider_t &provider) {
+          [monitoring = _state->monitoring] (service_provider_t &provider) {
               return std::static_pointer_cast<relocation_repository_t> (
                 std::make_shared<runtime::provider_relocation_repository_t> (
-                  provider.get_required<relocation_store_t> ()));
+                  provider.get_required<relocation_store_t> (), monitoring));
           },
           service_lifetime_t::singleton);
     }
     if (_state->services.contains (std::type_index (typeid (location_store_t)))
         && !_state->services.contains (std::type_index (typeid (location_repository_t)))) {
         _state->services.add_factory<location_repository_t> (
-          [] (service_provider_t &provider) {
+          [monitoring = _state->monitoring] (service_provider_t &provider) {
               return std::static_pointer_cast<location_repository_t> (
                 std::make_shared<runtime::provider_location_repository_t> (
-                  provider.get_required<location_store_t> ()));
+                  provider.get_required<location_store_t> (), monitoring));
           },
           service_lifetime_t::singleton);
     }
@@ -2166,13 +2169,13 @@ void app_t::_apply_zlink_framework ()
         channel_runtime.bind_mesh_node_transport (
           mesh_name,
           [mesh, mesh_node_service] (
-            const zlink::routing_id_t &target,
+            zlink::routing_id_t target,
             runtime::messaging::message_parts_t parts) -> task_t<result_t<void>> {
-              const auto local_rid = mesh->routing_id ();
+              const auto local_rid = co_await mesh->routing_id_async ();
               if (local_rid && *local_rid == target) {
                   co_return one_way_native_submit_result (
-                    mesh_node_service->submit_local_node_send (mesh,
-                                                               std::move (parts).take_items ()),
+                    co_await mesh_node_service->submit_local_node_send (
+                      mesh, std::move (parts).take_items ()),
                     "MeshNode send");
               }
               co_return one_way_native_submit_result (
@@ -2271,10 +2274,10 @@ void app_t::_apply_zlink_framework ()
           });
         actor_gateway_runtime.on_join_entry_spot (
           [weak_application_mesh = std::weak_ptr (application_mesh)] (
-            const actor_ref_t &actor, const zlink::message_t &request,
+            actor_ref_t actor, zlink::message_t request,
             std::chrono::milliseconds timeout) -> task_t<detail::actor_join_reply_t> {
               const auto application_mesh = detail::lock_runtime_owner (weak_application_mesh);
-              const auto routing_id = application_mesh->routing_id ();
+              const auto routing_id = co_await application_mesh->routing_id_async ();
               const auto target_node =
                 routing_id ? node_rid_t::from_string (routing_id->to_string ()) : actor.node_rid ();
               co_return co_await application_mesh->join_application_actor_to_entry_spot (
@@ -2389,8 +2392,8 @@ void app_t::_apply_zlink_framework ()
                   dispatch->binding.owner_lease_generation};
                 bound_session_source->session_sequence = dispatch->inbound_sequence;
             }
-            // The Session registry owns the admitted ingress fence through
-            // its terminal, including an application-handler failure.
+            // The native Session registry owns ingress completion and drain.
+            // Receiver admission alone advances the Actor's relay ordinal.
             std::exception_ptr relay_failure;
             std::optional<zlink::message_t> relayed;
             try {
@@ -2442,12 +2445,18 @@ void app_t::_apply_zlink_framework ()
               auto session_owner_runtime = application_mesh->native_node ().shared_from_this ();
               auto &native = *session_owner_runtime;
               const bool request = header.kind () == detail::stream_message_kind_t::request;
-              auto retain = [&] () -> runtime::stateful::stream_relay_delivery_t {
+              std::optional<runtime::mesh::raw_mesh_node_owner_t::local_operation_reservation_t>
+                prepared_operation;
+              if (request)
+                  prepared_operation =
+                    co_await native.transport ().prepare_local_operation_async ();
+              auto retain = [&, prepared_operation = std::move (prepared_operation)] ()
+                -> runtime::stateful::stream_relay_delivery_t {
                   completion = std::make_shared<task_completion_source_t<reply_t>> ();
                   operation =
-                    request
-                      ? native.transport ().register_local_operation (
-                          deadline,
+                    request && prepared_operation
+                        && native.transport ().register_prepared_local_operation (
+                          *prepared_operation, deadline,
                           [completion] (runtime::foundation::operation_terminal_t terminal,
                                         const zlink::message_t &) {
                               completion->complete (result_t<reply_t>::failure (
@@ -2457,7 +2466,8 @@ void app_t::_apply_zlink_framework ()
                                 "bound Session relay request did not complete within its original "
                                 "operation"));
                           })
-                      : std::optional<runtime::foundation::call_id_t>{};
+                      ? std::make_optional (prepared_operation->first)
+                      : std::nullopt;
 
                   if (request && !operation)
                       completion->complete (result_t<reply_t>::failure (
@@ -2890,6 +2900,9 @@ void app_t::_apply_zlink_framework ()
         }
     }
     const auto stream_snapshot = detail::stream_runtime_t::from (_state->zlink).snapshots ();
+    const auto read_framework_state = [state = _state.get ()] {
+        return state->runtime_state.load (std::memory_order_acquire);
+    };
     std::shared_ptr<runtime::client_server::client_server_location_runtime_t> client_server_runtime;
     if (!_state->services.contains (std::type_index (typeid (client_server_runtime_t)))) {
         auto provider = _state->services.build_provider ();
@@ -2899,8 +2912,9 @@ void app_t::_apply_zlink_framework ()
             provider.get_required<runtime::location_runtime_t> (),
             provider.get_required<location_repository_t> (),
             provider.get_required<location_repository_t> (), provider, _state->serializers,
-            _state->handlers, options.runtime_client_server_advertise_hosts (),
-            _state->listener_statuses, _state->application_job_queue);
+            _state->handlers, read_framework_state,
+            options.runtime_client_server_advertise_hosts (), _state->listener_statuses,
+            _state->application_job_queue);
         _state->services.add_factory<client_server_runtime_t> (
           [owner = std::weak_ptr (client_server_runtime)] (service_provider_t &) {
               return std::static_pointer_cast<client_server_runtime_t> (
@@ -2922,7 +2936,7 @@ void app_t::_apply_zlink_framework ()
           provider.get_required<runtime::location_runtime_t> (),
           provider.get_required<location_repository_t> (),
           provider.get_required<location_repository_t> (), provider, _state->serializers,
-          _state->handlers, detail::handler_invocation_executor (),
+          _state->handlers, read_framework_state, detail::handler_invocation_executor (),
           options.runtime_fanout_advertise_hosts (), _state->listener_statuses,
           _state->application_job_queue);
         _state->services.add_factory<fanout_runtime_t> (
@@ -2934,8 +2948,9 @@ void app_t::_apply_zlink_framework ()
     }
     auto auto_connect_service = std::make_unique<runtime::location_auto_connect_host_service_t> (
       _state->monitoring->runtime_failures, _state->zlink.message_bus (), channel_snapshot,
-      _state->handlers, _state->serializers, options.runtime_client_server_advertise_hosts (),
-      options.runtime_fanout_advertise_hosts (), options.route_mesh_client_channels (), mesh_nodes,
+      _state->handlers, _state->serializers, read_framework_state,
+      options.runtime_client_server_advertise_hosts (), options.runtime_fanout_advertise_hosts (),
+      options.route_mesh_client_channels (), mesh_nodes,
       [mesh_node_service] (location_write_intent_t intent) {
           return mesh_node_service == nullptr
                  || mesh_node_service->republish_after_store_recovery (intent);
@@ -3045,15 +3060,6 @@ try {
         _state->start_hosted_services (provider, started);
         (void) detail::app_state_t::enter_serving_after_publication (
           _state->status_access, _state->startup_publication ());
-        try {
-            runtime::runtime_metrics_t drain_metrics (_state->monitoring);
-            if (drain_metrics.enabled ()) {
-                drain_metrics.observable ("zlink.drain.state", "{state}", 1,
-                                          {{"state", "serving"}});
-            }
-        }
-        catch (...) {
-        }
         while (!_state->stop_requested.load (std::memory_order_acquire)) {
             _state->delays.reap_completed ();
             if (g_stop_signal_requested != 0) {
@@ -3137,21 +3143,6 @@ struct shutdown_forced_t
 
 using shutdown_progress_t = std::variant<shutdown_completed_t, shutdown_forced_t>;
 
-const char *drain_state_name (detail::drain_state_t state) noexcept
-{
-    switch (state) {
-        case detail::drain_state_t::serving:
-            return "serving";
-        case detail::drain_state_t::draining:
-            return "draining";
-        case detail::drain_state_t::stopped:
-            return "stopped";
-        case detail::drain_state_t::force_stopping:
-            return "force_stopping";
-    }
-    return "unknown";
-}
-
 bool capacity_available_for_relocation (const capacity_usage_t &usage)
 {
     return usage.limit == 0
@@ -3213,9 +3204,10 @@ struct relocation_preflight_t
 /* Spec 05-host-relocation-flow §5.1: the unit inventory decides whether host
  * relocation needs a target. A MeshNode with no Actor, User Spot or Instance
  * Spot has nothing to move, so no target is searched for it. */
-bool has_relocation_units (const detail::mesh_node_runtime_t &node)
+task_t<bool> has_relocation_units (const detail::mesh_node_runtime_t &node)
 {
-    return node.active_spot_count () != 0 || node.active_actor_count () != 0;
+    const auto [actors, spots] = co_await node.monitoring_counts_async ();
+    co_return spots != 0 || actors != 0;
 }
 
 std::int64_t relocation_target_application_version (const relocation_options_t &options,
@@ -3237,9 +3229,15 @@ relocation_topology_preflight_once (detail::app_state_t &state, const relocation
         co_return relocation_preflight_t{relocation_reason_t::manual_topology_unsupported, 0};
     // A process with several Meshes must find a target on every Mesh once it
     // owns a unit anywhere (§5.1), so the inventory is read for the whole host.
-    const bool requires_target =
-      std::any_of (state.route_mesh_nodes.begin (), state.route_mesh_nodes.end (),
-                   [] (const auto &node) { return node && has_relocation_units (*node); });
+    bool requires_target = false;
+    for (const auto &node : state.route_mesh_nodes) {
+        if (!node)
+            continue;
+        if (co_await has_relocation_units (*node)) {
+            requires_target = true;
+            break;
+        }
+    }
     if (!requires_target) {
         const auto source_version = mesh_node_descriptor_t{}.application_version;
         co_return relocation_preflight_t{
@@ -3260,7 +3258,8 @@ relocation_topology_preflight_once (detail::app_state_t &state, const relocation
         std::optional<std::int64_t> source_application_version;
         for (const auto &node : state.route_mesh_nodes) {
             if (node) {
-                if (const auto rid = node->routing_id ())
+                const auto rid = co_await node->routing_id_async ();
+                if (rid)
                     local_rids.insert (rid->to_hex ());
             }
         }
@@ -3268,7 +3267,7 @@ relocation_topology_preflight_once (detail::app_state_t &state, const relocation
         for (const auto &node : state.route_mesh_nodes) {
             if (!node)
                 continue;
-            const auto local_rid = node->routing_id ();
+            const auto [node_mesh, local_rid] = co_await node->identity_async ();
             const auto status = node->status ();
             if (!local_rid || status.lifecycle_generation () == 0)
                 co_return relocation_preflight_t{relocation_reason_t::runtime_not_ready, 0};
@@ -3276,7 +3275,7 @@ relocation_topology_preflight_once (detail::app_state_t &state, const relocation
             std::vector<mesh_node_descriptor_t> descriptors;
             location_page_request_t page;
             do {
-                auto listed = co_await store.list_mesh_nodes (node->mesh_name (), page);
+                auto listed = co_await store.list_mesh_nodes (node_mesh, page);
                 descriptors.insert (descriptors.end (),
                                     std::make_move_iterator (listed.items.begin ()),
                                     std::make_move_iterator (listed.items.end ()));
@@ -3477,6 +3476,41 @@ void cancel_application_relocation_readiness (detail::app_state_t &state,
 
 } // namespace
 
+namespace
+{
+void record_host_relocation (detail::app_state_t &state,
+                             const relocation_result_t &result,
+                             std::chrono::steady_clock::time_point started)
+{
+    runtime::runtime_metrics_t metrics (state.monitoring);
+    if (!metrics.enabled ())
+        return;
+    const char *mode = result.mode == relocation_mode_t::planned_maintenance ? "planned_maintenance"
+                                                                             : "rolling_update";
+    metrics.histogram (
+      "zlink.host.relocation.duration", "s",
+      std::chrono::duration<double> (std::chrono::steady_clock::now () - started).count (),
+      {{"mode", mode},
+       {"outcome", result.outcome == relocation_outcome_t::relocated ? "relocated" : "blocked"}});
+    if (result.outcome == relocation_outcome_t::blocked) {
+        constexpr const char *reasons[] = {"none",
+                                           "target_unavailable",
+                                           "store_unavailable",
+                                           "relocation_disabled",
+                                           "state_incompatible",
+                                           "deadline_exceeded",
+                                           "relocation_failed",
+                                           "runtime_not_ready",
+                                           "manual_topology_unsupported",
+                                           "shutdown_requested",
+                                           "operation_in_progress"};
+        metrics.counter (
+          "zlink.host.relocation.blocked", "{operation}", 1,
+          {{"mode", mode}, {"reason", reasons[static_cast<unsigned> (result.reason)]}});
+    }
+}
+} // namespace
+
 bool app_t::is_ready () const noexcept
 {
     return runtime_state () == framework_runtime_state_t::serving;
@@ -3508,6 +3542,11 @@ task_t<relocation_result_t> app_t::relocate (relocation_options_t options,
 task_t<relocation_result_t> app_t::relocate_async (relocation_options_t options,
                                                    std::stop_token wait_cancellation)
 {
+    const auto metric_started = std::chrono::steady_clock::now ();
+    const auto rejected = [&] (relocation_result_t result) {
+        record_host_relocation (*_state, result, metric_started);
+        return result_t<relocation_result_t>::success (result);
+    };
     detail::app_state_t::relocation_preflight_guard_t preflight_guard (*_state);
     const auto preflight_deadline_at = std::chrono::steady_clock::now () + *options.deadline;
 
@@ -3558,35 +3597,35 @@ task_t<relocation_result_t> app_t::relocate_async (relocation_options_t options,
                 // requests the source application version.
                 const auto rejected_effective_target = relocation_target_application_version (
                   options, operation.source_application_version);
-                co_return result_t<relocation_result_t>::success (
-                  {options.mode, rejected_effective_target, relocation_outcome_t::blocked,
-                   relocation_reason_t::operation_in_progress});
+                co_return rejected ({options.mode, rejected_effective_target,
+                                     relocation_outcome_t::blocked,
+                                     relocation_reason_t::operation_in_progress});
             }
         } else if (operation.terminal) {
             co_return result_t<relocation_result_t>::success (operation.result);
         } else {
             if (preflight.blocker) {
-                co_return result_t<relocation_result_t>::success (
-                  {options.mode, preflight.effective_target_application_version,
-                   relocation_outcome_t::blocked, *preflight.blocker});
+                co_return rejected ({options.mode, preflight.effective_target_application_version,
+                                     relocation_outcome_t::blocked, *preflight.blocker});
             }
             const auto readiness_meshes = begin_application_relocation_readiness (*_state);
             if (!publish_mesh_descriptor_state (*_state, framework_runtime_state_t::relocating)) {
                 (void) publish_mesh_descriptor_state (*_state, framework_runtime_state_t::serving);
                 cancel_application_relocation_readiness (*_state, readiness_meshes);
-                co_return result_t<relocation_result_t>::success (
-                  {options.mode, preflight.effective_target_application_version,
-                   relocation_outcome_t::blocked, relocation_reason_t::store_unavailable});
+                co_return rejected ({options.mode, preflight.effective_target_application_version,
+                                     relocation_outcome_t::blocked,
+                                     relocation_reason_t::store_unavailable});
             }
             operation.deadline = std::chrono::duration_cast<std::chrono::milliseconds> (
               preflight_deadline_at - std::chrono::steady_clock::now ());
             if (operation.deadline <= std::chrono::milliseconds::zero ()) {
                 (void) publish_mesh_descriptor_state (*_state, framework_runtime_state_t::serving);
                 cancel_application_relocation_readiness (*_state, readiness_meshes);
-                co_return result_t<relocation_result_t>::success (
-                  {options.mode, preflight.effective_target_application_version,
-                   relocation_outcome_t::blocked, relocation_reason_t::target_unavailable});
+                co_return rejected ({options.mode, preflight.effective_target_application_version,
+                                     relocation_outcome_t::blocked,
+                                     relocation_reason_t::target_unavailable});
             }
+            operation.metric_started = metric_started;
             operation.started = true;
             operation.options = options;
             operation.source_application_version = preflight.source_application_version;
@@ -3669,6 +3708,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
             operation.shutdown_requested = false;
             operation.deadline_at.reset ();
         }
+        record_host_relocation (state, result, operation.metric_started);
         operation.result = result;
         waiters = std::move (operation.waiters);
         operation.waiters.clear ();
@@ -3688,16 +3728,16 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
         }
 
         for (const auto &node : relocation_nodes) {
-            auto spot_runtime = detail::spot_node_runtime_t::from (state.zlink, node->mesh_name ());
+            const auto [node_mesh, local_rid] = co_await node->identity_async ();
+            auto spot_runtime = detail::spot_node_runtime_t::from (state.zlink, node_mesh);
             if (!spot_runtime)
                 continue;
-            if (std::find (readiness_meshes.begin (), readiness_meshes.end (), node->mesh_name ())
+            if (std::find (readiness_meshes.begin (), readiness_meshes.end (), node_mesh)
                 == readiness_meshes.end ()) {
-                spot_runtime->begin_relocation_readiness ();
-                readiness_meshes.push_back (node->mesh_name ());
+                co_await spot_runtime->begin_relocation_readiness_async ();
+                readiness_meshes.push_back (node_mesh);
             }
-            const auto local_rid = node->routing_id ();
-            while (!spot_runtime->relocation_ready ()) {
+            while (!co_await spot_runtime->relocation_ready_async ()) {
                 if (shutdown_requested () || std::chrono::steady_clock::now () >= deadline_at) {
                     terminal.reason = shutdown_requested ()
                                         ? relocation_reason_t::shutdown_requested
@@ -3705,10 +3745,10 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                     complete (terminal);
                     co_return;
                 }
-                zlink::framework::runtime::wait_poll_interval (std::chrono::milliseconds (1));
+                co_await detail::delay (state.delays, std::chrono::milliseconds (1));
             }
             // §5.1: with no unit on this Mesh there is no target to narrow.
-            if (!has_relocation_units (*node))
+            if (!co_await has_relocation_units (*node))
                 continue;
 
             auto provider = state.services.build_provider ();
@@ -3732,7 +3772,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
             mesh_node_descriptor_t source_descriptor;
             {
                 const auto source_generation = node->status ().lifecycle_generation ();
-                auto live_source = co_await peers->get ().list_live_mesh_nodes (node->mesh_name ());
+                auto live_source = co_await peers->get ().list_live_mesh_nodes (node_mesh);
                 const auto found =
                   std::find_if (live_source.begin (), live_source.end (),
                                 [&] (const mesh_node_descriptor_t &descriptor) {
@@ -3754,8 +3794,8 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
 
             for (const auto &unit : units.spots) {
                 const auto target = co_await wait_for_relocation_target (
-                  peers->get (), state.delays, node->mesh_name (), deadline_at,
-                  topology_poll_interval, shutdown_requested,
+                  peers->get (), state.delays, node_mesh, deadline_at, topology_poll_interval,
+                  shutdown_requested,
                   [&] (const mesh_node_descriptor_t &peer) {
                       if (local_rid && peer.rid.to_hex () == local_rid->to_hex ())
                           return false;
@@ -3788,7 +3828,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 std::vector<runtime::stateful::object_ref_t> sources;
                 std::vector<std::string> stable_types;
                 const auto spot_source =
-                  node->native_node ().resolve_spot (std::string (unit.spot_id));
+                  co_await node->native_node ().resolve_spot_async (std::string (unit.spot_id));
                 if (!spot_source) {
                     terminal.reason = relocation_reason_t::state_incompatible;
                     complete (terminal);
@@ -3797,7 +3837,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 sources.push_back (*spot_source);
                 stable_types.push_back (unit.spot_type);
                 for (const auto &actor : unit.actors) {
-                    const auto source = node->native_node ().resolve_actor (actor);
+                    const auto source = co_await node->native_node ().resolve_actor_async (actor);
                     if (!source) {
                         terminal.reason = relocation_reason_t::state_incompatible;
                         complete (terminal);
@@ -3832,7 +3872,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                 }
 
                 const auto moved = co_await node->relocate_application_unit (
-                  std::move (sources), std::move (stable_types), *target, authorities, deadline_at);
+                  sources, std::move (stable_types), *target, authorities, deadline_at);
                 if (moved.terminal != runtime::stateful::relocation_terminal_t::completed) {
                     authority_split =
                       committed_units != 0
@@ -3842,8 +3882,9 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                     complete (terminal);
                     co_return;
                 }
+                co_await spot_runtime->retire_relocation_source (sources);
                 ++committed_units;
-                relocated_ready_spots[node->mesh_name ()].push_back (unit.spot_id);
+                relocated_ready_spots[node_mesh].push_back (unit.spot_id);
             }
 
             for (const auto &actor : units.standalone_actors) {
@@ -3859,8 +3900,8 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                     co_return;
                 }
                 const auto target = co_await wait_for_relocation_target (
-                  peers->get (), state.delays, node->mesh_name (), deadline_at,
-                  topology_poll_interval, shutdown_requested,
+                  peers->get (), state.delays, node_mesh, deadline_at, topology_poll_interval,
+                  shutdown_requested,
                   [&] (const mesh_node_descriptor_t &peer) {
                       if (local_rid && peer.rid.to_hex () == local_rid->to_hex ())
                           return false;
@@ -3897,6 +3938,12 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                     co_return;
                 }
 
+                const auto source = co_await node->native_node ().resolve_actor_async (actor);
+                if (!source) {
+                    terminal.reason = relocation_reason_t::state_incompatible;
+                    complete (terminal);
+                    co_return;
+                }
                 const auto moved = co_await node->relocate_application_actor (
                   actor, *target, *authority, deadline_at);
                 if (moved.terminal != runtime::stateful::relocation_terminal_t::completed) {
@@ -3908,6 +3955,8 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
                     complete (terminal);
                     co_return;
                 }
+                const std::vector<runtime::stateful::object_ref_t> source_unit{source.value ()};
+                co_await spot_runtime->retire_relocation_source (source_unit);
                 ++committed_units;
             }
         }
@@ -3947,6 +3996,7 @@ task_t<termination_result_t> app_t::shutdown (std::chrono::milliseconds deadline
               result_t<termination_result_t>::success (operation.result));
         }
         if (!operation.started) {
+            operation.metric_started = std::chrono::steady_clock::now ();
             operation.started = true;
             operation.deadline = deadline;
             operation.deadline_at = std::chrono::system_clock::now () + deadline;
@@ -3973,11 +4023,6 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
     auto emit_state = [&] (detail::drain_state_t drain_state) {
         try {
             monitoring.publish_drain (detail::drain_event_t{drain_state});
-            runtime::runtime_metrics_t drain_metrics (state.monitoring);
-            if (drain_metrics.enabled ()) {
-                drain_metrics.observable ("zlink.drain.state", "{state}", 1,
-                                          {{"state", drain_state_name (drain_state)}});
-            }
         }
         catch (...) {
         }
@@ -4178,10 +4223,6 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
             for (const auto &service : state.hosted_services) {
                 if (auto *lifecycle = detail::lifecycle_of (service.get ())) {
                     lifecycle->force_close_sessions ();
-                    runtime::runtime_metrics_t metrics (state.monitoring);
-                    if (metrics.enabled ()) {
-                        metrics.counter ("zlink.drain.forced", "{event}", 1, {{"kind", "session"}});
-                    }
                 }
             }
         }
@@ -4190,19 +4231,6 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
     }
     if (!force_stopped)
         emit_state (detail::drain_state_t::stopped);
-    try {
-        runtime::runtime_metrics_t drain_metrics (state.monitoring);
-        if (drain_metrics.enabled ()) {
-            const auto elapsed =
-              std::chrono::duration<double> (std::chrono::steady_clock::now () - started_at)
-                .count ();
-            drain_metrics.histogram ("zlink.drain.duration", "s", elapsed,
-                                     {{"outcome", force_stopped ? "force_stopped" : "drained"}});
-        }
-    }
-    catch (...) {
-    }
-
     termination_reason_t terminal_reason = termination_reason_t::none;
     if (const auto *forced = std::get_if<shutdown_forced_t> (&result)) {
         switch (forced->reason) {
@@ -4229,6 +4257,21 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
     if (!teardown_completed && terminal.outcome == termination_outcome_t::stopped) {
         terminal.outcome = termination_outcome_t::force_stopped;
         terminal.reason = termination_reason_t::deadline_exceeded;
+    }
+    runtime::runtime_metrics_t metrics (state.monitoring);
+    if (metrics.enabled ()) {
+        metrics.histogram (
+          "zlink.host.shutdown.duration", "s",
+          std::chrono::duration<double> (std::chrono::steady_clock::now ()
+                                         - state.termination_operation.metric_started)
+            .count (),
+          {{"outcome",
+            terminal.outcome == termination_outcome_t::stopped ? "stopped" : "force_stopped"}});
+        if (terminal.outcome == termination_outcome_t::force_stopped)
+            metrics.counter ("zlink.host.shutdown.forced", "{operation}", 1,
+                             {{"reason", terminal.reason == termination_reason_t::deadline_exceeded
+                                           ? "deadline_exceeded"
+                                           : "teardown_failed"}});
     }
     std::vector<std::shared_ptr<detail::app_state_t::termination_waiter_t>> waiters;
     {
