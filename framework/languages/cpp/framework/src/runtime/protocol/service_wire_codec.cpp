@@ -121,7 +121,8 @@ void append_text8 (std::vector<std::uint8_t> &bytes, const std::string &value, c
     bytes.insert (bytes.end (), value.begin (), value.end ());
 }
 
-std::string read_text8 (std::span<const std::uint8_t> bytes, std::size_t &offset, const char *field)
+std::string_view
+read_text8_view (std::span<const std::uint8_t> bytes, std::size_t &offset, const char *field)
 {
     if (offset >= bytes.size ()) {
         throw service_wire_error_t (std::string ("truncated ") + field);
@@ -136,7 +137,13 @@ std::string read_text8 (std::span<const std::uint8_t> bytes, std::size_t &offset
         throw service_wire_error_t (std::string ("invalid UTF-8 in ") + field);
     }
     offset += length;
-    return std::string (reinterpret_cast<const char *> (value_bytes.data ()), value_bytes.size ());
+    return std::string_view (reinterpret_cast<const char *> (value_bytes.data ()),
+                             value_bytes.size ());
+}
+
+std::string read_text8 (std::span<const std::uint8_t> bytes, std::size_t &offset, const char *field)
+{
+    return std::string (read_text8_view (bytes, offset, field));
 }
 
 void append_bytes8 (std::vector<std::uint8_t> &bytes,
@@ -2992,8 +2999,8 @@ std::size_t application_payload_hwm_bytes (std::span<const std::uint8_t> bytes)
     }
     const auto body = bytes.subspan (offset, body_length);
     std::size_t body_offset = 0;
-    const auto packet_name = read_text8 (body, body_offset, "packet name");
-    const auto content_type = read_text8 (body, body_offset, "content type");
+    const auto packet_name = read_text8_view (body, body_offset, "packet name");
+    const auto content_type = read_text8_view (body, body_offset, "content type");
     const auto payload_length = read_u32 (body, body_offset);
     if (payload_length > body.size () - body_offset) {
         throw service_wire_error_t ("application payload length does not match frame");

@@ -3,6 +3,7 @@
 #include "runtime/protocol/service_wire_codec.hpp"
 #include <iostream>
 #include <stdexcept>
+#include <string_view>
 
 namespace
 {
@@ -37,11 +38,35 @@ void verify_reply_header_cost ()
     require (injected.count > budget.count && injected.bytes > budget.bytes,
              "reply header cost check did not reject an added allocation");
 }
+
+void verify_payload_accounting_cost ()
+{
+    namespace wire = zlink::framework::runtime::protocol;
+    using namespace zlink::framework;
+    std::vector<zlink::message_t> parts;
+    parts.push_back (zlink::message_t::from (std::string (1024, 'x')));
+    const auto payload = wire::encode_application_payload (
+      wire::application_payload_t::from_parts (std::move (parts)));
+    std::size_t bytes = 0;
+    const auto actual =
+      tests::measure_allocations ([&] { bytes = wire::application_payload_hwm_bytes (payload); });
+    std::cout << "payload-accounting count=" << actual.count << " bytes=" << actual.bytes
+              << " application-bytes=" << bytes << '\n';
+    require (bytes == 1024, "payload HWM accounting changed");
+    require (actual.count == 0 && actual.bytes == 0,
+             "payload HWM accounting copies header strings");
 }
-int main ()
+
+}
+int main (int argc, char **argv)
 {
     try {
+        if (argc == 2 && std::string_view (argv[1]) == "--payload-accounting-only") {
+            verify_payload_accounting_cost ();
+            return 0;
+        }
         verify_reply_header_cost ();
+        verify_payload_accounting_cost ();
         return 0;
     }
     catch (const std::exception &error) {
