@@ -664,7 +664,6 @@ void mesh_node_runtime_t::start (
     if (_node) {
         return;
     }
-    _stopping.store (false, std::memory_order_release);
 
     std::shared_ptr<handler_group_options_state_t> handler_groups;
     std::vector<std::pair<std::string, std::string>> mesh_handler_groups;
@@ -1880,7 +1879,6 @@ task_t<bool> mesh_node_runtime_t::send_instance_spot_activation_remote (
 
 void mesh_node_runtime_t::request_stop () noexcept
 {
-    _stopping.store (true, std::memory_order_release);
     if (_node)
         (void) _node->seal_relocation_targets ();
 }
@@ -1909,7 +1907,6 @@ void mesh_node_runtime_t::stop ()
             return _active_completion_waiters.load (std::memory_order_acquire) == 0;
         });
     }
-    _stopping.store (true, std::memory_order_release);
     _completion_ready.notify_all ();
     _state->lane
       .run ([&] {

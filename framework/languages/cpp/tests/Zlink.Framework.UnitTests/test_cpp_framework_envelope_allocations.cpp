@@ -1,7 +1,11 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include <gtest/gtest.h>
 #include "allocation_counter.hpp"
+#include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/channels/channel_reply_writer.hpp"
+#include "runtime/channels/channel_packet_dispatcher.hpp"
+#include <zlink/framework.hpp>
+#include <cstdio>
 #include "runtime/messaging/client_call_codec.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include <cstdlib>
@@ -21,6 +25,106 @@ struct payload_t
 {
     int value = 7;
 };
+
+struct allocation_handler_t
+{
+    unsigned calls = 0;
+    void send (const payload_t &) { ++calls; }
+    payload_t request (const payload_t &value)
+    {
+        ++calls;
+        return value;
+    }
+};
+
+TEST (EnvelopeAllocations, DisabledTypedChannelDispatchAllocationProbe)
+{
+    fw::zlink_builder_t builder;
+    fw::dispatch_options_t options;
+    options.message_flow (fw::message_flow_log_mode_t::off);
+    fw::detail::apply_dispatch_options (builder, options);
+    builder.channel ("c").enable_server ().bind ("inproc://channel-allocation-probe");
+    auto runtime = fw::detail::channel_runtime_t::from (builder.message_bus ());
+    fw::detail::channel_packet_dispatcher_t dispatcher (runtime);
+    fw::serializer_registry_t serializers;
+    serializers.add<payload_t> (
+      [] (const payload_t &) { return fw::encoded_payload_t::from_string ("7"); },
+      [] (const fw::encoded_payload_t &) { return payload_t{}; }, "application/json");
+    runtime.bind_serializers (serializers);
+    fw::service_collection_t services;
+    services.add_singleton<allocation_handler_t> ();
+    auto provider = services.build_provider ();
+    fw::handler_registry_t handlers;
+    handlers.on_send<allocation_handler_t, payload_t> ("c", "", &allocation_handler_t::send,
+                                                       {.packet_name = "m"});
+    handlers.on_request<allocation_handler_t, payload_t, payload_t> (
+      "c", "", &allocation_handler_t::request, {.packet_name = "r"});
+    msg::envelope_header_t header;
+    header.channel_name = "c";
+    header.correlation_id = "corr";
+    for (const bool request : {false, true}) {
+        header.kind = request ? msg::message_kind_t::request : msg::message_kind_t::command;
+        header.message_name = request ? "r" : "m";
+        const auto parts = msg::envelope_codec_t{}.encode_parts (header, payload_t{}, serializers);
+        bool succeeded = true;
+        auto invoke = [&] {
+            const auto result =
+              dispatcher.dispatch_server_message ("c", parts, provider, serializers, handlers);
+            succeeded = succeeded && static_cast<bool> (result);
+            if (request && result) {
+                const auto reply = msg::envelope_codec_t{}.decode_header (result.value ());
+                succeeded =
+                  succeeded && reply && reply.value ().kind == msg::message_kind_t::response;
+            }
+        };
+        for (unsigned index = 0; index < 128; ++index)
+            invoke ();
+        const auto allocations = count_allocations ([&] {
+            for (unsigned index = 0; index < 128; ++index)
+                invoke ();
+        });
+        EXPECT_TRUE (succeeded);
+        EXPECT_GT (allocations, 0u);
+        std::printf ("Off typed Channel %s: %zu allocations / 128 calls.\n",
+                     request ? "request" : "send", allocations);
+    }
+    EXPECT_EQ (512u, provider.get_required<allocation_handler_t> ().calls);
+}
+
+TEST (EnvelopeAllocations, DisabledChannelTraceFactoriesDoNotAllocate)
+{
+    fw::dispatch_options_t options;
+    options.message_flow (fw::message_flow_log_mode_t::off);
+    fw::detail::dispatch_options_access_t::set_observer_for_tests (options, [] (const auto &) {});
+    fw::detail::message_flow_tracer_t flow (options);
+    unsigned factories = 0;
+    auto trace = [&] {
+        for (const auto phase :
+             {fw::message_flow_outcome_t::received, fw::message_flow_outcome_t::admitted,
+              fw::message_flow_outcome_t::dispatched, fw::message_flow_outcome_t::completed,
+              fw::message_flow_outcome_t::replied}) {
+            flow.trace (phase, [&] {
+                ++factories;
+                return fw::message_flow_event_t{phase,
+                                                fw::dispatch_error_surface_t::channel,
+                                                fw::dispatch_message_kind_t::request,
+                                                std::string (128, 'p'),
+                                                std::nullopt,
+                                                std::nullopt,
+                                                std::nullopt,
+                                                std::nullopt,
+                                                std::nullopt,
+                                                std::nullopt,
+                                                std::nullopt};
+            });
+        }
+    };
+    EXPECT_EQ (0u, count_allocations (trace));
+    EXPECT_EQ (0u, factories);
+    options.message_flow (fw::message_flow_log_mode_t::normal);
+    EXPECT_GT (count_allocations (trace), 0u);
+    EXPECT_EQ (5u, factories);
+}
 
 TEST (EnvelopeAllocations, CounterDetectsAnOwningStringCopy)
 {

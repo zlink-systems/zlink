@@ -439,7 +439,7 @@ public sealed partial class EntrySpotActorDispatchTests
     }
 
     [Fact]
-    public async Task MeshNode_Channel_Request_Emits_Received_Then_Replied_With_Wire_Identity()
+    public async Task MeshNode_Channel_Request_Emits_Receiver_Phases_With_Wire_Identity()
     {
         var membership = new ZLinkMeshChannelMembership { ChannelName = "play" };
         membership.RequestHandlers.Add(
@@ -722,20 +722,38 @@ public sealed partial class EntrySpotActorDispatchTests
                 )
             )
             .ToArray();
-        if (sealAdmission)
+        // Spec 26 §2.1/§2.2 requires queue admission and typed handler entry
+        // in addition to receive and terminal reply for Channel requests.
+        if (channelName is not null)
         {
-            Assert.Empty(matching);
-            return result;
-        }
-        Assert.Equal(2, matching.Length);
-        Assert.Contains("phase=received", matching[0], StringComparison.Ordinal);
-        if (expectHandlerError)
-        {
-            Assert.Contains("event=zlink.dispatch_error", matching[1], StringComparison.Ordinal);
-            Assert.DoesNotContain("phase=", matching[1], StringComparison.Ordinal);
+            Assert.Contains("phase=received", matching[0], StringComparison.Ordinal);
+            Assert.Contains("phase=admitted", matching[1], StringComparison.Ordinal);
+            if (sealAdmission)
+            {
+                // This fixture seals runtime operation admission after the Channel
+                // queue has accepted the record. No typed handler starts.
+                Assert.Equal(2, matching.Length);
+                return result;
+            }
+            Assert.Equal(expectHandlerError ? 5 : 4, matching.Length);
+            Assert.Contains("phase=dispatched", matching[2], StringComparison.Ordinal);
+            if (expectHandlerError)
+            {
+                Assert.Contains(
+                    "event=zlink.dispatch_error",
+                    matching[3],
+                    StringComparison.Ordinal
+                );
+                Assert.DoesNotContain("phase=", matching[3], StringComparison.Ordinal);
+            }
+            Assert.Contains("phase=replied", matching[^1], StringComparison.Ordinal);
         }
         else
+        {
+            Assert.Equal(2, matching.Length);
+            Assert.Contains("phase=received", matching[0], StringComparison.Ordinal);
             Assert.Contains("phase=replied", matching[1], StringComparison.Ordinal);
+        }
         Assert.All(
             matching,
             line =>
