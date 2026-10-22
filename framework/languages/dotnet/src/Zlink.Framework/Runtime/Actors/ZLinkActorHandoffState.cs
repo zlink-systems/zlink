@@ -75,6 +75,7 @@ internal sealed class ZLinkActorHandoffState(
                 foreach (var frame in _frames)
                     terminals.Add(admit(frame));
                 var terminal = Task.WhenAll(terminals);
+                ObserveTerminal(terminal);
                 _canonicalMaintenanceDrain = new DurablePrefix(terminal, admit);
                 _targetPhase = ZLinkActorTargetHandoffPhase.AdmissionOpenDraining;
                 return terminal;
@@ -117,7 +118,6 @@ internal sealed class ZLinkActorHandoffState(
                 );
             AwaitStateLane(_lane.RunAsync(() => frame.Withdraw = null));
         }
-        AwaitStateLane(_lane.RunAsync(() => _canonicalMaintenanceDrain = null));
     }
 
     private IDisposable? _pendingShutdownToken;
@@ -173,7 +173,8 @@ internal sealed class ZLinkActorHandoffState(
                 {
                     _deferredJoinCapture = false;
                     var preserveCompletedTarget =
-                        _targetPhase == ZLinkActorTargetHandoffPhase.Completed;
+                        _targetPhase == ZLinkActorTargetHandoffPhase.Completed
+                        || _canonicalMaintenanceDrain?.Admit is not null;
                     if (!preserveCompletedTarget)
                     {
                         _handoffId = null;
@@ -199,7 +200,9 @@ internal sealed class ZLinkActorHandoffState(
                     return;
                 }
 
-                var retainsDurableSuffix = _targetPhase == ZLinkActorTargetHandoffPhase.Completed;
+                var retainsDurableSuffix =
+                    _targetPhase == ZLinkActorTargetHandoffPhase.Completed
+                    || _canonicalMaintenanceDrain?.Admit is not null;
                 _handoffId = null;
                 _joinRequest = null;
                 _preparation = null;
@@ -280,7 +283,10 @@ internal sealed class ZLinkActorHandoffState(
     {
         _sourceIngressAdmission.ReleaseAll();
         _sourceHoldAdmission.ReleaseAll();
-        if (_targetPhase != ZLinkActorTargetHandoffPhase.Completed)
+        if (
+            _targetPhase != ZLinkActorTargetHandoffPhase.Completed
+            && _canonicalMaintenanceDrain?.Admit is null
+        )
             _frames.Clear();
         else
             for (var index = 0; index < _frames.Count; index++)
@@ -302,41 +308,29 @@ internal sealed class ZLinkActorHandoffState(
                 or ZLinkActorTargetHandoffPhase.Replaying
                 or ZLinkActorTargetHandoffPhase.AdmissionOpenDraining;
 
-    public IReadOnlyList<ZLinkActorHandoffFrame> EndDeferredJoinCapture()
+    public void EndDeferredJoinCapture(Func<ZLinkActorHandoffFrame, Task, Task> admit)
     {
-        return AwaitStateLane(
+        AwaitStateLane(
             _lane.RunAsync(() =>
             {
                 if (_deferredJoinAwaitingTarget)
                 {
                     _deferredJoinAwaitingTarget = false;
-                    return [];
+                    return;
                 }
                 if (!_deferredJoinCapture || _sourcePhase != ZLinkActorSourceHandoffPhase.Idle)
-                    return [];
+                    return;
 
-                if (_canonicalMaintenanceDrain?.Admit is { } admit)
-                {
-                    _deferredJoinCapture = false;
-                    _sourceIngressAdmission.ReleaseAll();
-                    _sourceHoldAdmission.ReleaseAll();
-                    foreach (var frame in _frames)
-                    {
-                        frame.CanonicalEncodedLength = 0;
-                        if (frame.Withdraw is null)
-                            _ = admit(frame);
-                    }
-                    return [];
-                }
-
-                var frames = _frames.OrderBy(static frame => frame.ArrivalIndex).ToArray();
+                AdmitRestoredSourceFramesCore(
+                    _frames.OrderBy(static frame => frame.ArrivalIndex).ToArray(),
+                    admit
+                );
                 _deferredJoinCapture = false;
                 _sourceIngressAdmission.ReleaseAll();
                 _sourceHoldAdmission.ReleaseAll();
-                _frames.Clear();
                 _sourceHoldFrames.Clear();
-                _arrivalIndex = 0;
-                return frames;
+                if (_canonicalMaintenanceDrain?.Admit is null)
+                    _arrivalIndex = 0;
             })
         );
     }
@@ -2034,16 +2028,89 @@ internal sealed class ZLinkActorHandoffState(
         );
     }
 
-    public IReadOnlyList<ZLinkActorHandoffFrame> AbortCapture()
+    public void AbortCapture(Func<ZLinkActorHandoffFrame, Task, Task> admit)
     {
-        var frames = AwaitStateLane(_lane.RunAsync(BeginAbortCaptureRestoreCore));
-        foreach (var frame in frames)
-            AwaitStateLane(
-                _lane.RunAsync(() => AcknowledgeAbortRestoreEnqueuedCore(frame.ArrivalIndex))
-            );
-        AwaitStateLane(_lane.RunAsync(CompleteAbortCaptureRestoreCore));
-        return frames;
+        AwaitStateLane(
+            _lane.RunAsync(() =>
+            {
+                var frames = BeginAbortCaptureRestoreCore();
+                AdmitRestoredSourceFramesCore(frames, admit);
+                CompleteAbortCaptureRestoreCore();
+            })
+        );
     }
+
+    // Completion means the original FIFO owns every record, not that its
+    // handlers ran. Keep acknowledgement on the same lane as that transfer.
+    private void AdmitRestoredSourceFramesCore(
+        IReadOnlyList<ZLinkActorHandoffFrame> frames,
+        Func<ZLinkActorHandoffFrame, Task, Task> admit
+    )
+    {
+        var retained =
+            _sourcePhase == ZLinkActorSourceHandoffPhase.Idle
+                ? _canonicalMaintenanceDrain?.Admit
+                : null;
+        var previous = _canonicalMaintenanceDrain?.Terminal;
+        var start = _sourceCompletion?.Task ?? Task.CompletedTask;
+        var admitted = new List<ZLinkActorHandoffFrame>();
+        var terminals = new List<Task>();
+        try
+        {
+            foreach (var frame in frames)
+            {
+                if (retained is not null && frame.Withdraw is not null)
+                    continue;
+                var terminal = retained is null ? admit(frame, start) : retained(frame);
+                ObserveTerminal(terminal);
+                if (_sourcePhase == ZLinkActorSourceHandoffPhase.AbortRestoring)
+                    AcknowledgeAbortRestoreEnqueuedCore(frame.ArrivalIndex);
+                else
+                {
+                    ReleaseSourceReservation(_sourceIngressAdmission, frame);
+                    if (retained is null)
+                        _frames.Remove(frame);
+                    else
+                        frame.CanonicalEncodedLength = 0;
+                }
+                if (retained is null && frame.Withdraw is not null)
+                {
+                    frame.CanonicalEncodedLength = 0;
+                    admitted.Add(frame);
+                    terminals.Add(terminal);
+                }
+            }
+        }
+        finally
+        {
+            // An accepted, unstarted source record uses the same durable
+            // prefix owner as a target record. A subsequent Join can withdraw
+            // and capture it, including after a partial restore was refused.
+            if (admitted.Count != 0)
+            {
+                _frames.AddRange(admitted);
+                if (previous is not null)
+                    terminals.Add(previous);
+                var terminal = Task.WhenAll(terminals);
+                ObserveTerminal(terminal);
+                _canonicalMaintenanceDrain = new DurablePrefix(
+                    terminal,
+                    frame => admit(frame, Task.CompletedTask)
+                );
+            }
+        }
+    }
+
+    private static void ObserveTerminal(Task terminal) =>
+        _ = terminal.ContinueWith(
+            static task =>
+            {
+                _ = task.Exception;
+            },
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default
+        );
 
     internal IReadOnlyList<ZLinkActorHandoffFrame> BeginAbortCaptureRestore()
     {
@@ -2065,6 +2132,7 @@ internal sealed class ZLinkActorHandoffState(
         _sourcePhase = ZLinkActorSourceHandoffPhase.AbortRestoring;
         return _frames
             .Concat(_sourceHoldFrames)
+            .Where(static frame => frame.Withdraw is null)
             .OrderBy(static frame => frame.ArrivalIndex)
             .ToArray();
     }
@@ -2090,6 +2158,7 @@ internal sealed class ZLinkActorHandoffState(
                 : _sourceHoldFrames.FindIndex(frame => frame.ArrivalIndex == arrivalIndex);
         var nextArrival = _frames
             .Concat(_sourceHoldFrames)
+            .Where(frame => frame.Withdraw is null || frame.ArrivalIndex == arrivalIndex)
             .Select(static frame => frame.ArrivalIndex)
             .DefaultIfEmpty(long.MinValue)
             .Min();
@@ -2169,7 +2238,7 @@ internal sealed class ZLinkActorHandoffState(
             throw new InvalidOperationException(
                 $"Actor '{actorId}' does not have an abort restore to complete."
             );
-        if (_frames.Count != 0 || _sourceHoldFrames.Count != 0)
+        if (_frames.Any(static frame => frame.Withdraw is null) || _sourceHoldFrames.Count != 0)
             throw new InvalidOperationException(
                 $"Actor '{actorId}' abort restore still has queued frames."
             );
@@ -2177,7 +2246,6 @@ internal sealed class ZLinkActorHandoffState(
         ClearSourceMembershipLeave();
         _sourceIngressAdmission.ReleaseAll();
         _sourceHoldAdmission.ReleaseAll();
-        _frames.Clear();
         _sourceHoldFrames.Clear();
         _importedFrameCount = 0;
         _sourceTrailingImported = false;

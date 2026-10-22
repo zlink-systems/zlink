@@ -264,6 +264,8 @@
         <Compile Include="Runtime/AuditRuntimeFailureReporter.cs"/>
         <Compile Include="Runtime/ActorMembershipOwnershipTests.cs"/>
         <Compile Include="Runtime/RelocationBehaviorConformanceTests.cs"/>
+        <Compile Include="Runtime/RelocationSourceRestoreTests.cs"/>
+        <Compile Include="Runtime/ActorHandoffTestRestoration.cs"/>
         <Compile Include="Runtime/RouteChangeProxy.cs"/>
         <Compile Include="Runtime/RelocationTargetShutdownTests.cs"/>
         <Compile Include="Runtime/SpotCloseConformanceTests.cs"/>
