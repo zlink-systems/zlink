@@ -420,8 +420,8 @@ public final class ZLinkServiceM6AWireCodec {
         }
         long encodedSize = Integer.BYTES;
         for (int index = 0; index < parts.size(); index++) {
-            Message part = parts.get(index);
-            encodedSize += Integer.BYTES + (long) Objects.requireNonNull(part, "part").size();
+            encodedSize +=
+                    Integer.BYTES + (long) ZLinkFrameworkMultipartView.partSize(parts, index);
             if (encodedSize > Integer.MAX_VALUE) {
                 throw protocol("framework multipart payload is too large");
             }
@@ -432,9 +432,8 @@ public final class ZLinkServiceM6AWireCodec {
     private static void writeMultipart(ByteBuffer target, List<Message> parts) {
         target.putInt(parts.size());
         for (int index = 0; index < parts.size(); index++) {
-            Message part = parts.get(index);
-            target.putInt(part.size());
-            part.copyTo(target);
+            target.putInt(ZLinkFrameworkMultipartView.partSize(parts, index));
+            ZLinkFrameworkMultipartView.writePart(parts, index, target);
         }
     }
 
@@ -448,7 +447,8 @@ public final class ZLinkServiceM6AWireCodec {
         return decodeMultipartView(
                         payload.packetName(),
                         payload.contentType(),
-                        Reader.view(payload.payloadForCodec()))
+                        Reader.view(payload.payloadForCodec()),
+                        null)
                 .detachAll();
     }
 
@@ -462,6 +462,24 @@ public final class ZLinkServiceM6AWireCodec {
      * parts. The caller must keep the frame owner alive until the returned view is closed.
      */
     public static ZLinkFrameworkMultipartView decodeFrameworkMultipartFrameView(ByteBuffer frame) {
+        return decodeFrameworkMultipartFrameView(frame, null);
+    }
+
+    /**
+     * Takes ownership of one received frame, which the returned view closes; the parts are read
+     * from it in place. A malformed frame is closed before the protocol failure is thrown.
+     */
+    public static ZLinkFrameworkMultipartView decodeFrameworkMultipartFrameView(Message frame) {
+        try {
+            return decodeFrameworkMultipartFrameView(frame.dataBuffer(), frame);
+        } catch (RuntimeException | Error failure) {
+            frame.close();
+            throw failure;
+        }
+    }
+
+    private static ZLinkFrameworkMultipartView decodeFrameworkMultipartFrameView(
+            ByteBuffer frame, Message owner) {
         ByteBuffer reader = Reader.view(frame);
         if (Reader.u8(reader, "version") != 1) {
             throw protocol("invalid application payload version");
@@ -483,11 +501,11 @@ public final class ZLinkServiceM6AWireCodec {
         if (Reader.intU32(reader, "payloadLength") != reader.remaining()) {
             throw protocol("application payload length mismatch");
         }
-        return decodeMultipartView(packetName, contentType, reader);
+        return decodeMultipartView(packetName, contentType, reader, owner);
     }
 
     private static ZLinkFrameworkMultipartView decodeMultipartView(
-            String packetName, String contentType, ByteBuffer reader) {
+            String packetName, String contentType, ByteBuffer reader, Message owner) {
         if (!ServiceWireConstants.FRAMEWORK_MULTIPART_PACKET_NAME.equals(packetName)
                 || !ServiceWireConstants.FRAMEWORK_MULTIPART_CONTENT_TYPE.equals(contentType)) {
             throw protocol("framework application payload profile is unsupported");
@@ -503,7 +521,7 @@ public final class ZLinkServiceM6AWireCodec {
             parts[(int) index] = Reader.buffer(reader, size, "frameworkMultipartPart");
         }
         Reader.end(reader);
-        return new ZLinkFrameworkMultipartView(parts);
+        return new ZLinkFrameworkMultipartView(parts, owner);
     }
 
     public ApplicationPayload decodeApplicationPayload(byte[] frame) {

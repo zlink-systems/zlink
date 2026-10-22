@@ -54,23 +54,26 @@ final class ZLinkJsonMessageSerializerTest {
                         ZLinkFrameworkJsonProfile.mapper()
                                 .readValue(
                                         json.getBytes(StandardCharsets.UTF_8), ProfileReply.class),
-                        serializer.deserializeBorrowed(payload, ProfileReply.class));
+                        serializer.deserializeBorrowed(payload.dataBuffer(), ProfileReply.class));
             }
         }
         for (String json : List.of("", "{", "{\"value\":", "{\"value\":[]}")) {
             try (Message payload = Message.from(json)) {
                 assertThrows(
                         IllegalArgumentException.class,
-                        () -> serializer.deserializeBorrowed(payload, ProfileReply.class));
+                        () ->
+                                serializer.deserializeBorrowed(
+                                        payload.dataBuffer(), ProfileReply.class));
             }
         }
         ActorRef expected = new ActorRef("actor", 7, "mesh", RoutingId.from(new byte[] {1}));
         try (Message payload = serializer.serializeOwned(expected)) {
-            assertEquals(expected, serializer.deserializeBorrowed(payload, ActorRef.class));
+            assertEquals(
+                    expected, serializer.deserializeBorrowed(payload.dataBuffer(), ActorRef.class));
         }
         SpotRef spot = new SpotRef("spot", 9, "mesh", RoutingId.from(new byte[] {2}));
         try (Message payload = serializer.serializeOwned(spot)) {
-            assertEquals(spot, serializer.deserializeBorrowed(payload, SpotRef.class));
+            assertEquals(spot, serializer.deserializeBorrowed(payload.dataBuffer(), SpotRef.class));
         }
     }
 
@@ -86,8 +89,9 @@ final class ZLinkJsonMessageSerializerTest {
         try (Message payload = Message.from(bomJson)) {
             assertThrows(
                     IllegalArgumentException.class,
-                    () -> serializer.deserializeBorrowed(payload, ProfileReply.class));
-            assertArrayEquals(bomJson, serializer.deserializeBorrowed(payload, byte[].class));
+                    () -> serializer.deserializeBorrowed(payload.dataBuffer(), ProfileReply.class));
+            assertArrayEquals(
+                    bomJson, serializer.deserializeBorrowed(payload.dataBuffer(), byte[].class));
         }
     }
 
@@ -97,8 +101,8 @@ final class ZLinkJsonMessageSerializerTest {
         byte[] bytes;
         Message copied;
         try (Message payload = Message.from("raw-value")) {
-            bytes = serializer.deserializeBorrowed(payload, byte[].class);
-            copied = serializer.deserializeBorrowed(payload, Message.class);
+            bytes = serializer.deserializeBorrowed(payload.dataBuffer(), byte[].class);
+            copied = serializer.deserializeBorrowed(payload.dataBuffer(), Message.class);
         }
         try (copied) {
             assertEquals("raw-value", copied.toUtf8String());
@@ -112,10 +116,10 @@ final class ZLinkJsonMessageSerializerTest {
         try (Message payload = Message.from("{\"value\":\"custom\"}")) {
             assertEquals(
                     new CodecAwareValue("custom"),
-                    serializer.deserializeBorrowed(payload, CodecAwareValue.class));
+                    serializer.deserializeBorrowed(payload.dataBuffer(), CodecAwareValue.class));
             assertEquals(
                     new CodecAwareRecord("custom"),
-                    serializer.deserializeBorrowed(payload, CodecAwareRecord.class));
+                    serializer.deserializeBorrowed(payload.dataBuffer(), CodecAwareRecord.class));
         }
     }
 

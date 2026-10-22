@@ -127,7 +127,7 @@ final class ZLinkChannelHandlerPermitBoundaryTest {
                                                                     ProbeHandler.class,
                                                                     String.class,
                                                                     "packet"),
-                                                            payload)),
+                                                            payload.dataBuffer())),
                             null);
             executor.drain();
             if (completed.toCompletableFuture().isCompletedExceptionally() && !expectedFailure) {
