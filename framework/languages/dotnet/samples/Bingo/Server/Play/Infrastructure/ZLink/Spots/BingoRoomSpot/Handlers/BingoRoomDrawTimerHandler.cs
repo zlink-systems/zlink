@@ -1,11 +1,9 @@
-using Zlink.Framework.Contracts.Handlers;
 using Zlink.Framework.Contracts.Spots;
 using Zlink.Framework.Contracts.Timers;
 
 namespace Bingo.Server.Play.Infrastructure.ZLink.Spots.BingoRoomSpot.Handlers;
 
 // --8<-- [start:doc-bingo-draw-timer]
-[ZLinkSpotTimerHandler("bingo-draw", 200)]
 internal sealed class BingoRoomDrawTimerHandler : IZLinkSpotTimerHandler<BingoRoom>
 {
     public async ValueTask HandleAsync(
