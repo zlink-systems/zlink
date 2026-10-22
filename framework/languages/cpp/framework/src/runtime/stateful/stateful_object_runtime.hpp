@@ -3,6 +3,7 @@
 
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/stateful/object_ref.hpp"
+#include "runtime/diagnostics/mesh_request_metrics.hpp"
 #include "runtime/spots/actor_transfer_coordinator.hpp"
 
 #include "runtime/dispatch/dispatch_limits.hpp"
@@ -274,6 +275,30 @@ class stateful_object_runtime_t
     friend struct stateful_object_runtime_test_access_t;
 
   public:
+    task_t<void> configure_population_metrics (std::string mesh_name)
+    {
+        return _lane.run_task ([this, mesh_name = std::move (mesh_name)] () mutable {
+            if (_actor_metric)
+                return;
+            _metric_mesh = std::move (mesh_name);
+            auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
+            if (!dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ())) {
+                auto meter = provider->GetMeter ("zlink.framework");
+                if (!meter)
+                    return;
+                _actor_metric =
+                  meter->CreateDoubleUpDownCounter ("zlink.actor.count", "", "{actor}");
+                if (_actor_metric) {
+                    _actor_metric->Add (0, {{"mesh_name", _metric_mesh}});
+                    for (const auto &[key, object] : _objects)
+                        record_actor_population (object, 1);
+                }
+            }
+        });
+    }
+
+    task_t<void> retire_population_metrics_async ();
+
     using relocation_state_capture_t = std::function<task_t<frozen_object_state_t> (
       const object_ref_t &, const std::string &, std::stop_token)>;
     using relocation_state_restore_t =
@@ -618,6 +643,28 @@ class stateful_object_runtime_t
     // Lane-owned waiters of a seal; empty unless a seal waits for active turns.
     std::vector<std::shared_ptr<task_completion_source_t<void>>> _quiescence_waiters;
     std::vector<placement_candidate_t> _candidates;
+    using object_iterator_t = std::map<object_key_t, object_record_t>::iterator;
+    void record_actor_population (const object_record_t &object, double delta)
+    {
+        if (_actor_metric && object.reference.kind == object_kind_t::actor
+            && object.state != object_state_t::creating
+            && object.state != object_state_t::recovering
+            && !finalized_relocation_source_on_lane (object))
+            _actor_metric->Add (delta, {{"mesh_name", _metric_mesh}});
+    }
+    void erase_object_on_lane (object_iterator_t found)
+    {
+        if (found != _objects.end ()) {
+            record_actor_population (found->second, -1);
+            _objects.erase (found);
+        }
+    }
+    void erase_object_on_lane (const object_key_t &key)
+    {
+        erase_object_on_lane (_objects.find (key));
+    }
+    std::string _metric_mesh;
+    opentelemetry::nostd::unique_ptr<opentelemetry::metrics::UpDownCounter<double>> _actor_metric;
     std::map<object_key_t, object_record_t> _objects;
     std::map<object_key_t, std::uint64_t> _last_generation;
     std::map<std::uint64_t, object_key_t> _attempts;

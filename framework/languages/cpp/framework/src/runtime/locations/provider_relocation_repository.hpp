@@ -2,6 +2,7 @@
 #pragma once
 
 #include <runtime/locations/location_repository.hpp>
+#include "runtime/diagnostics/runtime_metrics.hpp"
 #include <runtime/execution/task_result.hpp>
 #include <zlink/framework/contracts/locations/stores.hpp>
 #include <zlink/framework/detail/crc32c.hpp>
@@ -30,7 +31,10 @@ namespace zlink::framework::runtime
 class provider_relocation_repository_t final : public relocation_repository_t
 {
   public:
-    explicit provider_relocation_repository_t (relocation_store_t &store) noexcept : _store (&store)
+    explicit provider_relocation_repository_t (
+      relocation_store_t &store,
+      std::shared_ptr<framework::detail::monitoring_runtime_state_t> monitoring = {}) :
+        _store (&store), _monitoring (std::move (monitoring))
     {
     }
 
@@ -61,9 +65,11 @@ class provider_relocation_repository_t final : public relocation_repository_t
         for (;;) {
             if (auto terminal = check_operation ())
                 return std::move (*terminal);
-            auto pending_put = _store->put (
-              blob_reference_t{reference},
-              std::span<const std::byte> (payload.data (), payload.size ()), retention_ms);
+            auto pending_put = observe_spi<blob_put_result_t> ("relocation_put", [&] {
+                return _store->put (blob_reference_t{reference},
+                                    std::span<const std::byte> (payload.data (), payload.size ()),
+                                    retention_ms);
+            });
             auto response = detail::observe_task_result_for (
               pending_put,
               std::chrono::ceil<std::chrono::milliseconds> (operation_deadline
@@ -91,7 +97,8 @@ class provider_relocation_repository_t final : public relocation_repository_t
 
             if (auto terminal = check_operation ())
                 return std::move (*terminal);
-            auto pending_read = _store->read (blob_reference_t{reference});
+            auto pending_read = observe_spi<blob_read_result_t> (
+              "relocation_get", [&] { return _store->read (blob_reference_t{reference}); });
             auto read_response = detail::observe_task_result_for (
               pending_read,
               std::chrono::ceil<std::chrono::milliseconds> (operation_deadline
@@ -100,9 +107,10 @@ class provider_relocation_repository_t final : public relocation_repository_t
             if (auto terminal = check_operation ())
                 return std::move (*terminal);
             auto read = std::move (*read_response);
-            if (!read)
+            if (!read) {
                 return task_t<relocation_stored_t> (detail::propagate_failure<relocation_stored_t> (
                   read, "relocation Store read-back failed"));
+            }
             if (const auto *found = std::get_if<blob_found_t> (&read.value ())) {
                 if (found->bytes != payload) {
                     reference = make_reference ();
@@ -119,11 +127,13 @@ class provider_relocation_repository_t final : public relocation_repository_t
     {
         if (cancellation.stop_requested ())
             co_return co_await cancelled<relocation_read_result_t> ();
-        auto pending = _store->read (blob_reference_t{std::move (reference)});
+        auto pending = observe_spi<blob_read_result_t> (
+          "relocation_get", [&] { return _store->read (blob_reference_t{std::move (reference)}); });
         auto result = co_await await_result (std::move (pending));
-        if (!result)
+        if (!result) {
             co_return detail::propagate_failure<relocation_read_result_t> (
               result, "relocation Store read failed");
+        }
         if (const auto *found = std::get_if<blob_found_t> (&result.value ()))
             co_return relocation_read_result_t{relocation_found_t{found->bytes}};
         co_return relocation_read_result_t{relocation_missing_t{}};
@@ -138,13 +148,16 @@ class provider_relocation_repository_t final : public relocation_repository_t
         if (retention <= std::chrono::hours::zero ())
             co_return co_await failed<relocation_renew_result_t> (
               framework_error_kind_t::protocol_error, "relocation retention must be positive");
-        auto pending =
-          _store->renew (blob_reference_t{std::move (reference)},
-                         std::chrono::duration_cast<std::chrono::milliseconds> (retention));
+        auto pending = observe_spi<blob_renew_result_t> ("lease_renew", [&] {
+            return _store->renew (
+              blob_reference_t{std::move (reference)},
+              std::chrono::duration_cast<std::chrono::milliseconds> (retention));
+        });
         auto result = co_await await_result (std::move (pending));
-        if (!result)
+        if (!result) {
             co_return detail::propagate_failure<relocation_renew_result_t> (
               result, "relocation Store renew failed");
+        }
         if (const auto *renewed = std::get_if<blob_renewed_t> (&result.value ()))
             co_return relocation_renew_result_t{
               relocation_renewed_t{renewed->expires_at, renewed->store_now}};
@@ -156,11 +169,14 @@ class provider_relocation_repository_t final : public relocation_repository_t
     {
         if (cancellation.stop_requested ())
             co_return co_await cancelled<relocation_delete_result_t> ();
-        auto pending = _store->erase (blob_reference_t{std::move (reference)});
+        auto pending = observe_spi<void> ("relocation_delete", [&] {
+            return _store->erase (blob_reference_t{std::move (reference)});
+        });
         auto result = co_await await_result (std::move (pending));
-        if (!result)
+        if (!result) {
             co_return detail::propagate_failure<relocation_delete_result_t> (
               result, "relocation Store erase failed");
+        }
         co_return relocation_delete_result_t::deleted;
     }
 
@@ -197,6 +213,24 @@ class provider_relocation_repository_t final : public relocation_repository_t
         return stream.str ();
     }
 
+    template <typename T, typename Start> task_t<T> observe_spi (const char *operation, Start start)
+    {
+        try {
+            co_return co_await start ();
+        }
+        catch (...) {
+            record_store_error (operation);
+            throw;
+        }
+    }
+    void record_store_error (const char *operation) const
+    {
+        runtime_metrics_t metrics (_monitoring);
+        if (metrics.enabled ())
+            metrics.counter ("zlink.location.store.errors", "{error}", 1,
+                             {{"operation", operation}});
+    }
+    std::shared_ptr<framework::detail::monitoring_runtime_state_t> _monitoring;
     relocation_store_t *_store;
 };
 
