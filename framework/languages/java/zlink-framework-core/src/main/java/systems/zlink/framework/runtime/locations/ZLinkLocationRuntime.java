@@ -826,30 +826,13 @@ public final class ZLinkLocationRuntime implements AutoCloseable {
                                                 : withinDeadline(terminalClaim, cleanupDeadline))
                                         .thenCompose(
                                                 claimedToken ->
-                                                        stateLane
-                                                                .runAsync(
-                                                                        () ->
-                                                                                completion
-                                                                                                .isCancelled()
-                                                                                        || (!started
-                                                                                                && !completion
-                                                                                                        .isCompletedExceptionally())
-                                                                                        || !ownsStartupCore(
-                                                                                                completion))
-                                                                .thenCompose(
-                                                                        abandoned ->
-                                                                                abandoned
-                                                                                        ? startupCancellationCleanup(
-                                                                                                cleanupDeadline
-                                                                                                                == null
-                                                                                                        ? cleanupDeadlineNanos(
-                                                                                                                lifecycle)
-                                                                                                        : cleanupDeadline,
-                                                                                                claimedToken,
-                                                                                                completion)
-                                                                                        : CompletableFuture
-                                                                                                .completedFuture(
-                                                                                                        null))))
+                                                        cleanupDeadline != null
+                                                                ? startupCancellationCleanup(
+                                                                        cleanupDeadline,
+                                                                        claimedToken,
+                                                                        completion)
+                                                                : CompletableFuture.completedFuture(
+                                                                        null)))
                 .whenComplete(
                         (ignored, failure) -> {
                             if (failure == null) {
