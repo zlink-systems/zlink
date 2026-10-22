@@ -4477,13 +4477,14 @@ void test_relocation_request_source_registration (test_context_t &test,
             continue;
         for (const auto &point : metric.point_data_attr_) {
             ++terminals;
-            const auto *sum = opentelemetry::nostd::get_if<metric_test::sdk::SumPointData> (
-              &point.point_data);
+            const auto *sum =
+              opentelemetry::nostd::get_if<metric_test::sdk::SumPointData> (&point.point_data);
             test.require (sum && opentelemetry::nostd::get<double> (sum->value_) == 1,
                           "source Preserve must record its terminal exactly once");
             const auto outcome = point.attributes.find ("outcome");
             test.require (outcome != point.attributes.end ()
-                            && opentelemetry::nostd::get<std::string> (outcome->second) == "aborted",
+                            && opentelemetry::nostd::get<std::string> (outcome->second)
+                                 == "aborted",
                           "resumed source authority must retain the aborted metric outcome");
         }
     }

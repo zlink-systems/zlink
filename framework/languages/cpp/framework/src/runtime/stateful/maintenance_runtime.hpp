@@ -672,7 +672,8 @@ class maintenance_runtime_t
                               std::uint64_t participant_id,
                               const turn_record_t &turn) const;
     task_t<stateful_error_t> abort_relocation_before_cutover (
-      std::uint64_t token, const eligible_relocation_unit_t::canonical_wire_context_t &context,
+      std::uint64_t token,
+      const eligible_relocation_unit_t::canonical_wire_context_t &context,
       relocation_metric_operation_t *preserved_metric = nullptr);
     task_t<relocation_reason_t>
     prepare_target (const eligible_relocation_unit_t::canonical_wire_context_t &context,
