@@ -66,30 +66,6 @@ bool valid_channels (const std::vector<service_channel_descriptor_t> &channels)
     return true;
 }
 
-void project_discovered_owner (service_node_descriptor_t &descriptor,
-                               const service_node_descriptor_t *discovered,
-                               const service_node_descriptor_t *current)
-{
-    const auto *owner =
-      discovered && discovered->lifecycle_generation == descriptor.lifecycle_generation
-          && !discovered->owner_id.empty ()
-        ? discovered
-      : current && current->lifecycle_generation == descriptor.lifecycle_generation ? current
-                                                                                    : nullptr;
-    if (owner) {
-        descriptor.owner_id = owner->owner_id;
-        descriptor.owner_lease_generation = owner->owner_lease_generation;
-    }
-}
-
-bool same_wire_descriptor (const service_node_descriptor_t &left, service_node_descriptor_t right)
-{
-    // Discovery metadata does not participate in wire revision equality.
-    right.owner_id = left.owner_id;
-    right.owner_lease_generation = left.owner_lease_generation;
-    return left == right;
-}
-
 bool immutable_fields_match (const service_node_descriptor_t &current,
                              const service_node_descriptor_t &incoming,
                              bool allow_initial_endpoint_resolution = false)
@@ -267,6 +243,7 @@ service_topology_registry_t::publish_draining_snapshot ()
     return {std::move (std::get<0> (publication)), std::move (std::get<1> (publication))};
 }
 
+
 std::function<void ()>
 service_topology_registry_t::publish_topology (std::shared_ptr<topology_state_t> next)
 {
@@ -300,32 +277,6 @@ service_topology_registry_t::observe_peer (std::vector<std::uint8_t> node_routin
 void service_topology_registry_t::set_change_handler (std::function<void ()> handler)
 {
     _lane.run ([&, this] { _change_handler = std::move (handler); }).get ();
-}
-
-void service_topology_registry_t::project_discovered_peer (
-  const service_node_descriptor_t &descriptor)
-{
-    auto changed =
-      _lane
-        .run ([&, this] () -> std::function<void ()> {
-            const auto topology =
-              std::atomic_load_explicit (_topology.get (), std::memory_order_acquire);
-            const auto found = topology->peers.find (descriptor.node_routing_id);
-            if (found == topology->peers.end ()
-                || found->second.descriptor.lifecycle_generation != descriptor.lifecycle_generation
-                || !discovery_expectation_matches (descriptor, found->second.descriptor))
-                return {};
-            auto projected = found->second.descriptor;
-            project_discovered_owner (projected, &descriptor, &found->second.descriptor);
-            if (projected == found->second.descriptor)
-                return {};
-            auto next = std::make_shared<topology_state_t> (*topology);
-            next->peers.at (descriptor.node_routing_id).descriptor = std::move (projected);
-            return publish_topology (std::move (next));
-        })
-        .get ();
-    if (changed)
-        changed ();
 }
 
 service_node_descriptor_t service_topology_registry_t::local_descriptor () const
@@ -398,9 +349,6 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
                                   : not_required != _not_required_peers.end ()
                                     ? &not_required->second
                                     : nullptr;
-            // Admission and UPDATE carry the wire descriptor. Preserve the owner
-            // token projected by Store discovery in this same descriptor owner.
-            project_discovered_owner (descriptor, expected_descriptor, current);
             if ((current == nullptr
                  || descriptor.lifecycle_generation != current->lifecycle_generation)
                 && (command == protocol::command::update
@@ -412,7 +360,7 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
                 && descriptor.lifecycle_generation == current->lifecycle_generation
                 && (descriptor.descriptor_revision < current->descriptor_revision
                     || (descriptor.descriptor_revision == current->descriptor_revision
-                        && !same_wire_descriptor (*current, descriptor))
+                        && *current != descriptor)
                     || (descriptor.descriptor_revision > current->descriptor_revision
                         && (command != protocol::command::update
                             || !immutable_fields_match (*current, descriptor))))) {
@@ -444,11 +392,10 @@ service_topology_registry_t::admit_impl (service_node_descriptor_t descriptor,
               command == protocol::command::admit
               || (admitted != topology->peers.end ()
                   && admitted->second.connection_id == connection_id && admitted->second.ready);
-            const bool same_admission =
-              admitted != topology->peers.end () && admitted->second.connection_id == connection_id
-              && same_wire_descriptor (admitted->second.descriptor, descriptor);
-            if (same_admission && admitted->second.ready == ready
-                && admitted->second.descriptor == descriptor) {
+            const bool same_admission = admitted != topology->peers.end ()
+                                        && admitted->second.connection_id == connection_id
+                                        && admitted->second.descriptor == descriptor;
+            if (same_admission && admitted->second.ready == ready) {
                 return std::pair{peer_admission_result_t::duplicate_connection,
                                  std::function<void ()>{}};
             }

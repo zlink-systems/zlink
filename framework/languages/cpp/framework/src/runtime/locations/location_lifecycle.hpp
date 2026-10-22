@@ -188,22 +188,25 @@ class location_lifecycle_t
 
     location_write_result_t release_actor (actor_location_key_t key)
     {
-        actor_claim_t claim;
-        return _state->lane
-          .run ([&] {
-              const auto found = _state->actors.find (actor_key (key));
-              if (found == _state->actors.end ()) {
-                  return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
-              }
-              claim = found->second;
-              // Untracked before the write: a stale remove after another owner's
-              // takeover is ignored by the store and must not fire deactivation.
-              _state->actors.erase (found);
-              return location_write_result_t{location_write_status_t::stored,
-                                             static_cast<std::int64_t> (claim.store_generation),
-                                             std::chrono::system_clock::now ()};
-          })
-          .get ();
+        return release_actor_async (std::move (key)).result ().value ();
+    }
+
+    task_t<location_write_result_t> release_actor_async (actor_location_key_t key)
+    {
+        const auto state = _state;
+        return state->lane.run_task ([state, key = std::move (key)] {
+            const auto found = state->actors.find (actor_key (key));
+            if (found == state->actors.end ()) {
+                return location_write_result_t{location_write_status_t::ignored_stale, 0, {}};
+            }
+            const auto claim = found->second;
+            // Untracked before the write: a stale remove after another owner's
+            // takeover is ignored by the store and must not fire deactivation.
+            state->actors.erase (found);
+            return location_write_result_t{location_write_status_t::stored,
+                                           static_cast<std::int64_t> (claim.store_generation),
+                                           std::chrono::system_clock::now ()};
+        });
     }
 
     std::size_t tracked_actor_count () const

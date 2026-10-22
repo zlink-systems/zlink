@@ -1394,7 +1394,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_host_lifecycle.cpp)
   target_compile_features(test_cpp_framework_host_lifecycle PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_host_lifecycle PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_host_lifecycle PRIVATE
     zlink_framework
     Threads::Threads)
@@ -1402,6 +1403,23 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     NAME test_cpp_framework_host_lifecycle
     COMMAND test_cpp_framework_host_lifecycle
     LABELS "framework-unit;framework-m6-runtime;maintenance;relocation;termination"
+    TIMEOUT 30)
+
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_relocated_actor_shutdown
+    COMMAND test_cpp_framework_host_lifecycle relocated-actor-shutdown
+    LABELS "framework-contract;relocation;termination"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_relocated_aggregate_shutdown
+    COMMAND test_cpp_framework_host_lifecycle relocated-aggregate-shutdown
+    LABELS "framework-contract;relocation;termination"
+    TIMEOUT 30)
+
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_relocation_missing_source
+    COMMAND test_cpp_framework_host_lifecycle relocation-missing-source
+    LABELS "framework-contract;relocation"
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_host_startup_failure
@@ -1809,6 +1827,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       TIMEOUT 30)
   endforeach()
   add_zlink_framework_test(
+    test_cpp_framework_maintenance_failure
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp
+    "framework-unit;framework-contract;framework-actor;relocation"
+    unit)
+  target_use_zlink_gtest_main(test_cpp_framework_maintenance_failure)
+  target_include_directories(test_cpp_framework_maintenance_failure PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_relocation_seal_contract
     tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
     "framework-unit;framework-contract;framework-actor;stream;relocation"
@@ -2108,7 +2134,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink::framework)
   target_include_directories(test_cpp_framework_in_memory_location_store PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_in_memory_location_store
     COMMAND test_cpp_framework_in_memory_location_store
