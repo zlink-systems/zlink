@@ -4,6 +4,8 @@
 #include <zlink/framework/contracts/dispatch/task.hpp>
 #include <zlink/framework/contracts/channels/call.hpp>
 
+#include "runtime/dispatch/owned_task.hpp"
+
 #include <exception>
 #include <functional>
 #include <memory>
@@ -19,11 +21,9 @@ template <typename T> task_t<T> run_blocking_step (std::function<task_t<T> ()> s
     auto owned_step = std::make_shared<std::function<task_t<T> ()>> (std::move (step));
     auto run = [owned_step, completion] () mutable {
         try {
-            auto running = std::make_shared<task_t<T>> ((*owned_step) ());
-            detail::observe_task_terminal (
-              *running, [running, completion, owned_step] (const result_t<T> &value) mutable {
-                  completion->complete (value);
-              });
+            start_owned_task<T> (owned_step, [completion] (const result_t<T> &value) {
+                completion->complete (value);
+            });
         }
         catch (const framework_exception_t &error) {
             completion->complete (detail::result_access_t::failure<T> (error));
