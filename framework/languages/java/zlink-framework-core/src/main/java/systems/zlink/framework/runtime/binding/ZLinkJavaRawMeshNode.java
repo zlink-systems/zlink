@@ -1886,23 +1886,12 @@ final class ZLinkJavaRawMeshNode
                         .orElse(0L);
     }
 
-    CompletionStage<Void> sendNode(
-            RoutingId target,
-            byte[] metadata,
-            List<Message> parts,
-            boolean request,
-            Long correlation) {
+    CompletionStage<Void> sendNode(RoutingId target, byte[] metadata, List<Message> parts) {
         RouterSocket router = requireStarted();
         int flags =
                 metadata == null || metadata.length == 0 ? 0 : ServiceWireConstants.FLAG_METADATA;
         List<Message> frames =
-                encodeApplicationFrames(
-                        request
-                                ? wire.encodeNodeRequestHeader(
-                                        Objects.requireNonNull(correlation, "correlation"), flags)
-                                : wire.encodeNodeSendHeader(flags),
-                        metadata,
-                        parts);
+                encodeApplicationFrames(wire.encodeNodeSendHeader(flags), metadata, parts);
         try {
             if (topology == null || topology.peerFromOwner(target).isEmpty()) {
                 return CompletableFuture.failedFuture(
