@@ -160,3 +160,8 @@ add_executable(bench_cpp_grpc_callback_test
 bench_target(bench_cpp_grpc_callback_test)
 bench_grpc_target(bench_cpp_grpc_callback_test)
 add_test(NAME bench_cpp_grpc_callback COMMAND bench_cpp_grpc_callback_test)
+
+add_executable(bench_cpp_framework_window_test tests/framework_window_test.cpp ${BENCH_PROTO_CC})
+target_include_directories(bench_cpp_framework_window_test PRIVATE ${BENCH_PROTO_GEN_DIR})
+target_link_libraries(bench_cpp_framework_window_test PRIVATE protobuf::libprotobuf)
+add_test(NAME bench_cpp_framework_window COMMAND bench_cpp_framework_window_test)
