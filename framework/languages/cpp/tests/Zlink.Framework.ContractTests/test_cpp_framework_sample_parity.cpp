@@ -260,7 +260,7 @@ void check_bingo_observer_join (std::optional<zlink::framework::framework_error_
     zlink::framework_codecs::protobuf ().register_framework_codecs (codecs);
     auto builder = zlink::framework::test::runtime_failure_builder ();
     auto transport = channel_runtime_t::from (builder.message_bus ());
-    bingo_observation_resolver_t resolver;
+    const auto resolver = std::make_shared<bingo_observation_resolver_t> ();
     transport.bind_spot_address_resolver (resolver);
     bingo_room_spot_t game ("room");
     bingo_room_relocation_state_t final_state;
