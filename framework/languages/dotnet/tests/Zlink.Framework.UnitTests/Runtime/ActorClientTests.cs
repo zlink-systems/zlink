@@ -9,6 +9,78 @@ namespace Zlink.Framework.UnitTests;
 public sealed class ActorClientTests
 {
     [Fact]
+    public void ActorErrorPayload_FollowsSharedVectors()
+    {
+        const string relative = "framework/runtime/conformance/actor-error-payload-v1.json";
+        var root = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+        while (
+            root is not null
+            && !System.IO.File.Exists(System.IO.Path.Combine(root.FullName, relative))
+        )
+            root = root.Parent;
+        Assert.NotNull(root);
+        using var fixture = System.Text.Json.JsonDocument.Parse(
+            System.IO.File.ReadAllText(System.IO.Path.Combine(root.FullName, relative))
+        );
+        foreach (var vector in fixture.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            var parts = vector
+                .GetProperty("parts")
+                .EnumerateArray()
+                .Select(part => Message.From(Convert.FromHexString(part.GetString()!)))
+                .ToArray();
+            var expected = (ZLinkFrameworkErrorKind)vector.GetProperty("expectedKind").GetInt32();
+            try
+            {
+                var typed = Assert.Throws<ZLinkFrameworkException>(() =>
+                    ZLinkActorReplyDecoder.Decode<object>(parts)
+                );
+                Assert.Equal(expected, typed.Kind);
+                var terminal = Assert.Throws<ZLinkFrameworkException>(() =>
+                    ZLinkActorReplyDecoder.DecodeTerminal(parts)
+                );
+                Assert.Equal(expected, terminal.Kind);
+                if (vector.GetProperty("valid").GetBoolean())
+                {
+                    var message = vector.GetProperty("message").GetString()!;
+                    Assert.Equal(message, typed.Message);
+                    Assert.Equal(message, terminal.Message);
+                    var reply = ZLinkActorReply.FromError(
+                        new ZLinkFrameworkException(expected, message)
+                    );
+                    var header = new ZlinkStreamHeader(
+                        ZlinkStreamMessageKind.Request,
+                        ZlinkStreamCodec.Json,
+                        ZlinkStreamHeaderFlags.HasRequestSeq,
+                        new ZlinkStreamRequestSeq(1),
+                        "ActorAsk",
+                        ZlinkStreamMetadata.Empty
+                    );
+                    var frame = reply.ToFrame(header);
+                    Assert.True(
+                        ZLinkStreamFrameCodec.TryDecode(frame, out var headerBytes, out var payload)
+                    );
+                    Assert.Equal(
+                        ZlinkStreamCodec.Json,
+                        ZLinkStreamProtocolDefaults.DecodeHeader(headerBytes.ToArray()).Codec
+                    );
+                    using var error = System.Text.Json.JsonDocument.Parse(payload.ToArray());
+                    Assert.Equal(
+                        vector.GetProperty("code").GetString(),
+                        error.RootElement.GetProperty("code").GetString()
+                    );
+                    Assert.Equal(message, error.RootElement.GetProperty("message").GetString());
+                }
+            }
+            finally
+            {
+                foreach (var part in parts)
+                    part.Dispose();
+            }
+        }
+    }
+
+    [Fact]
     public void ActorReplyDecoder_FollowsSharedFramingVectors()
     {
         const string relative = "framework/runtime/conformance/actor-reply-framing-v1.json";

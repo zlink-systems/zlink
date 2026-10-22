@@ -2596,7 +2596,7 @@ test('ZLinkSpotManager replies formal Mesh actor handler exceptions as HandlerEx
     );
     assert.deepEqual(JSON.parse(Buffer.from(replyFrame.payload).toString()), {
       message: 'handler boom',
-      kind: framework.ZLinkFrameworkErrorKind.InternalFailure
+      code: 'internal_failure'
     });
     const errorEvents = dispatchEvents.filter((event) => event.outcome === 'failed');
     assert.equal(errorEvents.length, 1);

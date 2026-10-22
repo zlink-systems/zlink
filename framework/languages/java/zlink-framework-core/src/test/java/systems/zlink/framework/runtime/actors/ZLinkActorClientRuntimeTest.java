@@ -71,6 +71,50 @@ import java.util.function.Consumer;
 
 final class ZLinkActorClientRuntimeTest {
     @Test
+    void actorErrorPayloadFollowsSharedVectors() throws Exception {
+        var current = java.nio.file.Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        while (current != null
+                && !java.nio.file.Files.isRegularFile(
+                        current.resolve("runtime/conformance/actor-error-payload-v1.json")))
+            current = current.getParent();
+        if (current == null) throw new IllegalStateException("Actor Error fixture was not found");
+        var fixture =
+                new com.fasterxml.jackson.databind.ObjectMapper()
+                        .readTree(
+                                java.nio.file.Files.readString(
+                                        current.resolve(
+                                                "runtime/conformance/actor-error-payload-v1.json")));
+        for (var vector : fixture.get("cases")) {
+            var parts = new java.util.ArrayList<Message>();
+            for (var part : vector.get("parts"))
+                parts.add(Message.from(java.util.HexFormat.of().parseHex(part.asText())));
+            var expected = ZLinkFrameworkErrorKind.fromValue(vector.get("expectedKind").asInt());
+            try {
+                var typed =
+                        assertThrows(
+                                ZLinkFrameworkException.class,
+                                () ->
+                                        ZLinkActorReplyDecoder.decode(
+                                                parts,
+                                                new ZLinkJsonMessageSerializer(),
+                                                Pong.class));
+                assertEquals(expected, typed.kind(), vector.get("id").asText());
+                var terminal =
+                        assertThrows(
+                                ZLinkFrameworkException.class,
+                                () -> ZLinkActorReplyDecoder.decodeTerminal(parts));
+                assertEquals(expected, terminal.kind(), vector.get("id").asText());
+                if (vector.get("valid").asBoolean()) {
+                    assertEquals(vector.get("message").asText(), typed.getMessage());
+                    assertEquals(vector.get("message").asText(), terminal.getMessage());
+                }
+            } finally {
+                parts.forEach(Message::close);
+            }
+        }
+    }
+
+    @Test
     void actorReplyDecoderFollowsSharedFramingVectors() throws Exception {
         var current = java.nio.file.Path.of(System.getProperty("user.dir")).toAbsolutePath();
         while (current != null

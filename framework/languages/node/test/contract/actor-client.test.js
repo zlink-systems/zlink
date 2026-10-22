@@ -164,6 +164,34 @@ test('Actor reply encoder preserves response schema and uses default JSON for er
   assert.deepEqual(JSON.parse(Buffer.from(frame.payload).toString()), { value: 2147483648 });
 });
 
+const actorErrorFixture = require('../../../../runtime/conformance/actor-error-payload-v1.json');
+for (const vector of actorErrorFixture.cases) {
+  test(`Actor Error shared vector ${vector.id}`, async () => {
+    const client = createActorClient({
+      nodeProvider: () => ({ requestToActor() { return operationId; } }),
+      completionTableProvider: () => completionTable(RequestResult.Ok,
+        vector.parts.map(hex => Message.from(Buffer.from(hex, 'hex')))),
+      locationResolver: () => createResolver()
+    });
+    await assert.rejects(() => client.requestToActor('actor-1', new ActorAsk('ping')).submit(),
+      error => error.kind === vector.expectedKind && (!vector.valid || error.message === vector.message));
+    if (vector.valid) {
+      const { boundSessionErrorPayload } = require('../../packages/framework/dist/runtime/streams/bound-session-response-target');
+      const { encodeActorReply } = require('../../packages/framework/dist/runtime/actors/actor-reply');
+      const request = framework.encodeStreamHeader({ kind: framework.ZLinkStreamMessageKind.Request,
+        codec: framework.ZLinkStreamCodec.Json, flags: framework.ZLinkStreamHeaderFlags.None,
+        requestSeq: 1n, name: 'ActorAsk', metadata: new Map() });
+      const parts = encodeActorReply(request, framework.ZLinkStreamMessageKind.Error,
+        boundSessionErrorPayload(new framework.ZLinkFrameworkException(vector.expectedKind, vector.message)),
+        undefined, false);
+      assert.equal(parts.length, 1);
+      const frame = framework.decodeStreamFrame(parts[0]);
+      assert.equal(framework.decodeStreamHeader(frame.header).codec, framework.ZLinkStreamCodec.Json);
+      assert.deepEqual(JSON.parse(Buffer.from(frame.payload).toString()), { code: vector.code, message: vector.message });
+    }
+  });
+}
+
 test('cached actor request allocates no deadline timer or race promise', async t => {
   const resolver = createStoreResolver({
     kind: 'snapshot', allocation: {

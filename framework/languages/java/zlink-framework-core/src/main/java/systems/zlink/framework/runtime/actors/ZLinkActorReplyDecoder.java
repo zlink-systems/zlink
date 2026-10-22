@@ -55,6 +55,11 @@ final class ZLinkActorReplyDecoder {
                     payload,
                     replyType,
                     serializer);
+        } catch (IllegalArgumentException invalidFrame) {
+            throw new ZLinkFrameworkException(
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "Actor request reply frame is invalid.",
+                    invalidFrame);
         } finally {
             payload.close();
         }
@@ -66,20 +71,14 @@ final class ZLinkActorReplyDecoder {
             Class<TReply> replyType,
             ZLinkMessageSerializer serializer) {
         if (header.kind() == ZLinkStreamMessageKind.ERROR) {
-            try {
-                ZLinkStreamErrorPayload.Decoded error =
-                        ZLinkStreamErrorPayload.decode(payload.toByteArray());
-                ZLinkFrameworkErrorKind kind =
-                        error.frameworkKind() == null
-                                ? ZLinkFrameworkErrorKind.INTERNAL_FAILURE
-                                : error.frameworkKind();
-                throw new ZLinkFrameworkException(kind, error.message());
-            } catch (IllegalArgumentException invalidPayload) {
+            ZLinkStreamErrorPayload.Decoded error =
+                    ZLinkStreamErrorPayload.decode(payload.toByteArray());
+            if (error.frameworkKind() == null) {
                 throw new ZLinkFrameworkException(
                         ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                        "Actor request error reply payload is invalid.",
-                        invalidPayload);
+                        "Actor Error reply uses an unknown error code.");
             }
+            throw new ZLinkFrameworkException(error.frameworkKind(), error.message());
         }
         if (replyType == null) return null;
         return ZLinkMessagePayloads.deserialize(

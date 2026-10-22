@@ -8113,11 +8113,68 @@ int actor_reply_framing_vectors ()
     return 0;
 }
 
+int actor_error_payload_vectors ()
+{
+    using namespace zlink::framework;
+    auto root = std::filesystem::path (__FILE__).parent_path ();
+    const auto relative = "framework/runtime/conformance/actor-error-payload-v1.json";
+    while (!root.empty () && !std::filesystem::is_regular_file (root / relative)) {
+        const auto parent = root.parent_path ();
+        if (parent == root)
+            return 1;
+        root = parent;
+    }
+    std::ifstream input (root / relative);
+    if (!input)
+        return 1;
+    const auto fixture = nlohmann::json::parse (input);
+    for (const auto &vector : fixture.at ("cases")) {
+        std::vector<zlink::message_t> parts;
+        for (const auto &part : vector.at ("parts")) {
+            const auto hex = part.get<std::string> ();
+            std::vector<std::uint8_t> bytes;
+            for (std::size_t i = 0; i < hex.size (); i += 2)
+                bytes.push_back (
+                  static_cast<std::uint8_t> (std::stoul (hex.substr (i, 2), nullptr, 16)));
+            parts.push_back (zlink::message_t::from (bytes));
+        }
+        const auto expected =
+          static_cast<framework_error_kind_t> (vector.at ("expectedKind").get<int> ());
+        const auto reply =
+          detail::decode_actor_reply (runtime::messaging::message_parts_t (std::move (parts)));
+        if (reply || reply.error_kind () != expected) {
+            std::cerr << "Actor Error vector failed: " << vector.at ("id") << '\n';
+            return 2;
+        }
+        if (vector.at ("valid").get<bool> ()) {
+            const auto message = vector.at ("message").get<std::string> ();
+            if (reply.error ()->what () != message)
+                return 3;
+            if (expected == framework_error_kind_t::unavailable
+                && reply.error ()->code () != std::make_error_code (std::errc::not_connected))
+                return 5;
+            runtime::messaging::envelope_header_t header;
+            header.kind = runtime::messaging::message_kind_t::error;
+            header.error_code = detail::stream_error_code (expected);
+            header.error_message = message;
+            auto encoded = detail::encode_actor_reply (header, zlink::message_t::from (""));
+            auto [wire, body] = detail::stream_runtime_t::decode_frame (encoded.items (), false);
+            const auto payload = nlohmann::json::parse (body.to_string ());
+            if (wire.codec () != stream_codec_t::json || payload.at ("code") != vector.at ("code")
+                || payload.at ("message") != message)
+                return 4;
+        }
+    }
+    return 0;
+}
+
 int main (int argc, char **argv)
 {
     if (const auto framing = actor_reply_framing_vectors (); framing != 0)
         return 500 + framing;
 
+    if (const auto errors = actor_error_payload_vectors (); errors != 0)
+        return 600 + errors;
     zlink::framework::completion_owner_t completion_owner;
     if (argc == 2 && std::string (argv[1]) == "--actor-typed-wire")
         return actor_typed_wire_header_contract ();
