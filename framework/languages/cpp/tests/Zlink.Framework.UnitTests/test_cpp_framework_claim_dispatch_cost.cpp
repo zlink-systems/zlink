@@ -127,11 +127,17 @@ bool verify_cost (host::public_host_runtime_t &target, bool channel, bool owning
 {
     mesh::service_mailbox_t mailbox;
     enqueue (mailbox, false, channel);
+    // The original moves once, inside the claim, exactly as the dispatcher takes it;
+    // a record move allocates on some standard libraries (MSVC std::map).
     const auto claim_cost = tests::measure_allocations ([&] {
+        std::optional<mesh::service_mailbox_record_t> original;
+        const auto transfer = [&original] (const auto &claim) {
+            original.emplace (std::move (*claim->records[0]));
+        };
         auto claim = mailbox.try_claim_owner (domain, claim_owner (channel), 1,
-                                              runtime::dispatch_limits::receive_batch_bytes);
+                                              runtime::dispatch_limits::receive_batch_bytes,
+                                              std::ref (transfer));
         require (static_cast<bool> (claim), "baseline claim failed");
-        auto original = mailbox.take ({claim, 0});
         require (original.has_value (), "baseline original transfer failed");
         require (original->transferred (), "baseline release failed");
     });
