@@ -5,6 +5,7 @@
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/stateful/relocation_transfer.hpp"
+#include "runtime/locations/relocation_authority_payload.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
 
@@ -39,7 +40,6 @@ class monitoring_runtime_state_t;
 namespace zlink::framework::runtime::stateful
 {
 
-using inventory_digest_t = std::array<std::uint8_t, 32>;
 using relocation_session_binding_t =
   std::pair<protocol::actor_identity_t, protocol::relocation_envelope_session_binding_t>;
 
@@ -96,17 +96,6 @@ class durable_session_journal_store_t
 
   private:
     std::shared_ptr<relocation_store_port_t> _store;
-};
-
-struct authority_relocation_reference_t
-{
-    object_ref_t source;
-    object_ref_t target;
-    std::string relocation_reference;
-    std::uint32_t checksum_crc32c = 0;
-    inventory_digest_t inventory_digest{};
-    location_owner_token_t target_owner;
-    std::vector<std::byte> application_payload;
 };
 
 enum class authority_publish_status_t
@@ -490,6 +479,8 @@ class maintenance_runtime_t
 {
   public:
     using observer_t = std::function<void (const relocation_result_t &)>;
+    using committed_terminal_t =
+      std::function<void (const object_ref_t &, const std::vector<turn_record_t> &)>;
 
     maintenance_runtime_t (stateful_object_runtime_t &objects,
                            std::shared_ptr<authority_relocation_port_t> authority,
@@ -548,7 +539,7 @@ class maintenance_runtime_t
     /* Expired-owner terminal (28 §4.4): replies Unavailable once to each
      * pending request of the object and drops its accepted records. */
     void attach_unavailable_terminal (std::function<void (const object_ref_t &)> terminal) noexcept;
-    void attach_committed_terminal (std::function<void (const object_ref_t &)> terminal) noexcept;
+    void attach_committed_terminal (committed_terminal_t terminal) noexcept;
 
     relocation_gate_snapshot_t gate_snapshot () const;
 
@@ -631,7 +622,7 @@ class maintenance_runtime_t
     task_t<bool> relocate_seal (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> capture_relocation_session_bindings (
       eligible_relocation_unit_t::canonical_wire_context_t &context);
-    bool relocate_encode (const std::shared_ptr<relocation_terminal_state_t> &state);
+    task_t<bool> relocate_encode (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_prepare_target (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<bool> relocate_send_state_chunks (std::shared_ptr<relocation_terminal_state_t> state,
                                              std::function<bool ()> target_failed = {});
@@ -671,10 +662,8 @@ class maintenance_runtime_t
                               const object_ref_t &owner,
                               std::uint64_t participant_id,
                               const turn_record_t &turn) const;
-    task_t<stateful_error_t> abort_relocation_before_cutover (
-      std::uint64_t token,
-      const eligible_relocation_unit_t::canonical_wire_context_t &context,
-      relocation_metric_operation_t *preserved_metric = nullptr);
+    task_t<stateful_error_t>
+    abort_relocation_before_cutover (std::shared_ptr<relocation_terminal_state_t> state);
     task_t<relocation_reason_t>
     prepare_target (const eligible_relocation_unit_t::canonical_wire_context_t &context,
                     const std::vector<frozen_object_state_t> &participants,
@@ -701,7 +690,7 @@ class maintenance_runtime_t
     raw_relocation_replay_coordinator_t *_relocation_wire = nullptr;
     std::function<raw_stateful_dispatch_t *()> _relocation_dispatch;
     std::function<void (const object_ref_t &)> _unavailable_terminal;
-    std::function<void (const object_ref_t &)> _committed_terminal;
+    committed_terminal_t _committed_terminal;
     /* route_convergence metric + SafeToShutdown obligation count, held
      * separately from `this` in a shared_ptr: the retention coroutine in
      * retain_message_follow is detached (self-keeping via
@@ -758,7 +747,7 @@ class host_maintenance_runtime_t
   private:
     task_t<termination_result_t> run_termination ();
     task_t<termination_result_t> run_shutdown ();
-    void complete_termination (const termination_result_t &result);
+    task_t<void> complete_termination (termination_result_t result);
 
     stateful_object_runtime_t &_objects;
     stream_session_registry_t &_sessions;
