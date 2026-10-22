@@ -33,7 +33,11 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-final class RouteSendCall implements ZLinkSendCall {
+final class RouteSendCall
+        implements ZLinkSendCall,
+                java.util.function.BiFunction<
+                        ZLinkInternalSpotNode, Duration, CompletionStage<Void>>,
+                java.util.function.Consumer<Throwable> {
     private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
@@ -122,12 +126,7 @@ final class RouteSendCall implements ZLinkSendCall {
         }
         try (var flowScope = runtime.enterApplicationFlow()) {
             return sockets.submitToNode(
-                    channelName,
-                    null,
-                    null,
-                    (router, timeout) -> submitRouter(router),
-                    (node, timeout) -> submitNode(node),
-                    failure -> payload.close());
+                    channelName, null, null, (router, timeout) -> submitRouter(router), this, this);
         }
     }
 
@@ -153,7 +152,13 @@ final class RouteSendCall implements ZLinkSendCall {
         }
     }
 
-    private CompletionStage<Void> submitNode(ZLinkInternalSpotNode node) {
+    @Override
+    public void accept(Throwable failure) {
+        payload.close();
+    }
+
+    @Override
+    public CompletionStage<Void> apply(ZLinkInternalSpotNode node, Duration timeout) {
         ZLinkApplicationMetadata metadata =
                 this.metadata == null ? ZLinkApplicationMetadata.empty() : this.metadata;
         traceSent();
@@ -566,7 +571,11 @@ final class RouteRequestCall implements ZLinkRequestCall {
     }
 }
 
-final class ChannelSendCall implements ZLinkSendCall {
+final class ChannelSendCall
+        implements ZLinkSendCall,
+                java.util.function.BiFunction<
+                        ZLinkInternalSpotNode, Duration, CompletionStage<Void>>,
+                java.util.function.Consumer<Throwable> {
     private final AtomicBoolean submitGate;
     private final ZLinkChannelCallRuntime runtime;
     private final String channelName;
@@ -669,8 +678,8 @@ final class ChannelSendCall implements ZLinkSendCall {
                             null,
                             null,
                             (client, remaining) -> submitClient(client),
-                            (node, timeout) -> submitMesh(node),
-                            failure -> payload.close()));
+                            this,
+                            this));
         }
     }
 
@@ -707,7 +716,13 @@ final class ChannelSendCall implements ZLinkSendCall {
         }
     }
 
-    private CompletionStage<Void> submitMesh(ZLinkInternalSpotNode node) {
+    @Override
+    public void accept(Throwable failure) {
+        payload.close();
+    }
+
+    @Override
+    public CompletionStage<Void> apply(ZLinkInternalSpotNode node, Duration timeout) {
         ZLinkApplicationMetadata metadata =
                 this.metadata == null ? ZLinkApplicationMetadata.empty() : this.metadata;
         List<Message> parts =

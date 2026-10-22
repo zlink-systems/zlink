@@ -69,6 +69,7 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
                         new ZLinkJavaChannelBackendAdapter(), options.registration(), serializer)) {
             long total = 0;
             long totalOptionals = 0;
+            long excessCallbacks = 0;
             for (boolean direct : new boolean[] {false, true}) {
                 var calls = new ZLinkSendCall[SENDS];
                 var outputs = new Message[SENDS];
@@ -119,11 +120,37 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
                         SENDS,
                         optionalControl[1],
                         "Optional allocation recording has a positive control");
+                long[] callbackControl =
+                        tuples(
+                                () -> {
+                                    for (int i = 0; i < SENDS; i++)
+                                        observed = (Runnable) () -> serializer.output.close();
+                                },
+                                true);
+                long[] submitted =
+                        tuples(
+                                () -> {
+                                    for (int i = 0; i < SENDS; i++) {
+                                        reject(prepare(runtime, direct));
+                                        assertThrows(
+                                                IllegalStateException.class,
+                                                serializer.output::refCount);
+                                    }
+                                });
+                System.out.printf(
+                        "direct=%s sends=%d controlCallbacks=%d submitCallbacks=%d%n",
+                        direct, SENDS, callbackControl[2], submitted[2]);
+                assertEquals(SENDS, callbackControl[2]);
+                excessCallbacks += Math.abs(submitted[2] - callbackControl[2]);
                 total += actual[0];
                 totalOptionals += actual[1];
             }
             assertEquals(0, total, "the send calls directly own the codec output");
             assertEquals(0, totalOptionals, "send preparation keeps packet names as strings");
+            assertEquals(
+                    0,
+                    excessCallbacks,
+                    "the send call supplies its own mesh submit and rejection callback");
         } finally {
             options.registration().applicationJobQueue().close();
         }
@@ -146,6 +173,10 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
     }
 
     private static long[] tuples(Runnable action) throws Exception {
+        return tuples(action, false);
+    }
+
+    private static long[] tuples(Runnable action, boolean callbackControl) throws Exception {
         var file = Files.createTempFile("zlink-send-prepare-", ".jfr");
         try {
             try (var recording = new Recording()) {
@@ -156,7 +187,7 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
                 recording.stop();
                 recording.dump(file);
             }
-            long[] count = new long[2];
+            long[] count = new long[3];
             try (var events = new RecordingFile(file)) {
                 while (events.hasMoreEvents()) {
                     var event = events.readEvent();
@@ -166,6 +197,30 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
                         if (allocated.equals(ZLinkPayloadEncoding.EncodedPayload.class.getName()))
                             count[0]++;
                         if (allocated.equals(Optional.class.getName())) count[1]++;
+                        if (allocated.contains("$$Lambda") && event.getStackTrace() != null) {
+                            var owner =
+                                    event.getStackTrace().getFrames().stream()
+                                            .filter(
+                                                    frame ->
+                                                            frame.getMethod()
+                                                                    .getType()
+                                                                    .getName()
+                                                                    .startsWith(
+                                                                            "systems.zlink.framework."))
+                                            .findFirst();
+                            if (owner.isPresent()) {
+                                String type = owner.orElseThrow().getMethod().getType().getName();
+                                if (callbackControl
+                                        ? type.startsWith(
+                                                ZLinkSendPayloadPreparationAllocationTest.class
+                                                        .getName())
+                                        : type.startsWith(
+                                                        "systems.zlink.framework.runtime.channels.RouteSendCall")
+                                                || type.startsWith(
+                                                        "systems.zlink.framework.runtime.channels.ChannelSendCall"))
+                                    count[2]++;
+                            }
+                        }
                     }
                 }
             }
