@@ -229,22 +229,24 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
         if (auto cached = cached_route (_actor_routes, actor_id)) {
             co_return std::optional<spot_address_t>{std::move (*cached)};
         }
-        const auto authority = co_await read_ready_authority (true, actor_id);
-        if (!authority) {
-            co_return std::optional<spot_address_t>{};
-        }
-        const auto projection =
-          decode_actor_authority_payload (authority->payload, authority->object_generation);
-        if (!projection || projection->actor.actor_id ().value () != actor_id)
-            co_return std::optional<spot_address_t>{};
-        auto address = spot_address_t{
-          authority->allocation.target.mesh_name,
-          zlink::routing_id_t::from (std::string (authority->allocation.target.node_rid.value ())),
-          projection->spot_id, projection->spot_generation};
-        address.node_generation = authority->allocation.target.node_lifecycle_generation;
-        apply_authority (address, *authority);
-        co_await cache_ready_route (_actor_routes, actor_id, address);
-        co_return std::optional<spot_address_t>{std::move (address)};
+        auto address = co_await read_actor_address (actor_id);
+        if (address)
+            co_await cache_ready_route (_actor_routes, actor_id, *address);
+        co_return address;
+    }
+
+    task_t<std::optional<spot_address_t>>
+    resolve_actor_session_binding_address (actor_ref_t actor) override
+    {
+        auto address = co_await read_actor_address (std::string (actor.actor_id ().value ()));
+        if (!address || address->object_generation != actor.object_generation ()
+            || address->node_rid
+                 != zlink::routing_id_t::from (std::string (actor.node_rid ().value ()))
+            || (!actor.mesh_name ().empty () && address->mesh_name != actor.mesh_name ())
+            || address->authority_owner_generation == 0 || address->node_generation == 0
+            || address->owner.lease_generation <= 0)
+            co_return std::nullopt;
+        co_return address;
     }
 
     void invalidate_actor_address (std::string_view actor_id) override
@@ -296,6 +298,25 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
     }
 
   private:
+    task_t<std::optional<spot_address_t>> read_actor_address (std::string actor_id)
+    {
+        const auto authority = co_await read_ready_authority (true, actor_id);
+        if (!authority) {
+            co_return std::optional<spot_address_t>{};
+        }
+        const auto projection =
+          decode_actor_authority_payload (authority->payload, authority->object_generation);
+        if (!projection || projection->actor.actor_id ().value () != actor_id)
+            co_return std::optional<spot_address_t>{};
+        auto address = spot_address_t{
+          authority->allocation.target.mesh_name,
+          zlink::routing_id_t::from (std::string (authority->allocation.target.node_rid.value ())),
+          projection->spot_id, projection->spot_generation};
+        address.node_generation = authority->allocation.target.node_lifecycle_generation;
+        apply_authority (address, *authority);
+        co_return std::optional<spot_address_t>{std::move (address)};
+    }
+
     struct cached_address_t
     {
         spot_address_t address;
