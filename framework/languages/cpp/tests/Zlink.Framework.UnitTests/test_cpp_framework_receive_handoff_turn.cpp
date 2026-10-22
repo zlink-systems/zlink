@@ -22,10 +22,15 @@ namespace zlink::framework::runtime
 {
 struct offload_executor_test_access_t
 {
-    static bool application_pending (offload_executor_t &executor)
+    static bool application_queued (offload_executor_t &executor)
     {
         std::lock_guard lock (executor._mutex);
-        return !executor._queue.empty () || executor._active > executor._role_active;
+        return !executor._queue.empty ();
+    }
+    static bool application_running (offload_executor_t &executor)
+    {
+        std::lock_guard lock (executor._mutex);
+        return executor._active > executor._role_active;
     }
     static std::size_t idle (offload_executor_t &executor)
     {
@@ -120,9 +125,19 @@ extern "C" bool wrapped_assign (rt::offload_executor_t *executor,
         if (watched)
             pending_handoff = false;
     }
+    if (watched) {
+        // Other application work may still be finishing on a worker. A posted
+        // probe owner enters its handler; unrelated work completes instead.
+        const auto deadline = std::chrono::steady_clock::now () + 5s;
+        while (!handler_entered.load ()
+               && rt::offload_executor_test_access_t::application_running (*executor)) {
+            assert (std::chrono::steady_clock::now () < deadline);
+            std::this_thread::yield ();
+        }
+    }
     if (watched
         && (handler_entered.load ()
-            || rt::offload_executor_test_access_t::application_pending (*executor))) {
+            || rt::offload_executor_test_access_t::application_queued (*executor))) {
         ++posted_before_handoff;
         // The original receive turn has already published this owner. Let
         // its posted worker enter before the receive resource can continue.
