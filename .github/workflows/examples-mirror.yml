@@ -27,7 +27,7 @@ name: Mirror examples repositories
 # re-run this workflow (workflow_dispatch with the tag) after the fix ships.
 #
 # Push credentials are one write-only deploy key per mirror repository
-# (EXAMPLES_MIRROR_KEY_<LANG> secrets, doc/building/release-accounts.ko.md).
+# (EXAMPLES_MIRROR_KEY_<LANG> secrets, internal document: zlink/building/release-accounts.ko.md in private zlink-systems/docs).
 # GITHUB_TOKEN cannot push to another repository.
 on:
   workflow_call:

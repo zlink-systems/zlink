@@ -43,7 +43,7 @@ Number rules are owned by the [versioning policy](./versioning.md): Core `MAJOR.
   - Create GitHub Release if needed
   - Publish to npm/PyPI/NuGet/Maven if needed
 
-Required accounts/secrets: [release-accounts.md](./release-accounts.md)
+Required accounts/secrets: internal document (`zlink/building/release-accounts.md` in the private repository zlink-systems/docs)
 
 ## 4. Conan
 

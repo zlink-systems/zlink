@@ -4,7 +4,7 @@
 
 이 문서는 zlink의 각 구성 요소가 **어디서(GitHub Actions 워크플로우), 무엇으로(트리거·인증),
 어디로(공개 채널)** 빌드되고 배포되는지를 한 장에 정리한다. 절차 세부는
-[패키징 가이드](./packaging.ko.md), 계정·secret은 [배포 계정](./release-accounts.ko.md)을 본다.
+[패키징 가이드](./packaging.ko.md), 계정·secret은 내부 문서(비공개 저장소 zlink-systems/docs의 `zlink/building/release-accounts.ko.md`)를 본다.
 모든 배포는 GitHub Actions에서 수행하며 로컬 PC에서 publish하지 않는다.
 
 ## 1. 구성 요소별 배포 경로
@@ -200,7 +200,7 @@ Windows job의 MSVC 환경은 `.github/actions/msvc-env`(composite, Node 런타�
 
 ## 10. 관련 기록
 
-- [배포 계정과 secret](./release-accounts.ko.md)
+- 내부 문서(비공개 저장소 zlink-systems/docs의 `zlink/building/release-accounts.ko.md`)
 - [패키징 절차](./packaging.ko.md)
 - [릴리스 노트](./release-notes/)
 - [PR 초안](./pr-drafts/) — ConanCenter #30935, vcpkg #53846

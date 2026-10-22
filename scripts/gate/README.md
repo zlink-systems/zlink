@@ -2,7 +2,7 @@
 
 Serialized, machine-local gates used to close a Core/framework change. Logs go to `zlink-work/gates/<tag>/`.
 
-A new tree needs no manual preparation: `rebuild-dev.sh <tag>` then the gate. Machine prerequisites are checked once at start by `check-env.sh` (run it directly to see `ok`/`missing <install command>` per item); the procedure and its rationale live in `doc/principal/dev/worktree-setup.ko.md`.
+A new tree needs no manual preparation: `rebuild-dev.sh <tag>` then the gate. Machine prerequisites are checked once at start by `check-env.sh` (run it directly to see `ok`/`missing <install command>` per item); the procedure and its rationale live in internal document (`zlink/dev/worktree-setup.ko.md` in the private repository zlink-systems/docs).
 
 | Script | What it does |
 |---|---|
