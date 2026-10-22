@@ -7650,10 +7650,12 @@ public_host_runtime_t::dispatch_application_claim (
         auto &entry = batch->entries[index];
         mesh::service_mailbox_settlement_t release_mailbox_reservation;
         try {
+            // A taken original is dispatched in its slot: each record move copies
+            // container storage on some standard libraries (MSVC std::map).
             using step_t = std::variant<std::monostate, mesh::service_mailbox_record_t, kept_t>;
             auto step =
               entry.original
-                ? step_t (std::move (*entry.original))
+                ? step_t ()
                 : _transport->mailbox ().take_unless (
                     slot,
                     [stateful = static_cast<bool> (_stateful_dispatch),
@@ -7678,8 +7680,6 @@ public_host_runtime_t::dispatch_application_claim (
                         return kept_t{
                           stateful::claimed_ingress_t::prepare (original, sources, *mesh_name)};
                     });
-            if (std::holds_alternative<std::monostate> (step))
-                continue;
             if (auto *kept = std::get_if<kept_t> (&step)) {
                 // Only stateful ingress needs a suspended cursor. The canonical
                 // slot remains the original owner throughout authority preparation.
@@ -7771,9 +7771,11 @@ public_host_runtime_t::dispatch_application_claim (
                         ++batch->index;
                 }(shared_from_this (), batch, std::move (*kept));
                 return continue_application_claim (batch, std::move (pending));
-            } else
-                entry.original.emplace (
-                  std::move (std::get<mesh::service_mailbox_record_t> (step)));
+            }
+            if (auto *taken = std::get_if<mesh::service_mailbox_record_t> (&step))
+                entry.original.emplace (std::move (*taken));
+            if (!entry.original)
+                continue;
             auto &mailbox_record = *entry.original;
             release_mailbox_reservation = std::exchange (mailbox_record.transferred, {});
             const auto retain_mailbox_reservation = [batch, index] {
