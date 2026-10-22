@@ -242,6 +242,56 @@ final class ZLinkLocationRuntimeRecoveryTest {
     }
 
     @Test
+    void successfulStartupStoppedByCompletionObserverDoesNotRunCancellationCleanup() {
+        var claim = new CompletableFuture<ZLinkOwnerLeaseClaimResult>();
+        var removed = new AtomicInteger();
+        var released = new AtomicInteger();
+        var token = new ZLinkLocationOwnerToken("owner-a", 1);
+        var store =
+                new ZLinkLocationStoreTestAdapter() {
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseClaimResult> claimOwnerLease(
+                            String ownerId, Duration ttl) {
+                        return claim;
+                    }
+
+                    @Override
+                    public CompletionStage<Long> removeAllByOwner(ZLinkLocationOwnerToken owner) {
+                        assertEquals(token, owner);
+                        removed.incrementAndGet();
+                        return CompletableFuture.completedFuture(0L);
+                    }
+
+                    @Override
+                    public CompletionStage<ZLinkOwnerLeaseReleaseResult> releaseOwnerLease(
+                            ZLinkLocationOwnerToken owner) {
+                        assertEquals(token, owner);
+                        released.incrementAndGet();
+                        return CompletableFuture.completedFuture(
+                                ZLinkOwnerLeaseReleaseResult.RELEASED);
+                    }
+                };
+        try (var runtime =
+                new ZLinkLocationRuntime(
+                        ZLinkRegisteredLocationStores.fromUnified(store),
+                        "owner-a",
+                        Duration.ofSeconds(15),
+                        Duration.ofHours(1),
+                        Duration.ofSeconds(5),
+                        Duration.ofSeconds(1))) {
+            var startup = runtime.start(RoutingId.from("node-a")).toCompletableFuture();
+            // Stop from the success observer before the earlier cleanup observer runs.
+            var stopped = startup.thenApply(ignored -> runtime.stop()).thenCompose(stage -> stage);
+            Instant now = Instant.now();
+            claim.complete(new ZLinkOwnerLeaseClaimed(token, now.plusSeconds(15), now));
+            startup.join();
+            stopped.join();
+            assertEquals(1, removed.get());
+            assertEquals(1, released.get());
+        }
+    }
+
+    @Test
     void stoppedOwnerRenewalCannotOverwriteTheRestartedOwnerLease() {
         Instant now = Instant.parse("2026-10-01T00:00:00Z");
         var generation = new AtomicInteger();
@@ -820,7 +870,7 @@ final class ZLinkLocationRuntimeRecoveryTest {
     }
 
     @Test
-    void pendingClaimCleanupLeavesTheRecoveredTokenToStopAndPreservesConfirmationFailure()
+    void successfulStartupLeavesTheRecoveredTokenToStopWithoutCancellationConfirmation()
             throws Exception {
         for (boolean failConfirmation : new boolean[] {false, true}) {
             RestartedClaimStore store = new RestartedClaimStore();
@@ -844,19 +894,13 @@ final class ZLinkLocationRuntimeRecoveryTest {
                         runtime.renewOwnerLeaseOnce()
                                 .toCompletableFuture()
                                 .get(1, TimeUnit.SECONDS));
+                int readsBeforeStop = store.reads.get();
                 store.failRead = failConfirmation;
                 var stopping = runtime.stop(deadline).toCompletableFuture();
                 store.firstClaim.completeExceptionally(
                         new IllegalStateException("initial provider failed"));
-                if (failConfirmation) {
-                    var failure =
-                            assertThrows(
-                                    java.util.concurrent.ExecutionException.class,
-                                    () -> stopping.get(1, TimeUnit.SECONDS));
-                    assertEquals("confirmation failed", failure.getCause().getMessage());
-                } else {
-                    stopping.get(1, TimeUnit.SECONDS);
-                }
+                stopping.get(1, TimeUnit.SECONDS);
+                assertEquals(readsBeforeStop, store.reads.get());
                 assertEquals(1, store.releases.get());
                 assertFalse(runtime.ownerLeaseHealthy());
             }
@@ -891,7 +935,7 @@ final class ZLinkLocationRuntimeRecoveryTest {
     }
 
     @Test
-    void hostCleanupDeadlinePreservesBothCleanupFailures() throws Exception {
+    void normalStopPreservesReleaseFailureWithoutCancellationConfirmation() throws Exception {
         RestartedClaimStore store = new RestartedClaimStore();
         try (ZLinkLocationRuntime runtime =
                 new ZLinkLocationRuntime(
@@ -911,6 +955,7 @@ final class ZLinkLocationRuntimeRecoveryTest {
                     .get(1, TimeUnit.SECONDS);
             assertTrue(
                     runtime.renewOwnerLeaseOnce().toCompletableFuture().get(1, TimeUnit.SECONDS));
+            int readsBeforeStop = store.reads.get();
             store.failRead = true;
             store.releaseResult =
                     CompletableFuture.failedFuture(new IllegalStateException("release failed"));
@@ -921,9 +966,9 @@ final class ZLinkLocationRuntimeRecoveryTest {
                     assertThrows(
                             java.util.concurrent.ExecutionException.class,
                             () -> stopping.get(1, TimeUnit.SECONDS));
-            assertEquals("confirmation failed", failure.getCause().getMessage());
-            assertEquals(1, failure.getCause().getSuppressed().length);
-            assertEquals("release failed", failure.getCause().getSuppressed()[0].getMessage());
+            assertEquals("release failed", failure.getCause().getMessage());
+            assertEquals(0, failure.getCause().getSuppressed().length);
+            assertEquals(readsBeforeStop, store.reads.get());
             assertEquals(1, store.releases.get());
         }
     }
@@ -1112,6 +1157,7 @@ final class ZLinkLocationRuntimeRecoveryTest {
         private final ZLinkLocationOwnerToken current = new ZLinkLocationOwnerToken("owner-a", 2);
         private final AtomicInteger claims = new AtomicInteger();
         private final AtomicInteger releases = new AtomicInteger();
+        private final AtomicInteger reads = new AtomicInteger();
         private boolean failRead;
         private final CountDownLatch releaseCalled = new CountDownLatch(1);
         private CompletableFuture<ZLinkOwnerLeaseReleaseResult> releaseResult =
@@ -1128,6 +1174,7 @@ final class ZLinkLocationRuntimeRecoveryTest {
 
         @Override
         public CompletionStage<ZLinkOwnerLeaseReadResult> readOwnerLease(String ownerId) {
+            reads.incrementAndGet();
             if (failRead)
                 return CompletableFuture.failedFuture(
                         new IllegalStateException("confirmation failed"));
