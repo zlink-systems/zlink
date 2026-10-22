@@ -144,7 +144,6 @@ raw_send_submission_t raw_route_port_t::submit_send (const raw_bytes_t &target_r
     try {
         if (target_routing_id.empty () || parts.empty ())
             throw std::invalid_argument ("raw route send requires a target and message parts");
-        auto messages = materialize_binding_parts (std::move (parts));
         if (trace) {
             try {
                 trace ("router_admission_submit", "begin");
@@ -177,9 +176,10 @@ raw_send_submission_t raw_route_port_t::submit_send (const raw_bytes_t &target_r
             }
             auto operation =
               std::move (_socket->send (zlink::routing_id_t::from (target_routing_id)))
-                .message (messages[0]);
-            for (std::size_t index = 1; index < messages.size (); ++index) {
-                operation = std::move (operation).message (messages[index]);
+                .message (materialize_binding_part (std::move (parts[0])));
+            for (std::size_t index = 1; index < parts.size (); ++index) {
+                operation = std::move (operation).message (
+                  materialize_binding_part (std::move (parts[index])));
             }
             auto submission = std::move (operation).async ();
             pending = take_submission_admission (submission);
