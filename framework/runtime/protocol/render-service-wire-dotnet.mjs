@@ -982,7 +982,8 @@ function commandDecl(c) {
   if (m) a.push(`${typeOf(m.frame, true)} Metadata`);
   if (p.policy !== "forbidden")
     a.push(`${typeOf(p.type, p.policy === "optional")} Payload`);
-  return `internal sealed record ${id(c.name)}${c.id}(${a.join(",")});`;
+  const n = `${id(c.name)}${c.id}`;
+  return `internal readonly record struct ${n}Header(${["byte Flags", ...fs.map((f) => `${typeOf(f.type, !!f.when)} ${id(f.name)}`)].join(",")});\ninternal sealed record ${n}(${a.join(",")});`;
 }
 function flagChecks(c, x) {
   const f = op(c, "flags"),
@@ -1008,25 +1009,36 @@ function commandMethods(c) {
     m = c.operations.find((x) => x.op === "metadata-flag-frame"),
     rf = readFields(fs, "body", new Map(), "flags"),
     wf = writeFields(fs, "body", "value", new Map(), "value.Flags"),
-    ctor = ["flags", ...fs.map((f) => id(f.name))],
-    r = [
-      'if(frames.Count==0)throw Error("frames");',
-      "var body=new Reader(frames[0]);",
+    ctor = ["flags", ...fs.map((f) => `header.${id(f.name)}`)],
+    hr = [
+      "var body=new Reader(bytes);",
       ...h.magic.map((v) => `if(body.U8()!=${v})throw Error("magic");`),
       `if(body.U8()!=${h.wireMajor}||body.U8()!=${h.commandId})throw Error("header");`,
       `var flags=body.U8();`,
       ...flagChecks(c, "flags"),
       ...rf.lines,
       'body.End("body");',
-      "var index=1;",
+      `var value=new ${n}Header(${["flags", ...fs.map((f) => id(f.name))].join(",")});`,
+      ...predicates(c, "value"),
+      "return value;",
     ],
-    w = [
+    hw = [
       ...flagChecks(c, "value.Flags"),
       "var body=new Writer();",
       ...h.magic.map((v) => `body.U8(${v});`),
       `body.U8(${h.wireMajor});body.U8(${h.commandId});body.U8(value.Flags);`,
       ...wf.lines,
-      "var frames=new List<byte[]>{body.ToArray()};",
+      ...predicates(c, "value"),
+      "return body.ToArray();",
+    ],
+    r = [
+      'if(frames.Count==0)throw Error("frames");',
+      `var header=Decode${n}Header(frames[0],context);`,
+      "var flags=header.Flags;",
+      "var index=1;",
+    ],
+    w = [
+      `var frames=new List<byte[]>{Encode${n}Header(new(${["value.Flags", ...fs.map((f) => `value.${id(f.name)}`)].join(",")}),context)};`,
     ];
   if (m) {
     seen.add(m.op);
@@ -1059,11 +1071,10 @@ function commandMethods(c) {
   r.push(
     'if(index!=frames.Count)throw Error("extra frame");',
     `var value=new ${n}(${ctor.join(",")});`,
-    ...predicates(c, "value"),
     "return value;",
   );
-  w.push(...predicates(c, "value"), "return frames.ToArray();");
-  return `    internal static ${n} Decode${n}(IReadOnlyList<byte[]> frames,DecodeContext context)\n    {\n        ${r.filter(Boolean).join("\n        ")}\n    }\n    internal static ${n} Decode${n}(byte[] frame,DecodeContext context)=>Decode${n}(new[]{frame},context);\n    internal static byte[][] Encode${n}(${n} value,DecodeContext context)\n    {\n        ${w.filter(Boolean).join("\n        ")}\n    }`;
+  w.push("return frames.ToArray();");
+  return `    internal static ${n}Header Decode${n}Header(byte[] bytes,DecodeContext context)\n    {\n        ${hr.join("\n        ")}\n    }\n    internal static byte[] Encode${n}Header(${n}Header value,DecodeContext context)\n    {\n        ${hw.join("\n        ")}\n    }\n    internal static ${n} Decode${n}(IReadOnlyList<byte[]> frames,DecodeContext context)\n    {\n        ${r.filter(Boolean).join("\n        ")}\n    }\n    internal static ${n} Decode${n}(byte[] frame,DecodeContext context)=>Decode${n}(new[]{frame},context);\n    internal static byte[][] Encode${n}(${n} value,DecodeContext context)\n    {\n        ${w.filter(Boolean).join("\n        ")}\n    }`;
 }
 
 function durable(f) {

@@ -687,86 +687,127 @@ internal static class ServiceWireCodec
 
     internal sealed record RelocationEnvelopeV1(RelocationId Relocation, RelocationObjectIdentity Object, ApplicationVersion ApplicationVersion, RelocationParticipantApplicationStateVector ApplicationStates, SavedWorkVector SavedWork, RelocationTimerRegistrationVector TimerRegistrations, RelocationPendingTimerTickVector PendingTimerTicks, RelocationSessionBindingVector SessionBindings);
 
+    internal readonly record struct Hello1Header(byte Flags,ServiceAdmission Admission);
     internal sealed record Hello1(byte Flags,ServiceAdmission Admission);
 
+    internal readonly record struct Admit2Header(byte Flags,ServiceAdmission Admission);
     internal sealed record Admit2(byte Flags,ServiceAdmission Admission);
 
+    internal readonly record struct Reject3Header(byte Flags,RejectReason Reason);
     internal sealed record Reject3(byte Flags,RejectReason Reason);
 
+    internal readonly record struct Update4Header(byte Flags,ServiceAdmission Admission);
     internal sealed record Update4(byte Flags,ServiceAdmission Admission);
 
+    internal readonly record struct LivenessProbe5Header(byte Flags,NonzeroU64 ProbeId);
     internal sealed record LivenessProbe5(byte Flags,NonzeroU64 ProbeId);
 
+    internal readonly record struct LivenessAck6Header(byte Flags,NonzeroU64 ProbeId);
     internal sealed record LivenessAck6(byte Flags,NonzeroU64 ProbeId);
 
+    internal readonly record struct NodeSend16Header(byte Flags);
     internal sealed record NodeSend16(byte Flags,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
+    internal readonly record struct NodeRequest17Header(byte Flags,NonzeroU64 Correlation);
     internal sealed record NodeRequest17(byte Flags,NonzeroU64 Correlation,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
+    internal readonly record struct ChannelSend18Header(byte Flags,Text8 ChannelName);
     internal sealed record ChannelSend18(byte Flags,Text8 ChannelName,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
+    internal readonly record struct ChannelRequest19Header(byte Flags,NonzeroU64 Correlation,Text8 ChannelName);
     internal sealed record ChannelRequest19(byte Flags,NonzeroU64 Correlation,Text8 ChannelName,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
+    internal readonly record struct Reply20Header(byte Flags,NonzeroU64 Correlation,RequestTerminalResult TerminalResult,FrameworkErrorCode FailureCode,RequestSpecificTail Tail);
     internal sealed record Reply20(byte Flags,NonzeroU64 Correlation,RequestTerminalResult TerminalResult,FrameworkErrorCode FailureCode,RequestSpecificTail Tail,ApplicationPayloadEnvelopeV1? Payload);
 
+    internal readonly record struct SpotSend21Header(byte Flags,OperationId Operation,U8 MessageFollowHopCount,Text8 SourceSpotId,SpotRouteFence TargetSpot);
     internal sealed record SpotSend21(byte Flags,OperationId Operation,U8 MessageFollowHopCount,Text8 SourceSpotId,SpotRouteFence TargetSpot,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
+    internal readonly record struct SpotRequest22Header(byte Flags,NonzeroU64 Correlation,OperationId Operation,U8 MessageFollowHopCount,Text8 SourceSpotId,SpotRouteFence TargetSpot);
     internal sealed record SpotRequest22(byte Flags,NonzeroU64 Correlation,OperationId Operation,U8 MessageFollowHopCount,Text8 SourceSpotId,SpotRouteFence TargetSpot,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
+    internal readonly record struct LogicalMulticast23Header(byte Flags,Text8 ChannelName,Text8 Topic,Text8 SourceSpotId);
     internal sealed record LogicalMulticast23(byte Flags,Text8 ChannelName,Text8 Topic,Text8 SourceSpotId,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
+    internal readonly record struct ActorSend24Header(byte Flags,OperationId Operation,U8 MessageFollowHopCount,OptionalActorRef SourceActor,ActorRouteFence TargetActor,OptionalBoundSessionTail? BoundSessionTail);
     internal sealed record ActorSend24(byte Flags,OperationId Operation,U8 MessageFollowHopCount,OptionalActorRef SourceActor,ActorRouteFence TargetActor,OptionalBoundSessionTail? BoundSessionTail,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
+    internal readonly record struct ActorRequest25Header(byte Flags,NonzeroU64 Correlation,OperationId Operation,U8 MessageFollowHopCount,OptionalActorRef SourceActor,ActorRouteFence TargetActor,OptionalBoundSessionTail? BoundSessionTail);
     internal sealed record ActorRequest25(byte Flags,NonzeroU64 Correlation,OperationId Operation,U8 MessageFollowHopCount,OptionalActorRef SourceActor,ActorRouteFence TargetActor,OptionalBoundSessionTail? BoundSessionTail,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
+    internal readonly record struct ActorLookup26Header(byte Flags,NonzeroU64 Correlation,Text8 ActorId);
     internal sealed record ActorLookup26(byte Flags,NonzeroU64 Correlation,Text8 ActorId);
 
+    internal readonly record struct ActorDestroy27Header(byte Flags,NonzeroU64 Correlation,ActorRouteFence Actor);
     internal sealed record ActorDestroy27(byte Flags,NonzeroU64 Correlation,ActorRouteFence Actor);
 
+    internal readonly record struct ActorJoin28Header(byte Flags,NonzeroU64 Correlation,ActorRouteFence Actor,Bool8 Entry,SpotRouteFence TargetSpot);
     internal sealed record ActorJoin28(byte Flags,NonzeroU64 Correlation,ActorRouteFence Actor,Bool8 Entry,SpotRouteFence TargetSpot,ApplicationPayloadEnvelopeV1? Payload);
 
+    internal readonly record struct ActorLeft29Header(byte Flags,ActorRef Actor,SpotMembership PreviousMembership,NonzeroU64 CurrentAuthorityOwnerGeneration);
     internal sealed record ActorLeft29(byte Flags,ActorRef Actor,SpotMembership PreviousMembership,NonzeroU64 CurrentAuthorityOwnerGeneration);
 
+    internal readonly record struct RelocationReady30Header(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationObjectIdentity Object,RelocationRole SenderRole);
     internal sealed record RelocationReady30(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationObjectIdentity Object,RelocationRole SenderRole);
 
+    internal readonly record struct RelocationData31Header(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,RelocationObjectIdentity Object,FrozenRecord Record);
     internal sealed record RelocationData31(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,RelocationObjectIdentity Object,FrozenRecord Record);
 
+    internal readonly record struct ReplyRelay33Header(byte Flags,OperationId Operation,NonzeroU64 ReplyRouteId,ReplyRelayContext Context,RequestTerminalResult TerminalResult,FrameworkErrorCode FailureCode);
     internal sealed record ReplyRelay33(byte Flags,OperationId Operation,NonzeroU64 ReplyRouteId,ReplyRelayContext Context,RequestTerminalResult TerminalResult,FrameworkErrorCode FailureCode,ApplicationPayloadEnvelopeV1? Payload);
 
+    internal readonly record struct RelocationCutover34Header(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,RelocationObjectIdentity Object,OrdinalOrZero BoundaryRecordCount,U32 BoundaryChecksumCrc32c);
     internal sealed record RelocationCutover34(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,RelocationObjectIdentity Object,OrdinalOrZero BoundaryRecordCount,U32 BoundaryChecksumCrc32c);
 
+    internal readonly record struct BoundSessionSend36Header(byte Flags,ActorRouteFence Actor,NonzeroU64 ExpectedBindingGeneration);
     internal sealed record BoundSessionSend36(byte Flags,ActorRouteFence Actor,NonzeroU64 ExpectedBindingGeneration,ApplicationPayloadEnvelopeV1 Payload);
 
+    internal readonly record struct ActorJoined37Header(byte Flags,ActorRef Actor,OptionalSpotMembership PreviousMembership,SpotMembership CurrentMembership,NonzeroU64 CurrentAuthorityOwnerGeneration);
     internal sealed record ActorJoined37(byte Flags,ActorRef Actor,OptionalSpotMembership PreviousMembership,SpotMembership CurrentMembership,NonzeroU64 CurrentAuthorityOwnerGeneration);
 
+    internal readonly record struct BoundSessionBind38Header(byte Flags,NonzeroU64 Correlation,ActorRouteFence Actor,Rid SessionRid,BoundSessionBindingTransition Binding);
     internal sealed record BoundSessionBind38(byte Flags,NonzeroU64 Correlation,ActorRouteFence Actor,Rid SessionRid,BoundSessionBindingTransition Binding);
 
+    internal readonly record struct InstanceSpot39Header(byte Flags,InstanceRouteV1 Route,NonzeroU64 SourceNodeGeneration,Rid SourceNodeRid,OptionalText8 SourceSpotId,InstanceOperationKind OperationKind,OperationIdOrZero Operation,InstanceReplyRoute ReplyRoute);
     internal sealed record InstanceSpot39(byte Flags,InstanceRouteV1 Route,NonzeroU64 SourceNodeGeneration,Rid SourceNodeRid,OptionalText8 SourceSpotId,InstanceOperationKind OperationKind,OperationIdOrZero Operation,InstanceReplyRoute ReplyRoute,MetadataFrame? Metadata,ApplicationPayloadEnvelopeV1 Payload);
 
+    internal readonly record struct RelocationPrepare40Header(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationRole InitiatorRole,RelocationObjectIdentity Object,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,RelocationLogicalLength PayloadTotalLength,RelocationChunkCount PayloadChunkCount,U32 PayloadChecksumCrc32c,ApplicationVersion ApplicationVersion,NonzeroU64 DeadlineUnixMs);
     internal sealed record RelocationPrepare40(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationRole InitiatorRole,RelocationObjectIdentity Object,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,RelocationLogicalLength PayloadTotalLength,RelocationChunkCount PayloadChunkCount,U32 PayloadChecksumCrc32c,ApplicationVersion ApplicationVersion,NonzeroU64 DeadlineUnixMs);
 
+    internal readonly record struct SessionRelocationSeal42Header(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,Rid TargetNodeRid,NonzeroU64 TargetNodeGeneration);
     internal sealed record SessionRelocationSeal42(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,Rid TargetNodeRid,NonzeroU64 TargetNodeGeneration);
 
+    internal readonly record struct SessionRelocationSealed43Header(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,SessionSealResult SealResult);
     internal sealed record SessionRelocationSealed43(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,ActorRouteFence Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,SessionSealResult SealResult);
 
+    internal readonly record struct SessionRelocationRoute44Header(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,ActorRef Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,SessionRelocationRouteUpdate Route);
     internal sealed record SessionRelocationRoute44(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,ActorRef Actor,Rid SessionOwnerNodeRid,NonzeroU64 SessionOwnerNodeGeneration,Text8 SessionOwnerId,NonzeroU64 SessionOwnerLeaseGeneration,Rid SessionRid,NonzeroU64 BindingGeneration,SessionRelocationRouteUpdate Route);
 
+    internal readonly record struct ReplyRelayAck46Header(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,OperationId Operation,NonzeroU64 ReplyRouteId,RequestSourceFence RequestSource,ReplyRelayAckStatus Status);
     internal sealed record ReplyRelayAck46(byte Flags,RelocationId Relocation,RelocationCoordinatorFence Coordinator,OperationId Operation,NonzeroU64 ReplyRouteId,RequestSourceFence RequestSource,ReplyRelayAckStatus Status);
 
+    internal readonly record struct UserSpotCreate47Header(byte Flags,NonzeroU64 Correlation,OperationId Operation,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,Text8 SpotId,Text8 StableType,ObjectReservationFence Reservation,NonzeroU64 DeadlineUnixMs);
     internal sealed record UserSpotCreate47(byte Flags,NonzeroU64 Correlation,OperationId Operation,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,Text8 SpotId,Text8 StableType,ObjectReservationFence Reservation,NonzeroU64 DeadlineUnixMs);
 
+    internal readonly record struct UserSpotClose48Header(byte Flags,NonzeroU64 Correlation,OperationId Operation,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,UserSpotCloseFenceV1 Target,NonzeroU64 DeadlineUnixMs);
     internal sealed record UserSpotClose48(byte Flags,NonzeroU64 Correlation,OperationId Operation,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,UserSpotCloseFenceV1 Target,NonzeroU64 DeadlineUnixMs);
 
+    internal readonly record struct ActorCreate49Header(byte Flags,NonzeroU64 Correlation,OperationId Operation,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,Text8 ActorId,Text8 StableType,ObjectReservationFence Reservation,NonzeroU64 DeadlineUnixMs);
     internal sealed record ActorCreate49(byte Flags,NonzeroU64 Correlation,OperationId Operation,Rid SourceNodeRid,NonzeroU64 SourceNodeGeneration,Text8 ActorId,Text8 StableType,ObjectReservationFence Reservation,NonzeroU64 DeadlineUnixMs);
 
+    internal readonly record struct MessageFollow50Header(byte Flags,MessageFollowRouteV1 Route);
     internal sealed record MessageFollow50(byte Flags,MessageFollowRouteV1 Route);
 
+    internal readonly record struct BoundSessionReplaced51Header(byte Flags,ActorRouteFence ActorAuthority,RetiredBoundSessionRouteFence RetiredSession);
     internal sealed record BoundSessionReplaced51(byte Flags,ActorRouteFence ActorAuthority,RetiredBoundSessionRouteFence RetiredSession);
 
+    internal readonly record struct RelocationState52Header(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,RelocationObjectIdentity Object,U32 ChunkOrdinal,DurableBlob ChunkData);
     internal sealed record RelocationState52(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationRole SenderRole,RelocationObjectIdentity Object,U32 ChunkOrdinal,DurableBlob ChunkData);
 
+    internal readonly record struct RelocationFailed53Header(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationObjectIdentity Object,RelocationRole SenderRole,FrameworkErrorCode FailureCode);
     internal sealed record RelocationFailed53(byte Flags,RelocationId Relocation,NonzeroU64 TargetAttemptGeneration,RelocationCoordinatorFence Coordinator,RelocationTargetFence Target,RelocationObjectIdentity Object,RelocationRole SenderRole,FrameworkErrorCode FailureCode);
 
+    internal readonly record struct BoundSessionClose54Header(byte Flags,NonzeroU64 Correlation,ActorRef Actor,RetiredBoundSessionRouteFence Session);
     internal sealed record BoundSessionClose54(byte Flags,NonzeroU64 Correlation,ActorRef Actor,RetiredBoundSessionRouteFence Session);
     private sealed class Reader{private readonly byte[]b;private readonly int limit;private int p;internal Reader(byte[] bytes){b=bytes;limit=bytes.Length;}internal int Remaining=>limit-p;private void N(int n){if(n<0||Remaining<n)throw new EndOfStreamException("truncated");}internal byte U8()=>Bytes(1)[0];internal ushort U16()=>BinaryPrimitives.ReadUInt16BigEndian(Bytes(2));internal uint U32()=>BinaryPrimitives.ReadUInt32BigEndian(Bytes(4));internal ulong U64()=>BinaryPrimitives.ReadUInt64BigEndian(Bytes(8));internal long I64()=>BinaryPrimitives.ReadInt64BigEndian(Bytes(8));internal byte[] Bytes(int n){N(n);var value=b.AsSpan(p,n).ToArray();p+=n;return value;}internal Reader Slice(int n)=>new(Bytes(n));internal void End(string n){if(Remaining!=0)throw Error(n+": trailing");}} private sealed class Writer{private readonly List<byte[]>chunks=[];private long length;internal long Length=>length;private void Add(byte[]v){chunks.Add(v);length=checked(length+v.LongLength);}internal void U8(byte v)=>Add([v]);internal void U16(ushort v){var x=new byte[2];BinaryPrimitives.WriteUInt16BigEndian(x,v);Add(x);}internal void U32(uint v){var x=new byte[4];BinaryPrimitives.WriteUInt32BigEndian(x,v);Add(x);}internal void U64(ulong v){var x=new byte[8];BinaryPrimitives.WriteUInt64BigEndian(x,v);Add(x);}internal void I64(long v){var x=new byte[8];BinaryPrimitives.WriteInt64BigEndian(x,v);Add(x);}internal void Bytes(byte[]v)=>Add(v);internal byte[]ToArray(){if(length>int.MaxValue)throw Capacity("writer capacity");var result=GC.AllocateUninitializedArray<byte>((int)length);var offset=0;foreach(var chunk in chunks){chunk.CopyTo(result,offset);offset+=chunk.Length;}return result;}} private sealed class CapacityException(string message):Exception(message);private static CapacityException Capacity(string m)=>new(m);private static readonly UTF8Encoding Utf8=new(false,true);private static string StrictText(byte[] bytes,string name){try{return Utf8.GetString(bytes);}catch(DecoderFallbackException failure){throw new InvalidDataException(name+": UTF-8",failure);}}private static InvalidDataException Error(string m)=>new(m);private static int CompareBytes(byte[]a,byte[]b){var n=Math.Min(a.Length,b.Length);for(var i=0;i<n;i++){var c=a[i].CompareTo(b[i]);if(c!=0)return c;}return a.Length.CompareTo(b.Length);}private static string AuthorityComponent(string value){var bytes=Utf8.GetBytes(value);var result=new StringBuilder().Append(bytes.Length).Append(':');foreach(var b in bytes){if((b>=(byte)'A'&&b<=(byte)'Z')||(b>=(byte)'a'&&b<=(byte)'z')||(b>=(byte)'0'&&b<=(byte)'9')||b is (byte)'-' or (byte)'.' or (byte)'_' or (byte)'~')result.Append((char)b);else result.Append('%').Append(b.ToString("X2"));}return result.ToString();}private static uint Crc32C(ReadOnlySpan<byte>b){var c=uint.MaxValue;foreach(var v in b){c^=v;for(var i=0;i<8;i++)c=(c>>1)^(0x82f63b78u&(uint)-(int)(c&1));}return~c;}
     internal static void ValidateTerminalFailure(RequestTerminalResult result, FrameworkErrorCode failure){if(!ServiceWireConstants.ValidTerminalFailure((uint)result,(uint)failure))throw Error("terminal failure integrity");}
@@ -5797,10 +5838,9 @@ internal static class ServiceWireCodec
         WriteRelocationPendingTimerTickVector(writer, value.PendingTimerTicks, context);
         WriteRelocationSessionBindingVector(writer, value.SessionBindings, context);
     }
-    internal static Hello1 DecodeHello1(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static Hello1Header DecodeHello1Header(byte[] bytes,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=1)throw Error("header");
@@ -5808,13 +5848,10 @@ internal static class ServiceWireCodec
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
         var Admission = ReadServiceAdmission(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new Hello1(flags,Admission);
+        var value=new Hello1Header(flags,Admission);
         return value;
     }
-    internal static Hello1 DecodeHello1(byte[] frame,DecodeContext context)=>DecodeHello1(new[]{frame},context);
-    internal static byte[][] EncodeHello1(Hello1 value,DecodeContext context)
+    internal static byte[] EncodeHello1Header(Hello1Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -5822,13 +5859,27 @@ internal static class ServiceWireCodec
         body.U8(77);
         body.U8(1);body.U8(1);body.U8(value.Flags);
         WriteServiceAdmission(body, value.Admission, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static Admit2 DecodeAdmit2(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static Hello1 DecodeHello1(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeHello1Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new Hello1(flags,header.Admission);
+        return value;
+    }
+    internal static Hello1 DecodeHello1(byte[] frame,DecodeContext context)=>DecodeHello1(new[]{frame},context);
+    internal static byte[][] EncodeHello1(Hello1 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeHello1Header(new(value.Flags,value.Admission),context)};
+        return frames.ToArray();
+    }
+    internal static Admit2Header DecodeAdmit2Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=2)throw Error("header");
@@ -5836,13 +5887,10 @@ internal static class ServiceWireCodec
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
         var Admission = ReadServiceAdmission(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new Admit2(flags,Admission);
+        var value=new Admit2Header(flags,Admission);
         return value;
     }
-    internal static Admit2 DecodeAdmit2(byte[] frame,DecodeContext context)=>DecodeAdmit2(new[]{frame},context);
-    internal static byte[][] EncodeAdmit2(Admit2 value,DecodeContext context)
+    internal static byte[] EncodeAdmit2Header(Admit2Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -5850,13 +5898,27 @@ internal static class ServiceWireCodec
         body.U8(77);
         body.U8(1);body.U8(2);body.U8(value.Flags);
         WriteServiceAdmission(body, value.Admission, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static Reject3 DecodeReject3(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static Admit2 DecodeAdmit2(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeAdmit2Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new Admit2(flags,header.Admission);
+        return value;
+    }
+    internal static Admit2 DecodeAdmit2(byte[] frame,DecodeContext context)=>DecodeAdmit2(new[]{frame},context);
+    internal static byte[][] EncodeAdmit2(Admit2 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeAdmit2Header(new(value.Flags,value.Admission),context)};
+        return frames.ToArray();
+    }
+    internal static Reject3Header DecodeReject3Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=3)throw Error("header");
@@ -5864,13 +5926,10 @@ internal static class ServiceWireCodec
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
         var Reason = ReadRejectReason(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new Reject3(flags,Reason);
+        var value=new Reject3Header(flags,Reason);
         return value;
     }
-    internal static Reject3 DecodeReject3(byte[] frame,DecodeContext context)=>DecodeReject3(new[]{frame},context);
-    internal static byte[][] EncodeReject3(Reject3 value,DecodeContext context)
+    internal static byte[] EncodeReject3Header(Reject3Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -5878,13 +5937,27 @@ internal static class ServiceWireCodec
         body.U8(77);
         body.U8(1);body.U8(3);body.U8(value.Flags);
         WriteRejectReason(body, value.Reason, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static Update4 DecodeUpdate4(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static Reject3 DecodeReject3(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeReject3Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new Reject3(flags,header.Reason);
+        return value;
+    }
+    internal static Reject3 DecodeReject3(byte[] frame,DecodeContext context)=>DecodeReject3(new[]{frame},context);
+    internal static byte[][] EncodeReject3(Reject3 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeReject3Header(new(value.Flags,value.Reason),context)};
+        return frames.ToArray();
+    }
+    internal static Update4Header DecodeUpdate4Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=4)throw Error("header");
@@ -5892,13 +5965,10 @@ internal static class ServiceWireCodec
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
         var Admission = ReadServiceAdmission(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new Update4(flags,Admission);
+        var value=new Update4Header(flags,Admission);
         return value;
     }
-    internal static Update4 DecodeUpdate4(byte[] frame,DecodeContext context)=>DecodeUpdate4(new[]{frame},context);
-    internal static byte[][] EncodeUpdate4(Update4 value,DecodeContext context)
+    internal static byte[] EncodeUpdate4Header(Update4Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -5906,13 +5976,27 @@ internal static class ServiceWireCodec
         body.U8(77);
         body.U8(1);body.U8(4);body.U8(value.Flags);
         WriteServiceAdmission(body, value.Admission, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static LivenessProbe5 DecodeLivenessProbe5(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static Update4 DecodeUpdate4(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeUpdate4Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new Update4(flags,header.Admission);
+        return value;
+    }
+    internal static Update4 DecodeUpdate4(byte[] frame,DecodeContext context)=>DecodeUpdate4(new[]{frame},context);
+    internal static byte[][] EncodeUpdate4(Update4 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeUpdate4Header(new(value.Flags,value.Admission),context)};
+        return frames.ToArray();
+    }
+    internal static LivenessProbe5Header DecodeLivenessProbe5Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=5)throw Error("header");
@@ -5920,13 +6004,10 @@ internal static class ServiceWireCodec
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
         var ProbeId = ReadNonzeroU64(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new LivenessProbe5(flags,ProbeId);
+        var value=new LivenessProbe5Header(flags,ProbeId);
         return value;
     }
-    internal static LivenessProbe5 DecodeLivenessProbe5(byte[] frame,DecodeContext context)=>DecodeLivenessProbe5(new[]{frame},context);
-    internal static byte[][] EncodeLivenessProbe5(LivenessProbe5 value,DecodeContext context)
+    internal static byte[] EncodeLivenessProbe5Header(LivenessProbe5Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -5934,13 +6015,27 @@ internal static class ServiceWireCodec
         body.U8(77);
         body.U8(1);body.U8(5);body.U8(value.Flags);
         WriteNonzeroU64(body, value.ProbeId, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static LivenessAck6 DecodeLivenessAck6(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static LivenessProbe5 DecodeLivenessProbe5(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeLivenessProbe5Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new LivenessProbe5(flags,header.ProbeId);
+        return value;
+    }
+    internal static LivenessProbe5 DecodeLivenessProbe5(byte[] frame,DecodeContext context)=>DecodeLivenessProbe5(new[]{frame},context);
+    internal static byte[][] EncodeLivenessProbe5(LivenessProbe5 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeLivenessProbe5Header(new(value.Flags,value.ProbeId),context)};
+        return frames.ToArray();
+    }
+    internal static LivenessAck6Header DecodeLivenessAck6Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=6)throw Error("header");
@@ -5948,13 +6043,10 @@ internal static class ServiceWireCodec
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
         var ProbeId = ReadNonzeroU64(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new LivenessAck6(flags,ProbeId);
+        var value=new LivenessAck6Header(flags,ProbeId);
         return value;
     }
-    internal static LivenessAck6 DecodeLivenessAck6(byte[] frame,DecodeContext context)=>DecodeLivenessAck6(new[]{frame},context);
-    internal static byte[][] EncodeLivenessAck6(LivenessAck6 value,DecodeContext context)
+    internal static byte[] EncodeLivenessAck6Header(LivenessAck6Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -5962,19 +6054,50 @@ internal static class ServiceWireCodec
         body.U8(77);
         body.U8(1);body.U8(6);body.U8(value.Flags);
         WriteNonzeroU64(body, value.ProbeId, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static NodeSend16 DecodeNodeSend16(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static LivenessAck6 DecodeLivenessAck6(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeLivenessAck6Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new LivenessAck6(flags,header.ProbeId);
+        return value;
+    }
+    internal static LivenessAck6 DecodeLivenessAck6(byte[] frame,DecodeContext context)=>DecodeLivenessAck6(new[]{frame},context);
+    internal static byte[][] EncodeLivenessAck6(LivenessAck6 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeLivenessAck6Header(new(value.Flags,value.ProbeId),context)};
+        return frames.ToArray();
+    }
+    internal static NodeSend16Header DecodeNodeSend16Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=16)throw Error("header");
         var flags=body.U8();
         if((flags&~1)!=0||(flags&0)!=0)throw Error("flags");
         body.End("body");
+        var value=new NodeSend16Header(flags);
+        return value;
+    }
+    internal static byte[] EncodeNodeSend16Header(NodeSend16Header value,DecodeContext context)
+    {
+        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
+        var body=new Writer();
+        body.U8(90);
+        body.U8(77);
+        body.U8(1);body.U8(16);body.U8(value.Flags);
+        return body.ToArray();
+    }
+    internal static NodeSend16 DecodeNodeSend16(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var header=DecodeNodeSend16Header(frames[0],context);
+        var flags=header.Flags;
         var index=1;
         MetadataFrame? metadata=null;
         if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
@@ -5988,21 +6111,15 @@ internal static class ServiceWireCodec
     internal static NodeSend16 DecodeNodeSend16(byte[] frame,DecodeContext context)=>DecodeNodeSend16(new[]{frame},context);
     internal static byte[][] EncodeNodeSend16(NodeSend16 value,DecodeContext context)
     {
-        if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
-        var body=new Writer();
-        body.U8(90);
-        body.U8(77);
-        body.U8(1);body.U8(16);body.U8(value.Flags);
-        var frames=new List<byte[]>{body.ToArray()};
+        var frames=new List<byte[]>{EncodeNodeSend16Header(new(value.Flags),context)};
         if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
         if(value.Payload is null)throw Error("payload required");
         if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
         return frames.ToArray();
     }
-    internal static NodeRequest17 DecodeNodeRequest17(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static NodeRequest17Header DecodeNodeRequest17Header(byte[] bytes,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=17)throw Error("header");
@@ -6010,18 +6127,10 @@ internal static class ServiceWireCodec
         if((flags&~1)!=0||(flags&0)!=0)throw Error("flags");
         var Correlation = ReadNonzeroU64(body, context);
         body.End("body");
-        var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
-        if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new NodeRequest17(flags,Correlation,metadata,payload!);
+        var value=new NodeRequest17Header(flags,Correlation);
         return value;
     }
-    internal static NodeRequest17 DecodeNodeRequest17(byte[] frame,DecodeContext context)=>DecodeNodeRequest17(new[]{frame},context);
-    internal static byte[][] EncodeNodeRequest17(NodeRequest17 value,DecodeContext context)
+    internal static byte[] EncodeNodeRequest17Header(NodeRequest17Header value,DecodeContext context)
     {
         if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6029,23 +6138,13 @@ internal static class ServiceWireCodec
         body.U8(77);
         body.U8(1);body.U8(17);body.U8(value.Flags);
         WriteNonzeroU64(body, value.Correlation, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
-        if(value.Payload is null)throw Error("payload required");
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static ChannelSend18 DecodeChannelSend18(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static NodeRequest17 DecodeNodeRequest17(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
-        if(body.U8()!=90)throw Error("magic");
-        if(body.U8()!=77)throw Error("magic");
-        if(body.U8()!=1||body.U8()!=18)throw Error("header");
-        var flags=body.U8();
-        if((flags&~1)!=0||(flags&0)!=0)throw Error("flags");
-        var ChannelName = ReadText8(body, context);
-        body.End("body");
+        var header=DecodeNodeRequest17Header(frames[0],context);
+        var flags=header.Flags;
         var index=1;
         MetadataFrame? metadata=null;
         if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
@@ -6053,11 +6152,32 @@ internal static class ServiceWireCodec
         if(index>=frames.Count)throw Error("payload required");
         if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
         if(index!=frames.Count)throw Error("extra frame");
-        var value=new ChannelSend18(flags,ChannelName,metadata,payload!);
+        var value=new NodeRequest17(flags,header.Correlation,metadata,payload!);
         return value;
     }
-    internal static ChannelSend18 DecodeChannelSend18(byte[] frame,DecodeContext context)=>DecodeChannelSend18(new[]{frame},context);
-    internal static byte[][] EncodeChannelSend18(ChannelSend18 value,DecodeContext context)
+    internal static NodeRequest17 DecodeNodeRequest17(byte[] frame,DecodeContext context)=>DecodeNodeRequest17(new[]{frame},context);
+    internal static byte[][] EncodeNodeRequest17(NodeRequest17 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeNodeRequest17Header(new(value.Flags,value.Correlation),context)};
+        if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
+        if(value.Payload is null)throw Error("payload required");
+        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
+        return frames.ToArray();
+    }
+    internal static ChannelSend18Header DecodeChannelSend18Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
+        if(body.U8()!=90)throw Error("magic");
+        if(body.U8()!=77)throw Error("magic");
+        if(body.U8()!=1||body.U8()!=18)throw Error("header");
+        var flags=body.U8();
+        if((flags&~1)!=0||(flags&0)!=0)throw Error("flags");
+        var ChannelName = ReadText8(body, context);
+        body.End("body");
+        var value=new ChannelSend18Header(flags,ChannelName);
+        return value;
+    }
+    internal static byte[] EncodeChannelSend18Header(ChannelSend18Header value,DecodeContext context)
     {
         if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6065,16 +6185,35 @@ internal static class ServiceWireCodec
         body.U8(77);
         body.U8(1);body.U8(18);body.U8(value.Flags);
         WriteText8(body, value.ChannelName, context);
-        var frames=new List<byte[]>{body.ToArray()};
+        return body.ToArray();
+    }
+    internal static ChannelSend18 DecodeChannelSend18(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var header=DecodeChannelSend18Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        MetadataFrame? metadata=null;
+        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
+        ApplicationPayloadEnvelopeV1? payload=null;
+        if(index>=frames.Count)throw Error("payload required");
+        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new ChannelSend18(flags,header.ChannelName,metadata,payload!);
+        return value;
+    }
+    internal static ChannelSend18 DecodeChannelSend18(byte[] frame,DecodeContext context)=>DecodeChannelSend18(new[]{frame},context);
+    internal static byte[][] EncodeChannelSend18(ChannelSend18 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeChannelSend18Header(new(value.Flags,value.ChannelName),context)};
         if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
         if(value.Payload is null)throw Error("payload required");
         if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
         return frames.ToArray();
     }
-    internal static ChannelRequest19 DecodeChannelRequest19(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ChannelRequest19Header DecodeChannelRequest19Header(byte[] bytes,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=19)throw Error("header");
@@ -6083,18 +6222,10 @@ internal static class ServiceWireCodec
         var Correlation = ReadNonzeroU64(body, context);
         var ChannelName = ReadText8(body, context);
         body.End("body");
-        var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
-        if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new ChannelRequest19(flags,Correlation,ChannelName,metadata,payload!);
+        var value=new ChannelRequest19Header(flags,Correlation,ChannelName);
         return value;
     }
-    internal static ChannelRequest19 DecodeChannelRequest19(byte[] frame,DecodeContext context)=>DecodeChannelRequest19(new[]{frame},context);
-    internal static byte[][] EncodeChannelRequest19(ChannelRequest19 value,DecodeContext context)
+    internal static byte[] EncodeChannelRequest19Header(ChannelRequest19Header value,DecodeContext context)
     {
         if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6103,16 +6234,35 @@ internal static class ServiceWireCodec
         body.U8(1);body.U8(19);body.U8(value.Flags);
         WriteNonzeroU64(body, value.Correlation, context);
         WriteText8(body, value.ChannelName, context);
-        var frames=new List<byte[]>{body.ToArray()};
+        return body.ToArray();
+    }
+    internal static ChannelRequest19 DecodeChannelRequest19(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var header=DecodeChannelRequest19Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        MetadataFrame? metadata=null;
+        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
+        ApplicationPayloadEnvelopeV1? payload=null;
+        if(index>=frames.Count)throw Error("payload required");
+        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new ChannelRequest19(flags,header.Correlation,header.ChannelName,metadata,payload!);
+        return value;
+    }
+    internal static ChannelRequest19 DecodeChannelRequest19(byte[] frame,DecodeContext context)=>DecodeChannelRequest19(new[]{frame},context);
+    internal static byte[][] EncodeChannelRequest19(ChannelRequest19 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeChannelRequest19Header(new(value.Flags,value.Correlation,value.ChannelName),context)};
         if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
         if(value.Payload is null)throw Error("payload required");
         if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
         return frames.ToArray();
     }
-    internal static Reply20 DecodeReply20(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static Reply20Header DecodeReply20Header(byte[] bytes,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=20)throw Error("header");
@@ -6123,16 +6273,11 @@ internal static class ServiceWireCodec
         var FailureCode = ReadFrameworkErrorCode(body, context);
         var Tail = ReadRequestSpecificTail(body, context, TerminalResult);
         body.End("body");
-        var index=1;
-        ApplicationPayloadEnvelopeV1? payload=null;
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new Reply20(flags,Correlation,TerminalResult,FailureCode,Tail,payload);
+        var value=new Reply20Header(flags,Correlation,TerminalResult,FailureCode,Tail);
         ValidateTerminalFailure(value.TerminalResult, value.FailureCode);
         return value;
     }
-    internal static Reply20 DecodeReply20(byte[] frame,DecodeContext context)=>DecodeReply20(new[]{frame},context);
-    internal static byte[][] EncodeReply20(Reply20 value,DecodeContext context)
+    internal static byte[] EncodeReply20Header(Reply20Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6143,15 +6288,31 @@ internal static class ServiceWireCodec
         WriteRequestTerminalResult(body, value.TerminalResult, context);
         WriteFrameworkErrorCode(body, value.FailureCode, context);
         WriteRequestSpecificTail(body, value.Tail, context, value.TerminalResult);
-        var frames=new List<byte[]>{body.ToArray()};
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
         ValidateTerminalFailure(value.TerminalResult, value.FailureCode);
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static SpotSend21 DecodeSpotSend21(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static Reply20 DecodeReply20(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeReply20Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        ApplicationPayloadEnvelopeV1? payload=null;
+        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new Reply20(flags,header.Correlation,header.TerminalResult,header.FailureCode,header.Tail,payload);
+        return value;
+    }
+    internal static Reply20 DecodeReply20(byte[] frame,DecodeContext context)=>DecodeReply20(new[]{frame},context);
+    internal static byte[][] EncodeReply20(Reply20 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeReply20Header(new(value.Flags,value.Correlation,value.TerminalResult,value.FailureCode,value.Tail),context)};
+        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
+        return frames.ToArray();
+    }
+    internal static SpotSend21Header DecodeSpotSend21Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=21)throw Error("header");
@@ -6164,18 +6325,10 @@ internal static class ServiceWireCodec
         var SourceSpotId = ReadText8(body, context);
         var TargetSpot = ReadSpotRouteFence(body, context);
         body.End("body");
-        var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
-        if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new SpotSend21(flags,Operation,MessageFollowHopCount,SourceSpotId,TargetSpot,metadata,payload!);
+        var value=new SpotSend21Header(flags,Operation,MessageFollowHopCount,SourceSpotId,TargetSpot);
         return value;
     }
-    internal static SpotSend21 DecodeSpotSend21(byte[] frame,DecodeContext context)=>DecodeSpotSend21(new[]{frame},context);
-    internal static byte[][] EncodeSpotSend21(SpotSend21 value,DecodeContext context)
+    internal static byte[] EncodeSpotSend21Header(SpotSend21Header value,DecodeContext context)
     {
         if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6188,16 +6341,35 @@ internal static class ServiceWireCodec
         WriteU8(body, value.MessageFollowHopCount, context);
         WriteText8(body, value.SourceSpotId, context);
         WriteSpotRouteFence(body, value.TargetSpot, context);
-        var frames=new List<byte[]>{body.ToArray()};
+        return body.ToArray();
+    }
+    internal static SpotSend21 DecodeSpotSend21(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var header=DecodeSpotSend21Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        MetadataFrame? metadata=null;
+        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
+        ApplicationPayloadEnvelopeV1? payload=null;
+        if(index>=frames.Count)throw Error("payload required");
+        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new SpotSend21(flags,header.Operation,header.MessageFollowHopCount,header.SourceSpotId,header.TargetSpot,metadata,payload!);
+        return value;
+    }
+    internal static SpotSend21 DecodeSpotSend21(byte[] frame,DecodeContext context)=>DecodeSpotSend21(new[]{frame},context);
+    internal static byte[][] EncodeSpotSend21(SpotSend21 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeSpotSend21Header(new(value.Flags,value.Operation,value.MessageFollowHopCount,value.SourceSpotId,value.TargetSpot),context)};
         if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
         if(value.Payload is null)throw Error("payload required");
         if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
         return frames.ToArray();
     }
-    internal static SpotRequest22 DecodeSpotRequest22(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static SpotRequest22Header DecodeSpotRequest22Header(byte[] bytes,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=22)throw Error("header");
@@ -6211,18 +6383,10 @@ internal static class ServiceWireCodec
         var SourceSpotId = ReadText8(body, context);
         var TargetSpot = ReadSpotRouteFence(body, context);
         body.End("body");
-        var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
-        if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new SpotRequest22(flags,Correlation,Operation,MessageFollowHopCount,SourceSpotId,TargetSpot,metadata,payload!);
+        var value=new SpotRequest22Header(flags,Correlation,Operation,MessageFollowHopCount,SourceSpotId,TargetSpot);
         return value;
     }
-    internal static SpotRequest22 DecodeSpotRequest22(byte[] frame,DecodeContext context)=>DecodeSpotRequest22(new[]{frame},context);
-    internal static byte[][] EncodeSpotRequest22(SpotRequest22 value,DecodeContext context)
+    internal static byte[] EncodeSpotRequest22Header(SpotRequest22Header value,DecodeContext context)
     {
         if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6236,16 +6400,35 @@ internal static class ServiceWireCodec
         WriteU8(body, value.MessageFollowHopCount, context);
         WriteText8(body, value.SourceSpotId, context);
         WriteSpotRouteFence(body, value.TargetSpot, context);
-        var frames=new List<byte[]>{body.ToArray()};
+        return body.ToArray();
+    }
+    internal static SpotRequest22 DecodeSpotRequest22(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var header=DecodeSpotRequest22Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        MetadataFrame? metadata=null;
+        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
+        ApplicationPayloadEnvelopeV1? payload=null;
+        if(index>=frames.Count)throw Error("payload required");
+        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new SpotRequest22(flags,header.Correlation,header.Operation,header.MessageFollowHopCount,header.SourceSpotId,header.TargetSpot,metadata,payload!);
+        return value;
+    }
+    internal static SpotRequest22 DecodeSpotRequest22(byte[] frame,DecodeContext context)=>DecodeSpotRequest22(new[]{frame},context);
+    internal static byte[][] EncodeSpotRequest22(SpotRequest22 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeSpotRequest22Header(new(value.Flags,value.Correlation,value.Operation,value.MessageFollowHopCount,value.SourceSpotId,value.TargetSpot),context)};
         if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
         if(value.Payload is null)throw Error("payload required");
         if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
         return frames.ToArray();
     }
-    internal static LogicalMulticast23 DecodeLogicalMulticast23(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static LogicalMulticast23Header DecodeLogicalMulticast23Header(byte[] bytes,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=23)throw Error("header");
@@ -6255,18 +6438,10 @@ internal static class ServiceWireCodec
         var Topic = ReadText8(body, context);
         var SourceSpotId = ReadText8(body, context);
         body.End("body");
-        var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
-        if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new LogicalMulticast23(flags,ChannelName,Topic,SourceSpotId,metadata,payload!);
+        var value=new LogicalMulticast23Header(flags,ChannelName,Topic,SourceSpotId);
         return value;
     }
-    internal static LogicalMulticast23 DecodeLogicalMulticast23(byte[] frame,DecodeContext context)=>DecodeLogicalMulticast23(new[]{frame},context);
-    internal static byte[][] EncodeLogicalMulticast23(LogicalMulticast23 value,DecodeContext context)
+    internal static byte[] EncodeLogicalMulticast23Header(LogicalMulticast23Header value,DecodeContext context)
     {
         if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6276,16 +6451,35 @@ internal static class ServiceWireCodec
         WriteText8(body, value.ChannelName, context);
         WriteText8(body, value.Topic, context);
         WriteText8(body, value.SourceSpotId, context);
-        var frames=new List<byte[]>{body.ToArray()};
+        return body.ToArray();
+    }
+    internal static LogicalMulticast23 DecodeLogicalMulticast23(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var header=DecodeLogicalMulticast23Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        MetadataFrame? metadata=null;
+        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
+        ApplicationPayloadEnvelopeV1? payload=null;
+        if(index>=frames.Count)throw Error("payload required");
+        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new LogicalMulticast23(flags,header.ChannelName,header.Topic,header.SourceSpotId,metadata,payload!);
+        return value;
+    }
+    internal static LogicalMulticast23 DecodeLogicalMulticast23(byte[] frame,DecodeContext context)=>DecodeLogicalMulticast23(new[]{frame},context);
+    internal static byte[][] EncodeLogicalMulticast23(LogicalMulticast23 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeLogicalMulticast23Header(new(value.Flags,value.ChannelName,value.Topic,value.SourceSpotId),context)};
         if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
         if(value.Payload is null)throw Error("payload required");
         if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
         return frames.ToArray();
     }
-    internal static ActorSend24 DecodeActorSend24(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorSend24Header DecodeActorSend24Header(byte[] bytes,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=24)throw Error("header");
@@ -6305,18 +6499,10 @@ internal static class ServiceWireCodec
         }
         else BoundSessionTail = null;
         body.End("body");
-        var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
-        if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorSend24(flags,Operation,MessageFollowHopCount,SourceActor,TargetActor,BoundSessionTail,metadata,payload!);
+        var value=new ActorSend24Header(flags,Operation,MessageFollowHopCount,SourceActor,TargetActor,BoundSessionTail);
         return value;
     }
-    internal static ActorSend24 DecodeActorSend24(byte[] frame,DecodeContext context)=>DecodeActorSend24(new[]{frame},context);
-    internal static byte[][] EncodeActorSend24(ActorSend24 value,DecodeContext context)
+    internal static byte[] EncodeActorSend24Header(ActorSend24Header value,DecodeContext context)
     {
         if((value.Flags&~7)!=0||(value.Flags&0)!=0)throw Error("flags");
         var fc=((value.Flags&2)!=0?1:0)+((value.Flags&4)!=0?1:0);if(fc!=0&&fc!=2)throw Error("flag constraint");
@@ -6336,16 +6522,35 @@ internal static class ServiceWireCodec
             WriteOptionalBoundSessionTail(body, value.BoundSessionTail!, context);
         }
         else if (value.BoundSessionTail is not null) throw Error("boundSessionTail: forbidden");
-        var frames=new List<byte[]>{body.ToArray()};
+        return body.ToArray();
+    }
+    internal static ActorSend24 DecodeActorSend24(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var header=DecodeActorSend24Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        MetadataFrame? metadata=null;
+        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
+        ApplicationPayloadEnvelopeV1? payload=null;
+        if(index>=frames.Count)throw Error("payload required");
+        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new ActorSend24(flags,header.Operation,header.MessageFollowHopCount,header.SourceActor,header.TargetActor,header.BoundSessionTail,metadata,payload!);
+        return value;
+    }
+    internal static ActorSend24 DecodeActorSend24(byte[] frame,DecodeContext context)=>DecodeActorSend24(new[]{frame},context);
+    internal static byte[][] EncodeActorSend24(ActorSend24 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeActorSend24Header(new(value.Flags,value.Operation,value.MessageFollowHopCount,value.SourceActor,value.TargetActor,value.BoundSessionTail),context)};
         if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
         if(value.Payload is null)throw Error("payload required");
         if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
         return frames.ToArray();
     }
-    internal static ActorRequest25 DecodeActorRequest25(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorRequest25Header DecodeActorRequest25Header(byte[] bytes,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=25)throw Error("header");
@@ -6366,18 +6571,10 @@ internal static class ServiceWireCodec
         }
         else BoundSessionTail = null;
         body.End("body");
-        var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
-        if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorRequest25(flags,Correlation,Operation,MessageFollowHopCount,SourceActor,TargetActor,BoundSessionTail,metadata,payload!);
+        var value=new ActorRequest25Header(flags,Correlation,Operation,MessageFollowHopCount,SourceActor,TargetActor,BoundSessionTail);
         return value;
     }
-    internal static ActorRequest25 DecodeActorRequest25(byte[] frame,DecodeContext context)=>DecodeActorRequest25(new[]{frame},context);
-    internal static byte[][] EncodeActorRequest25(ActorRequest25 value,DecodeContext context)
+    internal static byte[] EncodeActorRequest25Header(ActorRequest25Header value,DecodeContext context)
     {
         if((value.Flags&~7)!=0||(value.Flags&0)!=0)throw Error("flags");
         var fc=((value.Flags&2)!=0?1:0)+((value.Flags&4)!=0?1:0);if(fc!=0&&fc!=2)throw Error("flag constraint");
@@ -6398,16 +6595,35 @@ internal static class ServiceWireCodec
             WriteOptionalBoundSessionTail(body, value.BoundSessionTail!, context);
         }
         else if (value.BoundSessionTail is not null) throw Error("boundSessionTail: forbidden");
-        var frames=new List<byte[]>{body.ToArray()};
+        return body.ToArray();
+    }
+    internal static ActorRequest25 DecodeActorRequest25(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var header=DecodeActorRequest25Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        MetadataFrame? metadata=null;
+        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
+        ApplicationPayloadEnvelopeV1? payload=null;
+        if(index>=frames.Count)throw Error("payload required");
+        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new ActorRequest25(flags,header.Correlation,header.Operation,header.MessageFollowHopCount,header.SourceActor,header.TargetActor,header.BoundSessionTail,metadata,payload!);
+        return value;
+    }
+    internal static ActorRequest25 DecodeActorRequest25(byte[] frame,DecodeContext context)=>DecodeActorRequest25(new[]{frame},context);
+    internal static byte[][] EncodeActorRequest25(ActorRequest25 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeActorRequest25Header(new(value.Flags,value.Correlation,value.Operation,value.MessageFollowHopCount,value.SourceActor,value.TargetActor,value.BoundSessionTail),context)};
         if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
         if(value.Payload is null)throw Error("payload required");
         if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
         return frames.ToArray();
     }
-    internal static ActorLookup26 DecodeActorLookup26(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorLookup26Header DecodeActorLookup26Header(byte[] bytes,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=26)throw Error("header");
@@ -6416,13 +6632,10 @@ internal static class ServiceWireCodec
         var Correlation = ReadNonzeroU64(body, context);
         var ActorId = ReadText8(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorLookup26(flags,Correlation,ActorId);
+        var value=new ActorLookup26Header(flags,Correlation,ActorId);
         return value;
     }
-    internal static ActorLookup26 DecodeActorLookup26(byte[] frame,DecodeContext context)=>DecodeActorLookup26(new[]{frame},context);
-    internal static byte[][] EncodeActorLookup26(ActorLookup26 value,DecodeContext context)
+    internal static byte[] EncodeActorLookup26Header(ActorLookup26Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6431,13 +6644,27 @@ internal static class ServiceWireCodec
         body.U8(1);body.U8(26);body.U8(value.Flags);
         WriteNonzeroU64(body, value.Correlation, context);
         WriteText8(body, value.ActorId, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static ActorDestroy27 DecodeActorDestroy27(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorLookup26 DecodeActorLookup26(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeActorLookup26Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new ActorLookup26(flags,header.Correlation,header.ActorId);
+        return value;
+    }
+    internal static ActorLookup26 DecodeActorLookup26(byte[] frame,DecodeContext context)=>DecodeActorLookup26(new[]{frame},context);
+    internal static byte[][] EncodeActorLookup26(ActorLookup26 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeActorLookup26Header(new(value.Flags,value.Correlation,value.ActorId),context)};
+        return frames.ToArray();
+    }
+    internal static ActorDestroy27Header DecodeActorDestroy27Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=27)throw Error("header");
@@ -6446,13 +6673,10 @@ internal static class ServiceWireCodec
         var Correlation = ReadNonzeroU64(body, context);
         var Actor = ReadActorRouteFence(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorDestroy27(flags,Correlation,Actor);
+        var value=new ActorDestroy27Header(flags,Correlation,Actor);
         return value;
     }
-    internal static ActorDestroy27 DecodeActorDestroy27(byte[] frame,DecodeContext context)=>DecodeActorDestroy27(new[]{frame},context);
-    internal static byte[][] EncodeActorDestroy27(ActorDestroy27 value,DecodeContext context)
+    internal static byte[] EncodeActorDestroy27Header(ActorDestroy27Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6461,13 +6685,27 @@ internal static class ServiceWireCodec
         body.U8(1);body.U8(27);body.U8(value.Flags);
         WriteNonzeroU64(body, value.Correlation, context);
         WriteActorRouteFence(body, value.Actor, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static ActorJoin28 DecodeActorJoin28(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorDestroy27 DecodeActorDestroy27(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeActorDestroy27Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new ActorDestroy27(flags,header.Correlation,header.Actor);
+        return value;
+    }
+    internal static ActorDestroy27 DecodeActorDestroy27(byte[] frame,DecodeContext context)=>DecodeActorDestroy27(new[]{frame},context);
+    internal static byte[][] EncodeActorDestroy27(ActorDestroy27 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeActorDestroy27Header(new(value.Flags,value.Correlation,value.Actor),context)};
+        return frames.ToArray();
+    }
+    internal static ActorJoin28Header DecodeActorJoin28Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=28)throw Error("header");
@@ -6478,15 +6716,10 @@ internal static class ServiceWireCodec
         var Entry = ReadBool8(body, context);
         var TargetSpot = ReadSpotRouteFence(body, context);
         body.End("body");
-        var index=1;
-        ApplicationPayloadEnvelopeV1? payload=null;
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorJoin28(flags,Correlation,Actor,Entry,TargetSpot,payload);
+        var value=new ActorJoin28Header(flags,Correlation,Actor,Entry,TargetSpot);
         return value;
     }
-    internal static ActorJoin28 DecodeActorJoin28(byte[] frame,DecodeContext context)=>DecodeActorJoin28(new[]{frame},context);
-    internal static byte[][] EncodeActorJoin28(ActorJoin28 value,DecodeContext context)
+    internal static byte[] EncodeActorJoin28Header(ActorJoin28Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6497,14 +6730,30 @@ internal static class ServiceWireCodec
         WriteActorRouteFence(body, value.Actor, context);
         WriteBool8(body, value.Entry, context);
         WriteSpotRouteFence(body, value.TargetSpot, context);
-        var frames=new List<byte[]>{body.ToArray()};
+        return body.ToArray();
+    }
+    internal static ActorJoin28 DecodeActorJoin28(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var header=DecodeActorJoin28Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        ApplicationPayloadEnvelopeV1? payload=null;
+        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new ActorJoin28(flags,header.Correlation,header.Actor,header.Entry,header.TargetSpot,payload);
+        return value;
+    }
+    internal static ActorJoin28 DecodeActorJoin28(byte[] frame,DecodeContext context)=>DecodeActorJoin28(new[]{frame},context);
+    internal static byte[][] EncodeActorJoin28(ActorJoin28 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeActorJoin28Header(new(value.Flags,value.Correlation,value.Actor,value.Entry,value.TargetSpot),context)};
         if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
         return frames.ToArray();
     }
-    internal static ActorLeft29 DecodeActorLeft29(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorLeft29Header DecodeActorLeft29Header(byte[] bytes,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=29)throw Error("header");
@@ -6514,13 +6763,10 @@ internal static class ServiceWireCodec
         var PreviousMembership = ReadSpotMembership(body, context);
         var CurrentAuthorityOwnerGeneration = ReadNonzeroU64(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorLeft29(flags,Actor,PreviousMembership,CurrentAuthorityOwnerGeneration);
+        var value=new ActorLeft29Header(flags,Actor,PreviousMembership,CurrentAuthorityOwnerGeneration);
         return value;
     }
-    internal static ActorLeft29 DecodeActorLeft29(byte[] frame,DecodeContext context)=>DecodeActorLeft29(new[]{frame},context);
-    internal static byte[][] EncodeActorLeft29(ActorLeft29 value,DecodeContext context)
+    internal static byte[] EncodeActorLeft29Header(ActorLeft29Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6530,13 +6776,27 @@ internal static class ServiceWireCodec
         WriteActorRef(body, value.Actor, context);
         WriteSpotMembership(body, value.PreviousMembership, context);
         WriteNonzeroU64(body, value.CurrentAuthorityOwnerGeneration, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static RelocationReady30 DecodeRelocationReady30(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorLeft29 DecodeActorLeft29(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeActorLeft29Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new ActorLeft29(flags,header.Actor,header.PreviousMembership,header.CurrentAuthorityOwnerGeneration);
+        return value;
+    }
+    internal static ActorLeft29 DecodeActorLeft29(byte[] frame,DecodeContext context)=>DecodeActorLeft29(new[]{frame},context);
+    internal static byte[][] EncodeActorLeft29(ActorLeft29 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeActorLeft29Header(new(value.Flags,value.Actor,value.PreviousMembership,value.CurrentAuthorityOwnerGeneration),context)};
+        return frames.ToArray();
+    }
+    internal static RelocationReady30Header DecodeRelocationReady30Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=30)throw Error("header");
@@ -6549,13 +6809,10 @@ internal static class ServiceWireCodec
         var Object = ReadRelocationObjectIdentity(body, context);
         var SenderRole = ReadRelocationRole(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new RelocationReady30(flags,Relocation,TargetAttemptGeneration,Coordinator,Target,Object,SenderRole);
+        var value=new RelocationReady30Header(flags,Relocation,TargetAttemptGeneration,Coordinator,Target,Object,SenderRole);
         return value;
     }
-    internal static RelocationReady30 DecodeRelocationReady30(byte[] frame,DecodeContext context)=>DecodeRelocationReady30(new[]{frame},context);
-    internal static byte[][] EncodeRelocationReady30(RelocationReady30 value,DecodeContext context)
+    internal static byte[] EncodeRelocationReady30Header(RelocationReady30Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6568,13 +6825,27 @@ internal static class ServiceWireCodec
         WriteRelocationTargetFence(body, value.Target, context);
         WriteRelocationObjectIdentity(body, value.Object, context);
         WriteRelocationRole(body, value.SenderRole, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static RelocationData31 DecodeRelocationData31(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static RelocationReady30 DecodeRelocationReady30(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeRelocationReady30Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new RelocationReady30(flags,header.Relocation,header.TargetAttemptGeneration,header.Coordinator,header.Target,header.Object,header.SenderRole);
+        return value;
+    }
+    internal static RelocationReady30 DecodeRelocationReady30(byte[] frame,DecodeContext context)=>DecodeRelocationReady30(new[]{frame},context);
+    internal static byte[][] EncodeRelocationReady30(RelocationReady30 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeRelocationReady30Header(new(value.Flags,value.Relocation,value.TargetAttemptGeneration,value.Coordinator,value.Target,value.Object,value.SenderRole),context)};
+        return frames.ToArray();
+    }
+    internal static RelocationData31Header DecodeRelocationData31Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=31)throw Error("header");
@@ -6587,13 +6858,10 @@ internal static class ServiceWireCodec
         var Object = ReadRelocationObjectIdentity(body, context);
         var Record = ReadFrozenRecord(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new RelocationData31(flags,Relocation,TargetAttemptGeneration,Coordinator,SenderRole,Object,Record);
+        var value=new RelocationData31Header(flags,Relocation,TargetAttemptGeneration,Coordinator,SenderRole,Object,Record);
         return value;
     }
-    internal static RelocationData31 DecodeRelocationData31(byte[] frame,DecodeContext context)=>DecodeRelocationData31(new[]{frame},context);
-    internal static byte[][] EncodeRelocationData31(RelocationData31 value,DecodeContext context)
+    internal static byte[] EncodeRelocationData31Header(RelocationData31Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6606,13 +6874,27 @@ internal static class ServiceWireCodec
         WriteRelocationRole(body, value.SenderRole, context);
         WriteRelocationObjectIdentity(body, value.Object, context);
         WriteFrozenRecord(body, value.Record, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static ReplyRelay33 DecodeReplyRelay33(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static RelocationData31 DecodeRelocationData31(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeRelocationData31Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new RelocationData31(flags,header.Relocation,header.TargetAttemptGeneration,header.Coordinator,header.SenderRole,header.Object,header.Record);
+        return value;
+    }
+    internal static RelocationData31 DecodeRelocationData31(byte[] frame,DecodeContext context)=>DecodeRelocationData31(new[]{frame},context);
+    internal static byte[][] EncodeRelocationData31(RelocationData31 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeRelocationData31Header(new(value.Flags,value.Relocation,value.TargetAttemptGeneration,value.Coordinator,value.SenderRole,value.Object,value.Record),context)};
+        return frames.ToArray();
+    }
+    internal static ReplyRelay33Header DecodeReplyRelay33Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=33)throw Error("header");
@@ -6624,16 +6906,11 @@ internal static class ServiceWireCodec
         var TerminalResult = ReadRequestTerminalResult(body, context);
         var FailureCode = ReadFrameworkErrorCode(body, context);
         body.End("body");
-        var index=1;
-        ApplicationPayloadEnvelopeV1? payload=null;
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new ReplyRelay33(flags,Operation,ReplyRouteId,Context,TerminalResult,FailureCode,payload);
+        var value=new ReplyRelay33Header(flags,Operation,ReplyRouteId,Context,TerminalResult,FailureCode);
         ValidateTerminalFailure(value.TerminalResult, value.FailureCode);
         return value;
     }
-    internal static ReplyRelay33 DecodeReplyRelay33(byte[] frame,DecodeContext context)=>DecodeReplyRelay33(new[]{frame},context);
-    internal static byte[][] EncodeReplyRelay33(ReplyRelay33 value,DecodeContext context)
+    internal static byte[] EncodeReplyRelay33Header(ReplyRelay33Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6645,15 +6922,31 @@ internal static class ServiceWireCodec
         WriteReplyRelayContext(body, value.Context, context);
         WriteRequestTerminalResult(body, value.TerminalResult, context);
         WriteFrameworkErrorCode(body, value.FailureCode, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
         ValidateTerminalFailure(value.TerminalResult, value.FailureCode);
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static RelocationCutover34 DecodeRelocationCutover34(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ReplyRelay33 DecodeReplyRelay33(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeReplyRelay33Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        ApplicationPayloadEnvelopeV1? payload=null;
+        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new ReplyRelay33(flags,header.Operation,header.ReplyRouteId,header.Context,header.TerminalResult,header.FailureCode,payload);
+        return value;
+    }
+    internal static ReplyRelay33 DecodeReplyRelay33(byte[] frame,DecodeContext context)=>DecodeReplyRelay33(new[]{frame},context);
+    internal static byte[][] EncodeReplyRelay33(ReplyRelay33 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeReplyRelay33Header(new(value.Flags,value.Operation,value.ReplyRouteId,value.Context,value.TerminalResult,value.FailureCode),context)};
+        if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
+        return frames.ToArray();
+    }
+    internal static RelocationCutover34Header DecodeRelocationCutover34Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=34)throw Error("header");
@@ -6667,13 +6960,10 @@ internal static class ServiceWireCodec
         var BoundaryRecordCount = ReadOrdinalOrZero(body, context);
         var BoundaryChecksumCrc32c = ReadU32(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new RelocationCutover34(flags,Relocation,TargetAttemptGeneration,Coordinator,SenderRole,Object,BoundaryRecordCount,BoundaryChecksumCrc32c);
+        var value=new RelocationCutover34Header(flags,Relocation,TargetAttemptGeneration,Coordinator,SenderRole,Object,BoundaryRecordCount,BoundaryChecksumCrc32c);
         return value;
     }
-    internal static RelocationCutover34 DecodeRelocationCutover34(byte[] frame,DecodeContext context)=>DecodeRelocationCutover34(new[]{frame},context);
-    internal static byte[][] EncodeRelocationCutover34(RelocationCutover34 value,DecodeContext context)
+    internal static byte[] EncodeRelocationCutover34Header(RelocationCutover34Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6687,13 +6977,27 @@ internal static class ServiceWireCodec
         WriteRelocationObjectIdentity(body, value.Object, context);
         WriteOrdinalOrZero(body, value.BoundaryRecordCount, context);
         WriteU32(body, value.BoundaryChecksumCrc32c, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static BoundSessionSend36 DecodeBoundSessionSend36(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static RelocationCutover34 DecodeRelocationCutover34(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeRelocationCutover34Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new RelocationCutover34(flags,header.Relocation,header.TargetAttemptGeneration,header.Coordinator,header.SenderRole,header.Object,header.BoundaryRecordCount,header.BoundaryChecksumCrc32c);
+        return value;
+    }
+    internal static RelocationCutover34 DecodeRelocationCutover34(byte[] frame,DecodeContext context)=>DecodeRelocationCutover34(new[]{frame},context);
+    internal static byte[][] EncodeRelocationCutover34(RelocationCutover34 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeRelocationCutover34Header(new(value.Flags,value.Relocation,value.TargetAttemptGeneration,value.Coordinator,value.SenderRole,value.Object,value.BoundaryRecordCount,value.BoundaryChecksumCrc32c),context)};
+        return frames.ToArray();
+    }
+    internal static BoundSessionSend36Header DecodeBoundSessionSend36Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=36)throw Error("header");
@@ -6702,16 +7006,10 @@ internal static class ServiceWireCodec
         var Actor = ReadActorRouteFence(body, context);
         var ExpectedBindingGeneration = ReadNonzeroU64(body, context);
         body.End("body");
-        var index=1;
-        ApplicationPayloadEnvelopeV1? payload=null;
-        if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new BoundSessionSend36(flags,Actor,ExpectedBindingGeneration,payload!);
+        var value=new BoundSessionSend36Header(flags,Actor,ExpectedBindingGeneration);
         return value;
     }
-    internal static BoundSessionSend36 DecodeBoundSessionSend36(byte[] frame,DecodeContext context)=>DecodeBoundSessionSend36(new[]{frame},context);
-    internal static byte[][] EncodeBoundSessionSend36(BoundSessionSend36 value,DecodeContext context)
+    internal static byte[] EncodeBoundSessionSend36Header(BoundSessionSend36Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6720,15 +7018,32 @@ internal static class ServiceWireCodec
         body.U8(1);body.U8(36);body.U8(value.Flags);
         WriteActorRouteFence(body, value.Actor, context);
         WriteNonzeroU64(body, value.ExpectedBindingGeneration, context);
-        var frames=new List<byte[]>{body.ToArray()};
+        return body.ToArray();
+    }
+    internal static BoundSessionSend36 DecodeBoundSessionSend36(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var header=DecodeBoundSessionSend36Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        ApplicationPayloadEnvelopeV1? payload=null;
+        if(index>=frames.Count)throw Error("payload required");
+        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new BoundSessionSend36(flags,header.Actor,header.ExpectedBindingGeneration,payload!);
+        return value;
+    }
+    internal static BoundSessionSend36 DecodeBoundSessionSend36(byte[] frame,DecodeContext context)=>DecodeBoundSessionSend36(new[]{frame},context);
+    internal static byte[][] EncodeBoundSessionSend36(BoundSessionSend36 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeBoundSessionSend36Header(new(value.Flags,value.Actor,value.ExpectedBindingGeneration),context)};
         if(value.Payload is null)throw Error("payload required");
         if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
         return frames.ToArray();
     }
-    internal static ActorJoined37 DecodeActorJoined37(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorJoined37Header DecodeActorJoined37Header(byte[] bytes,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=37)throw Error("header");
@@ -6739,13 +7054,10 @@ internal static class ServiceWireCodec
         var CurrentMembership = ReadSpotMembership(body, context);
         var CurrentAuthorityOwnerGeneration = ReadNonzeroU64(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorJoined37(flags,Actor,PreviousMembership,CurrentMembership,CurrentAuthorityOwnerGeneration);
+        var value=new ActorJoined37Header(flags,Actor,PreviousMembership,CurrentMembership,CurrentAuthorityOwnerGeneration);
         return value;
     }
-    internal static ActorJoined37 DecodeActorJoined37(byte[] frame,DecodeContext context)=>DecodeActorJoined37(new[]{frame},context);
-    internal static byte[][] EncodeActorJoined37(ActorJoined37 value,DecodeContext context)
+    internal static byte[] EncodeActorJoined37Header(ActorJoined37Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6756,13 +7068,27 @@ internal static class ServiceWireCodec
         WriteOptionalSpotMembership(body, value.PreviousMembership, context);
         WriteSpotMembership(body, value.CurrentMembership, context);
         WriteNonzeroU64(body, value.CurrentAuthorityOwnerGeneration, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static BoundSessionBind38 DecodeBoundSessionBind38(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorJoined37 DecodeActorJoined37(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeActorJoined37Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new ActorJoined37(flags,header.Actor,header.PreviousMembership,header.CurrentMembership,header.CurrentAuthorityOwnerGeneration);
+        return value;
+    }
+    internal static ActorJoined37 DecodeActorJoined37(byte[] frame,DecodeContext context)=>DecodeActorJoined37(new[]{frame},context);
+    internal static byte[][] EncodeActorJoined37(ActorJoined37 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeActorJoined37Header(new(value.Flags,value.Actor,value.PreviousMembership,value.CurrentMembership,value.CurrentAuthorityOwnerGeneration),context)};
+        return frames.ToArray();
+    }
+    internal static BoundSessionBind38Header DecodeBoundSessionBind38Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=38)throw Error("header");
@@ -6773,13 +7099,10 @@ internal static class ServiceWireCodec
         var SessionRid = ReadRid(body, context);
         var Binding = ReadBoundSessionBindingTransition(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new BoundSessionBind38(flags,Correlation,Actor,SessionRid,Binding);
+        var value=new BoundSessionBind38Header(flags,Correlation,Actor,SessionRid,Binding);
         return value;
     }
-    internal static BoundSessionBind38 DecodeBoundSessionBind38(byte[] frame,DecodeContext context)=>DecodeBoundSessionBind38(new[]{frame},context);
-    internal static byte[][] EncodeBoundSessionBind38(BoundSessionBind38 value,DecodeContext context)
+    internal static byte[] EncodeBoundSessionBind38Header(BoundSessionBind38Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6790,13 +7113,27 @@ internal static class ServiceWireCodec
         WriteActorRouteFence(body, value.Actor, context);
         WriteRid(body, value.SessionRid, context);
         WriteBoundSessionBindingTransition(body, value.Binding, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static InstanceSpot39 DecodeInstanceSpot39(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static BoundSessionBind38 DecodeBoundSessionBind38(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeBoundSessionBind38Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new BoundSessionBind38(flags,header.Correlation,header.Actor,header.SessionRid,header.Binding);
+        return value;
+    }
+    internal static BoundSessionBind38 DecodeBoundSessionBind38(byte[] frame,DecodeContext context)=>DecodeBoundSessionBind38(new[]{frame},context);
+    internal static byte[][] EncodeBoundSessionBind38(BoundSessionBind38 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeBoundSessionBind38Header(new(value.Flags,value.Correlation,value.Actor,value.SessionRid,value.Binding),context)};
+        return frames.ToArray();
+    }
+    internal static InstanceSpot39Header DecodeInstanceSpot39Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=39)throw Error("header");
@@ -6810,18 +7147,10 @@ internal static class ServiceWireCodec
         var Operation = ReadOperationIdOrZero(body, context);
         var ReplyRoute = ReadInstanceReplyRoute(body, context, OperationKind);
         body.End("body");
-        var index=1;
-        MetadataFrame? metadata=null;
-        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
-        ApplicationPayloadEnvelopeV1? payload=null;
-        if(index>=frames.Count)throw Error("payload required");
-        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new InstanceSpot39(flags,Route,SourceNodeGeneration,SourceNodeRid,SourceSpotId,OperationKind,Operation,ReplyRoute,metadata,payload!);
+        var value=new InstanceSpot39Header(flags,Route,SourceNodeGeneration,SourceNodeRid,SourceSpotId,OperationKind,Operation,ReplyRoute);
         return value;
     }
-    internal static InstanceSpot39 DecodeInstanceSpot39(byte[] frame,DecodeContext context)=>DecodeInstanceSpot39(new[]{frame},context);
-    internal static byte[][] EncodeInstanceSpot39(InstanceSpot39 value,DecodeContext context)
+    internal static byte[] EncodeInstanceSpot39Header(InstanceSpot39Header value,DecodeContext context)
     {
         if((value.Flags&~1)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6835,16 +7164,35 @@ internal static class ServiceWireCodec
         WriteInstanceOperationKind(body, value.OperationKind, context);
         WriteOperationIdOrZero(body, value.Operation, context);
         WriteInstanceReplyRoute(body, value.ReplyRoute, context, value.OperationKind);
-        var frames=new List<byte[]>{body.ToArray()};
+        return body.ToArray();
+    }
+    internal static InstanceSpot39 DecodeInstanceSpot39(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var header=DecodeInstanceSpot39Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        MetadataFrame? metadata=null;
+        if((flags&1)!=0){if(index>=frames.Count)throw Error("metadata required");var x=new Reader(frames[index++]);metadata=ReadMetadataFrame(x, context);x.End("metadata");}
+        ApplicationPayloadEnvelopeV1? payload=null;
+        if(index>=frames.Count)throw Error("payload required");
+        if(index<frames.Count){var x=new Reader(frames[index++]);payload=ReadApplicationPayloadEnvelopeV1(x, context);x.End("payload");}
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new InstanceSpot39(flags,header.Route,header.SourceNodeGeneration,header.SourceNodeRid,header.SourceSpotId,header.OperationKind,header.Operation,header.ReplyRoute,metadata,payload!);
+        return value;
+    }
+    internal static InstanceSpot39 DecodeInstanceSpot39(byte[] frame,DecodeContext context)=>DecodeInstanceSpot39(new[]{frame},context);
+    internal static byte[][] EncodeInstanceSpot39(InstanceSpot39 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeInstanceSpot39Header(new(value.Flags,value.Route,value.SourceNodeGeneration,value.SourceNodeRid,value.SourceSpotId,value.OperationKind,value.Operation,value.ReplyRoute),context)};
         if((value.Flags&1)!=0){if(value.Metadata is null)throw Error("metadata required");var x=new Writer();WriteMetadataFrame(x, value.Metadata, context);frames.Add(x.ToArray());}else if(value.Metadata is not null)throw Error("metadata forbidden");
         if(value.Payload is null)throw Error("payload required");
         if(value.Payload is not null){var x=new Writer();WriteApplicationPayloadEnvelopeV1(x, value.Payload, context);frames.Add(x.ToArray());}
         return frames.ToArray();
     }
-    internal static RelocationPrepare40 DecodeRelocationPrepare40(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static RelocationPrepare40Header DecodeRelocationPrepare40Header(byte[] bytes,DecodeContext context)
     {
-        if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=40)throw Error("header");
@@ -6864,13 +7212,10 @@ internal static class ServiceWireCodec
         var ApplicationVersion = ReadApplicationVersion(body, context);
         var DeadlineUnixMs = ReadNonzeroU64(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new RelocationPrepare40(flags,Relocation,TargetAttemptGeneration,Coordinator,Target,InitiatorRole,Object,SourceNodeRid,SourceNodeGeneration,PayloadTotalLength,PayloadChunkCount,PayloadChecksumCrc32c,ApplicationVersion,DeadlineUnixMs);
+        var value=new RelocationPrepare40Header(flags,Relocation,TargetAttemptGeneration,Coordinator,Target,InitiatorRole,Object,SourceNodeRid,SourceNodeGeneration,PayloadTotalLength,PayloadChunkCount,PayloadChecksumCrc32c,ApplicationVersion,DeadlineUnixMs);
         return value;
     }
-    internal static RelocationPrepare40 DecodeRelocationPrepare40(byte[] frame,DecodeContext context)=>DecodeRelocationPrepare40(new[]{frame},context);
-    internal static byte[][] EncodeRelocationPrepare40(RelocationPrepare40 value,DecodeContext context)
+    internal static byte[] EncodeRelocationPrepare40Header(RelocationPrepare40Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6890,13 +7235,27 @@ internal static class ServiceWireCodec
         WriteU32(body, value.PayloadChecksumCrc32c, context);
         WriteApplicationVersion(body, value.ApplicationVersion, context);
         WriteNonzeroU64(body, value.DeadlineUnixMs, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static SessionRelocationSeal42 DecodeSessionRelocationSeal42(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static RelocationPrepare40 DecodeRelocationPrepare40(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeRelocationPrepare40Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new RelocationPrepare40(flags,header.Relocation,header.TargetAttemptGeneration,header.Coordinator,header.Target,header.InitiatorRole,header.Object,header.SourceNodeRid,header.SourceNodeGeneration,header.PayloadTotalLength,header.PayloadChunkCount,header.PayloadChecksumCrc32c,header.ApplicationVersion,header.DeadlineUnixMs);
+        return value;
+    }
+    internal static RelocationPrepare40 DecodeRelocationPrepare40(byte[] frame,DecodeContext context)=>DecodeRelocationPrepare40(new[]{frame},context);
+    internal static byte[][] EncodeRelocationPrepare40(RelocationPrepare40 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeRelocationPrepare40Header(new(value.Flags,value.Relocation,value.TargetAttemptGeneration,value.Coordinator,value.Target,value.InitiatorRole,value.Object,value.SourceNodeRid,value.SourceNodeGeneration,value.PayloadTotalLength,value.PayloadChunkCount,value.PayloadChecksumCrc32c,value.ApplicationVersion,value.DeadlineUnixMs),context)};
+        return frames.ToArray();
+    }
+    internal static SessionRelocationSeal42Header DecodeSessionRelocationSeal42Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=42)throw Error("header");
@@ -6915,13 +7274,10 @@ internal static class ServiceWireCodec
         var TargetNodeRid = ReadRid(body, context);
         var TargetNodeGeneration = ReadNonzeroU64(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new SessionRelocationSeal42(flags,Relocation,Coordinator,SenderRole,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration,TargetNodeRid,TargetNodeGeneration);
+        var value=new SessionRelocationSeal42Header(flags,Relocation,Coordinator,SenderRole,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration,TargetNodeRid,TargetNodeGeneration);
         return value;
     }
-    internal static SessionRelocationSeal42 DecodeSessionRelocationSeal42(byte[] frame,DecodeContext context)=>DecodeSessionRelocationSeal42(new[]{frame},context);
-    internal static byte[][] EncodeSessionRelocationSeal42(SessionRelocationSeal42 value,DecodeContext context)
+    internal static byte[] EncodeSessionRelocationSeal42Header(SessionRelocationSeal42Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6940,13 +7296,27 @@ internal static class ServiceWireCodec
         WriteNonzeroU64(body, value.BindingGeneration, context);
         WriteRid(body, value.TargetNodeRid, context);
         WriteNonzeroU64(body, value.TargetNodeGeneration, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static SessionRelocationSealed43 DecodeSessionRelocationSealed43(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static SessionRelocationSeal42 DecodeSessionRelocationSeal42(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeSessionRelocationSeal42Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new SessionRelocationSeal42(flags,header.Relocation,header.Coordinator,header.SenderRole,header.Actor,header.SessionOwnerNodeRid,header.SessionOwnerNodeGeneration,header.SessionOwnerId,header.SessionOwnerLeaseGeneration,header.SessionRid,header.BindingGeneration,header.TargetNodeRid,header.TargetNodeGeneration);
+        return value;
+    }
+    internal static SessionRelocationSeal42 DecodeSessionRelocationSeal42(byte[] frame,DecodeContext context)=>DecodeSessionRelocationSeal42(new[]{frame},context);
+    internal static byte[][] EncodeSessionRelocationSeal42(SessionRelocationSeal42 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeSessionRelocationSeal42Header(new(value.Flags,value.Relocation,value.Coordinator,value.SenderRole,value.Actor,value.SessionOwnerNodeRid,value.SessionOwnerNodeGeneration,value.SessionOwnerId,value.SessionOwnerLeaseGeneration,value.SessionRid,value.BindingGeneration,value.TargetNodeRid,value.TargetNodeGeneration),context)};
+        return frames.ToArray();
+    }
+    internal static SessionRelocationSealed43Header DecodeSessionRelocationSealed43Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=43)throw Error("header");
@@ -6963,13 +7333,10 @@ internal static class ServiceWireCodec
         var BindingGeneration = ReadNonzeroU64(body, context);
         var SealResult = ReadSessionSealResult(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new SessionRelocationSealed43(flags,Relocation,Coordinator,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration,SealResult);
+        var value=new SessionRelocationSealed43Header(flags,Relocation,Coordinator,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration,SealResult);
         return value;
     }
-    internal static SessionRelocationSealed43 DecodeSessionRelocationSealed43(byte[] frame,DecodeContext context)=>DecodeSessionRelocationSealed43(new[]{frame},context);
-    internal static byte[][] EncodeSessionRelocationSealed43(SessionRelocationSealed43 value,DecodeContext context)
+    internal static byte[] EncodeSessionRelocationSealed43Header(SessionRelocationSealed43Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -6986,13 +7353,27 @@ internal static class ServiceWireCodec
         WriteRid(body, value.SessionRid, context);
         WriteNonzeroU64(body, value.BindingGeneration, context);
         WriteSessionSealResult(body, value.SealResult, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static SessionRelocationRoute44 DecodeSessionRelocationRoute44(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static SessionRelocationSealed43 DecodeSessionRelocationSealed43(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeSessionRelocationSealed43Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new SessionRelocationSealed43(flags,header.Relocation,header.Coordinator,header.Actor,header.SessionOwnerNodeRid,header.SessionOwnerNodeGeneration,header.SessionOwnerId,header.SessionOwnerLeaseGeneration,header.SessionRid,header.BindingGeneration,header.SealResult);
+        return value;
+    }
+    internal static SessionRelocationSealed43 DecodeSessionRelocationSealed43(byte[] frame,DecodeContext context)=>DecodeSessionRelocationSealed43(new[]{frame},context);
+    internal static byte[][] EncodeSessionRelocationSealed43(SessionRelocationSealed43 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeSessionRelocationSealed43Header(new(value.Flags,value.Relocation,value.Coordinator,value.Actor,value.SessionOwnerNodeRid,value.SessionOwnerNodeGeneration,value.SessionOwnerId,value.SessionOwnerLeaseGeneration,value.SessionRid,value.BindingGeneration,value.SealResult),context)};
+        return frames.ToArray();
+    }
+    internal static SessionRelocationRoute44Header DecodeSessionRelocationRoute44Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=44)throw Error("header");
@@ -7010,13 +7391,10 @@ internal static class ServiceWireCodec
         var BindingGeneration = ReadNonzeroU64(body, context);
         var Route = ReadSessionRelocationRouteUpdate(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new SessionRelocationRoute44(flags,Relocation,Coordinator,SenderRole,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration,Route);
+        var value=new SessionRelocationRoute44Header(flags,Relocation,Coordinator,SenderRole,Actor,SessionOwnerNodeRid,SessionOwnerNodeGeneration,SessionOwnerId,SessionOwnerLeaseGeneration,SessionRid,BindingGeneration,Route);
         return value;
     }
-    internal static SessionRelocationRoute44 DecodeSessionRelocationRoute44(byte[] frame,DecodeContext context)=>DecodeSessionRelocationRoute44(new[]{frame},context);
-    internal static byte[][] EncodeSessionRelocationRoute44(SessionRelocationRoute44 value,DecodeContext context)
+    internal static byte[] EncodeSessionRelocationRoute44Header(SessionRelocationRoute44Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -7034,13 +7412,27 @@ internal static class ServiceWireCodec
         WriteRid(body, value.SessionRid, context);
         WriteNonzeroU64(body, value.BindingGeneration, context);
         WriteSessionRelocationRouteUpdate(body, value.Route, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static ReplyRelayAck46 DecodeReplyRelayAck46(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static SessionRelocationRoute44 DecodeSessionRelocationRoute44(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeSessionRelocationRoute44Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new SessionRelocationRoute44(flags,header.Relocation,header.Coordinator,header.SenderRole,header.Actor,header.SessionOwnerNodeRid,header.SessionOwnerNodeGeneration,header.SessionOwnerId,header.SessionOwnerLeaseGeneration,header.SessionRid,header.BindingGeneration,header.Route);
+        return value;
+    }
+    internal static SessionRelocationRoute44 DecodeSessionRelocationRoute44(byte[] frame,DecodeContext context)=>DecodeSessionRelocationRoute44(new[]{frame},context);
+    internal static byte[][] EncodeSessionRelocationRoute44(SessionRelocationRoute44 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeSessionRelocationRoute44Header(new(value.Flags,value.Relocation,value.Coordinator,value.SenderRole,value.Actor,value.SessionOwnerNodeRid,value.SessionOwnerNodeGeneration,value.SessionOwnerId,value.SessionOwnerLeaseGeneration,value.SessionRid,value.BindingGeneration,value.Route),context)};
+        return frames.ToArray();
+    }
+    internal static ReplyRelayAck46Header DecodeReplyRelayAck46Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=46)throw Error("header");
@@ -7053,13 +7445,10 @@ internal static class ServiceWireCodec
         var RequestSource = ReadRequestSourceFence(body, context);
         var Status = ReadReplyRelayAckStatus(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new ReplyRelayAck46(flags,Relocation,Coordinator,Operation,ReplyRouteId,RequestSource,Status);
+        var value=new ReplyRelayAck46Header(flags,Relocation,Coordinator,Operation,ReplyRouteId,RequestSource,Status);
         return value;
     }
-    internal static ReplyRelayAck46 DecodeReplyRelayAck46(byte[] frame,DecodeContext context)=>DecodeReplyRelayAck46(new[]{frame},context);
-    internal static byte[][] EncodeReplyRelayAck46(ReplyRelayAck46 value,DecodeContext context)
+    internal static byte[] EncodeReplyRelayAck46Header(ReplyRelayAck46Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -7072,13 +7461,27 @@ internal static class ServiceWireCodec
         WriteNonzeroU64(body, value.ReplyRouteId, context);
         WriteRequestSourceFence(body, value.RequestSource, context);
         WriteReplyRelayAckStatus(body, value.Status, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static UserSpotCreate47 DecodeUserSpotCreate47(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ReplyRelayAck46 DecodeReplyRelayAck46(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeReplyRelayAck46Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new ReplyRelayAck46(flags,header.Relocation,header.Coordinator,header.Operation,header.ReplyRouteId,header.RequestSource,header.Status);
+        return value;
+    }
+    internal static ReplyRelayAck46 DecodeReplyRelayAck46(byte[] frame,DecodeContext context)=>DecodeReplyRelayAck46(new[]{frame},context);
+    internal static byte[][] EncodeReplyRelayAck46(ReplyRelayAck46 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeReplyRelayAck46Header(new(value.Flags,value.Relocation,value.Coordinator,value.Operation,value.ReplyRouteId,value.RequestSource,value.Status),context)};
+        return frames.ToArray();
+    }
+    internal static UserSpotCreate47Header DecodeUserSpotCreate47Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=47)throw Error("header");
@@ -7093,13 +7496,10 @@ internal static class ServiceWireCodec
         var Reservation = ReadObjectReservationFence(body, context);
         var DeadlineUnixMs = ReadNonzeroU64(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new UserSpotCreate47(flags,Correlation,Operation,SourceNodeRid,SourceNodeGeneration,SpotId,StableType,Reservation,DeadlineUnixMs);
+        var value=new UserSpotCreate47Header(flags,Correlation,Operation,SourceNodeRid,SourceNodeGeneration,SpotId,StableType,Reservation,DeadlineUnixMs);
         return value;
     }
-    internal static UserSpotCreate47 DecodeUserSpotCreate47(byte[] frame,DecodeContext context)=>DecodeUserSpotCreate47(new[]{frame},context);
-    internal static byte[][] EncodeUserSpotCreate47(UserSpotCreate47 value,DecodeContext context)
+    internal static byte[] EncodeUserSpotCreate47Header(UserSpotCreate47Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -7114,13 +7514,27 @@ internal static class ServiceWireCodec
         WriteText8(body, value.StableType, context);
         WriteObjectReservationFence(body, value.Reservation, context);
         WriteNonzeroU64(body, value.DeadlineUnixMs, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static UserSpotClose48 DecodeUserSpotClose48(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static UserSpotCreate47 DecodeUserSpotCreate47(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeUserSpotCreate47Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new UserSpotCreate47(flags,header.Correlation,header.Operation,header.SourceNodeRid,header.SourceNodeGeneration,header.SpotId,header.StableType,header.Reservation,header.DeadlineUnixMs);
+        return value;
+    }
+    internal static UserSpotCreate47 DecodeUserSpotCreate47(byte[] frame,DecodeContext context)=>DecodeUserSpotCreate47(new[]{frame},context);
+    internal static byte[][] EncodeUserSpotCreate47(UserSpotCreate47 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeUserSpotCreate47Header(new(value.Flags,value.Correlation,value.Operation,value.SourceNodeRid,value.SourceNodeGeneration,value.SpotId,value.StableType,value.Reservation,value.DeadlineUnixMs),context)};
+        return frames.ToArray();
+    }
+    internal static UserSpotClose48Header DecodeUserSpotClose48Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=48)throw Error("header");
@@ -7133,13 +7547,10 @@ internal static class ServiceWireCodec
         var Target = ReadUserSpotCloseFenceV1(body, context);
         var DeadlineUnixMs = ReadNonzeroU64(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new UserSpotClose48(flags,Correlation,Operation,SourceNodeRid,SourceNodeGeneration,Target,DeadlineUnixMs);
+        var value=new UserSpotClose48Header(flags,Correlation,Operation,SourceNodeRid,SourceNodeGeneration,Target,DeadlineUnixMs);
         return value;
     }
-    internal static UserSpotClose48 DecodeUserSpotClose48(byte[] frame,DecodeContext context)=>DecodeUserSpotClose48(new[]{frame},context);
-    internal static byte[][] EncodeUserSpotClose48(UserSpotClose48 value,DecodeContext context)
+    internal static byte[] EncodeUserSpotClose48Header(UserSpotClose48Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -7152,13 +7563,27 @@ internal static class ServiceWireCodec
         WriteNonzeroU64(body, value.SourceNodeGeneration, context);
         WriteUserSpotCloseFenceV1(body, value.Target, context);
         WriteNonzeroU64(body, value.DeadlineUnixMs, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static ActorCreate49 DecodeActorCreate49(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static UserSpotClose48 DecodeUserSpotClose48(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeUserSpotClose48Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new UserSpotClose48(flags,header.Correlation,header.Operation,header.SourceNodeRid,header.SourceNodeGeneration,header.Target,header.DeadlineUnixMs);
+        return value;
+    }
+    internal static UserSpotClose48 DecodeUserSpotClose48(byte[] frame,DecodeContext context)=>DecodeUserSpotClose48(new[]{frame},context);
+    internal static byte[][] EncodeUserSpotClose48(UserSpotClose48 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeUserSpotClose48Header(new(value.Flags,value.Correlation,value.Operation,value.SourceNodeRid,value.SourceNodeGeneration,value.Target,value.DeadlineUnixMs),context)};
+        return frames.ToArray();
+    }
+    internal static ActorCreate49Header DecodeActorCreate49Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=49)throw Error("header");
@@ -7173,13 +7598,10 @@ internal static class ServiceWireCodec
         var Reservation = ReadObjectReservationFence(body, context);
         var DeadlineUnixMs = ReadNonzeroU64(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new ActorCreate49(flags,Correlation,Operation,SourceNodeRid,SourceNodeGeneration,ActorId,StableType,Reservation,DeadlineUnixMs);
+        var value=new ActorCreate49Header(flags,Correlation,Operation,SourceNodeRid,SourceNodeGeneration,ActorId,StableType,Reservation,DeadlineUnixMs);
         return value;
     }
-    internal static ActorCreate49 DecodeActorCreate49(byte[] frame,DecodeContext context)=>DecodeActorCreate49(new[]{frame},context);
-    internal static byte[][] EncodeActorCreate49(ActorCreate49 value,DecodeContext context)
+    internal static byte[] EncodeActorCreate49Header(ActorCreate49Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -7194,13 +7616,27 @@ internal static class ServiceWireCodec
         WriteText8(body, value.StableType, context);
         WriteObjectReservationFence(body, value.Reservation, context);
         WriteNonzeroU64(body, value.DeadlineUnixMs, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static MessageFollow50 DecodeMessageFollow50(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static ActorCreate49 DecodeActorCreate49(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeActorCreate49Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new ActorCreate49(flags,header.Correlation,header.Operation,header.SourceNodeRid,header.SourceNodeGeneration,header.ActorId,header.StableType,header.Reservation,header.DeadlineUnixMs);
+        return value;
+    }
+    internal static ActorCreate49 DecodeActorCreate49(byte[] frame,DecodeContext context)=>DecodeActorCreate49(new[]{frame},context);
+    internal static byte[][] EncodeActorCreate49(ActorCreate49 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeActorCreate49Header(new(value.Flags,value.Correlation,value.Operation,value.SourceNodeRid,value.SourceNodeGeneration,value.ActorId,value.StableType,value.Reservation,value.DeadlineUnixMs),context)};
+        return frames.ToArray();
+    }
+    internal static MessageFollow50Header DecodeMessageFollow50Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=50)throw Error("header");
@@ -7208,13 +7644,10 @@ internal static class ServiceWireCodec
         if((flags&~0)!=0||(flags&0)!=0)throw Error("flags");
         var Route = ReadMessageFollowRouteV1(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new MessageFollow50(flags,Route);
+        var value=new MessageFollow50Header(flags,Route);
         return value;
     }
-    internal static MessageFollow50 DecodeMessageFollow50(byte[] frame,DecodeContext context)=>DecodeMessageFollow50(new[]{frame},context);
-    internal static byte[][] EncodeMessageFollow50(MessageFollow50 value,DecodeContext context)
+    internal static byte[] EncodeMessageFollow50Header(MessageFollow50Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -7222,13 +7655,27 @@ internal static class ServiceWireCodec
         body.U8(77);
         body.U8(1);body.U8(50);body.U8(value.Flags);
         WriteMessageFollowRouteV1(body, value.Route, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static BoundSessionReplaced51 DecodeBoundSessionReplaced51(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static MessageFollow50 DecodeMessageFollow50(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeMessageFollow50Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new MessageFollow50(flags,header.Route);
+        return value;
+    }
+    internal static MessageFollow50 DecodeMessageFollow50(byte[] frame,DecodeContext context)=>DecodeMessageFollow50(new[]{frame},context);
+    internal static byte[][] EncodeMessageFollow50(MessageFollow50 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeMessageFollow50Header(new(value.Flags,value.Route),context)};
+        return frames.ToArray();
+    }
+    internal static BoundSessionReplaced51Header DecodeBoundSessionReplaced51Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=51)throw Error("header");
@@ -7237,13 +7684,10 @@ internal static class ServiceWireCodec
         var ActorAuthority = ReadActorRouteFence(body, context);
         var RetiredSession = ReadRetiredBoundSessionRouteFence(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new BoundSessionReplaced51(flags,ActorAuthority,RetiredSession);
+        var value=new BoundSessionReplaced51Header(flags,ActorAuthority,RetiredSession);
         return value;
     }
-    internal static BoundSessionReplaced51 DecodeBoundSessionReplaced51(byte[] frame,DecodeContext context)=>DecodeBoundSessionReplaced51(new[]{frame},context);
-    internal static byte[][] EncodeBoundSessionReplaced51(BoundSessionReplaced51 value,DecodeContext context)
+    internal static byte[] EncodeBoundSessionReplaced51Header(BoundSessionReplaced51Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -7252,13 +7696,27 @@ internal static class ServiceWireCodec
         body.U8(1);body.U8(51);body.U8(value.Flags);
         WriteActorRouteFence(body, value.ActorAuthority, context);
         WriteRetiredBoundSessionRouteFence(body, value.RetiredSession, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static RelocationState52 DecodeRelocationState52(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static BoundSessionReplaced51 DecodeBoundSessionReplaced51(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeBoundSessionReplaced51Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new BoundSessionReplaced51(flags,header.ActorAuthority,header.RetiredSession);
+        return value;
+    }
+    internal static BoundSessionReplaced51 DecodeBoundSessionReplaced51(byte[] frame,DecodeContext context)=>DecodeBoundSessionReplaced51(new[]{frame},context);
+    internal static byte[][] EncodeBoundSessionReplaced51(BoundSessionReplaced51 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeBoundSessionReplaced51Header(new(value.Flags,value.ActorAuthority,value.RetiredSession),context)};
+        return frames.ToArray();
+    }
+    internal static RelocationState52Header DecodeRelocationState52Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=52)throw Error("header");
@@ -7272,13 +7730,10 @@ internal static class ServiceWireCodec
         var ChunkOrdinal = ReadU32(body, context);
         var ChunkData = ReadDurableBlob(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new RelocationState52(flags,Relocation,TargetAttemptGeneration,Coordinator,SenderRole,Object,ChunkOrdinal,ChunkData);
+        var value=new RelocationState52Header(flags,Relocation,TargetAttemptGeneration,Coordinator,SenderRole,Object,ChunkOrdinal,ChunkData);
         return value;
     }
-    internal static RelocationState52 DecodeRelocationState52(byte[] frame,DecodeContext context)=>DecodeRelocationState52(new[]{frame},context);
-    internal static byte[][] EncodeRelocationState52(RelocationState52 value,DecodeContext context)
+    internal static byte[] EncodeRelocationState52Header(RelocationState52Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -7292,13 +7747,27 @@ internal static class ServiceWireCodec
         WriteRelocationObjectIdentity(body, value.Object, context);
         WriteU32(body, value.ChunkOrdinal, context);
         WriteDurableBlob(body, value.ChunkData, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static RelocationFailed53 DecodeRelocationFailed53(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static RelocationState52 DecodeRelocationState52(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeRelocationState52Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new RelocationState52(flags,header.Relocation,header.TargetAttemptGeneration,header.Coordinator,header.SenderRole,header.Object,header.ChunkOrdinal,header.ChunkData);
+        return value;
+    }
+    internal static RelocationState52 DecodeRelocationState52(byte[] frame,DecodeContext context)=>DecodeRelocationState52(new[]{frame},context);
+    internal static byte[][] EncodeRelocationState52(RelocationState52 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeRelocationState52Header(new(value.Flags,value.Relocation,value.TargetAttemptGeneration,value.Coordinator,value.SenderRole,value.Object,value.ChunkOrdinal,value.ChunkData),context)};
+        return frames.ToArray();
+    }
+    internal static RelocationFailed53Header DecodeRelocationFailed53Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=53)throw Error("header");
@@ -7312,13 +7781,10 @@ internal static class ServiceWireCodec
         var SenderRole = ReadRelocationRole(body, context);
         var FailureCode = ReadFrameworkErrorCode(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new RelocationFailed53(flags,Relocation,TargetAttemptGeneration,Coordinator,Target,Object,SenderRole,FailureCode);
+        var value=new RelocationFailed53Header(flags,Relocation,TargetAttemptGeneration,Coordinator,Target,Object,SenderRole,FailureCode);
         return value;
     }
-    internal static RelocationFailed53 DecodeRelocationFailed53(byte[] frame,DecodeContext context)=>DecodeRelocationFailed53(new[]{frame},context);
-    internal static byte[][] EncodeRelocationFailed53(RelocationFailed53 value,DecodeContext context)
+    internal static byte[] EncodeRelocationFailed53Header(RelocationFailed53Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -7332,13 +7798,27 @@ internal static class ServiceWireCodec
         WriteRelocationObjectIdentity(body, value.Object, context);
         WriteRelocationRole(body, value.SenderRole, context);
         WriteFrameworkErrorCode(body, value.FailureCode, context);
-        var frames=new List<byte[]>{body.ToArray()};
-        return frames.ToArray();
+        return body.ToArray();
     }
-    internal static BoundSessionClose54 DecodeBoundSessionClose54(IReadOnlyList<byte[]> frames,DecodeContext context)
+    internal static RelocationFailed53 DecodeRelocationFailed53(IReadOnlyList<byte[]> frames,DecodeContext context)
     {
         if(frames.Count==0)throw Error("frames");
-        var body=new Reader(frames[0]);
+        var header=DecodeRelocationFailed53Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new RelocationFailed53(flags,header.Relocation,header.TargetAttemptGeneration,header.Coordinator,header.Target,header.Object,header.SenderRole,header.FailureCode);
+        return value;
+    }
+    internal static RelocationFailed53 DecodeRelocationFailed53(byte[] frame,DecodeContext context)=>DecodeRelocationFailed53(new[]{frame},context);
+    internal static byte[][] EncodeRelocationFailed53(RelocationFailed53 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeRelocationFailed53Header(new(value.Flags,value.Relocation,value.TargetAttemptGeneration,value.Coordinator,value.Target,value.Object,value.SenderRole,value.FailureCode),context)};
+        return frames.ToArray();
+    }
+    internal static BoundSessionClose54Header DecodeBoundSessionClose54Header(byte[] bytes,DecodeContext context)
+    {
+        var body=new Reader(bytes);
         if(body.U8()!=90)throw Error("magic");
         if(body.U8()!=77)throw Error("magic");
         if(body.U8()!=1||body.U8()!=54)throw Error("header");
@@ -7348,13 +7828,10 @@ internal static class ServiceWireCodec
         var Actor = ReadActorRef(body, context);
         var Session = ReadRetiredBoundSessionRouteFence(body, context);
         body.End("body");
-        var index=1;
-        if(index!=frames.Count)throw Error("extra frame");
-        var value=new BoundSessionClose54(flags,Correlation,Actor,Session);
+        var value=new BoundSessionClose54Header(flags,Correlation,Actor,Session);
         return value;
     }
-    internal static BoundSessionClose54 DecodeBoundSessionClose54(byte[] frame,DecodeContext context)=>DecodeBoundSessionClose54(new[]{frame},context);
-    internal static byte[][] EncodeBoundSessionClose54(BoundSessionClose54 value,DecodeContext context)
+    internal static byte[] EncodeBoundSessionClose54Header(BoundSessionClose54Header value,DecodeContext context)
     {
         if((value.Flags&~0)!=0||(value.Flags&0)!=0)throw Error("flags");
         var body=new Writer();
@@ -7364,7 +7841,22 @@ internal static class ServiceWireCodec
         WriteNonzeroU64(body, value.Correlation, context);
         WriteActorRef(body, value.Actor, context);
         WriteRetiredBoundSessionRouteFence(body, value.Session, context);
-        var frames=new List<byte[]>{body.ToArray()};
+        return body.ToArray();
+    }
+    internal static BoundSessionClose54 DecodeBoundSessionClose54(IReadOnlyList<byte[]> frames,DecodeContext context)
+    {
+        if(frames.Count==0)throw Error("frames");
+        var header=DecodeBoundSessionClose54Header(frames[0],context);
+        var flags=header.Flags;
+        var index=1;
+        if(index!=frames.Count)throw Error("extra frame");
+        var value=new BoundSessionClose54(flags,header.Correlation,header.Actor,header.Session);
+        return value;
+    }
+    internal static BoundSessionClose54 DecodeBoundSessionClose54(byte[] frame,DecodeContext context)=>DecodeBoundSessionClose54(new[]{frame},context);
+    internal static byte[][] EncodeBoundSessionClose54(BoundSessionClose54 value,DecodeContext context)
+    {
+        var frames=new List<byte[]>{EncodeBoundSessionClose54Header(new(value.Flags,value.Correlation,value.Actor,value.Session),context)};
         return frames.ToArray();
     }    internal static AuthorityPayloadV1 DecodeDurableAuthorityPayloadV1(byte[] bytes,DecodeContext context){if(bytes.LongLength>1048576L)throw Error("limit");var r=new Reader(bytes);if(r.U8()!=90)throw Error("magic");if(r.U8()!=76)throw Error("magic");if(r.U8()!=65)throw Error("magic");if(r.U8()!=85)throw Error("magic");if(r.U8()!=1)throw Error("version");if(ReadU16(r,context).Value!=0)throw Error("flags");var x=r.Slice(checked((int)ReadU32(r,context).Value));var sum=r.U32();r.End("durable");if(Crc32C(bytes.AsSpan(0,bytes.Length-4))!=sum)throw Error("checksum");var v=ReadAuthorityPayloadV1(x,context);x.End("body");return v;}
     internal static byte[] EncodeDurableAuthorityPayloadV1(AuthorityPayloadV1 value,DecodeContext context){var body=new Writer();WriteAuthorityPayloadV1(body,value,context);var w=new Writer();w.U8(90);w.U8(76);w.U8(65);w.U8(85);w.U8(1);WriteU16(w,new U16(0),context);WriteU32(w,new U32(checked((uint)body.Length)),context);w.Bytes(body.ToArray());var p=w.ToArray();w.U32(Crc32C(p));var r=w.ToArray();if(r.LongLength>1048576L)throw Error("limit");return r;}
