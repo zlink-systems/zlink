@@ -1988,26 +1988,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             })
             .ConfigureAwait(false);
         if (!ReferenceEquals(current, expectedPeer) || !expectedPeer.Admitted)
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                "The canonical relocation connection changed.",
-                ZLinkRetryAdvice.RetryAfterBackoff
-            );
+            throw new ZlinkSubmitException(ZlinkSubmitException.ErrorCode.NotConnected);
 
-        try
-        {
-            await SendRoutedAsync(expectedPeer.PhysicalRoutingId, [encoded], cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (ZlinkException exception)
-        {
-            throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.Unavailable,
-                "The canonical relocation record could not be submitted.",
-                ZLinkRetryAdvice.RetryAfterBackoff,
-                exception
-            );
-        }
+        await SendRoutedAsync(expectedPeer.PhysicalRoutingId, [encoded], cancellationToken)
+            .ConfigureAwait(false);
     }
 
     public SubmitResult ActivateInstanceSpot(

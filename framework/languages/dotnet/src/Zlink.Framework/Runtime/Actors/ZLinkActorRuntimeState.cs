@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Handlers;
 using Zlink.Framework.Runtime.Identifiers;
@@ -278,8 +279,7 @@ internal sealed class ZLinkActorRuntimeState(
         }
         catch
         {
-            _ = Handoff.EndDeferredJoinCapture();
-            Volatile.Write(ref _deferredJoinPending, 0);
+            ReleaseDeferredJoinBarrier();
             throw;
         }
     }
@@ -292,8 +292,7 @@ internal sealed class ZLinkActorRuntimeState(
         }
         catch
         {
-            _ = Handoff.EndDeferredJoinCapture();
-            Volatile.Write(ref _deferredJoinPending, 0);
+            ReleaseDeferredJoinBarrier();
             throw;
         }
     }
@@ -321,8 +320,20 @@ internal sealed class ZLinkActorRuntimeState(
 
     public void ReleaseDeferredJoinBarrier()
     {
-        Volatile.Write(ref _deferredJoinPending, 0);
-        _dispatchMailbox.NotifyReadiness();
+        try
+        {
+            Handoff.EndDeferredJoinCapture(
+                (frame, start) =>
+                    _services
+                        .GetRequiredService<ZLinkFrameworkRuntime>()
+                        .AdmitActorHandoffFrame(this, frame, start)
+            );
+        }
+        finally
+        {
+            Volatile.Write(ref _deferredJoinPending, 0);
+            _dispatchMailbox.NotifyReadiness();
+        }
     }
 
     public void BeginReservedCreation()

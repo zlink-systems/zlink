@@ -169,34 +169,6 @@ internal sealed class ZLinkActorInboundPipeline(
             .ConfigureAwait(false);
     }
 
-    internal async ValueTask DispatchSourceRestoreAsync(
-        ZLinkSpotActorFrameBatch frames,
-        Action acknowledgeFrame,
-        CancellationToken cancellationToken
-    )
-    {
-        ArgumentNullException.ThrowIfNull(acknowledgeFrame);
-        try
-        {
-            for (var i = 0; i < frames.Count; i++)
-            {
-                using var frame = frames[i];
-                await DispatchFrameAsync(
-                        frame,
-                        cancellationToken,
-                        allowCapture: false,
-                        acknowledgeHandledFrame: acknowledgeFrame,
-                        relocationReplay: false
-                    )
-                    .ConfigureAwait(false);
-            }
-        }
-        finally
-        {
-            frames.Dispose();
-        }
-    }
-
     internal async ValueTask DispatchReplayAsync(
         ZLinkSpotActorFrameBatch frames,
         Action<long> acknowledgeFrame,
