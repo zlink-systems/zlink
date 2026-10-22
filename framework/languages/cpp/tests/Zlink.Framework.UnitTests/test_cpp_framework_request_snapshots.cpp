@@ -6,6 +6,7 @@
 #include <gtest/gtest.h>
 #include <cstdio>
 #include <stdexcept>
+#include <optional>
 
 namespace
 {
@@ -44,6 +45,28 @@ TEST (CppFrameworkRequestSnapshots, RouteTimeoutDoesNotAllocateACompletionState)
     EXPECT_EQ (321ms, timeout);
     EXPECT_EQ (0u, allocations);
     std::fprintf (stderr, "request route timeout allocations=%zu\n", allocations);
+}
+
+TEST (CppFrameworkRequestSnapshots, UnknownReplyAllocatesOnlyItsRequiredFailure)
+{
+    detail::route_channel_runtime_t route ("request-completion-cost");
+    constexpr const char *message = "routed reply does not match a pending request";
+    std::optional<result_t<void>> baseline, actual;
+    const auto expected = tests::count_allocations ([&] {
+        baseline.emplace (
+          result_t<void>::failure (framework_error_kind_t::protocol_error, message));
+    });
+    const auto observed =
+      tests::count_allocations ([&] { actual.emplace (route.complete_request (1)); });
+    ASSERT_TRUE (baseline && actual);
+    ASSERT_FALSE (*baseline);
+    ASSERT_FALSE (*actual);
+    EXPECT_EQ (actual->error_kind (), baseline->error_kind ());
+    ASSERT_NE (actual->error (), nullptr);
+    EXPECT_STREQ (actual->error ()->what (), message);
+    EXPECT_EQ (observed, expected);
+    std::fprintf (stderr, "request complete failure allocations baseline=%zu actual=%zu\n",
+                  expected, observed);
 }
 
 TEST (CppFrameworkRequestSnapshots, MeshDefaultsRetainOwnerEntryErrors)

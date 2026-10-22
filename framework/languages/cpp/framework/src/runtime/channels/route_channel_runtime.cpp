@@ -209,15 +209,13 @@ result_t<std::uint64_t>
 route_channel_runtime_t::submit_request_parts (const zlink::routing_id_t &target_node_rid,
                                                runtime::messaging::message_parts_t parts)
 {
-    return _lane
-      .run ([&, this] {
-          if (auto connected = ensure_connected (); !connected) {
-              return detail::propagate_failure<std::uint64_t> (connected,
-                                                               "route channel is not connected");
-          }
-          return register_request_unlocked (target_node_rid, std::nullopt, std::move (parts));
-      })
-      .get ();
+    return _lane.run_sync ([&, this] {
+        if (auto connected = ensure_connected (); !connected) {
+            return detail::propagate_failure<std::uint64_t> (connected,
+                                                             "route channel is not connected");
+        }
+        return register_request_unlocked (target_node_rid, std::nullopt, std::move (parts));
+    });
 }
 
 result_t<runtime::messaging::message_parts_t> route_channel_runtime_t::request_reply_parts (
@@ -237,25 +235,22 @@ result_t<runtime::messaging::message_parts_t> route_channel_runtime_t::request_r
         return detail::propagate_failure<runtime::messaging::message_parts_t> (
           ready, "route channel peer is not ready");
     }
-    auto prepared =
-      _lane
-        .run ([&, this] {
-            if (auto connected = ensure_connected (); !connected) {
-                return detail::propagate_failure<runtime::messaging::message_parts_t> (
-                  connected, "route channel is not connected");
-            }
-            auto registered = register_request_unlocked (target_node_rid, std::nullopt, parts);
-            request_seq = registered.value ();
-            if (!_request_backend) {
-                _pending_requests.remove (request_seq);
-                return detail::boundary_failure<runtime::messaging::message_parts_t> (
-                  detail::boundary_error_t::timed_out,
-                  "route request reply was not completed by a backend");
-            }
-            backend = _request_backend;
-            return result_t<runtime::messaging::message_parts_t>::success ({});
-        })
-        .get ();
+    auto prepared = _lane.run_sync ([&, this] {
+        if (auto connected = ensure_connected (); !connected) {
+            return detail::propagate_failure<runtime::messaging::message_parts_t> (
+              connected, "route channel is not connected");
+        }
+        auto registered = register_request_unlocked (target_node_rid, std::nullopt, parts);
+        request_seq = registered.value ();
+        if (!_request_backend) {
+            _pending_requests.remove (request_seq);
+            return detail::boundary_failure<runtime::messaging::message_parts_t> (
+              detail::boundary_error_t::timed_out,
+              "route request reply was not completed by a backend");
+        }
+        backend = _request_backend;
+        return result_t<runtime::messaging::message_parts_t>::success ({});
+    });
     if (!prepared)
         return prepared;
     auto pending = backend (target_node_rid, std::nullopt, parts, timeout);
@@ -265,7 +260,7 @@ result_t<runtime::messaging::message_parts_t> route_channel_runtime_t::request_r
           stage, [admitted] (const auto &result) { admitted->complete (result); });
     }
     auto reply = pending.result ();
-    _lane.run ([&, this] { _pending_requests.remove (request_seq); }).get ();
+    _lane.run_sync ([&, this] { _pending_requests.remove (request_seq); });
     return reply;
 }
 
@@ -316,27 +311,24 @@ route_channel_runtime_t::request_to_spot_parts (const zlink::routing_id_t &targe
 {
     request_backend_t backend;
     std::uint64_t request_seq = 0;
-    auto registered =
-      _lane
-        .run ([&, this] {
-            if (auto connected = ensure_connected (); !connected) {
-                return detail::propagate_failure<std::uint64_t> (connected,
-                                                                 "route channel is not connected");
-            }
-            auto result = register_request_unlocked (target_node_rid, target_spot_id, parts);
-            request_seq = result.value ();
-            if (_request_backend) {
-                backend = _request_backend;
-            }
-            return result;
-        })
-        .get ();
+    auto registered = _lane.run_sync ([&, this] {
+        if (auto connected = ensure_connected (); !connected) {
+            return detail::propagate_failure<std::uint64_t> (connected,
+                                                             "route channel is not connected");
+        }
+        auto result = register_request_unlocked (target_node_rid, target_spot_id, parts);
+        request_seq = result.value ();
+        if (_request_backend) {
+            backend = _request_backend;
+        }
+        return result;
+    });
     if (!registered)
         return registered;
     if (backend) {
         auto reply =
           backend (target_node_rid, target_spot_id, parts, default_request_timeout ()).result ();
-        _lane.run ([&, this] { _pending_requests.remove (request_seq); }).get ();
+        _lane.run_sync ([&, this] { _pending_requests.remove (request_seq); });
         if (!reply) {
             return result_t<std::uint64_t>::failure (reply.error_kind (),
                                                      reply.error () ? reply.error ()->what ()
@@ -363,25 +355,22 @@ result_t<runtime::messaging::message_parts_t> route_channel_runtime_t::request_r
         return detail::propagate_failure<runtime::messaging::message_parts_t> (
           ready, "route channel peer is not ready");
     }
-    auto prepared =
-      _lane
-        .run ([&, this] {
-            if (auto connected = ensure_connected (); !connected) {
-                return detail::propagate_failure<runtime::messaging::message_parts_t> (
-                  connected, "route channel is not connected");
-            }
-            auto registered = register_request_unlocked (target_node_rid, target_spot_id, parts);
-            request_seq = registered.value ();
-            if (!_request_backend) {
-                _pending_requests.remove (request_seq);
-                return detail::boundary_failure<runtime::messaging::message_parts_t> (
-                  detail::boundary_error_t::timed_out,
-                  "route spot request reply was not completed by a backend");
-            }
-            backend = _request_backend;
-            return result_t<runtime::messaging::message_parts_t>::success ({});
-        })
-        .get ();
+    auto prepared = _lane.run_sync ([&, this] {
+        if (auto connected = ensure_connected (); !connected) {
+            return detail::propagate_failure<runtime::messaging::message_parts_t> (
+              connected, "route channel is not connected");
+        }
+        auto registered = register_request_unlocked (target_node_rid, target_spot_id, parts);
+        request_seq = registered.value ();
+        if (!_request_backend) {
+            _pending_requests.remove (request_seq);
+            return detail::boundary_failure<runtime::messaging::message_parts_t> (
+              detail::boundary_error_t::timed_out,
+              "route spot request reply was not completed by a backend");
+        }
+        backend = _request_backend;
+        return result_t<runtime::messaging::message_parts_t>::success ({});
+    });
     if (!prepared)
         return prepared;
     auto pending = backend (target_node_rid, target_spot_id, parts, timeout);
@@ -391,21 +380,19 @@ result_t<runtime::messaging::message_parts_t> route_channel_runtime_t::request_r
           stage, [admitted] (const auto &result) { admitted->complete (result); });
     }
     auto reply = pending.result ();
-    _lane.run ([&, this] { _pending_requests.remove (request_seq); }).get ();
+    _lane.run_sync ([&, this] { _pending_requests.remove (request_seq); });
     return reply;
 }
 
 result_t<void> route_channel_runtime_t::complete_request (std::uint64_t request_seq)
 {
-    return _lane
-      .run ([&, this] {
-          if (!_pending_requests.remove (request_seq)) {
-              return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                              "routed reply does not match a pending request");
-          }
-          return result_t<void>::success ();
-      })
-      .get ();
+    return _lane.run_sync ([&, this] {
+        if (!_pending_requests.remove (request_seq)) {
+            return result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                            "routed reply does not match a pending request");
+        }
+        return result_t<void>::success ();
+    });
 }
 
 void route_channel_runtime_t::set_send_backend (send_backend_t backend)
