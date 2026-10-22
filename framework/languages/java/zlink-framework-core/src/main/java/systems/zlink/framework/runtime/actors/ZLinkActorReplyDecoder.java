@@ -89,7 +89,7 @@ final class ZLinkActorReplyDecoder {
         if (replyType == null) return null;
         return ZLinkMessagePayloads.deserialize(
                 ZLinkCodecRegistration.serializerForReceivedStreamCodec(serializer, header.codec()),
-                payload,
+                payload.dataBuffer(),
                 replyType);
     }
 }

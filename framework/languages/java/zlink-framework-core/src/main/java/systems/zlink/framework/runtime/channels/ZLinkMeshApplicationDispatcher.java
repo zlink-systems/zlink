@@ -39,12 +39,14 @@ import systems.zlink.framework.runtime.internal.drain.ZLinkMeshDrainCoordinator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkHandlerActivator;
 import systems.zlink.framework.runtime.internal.handlers.ZLinkSuspendInvocationAdapter;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkMeshMessageMetrics;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.mesh.MeshNodeRegistration;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorReply;
 import systems.zlink.framework.runtime.messaging.ZLinkPacketNames;
 
+import java.nio.ByteBuffer;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -288,7 +290,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                 namespace,
                                 envelope,
                                 packetName,
-                                record.parts().get(1),
+                                ZLinkFrameworkMultipartView.buffer(record.parts(), 1),
                                 metadata,
                                 contentType,
                                 claim);
@@ -382,7 +384,8 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                                                             null,
                                                                                             route,
                                                                                             sourceNodeRid,
-                                                                                            ownedPayload,
+                                                                                            ownedPayload
+                                                                                                    .dataBuffer(),
                                                                                             metadata,
                                                                                             contentType));
                                                 } catch (RuntimeException handlerFailure) {
@@ -470,7 +473,8 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             CompletionStage<Void> queued =
                     namespace.sendQueue.enqueue(
                             () -> {
-                                Message payload = record.parts().get(1);
+                                ByteBuffer payload =
+                                        ZLinkFrameworkMultipartView.buffer(record.parts(), 1);
                                 CompletionStage<Void> invocation =
                                         route != null
                                                 ? invoker.executeHandler(
@@ -575,7 +579,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             Namespace namespace,
             systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.Header envelope,
             String packetName,
-            Message payload,
+            ByteBuffer payload,
             Map<String, String> metadata,
             String contentType,
             ZLinkMeshDrainCoordinator.Claim claim) {

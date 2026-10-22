@@ -14,12 +14,15 @@ import java.util.List;
 public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
         implements AutoCloseable {
     private final Object[] parts;
+    // The received frame the unmaterialized parts read from, when this view owns it.
+    private final Message frame;
     private boolean detached;
     private boolean closed;
 
-    /** Takes exclusive ownership of the codec's part slots. */
-    ZLinkFrameworkMultipartView(Object[] parts) {
+    /** Takes exclusive ownership of the codec's part slots and of {@code frame}, if any. */
+    ZLinkFrameworkMultipartView(Object[] parts, Message frame) {
         this.parts = parts;
+        this.frame = frame;
     }
 
     @Override
@@ -36,6 +39,38 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
         return (Message) value;
     }
 
+    /**
+     * Reads one part without materializing it as a binding message. The view stays valid while this
+     * record's frame owner is alive; a part already materialized is read in place.
+     */
+    public static ByteBuffer buffer(List<Message> parts, int index) {
+        if (parts instanceof ZLinkFrameworkMultipartView view) {
+            if (view.closed) {
+                throw new IllegalStateException("multipart view is closed");
+            }
+            if (view.parts[index] instanceof ByteBuffer bytes) {
+                return bytes.duplicate();
+            }
+        }
+        return parts.get(index).dataBuffer();
+    }
+
+    /** Releases received parts; a retained list releases its storage once, by itself. */
+    public static void closeAll(List<Message> parts) {
+        if (parts instanceof AutoCloseable retained) {
+            try {
+                retained.close();
+            } catch (RuntimeException failure) {
+                throw failure;
+            } catch (Exception failure) {
+                throw new IllegalStateException(
+                        "retained message parts could not be closed", failure);
+            }
+        } else {
+            parts.forEach(Message::close);
+        }
+    }
+
     @Override
     public int size() {
         return parts.length;
@@ -50,6 +85,7 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
             // Every slot now owns a Message; List.of publishes an immutable list of them.
             List<Message> result = (List<Message>) (List<?>) List.of(parts);
             detached = true;
+            if (frame != null) frame.close();
             return result;
         } catch (RuntimeException failure) {
             close();
@@ -63,10 +99,14 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
             return;
         }
         closed = true;
-        for (Object part : parts) {
-            if (part instanceof Message message) {
-                message.close();
+        try {
+            for (Object part : parts) {
+                if (part instanceof Message message) {
+                    message.close();
+                }
             }
+        } finally {
+            if (frame != null) frame.close();
         }
     }
 }

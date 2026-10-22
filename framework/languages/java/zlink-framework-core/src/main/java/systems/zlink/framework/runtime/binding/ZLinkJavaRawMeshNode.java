@@ -4757,11 +4757,13 @@ final class ZLinkJavaRawMeshNode
                     || (header.terminalResult() == 0) != (frames.size() == 2)) {
                 throw new IllegalArgumentException("service reply terminal mismatch");
             }
-            List<Message> parts =
-                    header.terminalResult() == 0
-                            ? ZLinkServiceM6AWireCodec.decodeFrameworkMultipartFrame(
-                                    frames.get(1).dataBuffer())
-                            : List.of();
+            List<Message> parts = List.of();
+            if (header.terminalResult() == 0) {
+                // The reply keeps the received frame; its parts are read from it in place.
+                Message frame = new Message();
+                frames.get(1).move(frame);
+                parts = ZLinkServiceM6AWireCodec.decodeFrameworkMultipartFrameView(frame);
+            }
             ZLinkBackendRequestResult terminal =
                     header.terminalResult() == 0
                             ? ZLinkBackendRequestResult.OK
@@ -5280,7 +5282,8 @@ final class ZLinkJavaRawMeshNode
                     channelName == null
                             && correlation != null
                             && messages.size() == 2
-                            && messages.getFirst().contentEquals(RELOCATION_CONTROL_PACKET);
+                            && ZLinkFrameworkMultipartView.buffer(messages, 0)
+                                    .equals(ByteBuffer.wrap(RELOCATION_CONTROL_PACKET));
             if (relocationControl) {
                 try {
                     byte[] relocationCommand = messages.get(1).toByteArray();

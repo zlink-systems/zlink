@@ -30,7 +30,7 @@ enum ZLinkProtobufStreamCodec implements ZLinkStreamTypedCodec {
         }
         if (ZLinkProtobufMessageSerializer.canSerialize(type)) {
             return ZLinkProtobufMessageSerializer.INSTANCE.deserializeBorrowed(
-                    payload.payload(), type);
+                    payload.payload().dataBuffer(), type);
         }
         return ZLinkProtobufPayloads.decodeStreamFallback(payload.payload(), type);
     }
