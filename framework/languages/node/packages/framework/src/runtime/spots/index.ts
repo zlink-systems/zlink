@@ -1,4 +1,5 @@
 import { encodeActorReply } from '../actors/actor-reply';
+import { boundSessionErrorPayload } from '../streams/bound-session-response-target';
 import { RELOCATED_REQUEST_OWNED_BY_REQUESTER } from '../actors/actor-handoff';
 import { routingIdsEqual } from '../routing-id';
 import type { ApplicationJobOrigin } from '../application-jobs/contracts';
@@ -2153,10 +2154,11 @@ export class DefaultZLinkSpotManager {
       }
       requireMeshSpotReply(
         record.reply(
-          this.encodeMeshActorReply(record.parts[0], ZLinkStreamMessageKind.Error, {
-            message: error instanceof Error ? error.message : String(error),
-            kind: spotActorFailureKind(error)
-          })
+          this.encodeMeshActorReply(
+            record.parts[0],
+            ZLinkStreamMessageKind.Error,
+            boundSessionErrorPayload(error)
+          )
         )
       );
     }
