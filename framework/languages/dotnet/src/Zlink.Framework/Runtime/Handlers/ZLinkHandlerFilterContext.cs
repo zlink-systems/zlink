@@ -5,6 +5,8 @@ internal sealed class ZLinkHandlerFilterContext(
     ZLinkHandlerDispatchKind dispatchKind
 ) : IZLinkHandlerFilterContext
 {
+    internal IZLinkMessageContext Message => message;
+
     public string? MeshName => message.MeshName;
 
     public string? ChannelName => message.ChannelName;
