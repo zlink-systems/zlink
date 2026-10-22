@@ -235,6 +235,8 @@ final class ZLinkJavaRawMeshNode
     private volatile ExecutorService pump;
     // The pump's next rotation, built once per pump start.
     private volatile Runnable pumpRotation;
+    // The pump's receive turn, built once with the pump socket like pumpRotation.
+    private Supplier<ClaimedRecord> pumpClaim;
     private final AtomicReference<CompletableFuture<ZLinkApplicationJobQueue.Permit>>
             pendingReceiveAcquire = new AtomicReference<>();
     // The pump executor alone reads and writes it; close reads it after the pump terminates.
@@ -4848,6 +4850,7 @@ final class ZLinkJavaRawMeshNode
                 Executors.newSingleThreadExecutor(
                         Thread.ofPlatform().name("zlink-jvm-raw-mesh-" + meshName).factory());
         pumpRotation = () -> pumpTurn(pumpSocket);
+        pumpClaim = () -> claimRecord(pumpSocket);
         pump.execute(pumpRotation);
     }
 
@@ -4937,13 +4940,14 @@ final class ZLinkJavaRawMeshNode
                 // received, or receives one record. A budgeted permit becomes a permit object
                 // only for work that exists.
                 RawMulticastFanout fanout = pendingRawMulticast;
-                ZLinkJavaRawServicePort.Inbound record = null;
+                ClaimedRecord record = null;
                 if (fanout == null) {
-                    Optional<ZLinkJavaRawServicePort.Inbound> inbound = port.receiveNow(pumpSocket);
-                    if (inbound.isEmpty()) {
+                    // Spec 08 §4.1 I2/I3: one transport turn claims the record and reads its
+                    // source peer, both owned by that lane.
+                    record = port.inStateLane(pumpClaim);
+                    if (record == null) {
                         return;
                     }
-                    record = inbound.orElseThrow();
                 }
                 ZLinkApplicationJobQueue.Permit permit = grant;
                 grant = null;
@@ -4960,12 +4964,13 @@ final class ZLinkJavaRawMeshNode
                     } else {
                         receivedBytes =
                                 Math.addExact(
-                                        receivedBytes, retainedBytes(record.received().parts()));
+                                        receivedBytes,
+                                        retainedBytes(record.inbound().received().parts()));
                         try (ZLinkApplicationJobContext.Scope ignored =
                                 permit == null
                                         ? () -> {}
                                         : ZLinkApplicationJobContext.enter(permit)) {
-                            dispatch(record);
+                            dispatch(record.inbound(), record.source());
                         }
                     }
                 } finally {
@@ -5091,8 +5096,27 @@ final class ZLinkJavaRawMeshNode
                 || command == ServiceWireConstants.COMMAND_RELOCATION_STATE;
     }
 
+    /** A record claimed in its receive turn together with the source peer that turn read. */
+    private record ClaimedRecord(
+            ZLinkJavaRawServicePort.Inbound inbound,
+            Optional<ZLinkServiceTopologyRegistry.Peer> source) {}
+
+    private ClaimedRecord claimRecord(RouterSocket pumpSocket) {
+        Optional<ZLinkJavaRawServicePort.Inbound> inbound = port.receiveNow(pumpSocket);
+        return inbound.isEmpty()
+                ? null
+                : new ClaimedRecord(
+                        inbound.orElseThrow(),
+                        topology.peerFromOwner(inbound.orElseThrow().source()));
+    }
+
     private void dispatch(ZLinkJavaRawServicePort.Inbound inbound) {
-        var source = topology.peerFromOwner(inbound.source());
+        dispatch(inbound, topology.peerFromOwner(inbound.source()));
+    }
+
+    private void dispatch(
+            ZLinkJavaRawServicePort.Inbound inbound,
+            Optional<ZLinkServiceTopologyRegistry.Peer> source) {
         boolean handedOff = false;
         try {
             List<byte[]> frames = inbound.frames();
