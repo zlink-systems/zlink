@@ -3420,8 +3420,10 @@ std::vector<std::uint8_t> encode_reply_header (std::uint64_t correlation,
                                     + std::to_string (terminal_result)
                                     + ", failure=" + std::to_string (failure_code));
     }
-    std::vector<std::uint8_t> result{magic[0], magic[1], wire_major,
-                                     static_cast<std::uint8_t> (command::reply), 0};
+    std::vector<std::uint8_t> result;
+    result.reserve (reply_header_t::encoded_size);
+    result.insert (result.end (),
+                   {magic[0], magic[1], wire_major, static_cast<std::uint8_t> (command::reply), 0});
     append_u64 (result, correlation);
     append_u32 (result, terminal_result);
     append_u32 (result, failure_code);
