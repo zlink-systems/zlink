@@ -7724,7 +7724,8 @@ final class ZLinkJavaRawMeshNode
                 .forEach(
                         peer -> {
                             if (disconnectAdmitted(peer, admittedConnectionId(peer))) {
-                                requireStarted().disconnectRid(peer);
+                                ZLinkJavaSocketSupport.disconnectRidIfPresent(
+                                        requireStarted(), peer);
                                 signalStateChanged(peer);
                             }
                         });
