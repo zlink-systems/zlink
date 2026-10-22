@@ -2,12 +2,18 @@
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
 
-#include <boost/asio/post.hpp>
-#include <boost/asio/system_executor.hpp>
+#include "completion_turn.hpp"
 
+#include <boost/asio/executor_work_guard.hpp>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/post.hpp>
+
+#include <algorithm>
 #include <atomic>
 #include <optional>
+#include <thread>
 #include <utility>
+#include <vector>
 
 namespace zlink::framework::detail
 {
@@ -19,21 +25,127 @@ thread_local std::optional<serial_resume_failure_t> current_serial_resume_failur
 thread_local const void *current_application_job = nullptr;
 thread_local std::stop_token current_wait_owner_token;
 thread_local bool current_infrastructure_wait_flag = false;
-thread_local const void *completion_owner = nullptr;
+struct completion_turn_scope_t;
+thread_local const completion_turn_scope_t *completion_owner = nullptr;
 const char process_completion_owner = 0;
 
 struct completion_turn_scope_t
 {
-    const void *previous;
+    const completion_turn_scope_t *previous;
+    const void *identity;
+    completion_dispatcher_t *dispatcher;
+    completion_turn_scope_t (const void *owner, completion_dispatcher_t *target) :
+        previous (completion_owner), identity (owner), dispatcher (target)
+    {
+        completion_owner = this;
+    }
     ~completion_turn_scope_t () { completion_owner = previous; }
 };
+std::weak_ptr<completion_dispatcher_t> active_completion_dispatcher;
+std::mutex completion_creation_mutex;
+}
+
+
+// Publishers and posted turns borrow a live completion owner's context.
+// Closing its last owner drains accepted work before joining workers.
+class completion_dispatcher_t
+{
+  public:
+    completion_dispatcher_t ()
+    {
+        // A blocked callback must leave another worker available for independent turns.
+        constexpr unsigned minimum_worker_count = 2;
+        const auto count = std::max (minimum_worker_count, std::thread::hardware_concurrency ());
+        _workers.reserve (count);
+        for (unsigned index = 0; index < count; ++index)
+            _workers.emplace_back ([this] { _context.run (); });
+    }
+
+    ~completion_dispatcher_t ()
+    {
+        _work.reset ();
+        for (auto &worker : _workers)
+            worker.join ();
+    }
+
+    template <typename Work> void post (Work &&work)
+    {
+        boost::asio::post (_context, std::forward<Work> (work));
+    }
+    void poll_one () { _context.poll_one (); }
+    std::size_t worker_count () const noexcept { return _workers.size (); }
+
+  private:
+    boost::asio::io_context _context;
+    std::vector<std::jthread> _workers;
+    // Declared last so construction failure releases work before joining started workers.
+    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> _work{
+      _context.get_executor ()};
+};
+
+namespace
+{
 std::atomic<const ambient_context_hooks_t *> ambient_context_hooks{nullptr};
 std::atomic<const runtime_execution_hooks_t *> runtime_execution_hooks{nullptr};
 }
 
+namespace
+{
+void ensure_completion_owner_lifecycle_allowed ()
+{
+    if (completion_owner)
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "completion owner lifecycle requires an external turn");
+}
+}
+
+std::shared_ptr<void> create_completion_owner ()
+{
+    ensure_completion_owner_lifecycle_allowed ();
+    const std::lock_guard lock (completion_creation_mutex);
+    auto dispatcher = active_completion_dispatcher.lock ();
+    if (!dispatcher) {
+        dispatcher = std::make_shared<completion_dispatcher_t> ();
+        active_completion_dispatcher = dispatcher;
+    }
+    return dispatcher;
+}
+
+void close_completion_owner (std::shared_ptr<void> &state)
+{
+    if (!state)
+        return;
+    ensure_completion_owner_lifecycle_allowed ();
+    const std::lock_guard lock (completion_creation_mutex);
+    state.reset ();
+}
+
+completion_dispatcher_borrow_t borrow_completion_dispatcher ()
+{
+    if (completion_owner)
+        return completion_owner->dispatcher;
+    const auto *hooks = runtime_execution_hooks.load (std::memory_order_acquire);
+    if (hooks != nullptr) {
+        if (auto *dispatcher = hooks->borrow_dispatcher ())
+            return dispatcher;
+    }
+    const std::lock_guard lock (completion_creation_mutex);
+    const auto dispatcher = active_completion_dispatcher.lock ();
+    if (!dispatcher)
+        throw framework_exception_t (framework_error_kind_t::invalid_operation,
+                                     "asynchronous completion requires a live completion owner");
+    return dispatcher.get ();
+}
+
+std::weak_ptr<completion_dispatcher_t> observe_completion_dispatcher ()
+{
+    const std::lock_guard lock (completion_creation_mutex);
+    return active_completion_dispatcher;
+}
+
 const void *current_completion_owner () noexcept
 {
-    return completion_owner;
+    return completion_owner ? completion_owner->identity : nullptr;
 }
 
 bool can_reuse_completion_turn (bool known_runtime_worker,
@@ -48,7 +160,10 @@ bool can_reuse_completion_turn (bool known_runtime_worker,
            && !current_wait_owner_token.stop_possible ();
 }
 
-void dispatch_completion (std::function<void ()> work, bool inline_allowed, const void *owner)
+void dispatch_completion (std::function<void ()> work,
+                          bool inline_allowed,
+                          const void *owner,
+                          completion_dispatcher_borrow_t dispatcher)
 {
     if (!work)
         return;
@@ -56,17 +171,50 @@ void dispatch_completion (std::function<void ()> work, bool inline_allowed, cons
         work ();
         return;
     }
-    boost::asio::post (boost::asio::system_executor{}, [work = std::move (work), owner] {
-        const completion_turn_scope_t scope{
-          std::exchange (completion_owner, owner != nullptr ? owner : &process_completion_owner)};
+    if (!dispatcher)
+        dispatcher = borrow_completion_dispatcher ();
+    auto *target = dispatcher;
+    target->post ([work = std::move (work), owner, target] {
+        const completion_turn_scope_t scope{owner != nullptr ? owner : &process_completion_owner,
+                                            target};
         work ();
     });
 }
 
-task_scheduler_t capture_runtime_native_continuation_scheduler ()
+bool dispatch_completion_receive_handoff (const std::function<bool ()> &handoff,
+                                          const completion_dispatcher_borrow_t &existing_dispatcher)
+{
+    // Completion publication and lane-current scopes have returned before entry.
+    // Only the executor can reserve an idle resource for the next receive turn.
+    if (!handoff ())
+        return false;
+    // Only Framework completions enter this context. Application system-executor
+    // handlers cannot be consumed by the resource that just handed off receive.
+    // An empty first rotation must not create workers just to attempt a dequeue.
+    if (existing_dispatcher) {
+        existing_dispatcher->poll_one ();
+    } else {
+        const auto observed = observe_completion_dispatcher ();
+        if (!observed.expired ())
+            borrow_completion_dispatcher ()->poll_one ();
+    }
+    return true;
+}
+
+std::size_t completion_dispatcher_worker_count () noexcept
+{
+    if (completion_owner)
+        return completion_owner->dispatcher->worker_count ();
+    const std::lock_guard lock (completion_creation_mutex);
+    const auto dispatcher = active_completion_dispatcher.lock ();
+    return dispatcher != nullptr ? dispatcher->worker_count () : 0;
+}
+
+task_scheduler_t
+capture_runtime_native_continuation_scheduler (completion_dispatcher_borrow_t *dispatcher)
 {
     const auto *hooks = runtime_execution_hooks.load (std::memory_order_acquire);
-    return hooks != nullptr ? hooks->capture_scheduler () : task_scheduler_t{};
+    return hooks != nullptr ? hooks->capture_scheduler (dispatcher) : task_scheduler_t{};
 }
 
 task_scheduler_t capture_runtime_scope_exit_scheduler ()
@@ -148,3 +296,18 @@ void set_ambient_context_hooks (const ambient_context_hooks_t *hooks) noexcept
 }
 
 } // namespace zlink::framework::detail
+
+namespace zlink::framework
+{
+completion_owner_t::completion_owner_t () : _state (detail::create_completion_owner ())
+{
+}
+completion_owner_t::~completion_owner_t () noexcept
+{
+    close ();
+}
+void completion_owner_t::close ()
+{
+    detail::close_completion_owner (_state);
+}
+}

@@ -511,6 +511,7 @@ void test_sequence_original_collision ()
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     try {
         test_terminal_window_and_inflight_accounting ();
         test_warmup_waits_for_operations_and_handlers ();

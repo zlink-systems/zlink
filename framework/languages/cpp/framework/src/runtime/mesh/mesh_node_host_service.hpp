@@ -19,7 +19,6 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <thread>
 #include <vector>
 
 namespace zlink::framework::detail
@@ -91,8 +90,8 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     void stop () noexcept override;
     std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> nodes () const;
     actor_manager_t actor_manager ();
-    zlink::submit_result_t
-    submit_local_node_send (const std::shared_ptr<detail::mesh_node_runtime_t> &node,
+    task_t<zlink::submit_result_t>
+    submit_local_node_send (std::shared_ptr<detail::mesh_node_runtime_t> node,
                             std::vector<zlink::message_t> parts);
     void seal_application_dispatch () noexcept override;
     bool wait_for_accepted_callbacks_until (
@@ -106,6 +105,7 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
 
   private:
     struct actor_destroy_callback_gate_t;
+    struct node_receive_role_t;
 
     task_t<spot_create_result_t>
     create_user_spot (std::shared_ptr<detail::mesh_node_runtime_t> source,
@@ -150,7 +150,9 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
                                    std::chrono::system_clock::time_point operation_deadline);
     task_t<std::optional<actor_ref_t>> find_actor (actor_id_t actor_id);
     task_t<std::optional<spot_ref_t>> find_actor_spot (actor_id_t actor_id);
-    result_t<void> finalize_local_actor_destroy (const actor_ref_t &actor);
+    task_t<std::shared_ptr<detail::mesh_node_runtime_t>>
+    find_local_actor_node_async (node_rid_t actor_node);
+    task_t<result_t<void>> finalize_local_actor_destroy (actor_ref_t actor);
     task_t<bool> destroy_actor (actor_ref_t actor);
 
     static void
@@ -190,12 +192,12 @@ class mesh_node_host_service_t final : public hosted_service_t, public hosted_se
     mutable std::mutex _dispatch_gate_mutex;
     std::condition_variable _dispatch_gate_changed;
     std::uint64_t _active_direct_dispatch = 0;
+    detail::completion_dispatcher_borrow_t _completion_dispatcher{};
     std::shared_ptr<offload_executor_t> _application_dispatch;
     std::shared_ptr<application_job_queue_t> _application_jobs;
     std::shared_ptr<listener_status_registry_t> _listener_statuses;
     std::shared_ptr<actor_destroy_callback_gate_t> _actor_destroy_gate;
     std::vector<std::shared_ptr<detail::mesh_node_runtime_t>> _nodes;
-    std::vector<std::thread> _threads;
 
     std::optional<location_owner_token_t> current_location_owner () const;
 };

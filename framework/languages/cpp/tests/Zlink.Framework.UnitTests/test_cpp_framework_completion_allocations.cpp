@@ -1,8 +1,10 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include <zlink/framework/contracts/dispatch/task.hpp>
+#include "allocation_counter.hpp"
 
 #include "runtime/dispatch/coroutine_executor.hpp"
+#include "runtime/messaging/envelope_codec.hpp"
 
 #include <array>
 #include <chrono>
@@ -12,13 +14,12 @@
 #include <functional>
 #include <iostream>
 #include <new>
+#include <optional>
 #include <stdexcept>
+#include <string>
 #include <thread>
 #include <utility>
 
-#if defined(_MSC_VER)
-#include <malloc.h>
-#endif
 
 namespace
 {
@@ -31,69 +32,7 @@ struct native_completion_work_t
     void operator() () const { completed->set_value (); }
 };
 
-thread_local bool tracking_allocations = false;
-thread_local std::size_t tracked_allocation_count = 0;
-
-void record_allocation () noexcept
-{
-    if (tracking_allocations)
-        ++tracked_allocation_count;
-}
-
-void *allocate_bytes (std::size_t size)
-{
-    if (void *memory = std::malloc (size == 0 ? 1 : size)) {
-        record_allocation ();
-        return memory;
-    }
-    throw std::bad_alloc ();
-}
-
-void *allocate_aligned_bytes (std::size_t size, std::size_t alignment)
-{
-#if defined(_MSC_VER)
-    void *memory = _aligned_malloc (size == 0 ? 1 : size, alignment);
-#else
-    void *memory = nullptr;
-    const int status = posix_memalign (&memory, alignment, size == 0 ? 1 : size);
-    if (status != 0)
-        memory = nullptr;
-#endif
-    if (memory != nullptr) {
-        record_allocation ();
-        return memory;
-    }
-    throw std::bad_alloc ();
-}
-
-void free_aligned_bytes (void *memory) noexcept
-{
-#if defined(_MSC_VER)
-    _aligned_free (memory);
-#else
-    std::free (memory);
-#endif
-}
-
-template <typename TAction> std::size_t count_allocations (TAction &&action)
-{
-    const bool previous_tracking = tracking_allocations;
-    const std::size_t previous_count = tracked_allocation_count;
-    tracked_allocation_count = 0;
-    tracking_allocations = true;
-    try {
-        std::forward<TAction> (action) ();
-    }
-    catch (...) {
-        tracking_allocations = previous_tracking;
-        tracked_allocation_count = previous_count;
-        throw;
-    }
-    tracking_allocations = previous_tracking;
-    const std::size_t measured = tracked_allocation_count;
-    tracked_allocation_count = previous_count;
-    return measured;
-}
+using zlink::framework::tests::count_allocations;
 
 std::size_t measure_native_completion ()
 {
@@ -148,6 +87,39 @@ std::size_t measure_task_wait_resumption ()
     return allocations;
 }
 
+std::size_t measure_envelope_parts (std::size_t iterations)
+{
+    using zlink::framework::runtime::messaging::message_parts_t;
+    constexpr std::size_t header_size = 128;
+    constexpr std::size_t body_size = 160;
+    std::size_t allocations = 0;
+    for (std::size_t iteration = 0; iteration < iterations; ++iteration) {
+        auto header = zlink::message_t::from (std::string (header_size, 'h'));
+        auto body = zlink::message_t::from (std::string (body_size, 'b'));
+        const auto *header_storage = header.data ();
+        const auto *body_storage = body.data ();
+        std::optional<message_parts_t> parts;
+        allocations +=
+          count_allocations ([&] { parts.emplace (std::move (header), std::move (body)); });
+        if (parts->size () != 2 || (*parts)[0].data () != header_storage
+            || (*parts)[1].data () != body_storage || (*parts)[0].size () != header_size
+            || (*parts)[1].size () != body_size || header.valid () || body.valid ()) {
+            throw std::runtime_error ("envelope parts changed storage, order, or ownership");
+        }
+        auto items = std::move (*parts).take_items ();
+        const auto *items_storage = items.data ();
+        std::optional<message_parts_t> transferred;
+        const auto transfer_allocations =
+          count_allocations ([&] { transferred.emplace (std::move (items)); });
+        if (transfer_allocations != 0 || transferred->items ().data () != items_storage
+            || (*transferred)[0].data () != header_storage
+            || (*transferred)[1].data () != body_storage) {
+            throw std::runtime_error ("envelope vector transfer allocated or changed storage");
+        }
+    }
+    return allocations;
+}
+
 bool exceeds_main_baseline (const char *variable, std::size_t observed)
 {
     const char *const text = std::getenv (variable);
@@ -167,57 +139,9 @@ bool exceeds_main_baseline (const char *variable, std::size_t observed)
 
 } // namespace
 
-void *operator new (std::size_t size)
-{
-    return allocate_bytes (size);
-}
-void *operator new[] (std::size_t size)
-{
-    return allocate_bytes (size);
-}
-void *operator new (std::size_t size, std::align_val_t alignment)
-{
-    return allocate_aligned_bytes (size, static_cast<std::size_t> (alignment));
-}
-void *operator new[] (std::size_t size, std::align_val_t alignment)
-{
-    return allocate_aligned_bytes (size, static_cast<std::size_t> (alignment));
-}
-void operator delete (void *memory) noexcept
-{
-    std::free (memory);
-}
-void operator delete[] (void *memory) noexcept
-{
-    std::free (memory);
-}
-void operator delete (void *memory, std::size_t) noexcept
-{
-    std::free (memory);
-}
-void operator delete[] (void *memory, std::size_t) noexcept
-{
-    std::free (memory);
-}
-void operator delete (void *memory, std::align_val_t) noexcept
-{
-    free_aligned_bytes (memory);
-}
-void operator delete[] (void *memory, std::align_val_t) noexcept
-{
-    free_aligned_bytes (memory);
-}
-void operator delete (void *memory, std::size_t, std::align_val_t) noexcept
-{
-    free_aligned_bytes (memory);
-}
-void operator delete[] (void *memory, std::size_t, std::align_val_t) noexcept
-{
-    free_aligned_bytes (memory);
-}
-
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     void *probe_allocation = nullptr;
     const std::size_t probe = count_allocations ([&] { probe_allocation = ::operator new (64); });
     ::operator delete (probe_allocation);
@@ -231,6 +155,13 @@ int main ()
       count_allocations ([&] { const std::function<void ()> copy = copy_probe_work; });
     if (function_copy_probe == 0) {
         std::cerr << "std::function copy probe expected>0 observed=" << function_copy_probe << '\n';
+        return 1;
+    }
+    constexpr std::size_t envelope_iterations = 1000;
+    const std::size_t envelope_parts = measure_envelope_parts (envelope_iterations);
+    if (envelope_parts != envelope_iterations) {
+        std::cerr << "envelope-parts expected=" << envelope_iterations
+                  << " observed=" << envelope_parts << '\n';
         return 1;
     }
 
@@ -247,7 +178,8 @@ int main ()
     zlink::framework::detail::set_ambient_context_hooks (nullptr);
 
     std::cout << "allocation probe=" << probe << " function-copy-probe=" << function_copy_probe
-              << " native-completion=" << native << " task-wait-resumption=" << task_wait << '\n';
+              << " envelope-parts=" << envelope_parts << " native-completion=" << native
+              << " task-wait-resumption=" << task_wait << '\n';
     const bool native_regressed =
       exceeds_main_baseline ("ZLINK_EXPECT_MAIN_NATIVE_COMPLETION_ALLOCATIONS", native);
     const bool task_wait_regressed =
