@@ -69,6 +69,11 @@ namespace service = runtime::host;
 
 namespace
 {
+const char *metric_spot_kind (const detail::spot_context_state_t &context) noexcept
+{
+    return context.is_entry_spot () ? "entry" : context.is_instance_spot () ? "instance" : "user";
+}
+
 constexpr std::size_t max_spot_relocation_state_bytes = 64u * 1024u * 1024u;
 
 constexpr std::uint32_t actor_recv_info_no_bind_flag = 1u;
@@ -559,23 +564,11 @@ handoff_pending_key (const zlink::routing_id_t &source_node,
     return {source_node.to_hex (), operation.high, operation.low, std::move (source_fence)};
 }
 
-task_t<void>
-report_handoff_terminal_drop_async (std::shared_ptr<detail::spot_node_builder_state_t> state,
-                                    std::string reason)
-{
-    auto monitoring = co_await state->lane.run_task ([&] { return state->monitoring; });
-    runtime::runtime_metrics_t metrics (std::move (monitoring));
-    metrics.counter ("zlink.actor.handoff_terminal.dropped", "{terminal}", 1,
-                     {{"reason", std::string (reason)}});
-    if (std::getenv ("ZLINK_CPP_HANDOFF_TRACE")) {
-        std::cerr << "zlink-cpp-handoff-terminal dropped reason=" << reason << '\n';
-    }
-}
-
-void report_handoff_terminal_drop (const std::shared_ptr<detail::spot_node_builder_state_t> &state,
+void report_handoff_terminal_drop (const std::shared_ptr<detail::spot_node_builder_state_t> &,
                                    std::string_view reason)
 {
-    report_handoff_terminal_drop_async (state, std::string (reason)).result ().value ();
+    if (std::getenv ("ZLINK_CPP_HANDOFF_TRACE"))
+        std::cerr << "zlink-cpp-handoff-terminal dropped reason=" << reason << '\n';
 }
 
 std::optional<handoff_terminal_route_t>
@@ -630,7 +623,7 @@ task_t<bool> send_handoff_terminal (std::shared_ptr<detail::spot_node_builder_st
                                     result_t<zlink::message_t> completed)
 {
     if (!route) {
-        co_await report_handoff_terminal_drop_async (state, "missing_parking_node");
+        report_handoff_terminal_drop (state, "missing_parking_node");
         co_return true;
     }
     const auto local_node_rid = co_await state->lane.run_task (
@@ -709,9 +702,7 @@ void fail_handoff_backlog (const std::shared_ptr<detail::spot_node_builder_state
                                                "Actor transfer ended before backlog replay"));
         detail::observe_task_completion (terminal, [state] (const result_t<bool> &result) {
             if (!result || !result.value ()) {
-                auto report =
-                  report_handoff_terminal_drop_async (state, "discarded_backlog_terminal_failed");
-                detail::observe_task_completion (report, [] (const result_t<void> &) {});
+                report_handoff_terminal_drop (state, "discarded_backlog_terminal_failed");
             }
         });
     }
@@ -5632,11 +5623,11 @@ class actor_dispatch_admission_token_t final
         _pending_handoff = std::move (pending);
     }
 
-    result_t<phase_snapshot_t> acquire_dispatch_phase (const actor_ref_t &actor_ref, bool request)
+    result_t<phase_snapshot_t> acquire_dispatch_phase (const actor_ref_t &actor_ref)
     {
         try {
             return _state->lane
-              .run ([this, &actor_ref, request] {
+              .run ([this, &actor_ref] {
                   if (_state->retiring_actor_keys.contains (_actor_key)) {
                       return result_t<phase_snapshot_t>::failure (framework_error_kind_t::not_found,
                                                                   "actor destruction is pending");
@@ -5699,10 +5690,6 @@ class actor_dispatch_admission_token_t final
                       }
                   }
 
-                  if (request) {
-                      ++_state->actor_pending_requests[_actor_key];
-                      _request_counted = true;
-                  }
                   if (_pending_handoff_key && _pending_handoff) {
                       if (_state->pending_handoff_requests.contains (*_pending_handoff_key)) {
                           _pending_handoff.reset ();
@@ -5782,21 +5769,9 @@ class actor_dispatch_admission_token_t final
     {
         if (_settled.exchange (true, std::memory_order_acq_rel))
             return;
-        const auto state = _state;
-        const auto key = _actor_key;
-        auto settle_request = [state, key, counted = _request_counted] {
-            if (!counted)
-                return;
-            const auto found = state->actor_pending_requests.find (key);
-            if (found != state->actor_pending_requests.end () && --found->second == 0)
-                state->actor_pending_requests.erase (found);
-        };
         try {
-            if (_lifecycle_claimed && _context) {
-                _context->leave_callback (std::move (settle_request));
-            } else if (_request_counted) {
-                _state->lane.run (std::move (settle_request)).get ();
-            }
+            if (_lifecycle_claimed && _context)
+                _context->leave_callback ();
         }
         catch (...) {
         }
@@ -5812,7 +5787,6 @@ class actor_dispatch_admission_token_t final
     std::optional<spot_node_builder_state_t::pending_handoff_request_t> _pending_handoff;
     std::shared_ptr<spot_context_state_t> _context;
     bool _lifecycle_claimed = false;
-    bool _request_counted = false;
     std::atomic_bool _handoff_reserved{false};
     std::atomic_bool _settled{false};
 };
@@ -9225,8 +9199,6 @@ spot_node_runtime_t::transfer_actor_out (const actor_ref_t &actor_ref,
         spot_id_t source_spot;
         std::shared_ptr<void> actor;
         spot_node_builder_state_t::actor_factory_registration_t factory;
-        std::shared_ptr<monitoring_runtime_state_t> monitoring;
-        std::size_t pending_requests = 0;
     };
     auto plan =
       _state->lane
@@ -9252,10 +9224,8 @@ spot_node_runtime_t::transfer_actor_out (const actor_ref_t &actor_ref,
             if (transfer_id.empty ()) {
                 transfer_id = key;
             }
-            const auto pending = _state->actor_pending_requests.find (key);
-            return result_t<transfer_plan_t>::success (transfer_plan_t{
-              key, source_spot->second, actor->second, factory->second, _state->monitoring,
-              pending == _state->actor_pending_requests.end () ? std::size_t{0} : pending->second});
+            return result_t<transfer_plan_t>::success (
+              transfer_plan_t{key, source_spot->second, actor->second, factory->second});
         })
         .get ();
     if (!plan) {
@@ -9272,15 +9242,6 @@ spot_node_runtime_t::transfer_actor_out (const actor_ref_t &actor_ref,
     catch (const framework_exception_t &error) {
         replay_actor_handoff_until_move_closed (actor_ref);
         co_return detail::result_access_t::failure<remote_actor_transfer_t> (error);
-    }
-    // Record the source plan's pending requests after the FIFO has sealed
-    // this transfer (runtime-metrics §4.3).
-    {
-        runtime::runtime_metrics_t metrics (prepared.monitoring);
-        if (metrics.enabled ()) {
-            metrics.histogram ("zlink.actor.transfer.pending_requests.count", "{request}",
-                               static_cast<double> (prepared.pending_requests));
-        }
     }
     if (!capture_state) {
         co_return result_t<remote_actor_transfer_t>::success (remote_actor_transfer_t{
@@ -10403,7 +10364,6 @@ task_t<void> spot_node_runtime_t::complete_remote_actor_transfer (
         }
     }
 
-    std::optional<std::chrono::steady_clock::duration> transfer_elapsed;
     for (;;) {
         auto replay = _state->actor_transfer_coordinator->finish_move_replay (key);
         order_bound_session_handoff (replay.backlog);
@@ -10489,18 +10449,7 @@ task_t<void> spot_node_runtime_t::complete_remote_actor_transfer (
             }
         }
         if (replay.completed) {
-            transfer_elapsed = replay.elapsed;
             break;
-        }
-    }
-    if (transfer_elapsed) {
-        // Commit ack confirmed: one transfers count and one duration sample per
-        // completed out→commit-ack move (runtime-metrics §4.3, RMETRIC-004).
-        runtime::runtime_metrics_t metrics (_state->monitoring);
-        if (metrics.enabled ()) {
-            metrics.counter ("zlink.actor.transfers", "{transfer}", 1.0);
-            metrics.histogram ("zlink.actor.transfer.duration", "s",
-                               std::chrono::duration<double> (*transfer_elapsed).count ());
         }
     }
     co_return;
@@ -12376,8 +12325,7 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
     std::optional<actor_dispatch_admission_token_t::phase_snapshot_t::warm_materialization_t>
       warm_materialization;
     if (admission_token) {
-        const auto phase = admission_token->acquire_dispatch_phase (
-          actor_ref, message_kind == stream_message_kind_t::request);
+        const auto phase = admission_token->acquire_dispatch_phase (actor_ref);
         if (!phase) {
             co_return detail::propagate_failure<std::optional<zlink::message_t>> (
               phase, "actor dispatch admission failed");
@@ -12871,44 +12819,6 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
                                                         "actor request dispatch is in flight");
         return std::nullopt;
     };
-    // In-flight request window for the transfer pending sample (runtime-metrics
-    // §4.3): counted from dispatch start until the reply (or error) is produced,
-    // so a moving transition that lands mid-dispatch sees this request.
-    struct pending_request_scope_t
-    {
-        std::shared_ptr<detail::spot_node_builder_state_t> state;
-        std::string key;
-
-        pending_request_scope_t (std::shared_ptr<detail::spot_node_builder_state_t> state_,
-                                 std::string key_) :
-            state (std::move (state_)), key (std::move (key_))
-        {
-        }
-        pending_request_scope_t (const pending_request_scope_t &) = delete;
-        pending_request_scope_t &operator= (const pending_request_scope_t &) = delete;
-        ~pending_request_scope_t ()
-        {
-            try {
-                state->lane
-                  .run ([this] {
-                      const auto found = state->actor_pending_requests.find (key);
-                      if (found != state->actor_pending_requests.end () && --found->second == 0) {
-                          state->actor_pending_requests.erase (found);
-                      }
-                  })
-                  .get ();
-            }
-            catch (...) {
-                // Scope destruction must not turn a handler terminal into a process abort
-                // while the node's state lane is closing.
-            }
-        }
-    };
-    std::optional<pending_request_scope_t> pending_request_scope;
-    if (message_kind == stream_message_kind_t::request && !admission_token) {
-        _state->lane.run ([this, &key] { _state->actor_pending_requests[key]++; }).get ();
-        pending_request_scope.emplace (_state, key);
-    }
     report_spot_dispatch_trace (_state, message_flow_outcome_t::received,
                                 dispatch_error_surface_t::spot_actor, dispatch_kind, packet_name,
                                 {}, current_spot_id, actor_ref.actor_id ().value ());
@@ -13404,9 +13314,12 @@ local_spot_create_result_t spot_node_runtime_t::create_spot_context (
     if (plan.monitoring) {
         runtime::runtime_metrics_t metrics (plan.monitoring);
         if (metrics.enabled ()) {
-            const auto kind = plan.entry_spot ? "entry" : "user";
-            metrics.counter ("zlink.spot.created", "{spot}", 1, {{"kind", kind}});
-            metrics.updown ("zlink.spot.count", "{spot}", 1, {{"kind", kind}});
+            const auto kind = plan.entry_spot                      ? "entry"
+                              : context_state->is_instance_spot () ? "instance"
+                                                                   : "user";
+
+            metrics.updown ("zlink.spot.count", "{spot}", 1,
+                            {{"mesh_name", _state->snapshot.name}, {"spot_kind", kind}});
         }
     }
     if (!inherited_operation) {
@@ -13753,7 +13666,7 @@ task_t<bool> spot_node_runtime_t::close_spot (spot_id_t spot_id, spot_close_reas
                       if (found != _state->spot_contexts_by_id.end ()) {
                           result.context.emplace (spot_context_t (found->second._state));
                           result.monitoring = _state->monitoring;
-                          result.kind = found->second._state->is_entry_spot () ? "entry" : "user";
+                          result.kind = metric_spot_kind (*found->second._state);
                       }
                       return result;
                   })
@@ -13765,12 +13678,13 @@ task_t<bool> spot_node_runtime_t::close_spot (spot_id_t spot_id, spot_close_reas
     auto closed = completion->task ();
     plan.context->_state->request_close (
       {},
-      [completion, monitoring = plan.monitoring, kind = plan.kind] (result_t<bool> result) {
+      [completion, monitoring = plan.monitoring, kind = plan.kind,
+       mesh_name = _state->snapshot.name] (result_t<bool> result) {
           if (result && result.value () && monitoring) {
               runtime::runtime_metrics_t metrics (monitoring);
               if (metrics.enabled ()) {
-                  metrics.counter ("zlink.spot.closed", "{spot}", 1, {{"kind", kind}});
-                  metrics.updown ("zlink.spot.count", "{spot}", -1, {{"kind", kind}});
+                  metrics.updown ("zlink.spot.count", "{spot}", -1,
+                                  {{"mesh_name", mesh_name}, {"spot_kind", kind}});
               }
           }
           completion->complete (std::move (result));
@@ -13991,7 +13905,6 @@ result_t<bool> spot_node_runtime_t::release_local_actor_on_lane (const actor_ref
     _state->mesh_runtime_owned_native_actor_ids.erase (
       std::string (actor_ref.actor_id ().value ()));
     _state->core_actor_membership_epochs.erase (std::string (actor_ref.actor_id ().value ()));
-    _state->actor_pending_requests.erase (key);
     (void) _state->dispatched_request_replies.erase_if ([&] (const auto &request_key) {
         return request_key.starts_with (actor_request_dedup_prefix (key));
     });

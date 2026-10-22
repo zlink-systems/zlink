@@ -45,7 +45,22 @@ stateful_object_runtime_t::stateful_object_runtime_t () = default;
 
 stateful_object_runtime_t::~stateful_object_runtime_t ()
 {
+    retire_population_metrics_async ().result ().value ();
     _lane.close ();
+}
+
+task_t<void> stateful_object_runtime_t::retire_population_metrics_async ()
+{
+    return _lane.run_task ([this] {
+        if (!_actor_metric)
+            return;
+        // Lifecycle teardown may visit retained objects. Observable collection
+        // never enumerates this population, and closed handles cannot keep a
+        // stopped host in the process's current Actor count.
+        for (const auto &[key, object] : _objects)
+            record_actor_population (object, -1);
+        _actor_metric.reset ();
+    });
 }
 
 std::size_t stateful_object_runtime_t::retained_bytes (const turn_record_t &record) noexcept
@@ -401,6 +416,7 @@ void stateful_object_runtime_t::activate_object_on_lane (object_record_t &object
         }
     }
     object.state = object_state_t::ready;
+    record_actor_population (object, 1);
 }
 
 bool stateful_object_runtime_t::finalized_relocation_source (object_kind_t kind,
@@ -489,7 +505,7 @@ stateful_error_t stateful_object_runtime_t::abort_create (std::uint64_t attempt)
               return stateful_error_t::conflict;
           }
           release_pending_capacity_locked (record->second);
-          _objects.erase (record);
+          erase_object_on_lane (record);
           _attempts.erase (attempt_entry);
           return stateful_error_t::none;
       })
@@ -817,7 +833,7 @@ task_t<stateful_error_t> stateful_object_runtime_t::destroy_actor_async (object_
             return stateful_error_t::conflict;
         }
         --candidate->active_count;
-        _objects.erase (key_for (actor));
+        erase_object_on_lane (key_for (actor));
         return stateful_error_t::none;
     });
 }
@@ -884,7 +900,7 @@ stateful_object_runtime_t::close_spot_async (const object_ref_t &spot)
                 break;
             }
         }
-        _objects.erase (key_for (spot));
+        erase_object_on_lane (key_for (spot));
         return {stateful_error_t::none, true};
     });
 }
@@ -1802,6 +1818,7 @@ void stateful_object_runtime_t::finalize_relocation_source_on_lane (relocation_s
 {
     for (const auto &key : seal.keys) {
         auto &object = _objects.at (key);
+        record_actor_population (object, -1);
         for (auto &candidate : _candidates) {
             if (candidate.mesh_name == object.reference.mesh_name
                 && candidate.node_id == object.reference.node_id) {
@@ -1892,7 +1909,7 @@ stateful_object_runtime_t::restore_relocation (frozen_object_state_t frozen,
              * restore owns the object from here; on failure the node forgets
              * it hosted this object at all so the next attempt is admitted
              * independently (15 §4.2). */
-                        _objects.erase (existing);
+                        erase_object_on_lane (existing);
                         replacing_remnant = true;
                     }
                     const auto existing_live =
@@ -2011,7 +2028,7 @@ stateful_object_runtime_t::restore_relocation (frozen_object_state_t frozen,
                   return stateful_error_t::conflict;
               _relocation_restore_reservations.erase (owned);
               if (!restored) {
-                  _objects.erase (key);
+                  erase_object_on_lane (key);
                   if (plan.previous_generation)
                       _last_generation[key] = *plan.previous_generation;
                   else
@@ -2177,7 +2194,7 @@ stateful_object_runtime_t::abort_relocation_restore (const object_ref_t &target,
               || found->second.restore_identity
                    != std::optional<relocation_restore_identity_t>{identity})
               return stateful_error_t::conflict;
-          _objects.erase (found);
+          erase_object_on_lane (found);
           const auto generation = _last_generation.find (key);
           if (generation != _last_generation.end ()
               && generation->second == target.object_generation)
@@ -2236,7 +2253,7 @@ stateful_error_t stateful_object_runtime_t::abort_relocation_restore_aggregate (
               const auto generation = _last_generation.find (key);
               if (generation != _last_generation.end ())
                   _last_generation.erase (generation);
-              _objects.erase (key);
+              erase_object_on_lane (key);
           }
           notify_quiescence ();
           return stateful_error_t::none;
@@ -2489,7 +2506,7 @@ stateful_object_runtime_t::restore_relocation_aggregate (std::vector<frozen_obje
                   _relocation_restore_reservations.erase (keys[index]);
                   if (restored)
                       continue;
-                  _objects.erase (keys[index]);
+                  erase_object_on_lane (keys[index]);
                   if (previous_generations[index])
                       _last_generation[keys[index]] = *previous_generations[index];
                   else

@@ -881,6 +881,7 @@ void mesh_node_runtime_t::start (
     if (_relocation_authority && _relocation_store)
         node->configure_relocation (_relocation_authority, _relocation_store,
                                     _aggregate_relocation_authority, _relocation_limits);
+    _state->spot_state->activation_admission->configure_metrics (_state->mesh_name);
     node->configure_relocation_gate (std::move (relocation_gate), std::move (native_spot_target),
                                      std::move (relocation_resume));
     node->start ();

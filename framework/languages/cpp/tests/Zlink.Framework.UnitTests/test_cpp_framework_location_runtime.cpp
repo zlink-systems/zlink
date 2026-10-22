@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
 
-#include "metric_test_reader.hpp"
+#include "../support/runtime_metric_contract.hpp"
 
 #include "runtime/diagnostics/monitoring_runtime.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
@@ -433,9 +433,9 @@ class slow_claim_repository_t final : public in_memory_location_repository_t
 
 TEST (ZLinkFrameworkLocationRuntime, RenewLatenessIsMeasuredFromTheHeartbeatSchedule)
 {
-    // Startup claims the lease and the heartbeat schedules its first renewal one interval after
-    // the claim completed. Lateness compares a renewal start with that schedule, so a slow claim
-    // must not appear as lateness of the first heartbeat.
+    // Lateness compares the renewal start with the scheduled deadline (the initial lease
+    // operation start plus one interval), rather than with the claim start itself. A slow claim
+    // must not be reported in full as heartbeat lateness.
     metric_test::provider_t metrics;
     const auto claim_delay = std::chrono::milliseconds (300);
     slow_claim_repository_t store (claim_delay);
@@ -445,19 +445,27 @@ TEST (ZLinkFrameworkLocationRuntime, RenewLatenessIsMeasuredFromTheHeartbeatSche
                          .owner_lease_renew_timeout = std::chrono::seconds (1)},
       "owner-lateness");
     runtime.bind_monitoring (zlink::framework::test::runtime_failure_monitoring ());
+    runtime.register_metric_scope ("mesh", "lateness-mesh").result ().value ();
     auto first_renew_called = store.first_renew_called ();
     runtime.start (zlink::routing_id_t::from ("node-lateness"));
     ASSERT_EQ (std::future_status::ready, first_renew_called.wait_for (std::chrono::seconds (5)));
 
     std::optional<metric_test::sdk::HistogramPointData> lateness;
-    for (const auto &metric : metrics.collect ()) {
+    const auto data = metrics.collect ();
+    metric_test::validate_metric_contract (data);
+    for (const auto &metric : data) {
         if (metric.instrument_descriptor.name_ != "zlink.location.owner_lease.renew.lateness")
             continue;
-        for (const auto &point : metric.point_data_attr_)
+        for (const auto &point : metric.point_data_attr_) {
+            EXPECT_EQ ("mesh",
+                       opentelemetry::nostd::get<std::string> (point.attributes.at ("scope_kind")));
+            EXPECT_EQ ("lateness-mesh",
+                       opentelemetry::nostd::get<std::string> (point.attributes.at ("scope_name")));
             if (const auto *histogram =
                   opentelemetry::nostd::get_if<metric_test::sdk::HistogramPointData> (
                     &point.point_data))
                 lateness = *histogram;
+        }
     }
     runtime.stop ();
     ASSERT_TRUE (lateness.has_value ());

@@ -24,6 +24,7 @@ const messageTypesByPacketName: Readonly<Record<string, string>> = {
   [PacketNames.playerJoinedNotify]: 'PlayerJoinedNotify',
   [PacketNames.gameStartedNotify]: 'BingoGameStartedNotify',
   [PacketNames.numberDrawnNotify]: 'BingoNumberDrawnNotify',
+  [PacketNames.observationStateNotify]: 'BingoObservationStateNotify',
   [PacketNames.gameEndedNotify]: 'BingoGameEndedNotify',
   [PacketNames.rewardAnnouncedNotify]: 'BingoRewardAnnouncedNotify'
 };
