@@ -833,49 +833,6 @@ struct channel_request_reservation_guard_t
     ~channel_request_reservation_guard_t () { (void) runtime.cancel_outbound_request (sequence); }
 };
 
-/* channel.request.* catalog instruments (runtime-metrics §4.4). The guard is
- * armed only when a metric subscriber exists, so the disabled path skips the
- * clock read entirely (§7.2). */
-struct channel_request_metrics_guard_t
-{
-    channel_request_metrics_guard_t (runtime::runtime_metrics_t metrics_surface,
-                                     std::string channel_name) :
-        metrics (std::move (metrics_surface)),
-        armed (metrics.enabled ()),
-        channel (std::move (channel_name))
-    {
-        if (armed) {
-            started = std::chrono::steady_clock::now ();
-            metrics.updown ("zlink.channel.request.inflight", "{request}", 1,
-                            {{"channel", channel}});
-        }
-    }
-
-    channel_request_metrics_guard_t (const channel_request_metrics_guard_t &) = delete;
-    channel_request_metrics_guard_t &operator= (const channel_request_metrics_guard_t &) = delete;
-
-    ~channel_request_metrics_guard_t ()
-    {
-        if (!armed) {
-            return;
-        }
-        metrics.updown ("zlink.channel.request.inflight", "{request}", -1, {{"channel", channel}});
-        const auto elapsed =
-          std::chrono::duration<double> (std::chrono::steady_clock::now () - started).count ();
-        metrics.histogram ("zlink.channel.request.duration", "s", elapsed, {{"channel", channel}});
-        if (timed_out) {
-            metrics.counter ("zlink.channel.request.timeouts", "{request}", 1,
-                             {{"channel", channel}});
-        }
-    }
-
-    runtime::runtime_metrics_t metrics;
-    bool armed = false;
-    std::string channel;
-    std::chrono::steady_clock::time_point started{};
-    bool timed_out = false;
-};
-
 message_flow_result_t request_terminal_result (const std::exception &error) noexcept
 {
     if (detail::is_cancellation_exception (error))
@@ -989,8 +946,6 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                                                  "channel request failed");
     }
     channel_request_reservation_guard_t request_reservation{runtime, reservation.value ()};
-    channel_request_metrics_guard_t request_metrics (runtime::runtime_metrics_t (state->monitoring),
-                                                     channel_name);
     if (!can_wait_for_client_endpoint (state, client)) {
         const auto error = detail::make_boundary_exception (detail::boundary_error_t::disconnected,
                                                             "channel client is not connected");
@@ -1026,8 +981,6 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
             }
             catch (const framework_exception_t &error) {
                 terminal_trace.failed_as (error);
-                request_metrics.timed_out =
-                  detail::boundary_state (error) == detail::boundary_error_t::timed_out;
                 co_return detail::result_access_t::failure<zlink::message_t> (error);
             }
             catch (const std::exception &error) {
@@ -1039,10 +992,6 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                 const auto mapped = map_native_exception (error);
                 terminal_trace.failed_as (mapped);
                 auto failure = detail::result_access_t::failure<zlink::message_t> (mapped);
-                const auto *framework = failure.error ();
-                request_metrics.timed_out =
-                  framework
-                  && detail::boundary_state (*framework) == detail::boundary_error_t::timed_out;
                 co_return failure;
             }
         }
@@ -1150,8 +1099,6 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
         }
         catch (const framework_exception_t &error) {
             terminal_trace.failed_as (error);
-            request_metrics.timed_out =
-              detail::boundary_state (error) == detail::boundary_error_t::timed_out;
             co_return detail::result_access_t::failure<zlink::message_t> (error);
         }
         catch (const std::exception &error) {
@@ -1163,14 +1110,9 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
             const auto mapped = map_native_exception (error);
             terminal_trace.failed_as (mapped);
             auto failure = detail::result_access_t::failure<zlink::message_t> (mapped);
-            const auto *framework = failure.error ();
-            request_metrics.timed_out =
-              framework
-              && detail::boundary_state (*framework) == detail::boundary_error_t::timed_out;
             co_return failure;
         }
     }
-    request_metrics.timed_out = true;
     co_return detail::result_access_t::failure<zlink::message_t> (detail::make_boundary_exception (
       detail::boundary_error_t::timed_out, "channel request reply was not completed by a backend"));
 }
