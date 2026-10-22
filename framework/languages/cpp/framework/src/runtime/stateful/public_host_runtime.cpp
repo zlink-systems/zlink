@@ -52,6 +52,66 @@ namespace zlink::framework::runtime::host
 
 namespace
 {
+// Ready owner turns continue on the stack; only an unfinished turn owns a frame.
+// The continuation is a parameter, so its captures outlive every suspended await.
+template <typename T, typename Next>
+task_t<zlink::submit_result_t> continue_local_enqueue (task_t<T> pending, Next next)
+{
+    if (!pending.await_ready ())
+        return [] (task_t<T> pending, Next next) -> task_t<zlink::submit_result_t> {
+            co_return co_await next (co_await pending);
+        }(std::move (pending), std::move (next));
+    try {
+        return next (pending.await_resume ());
+    }
+    catch (...) {
+        return task_t<zlink::submit_result_t> (
+          detail::current_exception_result<zlink::submit_result_t> ());
+    }
+}
+
+// Both immediate and suspended publication share the same terminal cleanup.
+template <typename Start>
+task_t<zlink::submit_result_t> finish_local_enqueue (mesh::raw_mesh_node_owner_t &transport,
+                                                     pending_operation_t *operation,
+                                                     Start start)
+{
+    const auto finish = [&transport, operation] (result_t<zlink::submit_result_t> result) {
+        if ((!result || result.value () != zlink::submit_result_t::ok) && operation)
+            transport.unregister_local_operation (operation->id);
+        if (result && result.value () == zlink::submit_result_t::ok)
+            transport.signal_activity ();
+        return result;
+    };
+    try {
+        auto pending = start ();
+        if (pending.await_ready ()) {
+            (void) finish (result_t<zlink::submit_result_t>::success (pending.await_resume ()));
+            return pending;
+        }
+        return [] (task_t<zlink::submit_result_t> pending,
+                   decltype (finish) finish) -> task_t<zlink::submit_result_t> {
+            std::optional<result_t<zlink::submit_result_t>> result;
+            try {
+                result.emplace (result_t<zlink::submit_result_t>::success (co_await pending));
+            }
+            catch (...) {
+                result.emplace (detail::current_exception_result<zlink::submit_result_t> ());
+            }
+            co_return finish (std::move (*result));
+        }(std::move (pending), finish);
+    }
+    catch (...) {
+        return task_t<zlink::submit_result_t> (
+          finish (detail::current_exception_result<zlink::submit_result_t> ()));
+    }
+}
+
+task_t<zlink::submit_result_t> local_enqueue_result (zlink::submit_result_t result)
+{
+    return task_t<zlink::submit_result_t> (result_t<zlink::submit_result_t>::success (result));
+}
+
 template <typename Peer> bool peer_route_ready (const Peer &peer, std::uint64_t generation)
 {
     return peer && peer->ready && peer->descriptor.lifecycle_generation == generation;
@@ -9004,101 +9064,112 @@ task_t<zlink::submit_result_t> public_host_runtime_t::enqueue_local_actor_messag
   std::uint64_t authority_owner_generation,
   std::uint64_t owner_lease_generation)
 {
-    if (!is_actor_application (kind)) {
-        co_return zlink::submit_result_t::invalid_argument;
-    }
-    // The Actor execution gate holds payloads during recovery and completion.
-    // Resolve identity here without a second Ready-only admission decision.
-    const auto current = co_await resolve_actor_async (std::string (target.actor_id ().value ()));
-    if (!current) {
-        co_return zlink::submit_result_t::not_found;
-    }
-
-    ready_record_t owner{
-      .owner_kind = owner_kind_t::actor,
-      .domain = ready_domain_t::application,
-      .actor = framework_actor_ref (
-        *current,
-        std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (target)))};
-    receive_record_t record;
-    record.kind = kind;
-    record.domain = ready_domain_t::application;
-    record.source_node_rid = status ().routing_id ();
-    if (bound_session_source) {
-        record.source_session_rid =
-          zlink::routing_id_t::from (bound_session_source->session_routing_id);
-        record.source_binding_generation = bound_session_source->binding_generation;
-        record.source_session_sequence = bound_session_source->session_sequence;
-    }
-
-    auto waiter = _options.mesh.application_jobs
-                    ? std::make_shared<application_job_queue_t::waiter_t> ()
-                    : nullptr;
-    std::optional<mesh::raw_mesh_node_owner_t::local_operation_reservation_t> reservation;
-    if (operation) {
-        reservation = co_await prepare_local_completion (*operation);
-        if (!reservation)
-            co_return zlink::submit_result_t::terminated;
-    } else if (_stateful_dispatch) {
-        const auto sequence = co_await _transport->next_operation_sequence_async ();
-        if (!sequence)
-            co_return zlink::submit_result_t::terminated;
-        record.operation_id = {_options.mesh.descriptor.lifecycle_generation, *sequence};
-    }
-
-    task_t<zlink::submit_result_t> dispatch{
-      result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated)};
-    try {
-        co_await _lifecycle_configuration_lane.run_task ([&] {
-            if (!_started || _closing)
-                return;
-            if (operation) {
-                register_local_completion (*operation, *reservation, timeout, {},
-                                           local_request_wait_cleanup (waiter),
-                                           mesh_request_surface_t::actor);
-                record.operation_id = operation->id;
-                std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
-                record.reply_token.host = weak;
-                record.reply_token.local_reply =
-                  [weak, operation = *operation] (const std::vector<zlink::message_t> &reply) {
-                      const auto host = weak.lock ();
-                      return host && host->complete_local_request (operation, reply);
-                  };
-            }
-            dispatch = _local_dispatch_completion_lane.run_task ([&] {
-                if (_stateful_dispatch) {
-                    record.actor_route = {current->key,
-                                          current->object_generation,
-                                          _options.mesh.descriptor.node_routing_id,
-                                          _options.mesh.descriptor.lifecycle_generation,
-                                          authority_owner_generation != 0
-                                            ? authority_owner_generation
-                                            : current->authority_owner_generation,
-                                          owner_lease_generation};
-                    if (operation)
-                        record.reply_route_id = operation->id.low;
-                }
-                admit_local_application (
-                  local_application_dispatch_t{std::move (owner), std::move (record), parts},
-                  waiter);
-
-                return zlink::submit_result_t::ok;
-            });
-        });
-        const auto submitted = co_await dispatch;
-        if (submitted != zlink::submit_result_t::ok) {
-            if (operation)
-                _transport->unregister_local_operation (operation->id);
-        }
-        if (submitted == zlink::submit_result_t::ok)
-            _transport->signal_activity ();
-        co_return submitted;
-    }
-    catch (...) {
-        if (operation)
-            _transport->unregister_local_operation (operation->id);
-        throw;
-    }
+    if (!is_actor_application (kind))
+        return local_enqueue_result (zlink::submit_result_t::invalid_argument);
+    // Identity lookup does not duplicate the Actor gate's recovery admission.
+    return continue_local_enqueue (
+      resolve_actor_async (std::string (target.actor_id ().value ())),
+      [this, &target, kind, &parts, operation,
+       bound_session_source = std::move (bound_session_source), timeout, authority_owner_generation,
+       owner_lease_generation] (
+        std::optional<stateful::object_ref_t> current) mutable -> task_t<zlink::submit_result_t> {
+          if (!current)
+              return local_enqueue_result (zlink::submit_result_t::not_found);
+          ready_record_t owner{
+            .owner_kind = owner_kind_t::actor,
+            .domain = ready_domain_t::application,
+            .actor = framework_actor_ref (
+              *current,
+              std::string (::zlink::framework::detail::actor_ref_access_t::actor_type (target)))};
+          receive_record_t record;
+          record.kind = kind;
+          record.domain = ready_domain_t::application;
+          record.source_node_rid = status ().routing_id ();
+          if (bound_session_source) {
+              record.source_session_rid =
+                zlink::routing_id_t::from (bound_session_source->session_routing_id);
+              record.source_binding_generation = bound_session_source->binding_generation;
+              record.source_session_sequence = bound_session_source->session_sequence;
+          }
+          auto waiter = _options.mesh.application_jobs
+                          ? std::make_shared<application_job_queue_t::waiter_t> ()
+                          : nullptr;
+          auto enqueue =
+            [this, &parts, operation, timeout, authority_owner_generation, owner_lease_generation,
+             current = std::move (*current), owner = std::move (owner), record = std::move (record),
+             waiter = std::move (waiter)] (
+              std::optional<mesh::raw_mesh_node_owner_t::local_operation_reservation_t> reservation,
+              std::optional<std::uint64_t> sequence) mutable -> task_t<zlink::submit_result_t> {
+              if (sequence)
+                  record.operation_id = {_options.mesh.descriptor.lifecycle_generation, *sequence};
+              return finish_local_enqueue (*_transport, operation, [&] {
+                  return _lifecycle_configuration_lane.run_task (
+                    [this, &parts, operation, reservation = std::move (reservation), timeout,
+                     authority_owner_generation, owner_lease_generation,
+                     current = std::move (current), owner = std::move (owner),
+                     record = std::move (record),
+                     waiter = std::move (waiter)] () mutable -> task_t<zlink::submit_result_t> {
+                        if (!_started || _closing)
+                            return local_enqueue_result (zlink::submit_result_t::terminated);
+                        if (operation) {
+                            register_local_completion (*operation, *reservation, timeout, {},
+                                                       local_request_wait_cleanup (waiter),
+                                                       mesh_request_surface_t::actor);
+                            record.operation_id = operation->id;
+                            std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
+                            record.reply_token.host = weak;
+                            record.reply_token.local_reply =
+                              [weak, operation =
+                                       *operation] (const std::vector<zlink::message_t> &reply) {
+                                  const auto host = weak.lock ();
+                                  return host && host->complete_local_request (operation, reply);
+                              };
+                        }
+                        return _local_dispatch_completion_lane.run_task (
+                          [this, &parts, operation, authority_owner_generation,
+                           owner_lease_generation, current = std::move (current),
+                           owner = std::move (owner), record = std::move (record),
+                           waiter = std::move (waiter)] () mutable {
+                              if (_stateful_dispatch) {
+                                  record.actor_route = {
+                                    current.key,
+                                    current.object_generation,
+                                    _options.mesh.descriptor.node_routing_id,
+                                    _options.mesh.descriptor.lifecycle_generation,
+                                    authority_owner_generation != 0
+                                      ? authority_owner_generation
+                                      : current.authority_owner_generation,
+                                    owner_lease_generation};
+                                  if (operation)
+                                      record.reply_route_id = operation->id.low;
+                              }
+                              admit_local_application (
+                                local_application_dispatch_t{std::move (owner), std::move (record),
+                                                             parts},
+                                waiter);
+                              return zlink::submit_result_t::ok;
+                          });
+                    });
+              });
+          };
+          if (operation)
+              return continue_local_enqueue (
+                prepare_local_completion (*operation),
+                [enqueue = std::move (enqueue)] (auto reservation) mutable {
+                    if (!reservation)
+                        return local_enqueue_result (zlink::submit_result_t::terminated);
+                    return enqueue (std::move (reservation), std::nullopt);
+                });
+          if (_stateful_dispatch)
+              return continue_local_enqueue (
+                _transport->next_operation_sequence_async (),
+                [enqueue = std::move (enqueue)] (auto sequence) mutable {
+                    if (!sequence)
+                        return local_enqueue_result (zlink::submit_result_t::terminated);
+                    return enqueue (std::nullopt, sequence);
+                });
+          return enqueue (std::nullopt, std::nullopt);
+      });
 }
 
 task_t<zlink::submit_result_t>
@@ -9106,44 +9177,52 @@ public_host_runtime_t::enqueue_local_spot_send (const protocol::spot_route_fence
                                                 const std::vector<zlink::message_t> &parts,
                                                 std::string source_spot_id)
 {
-    const auto local = status ();
+    auto local = status ();
     if (target.target_node_routing_id != local.routing_id ().to_bytes ()
-        || target.target_node_generation != local.lifecycle_generation ()) {
-        co_return zlink::submit_result_t::not_found;
-    }
-    const auto object = co_await resolve_spot_async (target.spot_id);
-    if (!object || object->node_id != local.routing_id ().to_string ()) {
-        co_return zlink::submit_result_t::not_found;
-    }
-
-    ready_record_t owner{.owner_kind = owner_kind_t::spot,
-                         .domain = ready_domain_t::application,
-                         .spot_id = target.spot_id};
-    receive_record_t record;
-    record.kind = record_kind_t::spot_send;
-    record.domain = ready_domain_t::application;
-    record.source_node_rid = local.routing_id ();
-    record.spot_route = target;
-    const auto sequence = co_await _transport->next_operation_sequence_async ();
-    if (!sequence)
-        co_return zlink::submit_result_t::terminated;
-    record.operation_id = {_options.mesh.descriptor.lifecycle_generation, *sequence};
-
-    task_t<zlink::submit_result_t> dispatch{
-      result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated)};
-    co_await _lifecycle_configuration_lane.run_task ([&] {
-        if (!_started || _closing)
-            return;
-        dispatch = _local_dispatch_completion_lane.run_task ([&] {
-            admit_local_application (local_application_dispatch_t{
-              std::move (owner), std::move (record), parts, std::move (source_spot_id)});
-            return zlink::submit_result_t::ok;
-        });
-    });
-    const auto submitted = co_await dispatch;
-    if (submitted == zlink::submit_result_t::ok)
-        _transport->signal_activity ();
-    co_return submitted;
+        || target.target_node_generation != local.lifecycle_generation ())
+        return local_enqueue_result (zlink::submit_result_t::not_found);
+    return continue_local_enqueue (
+      resolve_spot_async (target.spot_id),
+      [this, &target, &parts, local = std::move (local),
+       source_spot_id = std::move (source_spot_id)] (
+        std::optional<stateful::object_ref_t> object) mutable -> task_t<zlink::submit_result_t> {
+          if (!object || object->node_id != local.routing_id ().to_string ())
+              return local_enqueue_result (zlink::submit_result_t::not_found);
+          ready_record_t owner{.owner_kind = owner_kind_t::spot,
+                               .domain = ready_domain_t::application,
+                               .spot_id = target.spot_id};
+          receive_record_t record;
+          record.kind = record_kind_t::spot_send;
+          record.domain = ready_domain_t::application;
+          record.source_node_rid = local.routing_id ();
+          record.spot_route = target;
+          return continue_local_enqueue (
+            _transport->next_operation_sequence_async (),
+            [this, &parts, owner = std::move (owner), record = std::move (record),
+             source_spot_id = std::move (source_spot_id)] (
+              std::optional<std::uint64_t> sequence) mutable -> task_t<zlink::submit_result_t> {
+                if (!sequence)
+                    return local_enqueue_result (zlink::submit_result_t::terminated);
+                record.operation_id = {_options.mesh.descriptor.lifecycle_generation, *sequence};
+                return finish_local_enqueue (*_transport, nullptr, [&] {
+                    return _lifecycle_configuration_lane.run_task (
+                      [this, &parts, owner = std::move (owner), record = std::move (record),
+                       source_spot_id =
+                         std::move (source_spot_id)] () mutable -> task_t<zlink::submit_result_t> {
+                          if (!_started || _closing)
+                              return local_enqueue_result (zlink::submit_result_t::terminated);
+                          return _local_dispatch_completion_lane.run_task (
+                            [this, &parts, owner = std::move (owner), record = std::move (record),
+                             source_spot_id = std::move (source_spot_id)] () mutable {
+                                admit_local_application (local_application_dispatch_t{
+                                  std::move (owner), std::move (record), parts,
+                                  std::move (source_spot_id)});
+                                return zlink::submit_result_t::ok;
+                            });
+                      });
+                });
+            });
+      });
 }
 
 task_t<zlink::submit_result_t>
@@ -9155,75 +9234,73 @@ public_host_runtime_t::enqueue_local_spot_request (const protocol::spot_route_fe
                                                    spot_request_completion_t completion,
                                                    std::string source_spot_id)
 {
-    const auto local = status ();
+    auto local = status ();
     if (target.target_node_routing_id != local.routing_id ().to_bytes ()
-        || target.target_node_generation != local.lifecycle_generation ()) {
-        co_return zlink::submit_result_t::not_found;
-    }
-    const auto object = co_await resolve_spot_async (target.spot_id);
-    if (!object || object->node_id != local.routing_id ().to_string ()) {
-        co_return zlink::submit_result_t::not_found;
-    }
-
-    ready_record_t owner{.owner_kind = owner_kind_t::spot,
-                         .domain = ready_domain_t::application,
-                         .spot_id = target.spot_id};
-    receive_record_t record;
-    record.kind = record_kind_t::spot_request;
-    record.domain = ready_domain_t::application;
-    record.source_node_rid = local.routing_id ();
-    record.spot_route = target;
-
-    auto waiter = _options.mesh.application_jobs
-                    ? std::make_shared<application_job_queue_t::waiter_t> ()
-                    : nullptr;
-    const auto reservation = co_await prepare_local_completion (operation);
-    if (!reservation)
-        co_return zlink::submit_result_t::terminated;
-    task_t<zlink::submit_result_t> dispatch{
-      result_t<zlink::submit_result_t>::success (zlink::submit_result_t::terminated)};
-    try {
-        co_await _lifecycle_configuration_lane.run_task ([&] {
-            if (!_started || _closing)
-                return;
-            register_local_completion (operation, *reservation, timeout, std::move (completion),
-                                       local_request_wait_cleanup (waiter),
-                                       mesh_request_surface_t::spot);
-            record.operation_id = operation.id;
-            record.reply_route_id = operation.id.low;
-            std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
-            record.reply_token.host = weak;
-            record.reply_token.local_reply =
-              [weak, operation] (const std::vector<zlink::message_t> &reply) {
-                  const auto host = weak.lock ();
-                  if (!host) {
-                      return false;
-                  }
-                  return host->complete_local_request (operation, reply);
-              };
-
-
-            dispatch = _local_dispatch_completion_lane.run_task ([&] {
-                admit_local_application (local_application_dispatch_t{std::move (owner),
-                                                                      std::move (record), parts,
-                                                                      std::move (source_spot_id)},
-                                         waiter);
-
-                return zlink::submit_result_t::ok;
+        || target.target_node_generation != local.lifecycle_generation ())
+        return local_enqueue_result (zlink::submit_result_t::not_found);
+    return continue_local_enqueue (
+      resolve_spot_async (target.spot_id),
+      [this, &target, &parts, &operation, timeout, local = std::move (local),
+       completion = std::move (completion), source_spot_id = std::move (source_spot_id)] (
+        std::optional<stateful::object_ref_t> object) mutable -> task_t<zlink::submit_result_t> {
+          if (!object || object->node_id != local.routing_id ().to_string ())
+              return local_enqueue_result (zlink::submit_result_t::not_found);
+          ready_record_t owner{.owner_kind = owner_kind_t::spot,
+                               .domain = ready_domain_t::application,
+                               .spot_id = target.spot_id};
+          receive_record_t record;
+          record.kind = record_kind_t::spot_request;
+          record.domain = ready_domain_t::application;
+          record.source_node_rid = local.routing_id ();
+          record.spot_route = target;
+          auto waiter = _options.mesh.application_jobs
+                          ? std::make_shared<application_job_queue_t::waiter_t> ()
+                          : nullptr;
+          return continue_local_enqueue (
+            prepare_local_completion (operation),
+            [this, &parts, &operation, timeout, owner = std::move (owner),
+             record = std::move (record), waiter = std::move (waiter),
+             completion = std::move (completion), source_spot_id = std::move (source_spot_id)] (
+              std::optional<mesh::raw_mesh_node_owner_t::local_operation_reservation_t>
+                reservation) mutable -> task_t<zlink::submit_result_t> {
+                if (!reservation)
+                    return local_enqueue_result (zlink::submit_result_t::terminated);
+                return finish_local_enqueue (*_transport, &operation, [&] {
+                    return _lifecycle_configuration_lane.run_task (
+                      [this, &parts, &operation, timeout, reservation = std::move (*reservation),
+                       owner = std::move (owner), record = std::move (record),
+                       waiter = std::move (waiter), completion = std::move (completion),
+                       source_spot_id =
+                         std::move (source_spot_id)] () mutable -> task_t<zlink::submit_result_t> {
+                          if (!_started || _closing)
+                              return local_enqueue_result (zlink::submit_result_t::terminated);
+                          register_local_completion (
+                            operation, reservation, timeout, std::move (completion),
+                            local_request_wait_cleanup (waiter), mesh_request_surface_t::spot);
+                          record.operation_id = operation.id;
+                          record.reply_route_id = operation.id.low;
+                          std::weak_ptr<public_host_runtime_t> weak = shared_from_this ();
+                          record.reply_token.host = weak;
+                          record.reply_token.local_reply =
+                            [weak, operation] (const std::vector<zlink::message_t> &reply) {
+                                const auto host = weak.lock ();
+                                return host && host->complete_local_request (operation, reply);
+                            };
+                          return _local_dispatch_completion_lane.run_task (
+                            [this, &parts, owner = std::move (owner), record = std::move (record),
+                             waiter = std::move (waiter),
+                             source_spot_id = std::move (source_spot_id)] () mutable {
+                                admit_local_application (
+                                  local_application_dispatch_t{std::move (owner),
+                                                               std::move (record), parts,
+                                                               std::move (source_spot_id)},
+                                  waiter);
+                                return zlink::submit_result_t::ok;
+                            });
+                      });
+                });
             });
-        });
-        const auto submitted = co_await dispatch;
-        if (submitted != zlink::submit_result_t::ok) {
-            _transport->unregister_local_operation (operation.id);
-        }
-        if (submitted == zlink::submit_result_t::ok)
-            _transport->signal_activity ();
-        co_return submitted;
-    }
-    catch (...) {
-        _transport->unregister_local_operation (operation.id);
-        throw;
-    }
+      });
 }
 
 bool public_host_runtime_t::complete_local_request (const pending_operation_t &operation,
