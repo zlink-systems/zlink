@@ -175,6 +175,7 @@ struct local_application_dispatch_t
     ready_record_t owner;
     receive_record_t record;
     std::vector<zlink::message_t> parts;
+    std::string source_spot_id;
 };
 
 } // namespace zlink::framework::runtime::host
