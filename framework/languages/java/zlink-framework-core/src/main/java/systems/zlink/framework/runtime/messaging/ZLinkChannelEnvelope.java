@@ -352,20 +352,19 @@ public final class ZLinkChannelEnvelope {
     }
 
     public static Message encodeHeader(Header header) {
+        return Message.from(encodeHeaderBytes(header));
+    }
+
+    /** Encodes the JSON header into heap storage, sized by a first counting pass. */
+    public static byte[] encodeHeaderBytes(Header header) {
         validateFlowPair(header.flowId(), header.flowOrigin());
         try {
             long size = writeHeader(header, null);
             if (size > Integer.MAX_VALUE)
                 throw new IOException("ZLink envelope header is too large");
-            Message encoded = Message.allocate((int) size);
-            boolean complete = false;
-            try {
-                writeHeader(header, encoded.mutableDataBuffer());
-                complete = true;
-                return encoded;
-            } finally {
-                if (!complete) encoded.close();
-            }
+            byte[] encoded = new byte[(int) size];
+            writeHeader(header, ByteBuffer.wrap(encoded));
+            return encoded;
         } catch (IOException ex) {
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.INTERNAL_FAILURE,
@@ -374,9 +373,12 @@ public final class ZLinkChannelEnvelope {
         }
     }
 
-    /** Encodes {@code [header, body]}; the body message is not copied. */
+    /**
+     * Encodes {@code [header, body]}; the body message is not copied and the header stays in heap
+     * storage until a transport writes or materializes it. Closing the list releases the body.
+     */
     public static List<Message> encode(Header header, Message body) {
-        return List.of(encodeHeader(header), body);
+        return ZLinkFrameworkMultipartView.encoded(encodeHeaderBytes(header), body);
     }
 
     /**

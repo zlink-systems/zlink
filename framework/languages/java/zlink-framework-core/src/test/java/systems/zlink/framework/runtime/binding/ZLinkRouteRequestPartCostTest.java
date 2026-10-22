@@ -31,7 +31,8 @@ import java.util.concurrent.TimeUnit;
 /**
  * Counts the binding messages one public RouteMesh request creates, through real Framework
  * runtimes. Spec 05 §1/§4: received parts are read in place from the retained frame; a typed
- * request and reply materialize no further binding message for them.
+ * request and reply materialize no further binding message for them. Spec 08 §3 E1: the envelope
+ * header is written once into the frame that carries it, without a message of its own.
  */
 public final class ZLinkRouteRequestPartCostTest {
     private static final int WARMUP = 200;
@@ -43,7 +44,7 @@ public final class ZLinkRouteRequestPartCostTest {
     private static final String MESSAGE = "systems.zlink.contracts.messaging.Message";
 
     @Test
-    void receivedRequestAndReplyPartsAreReadWithoutMaterializedMessages() throws Exception {
+    void requestAndReplyPartsUseOnlyTheirWireFrames() throws Exception {
         var classpath = new LinkedHashSet<String>();
         for (ClassLoader loader = getClass().getClassLoader();
                 loader != null;
@@ -87,6 +88,7 @@ public final class ZLinkRouteRequestPartCostTest {
             exercise(recordingPath);
             long messages = 0;
             long materialized = 0;
+            long headers = 0;
             long truncated = 0;
             try (var events = new RecordingFile(recordingPath)) {
                 while (events.hasMoreEvents()) {
@@ -110,19 +112,30 @@ public final class ZLinkRouteRequestPartCostTest {
                             materialized++;
                             break;
                         }
+                        if (method.getType().getName().endsWith(".ZLinkChannelEnvelope")
+                                && method.getName().equals("encodeHeader")) {
+                            headers++;
+                            break;
+                        }
                     }
                 }
             }
             System.out.printf(
                     "requests=%d binding_messages=%d per_request=%.3f materialized_parts=%d"
-                            + " truncated=%d%n",
-                    REQUESTS, messages, messages / (double) REQUESTS, materialized, truncated);
+                            + " header_messages=%d truncated=%d%n",
+                    REQUESTS,
+                    messages,
+                    messages / (double) REQUESTS,
+                    materialized,
+                    headers,
+                    truncated);
             assertEquals(0, truncated, "every message allocation needs its owner stack");
             assertTrue(messages >= REQUESTS, "the recording covers the measured requests");
             assertEquals(
                     0,
                     materialized,
                     "a typed request and reply read their received parts from the retained frame");
+            assertEquals(0, headers, "request and reply headers are written into their frames");
         } finally {
             Files.deleteIfExists(recordingPath);
         }

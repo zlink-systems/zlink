@@ -801,11 +801,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
         if (envelope == null) {
             return List.of(reply);
         }
-        return List.of(
-                systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.encodeHeader(
-                        systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope.reply(
-                                envelope)),
-                reply);
+        return ZLinkChannelEnvelope.encode(ZLinkChannelEnvelope.reply(envelope), reply);
     }
 
     private void replyAndClose(
@@ -817,7 +813,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                 replies.send(token, parts);
             }
         } finally {
-            parts.forEach(Message::close);
+            ZLinkFrameworkMultipartView.closeAll(parts);
         }
     }
 

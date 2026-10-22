@@ -19,6 +19,7 @@ import systems.zlink.framework.runtime.internal.diagnostics.ZLinkDispatchMessage
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowEvent;
 import systems.zlink.framework.runtime.internal.diagnostics.ZLinkMessageFlowOutcome;
 import systems.zlink.framework.runtime.internal.metrics.ZLinkRequestMetrics;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.internal.service.ZLinkServiceOperationIds;
 import systems.zlink.framework.runtime.messaging.ZLinkApplicationMetadata;
 import systems.zlink.framework.runtime.messaging.ZLinkChannelEnvelope;
@@ -505,7 +506,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
         } catch (RuntimeException | Error error) {
             result.completeExceptionally(error);
         } finally {
-            requestParts.forEach(Message::close);
+            ZLinkFrameworkMultipartView.closeAll(requestParts);
         }
         return result;
     }

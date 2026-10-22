@@ -46,7 +46,7 @@ public record ZLinkMeshDispatchRecord(
         if (frameworkReply == null) {
             throw new IllegalStateException("dispatch record has no reply route");
         }
-        frameworkReply.accept(List.copyOf(replyParts));
+        frameworkReply.accept(java.util.Objects.requireNonNull(replyParts, "replyParts"));
     }
 
     /** Releases retained message parts. */

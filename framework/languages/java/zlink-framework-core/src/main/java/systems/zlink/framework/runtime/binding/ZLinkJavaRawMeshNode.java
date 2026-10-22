@@ -5330,7 +5330,7 @@ final class ZLinkJavaRawMeshNode
                             ? null
                             : replyParts -> {
                                 if (!replied.compareAndSet(false, true)) {
-                                    replyParts.forEach(Message::close);
+                                    ZLinkFrameworkMultipartView.closeAll(replyParts);
                                     throw new IllegalStateException(
                                             "service request already has a terminal reply");
                                 }
@@ -5345,7 +5345,7 @@ final class ZLinkJavaRawMeshNode
                                                     null,
                                                     replyParts));
                                 } finally {
-                                    replyParts.forEach(Message::close);
+                                    ZLinkFrameworkMultipartView.closeAll(replyParts);
                                 }
                             };
             ZLinkMeshDispatchRecord dispatch =
