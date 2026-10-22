@@ -489,6 +489,11 @@ class raw_mesh_node_owner_t
                              std::optional<std::vector<std::uint8_t>> metadata = {});
     task_t<bool> send_header_only (const std::vector<std::uint8_t> &target_routing_id,
                                    std::vector<std::uint8_t> header);
+    task_t<bool> send_control (std::vector<std::uint8_t> target_routing_id,
+                               detail::backend::raw_message_t parts);
+    raw_mesh_pump_result_t admit_control (const service_node_descriptor_t &local,
+                                          const service_node_descriptor_t &actual_source,
+                                          service_mailbox_record_t record);
     send_start_state_t submit_header_only (const std::vector<std::uint8_t> &target_routing_id,
                                            std::vector<std::uint8_t> header);
     send_start_state_t
