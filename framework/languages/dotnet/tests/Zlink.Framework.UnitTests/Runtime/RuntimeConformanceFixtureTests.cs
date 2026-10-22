@@ -82,18 +82,32 @@ public sealed class RuntimeConformanceFixtureTests
         warmup.Enqueue(warmupItem);
         Assert.True(warmup.TryDequeue(out _));
 
-        var queue = new ZLinkSerialWorkQueue();
-        var first = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
-        var second = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
-        var third = new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask);
-        var before = GC.GetAllocatedBytesForCurrentThread();
+        // Each call appends to its own fresh queue.
+        const int calls = 256;
+        var queues = new ZLinkSerialWorkQueue[calls];
+        var items = new ZLinkSerialWorkItem[calls][];
+        for (var index = 0; index < calls; index++)
+        {
+            queues[index] = new ZLinkSerialWorkQueue();
+            items[index] =
+            [
+                new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask),
+                new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask),
+                new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask),
+            ];
+        }
 
-        queue.Enqueue(first);
-        queue.Enqueue(second);
-        queue.Enqueue(third);
+        var allocated = PerCallAllocation.Steady(
+            index =>
+            {
+                queues[index].Enqueue(items[index][0]);
+                queues[index].Enqueue(items[index][1]);
+                queues[index].Enqueue(items[index][2]);
+            },
+            calls
+        );
 
-        var after = GC.GetAllocatedBytesForCurrentThread();
-        Assert.Equal(before, after);
+        Assert.Equal(0L, allocated);
     }
 
     [Fact]

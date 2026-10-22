@@ -52,34 +52,42 @@ public sealed class RouteCodecTests
 
         const int iterations = 128;
         var beforeInstances = AllocationHandler.Created;
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-        {
-            var scope = services.CreateAsyncScope();
-            ZLinkHandlerInvocationEngine
-                .InvokeAsync(new AllocationHandler(), invoke, null, context, CancellationToken.None)
-                .GetAwaiter()
-                .GetResult();
-            scope.DisposeAsync().GetAwaiter().GetResult();
-        }
-        var directBytes = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-            dispatcher
-                .DispatchRouteAsync(
-                    descriptor,
-                    null,
-                    context,
-                    ZLinkHandlerDispatchKind.NodeDirectSend,
-                    default
-                )
-                .GetAwaiter()
-                .GetResult();
-        var dispatchBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        var directBytes = PerCallAllocation.Steady(
+            () =>
+            {
+                var scope = services.CreateAsyncScope();
+                ZLinkHandlerInvocationEngine
+                    .InvokeAsync(
+                        new AllocationHandler(),
+                        invoke,
+                        null,
+                        context,
+                        CancellationToken.None
+                    )
+                    .GetAwaiter()
+                    .GetResult();
+                scope.DisposeAsync().GetAwaiter().GetResult();
+            },
+            iterations
+        );
+        var dispatchBytes = PerCallAllocation.Steady(
+            () =>
+                dispatcher
+                    .DispatchRouteAsync(
+                        descriptor,
+                        null,
+                        context,
+                        ZLinkHandlerDispatchKind.NodeDirectSend,
+                        default
+                    )
+                    .GetAwaiter()
+                    .GetResult(),
+            iterations
+        );
         Assert.Equal(iterations * 2, AllocationHandler.Created - beforeInstances);
         Assert.True(
-            dispatchBytes <= directBytes + iterations * 64L,
-            $"Dispatch allocated {dispatchBytes} bytes; owned scope and handler allocated {directBytes} bytes."
+            dispatchBytes <= directBytes + 64L,
+            $"Dispatch allocated {dispatchBytes} B/call; owned scope and handler allocated {directBytes} B/call."
         );
     }
 

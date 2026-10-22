@@ -60,22 +60,23 @@ public sealed class MessagingHotPathWireTests
         for (var index = 0; index < 32; index++)
             ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(frame, out _);
 
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < 1024; index++)
-        {
-            if (
-                !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
-                    frame,
-                    out var view
+        var allocated = PerCallAllocation.Steady(
+            () =>
+            {
+                if (
+                    !ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                        frame,
+                        out var view
+                    )
+                    || view.Count != 2
+                    || view.GetSpan(1).Length != 1024
                 )
-                || view.Count != 2
-                || view.GetSpan(1).Length != 1024
-            )
-                throw new InvalidOperationException(
-                    "The borrowed payload must preserve both parts."
-                );
-        }
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+                    throw new InvalidOperationException(
+                        "The borrowed payload must preserve both parts."
+                    );
+            },
+            1024
+        );
         Assert.Equal(0L, allocated);
     }
 

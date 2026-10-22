@@ -89,8 +89,8 @@ public sealed class ReceiveClaimCostTests(Xunit.Abstractions.ITestOutputHelper o
         pump.EnsureStarted();
         const int warmup = 128;
         const int iterations = 1000;
-        long allocated = 0;
-        long baselineBytes = 0;
+        var actualSamples = new List<long>();
+        var baselineSamples = new List<long>();
         var warmupStart = GC.GetTotalAllocatedBytes(precise: true);
         var enteredNoGc = false;
         try
@@ -110,8 +110,8 @@ public sealed class ReceiveClaimCostTests(Xunit.Abstractions.ITestOutputHelper o
                 var measured = await completed.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 if (index >= warmup)
                 {
-                    allocated += measured.Actual;
-                    baselineBytes += measured.Baseline;
+                    actualSamples.Add(measured.Actual);
+                    baselineSamples.Add(measured.Baseline);
                 }
             }
         }
@@ -121,12 +121,14 @@ public sealed class ReceiveClaimCostTests(Xunit.Abstractions.ITestOutputHelper o
                 GC.EndNoGCRegion();
         }
         Assert.Equal(request ? batchSize * (warmup + iterations) : 0, replies);
+        var allocated = PerCallAllocation.Mode(actualSamples);
+        var baselineBytes = PerCallAllocation.Mode(baselineSamples);
         output.WriteLine(
-            $"request={request}, batchSize={batchSize}, claim={allocated}B, baseline={baselineBytes}B, excess={allocated - baselineBytes}B/{iterations} batches"
+            $"request={request}, batchSize={batchSize}, claim={allocated}B, baseline={baselineBytes}B, excess={allocated - baselineBytes}B/batch"
         );
         Assert.True(
             allocated == baselineBytes,
-            $"claim={allocated}B, routes + claim-sized list={baselineBytes}B, excess={allocated - baselineBytes}B/{iterations} batches"
+            $"claim={allocated}B, routes + claim-sized list={baselineBytes}B, excess={allocated - baselineBytes}B/batch"
         );
     }
 

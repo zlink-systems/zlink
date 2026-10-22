@@ -184,14 +184,20 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
         }
     }
 
+    // Minimum over several single replays. A diagnostic allocation adds to every replay,
+    // while a one-time runtime allocation lands in one replay only.
     private static long replayAllocatedBytes(Runnable operation) {
         var bean =
                 (com.sun.management.ThreadMXBean)
                         java.lang.management.ManagementFactory.getThreadMXBean();
         long threadId = Thread.currentThread().threadId();
-        long before = bean.getThreadAllocatedBytes(threadId);
-        operation.run();
-        return bean.getThreadAllocatedBytes(threadId) - before;
+        long minimum = Long.MAX_VALUE;
+        for (int replay = 0; replay < 64; replay++) {
+            long before = bean.getThreadAllocatedBytes(threadId);
+            operation.run();
+            minimum = Math.min(minimum, bean.getThreadAllocatedBytes(threadId) - before);
+        }
+        return minimum;
     }
 
     @Test

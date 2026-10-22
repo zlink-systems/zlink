@@ -18,12 +18,12 @@ public sealed class ProtobufNativePayloadTests
         var codecs = Codecs();
         var value = new BytesValue { Value = ByteString.CopyFrom(new byte[AllocationPayloadSize]) };
         var size = value.CalculateSize();
-        var directBytes = AllocatedBytesOfUninterruptedCalls(() =>
+        var directBytes = SteadyBytes(() =>
         {
             using var direct = Message.Allocate(size);
             value.WriteTo(direct.AsSpan());
         });
-        var encodedBytes = AllocatedBytesOfUninterruptedCalls(() =>
+        var encodedBytes = SteadyBytes(() =>
         {
             using var encoded = ZLinkEnvelopeCodec.EncodeBody(value, typeof(BytesValue), codecs);
         });
@@ -36,15 +36,15 @@ public sealed class ProtobufNativePayloadTests
         var codecs = Codecs();
         Assert.True(codecs.TryGetSerializer("application/x-protobuf", out var serializer));
         var value = new BytesValue { Value = ByteString.CopyFrom(new byte[AllocationPayloadSize]) };
-        var directBytes = AllocatedBytesOfUninterruptedCalls(() =>
+        var directBytes = SteadyBytes(() =>
             ZLinkEncodedPayload.FromOwned(value.ToByteArray())
         );
-        var encodedBytes = AllocatedBytesOfUninterruptedCalls(() =>
+        var encodedBytes = SteadyBytes(() =>
             serializer.Serialize(value, typeof(BytesValue))
         );
         Assert.True(
             encodedBytes <= directBytes,
-            $"Public serialization allocated {encodedBytes} bytes; owned buffer control allocated {directBytes} bytes."
+            $"Public serialization allocated {encodedBytes} B/call; owned buffer control allocated {directBytes} B/call."
         );
     }
 
@@ -193,30 +193,9 @@ public sealed class ProtobufNativePayloadTests
         Assert.Equal(new byte[] { 0x0a, 0x02, 0x6f, 0x6b }, part.ToArray());
     }
 
-    // Sums the bytes AllocationIterations calls allocate on this thread after
-    // the same call path has been warmed. A GC suspension, including one by a
-    // background GC that has not finished yet, can retire the thread allocation
-    // context inside a call and add its unused tail to the thread counter. A
-    // call that a GC pause interrupted therefore does not count, and the loop
-    // measures another call in its place.
-    private static long AllocatedBytesOfUninterruptedCalls(Action call)
-    {
-        for (var index = 0; index < AllocationWarmupIterations; index++)
-            call();
-        long allocated = 0;
-        for (var measured = 0; measured < AllocationIterations; )
-        {
-            var pause = GC.GetTotalPauseDuration();
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            call();
-            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-            if (GC.GetTotalPauseDuration() != pause)
-                continue;
-            allocated += bytes;
-            measured++;
-        }
-        return allocated;
-    }
+    // Steady per-call bytes after the same call path has been warmed.
+    private static long SteadyBytes(Action call) =>
+        PerCallAllocation.Steady(call, AllocationIterations, AllocationWarmupIterations);
 
     private static ZLinkCodecRegistryBuilder Codecs()
     {

@@ -196,10 +196,7 @@ public sealed class ChannelReceiveMessageFlowTests(Xunit.Abstractions.ITestOutpu
         );
         for (var index = 0; index < 1000; index++)
             TraceStages();
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < 10000; index++)
-            TraceStages();
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+        var allocated = PerCallAllocation.Steady(TraceStages, 10000);
         Assert.Equal(allocates, allocated > 0);
         if (!allocates)
             Assert.Equal(0, allocated);

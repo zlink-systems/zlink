@@ -5636,12 +5636,13 @@ public sealed partial class EntrySpotActorDispatchTests
                 using var outer = runtime.EnterOperation();
                 using (runtime.EnterOperation()) { }
 
-                var allocatedBefore = GC.GetAllocatedBytesForCurrentThread();
-                for (var index = 0; index < 100_000; index++)
-                {
-                    using var nested = runtime.EnterOperation();
-                }
-                return GC.GetAllocatedBytesForCurrentThread() - allocatedBefore;
+                return PerCallAllocation.Steady(
+                    () =>
+                    {
+                        using var nested = runtime.EnterOperation();
+                    },
+                    100_000
+                );
             });
 
             Assert.Equal(0, allocated);

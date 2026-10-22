@@ -38,9 +38,14 @@ final class ZLinkStateLaneTest {
                         java.lang.management.ManagementFactory.getThreadMXBean();
         long thread = Thread.currentThread().threadId();
         for (int index = 0; index < 50_000; index++) lane.awaitTurn(work);
-        long before = allocations.getThreadAllocatedBytes(thread);
-        for (int index = 0; index < 20_000; index++) lane.awaitTurn(work);
-        long bytes = allocations.getThreadAllocatedBytes(thread) - before;
+        // Minimum over several intervals: an allocation per turn appears in every interval,
+        // while a one-time runtime allocation lands in one interval only.
+        long bytes = Long.MAX_VALUE;
+        for (int interval = 0; interval < 8; interval++) {
+            long before = allocations.getThreadAllocatedBytes(thread);
+            for (int index = 0; index < 20_000; index++) lane.awaitTurn(work);
+            bytes = Math.min(bytes, allocations.getThreadAllocatedBytes(thread) - before);
+        }
         assertTrue(bytes < 20_000, "idle turn allocated " + bytes + " bytes");
         assertTrue(lane.closeAsync().toCompletableFuture().isDone());
     }

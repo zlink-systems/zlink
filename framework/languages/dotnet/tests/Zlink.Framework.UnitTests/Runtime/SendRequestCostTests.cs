@@ -49,9 +49,8 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
         // call's header preparation, without a transport or exception allocation.
         for (var index = 0; index < 128; index++)
             await ObservePreamble();
-        long actual = 0;
-        long baseline = 0;
-        var accepted = 0;
+        var actualSamples = new List<long>();
+        var baselineSamples = new List<long>();
         for (var index = 0; index < Iterations; index++)
         {
             var collection = Collections();
@@ -77,13 +76,14 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
             var control = GC.GetAllocatedBytesForCurrentThread() - started;
             if (collection != Collections() || thread != Environment.CurrentManagedThreadId)
                 continue;
-            actual += measured;
-            baseline += control;
-            accepted++;
+            actualSamples.Add(measured);
+            baselineSamples.Add(control);
         }
-        Assert.True(accepted > 0);
+        Assert.NotEmpty(actualSamples);
+        var actual = PerCallAllocation.Mode(actualSamples);
+        var baseline = PerCallAllocation.Mode(baselineSamples);
         output.WriteLine(
-            $"channel send preamble {actual / accepted} B/op; single header {baseline / accepted} B/op; accepted {accepted}"
+            $"channel send preamble {actual} B/op; single header {baseline} B/op; accepted {actualSamples.Count}"
         );
         Assert.Equal(baseline, actual);
 
@@ -148,25 +148,15 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
     {
         for (var index = 0; index < 128; index++)
             await OptimizedRaw(42);
-        var accepted = 0;
-        for (var sample = 0; sample < 12; sample++)
-        {
-            var collection = Collections();
-            var thread = Environment.CurrentManagedThreadId;
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var index = 0; index < Iterations; index++)
-                Assert.Same(ReplyParts, await OptimizedRaw(42));
-            var actual = GC.GetAllocatedBytesForCurrentThread() - before;
-            before = GC.GetAllocatedBytesForCurrentThread();
-            for (var index = 0; index < Iterations; index++)
-                Assert.Same(ReplyParts, await ValueTask.FromResult(ReplyParts));
-            var runtime = GC.GetAllocatedBytesForCurrentThread() - before;
-            if (collection != Collections() || thread != Environment.CurrentManagedThreadId)
-                continue;
-            Assert.Equal(runtime, actual);
-            accepted++;
-        }
-        Assert.True(accepted > 0);
+        var actual = await PerCallAllocation.SteadyAsync(
+            async () => Assert.Same(ReplyParts, await OptimizedRaw(42)),
+            Iterations
+        );
+        var runtime = await PerCallAllocation.SteadyAsync(
+            async () => Assert.Same(ReplyParts, await ValueTask.FromResult(ReplyParts)),
+            Iterations
+        );
+        Assert.Equal(runtime, actual);
     }
 
     [Theory]
@@ -432,27 +422,12 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
                 actual();
                 control();
             }
-            var accepted = 0;
-            for (var sample = 0; sample < 12; sample++)
-            {
-                var collection = Collections();
-                var before = GC.GetAllocatedBytesForCurrentThread();
-                for (var index = 0; index < Iterations; index++)
-                    control();
-                var baseline = GC.GetAllocatedBytesForCurrentThread() - before;
-                before = GC.GetAllocatedBytesForCurrentThread();
-                for (var index = 0; index < Iterations; index++)
-                    actual();
-                var measured = GC.GetAllocatedBytesForCurrentThread() - before;
-                if (collection != Collections())
-                    continue;
-                output.WriteLine(
-                    $"component lookup {measured / Iterations} B/op; owner lane control {baseline / Iterations} B/op"
-                );
-                Assert.Equal(baseline, measured);
-                accepted++;
-            }
-            Assert.True(accepted > 0);
+            var baseline = PerCallAllocation.Steady(control, Iterations);
+            var measured = PerCallAllocation.Steady(actual, Iterations);
+            output.WriteLine(
+                $"component lookup {measured} B/op; owner lane control {baseline} B/op"
+            );
+            Assert.Equal(baseline, measured);
             var missing = Assert.Throws<ZLinkConfigurationException>(() =>
                 manager.GetClientServerClientRuntime(state, "missing")
             );

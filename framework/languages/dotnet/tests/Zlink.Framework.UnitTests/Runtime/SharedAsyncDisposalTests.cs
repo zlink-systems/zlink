@@ -304,17 +304,17 @@ public sealed class SharedAsyncDisposalTests
             resolved[i] = new ZLinkScopedHandlerInstanceOwner(services);
             resolved[i].Resolve<NonDisposableCleanupHandler>();
         }
-        var start = GC.GetAllocatedBytesForCurrentThread();
-        foreach (var owner in empty)
-            owner.DisposeAsync().GetAwaiter().GetResult();
-        var emptyBytes = GC.GetAllocatedBytesForCurrentThread() - start;
-        start = GC.GetAllocatedBytesForCurrentThread();
-        foreach (var owner in resolved)
-            owner.DisposeAsync().GetAwaiter().GetResult();
-        var resolvedBytes = GC.GetAllocatedBytesForCurrentThread() - start;
+        var emptyBytes = PerCallAllocation.Steady(
+            index => empty[index].DisposeAsync().GetAwaiter().GetResult(),
+            iterations
+        );
+        var resolvedBytes = PerCallAllocation.Steady(
+            index => resolved[index].DisposeAsync().GetAwaiter().GetResult(),
+            iterations
+        );
         Assert.True(
             resolvedBytes <= emptyBytes,
-            $"Empty owner cleanup {emptyBytes / iterations} B; non-disposable cleanup {resolvedBytes / iterations} B."
+            $"Empty owner cleanup {emptyBytes} B; non-disposable cleanup {resolvedBytes} B."
         );
         Assert.Throws<ObjectDisposedException>(() =>
             resolved[0].Resolve<NonDisposableCleanupHandler>()

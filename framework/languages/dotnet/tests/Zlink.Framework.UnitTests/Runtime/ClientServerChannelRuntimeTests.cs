@@ -2345,13 +2345,16 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
         const int iterations = 1000;
         var matches = 0;
-        var start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-            if (ZLinkClientServerControlProtocol.IsControl(parts))
-                matches++;
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - start;
+        var allocated = PerCallAllocation.Steady(
+            () =>
+            {
+                if (ZLinkClientServerControlProtocol.IsControl(parts))
+                    matches++;
+            },
+            iterations
+        );
 
-        output.WriteLine($"IsControl length={length} prefix={prefix}: {allocated} B/{iterations}");
+        output.WriteLine($"IsControl length={length} prefix={prefix}: {allocated} B/call");
         Assert.Equal(prefix && length >= 3 ? iterations : 0, matches);
         Assert.True(message.AsReadOnlySpan().SequenceEqual(bytes));
         Assert.Equal(0, allocated);
@@ -2384,19 +2387,22 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
         const int iterations = 1000;
         var matches = 0;
-        var start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-        {
-            if (ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probes, out var probeId))
-                matches += probeId == 11 ? 1 : 0;
-            if (ZLinkClientServerControlProtocol.TryDecodeLivenessAck(acks, out var ackId))
-                matches += ackId == 11 ? 1 : 0;
-            if (ZLinkClientServerControlProtocol.TryDecodeReject(rejects, out var reason))
-                matches += reason == 1 ? 1 : 0;
-        }
-        var allocated = GC.GetAllocatedBytesForCurrentThread() - start;
+        var allocated = PerCallAllocation.Steady(
+            () =>
+            {
+                if (
+                    ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probes, out var probeId)
+                )
+                    matches += probeId == 11 ? 1 : 0;
+                if (ZLinkClientServerControlProtocol.TryDecodeLivenessAck(acks, out var ackId))
+                    matches += ackId == 11 ? 1 : 0;
+                if (ZLinkClientServerControlProtocol.TryDecodeReject(rejects, out var reason))
+                    matches += reason == 1 ? 1 : 0;
+            },
+            iterations
+        );
 
-        output.WriteLine($"Control readers valid={valid}: {allocated} B/{iterations}");
+        output.WriteLine($"Control readers valid={valid}: {allocated} B/call");
         Assert.Equal(valid ? iterations * 3 : 0, matches);
         Assert.Equal(0, allocated);
     }

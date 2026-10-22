@@ -38,17 +38,18 @@ public sealed class RequestAdmissionObservationTests
         // admission ctor. Retain all replies pending until after measurement.
         var warmBaseline = AcceptedReply(source.Task, new ZLinkRequestAdmission());
         var warmActual = Submit(source.Task);
-        var started = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < count; index++)
-            baseline[index] = AcceptedReply(
-                baselineSources[index].Task,
-                new ZLinkRequestAdmission()
-            );
-        var expected = GC.GetAllocatedBytesForCurrentThread() - started;
-        started = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < count; index++)
-            actual[index] = Submit(actualSources[index].Task);
-        var measured = GC.GetAllocatedBytesForCurrentThread() - started;
+        var expected = PerCallAllocation.Steady(
+            index =>
+                baseline[index] = AcceptedReply(
+                    baselineSources[index].Task,
+                    new ZLinkRequestAdmission()
+                ),
+            count
+        );
+        var measured = PerCallAllocation.Steady(
+            index => actual[index] = Submit(actualSources[index].Task),
+            count
+        );
         var pending = actual.All(reply => !reply.IsCompleted);
         source.SetResult(7);
         foreach (var pendingSource in baselineSources)

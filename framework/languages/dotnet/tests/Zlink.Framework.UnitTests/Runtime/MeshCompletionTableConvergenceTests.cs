@@ -524,30 +524,47 @@ public sealed class MeshCompletionTableConvergenceTests
     {
         await WarmTerminalPathsAsync();
 
-        var replyTable = new ZLinkMeshCompletionTable();
-        var replyOperation = new MeshOperationId(16, 2);
-        Assert.True(replyTable.Register(replyOperation, static (_, _) => { }));
-        var replyRecord = MeshReceiveRecord.CompletionFailure(
-            replyOperation,
-            RequestResult.Terminated
-        );
+        // One table per call: each call is the first terminal completion of its own table.
+        const int calls = 64;
+        var replyTables = new ZLinkMeshCompletionTable[calls];
+        var replyRecords = new MeshReceiveRecord[calls];
+        for (var index = 0; index < calls; index++)
+        {
+            replyTables[index] = new ZLinkMeshCompletionTable();
+            var replyOperation = new MeshOperationId(16, (ulong)(2 + index * 2));
+            Assert.True(replyTables[index].Register(replyOperation, static (_, _) => { }));
+            replyRecords[index] = MeshReceiveRecord.CompletionFailure(
+                replyOperation,
+                RequestResult.Terminated
+            );
+        }
         var emptyParts = Array.Empty<Message>();
-        var beforeReply = GC.GetAllocatedBytesForCurrentThread();
-        replyTable.Complete(replyRecord, emptyParts);
-        var replyAllocation = GC.GetAllocatedBytesForCurrentThread() - beforeReply;
-
-        var cancellationTable = new ZLinkMeshCompletionTable();
-        var cancellationOperation = new MeshOperationId(16, 3);
-        Assert.True(cancellationTable.Register(cancellationOperation, static (_, _) => { }));
-        using var cancellation = new CancellationTokenSource();
-        using var registration = cancellationTable.RegisterCancellation(
-            cancellationOperation,
-            cancellation.Token,
-            static () => { }
+        var replyAllocation = PerCallAllocation.Steady(
+            index => replyTables[index].Complete(replyRecords[index], emptyParts),
+            calls
         );
-        var beforeCancellation = GC.GetAllocatedBytesForCurrentThread();
-        cancellation.Cancel();
-        var cancellationAllocation = GC.GetAllocatedBytesForCurrentThread() - beforeCancellation;
+
+        var cancellationTables = new ZLinkMeshCompletionTable[calls];
+        var cancellations = new CancellationTokenSource[calls];
+        var registrations = new IDisposable[calls];
+        for (var index = 0; index < calls; index++)
+        {
+            cancellationTables[index] = new ZLinkMeshCompletionTable();
+            var cancellationOperation = new MeshOperationId(16, (ulong)(3 + index * 2));
+            Assert.True(
+                cancellationTables[index].Register(cancellationOperation, static (_, _) => { })
+            );
+            cancellations[index] = new CancellationTokenSource();
+            registrations[index] = cancellationTables[index].RegisterCancellation(
+                cancellationOperation,
+                cancellations[index].Token,
+                static () => { }
+            );
+        }
+        var cancellationAllocation = PerCallAllocation.Steady(
+            index => cancellations[index].Cancel(),
+            calls
+        );
 
         var closeTable = new ZLinkMeshCompletionTable();
         var closeOperation = new MeshOperationId(16, 4);
@@ -555,10 +572,15 @@ public sealed class MeshCompletionTableConvergenceTests
         closeTable.FailAll(RequestResult.Terminated);
 
         await Task.WhenAll(
-            replyTable.CompletionDrained,
-            cancellationTable.CompletionDrained,
-            closeTable.CompletionDrained
+            replyTables
+                .Concat(cancellationTables)
+                .Append(closeTable)
+                .Select(static table => table.CompletionDrained)
         );
+        foreach (var registration in registrations)
+            registration.Dispose();
+        foreach (var cancellation in cancellations)
+            cancellation.Dispose();
 
         Assert.Equal(0, replyAllocation);
         Assert.Equal(0, cancellationAllocation);

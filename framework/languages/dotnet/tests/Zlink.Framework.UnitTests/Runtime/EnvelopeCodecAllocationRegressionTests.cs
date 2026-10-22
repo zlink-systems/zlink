@@ -81,8 +81,12 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
         using var large = ActorReply(65536);
         Message[] smallParts = [small];
         Message[] largeParts = [large];
-        var smallBytes = SteadyAllocated(() => ZLinkActorReplyDecoder.DecodeTerminal(smallParts));
-        var largeBytes = SteadyAllocated(() => ZLinkActorReplyDecoder.DecodeTerminal(largeParts));
+        var smallBytes = PerCallAllocation.Steady(() =>
+            ZLinkActorReplyDecoder.DecodeTerminal(smallParts)
+        );
+        var largeBytes = PerCallAllocation.Steady(() =>
+            ZLinkActorReplyDecoder.DecodeTerminal(largeParts)
+        );
         output.WriteLine($"terminal small={smallBytes}, large={largeBytes} B/call");
         Assert.True(
             largeBytes <= smallBytes,
@@ -98,7 +102,7 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
         );
         var wire = ZLinkMeshMetadataCodec.Encode(values);
         ZLinkMessageMetadata? decoded = null;
-        var bytes = Allocated(() =>
+        var bytes = PerCallAllocation.Steady(() =>
         {
             if (!ZLinkMeshMetadataCodec.TryDecode(wire.Span, out decoded))
                 throw new InvalidOperationException("Invalid metadata fixture.");
@@ -116,11 +120,11 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
     {
         var value = new Probe("wrapped");
         var wrapped = ZLinkMessage.From(value);
-        var directBytes = Allocated(() =>
+        var directBytes = PerCallAllocation.Steady(() =>
         {
             using var encoded = ZLinkEnvelopeCodec.EncodeBody(value, typeof(Probe), null);
         });
-        var wrappedBytes = Allocated(() =>
+        var wrappedBytes = PerCallAllocation.Steady(() =>
         {
             using var encoded = ZLinkEnvelopeCodec.EncodeBody(wrapped, typeof(ZLinkMessage), null);
         });
@@ -177,8 +181,8 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
                         registry
                     )!;
         }
-        var explicitBytes = Allocated(() => Decode(codecs));
-        var defaultBytes = Allocated(() => Decode(null));
+        var explicitBytes = PerCallAllocation.Steady(() => Decode(codecs));
+        var defaultBytes = PerCallAllocation.Steady(() => Decode(null));
         Assert.Equal("wrapped", result!.Decode<Probe>().Text);
         output.WriteLine(
             $"borrowed={borrowed}: explicit={explicitBytes}, default={defaultBytes} B/call"
@@ -204,52 +208,6 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
         Assert.Equal("before", snapshot.Decode<MutableProbe>().Text);
         using var raw = snapshot.ToRawMessage(codecs);
         Assert.Equal("before", raw.GetString());
-    }
-
-    // Per-call bytes over Iterations warmed calls that no GC pause interrupted.
-    // A GC suspension can retire the thread allocation context inside a call and
-    // add its unused tail to the thread counter (see ProtobufNativePayloadTests).
-    private long Allocated(Action action)
-    {
-        for (var i = 0; i < Iterations; i++)
-            action();
-        long allocated = 0;
-        for (var measured = 0; measured < Iterations; )
-        {
-            var pause = GC.GetTotalPauseDuration();
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            action();
-            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-            if (GC.GetTotalPauseDuration() != pause)
-                continue;
-            allocated += bytes;
-            measured++;
-        }
-        return allocated / Iterations;
-    }
-
-    // Steady per-call bytes: the value most warmed, pause-free calls allocate. A
-    // payload copy adds to every call, while a one-time runtime allocation inside
-    // the window (tier-up, a lazy runtime table) adds to a single call only, so a
-    // size comparison must not average that one call into the result.
-    private static long SteadyAllocated(Action action)
-    {
-        for (var i = 0; i < Iterations; i++)
-            action();
-        var counts = new Dictionary<long, int>();
-        for (var measured = 0; measured < Iterations; )
-        {
-            var pause = GC.GetTotalPauseDuration();
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            action();
-            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-            if (GC.GetTotalPauseDuration() != pause)
-                continue;
-            counts[bytes] = counts.GetValueOrDefault(bytes) + 1;
-            measured++;
-        }
-        // On a tie, report the larger count so a real per-call cost is never hidden.
-        return counts.MaxBy(static entry => (entry.Value, entry.Key)).Key;
     }
 
     private static Message ActorReply(int size) => ActorReply(new byte[size]);

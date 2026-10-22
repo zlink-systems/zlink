@@ -21,13 +21,15 @@ public sealed class MeshOutboundPayloadOwnershipTests
             var warm = new ZLinkOneWayCallGate("MeshNode send");
             warm.Claim();
         }
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < 1024; index++)
-        {
-            var gate = new ZLinkOneWayCallGate("MeshNode send");
-            gate.Claim();
-        }
-        Assert.Equal(0L, GC.GetAllocatedBytesForCurrentThread() - before);
+        var allocated = PerCallAllocation.Steady(
+            () =>
+            {
+                var gate = new ZLinkOneWayCallGate("MeshNode send");
+                gate.Claim();
+            },
+            1024
+        );
+        Assert.Equal(0L, allocated);
     }
 
     private const string Mesh = "outbound-ownership";

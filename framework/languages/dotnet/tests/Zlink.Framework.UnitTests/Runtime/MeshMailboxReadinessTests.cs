@@ -392,24 +392,21 @@ public sealed class MeshMailboxReadinessTests(Xunit.Abstractions.ITestOutputHelp
             enumerate();
             fixture.Node.DrainReady(domains, batch);
         }
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-            enumerate();
-        var enumerationBytes = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-            fixture.Node.DrainReady(domains, batch);
-        var selectionBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        var enumerationBytes = PerCallAllocation.Steady(enumerate, iterations);
+        var selectionBytes = PerCallAllocation.Steady(
+            () => fixture.Node.DrainReady(domains, batch),
+            iterations
+        );
         output.WriteLine(
             $"owners={owners}; domains={domains}; calls={iterations}; "
-                + $"enumeration bytes/call={enumerationBytes / iterations}; "
-                + $"selection bytes/call={selectionBytes / iterations}"
+                + $"enumeration bytes/call={enumerationBytes}; "
+                + $"selection bytes/call={selectionBytes}"
         );
         // The registry enumeration is the only allowed allocation. Newer runtimes
         // may allocate less for the same enumeration, never more for selection.
         Assert.True(
             selectionBytes <= enumerationBytes,
-            $"selection allocated {selectionBytes} bytes, enumeration {enumerationBytes}"
+            $"selection allocated {selectionBytes} B/call, enumeration {enumerationBytes} B/call"
         );
         Assert.Equal(0, batch.Count);
         Assert.All(fixture.Ready.Values.Cast<bool>(), Assert.True);

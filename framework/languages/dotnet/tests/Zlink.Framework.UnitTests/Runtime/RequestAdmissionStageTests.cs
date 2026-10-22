@@ -20,20 +20,21 @@ public sealed class RequestAdmissionStageTests
             new ZLinkRequestAdmission().Complete();
             _ = ZLinkRequestAdmission.Run(execute);
         }
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-            new ZLinkRequestAdmission().Complete();
-        var sourceBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        var sourceBytes = PerCallAllocation.Steady(
+            () => new ZLinkRequestAdmission().Complete(),
+            iterations
+        );
         var admitted = true;
         var replies = 0;
-        before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-        {
-            var request = ZLinkRequestAdmission.Run(execute);
-            admitted &= request.Admitted.IsCompletedSuccessfully;
-            replies += request.Reply.GetAwaiter().GetResult();
-        }
-        var observedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        var observedBytes = PerCallAllocation.Steady(
+            () =>
+            {
+                var request = ZLinkRequestAdmission.Run(execute);
+                admitted &= request.Admitted.IsCompletedSuccessfully;
+                replies += request.Reply.GetAwaiter().GetResult();
+            },
+            iterations
+        );
         Assert.True(admitted);
         Assert.Equal(replyValue * iterations, replies);
         Assert.Equal(sourceBytes, observedBytes);

@@ -31,32 +31,30 @@ public sealed class ApplicationJobQueueContractTests(Xunit.Abstractions.ITestOut
             Assert.Equal(1, queue.TryReserveBatch(1));
             queue.ReleaseReserved(1);
         }
-        var start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-            leases[index] = Acquire();
-        var actual = GC.GetAllocatedBytesForCurrentThread() - start;
+        var actual = PerCallAllocation.Steady(index => leases[index] = Acquire(), iterations);
         Assert.Equal((ulong)iterations, queue.GetStatus().PermitsInUse);
         foreach (var lease in leases)
             lease.Dispose();
-        start = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < iterations; index++)
-        {
-            _ = queue.TryReserveBatch(1);
-            leases[index] = new ZLinkApplicationJobQueueLease(
-                queue,
-                ZLinkApplicationJobOrigin.Remote
-            );
-        }
-        var baseline = GC.GetAllocatedBytesForCurrentThread() - start;
+        var baseline = PerCallAllocation.Steady(
+            index =>
+            {
+                _ = queue.TryReserveBatch(1);
+                leases[index] = new ZLinkApplicationJobQueueLease(
+                    queue,
+                    ZLinkApplicationJobOrigin.Remote
+                );
+            },
+            iterations
+        );
         foreach (var lease in leases)
             lease.Dispose();
         Assert.Equal(0UL, queue.GetStatus().PermitsInUse);
         output.WriteLine(
-            $"batch={batch}, cancellable={cancellable}, acquire={actual}B, baseline={baseline}B, excess={actual - baseline}B/{iterations}"
+            $"batch={batch}, cancellable={cancellable}, acquire={actual}B, baseline={baseline}B, excess={actual - baseline}B/call"
         );
         Assert.True(
             actual == baseline,
-            $"acquire={actual}B, lane + lease baseline={baseline}B, excess={actual - baseline}B/{iterations}"
+            $"acquire={actual}B, lane + lease baseline={baseline}B, excess={actual - baseline}B/call"
         );
 
         ZLinkApplicationJobQueueLease Acquire()

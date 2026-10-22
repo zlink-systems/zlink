@@ -336,13 +336,11 @@ public sealed class ConnectorJsonProfileTests
 
         static long CountAllocations(byte[] bytes)
         {
-            const int iterations = 1000;
-            for (var i = 0; i < iterations; i++)
+            for (var i = 0; i < 1000; i++)
                 ZLinkFrameworkJsonDocument.ValidateDocument(bytes);
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            for (var i = 0; i < iterations; i++)
-                ZLinkFrameworkJsonDocument.ValidateDocument(bytes);
-            return GC.GetAllocatedBytesForCurrentThread() - before;
+            return PerCallAllocation.Steady(() =>
+                ZLinkFrameworkJsonDocument.ValidateDocument(bytes)
+            );
         }
     }
 
