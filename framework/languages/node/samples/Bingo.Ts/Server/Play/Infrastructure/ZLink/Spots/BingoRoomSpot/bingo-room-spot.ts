@@ -1,8 +1,12 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ZLINK_ACTOR_CLIENT, ZLINK_CHANNEL_CLIENT } from '@zlink-systems/nestjs';
+import { ZLinkFrameworkException, ZLinkFrameworkErrorKind } from '@zlink-systems/framework';
 import { BingoRewardItems } from '../../../../../../Shared/Contracts/messages';
 import {
   BingoGameEndedNotify,
+  BingoObservationStateNotify,
+  GetBingoObservationReq,
+  GetBingoObservationRes,
   BingoGameStartedNotify,
   BingoNumberDrawnNotify,
   BingoRewardAcquiredEvent,
@@ -77,6 +81,7 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
   >();
   private drawTimer?: ZLinkTimer;
   private cleanupStarted = false;
+  private announcedRewardDrawSeq?: number;
 
   constructor(
     @Inject(ZLINK_CHANNEL_CLIENT) private readonly channels: ZLinkChannelClient,
@@ -162,6 +167,23 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     this.pendingJoins.delete(actorId);
     if (request.observeOnly) {
       this.observerActors.add(actorId);
+      this.announcedRewardDrawSeq = undefined;
+      // Observation receives results only while the game room is alive.
+      let observation: GetBingoObservationRes;
+      try {
+        observation = await this.context.outbound
+          .requestToSpot(request.roomId, new GetBingoObservationReq({}))
+          .submit<GetBingoObservationRes>();
+      } catch (error) {
+        if (
+          error instanceof ZLinkFrameworkException &&
+          error.kind === ZLinkFrameworkErrorKind.NotFound
+        )
+          return;
+        throw error;
+      }
+      await actor.push(new BingoObservationStateNotify({ state: observation.state }));
+      if (observation.reward != null) await this.announceReward(observation.reward);
       console.error(
         `bingo observer joined spot=${this.context.spotId} actor=${actorId} room=${request.roomId}`
       );
@@ -210,6 +232,7 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
   async onLeaveActor(actor: PlayerActor): Promise<void> {
     const actorId = actor.actorId;
     if (this.observerActors.delete(actorId)) {
+      if (this.observerActors.size === 0) void this.context.close();
       console.error(`bingo-lifecycle room-leave actor=${actorId} spot=${this.context.spotId}`);
       return;
     }
@@ -285,7 +308,8 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     if (
       !this.isObserverRoom() ||
       this.settings.observedRoomId !== event.roomId ||
-      this.observerActors.size === 0
+      this.observerActors.size === 0 ||
+      this.announcedRewardDrawSeq === event.drawSeq
     ) {
       console.error(
         `bingo reward ignored spot=${this.context.spotId} observer=${this.isObserverRoom()} observed=${this.settings.observedRoomId ?? '-'} event=${event.roomId} observers=${this.observerActors.size}`
@@ -305,6 +329,7 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
         )
       )
     );
+    this.announcedRewardDrawSeq = event.drawSeq;
   }
 
   verifyStopObserving(actorId: string, request: StopObservingBingoEventsReq): boolean {
@@ -424,25 +449,31 @@ class BingoRoomSpot implements ZLinkSpot<PlayerActor> {
     });
   }
 
-  private async publishReward(state: BingoRoomSnapshot): Promise<void> {
+  observation(): GetBingoObservationRes {
+    if (this.isObserverRoom()) throw new Error('Observer room does not own game state.');
+    const state = this.snapshot();
+    return new GetBingoObservationRes({ state, reward: this.rewardFor(state) });
+  }
+
+  private rewardFor(state: BingoRoomSnapshot): BingoRewardAcquiredEvent | null {
     const winner = state.winners.at(0);
-    if (winner === undefined) {
-      return;
-    }
+    if (state.status !== BingoRoomStatus.Finished || winner === undefined) return null;
+    return new BingoRewardAcquiredEvent({
+      roomId: state.roomId,
+      actorId: winner,
+      drawSeq: state.drawSeq,
+      itemId: BingoRewardItems.goldenDauberId,
+      itemName: BingoRewardItems.goldenDauberName,
+      rarity: BingoRewardItems.legendaryRarity
+    });
+  }
+
+  private async publishReward(state: BingoRoomSnapshot): Promise<void> {
+    const reward = this.rewardFor(state);
+    if (reward === null) return;
     // --8<-- [start:doc-bingo-reward-publish]
     await this.context.outbound
-      .publish(
-        SampleNames.roomRewardChannel,
-        SampleNames.roomRewardTopic,
-        new BingoRewardAcquiredEvent({
-          roomId: state.roomId,
-          actorId: winner,
-          drawSeq: state.drawSeq,
-          itemId: BingoRewardItems.goldenDauberId,
-          itemName: BingoRewardItems.goldenDauberName,
-          rarity: BingoRewardItems.legendaryRarity
-        })
-      )
+      .publish(SampleNames.roomRewardChannel, SampleNames.roomRewardTopic, reward)
       .submit();
     // --8<-- [end:doc-bingo-reward-publish]
   }
