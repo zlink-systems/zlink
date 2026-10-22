@@ -1029,7 +1029,7 @@ internal static class ZLinkRuntimeMetrics
             ZlinkStreamCloseReason.ClientClose => "client_close",
             ZlinkStreamCloseReason.IdleTimeout => "idle_timeout",
             ZlinkStreamCloseReason.HeartbeatTimeout => "heartbeat_timeout",
-            ZlinkStreamCloseReason.ServerDrain => "server_drain",
+            ZlinkStreamCloseReason.ServerDrain => "server_shutdown",
             ZlinkStreamCloseReason.ProtocolError => "protocol_error",
             _ => "transport_error",
         };
