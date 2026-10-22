@@ -434,12 +434,12 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::pump_one (
                     || envelope.kind == messaging::message_kind_t::command)) {
                 co_return co_await enqueue_application_record (
                   std::move (*received), std::move (application_header->value ()),
-                  std::move (application_permit), application_records, now);
+                  std::move (application_permit), application_records, now, dispatch_options);
             }
         }
     }
     if (application_records && !application_records->empty ())
-        (void) co_await enqueue_application_records (*application_records);
+        (void) co_await enqueue_application_records (*application_records, dispatch_options);
     if (!is_control) {
         if (application_header && !*application_header) {
             const bool admitted = co_await _lane.run_task ([this, &received, now] {
@@ -575,7 +575,8 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
   messaging::envelope_header_t envelope,
   std::shared_ptr<application_job_queue_t::permit_t> application_permit,
   std::vector<received_application_record_t> *application_records,
-  mesh::service_liveness_registry_t::clock_t::time_point received_at)
+  mesh::service_liveness_registry_t::clock_t::time_point received_at,
+  const dispatch_options_t *dispatch_options)
 {
     trace_client_server_lazy ("server-received", [&] {
         return "channel=" + envelope.channel_name
@@ -608,16 +609,16 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
     }
     std::vector<received_application_record_t> one;
     one.push_back (std::move (received_record));
-    co_return co_await enqueue_application_records (one);
+    co_return co_await enqueue_application_records (one, dispatch_options);
 }
 
 task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_application_records (
-  std::vector<received_application_record_t> &records)
+  std::vector<received_application_record_t> &records, const dispatch_options_t *dispatch_options)
 {
     if (records.empty ())
         co_return client_server_pump_result_t::no_data;
     // Connection admission and enqueue execute in the same owner turn.
-    auto results = co_await _lane.run_task ([this, &records] {
+    auto results = co_await _lane.run_task ([this, &records, dispatch_options] {
         std::vector<client_server_pump_result_t> results;
         results.reserve (records.size ());
         for (auto &received : records) {
@@ -628,12 +629,68 @@ task_t<client_server_pump_result_t> raw_client_server_server_t::enqueue_applicat
                 peer->second->record_received (received.received_at);
             if (peer == _connections.end () || !peer->second) {
                 results.push_back (client_server_pump_result_t::protocol_error);
-            } else if (_mailbox.try_enqueue (std::move (received.record), [&received] {
-                           // From here the admitted record alone owns its permit.
-                           if (received.permit)
-                               received.permit->mark_queued ();
-                           received.permit.reset ();
-                       })) {
+            } else if (_mailbox.try_enqueue (
+                         std::move (received.record), [&received, dispatch_options] {
+                             // From here the admitted record alone owns its permit.
+                             if (received.permit)
+                                 received.permit->mark_queued ();
+                             if (dispatch_options) {
+                                 detail::message_flow_tracer_t flow (*dispatch_options);
+                                 auto &header = received.record.envelope_header;
+                                 auto scope = flow_context_t::enter (
+                                   header.flow_id, header.flow_origin, flow.mode (),
+                                   flow_origin_t::inbound, std::nullopt);
+                                 if (!header.flow_id && flow_context_t::current ()) {
+                                     header.flow_id = flow_context_t::current ()->flow_id;
+                                     header.flow_origin = flow_context_t::current ()->origin;
+                                 }
+                                 flow.trace (message_flow_outcome_t::received,
+                                             header.flow_id ? std::string_view (*header.flow_id)
+                                                            : std::string_view{},
+                                             [&] {
+                                                 message_flow_event_t event{
+                                                   message_flow_outcome_t::received,
+                                                   dispatch_error_surface_t::channel,
+                                                   header.kind == messaging::message_kind_t::request
+                                                     ? dispatch_message_kind_t::request
+                                                     : dispatch_message_kind_t::send,
+                                                   header.message_name,
+                                                   received.record.owner,
+                                                   std::nullopt,
+                                                   header.correlation_id,
+                                                   std::nullopt,
+                                                   std::nullopt,
+                                                   std::nullopt,
+                                                   std::nullopt};
+                                                 event.flow_id = header.flow_id;
+                                                 event.flow_origin = header.flow_origin;
+                                                 return event;
+                                             });
+                                 flow.trace (message_flow_outcome_t::admitted,
+                                             header.flow_id ? std::string_view (*header.flow_id)
+                                                            : std::string_view{},
+                                             [&] {
+                                                 message_flow_event_t event{
+                                                   message_flow_outcome_t::admitted,
+                                                   dispatch_error_surface_t::channel,
+                                                   header.kind == messaging::message_kind_t::request
+                                                     ? dispatch_message_kind_t::request
+                                                     : dispatch_message_kind_t::send,
+                                                   header.message_name,
+                                                   received.record.owner,
+                                                   std::nullopt,
+                                                   header.correlation_id,
+                                                   std::nullopt,
+                                                   std::nullopt,
+                                                   std::nullopt,
+                                                   std::nullopt};
+                                                 event.flow_id = header.flow_id;
+                                                 event.flow_origin = header.flow_origin;
+                                                 return event;
+                                             });
+                             }
+                             received.permit.reset ();
+                         })) {
                 results.push_back (client_server_pump_result_t::application);
             } else {
                 results.push_back (client_server_pump_result_t::backpressured);

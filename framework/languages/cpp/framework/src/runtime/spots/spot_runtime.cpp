@@ -1875,7 +1875,7 @@ resolve_target_spot_generation (std::shared_ptr<detail::spot_node_builder_state_
     if (!state) {
         co_return std::nullopt;
     }
-    runtime::spot_address_resolver_t *resolver = nullptr;
+    std::shared_ptr<runtime::spot_address_resolver_t> resolver;
     std::string mesh_name;
     std::shared_ptr<service::spot_t> local_spot;
     state->lane
@@ -2730,7 +2730,7 @@ void spot_context_state_t::run_local_close_steps (
         service::after_close_step (
           run_close_step<bool> (
             [self, owner] {
-                auto members =
+                auto [members, services] =
                   owner->lane
                     .run ([&] {
                         std::vector<actor_ref_t> result;
@@ -2744,7 +2744,7 @@ void spot_context_state_t::run_local_close_steps (
                                     self->node_rid, type, id, owner->actor_generations.at (key)));
                             }
                         }
-                        return result;
+                        return std::make_pair (std::move (result), owner->root_services);
                     })
                     .get ();
                 spot_node_runtime_t runtime (owner);
@@ -2761,10 +2761,9 @@ void spot_context_state_t::run_local_close_steps (
                               result_t<bool>::failure (framework_error_kind_t::internal_failure,
                                                        "Host shutdown local Actor cleanup failed"));
                     }
-                    if (owner->root_services) {
+                    if (services) {
                         const auto cleaned =
-                          owner->root_services->get_required<actor_gateway_runtime_t> ()
-                            .destroy_actor (member);
+                          services->get_required<actor_gateway_runtime_t> ().destroy_actor (member);
                         if (!cleaned)
                             return task_t<bool> (detail::propagate_failure<bool> (
                               cleaned, "Host shutdown local Actor registry cleanup failed"));
@@ -9233,9 +9232,10 @@ task_t<void> spot_node_runtime_t::seal_actor_application_suffix (const actor_ref
               const runtime::messaging::message_parts_t parts (
                 runtime::protocol::decode_application_parts (application));
               const auto header = decode_actor_packet_header (
-                parts, kind == runtime::protocol::frozen_record_kind_t::actor_request
-                         ? stream_message_kind_t::request
-                         : stream_message_kind_t::send,
+                parts,
+                kind == runtime::protocol::frozen_record_kind_t::actor_request
+                  ? stream_message_kind_t::request
+                  : stream_message_kind_t::send,
                 false);
               if (!header)
                   std::rethrow_exception (header.exception ());
@@ -9329,20 +9329,22 @@ spot_node_runtime_t::open_local_actor_handoff (actor_ref_t actor_ref,
 {
     const auto state = _state;
     const auto key = actor_key (actor_ref);
-    auto [context, services] = co_await state->lane.run_task ([state, key] {
+    auto [context, executor, services] = co_await state->lane.run_task ([state, key] {
         std::shared_ptr<spot_context_state_t> context;
+        std::shared_ptr<runtime::actor_serial_executor_t> executor;
         const auto location = state->actor_spot_ids.find (key);
         if (location != state->actor_spot_ids.end ()) {
             const auto target = spot_node_runtime_t (state).find_context_core (location->second);
-            if (target)
+            if (target) {
                 context = target->_state;
+                executor = context->ensure_spot_serial_executor ()->actor_executor (key);
+            }
         }
-        return std::make_pair (std::move (context), state->root_services);
+        return std::make_tuple (std::move (context), std::move (executor), state->root_services);
     });
     if (!context)
         co_return result_t<void>::failure (framework_error_kind_t::unavailable,
                                            "local Actor handoff target is unavailable");
-    const auto executor = context->ensure_spot_serial_executor ()->actor_executor (key);
     if (!executor)
         co_return result_t<void>::failure (framework_error_kind_t::shutting_down,
                                            "local Actor handoff target queue is unavailable");
@@ -11942,7 +11944,7 @@ void spot_node_runtime_t::invalidate_message_follow_route (
     const auto *source = std::get_if<runtime::protocol::spot_route_fence_t> (&notice.source);
     if (!source)
         return;
-    auto *resolver = _state->lane.run ([&] { return _state->spot_location_resolver; }).get ();
+    const auto resolver = _state->lane.run ([&] { return _state->spot_location_resolver; }).get ();
     if (!resolver)
         return;
     runtime::spot_address_t expected;
@@ -13679,7 +13681,7 @@ std::optional<spot_route_t> spot_node_runtime_t::resolve_spot (spot_id_t spot_id
     {
         std::optional<spot_route_t> local;
         std::vector<std::function<std::optional<spot_route_t> (spot_id_t)>> resolvers;
-        runtime::spot_address_resolver_t *location_resolver = nullptr;
+        std::shared_ptr<runtime::spot_address_resolver_t> location_resolver;
         std::string mesh_name;
     };
     auto plan =
@@ -13967,6 +13969,15 @@ void spot_node_runtime_t::release_native_handles () noexcept
             catch (...) {
             }
         }
+        _state->lane
+          .run ([&] {
+              std::atomic_store_explicit (&_state->route_client,
+                                          std::shared_ptr<const route_client_t>{},
+                                          std::memory_order_release);
+              _state->channel_runtime.reset ();
+              _state->root_services.reset ();
+          })
+          .get ();
     }
     catch (...) {
     }
@@ -14370,9 +14381,10 @@ void spot_node_runtime_t::bind_host_phase (std::function<framework_runtime_state
     _state->lane.run ([&] { _state->host_phase = std::move (read_phase); }).get ();
 }
 
-void spot_node_runtime_t::bind_spot_location_resolver (runtime::spot_address_resolver_t &resolver)
+void spot_node_runtime_t::bind_spot_location_resolver (
+  std::shared_ptr<runtime::spot_address_resolver_t> resolver)
 {
-    _state->lane.run ([&] { _state->spot_location_resolver = &resolver; }).get ();
+    _state->lane.run ([&] { _state->spot_location_resolver = std::move (resolver); }).get ();
 }
 
 std::shared_ptr<service::mesh_node_t> spot_node_runtime_t::native_node () const
@@ -15530,12 +15542,11 @@ bool spot_node_runtime_t::dispatch_mesh_record (
             return false;
         }
         detail::observe_task_completion (
-          relayed,
-          [state = _state, admission_token, deferred_handoff_request, handoff_pending,
-           request_header, record_kind = record.kind, reply_token = record.reply_token,
-           terminal_claimed, terminal_owner,
-           application_completed, application_record = record.application_record] (
-            const result_t<std::optional<zlink::message_t>> &result) mutable {
+          relayed, [state = _state, admission_token, deferred_handoff_request, handoff_pending,
+                    request_header, record_kind = record.kind, reply_token = record.reply_token,
+                    terminal_claimed, terminal_owner, application_completed,
+                    application_record = record.application_record] (
+                     const result_t<std::optional<zlink::message_t>> &result) mutable {
               /* An empty relay result retains the existing native reply owner
                * or the legacy pending entry while handoff replay owns the request.
                * For the legacy path, the reply token stays

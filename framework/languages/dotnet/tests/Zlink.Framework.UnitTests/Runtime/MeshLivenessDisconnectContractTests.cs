@@ -10,24 +10,42 @@ public sealed partial class StatefulServiceRuntimeTests
     {
         await using var ownerContext = Systems.Zlink.Zlink.CreateContext();
         await using var peerContext = Systems.Zlink.Zlink.CreateContext();
-        var captured = new CapturingMeshSocketContext(ownerContext);
-        await using var owner = NewNode(captured, "disconnect-error-owner");
-        await using var peer = NewNode(peerContext, "disconnect-error-peer");
-        owner.SetBind("tcp://127.0.0.1:0");
-        owner.Start();
-        peer.Start();
-        peer.ConnectPeer(Assert.IsType<string>(owner.Status().LocalEndpoint), owner.RoutingId);
-        await ObserveAsync(() => owner.Status().AdmittedPeerCount == 1);
-        ownerContext.Shutdown();
-        var bindingError = Assert.Throws<ZlinkConnectException>(() =>
-            captured.Router!.DisconnectRid(peer.RoutingId)
+        var bindingFailure = new ZlinkConnectException(
+            ZlinkConnectException.ErrorCode.InternalError
         );
-        Assert.Equal(ZlinkConnectException.ErrorCode.InternalError, bindingError.Result);
-        Assert.Single(owner.Peers(), candidate => candidate.RoutingId == peer.RoutingId);
-        var error = Assert.Throws<ZlinkConnectException>(() =>
-            owner.DisconnectPeer(peer.RoutingId)
-        );
-        Assert.Equal(bindingError.Result, error.Result);
+        var captured = new CapturingMeshSocketContext(ownerContext)
+        {
+            DisconnectFailure = bindingFailure,
+        };
+        try
+        {
+            using var poller = new DeferredMeshTurnPoller();
+            await using var owner = new ZLinkManagedMeshNode(
+                captured,
+                "mesh",
+                receivePollerFactory: () => poller
+            );
+            owner.SetRoutingId(RoutingId.From("disconnect-error-owner"));
+            await using var peer = NewNode(peerContext, "disconnect-error-peer");
+            owner.SetBind("tcp://127.0.0.1:0");
+            owner.Start();
+            peer.Start();
+            peer.ConnectPeer(Assert.IsType<string>(owner.Status().LocalEndpoint), owner.RoutingId);
+            await ObserveAsync(() => owner.Status().AdmittedPeerCount == 1);
+            var error = Assert.Throws<ZlinkConnectException>(() =>
+                owner.DisconnectPeer(peer.RoutingId)
+            );
+            Assert.Equal(bindingFailure.Result, error.Result);
+            Assert.Same(bindingFailure, error);
+            Assert.Single(owner.Peers(), candidate => candidate.RoutingId == peer.RoutingId);
+            Assert.Equal(1, captured.DisconnectRidCalls);
+        }
+        finally
+        {
+            captured.DisposeCapturedRouter();
+            ownerContext.Shutdown();
+            peerContext.Shutdown();
+        }
     }
 
     [Fact]
@@ -209,7 +227,7 @@ public sealed partial class StatefulServiceRuntimeTests
         }
 
         public void Add(IZlinkSocket socket, PollEventFlags events, nuint slot) =>
-            _inner.Add(socket, events, slot);
+            _inner.Add(Unwrap(socket), events, slot);
 
         public void Add(ISocketMonitor monitor, PollEventFlags events, nuint slot) =>
             _inner.Add(monitor, events, slot);
@@ -220,14 +238,19 @@ public sealed partial class StatefulServiceRuntimeTests
             _inner.AddFd(fd, events, slot);
 
         public void Modify(IZlinkSocket socket, PollEventFlags events) =>
-            _inner.Modify(socket, events);
+            _inner.Modify(Unwrap(socket), events);
 
         public void Modify(ISocketMonitor monitor, PollEventFlags events) =>
             _inner.Modify(monitor, events);
 
         public void ModifyFd(int fd, PollEventFlags events) => _inner.ModifyFd(fd, events);
 
-        public bool Remove(IZlinkSocket socket) => _inner.Remove(socket);
+        public bool Remove(IZlinkSocket socket) => _inner.Remove(Unwrap(socket));
+
+        private static IZlinkSocket Unwrap(IZlinkSocket socket) =>
+            socket is CapturingMeshSocketContext.CapturingRouterSocketProxy proxy
+                ? proxy.Inner
+                : socket;
 
         public bool Remove(ISocketMonitor monitor) => _inner.Remove(monitor);
 

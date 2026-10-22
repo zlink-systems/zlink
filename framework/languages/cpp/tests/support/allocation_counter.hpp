@@ -9,6 +9,21 @@ extern thread_local std::size_t tracked_allocation_count;
 extern thread_local std::size_t tracked_allocation_size;
 extern thread_local std::size_t tracked_allocation_bytes;
 extern thread_local std::size_t largest_allocation;
+struct allocation_event_t
+{
+    const void *memory;
+    std::size_t size;
+};
+
+struct allocation_event_log_t
+{
+    allocation_event_t *events;
+    std::size_t capacity;
+    std::size_t count = 0;
+    bool overflow = false;
+};
+
+extern thread_local allocation_event_log_t *allocation_event_log;
 template <typename TAction>
 std::size_t count_allocations (TAction &&action, std::size_t allocation_size = 0)
 {
