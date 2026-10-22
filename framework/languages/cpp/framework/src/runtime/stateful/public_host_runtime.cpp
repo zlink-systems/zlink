@@ -1667,18 +1667,18 @@ template <typename T> result_t<bool> close_store_failure (const result_t<T> &fai
     return detail::propagate_failure<bool> (failed, "Location Store operation failed");
 }
 
-/* Step 4: deletes the Closing authority with the same owner and generation
- * fence (the Closing StoreVersion). */
+/* Deletes only the authority version owned by this operation. The Store
+ * transaction also releases its active capacity. */
 task_t<bool>
-release_closing_authority_async (std::shared_ptr<zlink::framework::location_repository_t> store,
-                                 authority_key_t authority_key,
-                                 std::string closing_version,
-                                 std::function<task_t<bool> ()> before_delete)
+release_authority_async (std::shared_ptr<zlink::framework::location_repository_t> store,
+                         authority_key_t authority_key,
+                         std::string expected_store_version,
+                         std::function<task_t<bool> ()> before_delete)
 {
     if (before_delete)
         (void) co_await before_delete ();
-    const auto deleted = co_await await_result (
-      store->compare_exchange_authority (authority_key, closing_version, authority_delete_t{}));
+    const auto deleted = co_await await_result (store->compare_exchange_authority (
+      authority_key, expected_store_version, authority_delete_t{}));
     if (!deleted)
         co_return close_store_failure (deleted);
     if (!std::holds_alternative<authority_deleted_t> (deleted.value ()))
@@ -1688,17 +1688,17 @@ release_closing_authority_async (std::shared_ptr<zlink::framework::location_repo
 }
 
 std::function<task_t<bool> ()>
-release_closing_authority (std::shared_ptr<zlink::framework::location_repository_t> store,
-                           authority_key_t authority_key,
-                           std::string closing_version,
-                           std::function<task_t<bool> ()> before_delete)
+release_authority (std::shared_ptr<zlink::framework::location_repository_t> store,
+                   authority_key_t authority_key,
+                   std::string expected_store_version,
+                   std::function<task_t<bool> ()> before_delete)
 {
-    return
-      [store = std::move (store), authority_key = std::move (authority_key),
-       closing_version = std::move (closing_version), before_delete = std::move (before_delete)] {
-          return release_closing_authority_async (store, authority_key, closing_version,
-                                                  before_delete);
-      };
+    return [store = std::move (store), authority_key = std::move (authority_key),
+            expected_store_version = std::move (expected_store_version),
+            before_delete = std::move (before_delete)] {
+        return release_authority_async (store, authority_key, expected_store_version,
+                                        before_delete);
+    };
 }
 
 task_t<bool> release_user_spot_record_async (std::shared_ptr<public_host_runtime_t> host,
@@ -1788,15 +1788,14 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
                  .node_rid = snapshot->allocation.target.node_rid,
                  .node_generation = snapshot->allocation.target.node_lifecycle_generation});
               complete_close_step (
-                completion,
-                {result_t<bool>::success (true),
-                 release_closing_authority (store, authority_key, snapshot->store_version, {}),
-                 reincarnate_closing_authority (store, authority_key, snapshot->store_version,
-                                                ready_payload),
-                 [store, authority_key] (const authority_snapshot_t &next) {
-                     return release_closing_authority (store, authority_key, next.store_version,
-                                                       {}) ();
-                 }});
+                completion, {result_t<bool>::success (true),
+                             release_authority (store, authority_key, snapshot->store_version, {}),
+                             reincarnate_closing_authority (store, authority_key,
+                                                            snapshot->store_version, ready_payload),
+                             [store, authority_key] (const authority_snapshot_t &next) {
+                                 return release_authority (store, authority_key, next.store_version,
+                                                           {}) ();
+                             }});
               return;
           }
 
@@ -1833,13 +1832,11 @@ public_host_runtime_t::begin_instance_spot_close (const std::string &stable_type
                 complete_close_step (
                   completion,
                   {result_t<bool>::success (true),
-                   release_closing_authority (store, authority_key, closing->snapshot.store_version,
-                                              {}),
+                   release_authority (store, authority_key, closing->snapshot.store_version, {}),
                    reincarnate_closing_authority (store, authority_key,
                                                   closing->snapshot.store_version, ready_payload),
                    [store, authority_key] (const authority_snapshot_t &next) {
-                       return release_closing_authority (store, authority_key, next.store_version,
-                                                         {}) ();
+                       return release_authority (store, authority_key, next.store_version, {}) ();
                    }});
             });
       });
@@ -1944,9 +1941,9 @@ public_host_runtime_t::begin_user_spot_close (protocol::user_spot_close_fence_t 
     // Step 4 releases the local object record, then the authority row.
     const auto release_from = [self, store, authority_key] (std::string closing_version,
                                                             stateful::object_ref_t ref) {
-        return release_closing_authority (
-          store, authority_key, std::move (closing_version),
-          [self, ref] { return release_user_spot_record_async (self, ref); });
+        return release_authority (store, authority_key, std::move (closing_version), [self, ref] {
+            return release_user_spot_record_async (self, ref);
+        });
     };
 
     if (snapshot->payload == closing_payload) {
@@ -2577,7 +2574,7 @@ std::size_t public_host_runtime_t::recover_instance_spot_activations ()
                   materializer
                     ->dispatch (
                       std::make_shared<const protocol::instance_activation_recovery_t> (recovery),
-                      {})
+                      {}, [] {})
                     .result ()
                     .value ();
                 activation_terminal.accepted = std::move (dispatched.accepted_turn_terminal);
@@ -5154,14 +5151,15 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
     }(admission->task (), deadline, record_activation, deliver_terminal);
     const auto reply_terminal = [admission,
                                  deliver_terminal] (instance_spot_activation_result_t result) {
-        if (result.terminal_result != 0 && !result.accepted_turn_terminal) {
-            auto completed = admission->task ();
-            if (admission->complete (result_t<instance_activation_admission_t>::success (result)))
-                return;
-            const auto terminal = completed.result ();
-            if (!terminal
-                || !std::holds_alternative<instance_activation_ready_t> (terminal.value ()))
-                return;
+        auto completed = admission->task ();
+        if (result.terminal_result != 0
+            && admission->complete (result_t<instance_activation_admission_t>::success (result)))
+            return;
+        const auto terminal = completed.result ();
+        if (!terminal || !std::holds_alternative<instance_activation_ready_t> (terminal.value ())) {
+            if (result.accepted_turn_terminal)
+                result.accepted_turn_terminal ();
+            return;
         }
         deliver_terminal (std::move (result));
     };
@@ -5180,9 +5178,12 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation (
     }
     const auto result = co_await runtime::await_result (dispatch_instance_spot_activation_core (
       owned_command, mailbox_record, reply_terminal, admission, previous_admission));
-    if (!result)
-        admission->complete (
-          detail::result_access_t::failure<instance_activation_admission_t> (result.exception ()));
+    if (!result) {
+        const auto failure =
+          messaging::request_failure_mapper_t{}.target_failure_reply (result.exception ());
+        reply_terminal (
+          {failure->terminal_result, failure->failure_code, std::nullopt, {}, result.exception ()});
+    }
     const auto observed_result = co_await runtime::await_result (std::move (observed));
     if (previous)
         co_await previous->terminal.task ();
@@ -5227,6 +5228,33 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
         if (admission)
             admission->complete (
               result_t<instance_activation_admission_t>::success (std::move (result)));
+    };
+    const auto accepted_activation = [admission] {
+        if (!admission)
+            return true;
+        const auto completed = admission->task ();
+        return completed.await_ready () && completed.result ()
+               && std::holds_alternative<instance_activation_ready_t> (
+                 completed.result ().value ());
+    };
+    const auto accept_activation =
+      [admission, admission_command] (const authority_snapshot_t &ready) -> std::function<void ()> {
+        if (!admission)
+            return [] {};
+        return [admission, admission_command, ready] {
+            if (admission->complete (result_t<instance_activation_admission_t>::success (
+                  instance_activation_ready_t{ready, admission_command})))
+                return;
+            const auto terminal = admission->task ().result ();
+            terminal.value ();
+            if (const auto *failure =
+                  std::get_if<instance_spot_activation_result_t> (&terminal.value ())) {
+                if (failure->exception)
+                    std::rethrow_exception (failure->exception);
+                throw messaging::request_failure_mapper_t{}.reply_header_exception (
+                  failure->terminal_result, failure->failure_code, "Instance Spot activation");
+            }
+        };
     };
     const auto reply_terminal = [done,
                                  finish_admission] (instance_spot_activation_result_t result) {
@@ -5462,16 +5490,16 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
                 co_return true;
             }
             auto running = std::make_shared<task_t<instance_spot_activation_result_t>> (
-              instance_materializer->dispatch (owned_command, resume_missing));
-            finish_admission (instance_activation_ready_t{*snapshot, admission_command});
+              instance_materializer->dispatch (owned_command, resume_missing,
+                                               accept_activation (*snapshot)));
             detail::observe_task_terminal (
-              *running, [running, reply_terminal, activation_terminal] (
+              *running, [running, reply_terminal, activation_terminal, accepted_activation] (
                           const result_t<instance_spot_activation_result_t> &result) {
                   if (result) {
                       auto terminal = result.value ();
                       activation_terminal->accepted = std::move (terminal.accepted_turn_terminal);
-                      terminal.accepted_turn_terminal = [activation_terminal] {
-                          activation_terminal->finish ();
+                      terminal.accepted_turn_terminal = [activation_terminal, accepted_activation] {
+                          activation_terminal->finish (accepted_activation ());
                       };
                       reply_terminal (std::move (terminal));
                   } else {
@@ -5734,9 +5762,30 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
         co_return;
     }
     const auto &ready_snapshot = created->ready;
-    auto dispatched = instance_materializer->dispatch (owned_command, resume_missing);
-    finish_admission (instance_activation_ready_t{ready_snapshot, admission_command});
+    auto dispatched = instance_materializer->dispatch (owned_command, resume_missing,
+                                                       accept_activation (ready_snapshot));
     const auto dispatch_result = co_await await_result (std::move (dispatched));
+    if (!accepted_activation ()) {
+        if (dispatch_result)
+            activation_terminal->accepted = dispatch_result.value ().accepted_turn_terminal;
+        const auto release_failed_activation = [&] () -> task_t<void> {
+            co_await activation_terminal->finish (false);
+            (void) co_await release_authority_async (store, authority_key,
+                                                     ready_snapshot.store_version, {});
+            instance_relocations->remove (recovery_root.reference);
+        };
+        const auto cleanup = co_await await_result (release_failed_activation ());
+        if (!cleanup) {
+            _options.mesh.runtime_failures->capture ([&] { cleanup.value (); });
+            cleanup.value ();
+        }
+        if (!dispatch_result)
+            dispatch_result.value ();
+        auto terminal = dispatch_result.value ();
+        terminal.accepted_turn_terminal = {};
+        reply_terminal (std::move (terminal));
+        co_return;
+    }
     if (!dispatch_result) {
         co_await activation_terminal->finish (false);
         dispatch_result.value ();
