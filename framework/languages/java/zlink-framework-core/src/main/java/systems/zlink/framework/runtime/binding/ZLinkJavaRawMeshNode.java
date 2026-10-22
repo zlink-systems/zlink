@@ -1913,15 +1913,15 @@ final class ZLinkJavaRawMeshNode
                         wire.encodeChannelSendHeader(selectedChannel, flags), metadata, parts);
         try {
             ZLinkServiceTopologyRegistry currentTopology = topology;
-            Optional<ZLinkServiceTopologyRegistry.Peer> target =
+            ZLinkServiceTopologyRegistry.Peer target =
                     currentTopology == null
-                            ? Optional.empty()
-                            : currentTopology.selectReadyChannelFromOwner(
+                            ? null
+                            : currentTopology.selectReadyChannelPeerFromOwner(
                                     selectedChannel,
                                     ZLinkRuntimeMetrics.enabled()
                                             ? selectionFailureObserver
                                             : null);
-            if (target.isEmpty()) {
+            if (target == null) {
                 if (currentTopology == null) {
                     recordChannelSelectionFailure(
                             selectedChannel,
@@ -1931,8 +1931,7 @@ final class ZLinkJavaRawMeshNode
                         ZLinkOneWayCalls.failureForStatus(
                                 unavailableChannelStatus(selectedChannel)));
             }
-            return port.sendMessages(
-                    router, target.orElseThrow().descriptor().nodeRoutingId(), frames);
+            return port.sendMessages(router, target.descriptor().nodeRoutingId(), frames);
         } finally {
             Message.closeAll(frames);
         }

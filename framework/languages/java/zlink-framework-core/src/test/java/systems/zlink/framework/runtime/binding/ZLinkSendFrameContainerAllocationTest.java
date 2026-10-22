@@ -223,12 +223,17 @@ public final class ZLinkSendFrameContainerAllocationTest {
         volatile CountDownLatch deliveries;
 
         Fixture() throws Exception {
+            this(null);
+        }
+
+        Fixture(String channel) throws Exception {
             try {
                 String endpoint = "inproc://send-frames-" + UUID.randomUUID();
                 source.setRoutingId(RoutingId.from("send-frames-source"));
                 source.setBind(endpoint + "-source");
                 target.setRoutingId(targetId);
                 target.setBind(endpoint);
+                if (channel != null) target.addChannel(channel);
                 target.setApplicationJobQueue(queue);
                 target.startDispatch(
                         record -> {

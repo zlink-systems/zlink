@@ -234,28 +234,46 @@ public final class ZLinkServiceTopologyRegistry {
         return selectReadyChannel(channelName, onUnavailable, stateLane.isOnLane());
     }
 
+    public Peer selectReadyChannelPeerFromOwner(
+            String channelName, BiConsumer<String, ChannelSelectionFailure> onUnavailable) {
+        return selectReadyChannelPeer(channelName, onUnavailable, stateLane.isOnLane());
+    }
+
     private Optional<Peer> selectReadyChannel(
+            String channelName,
+            BiConsumer<String, ChannelSelectionFailure> onUnavailable,
+            boolean ownerTurn) {
+        return Optional.ofNullable(selectReadyChannelPeer(channelName, onUnavailable, ownerTurn));
+    }
+
+    private Peer selectReadyChannelPeer(
             String channelName,
             BiConsumer<String, ChannelSelectionFailure> onUnavailable,
             boolean ownerTurn) {
         String requiredChannelName = requireChannelName(channelName);
         ChannelSelectionFailure[] failure =
                 onUnavailable == null ? null : new ChannelSelectionFailure[1];
-        java.util.function.Supplier<Optional<Peer>> selection =
-                () -> {
-                    ChannelSelectionPlan plan = readyChannelPlans.get(requiredChannelName);
-                    Optional<Peer> peer = plan == null ? Optional.empty() : plan.next();
-                    if (peer.isEmpty() && onUnavailable != null)
-                        failure[0] =
-                                plan == null
-                                        ? ChannelSelectionFailure.NO_MEMBER
-                                        : plan.unavailableReason;
-                    return peer;
-                };
-        Optional<Peer> selected = ownerTurn ? selection.get() : inStateLane(selection);
+        Peer selected =
+                ownerTurn
+                        ? selectReadyChannelCore(requiredChannelName, onUnavailable, failure)
+                        : inStateLane(
+                                () ->
+                                        selectReadyChannelCore(
+                                                requiredChannelName, onUnavailable, failure));
         if (failure != null && failure[0] != null)
             onUnavailable.accept(requiredChannelName, failure[0]);
         return selected;
+    }
+
+    private Peer selectReadyChannelCore(
+            String channelName,
+            BiConsumer<String, ChannelSelectionFailure> onUnavailable,
+            ChannelSelectionFailure[] failure) {
+        ChannelSelectionPlan plan = readyChannelPlans.get(channelName);
+        Peer peer = plan == null ? null : plan.next();
+        if (peer == null && onUnavailable != null)
+            failure[0] = plan == null ? ChannelSelectionFailure.NO_MEMBER : plan.unavailableReason;
+        return peer;
     }
 
     public enum ChannelSelectionFailure {
@@ -451,7 +469,7 @@ public final class ZLinkServiceTopologyRegistry {
     private Optional<Peer> selectPreparedOnLane(
             Map<String, ChannelSelectionPlan> plans, String channelName) {
         ChannelSelectionPlan plan = plans.get(channelName);
-        return plan == null ? Optional.empty() : plan.next();
+        return Optional.ofNullable(plan == null ? null : plan.next());
     }
 
     private void rebuildChannelPlansOnLane() {
@@ -648,20 +666,19 @@ public final class ZLinkServiceTopologyRegistry {
                     ChannelSelectionFailure.NOT_READY);
         }
 
-        Optional<Peer> next() {
+        Peer next() {
             if (candidates.isEmpty()) {
-                return Optional.empty();
+                return null;
             }
             if (fallbackCurrents != null) {
-                return Optional.of(
-                        candidates.get(selectAndAdvance(candidates, fallbackCurrents)).peer());
+                return candidates.get(selectAndAdvance(candidates, fallbackCurrents)).peer();
             }
             int selected = winners[cursor];
             cursor++;
             if (cursor == winners.length) {
                 cursor = cycleStart;
             }
-            return Optional.of(candidates.get(selected).peer());
+            return candidates.get(selected).peer();
         }
 
         boolean isEmpty() {
