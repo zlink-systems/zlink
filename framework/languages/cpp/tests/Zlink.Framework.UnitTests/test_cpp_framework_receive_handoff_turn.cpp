@@ -239,12 +239,17 @@ int main ()
         if (!rejected) {
             auto completed = std::make_shared<std::promise<void>> ();
             auto terminal = completed->get_future ();
-            const auto operation = target->native_node ().transport ().register_local_operation (
-              rt::foundation::operation_registry_t::clock_t::time_point::min (),
-              [completed] (auto outcome, zlink::message_t) {
-                  assert (outcome == rt::foundation::operation_terminal_t::timed_out);
-                  completed->set_value ();
-              });
+            const auto operation =
+              target->native_node ()
+                .transport ()
+                .register_local_operation_async (
+                  rt::foundation::operation_registry_t::clock_t::time_point::min (),
+                  [completed] (auto outcome, zlink::message_t) {
+                      assert (outcome == rt::foundation::operation_terminal_t::timed_out);
+                      completed->set_value ();
+                  })
+                .result ()
+                .value ();
             auto parallel_header = codec.create_envelope (rt::messaging::message_kind_t::command,
                                                           "parallel", "HandoffProbe");
             auto parallel_parts =
