@@ -240,17 +240,17 @@ class serial_deferred_barrier_t final
         auto source = std::make_shared<task_completion_source_t<void>> ();
         auto owned_work = std::make_shared<std::function<task_t<void> ()>> (std::move (work));
         const auto weak_self = weak_from_this ();
-        const auto settle = [weak_self] (
-                              const std::shared_ptr<task_completion_source_t<void>> &source,
-                              result_t<void> result) {
-            if (const auto self = weak_self.lock ()) {
-                std::lock_guard lock (self->_mutex);
-                if (self->_state == state_t::cancelled)
-                    result = result_t<void>::failure (framework_error_kind_t::shutting_down,
-                                                      cancelled_message);
-            }
-            source->complete (std::move (result));
-        };
+        const auto settle =
+          [weak_self] (const std::shared_ptr<task_completion_source_t<void>> &source,
+                       result_t<void> result) {
+              if (const auto self = weak_self.lock ()) {
+                  std::lock_guard lock (self->_mutex);
+                  if (self->_state == state_t::cancelled)
+                      result = result_t<void>::failure (framework_error_kind_t::shutting_down,
+                                                        cancelled_message);
+              }
+              source->complete (std::move (result));
+          };
         const auto invoke = [self = shared_from_this (), source, settle,
                              owned_work] (result_t<void> admission) {
             if (!admission) {
