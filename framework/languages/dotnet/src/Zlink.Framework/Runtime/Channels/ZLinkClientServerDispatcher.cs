@@ -120,12 +120,49 @@ internal sealed class ZLinkClientServerDispatcher(
     }
 
     internal (ZLinkEnvelopeHeader? Header, ZLinkEnvelopeProtocolException? Error) ReadHeader(
-        IReadOnlyList<Message> parts
+        IReadOnlyList<Message> parts,
+        string? channelName = null,
+        ZLinkApplicationJobQueueLease? admission = null
     )
     {
         try
         {
-            return (ZLinkEnvelopeCodec.DecodeHeader(parts, flowCaptureEnabled()), null);
+            var header = ZLinkEnvelopeCodec.DecodeHeader(parts, flowCaptureEnabled());
+            if (
+                admission is not null
+                && header.ChannelName == channelName
+                && header.Kind is ZLinkMessageKind.Command or ZLinkMessageKind.Request
+            )
+            {
+                using var flow = ZLinkFlowContext.Enter(
+                    header.FlowId,
+                    header.FlowOrigin,
+                    flowCaptureEnabled(),
+                    ZLinkFlowOrigin.Inbound
+                );
+                if (ZLinkFlowContext.Current is { } current)
+                {
+                    header.FlowId = current.FlowId;
+                    header.FlowOrigin = current.Origin;
+                }
+                var scope = new ZLinkDispatchFlowScope(
+                    ZLinkDispatchErrorSurface.Channel,
+                    flowCaptureEnabled(),
+                    header.Kind == ZLinkMessageKind.Request
+                        ? ZLinkDispatchMessageKind.Request
+                        : ZLinkDispatchMessageKind.Send,
+                    header.MessageName,
+                    channelName,
+                    header.ContentType,
+                    header.CorrelationId
+                );
+                if (dispatchErrors is not null)
+                    scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Received);
+                admission.MarkQueued();
+                if (dispatchErrors is not null)
+                    scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Admitted);
+            }
+            return (header, null);
         }
         catch (ZLinkEnvelopeProtocolException error)
         {

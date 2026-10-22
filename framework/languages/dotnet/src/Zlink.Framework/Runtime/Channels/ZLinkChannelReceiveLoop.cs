@@ -100,18 +100,11 @@ internal sealed class ZLinkChannelReceiveLoop(
                             continue;
                         }
                         var owned = received;
-                        var envelope = clientServerDispatcher.ReadHeader(received.Parts);
-                        if (
-                            envelope.Header is { } header
-                            && StringComparer.Ordinal.Equals(
-                                header.ChannelName,
-                                channelName
-                            )
-                            && header.Kind
-                                is ZLinkMessageKind.Command
-                                    or ZLinkMessageKind.Request
-                        )
-                            admission.MarkQueued();
+                        var envelope = clientServerDispatcher.ReadHeader(
+                            received.Parts,
+                            channelName,
+                            admission
+                        );
                         _ = applicationDispatch
                             .PostAsync(
                                 new ClientServerDispatchWork(
