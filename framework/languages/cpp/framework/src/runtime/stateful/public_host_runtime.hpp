@@ -956,6 +956,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              foundation::operation_terminal_t terminal,
                              zlink::message_t payload);
     task_t<std::size_t> dispatch_user_spot_operations ();
+    task_t<std::size_t> dispatch_user_spot_operations (mesh::service_mailbox_claim_t &&claim);
     struct application_claim_owner_t;
     using application_claim_result_t = std::variant<std::size_t, task_t<std::size_t>>;
     application_claim_result_t

@@ -8,6 +8,7 @@
 namespace zlink::framework::tests
 {
 thread_local bool tracking_allocations = false;
+thread_local std::optional<std::size_t> allocations_before_failure;
 thread_local std::size_t tracked_allocation_count = 0;
 thread_local std::size_t tracked_allocation_size = 0;
 thread_local std::size_t tracked_allocation_bytes = 0;
@@ -30,8 +31,19 @@ void record_allocation (const void *memory, std::size_t size) noexcept
     }
 }
 
+void check_allocation_failure ()
+{
+    if (!allocations_before_failure)
+        return;
+    if ((*allocations_before_failure)-- == 0) {
+        allocations_before_failure.reset ();
+        throw std::bad_alloc ();
+    }
+}
+
 void *allocate_bytes (std::size_t size)
 {
+    check_allocation_failure ();
     if (void *memory = std::malloc (size == 0 ? 1 : size)) {
         record_allocation (memory, size);
         return memory;
@@ -41,6 +53,7 @@ void *allocate_bytes (std::size_t size)
 
 void *allocate_aligned_bytes (std::size_t size, std::size_t alignment)
 {
+    check_allocation_failure ();
 #if defined(_MSC_VER)
     void *memory = _aligned_malloc (size == 0 ? 1 : size, alignment);
 #else
