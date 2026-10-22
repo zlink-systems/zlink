@@ -120,10 +120,11 @@ service_topology_registry_t::service_topology_registry_t (
     _metric_channel_names.erase (
       std::unique (_metric_channel_names.begin (), _metric_channel_names.end ()),
       _metric_channel_names.end ());
-    _selection_failures =
-      opentelemetry::metrics::Provider::GetMeterProvider ()
-        ->GetMeter ("zlink.framework")
-        ->CreateDoubleCounter ("zlink.mesh_node.channel.selection_failures", "", "{failure}");
+    const auto meter =
+      opentelemetry::metrics::Provider::GetMeterProvider ()->GetMeter ("zlink.framework");
+    if (meter)
+        _selection_failures = meter->CreateDoubleCounter (
+          "zlink.mesh_node.channel.selection_failures", "", "{failure}");
 }
 
 bool service_topology_registry_t::byte_vector_less_t::operator() (
@@ -697,6 +698,8 @@ service_topology_registry_t::select (const std::string &channel_name,
 void service_topology_registry_t::record_selection_failure (
   const std::string &channel_name) const noexcept
 {
+    if (!_selection_failures)
+        return;
     // Labels come only from startup registrations; arbitrary requested names
     // and per-peer identities cannot create metric series.
     if (!std::binary_search (_metric_channel_names.begin (), _metric_channel_names.end (),

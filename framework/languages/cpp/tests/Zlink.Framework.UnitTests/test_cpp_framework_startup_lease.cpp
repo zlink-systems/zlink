@@ -5,8 +5,6 @@
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/fanout/fanout_location_runtime.hpp"
 #include "runtime/locations/location_runtime.hpp"
-#include <opentelemetry/metrics/noop.h>
-#include <opentelemetry/metrics/provider.h>
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -20,8 +18,6 @@
 namespace
 {
 using namespace zlink::framework;
-namespace metrics = opentelemetry::metrics;
-namespace nostd = opentelemetry::nostd;
 
 struct startup_message_t
 {
@@ -32,9 +28,9 @@ struct startup_handler_t
     void handle (const startup_message_t &) {}
 };
 
-// The host creates this gauge after every hosted service has completed start().
-// Observing its creation gives the test a startup barrier without polling or sleeps.
-class startup_meter_t final : public metrics::Meter
+// The last hosted service supplies the startup barrier. The tests do not
+// depend on a metric being registered as a side effect of startup.
+class startup_signal_t
 {
   public:
     std::promise<void> started;
@@ -43,88 +39,22 @@ class startup_meter_t final : public metrics::Meter
         std::call_once (_started, [&] { started.set_value (); });
     }
 
-#define FORWARD_INSTRUMENT(Name)                                                                   \
-    auto Name (nostd::string_view name, nostd::string_view description = "",                       \
-               nostd::string_view unit = "") noexcept                                              \
-      -> decltype (std::declval<metrics::NoopMeter &> ().Name (name, description, unit)) override  \
-    {                                                                                              \
-        return _inner.Name (name, description, unit);                                              \
-    }
-    FORWARD_INSTRUMENT (CreateUInt64Counter)
-    FORWARD_INSTRUMENT (CreateDoubleCounter)
-    FORWARD_INSTRUMENT (CreateInt64ObservableCounter)
-    FORWARD_INSTRUMENT (CreateDoubleObservableCounter)
-    FORWARD_INSTRUMENT (CreateUInt64Histogram)
-    FORWARD_INSTRUMENT (CreateDoubleHistogram)
-    FORWARD_INSTRUMENT (CreateInt64ObservableGauge)
-    FORWARD_INSTRUMENT (CreateInt64UpDownCounter)
-    FORWARD_INSTRUMENT (CreateDoubleUpDownCounter)
-    FORWARD_INSTRUMENT (CreateInt64ObservableUpDownCounter)
-    FORWARD_INSTRUMENT (CreateDoubleObservableUpDownCounter)
-#if OPENTELEMETRY_ABI_VERSION_NO >= 2
-    FORWARD_INSTRUMENT (CreateInt64Gauge)
-    FORWARD_INSTRUMENT (CreateDoubleGauge)
-    uintptr_t
-    RegisterCallback (metrics::MultiObservableCallbackPtr callback,
-                      void *state,
-                      nostd::span<metrics::ObservableInstrument *> instruments) noexcept override
-    {
-        return _inner.RegisterCallback (callback, state, instruments);
-    }
-    void DeregisterCallback (uintptr_t token) noexcept override
-    {
-        _inner.DeregisterCallback (token);
-    }
-#endif
-#undef FORWARD_INSTRUMENT
-
-    nostd::shared_ptr<metrics::ObservableInstrument>
-    CreateDoubleObservableGauge (nostd::string_view name,
-                                 nostd::string_view description = "",
-                                 nostd::string_view unit = "") noexcept override
-    {
-        if (name == "zlink.drain.state")
-            notify_started_or_exited ();
-        return _inner.CreateDoubleObservableGauge (name, description, unit);
-    }
-
   private:
-    metrics::NoopMeter _inner;
     std::once_flag _started;
 };
-
-class startup_metrics_t final : public metrics::MeterProvider
+class startup_barrier_t final : public hosted_service_t
 {
   public:
-    startup_metrics_t () : _previous (metrics::Provider::GetMeterProvider ())
+    explicit startup_barrier_t (startup_signal_t &signal) : _signal (signal) {}
+    task_t<void> start (service_provider_t &) override
     {
-        metrics::Provider::SetMeterProvider (nostd::shared_ptr<metrics::MeterProvider> (
-          std::shared_ptr<metrics::MeterProvider> (this, [] (metrics::MeterProvider *) {})));
+        _signal.notify_started_or_exited ();
+        co_return;
     }
-    ~startup_metrics_t () override { metrics::Provider::SetMeterProvider (_previous); }
-#if OPENTELEMETRY_ABI_VERSION_NO >= 2
-    nostd::shared_ptr<metrics::Meter>
-    GetMeter (nostd::string_view,
-              nostd::string_view,
-              nostd::string_view,
-              const opentelemetry::common::KeyValueIterable *) noexcept override
-    {
-        return nostd::shared_ptr<metrics::Meter> (std::static_pointer_cast<metrics::Meter> (meter));
-    }
-    void RemoveMeter (nostd::string_view, nostd::string_view, nostd::string_view) noexcept override
-    {
-    }
-#else
-    nostd::shared_ptr<metrics::Meter>
-    GetMeter (nostd::string_view, nostd::string_view, nostd::string_view) noexcept override
-    {
-        return nostd::shared_ptr<metrics::Meter> (std::static_pointer_cast<metrics::Meter> (meter));
-    }
-#endif
-    std::shared_ptr<startup_meter_t> meter = std::make_shared<startup_meter_t> ();
+    void stop () noexcept override {}
 
   private:
-    nostd::shared_ptr<metrics::MeterProvider> _previous;
+    startup_signal_t &_signal;
 };
 
 class held_lease_repository_t final : public runtime::in_memory_location_repository_t
@@ -322,14 +252,16 @@ class running_host_t
   public:
     running_host_t (app_t &app,
                     std::shared_ptr<held_lease_repository_t> store,
-                    startup_meter_t &meter) :
-        _app (app), _store (std::move (store)), _host ([this, &meter] {
+                    startup_signal_t &signal) :
+        _app (app), _store (std::move (store))
+    {
+        _app.add_hosted_service (std::make_unique<startup_barrier_t> (signal));
+        _host = std::thread ([this, &signal] {
             char program[] = "startup-lease";
             char *argv[] = {program};
             exit_code.store (_app.run (1, argv));
-            meter.notify_started_or_exited ();
-        })
-    {
+            signal.notify_started_or_exited ();
+        });
     }
     ~running_host_t ()
     {
@@ -348,8 +280,8 @@ class running_host_t
 
 TEST (ZLinkFrameworkStartupLease, PreparingUntilServingDescriptorIsStored)
 {
-    startup_metrics_t metrics;
-    auto started = metrics.meter->started.get_future ();
+    startup_signal_t startup;
+    auto started = startup.started.get_future ();
     auto store = std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
     auto requested = store->descriptor_requested.get_future ();
     auto stored = store->descriptor_stored.get_future ();
@@ -367,7 +299,7 @@ TEST (ZLinkFrameworkStartupLease, PreparingUntilServingDescriptorIsStored)
     auto runtime_future = probe->framework_runtime.get_future ();
     auto fanout_future = probe->fanout.get_future ();
     app.add_hosted_service (std::move (probe));
-    running_host_t host (app, store, *metrics.meter);
+    running_host_t host (app, store, startup);
     started.wait ();
     ASSERT_EQ (-1, host.exit_code.load ());
     auto *runtime = runtime_future.get ();
@@ -420,15 +352,15 @@ TEST (ZLinkFrameworkStartupLease, PreparingUntilServingDescriptorIsStored)
 
 TEST (ZLinkFrameworkStartupLease, HostWithoutMeshAlsoWaitsForLeaseRecovery)
 {
-    startup_metrics_t metrics;
-    auto started = metrics.meter->started.get_future ();
+    startup_signal_t startup;
+    auto started = startup.started.get_future ();
     auto store = std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
     auto app = app_t::create ();
     configure (app, store, false);
     auto probe = std::make_unique<runtime_probe_t> ();
     auto runtime_future = probe->framework_runtime.get_future ();
     app.add_hosted_service (std::move (probe));
-    running_host_t host (app, store, *metrics.meter);
+    running_host_t host (app, store, startup);
     started.wait ();
     ASSERT_EQ (-1, host.exit_code.load ());
     EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
@@ -447,13 +379,13 @@ TEST (ZLinkFrameworkStartupLease, HostWithoutMeshAlsoWaitsForLeaseRecovery)
 
 TEST (ZLinkFrameworkStartupLease, ProviderErrorStartsPreparingAndStopsWithoutLease)
 {
-    startup_metrics_t metrics;
-    auto started = metrics.meter->started.get_future ();
+    startup_signal_t startup;
+    auto started = startup.started.get_future ();
     auto store =
       std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::unavailable);
     auto app = app_t::create ();
     configure (app, store);
-    running_host_t host (app, store, *metrics.meter);
+    running_host_t host (app, store, startup);
     started.wait ();
     EXPECT_EQ (-1, host.exit_code.load ());
     EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
@@ -482,8 +414,8 @@ TEST (ZLinkFrameworkStartupLease, UnknownDescriptorPublicationRetriesAfterRenewa
 {
     for (const auto kind : {"MeshNode", "ClientServer", "Fanout"}) {
         SCOPED_TRACE (kind);
-        startup_metrics_t metrics;
-        auto started = metrics.meter->started.get_future ();
+        startup_signal_t startup;
+        auto started = startup.started.get_future ();
         auto store =
           std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
         store->release_claim.complete (result_t<void>::success ());
@@ -525,7 +457,7 @@ TEST (ZLinkFrameworkStartupLease, UnknownDescriptorPublicationRetriesAfterRenewa
         auto location = probe->location.get_future ();
         auto runtime = probe->framework_runtime.get_future ();
         app.add_hosted_service (std::move (probe));
-        running_host_t host (app, store, *metrics.meter);
+        running_host_t host (app, store, startup);
         started.wait ();
         EXPECT_EQ (-1, host.exit_code.load ());
         if (host.exit_code.load () != -1)
@@ -555,7 +487,6 @@ TEST (ZLinkFrameworkStartupLease, ConfirmedDescriptorConflictFailsStartup)
 {
     for (const auto kind : {"MeshNode", "ClientServer", "Fanout"}) {
         SCOPED_TRACE (kind);
-        startup_metrics_t metrics;
         auto store =
           std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
         store->release ();
@@ -593,14 +524,14 @@ TEST (ZLinkFrameworkStartupLease, ConfirmedDescriptorConflictFailsStartup)
 
 TEST (ZLinkFrameworkStartupLease, AcquiredLeaseStorePendingKeepsPreparing)
 {
-    startup_metrics_t metrics;
-    auto started = metrics.meter->started.get_future ();
+    startup_signal_t startup;
+    auto started = startup.started.get_future ();
     auto store = std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
     store->release_claim.complete (result_t<void>::success ());
     auto requested = store->descriptor_requested.get_future ();
     auto app = app_t::create ();
     configure (app, store);
-    running_host_t host (app, store, *metrics.meter);
+    running_host_t host (app, store, startup);
     requested.wait ();
     EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
     EXPECT_FALSE (app.is_ready ());
@@ -610,7 +541,6 @@ TEST (ZLinkFrameworkStartupLease, AcquiredLeaseStorePendingKeepsPreparing)
 
 TEST (ZLinkFrameworkStartupLease, DescriptorCancellationFailsStartup)
 {
-    startup_metrics_t metrics;
     auto store = std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
     store->release ();
     store->cancel_mesh_write = true;
@@ -628,8 +558,8 @@ TEST (ZLinkFrameworkStartupLease, UnansweredPublicationStartsPreparingAndRecover
 {
     for (const auto kind : {"MeshNode", "ClientServer", "Fanout"}) {
         SCOPED_TRACE (kind);
-        startup_metrics_t metrics;
-        auto started = metrics.meter->started.get_future ();
+        startup_signal_t startup;
+        auto started = startup.started.get_future ();
         auto store =
           std::make_shared<held_lease_repository_t> (held_lease_repository_t::mode_t::held);
         store->release_claim.complete (result_t<void>::success ());
@@ -668,7 +598,7 @@ TEST (ZLinkFrameworkStartupLease, UnansweredPublicationStartsPreparingAndRecover
         auto location = probe->location.get_future ();
         auto framework = probe->framework_runtime.get_future ();
         app.add_hosted_service (std::move (probe));
-        running_host_t host (app, store, *metrics.meter);
+        running_host_t host (app, store, startup);
         requested.wait ();
         EXPECT_EQ (framework_runtime_state_t::preparing, app.runtime_state ());
         EXPECT_FALSE (app.is_ready ());
