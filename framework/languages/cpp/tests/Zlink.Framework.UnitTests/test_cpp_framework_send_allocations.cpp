@@ -296,10 +296,9 @@ TEST (SendAllocations, ReceiveTurnRetainsCallbacksAcrossNativeSuspension)
         ASSERT_TRUE (settled);
         EXPECT_EQ (settled.value (), 1u);
         EXPECT_EQ (bind_calls, 1u);
-        EXPECT_TRUE (runtime.transport ().mailbox ().try_claim_owner (
-                       mesh::service_mailbox_domain_t::infrastructure, "control", 1,
-                       std::numeric_limits<std::size_t>::max ())
-                     == std::nullopt);
+        EXPECT_FALSE (runtime.transport ().mailbox ().try_claim_owner (
+          mesh::service_mailbox_domain_t::infrastructure, "control", 1,
+          std::numeric_limits<std::size_t>::max ()));
         node.stop ();
     }
 }
