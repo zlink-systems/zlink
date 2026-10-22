@@ -3168,6 +3168,19 @@ export class DefaultZLinkSpotManager {
       }
     } catch (error) {
       lifecycleFailure = { error };
+      const reporter = this.options.dispatchErrors;
+      if (reporter?.captureEnabled() === true) {
+        reporter.report({
+          surface: ZLinkDispatchErrorSurface.ActorRelocation,
+          messageKind: ZLinkDispatchMessageKind.Control,
+          reason: dispatchReasonFromError(error),
+          action: ZLinkDispatchErrorAction.FailCaller,
+          packetName: 'OnJoinedActor',
+          meshName,
+          actorId: actor.context.actorId,
+          error
+        });
+      }
     }
     if (lifecycleFailure === undefined) {
       const sourceLeave = submitSourceLeave(admission.admission.actorRef.nodeRid);
