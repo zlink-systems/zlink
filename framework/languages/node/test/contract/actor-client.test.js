@@ -17,26 +17,13 @@ function actorRef(actorId = 'actor-1', generation = 1n) {
   return { nodeRid: 'node-a', actorId, objectGeneration: generation, meshName: 'play-mesh' };
 }
 
-function createReplyParts(value) {
-  return [
-    Message.from(Buffer.from(framework.encodeStreamHeader({
-      kind: framework.ZLinkStreamMessageKind.Response,
-      codec: framework.ZLinkStreamCodec.Json,
-      flags: framework.ZLinkStreamHeaderFlags.None,
-      name: 'ActorReply',
-      metadata: new Map()
-    }))),
-    Message.from(Buffer.from(JSON.stringify(value)))
-  ];
-}
-
 function createReplyFrame(value) {
   return [
     Message.from(Buffer.from(framework.encodeStreamFrame({
       kind: framework.ZLinkStreamMessageKind.Response,
       codec: framework.ZLinkStreamCodec.Json,
       flags: framework.ZLinkStreamHeaderFlags.None,
-      name: 'ActorReply',
+      name: '',
       metadata: new Map()
     }, Buffer.from(JSON.stringify(value)))))
   ];
@@ -95,6 +82,115 @@ function createStoreResolver(authority, remainingLeaseMs) {
   });
 }
 
+const actorReplyFixture = require('../../../../runtime/conformance/actor-reply-framing-v1.json');
+for (const vector of actorReplyFixture.cases) {
+  test(`Actor reply decoder follows shared framing vector ${vector.id}`, async () => {
+    const client = createActorClient({
+      nodeProvider: () => ({
+        requestToActor() {
+          return operationId;
+        }
+      }),
+      completionTableProvider: () =>
+        completionTable(
+          RequestResult.Ok,
+          vector.parts.map((hex) => Message.from(Buffer.from(hex, 'hex')))
+        ),
+      locationResolver: () => createResolver()
+    });
+    const reply = client.requestToActor('actor-1', new ActorAsk('ping'));
+    if (vector.accepted) {
+      assert.deepEqual(await reply.submit(), { value: 'pong' });
+    } else {
+      await assert.rejects(
+        () => reply.submit(),
+        (error) => error.kind === framework.ZLinkFrameworkErrorKind.ProtocolError
+      );
+    }
+  });
+}
+
+test('Actor reply encoder returns one STREAM frame', () => {
+  const { encodeActorReply } = require('../../packages/framework/dist/runtime/actors/actor-reply');
+  const request = framework.encodeStreamHeader({
+    kind: framework.ZLinkStreamMessageKind.Request,
+    codec: framework.ZLinkStreamCodec.Json,
+    flags: framework.ZLinkStreamHeaderFlags.None,
+    requestSeq: 7n,
+    name: 'ActorAsk',
+    metadata: new Map()
+  });
+  for (const kind of [
+    framework.ZLinkStreamMessageKind.Response,
+    framework.ZLinkStreamMessageKind.Error
+  ]) {
+    const parts = encodeActorReply(request, kind, { value: 'pong' }, undefined, false);
+    assert.equal(parts.length, 1);
+    const frame = framework.tryDecodeStreamFrame(parts[0]);
+    assert.ok(frame);
+    const header = framework.decodeStreamHeader(frame.header);
+    assert.equal(header.kind, kind);
+    assert.equal(header.requestSeq, 7n);
+    assert.equal(header.name, '');
+    assert.deepEqual(JSON.parse(Buffer.from(frame.payload).toString()), { value: 'pong' });
+  }
+});
+
+test('Actor reply encoder preserves response schema and uses default JSON for errors', () => {
+  const { encodeActorReply } = require('../../packages/framework/dist/runtime/actors/actor-reply');
+  const { defineZLinkPacketJsonContract } = require('../../packages/framework/dist/contracts/Handlers/JsonContract');
+  defineZLinkPacketJsonContract('ActorReplyCodecContract', {
+    payload: { type: 'object', properties: { value: { type: 'int32' } }, required: ['value'] }
+  });
+  const request = framework.encodeStreamHeader({
+    kind: framework.ZLinkStreamMessageKind.Request,
+    codec: framework.ZLinkStreamCodec.Json,
+    flags: framework.ZLinkStreamHeaderFlags.None,
+    requestSeq: 7n,
+    name: 'ActorReplyCodecContract',
+    metadata: new Map()
+  });
+  assert.throws(() => encodeActorReply(request, framework.ZLinkStreamMessageKind.Response,
+    { value: 2147483648 }, undefined, false), /int32/);
+  const serializers = new Map([['application/x-msgpack', {
+    canSerialize: () => true,
+    serialize() { throw new Error('Actor error must use the default JSON codec'); }
+  }]]);
+  const [error] = encodeActorReply(request, framework.ZLinkStreamMessageKind.Error,
+    { value: 2147483648 }, serializers, false);
+  const frame = framework.decodeStreamFrame(error);
+  assert.equal(framework.decodeStreamHeader(frame.header).codec, framework.ZLinkStreamCodec.Json);
+  assert.deepEqual(JSON.parse(Buffer.from(frame.payload).toString()), { value: 2147483648 });
+});
+
+const actorErrorFixture = require('../../../../runtime/conformance/actor-error-payload-v1.json');
+for (const vector of actorErrorFixture.cases) {
+  test(`Actor Error shared vector ${vector.id}`, async () => {
+    const client = createActorClient({
+      nodeProvider: () => ({ requestToActor() { return operationId; } }),
+      completionTableProvider: () => completionTable(RequestResult.Ok,
+        vector.parts.map(hex => Message.from(Buffer.from(hex, 'hex')))),
+      locationResolver: () => createResolver()
+    });
+    await assert.rejects(() => client.requestToActor('actor-1', new ActorAsk('ping')).submit(),
+      error => error.kind === vector.expectedKind && (!vector.valid || error.message === vector.message));
+    if (vector.valid) {
+      const { boundSessionErrorPayload } = require('../../packages/framework/dist/runtime/streams/bound-session-response-target');
+      const { encodeActorReply } = require('../../packages/framework/dist/runtime/actors/actor-reply');
+      const request = framework.encodeStreamHeader({ kind: framework.ZLinkStreamMessageKind.Request,
+        codec: framework.ZLinkStreamCodec.Json, flags: framework.ZLinkStreamHeaderFlags.None,
+        requestSeq: 1n, name: 'ActorAsk', metadata: new Map() });
+      const parts = encodeActorReply(request, framework.ZLinkStreamMessageKind.Error,
+        boundSessionErrorPayload(new framework.ZLinkFrameworkException(vector.expectedKind, vector.message)),
+        undefined, false);
+      assert.equal(parts.length, 1);
+      const frame = framework.decodeStreamFrame(parts[0]);
+      assert.equal(framework.decodeStreamHeader(frame.header).codec, framework.ZLinkStreamCodec.Json);
+      assert.deepEqual(JSON.parse(Buffer.from(frame.payload).toString()), { code: vector.code, message: vector.message });
+    }
+  });
+}
+
 test('cached actor request allocates no deadline timer or race promise', async t => {
   const resolver = createStoreResolver({
     kind: 'snapshot', allocation: {
@@ -106,7 +202,7 @@ test('cached actor request allocates no deadline timer or race promise', async t
   assert.equal((await resolver.resolveDirectActorRoute('actor-1')).kind, 'ready');
   const client = createActorClient({
     nodeProvider: () => ({ requestToActor() { return operationId; } }),
-    completionTableProvider: () => completionTable(RequestResult.Ok, createReplyParts('pong')),
+    completionTableProvider: () => completionTable(RequestResult.Ok, createReplyFrame('pong')),
     locationResolver: () => resolver
   });
   let timers = 0;
@@ -164,7 +260,7 @@ test('local Actor sends and requests preserve the resolved canonical authority f
   };
   const client = createActorClient({
     nodeProvider: () => node,
-    completionTableProvider: () => completionTable(RequestResult.Ok, createReplyParts('pong')),
+    completionTableProvider: () => completionTable(RequestResult.Ok, createReplyFrame('pong')),
     locationResolver: () => createResolver(() => route)
   });
   await client.sendToActor('actor-1', new ActorNotify('ping')).submit();
@@ -310,7 +406,7 @@ test('actor client selects the MeshNode and completion table from the current Ac
           failureErrno: 0,
           operationKind: 0,
           kindData: null,
-          parts: createReplyParts({ mesh: 'mesh-a' })
+          parts: createReplyFrame({ mesh: 'mesh-a' })
         };
       }
     }],
@@ -323,7 +419,7 @@ test('actor client selects the MeshNode and completion table from the current Ac
           failureErrno: 0,
           operationKind: 0,
           kindData: null,
-          parts: createReplyParts({ mesh: 'mesh-b' })
+          parts: createReplyFrame({ mesh: 'mesh-b' })
         };
       }
     }]
@@ -374,7 +470,7 @@ test('actor client request decodes the handler reply and never auto-creates a mi
   };
   const completions = completionTable(
     RequestResult.Ok,
-    createReplyParts({ value: 'pong' })
+    createReplyFrame({ value: 'pong' })
   );
   const resolver = createResolver();
   const client = createActorClient({
@@ -403,7 +499,7 @@ for (const jumpMs of [10_000, -10_000]) {
           return operationId;
         }
       }),
-      completionTableProvider: () => completionTable(RequestResult.Ok, createReplyParts('pong')),
+      completionTableProvider: () => completionTable(RequestResult.Ok, createReplyFrame('pong')),
       locationResolver: () => createResolver(() => {
         offsetMs = jumpMs;
         return actorLocation();
@@ -446,7 +542,7 @@ test('actor request uses the original packet JSON reply contract', async () => {
       properties: { generation: { type: 'uint64' } }
     }
   })(HandoffRequest);
-  const replyParts = createReplyParts({ generation: '18446744073709551615' });
+  const replyParts = createReplyFrame({ generation: '18446744073709551615' });
   const client = createActorClient({
     nodeProvider: () => ({ requestToActor: () => operationId }),
     completionTableProvider: () => completionTable(RequestResult.Ok, replyParts),
@@ -775,7 +871,7 @@ test('actor request deadline ends the caller wait before a slow route returns', 
   let submits = 0;
   const client = createActorClient({
     nodeProvider: () => ({ requestToActor() { submits++; return operationId; } }),
-    completionTableProvider: () => completionTable(RequestResult.Ok, createReplyParts('pong')),
+    completionTableProvider: () => completionTable(RequestResult.Ok, createReplyFrame('pong')),
     locationResolver: () => createResolver(() => route)
   });
   let terminal;
@@ -956,7 +1052,7 @@ test('actor request clears its sole deadline timer after route failure and succe
   assert.equal(clear.mock.callCount(), 1);
   const ready = createActorClient({
     nodeProvider: () => ({ requestToActor() { return operationId; } }),
-    completionTableProvider: () => completionTable(RequestResult.Ok, createReplyParts('pong')),
+    completionTableProvider: () => completionTable(RequestResult.Ok, createReplyFrame('pong')),
     locationResolver: () => createResolver()
   });
   assert.equal(await ready.requestToActor('actor-1', new ActorAsk('ping')).timeout(20).submit(), 'pong');
@@ -1097,7 +1193,7 @@ test('Actor route infrastructure admission cannot complete the user request admi
   } finally {
     releaseRoute();
     admitUser();
-    replyUser(createReplyParts('pong'));
+    replyUser(createReplyFrame('pong'));
     assert.equal(await pending, 'pong');
   }
 });
