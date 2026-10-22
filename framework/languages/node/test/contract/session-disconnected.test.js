@@ -172,7 +172,13 @@ for (const transport of ['mesh', 'no-bind']) {
         }
         assert.equal(callbacks, ['current', 'callback-error'].includes(scenario) ? 1 : 0);
         assert.equal(replies.length, 1);
-        const [header, body] = replies[0];
+        const [header, body] = transport === 'mesh'
+          ? (() => {
+            assert.equal(replies[0].length, 1);
+            const frame = protocol.decodeStreamFrame(replies[0][0]);
+            return [frame.header, Buffer.from(frame.payload)];
+          })()
+          : replies[0];
         if (scenario === 'callback-error')
           assert.match(body.toString(), /disconnect callback failed/);
         else assert.equal(body.length, 0, body.toString());

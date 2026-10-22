@@ -265,6 +265,10 @@ const ERROR_KIND_BY_WIRE_NAME: ReadonlyMap<string, ZLinkFrameworkErrorKind> = ne
   ERROR_KIND_WIRE_NAMES.map((name, kind) => [name, kind as ZLinkFrameworkErrorKind])
 );
 
+export function channelErrorKindFromCode(code: string): ZLinkFrameworkErrorKind | undefined {
+  return ERROR_KIND_BY_WIRE_NAME.get(code);
+}
+
 export function channelErrorCodeName(kind: ZLinkFrameworkErrorKind): string {
   return ERROR_KIND_WIRE_NAMES[kind] ?? 'internal_failure';
 }
@@ -360,7 +364,7 @@ function decodeChannelError(header: ZLinkChannelEnvelopeHeader): ZLinkChannelDec
     //  Cross-language contract: errorCode carries the snake_case wire name.
     //  An unknown name degrades to InternalFailure, matching the C++
     //  request_failure_mapper fallback for unrecognized codes.
-    const publicKind = ERROR_KIND_BY_WIRE_NAME.get(code) ?? ZLinkFrameworkErrorKind.InternalFailure;
+    const publicKind = channelErrorKindFromCode(code) ?? ZLinkFrameworkErrorKind.InternalFailure;
     failure = new ZLinkFrameworkException(publicKind, message);
   }
   //  Cross-language contract (.NET ZLinkErrorOriginWire.RemoteReplyOrigin /
