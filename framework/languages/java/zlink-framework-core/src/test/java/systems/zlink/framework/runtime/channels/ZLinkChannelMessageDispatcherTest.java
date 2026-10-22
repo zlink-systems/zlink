@@ -151,11 +151,74 @@ final class ZLinkChannelMessageDispatcherTest {
         }
     }
 
+    @Test
+    void disabledTypedChannelInvokerAllocationProbe() {
+        var bean =
+                (com.sun.management.ThreadMXBean)
+                        java.lang.management.ManagementFactory.getThreadMXBean();
+        bean.setThreadAllocatedMemoryEnabled(true);
+        var registration =
+                new ChannelSendHandlerRegistration(
+                        AllocationSendHandler.class, String.class, "Send", List.of());
+        var invoker = invoker();
+        AllocationSendHandler.calls = 0;
+        try (var payload = Message.from("send".getBytes(StandardCharsets.UTF_8))) {
+            for (int index = 0; index < 20000; index++)
+                invoker.invokeSendHandler("orders", registration, payload)
+                        .toCompletableFuture()
+                        .join();
+            long thread = Thread.currentThread().threadId();
+            long before = bean.getThreadAllocatedBytes(thread);
+            for (int index = 0; index < 20000; index++)
+                invoker.invokeSendHandler("orders", registration, payload)
+                        .toCompletableFuture()
+                        .join();
+            long allocated = bean.getThreadAllocatedBytes(thread) - before;
+            assertEquals(40000, AllocationSendHandler.calls);
+            assertTrue(allocated > 0L);
+            System.out.println(
+                    "Off typed Channel invoker allocation: " + allocated + " bytes / 20000 sends.");
+        }
+    }
+
+    public static final class AllocationSendHandler implements ZLinkSendHandler<String> {
+        private static int calls;
+
+        @Override
+        public CompletionStage<Void> handle(String message, ZLinkMessageContext context) {
+            calls++;
+            return CompletableFuture.completedFuture(null);
+        }
+    }
+
     private static void verifyChannelGate(boolean route) throws Exception {
         GateProbe probe = new GateProbe();
         gateProbe = probe;
+        List<String> traces = new CopyOnWriteArrayList<>();
+        Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
+        Level previousLevel = logger.getLevel();
+        var terminals = new java.util.concurrent.CountDownLatch(4);
+        Handler trace =
+                new Handler() {
+                    @Override
+                    public void publish(LogRecord record) {
+                        String message = record.getMessage();
+                        traces.add(message);
+                        if (message.contains("phase=replied")
+                                || message.contains("phase=completed")) terminals.countDown();
+                    }
+
+                    @Override
+                    public void flush() {}
+
+                    @Override
+                    public void close() {}
+                };
+        logger.setLevel(Level.ALL);
+        logger.addHandler(trace);
         try {
             ZLinkDispatchOptionsRegistration options = new ZLinkDispatchOptionsRegistration();
+            options.messageFlow(ZLinkMessageFlowLogMode.NORMAL);
             ZLinkDispatchErrorReporter errors =
                     new ZLinkDispatchErrorReporter(
                             options, ZLinkHandlerActivator.reflection(), Runnable::run);
@@ -226,13 +289,62 @@ final class ZLinkChannelMessageDispatcherTest {
             assertFalse(probe.laterEntered.isDone());
             assertTrue(probe.maximumRunning.get() <= 1);
 
+            assertEquals(
+                    4L,
+                    traces.stream().filter(line -> line.contains("phase=admitted")).count(),
+                    traces.toString());
+            assertEquals(
+                    2L,
+                    traces.stream().filter(line -> line.contains("phase=dispatched")).count(),
+                    traces.toString());
             probe.releaseFirst.complete("first-reply");
             probe.firstReply.get(2, TimeUnit.SECONDS);
             probe.sendEntered.get(2, TimeUnit.SECONDS);
             probe.laterEntered.get(2, TimeUnit.SECONDS);
             probe.laterReply.get(2, TimeUnit.SECONDS);
             assertTrue(probe.maximumRunning.get() <= 1);
+            assertTrue(terminals.await(2, TimeUnit.SECONDS), traces.toString());
+            var byFlow =
+                    traces.stream()
+                            .filter(line -> line.contains("phase="))
+                            .collect(
+                                    java.util.stream.Collectors.groupingBy(
+                                            line -> line.replaceAll(".* flow=([^ ]+).*", "$1")));
+            assertEquals(4, byFlow.size(), traces.toString());
+            for (var records : byFlow.values()) {
+                boolean send = records.getFirst().contains("kind=send");
+                assertEquals(
+                        List.of(
+                                "received",
+                                "admitted",
+                                "dispatched",
+                                send ? "completed" : "replied"),
+                        records.stream()
+                                .map(line -> line.replaceAll(".* phase=([^ ]+).*", "$1"))
+                                .toList(),
+                        records.toString());
+                assertEquals(
+                        1L,
+                        records.stream()
+                                .map(
+                                        line ->
+                                                line.contains(" corr=")
+                                                        ? line.replaceAll(".* corr=([^ ]+).*", "$1")
+                                                        : "")
+                                .distinct()
+                                .count());
+            }
+            assertEquals(
+                    1L,
+                    traces.stream().filter(line -> line.contains("phase=completed")).count(),
+                    traces.toString());
+            assertEquals(
+                    4L,
+                    traces.stream().filter(line -> line.contains("phase=dispatched")).count(),
+                    traces.toString());
         } finally {
+            logger.removeHandler(trace);
+            logger.setLevel(previousLevel);
             probe.releaseFirst.complete("first-reply");
             gateProbe = null;
         }

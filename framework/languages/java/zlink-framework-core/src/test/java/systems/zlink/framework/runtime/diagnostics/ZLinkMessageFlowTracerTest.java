@@ -40,6 +40,28 @@ import java.util.logging.Logger;
 
 // MFLOW-001/002/003/011: mode gating + runtime live toggle + structured output.
 class ZLinkMessageFlowTracerTest {
+    private static volatile Object allocationSink;
+
+    @Test
+    void channelTraceGateAllocatesNothingWhenOff() {
+        var bean =
+                (com.sun.management.ThreadMXBean)
+                        java.lang.management.ManagementFactory.getThreadMXBean();
+        bean.setThreadAllocatedMemoryEnabled(true);
+        long thread = Thread.currentThread().threadId();
+        for (var mode : List.of(ZLinkMessageFlowLogMode.OFF, ZLinkMessageFlowLogMode.NORMAL)) {
+            var tracer = tracer(options(mode));
+            for (int index = 0; index < 10000; index++)
+                allocationSink = tracer.begin(ZLinkMessageFlowOutcome.DISPATCHED);
+            long before = bean.getThreadAllocatedBytes(thread);
+            for (int index = 0; index < 10000; index++)
+                allocationSink = tracer.begin(ZLinkMessageFlowOutcome.DISPATCHED);
+            long allocated = bean.getThreadAllocatedBytes(thread) - before;
+            if (mode == ZLinkMessageFlowLogMode.OFF) assertEquals(0L, allocated);
+            else assertTrue(allocated > 0L);
+        }
+    }
+
     private static ZLinkDispatchOptionsRegistration options(ZLinkMessageFlowLogMode mode) {
         ZLinkDispatchOptionsRegistration options = new ZLinkDispatchOptionsRegistration();
         options.messageFlow(mode);
