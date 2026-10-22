@@ -40,13 +40,13 @@ test('native completion recv closes an unclaimed late completion exactly once', 
 
     let completion = null;
     for (let attempt = 0; attempt < 100 && !completion; attempt += 1) {
-      completion = native.socketCompletionRecv(dealer._native, zlink.RecvFlags.DontWait);
+      completion = native.socketCompletionRecv(dealer._native, zlink.RecvFlags.DontWait, Buffer.allocUnsafe);
       if (!completion) await new Promise((resolve) => setImmediate(resolve));
     }
     assert.ok(completion);
     assert.equal(completion.userContext, 999n);
     assert.equal(native.testCompletionCloseCount(false), 1n);
-    assert.equal(native.socketCompletionRecv(dealer._native, zlink.RecvFlags.DontWait), null);
+    assert.equal(native.socketCompletionRecv(dealer._native, zlink.RecvFlags.DontWait, Buffer.allocUnsafe), null);
     assert.equal(native.testCompletionCloseCount(false), 1n);
     request.close();
   } finally {
@@ -127,7 +127,7 @@ test('DONTWAIT routed HWM refusal preserves RID through writable-token retry', (
       'routed DONTWAIT send must reach physical HWM');
     assert.ok(blockedPayload);
     assert.equal(native.socketCompletionRecv(
-      router._native, zlink.RecvFlags.DontWait), null);
+      router._native, zlink.RecvFlags.DontWait, Buffer.allocUnsafe), null);
     assert.equal(poller.wait(events, 0), 0,
       'the HWM-full socket must not remain writable');
 
@@ -141,7 +141,7 @@ test('DONTWAIT routed HWM refusal preserves RID through writable-token retry', (
     assert.equal(events.slot(0), 79);
     assert.equal(events.hasEvent(0, zlink.PollEventFlag.PollOut), true);
     const writable = native.socketCompletionRecv(
-      router._native, zlink.RecvFlags.DontWait);
+      router._native, zlink.RecvFlags.DontWait, Buffer.allocUnsafe);
     assert.ok(writable);
     assert.equal(writable.kind, zlink.CompletionKind.Writable);
     assert.equal(writable.completionId, waitToken);
@@ -150,7 +150,7 @@ test('DONTWAIT routed HWM refusal preserves RID through writable-token retry', (
     assert.equal(writable.sendResult, zlink.SubmitResult.Ok);
     assert.equal(writable.terminalErrno, 0);
     assert.equal(native.socketCompletionRecv(
-      router._native, zlink.RecvFlags.DontWait), null);
+      router._native, zlink.RecvFlags.DontWait, Buffer.allocUnsafe), null);
 
     const retried = native.socketSubmitSend(
       router._native,
@@ -172,7 +172,7 @@ test('DONTWAIT routed HWM refusal preserves RID through writable-token retry', (
       'the rejected attempt must not have retained or delivered the payload');
     duplicate.close();
     assert.equal(native.socketCompletionRecv(
-      router._native, zlink.RecvFlags.DontWait), null,
+      router._native, zlink.RecvFlags.DontWait, Buffer.allocUnsafe), null,
       'ordinary successful SEND must not publish a completion');
   } finally {
     events.close();
