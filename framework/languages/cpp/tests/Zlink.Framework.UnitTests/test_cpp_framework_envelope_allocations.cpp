@@ -246,6 +246,52 @@ TEST (EnvelopeAllocations, DecodeDoesNotAllocateADiscardedJsonDefault)
     EXPECT_EQ (allocations, 0u);
 }
 
+TEST (EnvelopeAllocations, NodeSendOwnsOnlyTheSerializedContentType)
+{
+    fw::serializer_registry_t serializers;
+    const std::string content_type = "application/x-protobuf";
+    serializers.add<payload_t> (
+      [] (const payload_t &) {
+          return fw::encoded_payload_t::from_string (std::string (1027, 'p'));
+      },
+      [] (const fw::encoded_payload_t &) { return payload_t{}; }, content_type);
+    const auto serializer = serializers.get<payload_t> ();
+    const auto target = zlink::routing_id_t::from ("bench-server");
+    fw::dispatch_options_t dispatch;
+    dispatch.message_flow (fw::message_flow_log_mode_t::off);
+    const std::map<std::string, std::string> metadata;
+    msg::client_call_codec_t codec;
+    msg::envelope_codec_t envelope;
+    const auto encode = [&] { return serializer.serialize_with_content_type (payload_t{}); };
+    const auto encode_baseline = [&] {
+        auto serialized = encode ();
+        msg::envelope_header_t header{.kind = msg::message_kind_t::command,
+                                      .channel_name = "bench",
+                                      .message_name = "BenchPayload",
+                                      .content_type = std::move (serialized.content_type)};
+        return envelope.encode_raw_body_parts (
+          header, fw::detail::encoded_payload_to_raw (serialized.payload));
+    };
+    const auto encode_node = [&] {
+        return codec.encode_node_send_parts ("bench", "BenchPayload", target, metadata, dispatch,
+                                             serializers, [&] (auto &) { return encode (); });
+    };
+    (void) encode_baseline ();
+    (void) encode_node ();
+    std::optional<msg::message_parts_t> expected;
+    const auto baseline = count_allocations ([&] { expected.emplace (encode_baseline ()); });
+    std::optional<msg::message_parts_t> actual;
+    const auto allocations = count_allocations ([&] { actual.emplace (encode_node ()); });
+    EXPECT_EQ (allocations, baseline);
+    ASSERT_TRUE (expected);
+    ASSERT_TRUE (actual);
+    EXPECT_EQ ((*actual)[0].to_string (), (*expected)[0].to_string ());
+    EXPECT_EQ ((*actual)[1].to_string (), (*expected)[1].to_string ());
+    auto decoded = envelope.decode_header (*actual, false);
+    ASSERT_TRUE (decoded);
+    EXPECT_EQ (decoded.value ().content_type, content_type);
+}
+
 TEST (EnvelopeAllocations, ClientKeepsOneOwningJsonDefault)
 {
     msg::client_call_codec_t codec;
