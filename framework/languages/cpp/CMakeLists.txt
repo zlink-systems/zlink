@@ -2954,3 +2954,20 @@ if(TARGET zlink_framework_cpp_stage_native_runtime)
     endforeach()
   endforeach()
 endif()
+
+if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux"
+   AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  add_executable(test_cpp_framework_ready_task
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_ready_task.cpp)
+  target_compile_features(test_cpp_framework_ready_task PRIVATE cxx_std_20)
+  target_link_libraries(test_cpp_framework_ready_task PRIVATE
+    zlink::framework_provider_abstractions Threads::Threads)
+  target_link_options(test_cpp_framework_ready_task PRIVATE
+    "LINKER:--wrap=pthread_mutex_lock"
+    "LINKER:--wrap=_ZNSt18condition_variable10notify_allEv")
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_ready_task
+    COMMAND test_cpp_framework_ready_task
+    LABELS "framework-unit;framework-foundation;execution"
+    TIMEOUT 30)
+endif()
