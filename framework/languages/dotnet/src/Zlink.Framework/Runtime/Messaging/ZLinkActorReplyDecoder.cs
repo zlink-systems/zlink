@@ -42,34 +42,20 @@ internal static class ZLinkActorReplyDecoder
         bool captureFlow
     )
     {
-        if (reply.Count == 0)
-            throw ProtocolError("Actor request reply is empty.");
+        if (reply.Count != 1)
+            throw ProtocolError("Actor request reply must contain one STREAM frame.");
 
         ZlinkStreamHeader header;
         ReadOnlySpan<byte> payload;
         try
         {
-            if (reply.Count == 1)
-            {
-                var frame = reply[0].AsReadOnlySpan();
-                if (!ZLinkStreamFrameCodec.TryDecode(frame, out var headerBytes, out payload))
-                    throw new InvalidOperationException("Actor request reply frame is invalid.");
-                // The header decoder requires managed memory. Copy only that
-                // header; the reply retains the native payload until the caller
-                // finishes this synchronous decode.
-                header = ZLinkStreamProtocolDefaults.DecodeHeader(
-                    headerBytes.ToArray(),
-                    captureFlow
-                );
-            }
-            else
-            {
-                header = ZLinkStreamProtocolDefaults.DecodeHeader(
-                    reply[0].AsReadOnlyMemory(),
-                    captureFlow
-                );
-                payload = reply[1].AsReadOnlySpan();
-            }
+            var frame = reply[0].AsReadOnlySpan();
+            if (!ZLinkStreamFrameCodec.TryDecode(frame, out var headerBytes, out payload))
+                throw new InvalidOperationException("Actor request reply frame is invalid.");
+            // The header decoder requires managed memory. Copy only that
+            // header; the reply retains the native payload until the caller
+            // finishes this synchronous decode.
+            header = ZLinkStreamProtocolDefaults.DecodeHeader(headerBytes.ToArray(), captureFlow);
         }
         catch (Exception error)
             when (error is not OperationCanceledException and not ZLinkFrameworkException)
@@ -100,16 +86,16 @@ internal static class ZLinkActorReplyDecoder
             return ProtocolError("Actor request error payload could not be decoded.", decodeError);
         }
 
-        if (error is null)
-            return ProtocolError("Actor request error payload is null.");
+        if (error is null || error.Message is null)
+            return ProtocolError("Actor request error payload requires code and message strings.");
         // Cross-language snake_case wire names only (C++ stream_error_code);
         // an unknown name stays a protocol error.
         if (ZLinkErrorWireNames.TryParse(error.Code, out var kind))
-            return new ZLinkFrameworkException(kind, error.Message ?? "Actor request failed.");
+            return new ZLinkFrameworkException(kind, error.Message);
 
         return ProtocolError(
             $"Actor request reply uses an unknown error code '{error.Code ?? "<missing>"}': "
-                + (error.Message ?? "Actor request failed.")
+                + error.Message
         );
     }
 
