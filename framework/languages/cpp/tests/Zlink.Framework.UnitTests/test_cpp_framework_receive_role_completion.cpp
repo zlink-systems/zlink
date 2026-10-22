@@ -10,6 +10,89 @@
 #include <chrono>
 #include <future>
 
+#if defined(ZLINK_TEST_RECEIVE_WAIT_WRAP)
+#include <zlink.h>
+#include <condition_variable>
+#include <iostream>
+#include <mutex>
+
+namespace
+{
+std::atomic<void *> receive_poller{nullptr};
+std::mutex observation_mutex;
+std::condition_variable observation_changed;
+unsigned observation_phase = 0;
+bool observed_wait = false;
+bool release_observation = false;
+}
+
+extern "C" zlink_config_result_t __real_zlink_poller_add (void *, void *, void *, short);
+extern "C" zlink_config_result_t
+__wrap_zlink_poller_add (void *poller, void *socket, void *user, short events)
+{
+    const auto result = __real_zlink_poller_add (poller, socket, user, events);
+    if (result == ZLINK_CONFIG_OK && (events & ZLINK_POLLROUTE) != 0)
+        receive_poller.store (poller);
+    return result;
+}
+
+extern "C" int
+__real_zlink_poller_wait (void *, zlink_poller_event_t *, int, long, zlink_config_result_t *);
+extern "C" int __wrap_zlink_poller_wait (void *poller,
+                                         zlink_poller_event_t *events,
+                                         int capacity,
+                                         long timeout,
+                                         zlink_config_result_t *error)
+{
+    if (poller == receive_poller.load ()) {
+        std::unique_lock lock (observation_mutex);
+        if (observation_phase == 1 && timeout == 0) {
+            // A readiness miss must lead to a wait before another empty rotation.
+            observation_phase = 2;
+            if (error)
+                *error = ZLINK_CONFIG_OK;
+            return 0;
+        }
+        if (observation_phase == 2) {
+            observed_wait = false;
+            observation_phase = 3;
+            observation_changed.notify_all ();
+            observation_changed.wait (lock, [] { return release_observation; });
+        }
+    }
+    return __real_zlink_poller_wait (poller, events, capacity, timeout, error);
+}
+
+using receive_wait_host_t = zlink::framework::runtime::host::public_host_runtime_t;
+using receive_wait_deadline_t = std::optional<std::chrono::steady_clock::time_point>;
+extern "C" bool real_receive_wait (receive_wait_host_t *,
+                                   std::chrono::milliseconds,
+                                   bool,
+                                   receive_wait_deadline_t) noexcept
+  __asm__ ("__real_" ZLINK_TEST_RECEIVE_WAIT_SYMBOL);
+extern "C" bool wrapped_receive_wait (receive_wait_host_t *,
+                                      std::chrono::milliseconds,
+                                      bool,
+                                      receive_wait_deadline_t) noexcept
+  __asm__ ("__wrap_" ZLINK_TEST_RECEIVE_WAIT_SYMBOL);
+extern "C" bool wrapped_receive_wait (receive_wait_host_t *host,
+                                      std::chrono::milliseconds timeout,
+                                      bool accept_receive,
+                                      receive_wait_deadline_t deadline) noexcept
+{
+    {
+        std::unique_lock lock (observation_mutex);
+        if (observation_phase == 2) {
+            observed_wait = true;
+            observation_phase = 3;
+            observation_changed.notify_all ();
+            observation_changed.wait (lock, [] { return release_observation; });
+        }
+    }
+    return real_receive_wait (host, timeout, accept_receive, deadline);
+}
+#endif
+
 int main ()
 {
     zlink::framework::completion_owner_t completion_owner;
@@ -47,6 +130,29 @@ int main ()
       std::make_shared<runtime::runtime_failure_collector_t> (), {registration}, serializers);
     service.start (provider).result ().value ();
     const auto node = service.nodes ().front ();
+
+#if defined(ZLINK_TEST_RECEIVE_WAIT_WRAP)
+    assert (receive_poller.load () != nullptr);
+    {
+        std::lock_guard lock (observation_mutex);
+        observation_phase = 1;
+    }
+    node->signal_dispatch_activity ();
+    bool waited;
+    {
+        std::unique_lock lock (observation_mutex);
+        observation_changed.wait (lock, [] { return observation_phase == 3; });
+        waited = observed_wait;
+        release_observation = true;
+    }
+    observation_changed.notify_all ();
+    if (!waited) {
+        service.request_stop ();
+        service.stop ();
+        std::cerr << "idle receive started another zero-time rotation before readiness wait\n";
+        return 1;
+    }
+#endif
 
     std::promise<runtime::foundation::operation_terminal_t> completed;
     auto terminal = completed.get_future ();

@@ -2152,10 +2152,6 @@ struct mesh_node_host_service_t::node_receive_role_t final
                 next_activity = activity.second;
             }
         }
-        if (detail::dispatch_completion_receive_handoff (
-              [&] { return host._application_dispatch->try_assign_role (shared_from_this ()); },
-              host._completion_dispatcher))
-            return true;
         // A pump may consume the wake for supply delivered after this turn's
         // take. Recheck its owner state before waiting for the next rotation.
         if (!local_pending && !host._stop.load (std::memory_order_acquire)
@@ -2163,6 +2159,10 @@ struct mesh_node_host_service_t::node_receive_role_t final
             (void) node->native_node ().wait_for_dispatch_activity (
               std::chrono::milliseconds (-1), accept_application_receive, next_activity);
         }
+        if (detail::dispatch_completion_receive_handoff (
+              [&] { return host._application_dispatch->try_assign_role (shared_from_this ()); },
+              host._completion_dispatcher))
+            return true;
         return false;
     }
 

@@ -1984,6 +1984,19 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_receive_role_completion PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   zlink_framework_cpp_add_boost_headers(test_cpp_framework_receive_role_completion)
+  # The wait-entry hook uses GNU's 64-bit libstdc++ chrono ABI.
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
+     AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
+     AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    set(ZLINK_TEST_RECEIVE_WAIT_SYMBOL
+      "_ZN5zlink9framework7runtime4host21public_host_runtime_t26wait_for_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE")
+    target_compile_definitions(test_cpp_framework_receive_role_completion PRIVATE
+      ZLINK_TEST_RECEIVE_WAIT_WRAP=1
+      ZLINK_TEST_RECEIVE_WAIT_SYMBOL="${ZLINK_TEST_RECEIVE_WAIT_SYMBOL}")
+    target_link_options(test_cpp_framework_receive_role_completion PRIVATE
+      "LINKER:--wrap=zlink_poller_add" "LINKER:--wrap=zlink_poller_wait"
+      "LINKER:--wrap=${ZLINK_TEST_RECEIVE_WAIT_SYMBOL}")
+  endif()
   add_zlink_framework_test(
     test_cpp_framework_execution
     tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
