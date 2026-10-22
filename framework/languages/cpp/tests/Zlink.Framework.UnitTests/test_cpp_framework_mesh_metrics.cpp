@@ -2,6 +2,7 @@
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "metric_test_reader.hpp"
+#include "../support/runtime_metric_contract.hpp"
 
 #include "runtime/diagnostics/mesh_request_metrics.hpp"
 #include "runtime/foundation/operation_registry.hpp"
@@ -95,7 +96,9 @@ std::string describe_labels (const labels_t &value)
 std::vector<metric_sample_t> samples (metric_test::provider_t &provider)
 {
     std::vector<metric_sample_t> result;
-    for (const auto &metric : provider.collect ()) {
+    const auto collected = provider.collect ();
+    metric_test::validate_metric_contract (collected);
+    for (const auto &metric : collected) {
         for (const auto &point : metric.point_data_attr_) {
             metric_sample_t sample{metric.instrument_descriptor.name_,
                                    metric.instrument_descriptor.unit_,
@@ -881,7 +884,11 @@ void verify_public_host_local_spot_and_actor_requests ()
     require (!find_sample (provider, "zlink.mesh_node.request.timeouts",
                            {{"mesh_name", "metrics-local-public"}, {"surface", "actor"}}),
              "local public Actor completion emitted a timeout counter");
+    require_metric (provider, "zlink.actor.count", "updown", "{actor}",
+                    {{"mesh_name", "metrics-local-public"}}, 2);
     node.stop ();
+    require_metric (provider, "zlink.actor.count", "updown", "{actor}",
+                    {{"mesh_name", "metrics-local-public"}}, 0);
 }
 
 } // namespace
