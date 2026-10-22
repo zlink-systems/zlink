@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
+#include <variant>
+
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/diagnostics/instance_spot_metrics.hpp"
 #include "runtime/dispatch/application_record.hpp"
@@ -246,7 +248,7 @@ struct host_options_t
     std::chrono::milliseconds owner_lease_fencing_margin{5'000};
     std::shared_ptr<zlink::context_t> core_context;
     std::chrono::milliseconds session_relocation_seal_timeout =
-      location_options_t{}.session_relocation_seal_timeout;
+      zlink::framework::detail::default_session_relocation_seal_timeout;
     std::chrono::milliseconds user_spot_operation_replay_retention = std::chrono::minutes (5);
 };
 
@@ -610,11 +612,13 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                        std::optional<zlink::routing_id_t> expected = std::nullopt,
                        std::uint64_t expected_lifecycle_generation = 0,
                        std::string security_identity = "default",
-                       bool automatic = false);
+                       bool automatic = false,
+                       location_owner_token_t owner = {});
     void expect_peer (const std::string &endpoint,
                       const zlink::routing_id_t &expected,
                       std::uint64_t expected_lifecycle_generation,
-                      std::string security_identity);
+                      std::string security_identity,
+                      location_owner_token_t owner = {});
     void forget_peer (const std::string &endpoint, const zlink::routing_id_t &expected);
     void disconnect_peer (const std::string &endpoint) noexcept;
     bool disconnect_peer (const std::vector<std::uint8_t> &expected_routing_id,
@@ -710,8 +714,13 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     void configure_session_route_owner (
       std::function<std::optional<location_owner_token_t> ()> owner_resolver);
     void configure_stateful_dispatch (
-      std::function<std::optional<stateful::accepted_record_authority_t> (
-        const stateful::accepted_record_authority_query_t &)> resolver);
+      std::function<task_t<std::optional<stateful::accepted_record_authority_t>> (
+        stateful::accepted_record_authority_query_t)> resolver);
+    void
+    configure_stateful_dispatch (std::function<std::optional<location_owner_token_t> ()> owner);
+    task_t<std::optional<stateful::accepted_record_authority_t>>
+    accepted_record_authority (const stateful::accepted_record_authority_query_t &query,
+                               const std::optional<location_owner_token_t> &owner) const;
     void forward_relocation_application (const stateful::object_ref_t &owner,
                                          const stateful::turn_record_t &record,
                                          const std::vector<std::uint8_t> &target_routing_id,
@@ -755,7 +764,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                std::chrono::milliseconds timeout);
     task_t<bool> cutover_relocation_remote (const zlink::routing_id_t &target_node,
                                             protocol::relocation_cutover_t cutover);
-    stateful::stateful_error_t ingest_stateful (const stateful::object_ref_t &owner);
+    task_t<stateful::stateful_error_t> ingest_stateful (stateful::object_ref_t owner);
     task_t<bool> route_session_remote (const zlink::routing_id_t &session_owner_node,
                                        protocol::session_relocation_route_t route);
     std::size_t recover_instance_spot_activations ();
@@ -822,12 +831,12 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
         const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
       bool accept_application_receive = true,
       std::function<bool ()> next_application_receive = {});
-    bool dispatch_application_owner (
-      const std::string &owner,
+    task_t<bool> dispatch_application_owner (
+      std::string owner,
       const std::function<void (
-        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> &dispatch,
-      const std::function<void ()> &started,
-      const std::function<void ()> &rejected);
+        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch,
+      std::function<void ()> started,
+      std::function<void ()> rejected);
     bool wait_for_dispatch_activity (
       std::chrono::milliseconds timeout,
       bool accept_application_receive,
@@ -925,7 +934,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
       pending_operation_t *operation = nullptr,
       std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source =
         std::nullopt,
-      std::chrono::milliseconds timeout = {});
+      std::chrono::milliseconds timeout = {},
+      std::uint64_t authority_owner_generation = 0,
+      std::uint64_t owner_lease_generation = 0);
     zlink::submit_result_t enqueue_local_spot_send (const protocol::spot_route_fence_t &target,
                                                     const std::vector<zlink::message_t> &parts);
     zlink::submit_result_t enqueue_local_spot_request (const protocol::spot_route_fence_t &target,
@@ -945,11 +956,23 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              foundation::operation_terminal_t terminal,
                              zlink::message_t payload);
     task_t<std::size_t> dispatch_user_spot_operations ();
-    std::size_t dispatch_application_claim (
-      mesh::service_mailbox_claim_t claim,
-      const std::function<void (const ready_record_t &,
-                                const receive_record_t &,
-                                std::vector<zlink::message_t>)> &dispatch);
+    struct application_claim_owner_t;
+    using application_claim_result_t = std::variant<std::size_t, task_t<std::size_t>>;
+    application_claim_result_t
+    dispatch_application_claim (const std::shared_ptr<application_claim_owner_t> &operation);
+    task_t<std::size_t>
+    continue_application_claim (std::shared_ptr<application_claim_owner_t> operation,
+                                task_t<void> pending);
+    void fail_application_claim (const std::shared_ptr<application_claim_owner_t> &operation,
+                                 std::exception_ptr error);
+    task_t<bool> notify_stateful_owner (const stateful::object_ref_t &owner);
+    bool claim_stateful_owner (const stateful::object_ref_t &object,
+                               const mesh::service_mailbox_t::application_dispatch_t &dispatch);
+    task_t<bool>
+    dispatch_stateful_owner (const stateful::object_ref_t &object,
+                             const std::function<void (const ready_record_t &,
+                                                       const receive_record_t &,
+                                                       std::vector<zlink::message_t>)> &dispatch);
     bool dispatch_bound_session_send (const mesh::service_mailbox_record_t &record);
 
     host_options_t _options;
@@ -1089,7 +1112,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
          * count selects that batch as the received suffix and replaces any
          * partial earlier copy (28 §4.4). Records are staged only after the
          * cutover verifies. */
-        std::vector<std::pair<stateful::object_ref_t, protocol::relocation_data_t>> boundary_batch;
+        std::vector<std::tuple<stateful::object_ref_t, protocol::relocation_data_t, std::uint64_t>>
+          boundary_batch;
         /* S2 (owner CAS confirmed) for the target-resume interval. */
         std::chrono::steady_clock::time_point authority_committed_at{};
     };
@@ -1160,9 +1184,11 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                                   std::shared_ptr<relocation_assembly_staging_t> staging);
     bool register_relocation_target_queue (const protocol::relocation_prepare_t &prepare,
                                            const stateful::object_ref_t &target,
-                                           const protocol::relocation_object_t &wire_object);
+                                           const protocol::relocation_object_t &wire_object,
+                                           std::uint64_t participant_id);
     bool stage_relocation_record (const stateful::object_ref_t &target,
-                                  const protocol::relocation_data_t &data);
+                                  const protocol::relocation_data_t &data,
+                                  std::uint64_t participant_id);
     void poll_relocation_target_attempts ();
     static bool relocation_target_wire_ready (const relocation_target_attempt_t &attempt) noexcept;
     static bool relocation_target_terminal (const relocation_target_attempt_t &attempt);
@@ -1239,6 +1265,8 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     mutable runtime::state_lane_t _local_dispatch_completion_lane{
       _local_dispatch_completion_lane_executor};
     std::deque<local_application_dispatch_t> _local_application_dispatches;
+    void publish_local_application (local_application_dispatch_t dispatch);
+    task_t<stateful::object_ref_t> accept_local_application (local_application_dispatch_t dispatch);
     void
     admit_local_application (local_application_dispatch_t dispatch,
                              const std::shared_ptr<application_job_queue_t::waiter_t> &waiter = {},
@@ -1261,6 +1289,7 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     runtime::offload_executor_t _peer_endpoint_lane_executor;
     runtime::state_lane_t _peer_endpoint_lane{_peer_endpoint_lane_executor};
     std::atomic<std::uint64_t> _next_operation{1};
+    std::unique_ptr<completion_owner_t> _completion_owner;
     bool _started = false;
     bool _closing = false;
 };

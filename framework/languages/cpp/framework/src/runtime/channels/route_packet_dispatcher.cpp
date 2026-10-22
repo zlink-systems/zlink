@@ -93,11 +93,14 @@ route_packet_dispatcher_t::dispatch (const route_received_packet_t &received,
     auto flow_scope = runtime::flow_context_t::enter (
       header.flow_id, header.flow_origin, message_flow_tracer_t (_dispatch_options).mode (),
       flow_origin_t::inbound, std::nullopt);
-    trace_flow (message_flow_outcome_t::received,
-                header.kind == runtime::messaging::message_kind_t::request
-                  ? dispatch_message_kind_t::request
-                  : dispatch_message_kind_t::send,
-                received, header);
+    if (_send_dispatch_kind != handler_dispatch_kind_t::channel_send
+        && _request_dispatch_kind != handler_dispatch_kind_t::channel_request) {
+        trace_flow (message_flow_outcome_t::received,
+                    header.kind == runtime::messaging::message_kind_t::request
+                      ? dispatch_message_kind_t::request
+                      : dispatch_message_kind_t::send,
+                    received, header);
+    }
 
     switch (header.kind) {
         case runtime::messaging::message_kind_t::command:
@@ -116,22 +119,26 @@ void route_packet_dispatcher_t::trace_flow (
   const route_received_packet_t &received,
   const runtime::messaging::envelope_header_t &header) const
 {
-    message_flow_tracer_t (_dispatch_options).trace (outcome, [&] {
-        message_flow_event_t event{outcome,
-                                   dispatch_error_surface_t::route_mesh_channel,
-                                   kind,
-                                   header.message_name,
-                                   _router_channel_id,
-                                   header.topic,
-                                   header.correlation_id,
-                                   received.source_node_rid.to_string (),
-                                   std::nullopt,
-                                   std::nullopt,
-                                   std::nullopt};
-        event.mesh_name = _router_channel_id;
-        event.channel_route_kind = "route_mesh";
-        return event;
-    });
+    message_flow_tracer_t (_dispatch_options)
+      .trace (outcome, header.flow_id ? std::string_view (*header.flow_id) : std::string_view{},
+              [&] {
+                  message_flow_event_t event{outcome,
+                                             dispatch_error_surface_t::route_mesh_channel,
+                                             kind,
+                                             header.message_name,
+                                             _router_channel_id,
+                                             header.topic,
+                                             header.correlation_id,
+                                             received.source_node_rid.to_string (),
+                                             std::nullopt,
+                                             std::nullopt,
+                                             std::nullopt};
+                  event.flow_id = header.flow_id;
+                  event.flow_origin = header.flow_origin;
+                  event.mesh_name = _router_channel_id;
+                  event.channel_route_kind = "route_mesh";
+                  return event;
+              });
 }
 
 result_t<std::optional<route_dispatch_reply_t>>
@@ -168,6 +175,8 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
                                              received.source_node_rid.to_string (),
                                              header.correlation_id,
                                              std::exception_ptr{}};
+            event.flow_id = header.flow_id;
+            event.flow_origin = header.flow_origin;
             event.mesh_name = _router_channel_id;
             event.channel_route_kind = "route_mesh";
             return event;
@@ -191,6 +200,8 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
               received.source_node_rid.to_string (),
               header.correlation_id,
               body.error () ? std::make_exception_ptr (*body.error ()) : std::exception_ptr{}};
+            event.flow_id = header.flow_id;
+            event.flow_origin = header.flow_origin;
             event.mesh_name = _router_channel_id;
             event.channel_route_kind = "route_mesh";
             return event;
@@ -201,10 +212,21 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
     auto context =
       make_route_message_context (_router_channel_id, received.source_node_rid, header);
     const auto &filters = _filters != nullptr ? *_filters : empty_handler_filters ();
+    auto before = _before_application_handler;
+    if (message_flow_tracer_t (_dispatch_options)
+          .enabled_for (message_flow_outcome_t::dispatched)) {
+        before = [this, &received, &header] {
+            if (_before_application_handler)
+                _before_application_handler ();
+            trace_flow (message_flow_outcome_t::dispatched, dispatch_message_kind_t::send, received,
+                        header);
+        };
+    }
+
     auto dispatched = _invoker
                         .invoke_send (*_handlers, filters, _send_dispatch_kind, _router_channel_id,
                                       header.message_name, *_services, *_serializers, body.value (),
-                                      context, _before_application_handler)
+                                      context, std::move (before))
                         .result ();
     if (!dispatched) {
         dispatch_error_reporter_t (_dispatch_options).report_lazy ([&] {
@@ -222,6 +244,8 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
               header.correlation_id,
               dispatched.error () ? std::make_exception_ptr (*dispatched.error ())
                                   : std::exception_ptr{}};
+            event.flow_id = header.flow_id;
+            event.flow_origin = header.flow_origin;
             event.mesh_name = _router_channel_id;
             event.channel_route_kind = "route_mesh";
             return event;
@@ -229,8 +253,6 @@ route_packet_dispatcher_t::dispatch_send (const route_received_packet_t &receive
         return detail::propagate_failure<std::optional<route_dispatch_reply_t>> (
           dispatched, "routed send handler failed");
     }
-    trace_flow (message_flow_outcome_t::dispatched, dispatch_message_kind_t::send, received,
-                header);
     trace_flow (message_flow_outcome_t::completed, dispatch_message_kind_t::send, received, header);
     return result_t<std::optional<route_dispatch_reply_t>>::success (std::nullopt);
 }
@@ -279,10 +301,21 @@ route_packet_dispatcher_t::dispatch_request (const route_received_packet_t &rece
     auto context =
       make_route_message_context (_router_channel_id, received.source_node_rid, header);
     const auto &filters = _filters != nullptr ? *_filters : empty_handler_filters ();
+    auto before = _before_application_handler;
+    if (message_flow_tracer_t (_dispatch_options)
+          .enabled_for (message_flow_outcome_t::dispatched)) {
+        before = [this, &received, &header] {
+            if (_before_application_handler)
+                _before_application_handler ();
+            trace_flow (message_flow_outcome_t::dispatched, dispatch_message_kind_t::request,
+                        received, header);
+        };
+    }
+
     auto reply = _invoker
                    .invoke_request (*_handlers, filters, _request_dispatch_kind, _router_channel_id,
                                     header.message_name, *_services, *_serializers, body.value (),
-                                    context, _before_application_handler)
+                                    context, std::move (before))
                    .result ();
     if (!reply) {
         framework_exception_t error (reply.error_kind (), reply.error ()
@@ -319,6 +352,8 @@ route_packet_dispatcher_t::reply_error (const route_received_packet_t &received,
                                                     received.source_node_rid.to_string (),
                                                     header.correlation_id,
                                                     std::make_exception_ptr (error)};
+        event.flow_id = header.flow_id;
+        event.flow_origin = header.flow_origin;
         event.mesh_name = _router_channel_id;
         event.channel_route_kind = "route_mesh";
         return event;

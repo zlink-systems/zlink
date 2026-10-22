@@ -169,7 +169,12 @@ public sealed class ChannelEnvelopeHandoffTests
             CancellationToken.None,
             envelope
         );
-        Assert.Equal(captureFlow ? 1 : 0, logger.Messages.Count);
+        Assert.Equal(captureFlow ? (rejected ? 1 : 2) : 0, logger.Messages.Count);
+        if (captureFlow && !rejected)
+        {
+            // Spec 26 §2.1: a missing handler produces an error reply terminal.
+            Assert.Contains("phase=replied", logger.Messages[^1], StringComparison.Ordinal);
+        }
         var events = new PollEvent[1];
         Assert.True(poller.Wait(events, TimeSpan.FromSeconds(3)) > 0);
         var reply = await replyTask;

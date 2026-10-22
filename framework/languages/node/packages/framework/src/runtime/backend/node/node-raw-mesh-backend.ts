@@ -143,8 +143,8 @@ import {
   ZLinkBackendResultError,
   type ZLinkBackendMessageLike as MessageLike
 } from '../runtime-values';
-import { translateBindingResultError } from './node-backend-adapter-support';
-import { disconnectStreamPeer } from './node-socket-backend-adapter';
+import { translateBindingResultError, toNativeRoutingId } from './node-backend-adapter-support';
+import { disconnectSocketPeer } from './node-socket-backend-adapter';
 const DEFAULT_NATIVE_ACTIVE_CAPACITY = 10_000;
 const UNSTARTED_DIAGNOSTIC_ENDPOINT = 'inproc://not-started';
 
@@ -772,11 +772,17 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     return this.observedOperation(pending, OperationKind.NodeRequest);
   }
 
-  async sendToChannel(
+  sendToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[]
   ): Promise<SubmitResultValue> {
-    return this.requireRuntime().sendToChannel(channelName, encodeMultipartApplicationFrame(parts));
+    try {
+      return Promise.resolve(
+        this.requireRuntime().sendToChannel(channelName, encodeMultipartApplicationFrame(parts))
+      );
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   requestToChannel(
@@ -1907,14 +1913,18 @@ class RawServiceSpot implements ServiceSpot {
     };
   }
 
-  async sendToChannel(
+  sendToChannel(
     channelName: string,
     parts: MessageLike | readonly MessageLike[],
     options?: { readonly flags?: number }
   ): Promise<SubmitResultValue> {
-    this.requireOpen();
-    void options;
-    return this.backend.sendToChannel(channelName, parts);
+    try {
+      this.requireOpen();
+      void options;
+      return this.backend.sendToChannel(channelName, parts);
+    } catch (error) {
+      return Promise.reject(error);
+    }
   }
 
   requestToChannel(
@@ -2210,7 +2220,7 @@ class RawStreamSessionService implements StreamSessionService {
         case SubmitResult.Terminated:
           // Let the socket monitor drive the existing STREAM close/unbind
           // lifecycle instead of maintaining a second session-close state.
-          disconnectStreamPeer(this.stream, target);
+          disconnectSocketPeer(this.stream, toNativeRoutingId(target));
           throw new ZLinkBackendResultError('submit', error.result, error.nativeErrno, {
             cause: error
           });

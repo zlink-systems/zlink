@@ -114,7 +114,14 @@ internal static class ZLinkFrameworkServiceRegistrar
         services.TryAddSingleton(static provider => new ZLinkHandlerRegistry(
             provider.GetServices<ZLinkHandlerEndpointDescriptor>()
         ));
-        services.TryAddSingleton<ZLinkHandlerDispatcher>();
+        services.TryAddSingleton(provider => new ZLinkHandlerDispatcher(
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            registration,
+            new ZLinkDispatchErrorReporter(
+                registration.DispatchOptions,
+                ZLinkMessageFlowTracer.CreateLogger(provider.GetService<ILoggerFactory>(), null)
+            )
+        ));
         services.TryAddSingleton<ZLinkDrainAdmissionGate>();
         services.TryAddSingleton<ZLinkFrameworkHostLifecycleState>();
         services.AddSingleton(static provider => new ZLinkAutoConnectLifecycleCoordinator(

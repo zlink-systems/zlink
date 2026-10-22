@@ -26,6 +26,14 @@ namespace zlink::framework::runtime
 namespace state_lane_internal
 {
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+template <typename T> class boxed_future_t;
+inline bool pending_wait_is_unsafe (std::future_status status,
+                                    const offload_executor_t *target_executor) noexcept
+{
+    return status == std::future_status::timeout
+           && offload_executor_t::current_worker_executor () == target_executor;
+}
+
 void check_pending_infrastructure_wait (std::future_status status, const char *site) noexcept;
 template <typename Future> decltype (auto) get (Future &&future, const char *site);
 template <typename Future> void wait (Future &&future, const char *site);
@@ -40,30 +48,64 @@ std::future_status wait_until (Future &&future,
 template <typename Future> class checked_future_t
 {
   public:
-    explicit checked_future_t (Future future) : _future (std::move (future)) {}
+    explicit checked_future_t (Future future, const offload_executor_t *target_executor) :
+        _future (std::move (future)), _target_executor (target_executor)
+    {
+    }
     checked_future_t (checked_future_t &&) noexcept = default;
     checked_future_t &operator= (checked_future_t &&) noexcept = default;
     checked_future_t (const checked_future_t &) = delete;
     checked_future_t &operator= (const checked_future_t &) = delete;
 
     bool valid () const noexcept { return _future.valid (); }
-    decltype (auto) get () { return state_lane_internal::get (_future, "state-lane/get"); }
-    void wait () const { state_lane_internal::wait (_future, "state-lane/wait"); }
+    decltype (auto) get ()
+    {
+        check_wait ("state-lane/get");
+        return get_result (_future);
+    }
+    void wait () const
+    {
+        check_wait ("state-lane/wait");
+        underlying_future (_future).wait ();
+    }
 
     template <typename Rep, typename Period>
     std::future_status wait_for (const std::chrono::duration<Rep, Period> &timeout) const
     {
-        return state_lane_internal::wait_for (_future, timeout, "state-lane/wait_for");
+        if (timeout > timeout.zero ())
+            check_wait ("state-lane/wait_for");
+        return underlying_future (_future).wait_for (timeout);
     }
 
     template <typename Clock, typename Duration>
     std::future_status wait_until (const std::chrono::time_point<Clock, Duration> &deadline) const
     {
-        return state_lane_internal::wait_until (_future, deadline, "state-lane/wait_until");
+        if (deadline > Clock::now ())
+            check_wait ("state-lane/wait_until");
+        return underlying_future (_future).wait_until (deadline);
     }
 
   private:
+    void check_wait (const char *site) const
+    {
+        if (pending_wait_is_unsafe (underlying_future (_future).wait_for (std::chrono::seconds (0)),
+                                    _target_executor))
+            ::zlink::framework::detail::fail_infrastructure_wait (site);
+    }
+
+    template <typename T> static const T &underlying_future (const T &future) { return future; }
+    template <typename T> static const auto &underlying_future (const boxed_future_t<T> &future)
+    {
+        return future._future;
+    }
+    template <typename T> static decltype (auto) get_result (T &future) { return future.get (); }
+    template <typename T> static T get_result (boxed_future_t<T> &future)
+    {
+        return std::move (*future._future.get ());
+    }
+
     Future _future;
+    const offload_executor_t *_target_executor;
 };
 #endif
 template <typename T> class boxed_future_t
@@ -119,6 +161,9 @@ template <typename T> class boxed_future_t
     }
 
   private:
+#ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
+    template <typename Future> friend class checked_future_t;
+#endif
     std::future<stored_t> _future;
 };
 
@@ -190,23 +235,24 @@ class state_lane_t
 
         auto completion = std::make_shared<std::promise<stored_t>> ();
         auto result = bridge_t::make_future (completion->get_future ());
-        if (!enqueue (
-              [completion, work = std::forward<Work> (work)] () mutable {
-                  try {
-                      if constexpr (std::is_void_v<result_t>) {
-                          std::invoke (work);
-                          completion->set_value ();
-                      } else {
-                          completion->set_value (bridge_t::store (std::invoke (work)));
-                      }
-                  }
-                  catch (...) {
-                      completion->set_exception (std::current_exception ());
-                  }
-              },
-              [completion] (std::exception_ptr error) {
-                  completion->set_exception (std::move (error));
-              })) {
+        auto invoke_work = [completion, work = std::forward<Work> (work)] () mutable {
+            try {
+                if constexpr (std::is_void_v<result_t>) {
+                    std::invoke (work);
+                    completion->set_value ();
+                } else {
+                    completion->set_value (bridge_t::store (std::invoke (work)));
+                }
+            }
+            catch (...) {
+                completion->set_exception (std::current_exception ());
+            }
+        };
+        if (schedule_drain (true, [&] { invoke_work (); }))
+            return result;
+        if (!enqueue (std::move (invoke_work), [completion] (std::exception_ptr error) {
+                completion->set_exception (std::move (error));
+            })) {
             throw std::runtime_error ("state lane is closed");
         }
         schedule_drain (true);
@@ -217,7 +263,8 @@ class state_lane_t
     {
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
         auto result = run (std::forward<Work> (work));
-        return state_lane_internal::checked_future_t<decltype (result)> (std::move (result));
+        return state_lane_internal::checked_future_t<decltype (result)> (std::move (result),
+                                                                         &_executor);
 #else
         return run (std::forward<Work> (work));
 #endif

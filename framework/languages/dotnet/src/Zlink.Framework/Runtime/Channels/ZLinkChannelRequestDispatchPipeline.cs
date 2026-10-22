@@ -22,7 +22,9 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
     )
     {
         var scope = new ZLinkDispatchFlowScope(
-            ZLinkDispatchErrorSurface.Channel,
+            sourceNodeRid is null
+                ? ZLinkDispatchErrorSurface.Channel
+                : ZLinkDispatchErrorSurface.RouteMeshChannel,
             dispatchErrors.Flow.CaptureEnabled,
             ZLinkDispatchMessageKind.Request,
             header.MessageName,
@@ -52,6 +54,7 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                     ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, error)
                 )
                 .ConfigureAwait(false);
+            scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Replied);
             return;
         }
 
@@ -76,6 +79,7 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                     ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, decodeError!)
                 )
                 .ConfigureAwait(false);
+            scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Replied);
             return;
         }
 
@@ -140,6 +144,7 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                     )
                     .ConfigureAwait(false);
                 scope.HandlerException(dispatchErrors, ZLinkDispatchErrorAction.ReplyError, ex);
+                scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Replied);
             }
         }
         finally
@@ -163,7 +168,9 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
     )
     {
         var scope = new ZLinkDispatchFlowScope(
-            ZLinkDispatchErrorSurface.Channel,
+            sourceNodeRid is null
+                ? ZLinkDispatchErrorSurface.Channel
+                : ZLinkDispatchErrorSurface.RouteMeshChannel,
             dispatchErrors.Flow.CaptureEnabled,
             ZLinkDispatchMessageKind.Request,
             header.MessageName,
@@ -195,6 +202,7 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                     ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, error)
                 )
                 .ConfigureAwait(false);
+            scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Replied);
             return;
         }
 
@@ -219,6 +227,7 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                     ZLinkChannelReplyWriter.CreateErrorHeader(channelName, header, decodeError!)
                 )
                 .ConfigureAwait(false);
+            scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Replied);
             return;
         }
 
@@ -285,6 +294,7 @@ internal sealed class ZLinkChannelRequestDispatchPipeline(
                 )
                 .ConfigureAwait(false);
             scope.HandlerException(dispatchErrors, ZLinkDispatchErrorAction.ReplyError, ex);
+            scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Replied);
         }
     }
 }

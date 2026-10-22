@@ -136,16 +136,16 @@ internal sealed class ZLinkChannelSendCall<TMessage>(
 
     private IReadOnlyList<Message> EncodePayloadParts(out ReadOnlyMemory<byte> metadata)
     {
-        var header = ZLinkClientCallCodec.CreateEnvelope(
-            ZLinkMessageKind.Command,
-            channelName,
-            ZLinkMessageNameResolver.ResolveFromMessage(message)
-        );
         var selected = ZLinkCallMetadata.EncodeChannel(
             _metadata,
             runtime.IsClientServerClientChannel(channelName)
         );
-        header = header with { Metadata = selected.Header };
+        var header = ZLinkClientCallCodec.CreateEnvelope(
+            ZLinkMessageKind.Command,
+            channelName,
+            ZLinkMessageNameResolver.ResolveFromMessage(message),
+            metadata: selected.Header
+        );
         metadata = selected.Frame;
         return ZLinkClientCallCodec.EncodeEnvelopeParts(
             header,
@@ -206,11 +206,6 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
     {
         var packetName = ZLinkMessageNameResolver.ResolveFromMessage(request);
         var timeout = _timeout ?? runtime.Registration.ResolveChannelRequestTimeout(channelName);
-        using var encodedBody = ZLinkClientCallCodec.EncodeEnvelopeBody(
-            request,
-            runtime.Registration.Codecs,
-            out var contentType
-        );
         var terminal = runtime.Flow.CaptureEnabled
             ? new ZLinkChannelRequestTerminalTrace(
                 runtime.Flow,
@@ -231,11 +226,15 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
                 ZLinkMessageKind.Request,
                 channelName,
                 packetName,
-                timeout
+                timeout,
+                metadata: headerMetadata
             );
-            header = header with { Metadata = headerMetadata };
             terminal?.SetCorrelation(header.CorrelationId);
-            var parts = ZLinkClientCallCodec.CopyEnvelopeParts(header, encodedBody, contentType);
+            var parts = ZLinkClientCallCodec.EncodeEnvelopeParts(
+                header,
+                request,
+                runtime.Registration.Codecs
+            );
             var reply = await runtime
                 .RequestToChannelAsync(
                     channelName,
@@ -249,9 +248,10 @@ internal sealed class ZLinkChannelRequestCall<TRequest>(
             var decoded = ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
                 reply,
                 "Channel request reply is empty.",
-                $"Channel request failed for '{packetName}'.",
+                "Channel request failed for '{0}'.",
                 runtime.Registration.Codecs,
-                runtime.Flow.CaptureEnabled
+                runtime.Flow.CaptureEnabled,
+                packetName
             );
             terminal?.Succeeded();
             return decoded;
@@ -471,9 +471,10 @@ internal sealed class ZLinkRouteRequestCall<TRequest>(
             var decoded = ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
                 reply,
                 "Node request reply is empty.",
-                $"Node request failed for '{packetName}'.",
+                "Node request failed for '{0}'.",
                 runtime.Registration.Codecs,
-                runtime.Flow.CaptureEnabled
+                runtime.Flow.CaptureEnabled,
+                packetName
             );
             terminal?.Succeeded();
             return decoded;
@@ -674,9 +675,10 @@ internal sealed class ZLinkRouteSpotRequestCall<TRequest>(
                 return ZLinkClientCallCodec.DecodeEnvelopeReplyAndDispose<TReply>(
                     reply,
                     "SPOT route request reply is empty.",
-                    $"SPOT route request failed for '{packetName}'.",
+                    "SPOT route request failed for '{0}'.",
                     runtime.Registration.Codecs,
-                    runtime.Flow.CaptureEnabled
+                    runtime.Flow.CaptureEnabled,
+                    packetName
                 );
             },
             cancellationToken

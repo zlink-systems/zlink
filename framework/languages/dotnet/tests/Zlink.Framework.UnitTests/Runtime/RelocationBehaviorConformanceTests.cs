@@ -2811,7 +2811,8 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
         Action? reconcileReadStarted = null,
         Task? reconcileReadGate = null,
         Func<IZLinkMeshNodeLocationResolver, IZLinkMeshNodeLocationResolver>? meshResolverWrapper =
-            null
+            null,
+        string? spotType = null
     )
     {
         var services = new ServiceCollection();
@@ -2861,7 +2862,7 @@ internal sealed class RelocationBehaviorHost : IAsyncDisposable
                 );
             if (registerTargetSpot)
                 objects.AddSpotFactory<BehaviorTargetSpot>(
-                    SpotType,
+                    spotType ?? SpotType,
                     factory =>
                     {
                         if (relocateSpots)
@@ -3809,6 +3810,8 @@ internal class ProbedBackendSpotNode : DispatchProxy
     private object _target = null!;
     private CanonicalRelocationTransportProbe _probe = null!;
     private RouteChangeProxy? _routeProxy;
+
+    internal ZLinkManagedMeshNode NativeNode => ((ZLinkBackendSpotNodeWrapper)_target).NativeNode;
 
     internal static IZLinkBackendSpotNode Create(
         IZLinkBackendSpotNode target,

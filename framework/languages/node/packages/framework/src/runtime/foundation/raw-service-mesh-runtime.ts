@@ -360,10 +360,12 @@ export class RawServiceMeshRuntime {
       if (router.disconnectRid !== undefined) {
         router.disconnectRid(nodeRoutingId);
       } else {
-        router.disconnect(endpoint);
+        try {
+          router.disconnect(endpoint);
+        } catch (error) {
+          if (!isAlreadyDisconnectedError(error)) throw error;
+        }
       }
-    } catch (error) {
-      if (!isAlreadyDisconnectedError(error)) throw error;
     } finally {
       if (current !== undefined) this.removePeer(current);
       this.topology.forgetNotRequired(nodeRoutingId);
@@ -595,20 +597,21 @@ export class RawServiceMeshRuntime {
     return this.send(targetNodeRoutingId, [NODE_SEND_HEADER, this.applicationFrame(payload)]);
   }
 
-  async sendToChannel(
+  sendToChannel(
     channelName: string,
     payload: ServiceApplicationPayloadInput
-  ): Promise<SubmitResult> {
+  ): SubmitResult | Promise<SubmitResult> {
     const selection = this.selectChannelTarget(channelName);
     if (selection.kind !== 'selected') return selection.submitResult;
     const selected = selection.peer;
     const applicationFrame = this.applicationFrame(payload);
-    return (await this.send(selected.descriptor.nodeRoutingId, [
+    const submitted = this.send(selected.descriptor.nodeRoutingId, [
       encodeChannelSendHeader(channelName),
       applicationFrame
-    ]))
-      ? SubmitResult.Ok
-      : SubmitResult.NotConnected;
+    ]);
+    return typeof submitted === 'boolean'
+      ? channelSendSubmitResult(submitted)
+      : submitted.then(channelSendSubmitResult);
   }
 
   requestToNode(
@@ -1899,6 +1902,10 @@ export class RawServiceMeshRuntime {
     }
     throw error;
   }
+}
+
+function channelSendSubmitResult(accepted: boolean): SubmitResult {
+  return accepted ? SubmitResult.Ok : SubmitResult.NotConnected;
 }
 
 function controlSendKey(target: string, command: number): string {

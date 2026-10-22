@@ -1,19 +1,19 @@
-using System.Globalization;
-
 namespace Zlink.Framework.Runtime.Messaging;
 
 internal static class ZLinkRawRequestSubmitter
 {
-    public static async ValueTask<IReadOnlyList<Message>> SubmitAsync(
+    public static async ValueTask<IReadOnlyList<Message>> SubmitAsync<TState>(
+        TState state,
         IReadOnlyList<Message> parts,
         Func<
+            TState,
             IReadOnlyList<Message>,
             TimeSpan,
             CancellationToken,
             Task<IReadOnlyList<Message>>
         > request,
         TimeSpan timeout,
-        string failureMessage,
+        Func<TState, object, string> failureMessage,
         CancellationToken cancellationToken
     )
     {
@@ -24,13 +24,13 @@ internal static class ZLinkRawRequestSubmitter
             Task<IReadOnlyList<Message>> completion;
             try
             {
-                completion = request(parts, timeout, cancellationToken);
+                completion = request(state, parts, timeout, cancellationToken);
             }
             catch (ZlinkSubmitException error)
             {
                 throw ZLinkRequestFailureMapper.CreateSubmitException(
                     error,
-                    string.Format(CultureInfo.InvariantCulture, failureMessage, error.Result),
+                    failureMessage(state, error.Result),
                     completionFailure: false
                 );
             }
@@ -41,21 +41,21 @@ internal static class ZLinkRawRequestSubmitter
             throw ZLinkRequestFailureMapper.CreateCompletionException(
                 terminal.Result,
                 terminal.FailureErrno,
-                string.Format(CultureInfo.InvariantCulture, failureMessage, terminal.Result)
+                failureMessage(state, terminal.Result)
             );
         }
         catch (ZlinkRequestException error)
         {
             throw ZLinkRequestFailureMapper.CreateCompletionException(
                 (RequestResult)(int)error.Result,
-                string.Format(CultureInfo.InvariantCulture, failureMessage, error.Result)
+                failureMessage(state, error.Result)
             );
         }
         catch (ZlinkSubmitException error)
         {
             throw ZLinkRequestFailureMapper.CreateSubmitException(
                 error,
-                string.Format(CultureInfo.InvariantCulture, failureMessage, error.Result)
+                failureMessage(state, error.Result)
             );
         }
         finally

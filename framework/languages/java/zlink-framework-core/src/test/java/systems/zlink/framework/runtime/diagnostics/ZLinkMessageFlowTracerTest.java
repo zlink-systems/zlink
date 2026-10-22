@@ -40,6 +40,43 @@ import java.util.logging.Logger;
 
 // MFLOW-001/002/003/011: mode gating + runtime live toggle + structured output.
 class ZLinkMessageFlowTracerTest {
+    private static volatile Object allocationSink;
+
+    @Test
+    void channelTraceGateAllocatesNothingWhenOff() {
+        var bean =
+                (com.sun.management.ThreadMXBean)
+                        java.lang.management.ManagementFactory.getThreadMXBean();
+        bean.setThreadAllocatedMemoryEnabled(true);
+        long thread = Thread.currentThread().threadId();
+        java.util.function.Function<java.util.function.Supplier<?>, Long> minimumAllocated =
+                action -> {
+                    int callsPerInterval = 10000;
+                    for (int index = 0; index < callsPerInterval; index++)
+                        allocationSink = action.get();
+
+                    long minimum = Long.MAX_VALUE;
+                    for (int interval = 0; interval < 8; interval++) {
+                        long before = bean.getThreadAllocatedBytes(thread);
+                        for (int index = 0; index < callsPerInterval; index++)
+                            allocationSink = action.get();
+                        long allocated = bean.getThreadAllocatedBytes(thread) - before;
+                        minimum = Math.min(minimum, allocated);
+                    }
+                    return minimum;
+                };
+
+        var off = tracer(options(ZLinkMessageFlowLogMode.OFF));
+        assertEquals(
+                0L,
+                minimumAllocated.apply(() -> off.begin(ZLinkMessageFlowOutcome.DISPATCHED)));
+
+        var normal = tracer(options(ZLinkMessageFlowLogMode.NORMAL));
+        assertTrue(
+                minimumAllocated.apply(() -> normal.begin(ZLinkMessageFlowOutcome.DISPATCHED))
+                        > 0L);
+    }
+
     private static ZLinkDispatchOptionsRegistration options(ZLinkMessageFlowLogMode mode) {
         ZLinkDispatchOptionsRegistration options = new ZLinkDispatchOptionsRegistration();
         options.messageFlow(mode);

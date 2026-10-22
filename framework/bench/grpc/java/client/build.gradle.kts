@@ -43,3 +43,53 @@ val admissionProgressTest by tasks.registering(JavaExec::class) {
     dependsOn(tasks.testClasses)
 }
 tasks.check { dependsOn(admissionProgressTest) }
+
+// These measurements are opt-in and never run as part of check.
+val requestBackpressureMains = mapOf(
+    "requestBackpressureMicrobench" to "RequestBackpressureProbe",
+    "requestBackpressureCompare" to "RequestBackpressureCompare",
+    "requestBackpressureAdapterCompare" to "RequestBackpressureCompare\$Adapter",
+    "requestBackpressureAllocations" to "RequestBackpressureAllocations",
+)
+requestBackpressureMains.forEach { (taskName, entryPoint) ->
+    tasks.register<JavaExec>(taskName) {
+        description = "Run the public request backpressure measurement ($entryPoint)"
+        classpath = sourceSets.test.get().runtimeClasspath
+        mainClass.set("systems.zlink.bench.withgrpc.client.$entryPoint")
+        dependsOn(tasks.testClasses)
+        jvmArgs("--enable-native-access=ALL-UNNAMED")
+        doFirst {
+            val rounds = providers.gradleProperty("probeRounds").getOrElse("3")
+            val windowMillis = providers.gradleProperty("probeWindowMillis").getOrElse("2000")
+            val costDirectory = providers.gradleProperty("probeCostDirectory").orNull
+            if (costDirectory != null && entryPoint in setOf("RequestBackpressureProbe", "RequestBackpressureCompare")) {
+                file(costDirectory).mkdirs()
+                jvmArgs("-XX:-UseTLAB", "-XX:-DoEscapeAnalysis", "-XX:FlightRecorderOptions=stackdepth=256")
+            }
+            when (entryPoint) {
+                "RequestBackpressureProbe" -> {
+                    args(rounds, windowMillis)
+                    if (costDirectory != null) args(file(costDirectory).absolutePath)
+                }
+                "RequestBackpressureCompare" -> {
+                    args(
+                        providers.gradleProperty("probeBeforeClasspath").get(),
+                        providers.gradleProperty("probeAfterClasspath").get(),
+                        rounds,
+                        windowMillis,
+                    )
+                    if (costDirectory != null) args(file(costDirectory).absolutePath)
+                    if (providers.gradleProperty("probeIncludeBinding").getOrElse("true").toBoolean()) args("--binding")
+                }
+                "RequestBackpressureCompare\$Adapter" -> args(
+                    providers.gradleProperty("probeBeforeClasspath").get(),
+                    providers.gradleProperty("probeAfterClasspath").get(),
+                    providers.gradleProperty("probeBatches").getOrElse("512"),
+                    providers.gradleProperty("probeWidth").getOrElse("128"),
+                    rounds,
+                )
+                "RequestBackpressureAllocations" -> args(providers.gradleProperty("probeRecording").get())
+            }
+        }
+    }
+}

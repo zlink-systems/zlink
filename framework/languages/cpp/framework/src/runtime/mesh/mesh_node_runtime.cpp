@@ -661,7 +661,6 @@ void mesh_node_runtime_t::start ()
     if (_node) {
         return;
     }
-    _stopping.store (false, std::memory_order_release);
 
     std::shared_ptr<handler_group_options_state_t> handler_groups;
     std::vector<std::pair<std::string, std::string>> mesh_handler_groups;
@@ -864,8 +863,12 @@ void mesh_node_runtime_t::start ()
     }
     if (_session_route_owner_resolver)
         node->configure_session_route_owner (_session_route_owner_resolver);
-    if (_stateful_dispatch_resolver)
-        node->configure_stateful_dispatch (_stateful_dispatch_resolver);
+    std::visit (
+      [&node] (const auto &configuration) {
+          if (configuration)
+              node->configure_stateful_dispatch (configuration);
+      },
+      _stateful_dispatch_configuration);
     if (_bound_session_operations)
         node->configure_bound_session_operations (*_bound_session_operations);
     if (_late_session_route_update_reporter)
@@ -1720,13 +1723,13 @@ std::optional<location_owner_token_t> mesh_node_runtime_t::session_route_owner (
 }
 
 void mesh_node_runtime_t::configure_stateful_dispatch (
-  runtime::stateful::accepted_record_authority_resolver_t resolver)
+  stateful_dispatch_configuration_t configuration)
 {
-    if (!resolver)
+    if (!std::visit ([] (const auto &value) { return static_cast<bool> (value); }, configuration))
         throw configuration_error ("Stateful dispatch authority resolver is required");
     if (_node)
         throw configuration_error ("Stateful dispatch must be configured before MeshNode start");
-    _stateful_dispatch_resolver = std::move (resolver);
+    _stateful_dispatch_configuration = std::move (configuration);
 }
 
 void mesh_node_runtime_t::configure_bound_session_operations (
@@ -1870,7 +1873,6 @@ task_t<bool> mesh_node_runtime_t::send_instance_spot_activation_remote (
 
 void mesh_node_runtime_t::request_stop () noexcept
 {
-    _stopping.store (true, std::memory_order_release);
     if (_node)
         (void) _node->seal_relocation_targets ();
 }
@@ -1899,7 +1901,6 @@ void mesh_node_runtime_t::stop ()
             return _active_completion_waiters.load (std::memory_order_acquire) == 0;
         });
     }
-    _stopping.store (true, std::memory_order_release);
     _completion_ready.notify_all ();
     _state->lane
       .run ([&] {
@@ -1940,7 +1941,8 @@ void mesh_node_runtime_t::connect_peer (const zlink::routing_id_t &expected_rout
                                         const std::string &endpoint,
                                         std::uint64_t expected_lifecycle_generation,
                                         std::string security_identity,
-                                        bool automatic)
+                                        bool automatic,
+                                        location_owner_token_t owner)
 {
     if (!_node || endpoint.empty ())
         return;
@@ -1951,7 +1953,7 @@ void mesh_node_runtime_t::connect_peer (const zlink::routing_id_t &expected_rout
               return;
           const auto submitted =
             _node->connect_peer (endpoint, expected_routing_id, expected_lifecycle_generation,
-                                 std::move (security_identity), automatic);
+                                 std::move (security_identity), automatic, std::move (owner));
           if (submitted)
               _peer_connection_intents.emplace (endpoint, next_connection_intent_id ());
       })
@@ -1976,12 +1978,13 @@ void mesh_node_runtime_t::connect_peer (const std::string &endpoint, std::string
 void mesh_node_runtime_t::expect_peer (const zlink::routing_id_t &expected_routing_id,
                                        const std::string &endpoint,
                                        std::uint64_t expected_lifecycle_generation,
-                                       std::string security_identity)
+                                       std::string security_identity,
+                                       location_owner_token_t owner)
 {
     if (!_node || endpoint.empty ())
         return;
     _node->expect_peer (endpoint, expected_routing_id, expected_lifecycle_generation,
-                        std::move (security_identity));
+                        std::move (security_identity), std::move (owner));
 }
 
 void mesh_node_runtime_t::forget_peer (const zlink::routing_id_t &expected_routing_id,
@@ -2345,14 +2348,17 @@ void mesh_node_runtime_t::settle_application_actor_creation (const actor_ref_t &
         return;
     }
     auto opened = spots.open_local_actor_handoff (actor);
-    detail::observe_task_completion (opened, [state = _state->spot_state] (
-                                               const result_t<result_t<void>> &completion) {
-        const auto result =
-          completion ? completion.value ()
-                     : detail::propagate_failure<void> (completion, "Actor handoff opening failed");
-        if (!result)
-            state->runtime_failures ()->report (result.exception ());
-    });
+    detail::observe_task_completion (
+      opened, [state = _state, actor] (const result_t<result_t<void>> &terminal) {
+          const auto result =
+            terminal
+              ? terminal.value ()
+              : detail::propagate_failure<void> (terminal, "Actor creation handoff prefix failed");
+          if (!result) {
+              spot_node_runtime_t (state->spot_state).cancel_local_actor_handoff (actor);
+              state->spot_state->runtime_failures ()->report (result.exception ());
+          }
+      });
 }
 
 result_t<void>
@@ -3169,7 +3175,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::prepare_remote_application_actor
     /* The canonical relocation unit captures the Actor while sealing its
      * immutable envelope.  Only start the source move here; capturing now
      * would create a stale, unused snapshot and invoke Capture twice. */
-    const auto prepared = spot.transfer_actor_out (s->actor, s->transfer_id, false);
+    const auto prepared = co_await spot.transfer_actor_out (s->actor, s->transfer_id, false);
     if (!prepared) {
         const auto failed =
           detail::propagate_failure<actor_join_reply_t> (prepared, "Actor transfer-out failed");
@@ -3569,9 +3575,6 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
                          + (header.metadata.contains (std::string (message_follow_path_key))
                               ? 1
                               : message_follow_path_key.size ());
-        const bool replays_handoff_packet =
-          header.metadata.contains (std::string (detail::actor_handoff_source_node_key))
-          || header.metadata.contains ("__zlink.actorHandoffLateReplay");
         const bool has_exact_stale_route = stale_route.owner_lease_generation != 0;
         const bool exact_route_targets_local_source =
           has_exact_stale_route
@@ -3719,10 +3722,6 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
               framework_error_kind_t::invalid_operation,
               "bound Session Actor route fence is inconsistent");
         }
-        if (targets_local_node && !replays_handoff_packet)
-            co_return co_await detail::request_submission (spot_runtime.relay_local_actor_packet (
-              actor, header, payload, source_node, stale_route, incoming_hop_count,
-              original_operation, original_reply_route_id, timeout));
         std::uint64_t authority_owner_generation = 0;
         std::uint64_t owner_lease_generation = 0;
         if (targets_local_node && !spot_runtime.actor_route (target_actor)) {
