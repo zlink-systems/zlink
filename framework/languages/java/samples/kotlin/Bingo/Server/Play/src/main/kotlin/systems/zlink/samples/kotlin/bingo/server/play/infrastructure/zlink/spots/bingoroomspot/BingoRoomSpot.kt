@@ -12,6 +12,8 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
 import org.slf4j.LoggerFactory
 import systems.zlink.framework.channels.ZLinkRouteClient
+import systems.zlink.framework.errors.ZLinkFrameworkErrorKind
+import systems.zlink.framework.errors.ZLinkFrameworkException
 import systems.zlink.framework.kotlin.*
 import systems.zlink.framework.kotlin.ZLinkSuspendingSpot
 import systems.zlink.framework.kotlin.await
@@ -46,6 +48,7 @@ import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoRoomState
 import systems.zlink.samples.kotlin.bingo.shared.contracts.BingoStateNotify
 import systems.zlink.samples.kotlin.bingo.shared.contracts.GetPlayerRecordReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.GetPlayerRecordRes
+import systems.zlink.samples.kotlin.bingo.shared.contracts.Messages
 import systems.zlink.samples.kotlin.bingo.shared.contracts.PlayerJoinedNotify
 import systems.zlink.samples.kotlin.bingo.shared.contracts.ReportBingoResultReq
 import systems.zlink.samples.kotlin.bingo.shared.contracts.ReportBingoResultRes
@@ -61,6 +64,12 @@ class BingoRoomSpot(
     private val settingsInitializer: BingoRoomSettingsInitializer,
     routes: ZLinkRouteClient,
 ) : ZLinkSuspendingSpot<PlayerActor>() {
+    private companion object {
+        const val RewardItemId = "rare-golden-dauber"
+        const val RewardItemName = "Golden Dauber"
+        const val RewardRarity = "Legendary"
+    }
+
     private val logger = LoggerFactory.getLogger(BingoRoomSpot::class.java)
     private val outbound = routes.kotlin()
     private val playerNotifications = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -68,7 +77,7 @@ class BingoRoomSpot(
     private val actors = mutableMapOf<String, PlayerActor>()
     private val observers = mutableMapOf<String, PlayerActor>()
     private val pendingJoins = mutableMapOf<String, BingoRoomJoinReq>()
-    private val pendingObserverRewards = mutableListOf<BingoRewardAcquiredEvent>()
+    private var announcedRewardDrawSeq: Int? = null
     private var settings =
         BingoRoomSettings.create("two-player", 0, SampleTimings.DrawPeriod.toMillis())
     private var game: BingoRoomGame? = BingoGame.room(context.spotId(), settings)
@@ -102,9 +111,29 @@ class BingoRoomSpot(
         if (request.observeOnly) {
             pendingJoins.remove(actor.actorId())
             join(actor, request, 0, 0)
-            val pendingRewards = pendingObserverRewards.toList()
-            pendingObserverRewards.clear()
-            pendingRewards.forEach { notifyObservers(it) }
+            announcedRewardDrawSeq = null
+            // Observation receives results only while the game room is alive.
+            val observation =
+                try {
+                    context
+                        .outbound()
+                        .kotlin()
+                        .requestToSpot<Messages.GetBingoObservationRes>(
+                            request.roomId,
+                            Messages.GetBingoObservationReq.getDefaultInstance(),
+                        )
+                        .await()
+                } catch (error: ZLinkFrameworkException) {
+                    if (error.kind() == ZLinkFrameworkErrorKind.NOT_FOUND) return
+                    throw error
+                }
+            actor.push(
+                Messages.BingoObservationStateNotify.newBuilder()
+                    .setState(observation.state)
+                    .build()
+            )
+            if (observation.hasReward()) announceReward(observation.reward)
+            else context.relocationReady().defer()
             return
         }
         // --8<-- [start:doc-bingo-room-join]
@@ -136,6 +165,7 @@ class BingoRoomSpot(
     override suspend fun onLeaveActorSuspending(actor: PlayerActor) {
         if (!actors.containsKey(actor.actorId()) || game == null) {
             observers.remove(actor.actorId())
+            if (settings.observerMode() && observers.isEmpty()) context.close()
             logger.info("bingo-lifecycle room-leave actor={}", actor.actorId())
             return
         }
@@ -160,6 +190,7 @@ class BingoRoomSpot(
             record.losses,
         )
         actors.remove(actor.actorId())
+        if (actors.isEmpty() && observers.isEmpty()) context.close()
         logger.info("bingo-lifecycle room-leave actor={}", actor.actorId())
     }
 
@@ -205,7 +236,6 @@ class BingoRoomSpot(
         actor.joinRoom(request.roomId)
         if (request.observeOnly) {
             observers[actor.actorId()] = actor
-            context.relocationReady().defer()
             return BingoRoomJoinRes(observerJoinState(request))
         }
         val change = requireGame().join(actor.actorId(), request.displayName, wins, losses)
@@ -263,14 +293,16 @@ class BingoRoomSpot(
     // --8<-- [end:doc-bingo-draw-timer]
 
     suspend fun announceReward(event: BingoRewardAcquiredEvent) {
-        if (!settings.observerMode() || event.roomId != settings.observedRoomId) {
-            return
-        }
-        if (observers.isEmpty()) {
-            pendingObserverRewards += event
+        if (
+            !settings.observerMode() ||
+                event.roomId != settings.observedRoomId ||
+                observers.isEmpty() ||
+                event.drawSeq == announcedRewardDrawSeq
+        ) {
             return
         }
         notifyObservers(event)
+        announcedRewardDrawSeq = event.drawSeq
         context.relocationReady().defer()
     }
 
@@ -322,6 +354,8 @@ class BingoRoomSpot(
             actor.markForDestroyAfterRoomLeave()
             context.leaveActor(actor).await()
         }
+        // Cancellation completes after the active timer callback returns.
+        timer?.cancel()
     }
 
     // --8<-- [end:doc-bingo-room-cleanup]
@@ -367,28 +401,33 @@ class BingoRoomSpot(
 
     internal data class RelocationState(val settings: BingoRoomSettings, val state: BingoRoomState)
 
+    fun observation(): Messages.GetBingoObservationRes {
+        val state = checkNotNull(game) { "Observer room does not own game state." }.snapshot()
+        val response = Messages.GetBingoObservationRes.newBuilder().setState(state)
+        val reward = rewardFor(state)
+        if (reward != null) response.setReward(reward)
+        return response.build()
+    }
+
+    private fun rewardFor(state: BingoRoomState): BingoRewardAcquiredEvent? {
+        if (state.status != BingoRoomGame.Finished || state.winners.isEmpty()) return null
+        return BingoRewardAcquiredEvent(
+            state.roomId,
+            state.winners.first(),
+            state.drawSeq,
+            RewardItemId,
+            RewardItemName,
+            RewardRarity,
+        )
+    }
+
     private suspend fun publishWinner(change: BingoRoomGame.Change) {
-        val state = change.state
-        if (state.status != BingoRoomGame.Finished || state.winners.isEmpty()) {
-            return
-        }
-        val winner = state.winners.first()
+        val reward = rewardFor(change.state) ?: return
         // --8<-- [start:doc-bingo-reward-publish]
         context
             .outbound()
             .kotlin()
-            .publish(
-                SampleNames.RoomRewardChannel,
-                SampleNames.WinnerTopic,
-                BingoRewardAcquiredEvent(
-                    state.roomId,
-                    winner,
-                    state.drawSeq,
-                    "rare-golden-dauber",
-                    "Golden Dauber",
-                    "Legendary",
-                ),
-            )
+            .publish(SampleNames.RoomRewardChannel, SampleNames.WinnerTopic, reward)
             .await()
         // --8<-- [end:doc-bingo-reward-publish]
     }
