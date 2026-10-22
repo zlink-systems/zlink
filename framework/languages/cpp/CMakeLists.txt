@@ -1619,7 +1619,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink::stream_connector
     zlink_framework_bingo_proto)
   target_include_directories(test_cpp_framework_sample_parity PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_sample_parity
     COMMAND test_cpp_framework_sample_parity
