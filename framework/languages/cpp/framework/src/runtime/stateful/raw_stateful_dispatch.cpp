@@ -158,8 +158,7 @@ std::size_t retained_bytes (const raw_relocation_terminal_target_registration_t 
     if (registration.application_reply)
         total += protocol::encode_application_payload (*registration.application_reply).size ();
     total += registration.request_source.owner_id.size ()
-             + registration.request_source.node_routing_id.size ()
-             + registration.relay_destination_node_routing_id.size ();
+             + registration.request_source.node_routing_id.size ();
     return total;
 }
 
@@ -1837,10 +1836,7 @@ raw_relocation_replay_coordinator_t::retry_due_terminal_relays (clock_t::time_po
                              if (state.acknowledging || state.next_retry > now)
                                  continue;
                              pending.push_back (
-                               {item_key,
-                                state.registration.relay_destination_node_routing_id.empty ()
-                                  ? state.registration.request_source.node_routing_id
-                                  : state.registration.relay_destination_node_routing_id,
+                               {item_key, state.registration.request_source.node_routing_id,
                                 state.registration.relay, state.registration.application_reply});
                              state.next_retry = now + _relay_retry_interval;
                          }

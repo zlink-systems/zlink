@@ -396,7 +396,6 @@ public sealed partial class StatefulServiceRuntimeTests
         var nodeRid = RoutingId.From("wire-node");
         const string spotId = "wire-spot";
         const string sourceSpotId = "wire-source";
-        const ulong deadlineUnixMs = 4_102_444_800_123;
         var spot = ZLinkServiceWireCodec.EncodeSpot(
             ServiceWireConstants.Command.SpotRequest,
             9,
@@ -409,8 +408,7 @@ public sealed partial class StatefulServiceRuntimeTests
             12,
             13,
             hasMetadata: true,
-            messageFollowHopCount: 2,
-            deadlineUnixMs: deadlineUnixMs
+            messageFollowHopCount: 2
         );
         Assert.True(
             ZLinkServiceWireCodec.TryDecodeStateful(
@@ -428,11 +426,10 @@ public sealed partial class StatefulServiceRuntimeTests
         Assert.Equal(10UL, spotRecord.TargetSpotGeneration);
         Assert.Equal(13UL, spotRecord.OwnerLeaseGeneration);
         Assert.Equal<byte>(2, spotRecord.MessageFollowHopCount);
-        Assert.Equal(deadlineUnixMs, spotRecord.DeadlineUnixMs);
         Assert.Throws<ArgumentOutOfRangeException>(() =>
             ZLinkServiceWireCodec.EncodeSpot(
                 ServiceWireConstants.Command.SpotRequest,
-                9,
+                0,
                 new MeshOperationId(7, 8),
                 sourceSpotId,
                 spotId,
@@ -441,8 +438,7 @@ public sealed partial class StatefulServiceRuntimeTests
                 11,
                 12,
                 13,
-                hasMetadata: false,
-                deadlineUnixMs: 0
+                hasMetadata: false
             )
         );
 
