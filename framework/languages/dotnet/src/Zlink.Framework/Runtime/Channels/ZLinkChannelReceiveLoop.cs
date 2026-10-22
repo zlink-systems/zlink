@@ -100,8 +100,11 @@ internal sealed class ZLinkChannelReceiveLoop(
                             continue;
                         }
                         var owned = received;
-                        if (IsClientServerApplicationRecord(channelName, received.Parts))
-                            admission.MarkQueued();
+                        var envelope = clientServerDispatcher.ReadHeader(
+                            received.Parts,
+                            channelName,
+                            admission
+                        );
                         _ = applicationDispatch
                             .PostAsync(
                                 new ClientServerDispatchWork(
@@ -111,7 +114,8 @@ internal sealed class ZLinkChannelReceiveLoop(
                                     receiveStoragePool,
                                     applicationDispatch.ReplyGate,
                                     admittedMaximumMessageBytes,
-                                    admission
+                                    admission,
+                                    envelope
                                 ),
                                 cancellationToken
                             )
@@ -187,7 +191,8 @@ internal sealed class ZLinkChannelReceiveLoop(
                     work.Received,
                     work.ReplyGate,
                     work.MaximumMessageBytes,
-                    cancellationToken
+                    cancellationToken,
+                    work.Envelope
                 )
                 .ConfigureAwait(false);
         }
@@ -425,11 +430,18 @@ internal sealed class ZLinkChannelReceiveLoop(
 
                     onActivity?.Invoke();
                     var owned = topicMessage!;
-                    if (IsFanoutApplicationRecord(topicMessage.Parts))
+                    var envelope = dispatcher.ReadHeader(topicMessage.Parts);
+                    if (envelope.Header is not null)
                         admission.MarkQueued();
                     _ = applicationDispatch
                         .PostAsync(
-                            new FanoutDispatchWork(channelName, owned, topicMessagePool, admission),
+                            new FanoutDispatchWork(
+                                channelName,
+                                owned,
+                                topicMessagePool,
+                                admission,
+                                envelope
+                            ),
                             cancellationToken
                         )
                         .GetAwaiter()
@@ -477,43 +489,17 @@ internal sealed class ZLinkChannelReceiveLoop(
         {
             using var invocation = ZLinkApplicationJobQueueInvocation.Enter(work.Admission);
             await dispatcher
-                .DispatchEventMessageAsync(work.ChannelName, work.TopicMessage, cancellationToken)
+                .DispatchEventMessageAsync(
+                    work.ChannelName,
+                    work.TopicMessage,
+                    cancellationToken,
+                    work.Envelope
+                )
                 .ConfigureAwait(false);
         }
         finally
         {
             work.TopicMessagePool.Return(work.TopicMessage);
-        }
-    }
-
-    private static bool IsClientServerApplicationRecord(
-        string channelName,
-        IReadOnlyList<Message> parts
-    )
-    {
-        try
-        {
-            var header = ZLinkEnvelopeCodec.DecodeHeader(parts, validateFlow: false);
-            return StringComparer.Ordinal.Equals(header.ChannelName, channelName)
-                && header.Kind is ZLinkMessageKind.Command or ZLinkMessageKind.Request;
-        }
-        catch (ZLinkEnvelopeProtocolException)
-        {
-            return false;
-        }
-    }
-
-    private static bool IsFanoutApplicationRecord(IReadOnlyList<Message> parts)
-    {
-        try
-        {
-            var header = ZLinkEnvelopeCodec.DecodeHeader(parts, validateFlow: false);
-            ZLinkEnvelopeCodec.ValidateDispatchHeader(header);
-            return true;
-        }
-        catch (ZLinkEnvelopeProtocolException)
-        {
-            return false;
         }
     }
 
@@ -534,7 +520,8 @@ internal sealed class ZLinkChannelReceiveLoop(
         ZLinkReceivedStoragePool ReceiveStoragePool,
         ZLinkChannelReplyGate ReplyGate,
         uint MaximumMessageBytes,
-        ZLinkApplicationJobQueueLease Admission
+        ZLinkApplicationJobQueueLease Admission,
+        (ZLinkEnvelopeHeader? Header, ZLinkEnvelopeProtocolException? Error) Envelope
     );
 
     internal ZLinkChannelApplicationDispatchQueue<FanoutDispatchWork> CreateFanoutDispatchQueue(
@@ -556,6 +543,7 @@ internal sealed class ZLinkChannelReceiveLoop(
         string ChannelName,
         TopicMessage TopicMessage,
         ZLinkTopicMessageStoragePool TopicMessagePool,
-        ZLinkApplicationJobQueueLease Admission
+        ZLinkApplicationJobQueueLease Admission,
+        (ZLinkEnvelopeHeader? Header, ZLinkEnvelopeProtocolException? Error) Envelope
     );
 }

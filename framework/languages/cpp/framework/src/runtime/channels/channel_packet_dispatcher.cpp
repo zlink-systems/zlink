@@ -71,20 +71,33 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
     auto flow_scope =
       runtime::flow_context_t::enter (header.value ().flow_id, header.value ().flow_origin,
                                       flow.mode (), flow_origin_t::inbound, std::nullopt);
-    if (inbound_kind != dispatch_message_kind_t::publish) {
-        flow.trace (message_flow_outcome_t::received, [&] {
-            return message_flow_event_t{message_flow_outcome_t::received,
-                                        dispatch_error_surface_t::channel,
-                                        inbound_kind,
-                                        header.value ().message_name,
-                                        channel_name,
-                                        header.value ().topic,
-                                        header.value ().correlation_id,
-                                        std::nullopt,
-                                        std::nullopt,
-                                        std::nullopt,
-                                        std::nullopt};
-        });
+    if (inbound_kind != dispatch_message_kind_t::publish
+        && flow.enabled_for (message_flow_outcome_t::dispatched)) {
+        before_application_handler = [before = std::move (before_application_handler), &flow,
+                                      &header, &channel_name, inbound_kind] {
+            if (before)
+                before ();
+            flow.trace (message_flow_outcome_t::dispatched,
+                        header.value ().flow_id ? std::string_view (*header.value ().flow_id)
+                                                : std::string_view{},
+                        [&] {
+                            message_flow_event_t event{message_flow_outcome_t::dispatched,
+                                                       dispatch_error_surface_t::channel,
+                                                       inbound_kind,
+                                                       header.value ().message_name,
+                                                       channel_name,
+                                                       header.value ().topic,
+                                                       header.value ().correlation_id,
+                                                       std::nullopt,
+                                                       std::nullopt,
+                                                       std::nullopt,
+                                                       std::nullopt};
+
+                            event.flow_id = header.value ().flow_id;
+                            event.flow_origin = header.value ().flow_origin;
+                            return event;
+                        });
+        };
     }
 
     auto body = codec.decode_body (parts);
@@ -151,19 +164,25 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
                 writer.create_error_header (std::move (channel_name), header.value (), error),
                 zlink::message_t::from ("")));
         }
-        flow.trace (message_flow_outcome_t::replied, [&] {
-            return message_flow_event_t{message_flow_outcome_t::replied,
-                                        dispatch_error_surface_t::channel,
-                                        dispatch_message_kind_t::response,
-                                        header.value ().message_name,
-                                        channel_name,
-                                        header.value ().topic,
-                                        header.value ().correlation_id,
-                                        std::nullopt,
-                                        std::nullopt,
-                                        std::nullopt,
-                                        std::nullopt};
-        });
+        flow.trace (message_flow_outcome_t::replied,
+                    header.value ().flow_id ? std::string_view (*header.value ().flow_id)
+                                            : std::string_view{},
+                    [&] {
+                        message_flow_event_t event{message_flow_outcome_t::replied,
+                                                   dispatch_error_surface_t::channel,
+                                                   dispatch_message_kind_t::response,
+                                                   header.value ().message_name,
+                                                   channel_name,
+                                                   header.value ().topic,
+                                                   header.value ().correlation_id,
+                                                   std::nullopt,
+                                                   std::nullopt,
+                                                   std::nullopt,
+                                                   std::nullopt};
+                        event.flow_id = header.value ().flow_id;
+                        event.flow_origin = header.value ().flow_origin;
+                        return event;
+                    });
         return result_t<runtime::messaging::message_parts_t>::success (writer.reply_raw_envelope (
           writer.create_reply_header (runtime::messaging::message_kind_t::response,
                                       std::move (channel_name), header.value ()),
@@ -197,32 +216,25 @@ result_t<runtime::messaging::message_parts_t> channel_packet_dispatcher_t::dispa
               runtime::messaging::message_parts_t{});
         }
         if (inbound_kind != dispatch_message_kind_t::publish) {
-            flow.trace (message_flow_outcome_t::dispatched, [&] {
-                return message_flow_event_t{message_flow_outcome_t::dispatched,
-                                            dispatch_error_surface_t::channel,
-                                            inbound_kind,
-                                            header.value ().message_name,
-                                            channel_name,
-                                            header.value ().topic,
-                                            header.value ().correlation_id,
-                                            std::nullopt,
-                                            std::nullopt,
-                                            std::nullopt,
-                                            std::nullopt};
-            });
-            flow.trace (message_flow_outcome_t::completed, [&] {
-                return message_flow_event_t{message_flow_outcome_t::completed,
-                                            dispatch_error_surface_t::channel,
-                                            inbound_kind,
-                                            header.value ().message_name,
-                                            channel_name,
-                                            header.value ().topic,
-                                            header.value ().correlation_id,
-                                            std::nullopt,
-                                            std::nullopt,
-                                            std::nullopt,
-                                            std::nullopt};
-            });
+            flow.trace (message_flow_outcome_t::completed,
+                        header.value ().flow_id ? std::string_view (*header.value ().flow_id)
+                                                : std::string_view{},
+                        [&] {
+                            message_flow_event_t event{message_flow_outcome_t::completed,
+                                                       dispatch_error_surface_t::channel,
+                                                       inbound_kind,
+                                                       header.value ().message_name,
+                                                       channel_name,
+                                                       header.value ().topic,
+                                                       header.value ().correlation_id,
+                                                       std::nullopt,
+                                                       std::nullopt,
+                                                       std::nullopt,
+                                                       std::nullopt};
+                            event.flow_id = header.value ().flow_id;
+                            event.flow_origin = header.value ().flow_origin;
+                            return event;
+                        });
         }
         return result_t<runtime::messaging::message_parts_t>::success (
           runtime::messaging::message_parts_t{});
