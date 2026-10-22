@@ -256,7 +256,7 @@ bool zlink::socket_base_t::acquire_completion_poller (void *owner_)
             publish_completion_processing_owner ();
         }
     }
-    // A monitor must keep processing commands
+    // A monitor or temporary transport owner must keep processing commands
     // even when the application never waits on its completion poller. The
     // owner gate and completion reference fence only completion drain; the
     // async executor already skips that drain while a public poller owns it.
