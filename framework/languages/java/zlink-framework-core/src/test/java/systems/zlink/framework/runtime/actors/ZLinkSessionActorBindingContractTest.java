@@ -1185,10 +1185,7 @@ final class ZLinkSessionActorBindingContractTest {
                 .toCompletableFuture()
                 .join();
 
-        long deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos();
-        while (!runtime.bound().isEmpty() && System.nanoTime() < deadline) {
-            Thread.sleep(5);
-        }
+        stream.peerDisconnected.get(2, TimeUnit.SECONDS);
         assertTrue(
                 runtime.bound().isEmpty(), "the configured Session seal deadline did not expire");
         assertEquals(1, stream.disconnectedPeers);
@@ -1605,6 +1602,7 @@ final class ZLinkSessionActorBindingContractTest {
         private RuntimeException disconnectSubmissionFailure;
         private RuntimeException unbindFailure;
         private int disconnectedPeers;
+        private final CompletableFuture<Void> peerDisconnected = new CompletableFuture<>();
         private long nextIngressSequence = 1;
         private boolean closed;
         private ZLinkSessionActorsRuntime runtime;
@@ -1632,6 +1630,7 @@ final class ZLinkSessionActorBindingContractTest {
         @Override
         public void disconnectPeer(RoutingId routingId) {
             disconnectedPeers++;
+            peerDisconnected.complete(null);
         }
 
         @Override
