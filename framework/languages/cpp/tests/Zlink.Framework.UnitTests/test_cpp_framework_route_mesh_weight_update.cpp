@@ -2,6 +2,9 @@
 #include "../support/runtime_failure_fixture.hpp"
 
 #include "runtime/foundation/operation_registry.hpp"
+#include "runtime/channels/route_packet_dispatcher.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
+#include "runtime/messaging/envelope_codec.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 
@@ -397,5 +400,138 @@ TEST (CppFrameworkRouteMeshWeightUpdate, ConcurrentWeightChangesReachPeerInRevis
     source.close ();
     target_node.stop ();
 }
+
+
+struct channel_flow_handler_t
+{
+    std::string request (const std::string &value,
+                         const zlink::framework::route_message_context_t &)
+    {
+        return value;
+    }
+    void send (const std::string &, const zlink::framework::route_message_context_t &) {}
+};
+
+class ChannelMessageFlow : public ::testing::TestWithParam<bool>
+{
+};
+
+TEST_P (ChannelMessageFlow, RouteMeshRequestAndSendRecordAllReceiverStages)
+{
+    using namespace zlink::framework;
+    std::vector<message_flow_event_t> events;
+    dispatch_options_t options;
+    options.message_flow (message_flow_log_mode_t::normal);
+    detail::dispatch_options_access_t::set_observer_for_tests (
+      options, [&] (const auto &event) { events.push_back (event); });
+    auto context = std::make_shared<zlink::context_t> ();
+    mesh::service_node_descriptor_t target_descriptor{"channel-flow",
+                                                      bytes ("flow-target"),
+                                                      1,
+                                                      1,
+                                                      "inproc://channel-flow-target",
+                                                      {{"X", 100}},
+                                                      mesh::service_node_state_t::serving};
+    auto source_descriptor = target_descriptor;
+    source_descriptor.node_routing_id = bytes ("flow-source");
+    source_descriptor.advertised_endpoint = "inproc://channel-flow-source";
+    source_descriptor.channels.clear ();
+    mesh::raw_mesh_node_options_t target_options{target_descriptor};
+    target_options.dispatch = options;
+    mesh::raw_mesh_node_owner_t target (
+      zlink::framework::test::runtime_failure_options (std::move (target_options)), context);
+    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
+                                          mesh::raw_mesh_node_options_t{source_descriptor}),
+                                        context);
+    target.start ();
+    source.start ();
+    source.expect_peer (target_descriptor);
+    ASSERT_TRUE (source.connect_peer (target.endpoint (), target_descriptor));
+    ASSERT_TRUE (pump_until (source, target, [&] {
+        auto peer = source.topology ().peer (target_descriptor.node_routing_id);
+        return peer && peer->ready;
+    }));
+    service_collection_t services;
+    services.add_singleton<channel_flow_handler_t> ();
+    auto provider = services.build_provider ();
+    serializer_registry_t serializers;
+    serializers.add<std::string> (
+      [] (const std::string &value) { return encoded_payload_t::from_string (value); },
+      [] (const encoded_payload_t &value) { return value.to_string (); }, "application/json");
+    detail::route_handler_registry_t handlers;
+    handlers.on_request<channel_flow_handler_t, std::string, std::string> (
+      "X", "FlowRequest", &channel_flow_handler_t::request);
+    handlers.on_send<channel_flow_handler_t, std::string> ("X", "FlowSend",
+                                                           &channel_flow_handler_t::send);
+    detail::no_route_internal_packet_dispatcher_t no_internal;
+    handler_registry_t filters;
+    detail::route_packet_dispatcher_t dispatcher (
+      "X", provider, serializers, handlers, no_internal, options, &filters,
+      handler_dispatch_kind_t::channel_send, handler_dispatch_kind_t::channel_request);
+    const bool request = GetParam ();
+    events.clear ();
+    runtime::messaging::envelope_header_t outbound;
+    outbound.kind = request ? runtime::messaging::message_kind_t::request
+                            : runtime::messaging::message_kind_t::command;
+    outbound.channel_name = "X";
+    outbound.message_name = request ? "FlowRequest" : "FlowSend";
+    outbound.correlation_id = request ? "channel-flow-correlation" : "";
+    outbound.flow_id = "01890a5d-ac96-774b-bcce-b302099a8057";
+    outbound.flow_origin = flow_origin_t::application;
+    auto outbound_parts = runtime::messaging::envelope_codec_t{}.encode_raw_body_parts (
+      outbound, zlink::message_t::from ("body"));
+    auto payload =
+      protocol::application_payload_t::from_parts (std::move (outbound_parts).take_items ());
+    auto replied = std::make_shared<std::promise<void>> ();
+    auto reply = replied->get_future ();
+    if (request)
+        ASSERT_TRUE (await_task (source.request_to_channel (
+          "X", payload, 2s, [replied] (auto, auto) { replied->set_value (); })));
+    else
+        ASSERT_TRUE (await_task (source.send_to_channel ("X", payload)));
+    std::optional<mesh::service_mailbox_claim_t> claim;
+    ASSERT_TRUE (pump_until (source, target, [&] {
+        if (!claim)
+            claim = target.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1,
+                                                 64u * 1024u);
+        return claim.has_value ();
+    }));
+    auto &received = claim->records.front ();
+    auto parts = protocol::decode_application_parts (
+      protocol::decode_application_payload (protocol::message_bytes (received.parts[1]), true));
+    runtime::messaging::message_parts_t encoded (std::move (parts));
+    auto header = runtime::messaging::envelope_codec_t{}.decode_header (encoded, true).value ();
+    header.kind = request ? runtime::messaging::message_kind_t::request
+                          : runtime::messaging::message_kind_t::command;
+    header.channel_name = "X";
+
+    auto result = dispatcher.dispatch (
+      {zlink::routing_id_t::from ("flow-source"), received.correlation, std::move (encoded), {}},
+      std::move (header));
+    ASSERT_TRUE (result);
+    ASSERT_EQ (4u, events.size ());
+    EXPECT_EQ (message_flow_outcome_t::received, events[0].outcome);
+    EXPECT_EQ (message_flow_outcome_t::admitted, events[1].outcome);
+    EXPECT_EQ (message_flow_outcome_t::dispatched, events[2].outcome);
+    EXPECT_EQ (request ? message_flow_outcome_t::replied : message_flow_outcome_t::completed,
+               events[3].outcome);
+    for (const auto &event : events) {
+        EXPECT_EQ (outbound.flow_id, event.flow_id);
+        EXPECT_EQ (events.front ().correlation_id.value_or (""),
+                   event.correlation_id.value_or (""));
+    }
+    if (request)
+        ASSERT_TRUE (target.reply (received, protocol::application_payload_t{
+                                               "FlowReply", "application/json", bytes ("reply")}));
+    ASSERT_TRUE (target.mailbox ().release (*claim));
+    if (request)
+        ASSERT_TRUE (pump_until (
+          source, target, [&] { return reply.wait_for (0ms) == std::future_status::ready; }));
+
+    source.close ();
+    target.close ();
+}
+
+INSTANTIATE_TEST_SUITE_P (Modes, ChannelMessageFlow, ::testing::Values (false, true));
 
 } // namespace
