@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "allocation_counter.hpp"
 #include "runtime/stateful/public_host_runtime.hpp"
+#include "runtime/dispatch/dispatch_limits.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 #include "../support/runtime_failure_fixture.hpp"
 #include <gtest/gtest.h>
@@ -101,7 +102,7 @@ TEST (ReceiveAllocations, EmptyTurnDoesNotBuildInfrastructureDispatchStorage)
     runtime->close ();
 }
 
-TEST (ReceiveAllocations, InfrastructureDispatchRetainsItsClaimAcrossSuspension)
+void verify_infrastructure_claim_across_suspension (std::size_t bind_count)
 {
     auto runtime = make_host ();
     const auto rid = zlink::routing_id_t::from (std::vector<std::uint8_t>{'n'});
@@ -116,7 +117,7 @@ TEST (ReceiveAllocations, InfrastructureDispatchRetainsItsClaimAcrossSuspension)
     unsigned bind_calls = 0;
     unsigned follow_calls = 0;
     runtime->configure_message_follow_handler ([&] (const auto &) {
-        EXPECT_EQ (bind_calls, 1u);
+        EXPECT_EQ (bind_calls, bind_count);
         ++follow_calls;
     });
     runtime->configure_bound_session_operations (
@@ -157,8 +158,10 @@ TEST (ReceiveAllocations, InfrastructureDispatchRetainsItsClaimAcrossSuspension)
                                                     .owner_lease_generation = 1},
                                           .session_routing_id = {'s'},
                                           .binding = {.generation = 1}};
-    ASSERT_TRUE (runtime->transport ().mailbox ().try_enqueue (
-      infrastructure_record (wire::encode_bound_session_bind (bind))));
+    for (std::size_t index = 0; index < bind_count; ++index) {
+        ASSERT_TRUE (runtime->transport ().mailbox ().try_enqueue (
+          infrastructure_record (wire::encode_bound_session_bind (bind))));
+    }
     auto running = runtime->dispatch_ready ([] (const auto &, const auto &, auto) {}, false);
     EXPECT_FALSE (running.await_ready ());
     EXPECT_EQ (owner_calls, 1u);
@@ -173,14 +176,32 @@ TEST (ReceiveAllocations, InfrastructureDispatchRetainsItsClaimAcrossSuspension)
       fw::location_owner_token_t{"session-owner", 1})));
     const auto settled = running.result ();
     ASSERT_TRUE (settled);
-    EXPECT_EQ (settled.value (), 2u);
-    EXPECT_EQ (bind_calls, 1u);
+    // Suspension may exhaust this turn's budget. Drive the next bounded turn
+    // and wait for its completion before checking the entire queued sequence.
+    const auto remaining =
+      runtime->dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ();
+    ASSERT_TRUE (remaining);
+    EXPECT_EQ (settled.value () + remaining.value (), bind_count + 1);
+    EXPECT_EQ (owner_calls, bind_count);
+    EXPECT_EQ (bind_calls, bind_count);
     EXPECT_EQ (follow_calls, 1u);
     EXPECT_EQ (runtime->transport ().mailbox ().pending_messages (
                  mesh::service_mailbox_domain_t::infrastructure),
                0u);
     runtime->close ();
 }
+
+TEST (ReceiveAllocations, InfrastructureDispatchRetainsItsClaimAcrossSuspension)
+{
+    verify_infrastructure_claim_across_suspension (1);
+}
+
+TEST (ReceiveAllocations, InfrastructureDispatchContinuesAfterAnExhaustedClaim)
+{
+    verify_infrastructure_claim_across_suspension (
+      fw::runtime::dispatch_limits::receive_batch_messages);
+}
+
 TEST (ReceiveAllocations, InfrastructureFrameFailureReleasesTheClaim)
 {
     for (const std::size_t offset : {0u, 1u}) {
