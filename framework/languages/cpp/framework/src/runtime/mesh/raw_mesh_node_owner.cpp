@@ -455,6 +455,8 @@ raw_mesh_node_owner_t::raw_mesh_node_owner_t (raw_mesh_node_options_t options,
         throw std::invalid_argument ("A host runtime failure collector is required");
     auto meter =
       opentelemetry::metrics::Provider::GetMeterProvider ()->GetMeter ("zlink.framework");
+    if (!meter)
+        return;
     constexpr std::array names{"zlink.mesh_node.peers.configured",
                                "zlink.mesh_node.peers.connected", "zlink.mesh_node.peers.ready",
                                "zlink.mesh_node.channels.ready_members"};
@@ -464,20 +466,22 @@ raw_mesh_node_owner_t::raw_mesh_node_owner_t (raw_mesh_node_options_t options,
         registration.index = index;
         registration.instrument =
           meter->CreateDoubleObservableGauge (names[index], "", index == 3 ? "{member}" : "{peer}");
-        registration.instrument->AddCallback (&publish_peer_metrics, &registration);
+        if (registration.instrument)
+            registration.instrument->AddCallback (&publish_peer_metrics, &registration);
     }
     _drop_metric =
-      opentelemetry::metrics::Provider::GetMeterProvider ()
-        ->GetMeter ("zlink.framework")
-        ->CreateDoubleObservableCounter ("zlink.mesh_node.messages.dropped", "", "{message}");
-    _drop_metric->AddCallback (&publish_drop_metrics, this);
+      meter->CreateDoubleObservableCounter ("zlink.mesh_node.messages.dropped", "", "{message}");
+    if (_drop_metric)
+        _drop_metric->AddCallback (&publish_drop_metrics, this);
 }
 
 raw_mesh_node_owner_t::~raw_mesh_node_owner_t () noexcept
 {
     for (auto &registration : _peer_metrics)
-        registration.instrument->RemoveCallback (&publish_peer_metrics, &registration);
-    _drop_metric->RemoveCallback (&publish_drop_metrics, this);
+        if (registration.instrument)
+            registration.instrument->RemoveCallback (&publish_peer_metrics, &registration);
+    if (_drop_metric)
+        _drop_metric->RemoveCallback (&publish_drop_metrics, this);
     if (!_options.runtime_failures->capture ([&] { close (); })) {
         _options.runtime_failures->retain (
           [context = std::move (_context), socket_mutex = std::move (_socket_mutex),
