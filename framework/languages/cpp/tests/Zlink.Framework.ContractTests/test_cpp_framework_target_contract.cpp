@@ -337,8 +337,11 @@ int main ()
                   "STREAM host does not dispatch a session transport failure callback");
 
     /* IMP-CP-05 — automatic RouteMesh discovery uses MeshNode descriptors. */
-    gate.require (location_auto_connect.find ("list_mesh_nodes") != std::string::npos, "IMP-CP-05",
-                  "RouteMesh discovery does not read MeshNode descriptors");
+    gate.require (
+      location_auto_connect.find ("poll_mesh_sources (loop.mesh_name)") != std::string::npos
+        && live_location_reader.find ("_store->list_mesh_nodes (mesh_name, page)")
+             != std::string::npos,
+      "IMP-CP-05", "RouteMesh discovery bypasses the shared MeshNode descriptor catalog");
     gate.require (location_auto_connect.find ("list_peers") == std::string::npos
                     && location_auto_connect.find ("update_peer") == std::string::npos,
                   "IMP-CP-05", "RouteMesh discovery still uses legacy peer rows");
@@ -822,7 +825,7 @@ int main ()
 
     /* IMP-CP-06 — recovery connects new targets immediately and defers missing-target removal by owner lease TTL. */
     const auto complete_recovery_snapshot =
-      location_auto_connect.find ("} while (page.continuation_token);");
+      location_auto_connect.find ("poll_mesh_sources (loop.mesh_name).result ().value ()");
     const auto recovery_owner_check =
       location_auto_connect.find ("owner_lease_usable ()", complete_recovery_snapshot);
     const auto recovery_republish =
@@ -832,9 +835,10 @@ int main ()
     const auto recovery_diff =
       location_auto_connect.find ("auto desired = select_endpoint_winners", recovery_invalidation);
     gate.require (
-      complete_recovery_snapshot != std::string::npos && recovery_owner_check != std::string::npos
-        && recovery_republish != std::string::npos && recovery_invalidation != std::string::npos
-        && recovery_diff != std::string::npos
+      complete_recovery_snapshot != std::string::npos
+        && live_location_reader.find ("} while (page.continuation_token);") != std::string::npos
+        && recovery_owner_check != std::string::npos && recovery_republish != std::string::npos
+        && recovery_invalidation != std::string::npos && recovery_diff != std::string::npos
         && location_auto_connect.find (
              "loop.recovery_started_at = std::chrono::steady_clock::now ()", recovery_republish)
              != std::string::npos

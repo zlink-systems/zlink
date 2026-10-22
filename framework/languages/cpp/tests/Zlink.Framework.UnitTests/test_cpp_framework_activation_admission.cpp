@@ -3,6 +3,7 @@
 // admission in the MeshNode's record until the target commit or abort, and the record's limit
 // rejects new activations while it is full.
 
+#include "../support/committed_authority_fixture.hpp"
 #include "runtime/spots/spot_runtime.hpp"
 
 #include <zlink/framework.hpp>
@@ -90,6 +91,8 @@ void relocation_target_restore_holds_admission_until_commit_or_abort ()
       },
       [] (auto &factory) { factory.recreate_on_relocation (); });
     auto runtime = fw::detail::spot_node_runtime_t::from (builder);
+    runtime.bind_relocation_authority (
+      std::make_shared<fw::test::committed_authority_fixture_t> (target ("first")));
     const auto admission = runtime.weak_state ().lock ()->activation_admission;
     admission->set_limit (1);
 
