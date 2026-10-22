@@ -321,6 +321,15 @@ void verify_relay_seal (bool close_owner, bool request_timeout = false)
         }
         EXPECT_EQ (drops, 1u);
     }
+    if (!close_owner) {
+        // The native Session owner allocates and completes ingress identities.
+        const auto [admission, next] = sessions.admit_inbound (binding);
+        ASSERT_EQ (admission, stateful::stateful_error_t::none);
+        ASSERT_TRUE (next);
+        EXPECT_EQ (next->inbound_sequence, 3u);
+        EXPECT_EQ (sessions.complete_inbound (*next), stateful::stateful_error_t::none);
+        EXPECT_NE (sessions.complete_inbound (*next), stateful::stateful_error_t::none);
+    }
 }
 
 } // namespace
@@ -371,7 +380,7 @@ TEST (FrameworkSessionSealRelay, public_request_preserves_wire_correlation_and_f
     target->start ();
     const auto target_status = target->status ();
     auto target_actor = target->create_actor ("player", "seal-wire-actor");
-    const auto object = target->resolve_actor (target_actor.ref ());
+    const auto object = target->resolve_actor_async (target_actor.ref ()).result ().value ();
     ASSERT_TRUE (object);
     auto source_state = zlink::framework::test::runtime_failure_fixture<
       zlink::framework::detail::mesh_node_builder_state_t> ("seal-wire-mesh");
@@ -556,7 +565,8 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
     source.start ();
     const auto native_actor = source.create_actor ("player", "seal-dedup-actor", {}, 2s);
     ASSERT_EQ (native_actor.ref ().object_generation (), actor.object_generation ());
-    const auto native_object = source.native_node ().resolve_actor (native_actor.ref ());
+    const auto native_object =
+      source.native_node ().resolve_actor_async (native_actor.ref ()).result ().value ();
     ASSERT_TRUE (native_object);
     spot_node_runtime_t spots (node);
     spots.record_actor_spot (actor, spot->spot_id);
@@ -631,10 +641,10 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
           if (record.kind != host::record_kind_t::actor_request)
               return;
           ASSERT_TRUE (record.application_record);
-          ASSERT_TRUE (record.application_record->payload);
-          ASSERT_TRUE (record.application_record->payload->application_record);
+          ASSERT_TRUE (record.application_record->payload ());
+          ASSERT_TRUE (record.application_record->payload ()->application_record);
           const auto *accepted_body = std::get_if<protocol::frozen_actor_application_body_t> (
-            &record.application_record->payload->application_record->body);
+            &record.application_record->payload ()->application_record->body);
           ASSERT_NE (accepted_body, nullptr);
           if (record.actor_route)
               EXPECT_EQ (*record.actor_route, accepted_body->target);
@@ -738,7 +748,8 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
         header.message_name = "SessionIdentityRequest";
         header.content_type = "application/json";
         header.correlation_id = "same-upstream-correlation";
-        auto encoded = encode_actor_packet (header, zlink::message_t::from (std::move (payload)));
+        auto encoded =
+          detail::encode_actor_packet (header, zlink::message_t::from (std::move (payload)));
         auto parts = std::move (encoded).take_items ();
         // Redeliver the received operation at the Framework ingress boundary.
         // Submitting another local client request would allocate a new operation.
@@ -761,12 +772,13 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
                 original_session->to_bytes (), original_binding_generation,
                 original_session_sequence};
         record.application_record = std::make_shared<runtime::serial_application_record_t> ();
-        record.application_record->payload.emplace ();
-        record.application_record->payload->application_record = stateful::accepted_actor_record (
-          actor_header,
-          {"seal-dedup-source-owner", 17, record.source_node_rid.to_bytes (),
-           source.status ().lifecycle_generation ()},
-          protocol::application_payload_t::from_parts (parts), true);
+        record.application_record->payload ().emplace ();
+        record.application_record->payload ()->application_record =
+          stateful::accepted_actor_record (
+            actor_header,
+            {"seal-dedup-source-owner", 17, record.source_node_rid.to_bytes (),
+             source.status ().lifecycle_generation ()},
+            protocol::application_payload_t::from_parts (parts), true);
         auto replied = std::make_shared<std::promise<std::vector<zlink::message_t>>> ();
         auto reply = replied->get_future ();
         auto reply_calls = std::make_shared<std::atomic_uint32_t> (0);
@@ -795,7 +807,7 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
               framework_error_kind_t::deadline_exceeded, "replayed request did not reply");
         EXPECT_EQ (reply_calls->load (), 1u);
         runtime::messaging::message_parts_t response (reply.get ());
-        return decode_actor_reply (response);
+        return detail::decode_actor_reply (response);
     };
     auto stale_route = *original_route;
     ++stale_route.owner_lease_generation;

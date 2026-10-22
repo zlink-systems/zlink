@@ -52,20 +52,18 @@ envelope_header_t client_call_codec_t::create_envelope (message_kind_t kind,
                                                         std::optional<std::string> topic,
                                                         std::optional<std::string> source) const
 {
-    envelope_header_t header;
-    header.kind = kind;
-    header.channel_name = std::move (channel_name);
-    header.message_name = std::move (message_name);
-    header.content_type = envelope_codec_t::default_content_type;
-    if (kind == message_kind_t::request) {
-        header.correlation_id = next_correlation_id ();
-    }
-    if (timeout.count () > 0) {
-        header.deadline = format_utc_deadline (std::chrono::system_clock::now () + timeout);
-    }
-    header.topic = std::move (topic);
-    header.source = std::move (source);
-    return header;
+    // One prvalue: a named local could be moved on return (no NRVO), and a
+    // moved std::map allocates a new head node in MSVC's STL.
+    return envelope_header_t{
+      .kind = kind,
+      .channel_name = std::move (channel_name),
+      .message_name = std::move (message_name),
+      .correlation_id = kind == message_kind_t::request ? next_correlation_id () : std::string{},
+      .deadline = timeout.count () > 0 ? std::optional<std::string>{format_utc_deadline (
+                                           std::chrono::system_clock::now () + timeout)}
+                                       : std::nullopt,
+      .topic = std::move (topic),
+      .source = std::move (source)};
 }
 
 } // namespace zlink::framework::runtime::messaging

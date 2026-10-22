@@ -5,6 +5,7 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include <runtime/locations/location_repository.hpp>
 #include "runtime/locations/in_memory_location_store.hpp"
+#include "runtime/locations/live_location_reader.hpp"
 #include "runtime/locations/location_runtime.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
 #include "runtime/dispatch/dispatch_limits.hpp"
@@ -573,6 +574,7 @@ void enqueue_application_route (
 
 void verify_route_internal_packets_precede_application_dispatch ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     using namespace zlink::framework;
     using namespace zlink::framework::detail;
     namespace host = zlink::framework::runtime::host;
@@ -666,10 +668,13 @@ void verify_route_internal_packets_precede_application_dispatch ()
     runtime::mesh_node_host_service_t service (
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
       serializers, {}, {}, application_jobs);
-    service.start (provider);
+    service.start (provider).result ().value ();
     const auto node = service.nodes ().front ();
     auto native_spot = std::make_shared<host::spot_handle_t> (
-      node->native_node ().get_or_create_spot (std::string (context->spot_id)));
+      node->native_node ()
+        .get_or_create_spot_async (std::string (context->spot_id))
+        .result ()
+        .value ());
     registration->spot_state->lane.run ([&] { context->native_spot = native_spot; }).get ();
 
     native_spot->set_subscription ("work", "rel-358-topic");
@@ -764,12 +769,13 @@ void verify_local_join_timeout_releases_membership ()
     node.start ();
     auto &runtime = node.native_node ();
     auto actor = runtime.create_actor ("vertical.actor", "join-timeout-actor");
-    auto target = runtime.get_or_create_spot ("join-timeout-spot");
+    auto target = runtime.get_or_create_spot_async ("join-timeout-spot").result ().value ();
     const auto rid = runtime.status ().routing_id ();
     const auto generation = target.status ().lifecycle_generation ();
     host::pending_operation_t expired;
-    assert (actor.join_spot (rid, "join-timeout-spot", generation, {}, expired, 25ms)
-            == zlink::submit_result_t::ok);
+    assert (
+      actor.join_spot (rid, "join-timeout-spot", generation, {}, expired, 25ms).result ().value ()
+      == zlink::submit_result_t::ok);
     assert (runtime.transport ().expire_requests (std::chrono::steady_clock::now () + 1s) == 1);
     auto first = expired.completion->task ();
     assert (!first.result ());
@@ -781,8 +787,9 @@ void verify_local_join_timeout_releases_membership ()
     // The expired queued control is skipped, and the same Actor can start
     // another membership move because the terminal owner released its token.
     auto &retried = expired;
-    assert (actor.join_spot (rid, "join-timeout-spot", generation, {}, retried, 1s)
-            == zlink::submit_result_t::ok);
+    assert (
+      actor.join_spot (rid, "join-timeout-spot", generation, {}, retried, 1s).result ().value ()
+      == zlink::submit_result_t::ok);
     bool replied = false;
     (void) runtime
       .dispatch_ready ([&] (const host::ready_record_t &, const host::receive_record_t &record,
@@ -808,6 +815,12 @@ void verify_local_join_timeout_releases_membership ()
 
 void register_mesh_location_resolvers (zlink::framework::service_collection_t &services)
 {
+    services.add_factory<zlink::framework::runtime::live_location_reader_t> (
+      [] (zlink::framework::service_provider_t &provider) {
+          return std::make_unique<zlink::framework::runtime::live_location_reader_t> (
+            provider.get_required<zlink::framework::location_repository_t> ());
+      },
+      zlink::framework::service_lifetime_t::singleton);
     services.add_factory<zlink::framework::runtime::store_location_resolvers_t> (
       [] (zlink::framework::service_provider_t &provider) {
           return std::make_unique<zlink::framework::runtime::store_location_resolvers_t> (
@@ -875,6 +888,7 @@ class expired_actor_bind_session_t final : public zlink::framework::packet_strea
 
 void verify_actor_route_resolver_preserves_unavailable ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     using namespace zlink::framework;
     auto registration = make_named_node ("actor-route-unavailable", "actor-route-unavailable-node");
     const auto actor = detail::actor_ref_access_t::make (
@@ -908,7 +922,7 @@ void verify_actor_route_resolver_preserves_unavailable ()
     runtime::mesh_node_host_service_t service (
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
       serializers);
-    service.start (provider);
+    service.start (provider).result ().value ();
     const auto claimed = store.claim_owner_lease ("expired-actor-owner", 200ms).result ().value ();
     const auto *owner = std::get_if<owner_lease_claimed_t> (&claimed);
     assert (owner);
@@ -1030,6 +1044,7 @@ read_mesh_state (faulting_mesh_location_repository_t &store,
 
 void verify_server_descriptor_publishes_framework_entry_spot_without_application_entry ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     auto registration = make_named_node ("descriptor-entry", "descriptor-entry-node");
     registration->object_role = zlink::framework::object_role_t::server;
     assert (!registration->spot_state->snapshot.entry_spot_name);
@@ -1051,7 +1066,7 @@ void verify_server_descriptor_publishes_framework_entry_spot_without_application
     zlink::framework::runtime::mesh_node_host_service_t service (
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
       serializers);
-    service.start (provider);
+    service.start (provider).result ().value ();
     const auto nodes = store.list_mesh_nodes ("descriptor-entry").result ().value ();
     assert (nodes.items.size () == 1);
     const auto &descriptor = nodes.items.front ();
@@ -1064,6 +1079,7 @@ void verify_server_descriptor_publishes_framework_entry_spot_without_application
 
 void verify_descriptor_retire_order_and_pre_seal_rollback ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     using zlink::framework::framework_runtime_state_t;
 
     auto first = make_named_node ("vertical-order", "order-a");
@@ -1083,7 +1099,7 @@ void verify_descriptor_retire_order_and_pre_seal_rollback ()
     zlink::framework::runtime::mesh_node_host_service_t service (
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {first, second},
       serializers);
-    service.start (provider);
+    service.start (provider).result ().value ();
 
     assert (read_mesh_state (store, "vertical-order", *first->routing_id)
             == framework_runtime_state_t::serving);
@@ -1182,6 +1198,7 @@ class local_route_probe_handler_t
 
 void verify_local_node_submit_bridge ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     auto registration = make_node ("tcp://127.0.0.1:0", "local-route-node");
     registration->handlers.on_send<local_route_probe_handler_t, local_route_probe_message_t> (
       "vertical-mesh", "LocalRouteProbe", &local_route_probe_handler_t::handle);
@@ -1225,7 +1242,7 @@ void verify_local_node_submit_bridge ()
     zlink::framework::runtime::mesh_node_host_service_t service (
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       {registration, independent_registration}, serializers, {}, {}, application_jobs);
-    service.start (provider);
+    service.start (provider).result ().value ();
     const auto node = service.nodes ().front ();
     const auto independent_node = service.nodes ().back ();
 
@@ -1240,7 +1257,7 @@ void verify_local_node_submit_bridge ()
 
     {
         auto parts = encode ("owned-after-return");
-        assert (service.submit_local_node_send (node, parts.items ())
+        assert (service.submit_local_node_send (node, parts.items ()).result ().value ()
                 == zlink::submit_result_t::ok);
     }
     {
@@ -1274,15 +1291,16 @@ void verify_local_node_submit_bridge ()
     // handler is blocked. The same-node successor retains its permit until
     // that node's first handler reaches terminal completion (02 §2).
     auto independent = encode ("independent-owner", "independent-mesh");
-    assert (service.submit_local_node_send (independent_node, independent.items ())
-            == zlink::submit_result_t::ok);
+    assert (
+      service.submit_local_node_send (independent_node, independent.items ()).result ().value ()
+      == zlink::submit_result_t::ok);
     {
         std::unique_lock lock (probe->mutex);
         assert (probe->changed.wait_for (lock, 1s, [&] { return probe->entered == 2; }));
         assert (probe->completed == 0);
     }
     auto progresses = encode ("progress-after-entry");
-    assert (service.submit_local_node_send (node, progresses.items ())
+    assert (service.submit_local_node_send (node, progresses.items ()).result ().value ()
             == zlink::submit_result_t::ok);
     {
         std::unique_lock lock (probe->mutex);
@@ -1318,10 +1336,11 @@ void verify_local_node_submit_bridge ()
     assert (service.wait_for_accepted_callbacks_until (std::chrono::steady_clock::now () + 1s));
 
     auto throwing = encode ("throw");
-    assert (service.submit_local_node_send (node, throwing.items ()) == zlink::submit_result_t::ok);
+    assert (service.submit_local_node_send (node, throwing.items ()).result ().value ()
+            == zlink::submit_result_t::ok);
     assert (service.wait_for_accepted_callbacks_until (std::chrono::steady_clock::now () + 1s));
     auto after_throw = encode ("after-throw");
-    assert (service.submit_local_node_send (node, after_throw.items ())
+    assert (service.submit_local_node_send (node, after_throw.items ()).result ().value ()
             == zlink::submit_result_t::ok);
     {
         std::unique_lock lock (probe->mutex);
@@ -1333,7 +1352,7 @@ void verify_local_node_submit_bridge ()
 
     service.seal_application_dispatch ();
     auto after_seal = encode ("after-seal");
-    assert (service.submit_local_node_send (node, after_seal.items ())
+    assert (service.submit_local_node_send (node, after_seal.items ()).result ().value ()
             == zlink::submit_result_t::terminated);
     service.stop ();
     location_runtime.stop ();
@@ -1359,6 +1378,7 @@ void verify_local_node_submit_bridge ()
 // assertion would have failed pre-fix and pins the fix now.
 void verify_direct_target_falls_through_absent_location_store_entry ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     auto registration = make_node ("tcp://127.0.0.1:0", "location-gate-node");
     registration->object_role = zlink::framework::object_role_t::none;
 
@@ -1385,7 +1405,7 @@ void verify_direct_target_falls_through_absent_location_store_entry ()
     zlink::framework::runtime::mesh_node_host_service_t service (
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
       serializers, {}, {}, application_jobs);
-    service.start (provider);
+    service.start (provider).result ().value ();
     const auto node = service.nodes ().front ();
 
     const auto descriptors = location_store.list_mesh_nodes ("vertical-mesh").result ().value ();
@@ -1424,6 +1444,7 @@ void verify_direct_target_falls_through_absent_location_store_entry ()
 // raw-service-mesh-runtime.ts knownTarget gate.
 void verify_request_to_never_admitted_target_reports_not_found ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     auto registration = make_node ("tcp://127.0.0.1:0", "never-admitted-request-node");
     registration->object_role = zlink::framework::object_role_t::none;
 
@@ -1446,7 +1467,7 @@ void verify_request_to_never_admitted_target_reports_not_found ()
     zlink::framework::runtime::mesh_node_host_service_t service (
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (), {registration},
       serializers, {}, {}, application_jobs);
-    service.start (provider);
+    service.start (provider).result ().value ();
     const auto node = service.nodes ().front ();
 
     const std::vector<zlink::message_t> parts{zlink::message_t::from (std::string ("request"))};
@@ -2488,6 +2509,7 @@ void verify_fixed_drain_callback_barrier ()
 
 void verify_accepted_handler_push_after_host_seal (bool shutdown)
 {
+    zlink::framework::completion_owner_t completion_owner;
     using namespace zlink::framework;
     auto registration = make_named_node ("accepted-send-mesh", "accepted-send-node");
     serializer_registry_t serializers;
@@ -2504,7 +2526,7 @@ void verify_accepted_handler_push_after_host_seal (bool shutdown)
     locations.start (*registration->routing_id);
     runtime::mesh_node_host_service_t service (
       std::make_shared<runtime::runtime_failure_collector_t> (), {registration}, serializers);
-    service.start (provider);
+    service.start (provider).result ().value ();
     const auto node = service.nodes ().front ();
     auto gateway_state = std::make_shared<detail::actor_gateway_state_t> ();
     detail::actor_gateway_runtime_t gateway (gateway_state);
@@ -2533,7 +2555,8 @@ void verify_accepted_handler_push_after_host_seal (bool shutdown)
     assert (service.publish_descriptor_state (shutdown ? framework_runtime_state_t::draining
                                                        : framework_runtime_state_t::relocating));
     service.seal_application_dispatch ();
-    assert (service.submit_local_node_send (node, {}) == zlink::submit_result_t::terminated);
+    assert (service.submit_local_node_send (node, {}).result ().value ()
+            == zlink::submit_result_t::terminated);
     assert (!service.wait_for_accepted_callbacks_until (std::chrono::steady_clock::now ()));
     release.set_value ();
     assert (handler.wait_for (1s) == std::future_status::ready);
@@ -2747,6 +2770,7 @@ int run_cross_process_delivery ()
     if (child < 0)
         return 1;
     if (child == 0) {
+        zlink::framework::completion_owner_t completion_owner;
         close (endpoint_pipe[0]);
         close (direct_ack_pipe[0]);
         close (channel_ack_pipe[0]);
@@ -2766,7 +2790,7 @@ int run_cross_process_delivery ()
         auto state = make_node ("tcp://127.0.0.1:*", "vertical-b");
         zlink::framework::detail::mesh_node_runtime_t node (state);
         node.start ();
-        auto target_spot = node.get_or_create_spot ("target-spot");
+        auto target_spot = node.get_or_create_spot_async ("target-spot").result ().value ();
         auto target_actor = node.create_actor ("vertical.actor", "target-actor", {}, 5s);
         const std::uint64_t formal_descriptors[2]{target_spot.status ().lifecycle_generation (),
                                                   target_actor.ref ().object_generation ()};
@@ -2853,6 +2877,7 @@ int run_cross_process_delivery ()
             exit_code = 11;
         else if (!actor)
             exit_code = 10;
+        completion_owner.close ();
         _exit (exit_code);
     }
 
@@ -2879,6 +2904,7 @@ int run_cross_process_delivery ()
     const pid_t reciprocal_child = fork ();
     assert (reciprocal_child >= 0);
     if (reciprocal_child == 0) {
+        zlink::framework::completion_owner_t completion_owner;
         close (reciprocal_child_ready_pipe[0]);
         close (reciprocal_child_stop_pipe[1]);
         close (reciprocal_child_endpoint_pipe[0]);
@@ -2898,8 +2924,10 @@ int run_cross_process_delivery ()
         (void) read (reciprocal_child_stop_pipe[0], &stop, sizeof (stop));
         close (reciprocal_child_stop_pipe[0]);
         reciprocal_node.stop ();
+        completion_owner.close ();
         _exit (ready == 1 && stop == 1 ? 0 : 13);
     }
+    zlink::framework::completion_owner_t completion_owner;
     close (reciprocal_child_ready_pipe[1]);
     close (reciprocal_child_stop_pipe[0]);
     close (reciprocal_child_endpoint_pipe[1]);
@@ -3004,8 +3032,8 @@ int run_cross_process_delivery ()
     close (formal_ack_pipe[0]);
     assert (actor_ack == 1);
 
-    auto local_source = node.get_or_create_spot ("source-spot");
-    auto local_target = node.get_or_create_spot ("local-target");
+    auto local_source = node.get_or_create_spot_async ("source-spot").result ().value ();
+    auto local_target = node.get_or_create_spot_async ("local-target").result ().value ();
     const std::vector<zlink::message_t> local_request_parts{
       zlink::message_t::from (std::string ("local-request"))};
     const auto local_node_rid = node.status ().routing_id ();
@@ -3094,8 +3122,8 @@ int run_cross_process_delivery ()
     zlink::framework::detail::mesh_node_runtime_t race_node (race_state);
     configure_vertical_route_fences (race_node);
     race_node.start ();
-    auto race_source = race_node.get_or_create_spot ("race-source");
-    auto race_target = race_node.get_or_create_spot ("race-target");
+    auto race_source = race_node.get_or_create_spot_async ("race-source").result ().value ();
+    auto race_target = race_node.get_or_create_spot_async ("race-target").result ().value ();
     const auto race_node_rid = race_node.status ().routing_id ();
     const auto race_target_generation = race_target.status ().lifecycle_generation ();
     const std::vector<zlink::message_t> race_parts{zlink::message_t::from (std::string ("race"))};

@@ -13,6 +13,17 @@ task_t<store_read_result_t> read_from_provider (task_t<store_read_result_t> pend
 
 int main ()
 {
+    task_t<int> ready (result_t<int>::success (7));
+    if (ready.result ().value () != 7)
+        return 2;
+    task_completion_source_t<store_read_result_t> ownerless_source;
+    auto rejected = read_from_provider (ownerless_source.task ());
+    if (rejected.result ()
+        || rejected.result ().error ()->kind () != framework_error_kind_t::invalid_operation)
+        return 3;
+    if (!ownerless_source.complete (result_t<store_read_result_t>::success (store_missing_t{})))
+        return 4;
+    zlink::framework::completion_owner_t completion_owner;
     task_completion_source_t<store_read_result_t> source;
     auto read = read_from_provider (source.task ());
     source.complete (result_t<store_read_result_t>::success (store_missing_t{}));

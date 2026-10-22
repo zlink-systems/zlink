@@ -6,6 +6,7 @@
 #include "runtime/diagnostics/dispatch_error_reporter.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
+#include "runtime/dispatch/owned_task.hpp"
 #include "runtime/execution/task_result.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/spots/spot_route_packets.hpp"
@@ -13,6 +14,7 @@
 #include "runtime/stateful/public_host_runtime.hpp"
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/streams/stream_runtime.hpp"
+#include "runtime/streams/stream_header_encoder.hpp"
 
 #include "runtime/messaging/failure_origin_wire.hpp"
 #include "runtime/messaging/request_failure_mapper.hpp"
@@ -211,14 +213,11 @@ bool drain_bound_session_sends (
                     detail::trace_detached_bound_session_send_stage (
                       state, actor_id, "send_bound_session_enter", [] { return "entered"; },
                       nullptr, queue_key.session_rid ? &*queue_key.session_rid : nullptr);
-                    // The coroutine retains references to the dispatch closure across
-                    // suspension. Keep the closure at a stable address until terminal.
-                    auto dispatch = std::make_shared<std::function<task_t<result_t<void>> ()>> (
-                      std::move (pending.dispatch));
-                    auto task = std::make_shared<task_t<result_t<void>>> ((*dispatch) ());
-                    detail::observe_task_terminal (
-                      *task, [state, queue_key, actor_id, task, dispatch,
-                              completion_fence] (const result_t<result_t<void>> &terminal) {
+                    runtime::start_owned_task<result_t<void>> (
+                      std::make_shared<std::function<task_t<result_t<void>> ()>> (
+                        std::move (pending.dispatch)),
+                      [state, queue_key, actor_id,
+                       completion_fence] (const result_t<result_t<void>> &terminal) {
                           detail::trace_detached_bound_session_send_stage (
                             state, actor_id, "detached_delivery_complete",
                             [&] { return terminal && terminal.value () ? "ok" : "failed"; },
@@ -576,20 +575,30 @@ runtime::messaging::message_parts_t
 encode_actor_packet (const runtime::messaging::envelope_header_t &header, zlink::message_t body)
 {
     using runtime::messaging::message_kind_t;
-    stream_header_t wire (
+    stream_header_view_t wire{
+      header.metadata,
       header.kind == message_kind_t::command ? stream_message_kind_t::send
                                              : stream_message_kind_t::request,
-      stream_codec_from_content_type (header.content_type), stream_header_flags_t::none,
+      stream_codec_from_content_type (header.content_type),
+      stream_header_flags_t::none,
       header.kind == message_kind_t::command ? std::nullopt
                                              : std::make_optional (actor_wire_request_sequence),
-      header.message_name, stream_metadata_t (header.metadata));
-    if (!header.correlation_id.empty ())
-        wire.with_correlation_id (header.correlation_id);
-    if (header.flow_id && header.flow_origin)
-        wire.with_flow (*header.flow_id, *header.flow_origin);
-    stream_runtime_t::propagate_flow (wire);
-    auto encoded = stream_runtime_t (nullptr).encode_header (wire);
-    return {zlink::message_t::from (std::move (encoded.value ())), std::move (body)};
+      header.message_name,
+      header.correlation_id.empty ()
+        ? std::nullopt
+        : std::make_optional (std::string_view (header.correlation_id)),
+      std::nullopt,
+      std::nullopt,
+      std::nullopt};
+    // Match the owning header's empty-id and incomplete-pair semantics.
+    if (header.flow_id && header.flow_origin) {
+        if (!header.flow_id->empty ())
+            wire.flow_id = *header.flow_id;
+        wire.flow_origin = header.flow_origin;
+    }
+    propagate_stream_header_flow (wire);
+    auto encoded = encode_stream_header_message (wire);
+    return {std::move (encoded.value ()), std::move (body)};
 }
 
 result_t<runtime::messaging::envelope_header_t>
@@ -597,12 +606,18 @@ decode_actor_packet_header (const runtime::messaging::message_parts_t &parts,
                             stream_message_kind_t expected_kind,
                             bool capture_flow)
 {
+    if (parts.size () != 2)
+        return result_t<runtime::messaging::envelope_header_t>::failure (
+          framework_error_kind_t::protocol_error, "Actor typed message requires two parts");
+    return decode_actor_packet_header (parts[0], expected_kind, capture_flow);
+}
+
+result_t<runtime::messaging::envelope_header_t> decode_actor_packet_header (
+  const zlink::message_t &header_part, stream_message_kind_t expected_kind, bool capture_flow)
+{
     using runtime::messaging::envelope_header_t;
     using runtime::messaging::message_kind_t;
-    if (parts.size () != 2)
-        return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
-                                                     "Actor typed message requires two parts");
-    auto decoded = stream_runtime_t::decode_header (parts[0].to_bytes (), capture_flow);
+    auto decoded = stream_runtime_t::decode_header (header_part.to_bytes (), capture_flow);
     if (!decoded)
         return result_t<envelope_header_t>::failure (decoded.error_kind (),
                                                      decoded.error ()->what ());
@@ -2749,26 +2764,34 @@ result_t<void> actor_gateway_runtime_t::update_actor_ref (const actor_ref_t &act
 
 result_t<void> actor_gateway_runtime_t::destroy_actor (const actor_ref_t &actor_ref)
 {
-    return _state->sync ([this, &actor_ref] {
-        if (::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
-            return result_t<void>::failure (framework_error_kind_t::not_found,
-                                            "actor ref is empty");
-        }
-        const auto found = _state->actors_by_id.find (std::string (actor_ref.actor_id ().value ()));
-        if (found == _state->actors_by_id.end ()) {
-            return result_t<void>::success ();
-        }
-        if (!actor_types_compatible (found->second.ref, actor_ref)) {
-            return result_t<void>::failure (framework_error_kind_t::type_mismatch,
-                                            "actor id is already bound to another type");
-        }
-        if (found->second.ref.object_generation () != actor_ref.object_generation ()) {
-            return result_t<void>::success ();
-        }
-        _state->bound_session_sinks.erase (std::string (actor_ref.actor_id ().value ()));
-        _state->actors_by_id.erase (found);
+    return _state->sync ([&] { return destroy_actor_on_lane (actor_ref); });
+}
+
+task_t<result_t<void>> actor_gateway_runtime_t::destroy_actor_async (actor_ref_t actor_ref)
+{
+    co_return co_await _state->lane.run_task (
+      [this, actor_ref] { return destroy_actor_on_lane (actor_ref); });
+}
+
+result_t<void> actor_gateway_runtime_t::destroy_actor_on_lane (const actor_ref_t &actor_ref)
+{
+    if (::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
+        return result_t<void>::failure (framework_error_kind_t::not_found, "actor ref is empty");
+    }
+    const auto found = _state->actors_by_id.find (std::string (actor_ref.actor_id ().value ()));
+    if (found == _state->actors_by_id.end ()) {
         return result_t<void>::success ();
-    });
+    }
+    if (!actor_types_compatible (found->second.ref, actor_ref)) {
+        return result_t<void>::failure (framework_error_kind_t::type_mismatch,
+                                        "actor id is already bound to another type");
+    }
+    if (found->second.ref.object_generation () != actor_ref.object_generation ()) {
+        return result_t<void>::success ();
+    }
+    _state->bound_session_sinks.erase (std::string (actor_ref.actor_id ().value ()));
+    _state->actors_by_id.erase (found);
+    return result_t<void>::success ();
 }
 
 actor_session_binding_snapshot_t
