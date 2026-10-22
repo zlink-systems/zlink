@@ -3,6 +3,15 @@ import type { ZLinkRequest } from '../../contracts/Handlers/Attributes';
 
 const completedAdmission = Promise.resolve();
 const ignoreAdmissionFailure = (): void => {};
+const REQUEST_ADMISSION = Symbol('zlink.requestAdmission');
+// Every public request shares this getter. A getter closure per request gives
+// each reply Promise its own hidden class, and V8 then keeps its properties in
+// a per-request dictionary.
+const ADMITTED_PROPERTY: PropertyDescriptor = {
+  get(this: { readonly [REQUEST_ADMISSION]: RequestAdmission }): Promise<void> {
+    return this[REQUEST_ADMISSION].observe();
+  }
+};
 
 /** Transport preparation is separate from typed result delivery. */
 export interface ZLinkRequestResult<TReply> {
@@ -111,7 +120,6 @@ export function createZLinkRequest<TReply>(
     pending = Promise.reject(error);
   }
   const reply = deliverReply?.(pending) ?? pending;
-  return Object.defineProperty(reply, 'admitted', {
-    get: () => admission.observe()
-  }) as ZLinkRequest<TReply>;
+  Object.defineProperty(reply, REQUEST_ADMISSION, { value: admission });
+  return Object.defineProperty(reply, 'admitted', ADMITTED_PROPERTY) as ZLinkRequest<TReply>;
 }
