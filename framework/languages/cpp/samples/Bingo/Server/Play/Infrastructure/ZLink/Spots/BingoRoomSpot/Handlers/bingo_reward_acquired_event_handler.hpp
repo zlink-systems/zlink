@@ -10,7 +10,8 @@ namespace zlink::samples::bingo
 inline task_t<void>
 bingo_room_spot_t::on_reward_acquired (const bingo_reward_acquired_event_t &event)
 {
-    if (!_is_observer || event.room_id () != _observed_room_id) {
+    if (!_is_observer || event.room_id () != _observed_room_id || observers.empty ()
+        || (_announced_reward_draw_seq && *_announced_reward_draw_seq == event.draw_seq ())) {
         co_return;
     }
     for (auto &[_, actor] : observers) {
@@ -23,6 +24,7 @@ bingo_room_spot_t::on_reward_acquired (const bingo_reward_acquired_event_t &even
         notify.set_rarity (event.rarity ());
         actor->push (notify);
     }
+    _announced_reward_draw_seq = event.draw_seq ();
     // The observer event has been submitted to every current participant.
     // This turn can be used as an application-signaled relocation boundary.
     _context->relocation_ready ().defer ();
