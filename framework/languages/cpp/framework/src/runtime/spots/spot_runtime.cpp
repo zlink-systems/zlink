@@ -6738,22 +6738,11 @@ spot_node_runtime_t::join_remote_actor_to_spot_erased (const actor_ref_t &actor_
 }
 
 task_t<std::optional<std::chrono::steady_clock::time_point>>
-spot_node_runtime_t::next_management_activity_async () const
+spot_node_runtime_t::next_management_activity_on_lane_async (
+  std::shared_ptr<spot_node_builder_state_t> state,
+  std::optional<std::chrono::steady_clock::time_point> next)
 {
-    auto next = _state->actor_transfer_coordinator.next_activity ();
-    // Pending leaves and source cleanups keep the bound at due_now; only then
-    // the exact next instant is read on the lane, as each one may be blocked.
-    if (const auto own = _state->management_next_due.load (std::memory_order_acquire);
-        own != spot_node_builder_state_t::management_due_now) {
-        if (own != spot_node_builder_state_t::management_never_due) {
-            const auto deadline =
-              std::chrono::steady_clock::time_point (std::chrono::steady_clock::duration (own));
-            if (!next || deadline < *next)
-                next = deadline;
-        }
-        co_return next;
-    }
-    const auto pending = co_await _state->lane.run_task ([state = _state, next] () mutable {
+    const auto pending = co_await state->lane.run_task ([state, next] () mutable {
         std::vector<std::pair<std::string, std::chrono::steady_clock::time_point>> cleanups;
         for (const auto &entry : state->pending_handoff_requests) {
             if (!next || entry.second.deadline < *next)
@@ -6769,12 +6758,40 @@ spot_node_runtime_t::next_management_activity_async () const
     });
     next = pending.first;
     for (const auto &[key, deadline] : pending.second) {
-        if (_state->actor_transfer_coordinator.blocks_dispatch (key))
+        if (state->actor_transfer_coordinator.blocks_dispatch (key))
             continue;
         if (!next || deadline < *next)
             next = deadline;
     }
     co_return next;
+}
+
+task_t<std::optional<std::chrono::steady_clock::time_point>>
+spot_node_runtime_t::next_management_activity_async () const
+{
+    std::optional<std::chrono::steady_clock::time_point> next;
+    try {
+        next = _state->actor_transfer_coordinator.next_activity ();
+        // The owner already published an exact bound unless pending cleanup
+        // requires its lane. Keep that decision before creating an awaitable frame.
+        if (const auto own = _state->management_next_due.load (std::memory_order_acquire);
+            own != spot_node_builder_state_t::management_due_now) {
+            if (own != spot_node_builder_state_t::management_never_due) {
+                const auto deadline =
+                  std::chrono::steady_clock::time_point (std::chrono::steady_clock::duration (own));
+                if (!next || deadline < *next)
+                    next = deadline;
+            }
+            return task_t<std::optional<std::chrono::steady_clock::time_point>> (
+              result_t<std::optional<std::chrono::steady_clock::time_point>>::success (next));
+        }
+    }
+    catch (...) {
+        return task_t<std::optional<std::chrono::steady_clock::time_point>> (
+          result_access_t::failure<std::optional<std::chrono::steady_clock::time_point>> (
+            std::current_exception ()));
+    }
+    return next_management_activity_on_lane_async (_state, next);
 }
 
 // Runs on the spot state lane after the management sweep.
@@ -6803,23 +6820,39 @@ std::size_t spot_node_runtime_t::cleanup_expired_actor_admissions ()
 }
 
 static task_t<std::optional<std::chrono::steady_clock::time_point>>
-advance_spot_management_async (std::shared_ptr<spot_node_builder_state_t> state,
-                               bool include_next_activity)
+advance_due_spot_management_async (std::shared_ptr<spot_node_builder_state_t> state,
+                                   std::chrono::steady_clock::time_point now,
+                                   bool include_next_activity)
 {
-    const auto now = std::chrono::steady_clock::now ();
-    // Spec 08 section 4.2: a rotation with nothing due runs no Actor
-    // management. Each owner decides from its own published bound.
-    if (!spot_management_due (*state, now) && !state->actor_transfer_coordinator.due (now)) {
-        if (!include_next_activity)
-            co_return std::nullopt;
-        co_return co_await spot_node_runtime_t (std::move (state))
-          .next_management_activity_async ();
-    }
     spot_node_runtime_t owner (std::move (state));
     co_await owner.cleanup_expired_actor_admissions_at_async (now);
     if (!include_next_activity)
         co_return std::nullopt;
     co_return co_await owner.next_management_activity_async ();
+}
+
+static task_t<std::optional<std::chrono::steady_clock::time_point>>
+advance_spot_management_async (std::shared_ptr<spot_node_builder_state_t> state,
+                               bool include_next_activity)
+{
+    const auto now = std::chrono::steady_clock::now ();
+    // Spec 08 section 4.2: the existing published bounds decide whether a
+    // sweep is due. A known result does not need another coroutine owner.
+    if (!spot_management_due (*state, now) && !state->actor_transfer_coordinator.due (now)) {
+        try {
+            if (!include_next_activity)
+                return task_t<std::optional<std::chrono::steady_clock::time_point>> (
+                  result_t<std::optional<std::chrono::steady_clock::time_point>>::success (
+                    std::nullopt));
+            return spot_node_runtime_t (std::move (state)).next_management_activity_async ();
+        }
+        catch (...) {
+            return task_t<std::optional<std::chrono::steady_clock::time_point>> (
+              result_access_t::failure<std::optional<std::chrono::steady_clock::time_point>> (
+                std::current_exception ()));
+        }
+    }
+    return advance_due_spot_management_async (std::move (state), now, include_next_activity);
 }
 
 task_t<std::optional<std::chrono::steady_clock::time_point>>

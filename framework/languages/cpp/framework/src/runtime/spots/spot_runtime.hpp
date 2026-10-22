@@ -2304,6 +2304,10 @@ class spot_node_runtime_t
     }
 
   private:
+    static task_t<std::optional<std::chrono::steady_clock::time_point>>
+    next_management_activity_on_lane_async (
+      std::shared_ptr<spot_node_builder_state_t> state,
+      std::optional<std::chrono::steady_clock::time_point> next);
     static task_t<void> fast_fail_reconcile_backlog_core (
       std::shared_ptr<spot_node_builder_state_t> state,
       actor_ref_t actor_ref,
