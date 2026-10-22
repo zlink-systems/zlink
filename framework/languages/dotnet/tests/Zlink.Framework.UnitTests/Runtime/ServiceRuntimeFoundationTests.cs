@@ -3051,6 +3051,29 @@ public sealed class ServiceRuntimeFoundationTests
             requester.Status().AdmittedPeerCount == 1 && replier.Status().AdmittedPeerCount == 1
         );
 
+        //  Transport liveness §3: each peer probes right after admission and
+        //  the probe and ACK are ordinary data-line records. Saturate only
+        //  after both admission-time exchanges are consumed.
+        static bool LivenessSettled(ZLinkManagedMeshNode node, RoutingId peerRid)
+        {
+            var nodePeers =
+                (Dictionary<RoutingId, ZLinkMeshPeer>)
+                    typeof(ZLinkManagedMeshNode)
+                        .GetField(
+                            "_peersByRid",
+                            System.Reflection.BindingFlags.Instance
+                                | System.Reflection.BindingFlags.NonPublic
+                        )!
+                        .GetValue(node)!;
+            var liveness = nodePeers[peerRid].Liveness;
+            return liveness is not null
+                && liveness.OutstandingProbeId == 0
+                && liveness.TimeUntilNextActivity(Stopwatch.GetTimestamp()) > TimeSpan.Zero;
+        }
+        await WaitUntilAsync(() =>
+            LivenessSettled(requester, replierRid) && LivenessSettled(replier, requesterRid)
+        );
+
         //  Saturate the requester's ordinary job flow: the single permit is
         //  held externally, so Core pauses the inbound application lane.
         using var occupied = await applicationJobQueue.AcquireAsync(
@@ -3128,8 +3151,8 @@ public sealed class ServiceRuntimeFoundationTests
         Assert.Equal((int)RequestResult.Ok, completion.TerminalResult);
         Assert.True(admittedLiveness.DeadlineTimestamp >= submittedAt + 15 * Stopwatch.Frequency);
 
-        //  Closing removes the receive-flow target and its outstanding
-        //  pre-receive waiter before the external permit is returned.
+        //  Closing removes the receive-flow target and its pre-receive waiter,
+        //  if one is outstanding, before the external permit is returned.
         await requester.DisposeAsync();
         await occupied.ReleaseForHandlerStartAsync();
         Assert.Equal(
