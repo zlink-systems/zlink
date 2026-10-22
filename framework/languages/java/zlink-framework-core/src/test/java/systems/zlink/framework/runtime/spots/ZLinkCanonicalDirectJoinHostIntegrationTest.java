@@ -205,7 +205,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         relocationStore,
                         sourceRetention);
 
-        try (ZLinkFrameworkRuntime targetHost =
+        try (var diagnostics = new JoinFailureDiagnostics();
+                ZLinkFrameworkRuntime targetHost =
                         ZLinkFrameworkRuntimeTestAccess.start(targetOptions);
                 ZLinkFrameworkRuntime sourceHost =
                         ZLinkFrameworkRuntimeTestAccess.start(sourceOptions);
@@ -822,6 +823,19 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                     var failed =
                             assertInstanceOf(ZLinkActorJoinCompletion.Failed.class, completion);
                     assertEquals(operationId, failed.operationId());
+                    assertTrue(
+                            diagnostics.errors.stream()
+                                    .anyMatch(
+                                            message ->
+                                                    message.contains(
+                                                                    "injected target joined failure")
+                                                            && message.contains(
+                                                                    scenario
+                                                                                    == Scenario
+                                                                                            .JOINED_TYPED_FAILURE
+                                                                            ? "ZLinkFrameworkException"
+                                                                            : "IllegalStateException")),
+                            diagnostics.errors.toString());
                     assertEquals(
                             scenario == Scenario.JOINED_TYPED_FAILURE
                                     ? ZLinkFrameworkErrorKind.DATA_LOST
@@ -1006,6 +1020,31 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
             assertEquals(1, EVENTS.stream().filter("source.leave"::equals).count());
             assertTrue(sourceActors.localActor(ACTOR_ID).isEmpty());
             assertEquals(0, sourceAttemptCount(sourceJoin));
+        }
+    }
+
+    private static final class JoinFailureDiagnostics extends java.util.logging.Handler
+            implements AutoCloseable {
+        private final java.util.logging.Logger logger =
+                java.util.logging.Logger.getLogger(
+                        "systems.zlink.framework.runtime.diagnostics.ZLinkMessageFlowTracer");
+        final List<String> errors = new CopyOnWriteArrayList<>();
+
+        JoinFailureDiagnostics() {
+            logger.addHandler(this);
+        }
+
+        @Override
+        public void publish(java.util.logging.LogRecord record) {
+            errors.add(record.getMessage());
+        }
+
+        @Override
+        public void flush() {}
+
+        @Override
+        public void close() {
+            logger.removeHandler(this);
         }
     }
 

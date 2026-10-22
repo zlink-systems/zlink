@@ -1,12 +1,26 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const framework = require('../../packages/framework/dist/internal');
+const { trace } = require('@opentelemetry/api');
+const traceRecords = [];
+trace.setGlobalTracerProvider({ getTracer: () => ({ startSpan(_name, options) {
+  traceRecords.push(options.attributes);
+  return { setStatus() {}, end() {} };
+} }) });
+const { ZLinkDispatchErrorReporter } = require('../../packages/framework/dist/runtime/channels/dispatch-error-reporter');
+const { runWithFlow, currentOrCreateFlow } = require('../../packages/framework/dist/runtime/diagnostics/flow-context');
 const { DefaultZLinkSpotManager } = require('../../packages/framework/dist/runtime/spots');
 
 function fixture({ entry, lifecycleFailure, completionFailure, sourceLeaveFailure, throwUndefined } = {}) {
   const events = [];
   const completions = [];
   const notificationErrors = [];
+  const dispatchFailures = [];
+  const reporter = new ZLinkDispatchErrorReporter(undefined, undefined,
+    { reportRuntimeTaskException() {} }, {
+      diagnostics: { messageFlow: 'normal', sampleRate: 1, includeMessageSizes: false },
+      liveMode: { mode: 'normal' }
+    });
   const runner = new framework.ZLinkRuntimeTaskRunner({
     reportRuntimeTaskException(taskName, error) { notificationErrors.push({ taskName, error }); }
   }, new AbortController().signal);
@@ -38,6 +52,7 @@ function fixture({ entry, lifecycleFailure, completionFailure, sourceLeaveFailur
     },
     activations: { resolve: () => activation },
     options: {
+      dispatchErrors: { captureEnabled: () => reporter.captureEnabled(), report: failure => { dispatchFailures.push(failure); reporter.report(failure); } },
       entryNodeRid: 'entry',
       detachedTaskRunner: runner,
       dispatchEntryActorJoin: joined,
@@ -58,6 +73,7 @@ function fixture({ entry, lifecycleFailure, completionFailure, sourceLeaveFailur
     events,
     completions,
     notificationErrors,
+    dispatchFailures,
     completion,
     run: () => DefaultZLinkSpotManager.prototype.finalizeActorJoinRelocation.call(
       manager, 'mesh', 'relocation-a', actor, actorRef, async () => {
@@ -72,11 +88,20 @@ for (const entry of [false, true]) {
   test(`canonical ${entry ? 'Entry' : 'User'} target lifecycle failure reaches Failed completion and preserves the barrier`, async () => {
     const failure = new framework.ZLinkFrameworkException(framework.ZLinkFrameworkErrorKind.DataLost, 'restore failed');
     const f = fixture({ entry, lifecycleFailure: failure });
-    await assert.rejects(f.run(), error => error === failure);
+    const flow = currentOrCreateFlow('Lifecycle');
+    const previousRecords = traceRecords.length;
+    await assert.rejects(runWithFlow(flow, () => f.run()), error => error === failure);
+    const recorded = traceRecords.slice(previousRecords).find(record => record.error_message === 'restore failed');
+    assert.ok(recorded);
+    assert.equal(recorded.flow_id, flow.flowId);
+    assert.equal(recorded.error_type, failure.constructor.name);
     assert.deepEqual(f.events, ['joined', 'completion:failed']);
     assert.equal(f.completions.length, 1);
     assert.equal(f.completions[0].operationId, f.completion.operationId);
     assert.equal(f.completions[0].kind, framework.ZLinkFrameworkErrorKind.DataLost);
+    assert.equal(f.dispatchFailures.length, 1);
+    assert.equal(f.dispatchFailures[0].error, failure);
+    assert.equal(f.dispatchFailures[0].error.message, 'restore failed');
   });
 
   test(`canonical ${entry ? 'Entry' : 'User'} completion failure does not submit another completion`, async () => {
