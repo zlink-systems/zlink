@@ -36,12 +36,8 @@ public sealed class ProtobufNativePayloadTests
         var codecs = Codecs();
         Assert.True(codecs.TryGetSerializer("application/x-protobuf", out var serializer));
         var value = new BytesValue { Value = ByteString.CopyFrom(new byte[AllocationPayloadSize]) };
-        var directBytes = SteadyBytes(() =>
-            ZLinkEncodedPayload.FromOwned(value.ToByteArray())
-        );
-        var encodedBytes = SteadyBytes(() =>
-            serializer.Serialize(value, typeof(BytesValue))
-        );
+        var directBytes = SteadyBytes(() => ZLinkEncodedPayload.FromOwned(value.ToByteArray()));
+        var encodedBytes = SteadyBytes(() => serializer.Serialize(value, typeof(BytesValue)));
         Assert.True(
             encodedBytes <= directBytes,
             $"Public serialization allocated {encodedBytes} B/call; owned buffer control allocated {directBytes} B/call."

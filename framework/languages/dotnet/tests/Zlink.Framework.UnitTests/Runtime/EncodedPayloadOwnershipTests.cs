@@ -52,9 +52,6 @@ public sealed class EncodedPayloadOwnershipTests(ITestOutputHelper output)
                 + $"payload_bytes={ownedBuffer.Length} calls={iterations}"
         );
         Assert.True(ownedAllocated < 1_024 / iterations, $"owned_allocated={ownedAllocated}");
-        Assert.True(
-            copiedAllocated >= ownedBuffer.Length,
-            $"copied_allocated={copiedAllocated}"
-        );
+        Assert.True(copiedAllocated >= ownedBuffer.Length, $"copied_allocated={copiedAllocated}");
     }
 }

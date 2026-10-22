@@ -555,11 +555,12 @@ public sealed class MeshCompletionTableConvergenceTests
                 cancellationTables[index].Register(cancellationOperation, static (_, _) => { })
             );
             cancellations[index] = new CancellationTokenSource();
-            registrations[index] = cancellationTables[index].RegisterCancellation(
-                cancellationOperation,
-                cancellations[index].Token,
-                static () => { }
-            );
+            registrations[index] = cancellationTables[index]
+                .RegisterCancellation(
+                    cancellationOperation,
+                    cancellations[index].Token,
+                    static () => { }
+                );
         }
         var cancellationAllocation = PerCallAllocation.Steady(
             index => cancellations[index].Cancel(),

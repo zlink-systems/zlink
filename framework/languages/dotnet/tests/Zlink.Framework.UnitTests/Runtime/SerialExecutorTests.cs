@@ -364,8 +364,8 @@ public sealed class SerialExecutorTests
             await entered.Task;
             Assert.True(queue.TryPost(callback, out _));
             GC.KeepAlive(new ZLinkSerialWorkItem(callback));
-            var storage = PerCallAllocation.Steady(
-                () => GC.KeepAlive(new ZLinkSerialWorkItem(callback))
+            var storage = PerCallAllocation.Steady(() =>
+                GC.KeepAlive(new ZLinkSerialWorkItem(callback))
             );
             var admitted = 0;
             var admissionStorage = PerCallAllocation.Steady(() =>
@@ -639,11 +639,10 @@ public sealed class SerialExecutorTests
     [Fact]
     public async Task ApplicationDrainSignalIsAllocatedOnlyWhenObserved()
     {
-        var signalStorage = PerCallAllocation.Steady(
-            () =>
-                GC.KeepAlive(
-                    new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
-                )
+        var signalStorage = PerCallAllocation.Steady(() =>
+            GC.KeepAlive(
+                new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+            )
         );
         // The signal is created by the first observation of a busy queue, so each
         // sample observes its own fresh queue.
