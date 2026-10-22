@@ -1232,6 +1232,27 @@ int reader_retirement_is_tracked_until_complete ()
     held_retirement_session_t session (detail::actor_ref_access_t::make (
       node_rid_t::from_string ("held-actor-node"), "player", "held-actor", 1));
     auto connected = session.connected.get_future ();
+    struct held_binding_resolver_t final : runtime::actor_address_resolver_t
+    {
+        std::shared_ptr<task_completion_source_t<std::optional<runtime::spot_address_t>>> route =
+          std::make_shared<task_completion_source_t<std::optional<runtime::spot_address_t>>> ();
+        std::promise<void> entered;
+
+        task_t<std::optional<runtime::spot_address_t>> resolve_actor_address (std::string) override
+        {
+            co_return std::nullopt;
+        }
+        task_t<std::optional<runtime::spot_address_t>>
+        resolve_actor_session_binding_address (actor_ref_t) override
+        {
+            entered.set_value ();
+            return route->task ();
+        }
+    };
+    auto resolver = std::make_unique<held_binding_resolver_t> ();
+    auto route = resolver->route;
+    auto route_started = resolver->entered.get_future ();
+    services.add_singleton<runtime::actor_address_resolver_t> (std::move (resolver));
     zlink_framework_options_t options (services, handlers, serializers, builder);
     options.add_route_mesh ("held-mesh")
       .set_routing_id (zlink::routing_id_t::from ("held-node"))
@@ -1247,13 +1268,6 @@ int reader_retirement_is_tracked_until_complete ()
     auto provider = services.build_provider ();
     auto mesh = detail::mesh_node_runtime_t::from (builder, "held-mesh");
     mesh->bind_serializers (serializers);
-    auto route =
-      std::make_shared<task_completion_source_t<std::optional<runtime::spot_address_t>>> ();
-    auto route_entered = std::make_shared<std::promise<void>> ();
-    mesh->configure_actor_route_resolver ([route, route_entered] (actor_ref_t) {
-        route_entered->set_value ();
-        return route->task ();
-    });
     auto disconnect = std::make_shared<task_completion_source_t<void>> ();
     auto disconnect_entered = std::make_shared<std::promise<void>> ();
     provider.get_required<detail::actor_gateway_runtime_t> ().on_disconnect (
@@ -1276,7 +1290,6 @@ int reader_retirement_is_tracked_until_complete ()
       {boost::asio::ip::make_address ("127.0.0.1"),
        endpoint_port (listener_endpoint (*listeners, listener_kind_t::stream, "held-stream"))});
     client.handshake ("127.0.0.1", "/held");
-    auto route_started = route_entered->get_future ();
     auto disconnect_started = disconnect_entered->get_future ();
     int result = 0;
     if (connected.wait_for (5s) != std::future_status::ready
