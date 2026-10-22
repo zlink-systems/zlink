@@ -66,7 +66,10 @@ function frameBytes(entry, fixture) {
 const commands = new Map([
   [16, [codec.decodeNodeSendCommand, codec.encodeNodeSendCommand]],
   [20, [codec.decodeReplyCommand, codec.encodeReplyCommand]],
+  [21, [codec.decodeSpotSendCommand, codec.encodeSpotSendCommand]],
+  [22, [codec.decodeSpotRequestCommand, codec.encodeSpotRequestCommand]],
   [24, [codec.decodeActorSendCommand, codec.encodeActorSendCommand]],
+  [25, [codec.decodeActorRequestCommand, codec.encodeActorRequestCommand]],
   [28, [codec.decodeActorJoinCommand, codec.encodeActorJoinCommand]],
   [47, [codec.decodeUserSpotCreateCommand, codec.encodeUserSpotCreateCommand]],
   [48, [codec.decodeUserSpotCloseCommand, codec.encodeUserSpotCloseCommand]],
@@ -490,4 +493,20 @@ test('boundSessionClose uses shared cross-language bytes', () => {
       malformed.name
     );
   assert.throws(() => codec.decodeBoundSessionCloseCommand([bytes, Buffer.alloc(0)], context));
+});
+
+test('stateful messages use shared schema bytes', () => {
+  const fixture = JSON.parse(fs.readFileSync(path.join(protocolRoot, 'golden/stateful-message-v1.json'), 'utf8'));
+  assert.equal(fixture.valid.length, 8);
+  assert.equal(fixture.invalid.length, 4);
+  for (const vector of fixture.valid) {
+    const frames = vector.framesHex.map((hex) => Buffer.from(hex, 'hex'));
+    const [decode, encode] = commands.get(vector.commandId);
+    assertWireEqual(encode(decode(frames, context), context), frames, vector.name);
+  }
+  for (const vector of fixture.invalid) {
+    const frames = vector.framesHex.map((hex) => Buffer.from(hex, 'hex'));
+    const [decode] = commands.get(vector.commandId);
+    assert.throws(() => decode(frames, context), undefined, vector.name);
+  }
 });
