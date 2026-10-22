@@ -359,8 +359,9 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             var samples = 0;
             var key = MeshMailboxKey.ForNode(MeshReadyDomains.Application);
             var readyMap = new ConcurrentDictionary<MeshMailboxKey, bool>();
-            // The baseline retains both source checks' uncontended lane turns
-            // and the existing record/mailbox containers without fixed byte sizes.
+            // The baseline retains the one uncontended source lane turn that reads
+            // route currency and generation together, and the existing
+            // record/mailbox containers without fixed byte sizes.
             var mailbox = baselineMailbox = new ZLinkMeshNodeOwnedMailbox(
                 static _ => { },
                 static _ => { },
@@ -372,7 +373,6 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 // properties; both counters run on this same receive thread.
                 lastActual = GC.GetAllocatedBytesForCurrentThread() - router.RecordStart;
                 var start = GC.GetAllocatedBytesForCurrentThread();
-                _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
                 _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
                 if (
                     !mailbox.TryEnqueue(
