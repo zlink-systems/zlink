@@ -2821,7 +2821,9 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostPublishesAndCleansLoc
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       zlink.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (zlink.message_bus ()).channel_snapshots (),
-      handlers, serializers);
+      handlers, serializers, [&provider] {
+          return provider.get_required<zlink::framework::framework_runtime_t> ().status ().state;
+      });
     service.start (provider);
 
     const auto client_servers = store->list_client_servers ("orders").result ().value ();
@@ -3762,7 +3764,9 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostReconcilesRouteMeshCo
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       zlink.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (zlink.message_bus ()).channel_snapshots (),
-      handlers, serializers);
+      handlers, serializers, [&provider] {
+          return provider.get_required<zlink::framework::framework_runtime_t> ().status ().state;
+      });
     service.start (provider);
 
     EXPECT_TRUE (wait_until ([&] {
@@ -3845,7 +3849,9 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectSameEndpointReplacementPr
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       zlink.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (zlink.message_bus ()).channel_snapshots (),
-      handlers, serializers);
+      handlers, serializers, [&provider] {
+          return provider.get_required<zlink::framework::framework_runtime_t> ().status ().state;
+      });
     service.start (provider);
 
     const auto replacement_selected = wait_until ([&] {
@@ -3923,7 +3929,9 @@ TEST (ZLinkFrameworkStoreLocationResolvers,
       std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
       zlink.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (zlink.message_bus ()).channel_snapshots (),
-      handlers, serializers);
+      handlers, serializers, [&provider] {
+          return provider.get_required<zlink::framework::framework_runtime_t> ().status ().state;
+      });
     service.start (provider);
     ASSERT_TRUE (wait_until ([&] {
         const auto connections = route.list_connections ();
@@ -4010,7 +4018,11 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostUsesRouteMeshInitiato
       lower_zlink.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (lower_zlink.message_bus ())
         .channel_snapshots (),
-      lower_handlers, lower_serializers);
+      lower_handlers, lower_serializers, [&lower_provider] {
+          return lower_provider.get_required<zlink::framework::framework_runtime_t> ()
+            .status ()
+            .state;
+      });
     lower_service.start (lower_provider);
 
     EXPECT_TRUE (wait_until ([&] {
@@ -4070,7 +4082,11 @@ TEST (ZLinkFrameworkStoreLocationResolvers, AutoConnectHostUsesRouteMeshInitiato
       higher_zlink.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (higher_zlink.message_bus ())
         .channel_snapshots (),
-      higher_handlers, higher_serializers);
+      higher_handlers, higher_serializers, [&higher_provider] {
+          return higher_provider.get_required<zlink::framework::framework_runtime_t> ()
+            .status ()
+            .state;
+      });
     higher_service.start (higher_provider);
 
     std::this_thread::sleep_for (std::chrono::milliseconds (250));

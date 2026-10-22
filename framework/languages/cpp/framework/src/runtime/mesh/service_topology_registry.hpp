@@ -79,9 +79,6 @@ struct service_node_descriptor_t
     std::uint32_t pending_capacity_limit = protocol::nodePendingCapacityDefault;
     std::uint32_t active_capacity_used = 0;
     std::uint32_t pending_capacity_used = 0;
-    // Store discovery metadata belongs to the admitted descriptor, not the wire.
-    std::string owner_id;
-    std::int64_t owner_lease_generation = 0;
 
     friend bool operator== (const service_node_descriptor_t &,
                             const service_node_descriptor_t &) = default;
@@ -131,7 +128,6 @@ class service_topology_registry_t
                       std::vector<service_node_descriptor_t>>>
     monitoring_snapshot_async () const;
     void set_change_handler (std::function<void ()> handler);
-    void project_discovered_peer (const service_node_descriptor_t &descriptor);
 
     struct peer_observation_t
     {
@@ -154,7 +150,6 @@ class service_topology_registry_t
                                    protocol::command command = protocol::command::admit);
     bool disconnect (const std::vector<std::uint8_t> &node_routing_id,
                      const std::vector<std::uint8_t> &connection_id);
-
     std::vector<admitted_peer_t> peers () const;
     std::vector<service_node_descriptor_t> not_required_peers () const;
     // The admitted peer inside the current immutable topology snapshot; the
