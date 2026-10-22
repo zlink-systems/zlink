@@ -187,6 +187,12 @@ int main ()
         auto &store = *owned;
         services.add_singleton<fw::location_repository_t> (
           std::unique_ptr<fw::location_repository_t> (owned.release ()));
+        services.add_factory<rt::live_location_reader_t> (
+          [] (fw::service_provider_t &provider) {
+              return std::make_unique<rt::live_location_reader_t> (
+                provider.get_required<fw::location_repository_t> ());
+          },
+          fw::service_lifetime_t::singleton);
         services.add_singleton<rt::location_runtime_t> (
           std::make_unique<rt::location_runtime_t> (store));
         auto resolvers = std::make_shared<rt::store_location_resolvers_t> (store);
