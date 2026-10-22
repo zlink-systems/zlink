@@ -2304,6 +2304,114 @@ TEST (ZLinkFrameworkStoreLocationResolvers, ResolvesActorAddress)
     EXPECT_FALSE (missing.has_value ());
 }
 
+TEST (ZLinkFrameworkStoreLocationResolvers, SessionBindUsesMatchingCachedRowWithoutStoreReads)
+{
+    using namespace zlink::framework;
+    test_location_repository_t store;
+    const auto old_owner = claim_test_owner (store, "old-bind-owner");
+    const auto old_actor = detail::actor_ref_access_t::make (
+      node_rid_t::from_string ("old-bind-node"), "player", "bind-actor", 7, "bind-mesh");
+    authority_snapshot_t authority{
+      .store_version = "1",
+      .payload = runtime::encode_actor_authority_payload (old_actor, "bind-spot", 1),
+      .object_generation = 7,
+      .authority_owner_generation = 11,
+      .owner = old_owner,
+      .allocation = {.state = placement_allocation_state_t::active,
+                     .object_kind = placement_object_kind_t::actor,
+                     .stable_type = "player",
+                     .target = {.mesh_name = "bind-mesh",
+                                .node_rid = old_actor.node_rid (),
+                                .node_lifecycle_generation = 13,
+                                .owner = old_owner}}};
+    store.set_authority ("zla1:a:10:bind-actor", authority);
+    store_location_resolvers_t resolvers (store);
+    const auto cached = resolvers.resolve_actor_address ("bind-actor").result ().value ();
+    ASSERT_TRUE (cached);
+    const auto authority_reads = store.authority_read_count.load ();
+    const auto owner_reads = store.owner_read_count.load ();
+    const auto cached_binding =
+      resolvers.resolve_actor_session_binding_address (old_actor).result ().value ();
+    ASSERT_TRUE (cached_binding);
+    EXPECT_EQ (cached->node_rid, cached_binding->node_rid);
+    EXPECT_EQ (cached->object_generation, cached_binding->object_generation);
+    EXPECT_EQ (cached->mesh_name, cached_binding->mesh_name);
+    EXPECT_EQ (cached->node_generation, cached_binding->node_generation);
+    EXPECT_EQ (cached->authority_owner_generation, cached_binding->authority_owner_generation);
+    EXPECT_EQ (cached->owner.owner_id, cached_binding->owner.owner_id);
+    EXPECT_EQ (cached->owner.lease_generation, cached_binding->owner.lease_generation);
+    EXPECT_EQ (authority_reads, store.authority_read_count.load ());
+    EXPECT_EQ (owner_reads, store.owner_read_count.load ());
+}
+
+TEST (ZLinkFrameworkStoreLocationResolvers, SessionBindUsesCallerRefAfterRelocation)
+{
+    using namespace zlink::framework;
+    test_location_repository_t store;
+    const auto old_owner = claim_test_owner (store, "old-bind-owner");
+    const auto new_owner = claim_test_owner (store, "new-bind-owner");
+    const auto old_actor = detail::actor_ref_access_t::make (
+      node_rid_t::from_string ("old-bind-node"), "player", "bind-actor", 7);
+    const auto new_actor = detail::actor_ref_access_t::make (
+      node_rid_t::from_string ("new-bind-node"), "player", "bind-actor", 7);
+    authority_snapshot_t authority{
+      .store_version = "1",
+      .payload = runtime::encode_actor_authority_payload (old_actor, "bind-spot", 1),
+      .object_generation = 7,
+      .authority_owner_generation = 11,
+      .owner = old_owner,
+      .allocation = {.state = placement_allocation_state_t::active,
+                     .object_kind = placement_object_kind_t::actor,
+                     .stable_type = "player",
+                     .target = {.mesh_name = "bind-mesh",
+                                .node_rid = old_actor.node_rid (),
+                                .node_lifecycle_generation = 13,
+                                .owner = old_owner}}};
+    store.set_authority ("zla1:a:10:bind-actor", authority);
+    store_location_resolvers_t resolvers (store);
+    const auto cached = resolvers.resolve_actor_address ("bind-actor").result ().value ();
+    ASSERT_TRUE (cached);
+    authority.store_version = "2";
+    authority.payload = runtime::encode_actor_authority_payload (new_actor, "bind-spot", 2);
+    authority.authority_owner_generation = 17;
+    authority.owner = new_owner;
+    authority.allocation.target.node_rid = new_actor.node_rid ();
+    authority.allocation.target.node_lifecycle_generation = 19;
+    authority.allocation.target.owner = new_owner;
+    store.set_authority ("zla1:a:10:bind-actor", authority);
+    const auto binding =
+      resolvers.resolve_actor_session_binding_address (new_actor).result ().value ();
+    ASSERT_TRUE (binding);
+    EXPECT_EQ ("new-bind-node", binding->node_rid.to_string ());
+    EXPECT_EQ (19u, binding->node_generation);
+    EXPECT_EQ (17u, binding->authority_owner_generation);
+    EXPECT_EQ (new_owner.owner_id, binding->owner.owner_id);
+    EXPECT_EQ (new_owner.lease_generation, binding->owner.lease_generation);
+    const auto normal = resolvers.resolve_actor_address ("bind-actor").result ().value ();
+    ASSERT_TRUE (normal);
+    EXPECT_EQ (binding->node_rid, normal->node_rid);
+    EXPECT_EQ (binding->node_generation, normal->node_generation);
+    EXPECT_EQ (binding->object_generation, normal->object_generation);
+    EXPECT_EQ (binding->authority_owner_generation, normal->authority_owner_generation);
+    EXPECT_EQ (binding->owner.owner_id, normal->owner.owner_id);
+    EXPECT_EQ (binding->owner.lease_generation, normal->owner.lease_generation);
+    EXPECT_FALSE (resolvers.resolve_actor_session_binding_address (old_actor).result ().value ());
+    const auto other_incarnation =
+      detail::actor_ref_access_t::make (new_actor.node_rid (), "player", "bind-actor", 8);
+    EXPECT_FALSE (
+      resolvers.resolve_actor_session_binding_address (other_incarnation).result ().value ());
+    const auto other_mesh = detail::actor_ref_access_t::make (new_actor.node_rid (), "player",
+                                                              "bind-actor", 7, "other-mesh");
+    EXPECT_FALSE (resolvers.resolve_actor_session_binding_address (other_mesh).result ().value ());
+    const auto exact_mesh = detail::actor_ref_access_t::make (new_actor.node_rid (), "player",
+                                                              "bind-actor", 7, "bind-mesh");
+    EXPECT_TRUE (resolvers.resolve_actor_session_binding_address (exact_mesh).result ().value ());
+    const auto missing_actor =
+      detail::actor_ref_access_t::make (new_actor.node_rid (), "player", "missing-actor", 7);
+    EXPECT_FALSE (
+      resolvers.resolve_actor_session_binding_address (missing_actor).result ().value ());
+}
+
 TEST (ZLinkFrameworkStoreLocationResolvers, ReadyAuthorityWithExpiredOwnerIsUnavailable)
 {
     test_location_repository_t store;
