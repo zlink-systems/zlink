@@ -242,6 +242,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         if (!_loops.empty ())
             detail::channel_runtime_t::from (_bus).mark_auto_connect_active ();
         for (auto &loop : _loops) {
+            co_await _runtime->register_metric_scope ("mesh", loop.mesh_name);
             for (const auto &mesh_node : _mesh_nodes)
                 if (mesh_node && mesh_node->mesh_name () == loop.mesh_name)
                     mesh_node->configure_peer_reconcile (_runtime->peer_reconcile_requester ());
@@ -249,7 +250,7 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         }
         const auto observed = _runtime->owner_lease_observation ();
         _thread = std::thread ([this, observed] { run_loop (observed); });
-        return task_t<void> (result_t<void>::success ());
+        co_return;
     }
 
     void stop () noexcept override
@@ -356,6 +357,9 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             for (auto &loop : _loops) {
                 try {
                     snapshots.emplace_back (&loop, read_descriptors (loop));
+                    if (loop.local_rid)
+                        (void) _store->refresh_capacity_metrics (loop.mesh_name, *loop.local_rid)
+                          .result ();
                 }
                 catch (const std::exception &error) {
                     handle_loop_failure (loop, "tick", error.what ());
@@ -400,11 +404,6 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
         }
         catch (...) {
             trace_failure ("recovery-failed", loop.mesh_name, {}, "unknown exception");
-        }
-        try {
-            _runtime->record_store_error ();
-        }
-        catch (...) {
         }
     }
 
@@ -462,7 +461,6 @@ class location_auto_connect_host_service_t final : public hosted_service_t,
             if (target.accepting_work)
                 loop.last_desired.emplace (key, target);
         }
-        _runtime->observe_discovered_peers (loop.last_desired.size ());
         const bool defer_missing_target_removal =
           loop.recovery_started_at
           && std::chrono::steady_clock::now () - *loop.recovery_started_at
