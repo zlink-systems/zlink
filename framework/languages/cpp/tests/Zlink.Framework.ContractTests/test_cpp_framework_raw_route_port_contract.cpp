@@ -984,8 +984,7 @@ void verify_request_materializes_only_the_binding_message_list ()
         backend::raw_message_t parts (part_count);
         std::optional<zlink::framework::task_t<backend::raw_request_completion_t>> pending;
         const auto observed = count_allocations (
-          [&] { pending.emplace (port.request (target, std::move (parts), 1s)); },
-          container_bytes);
+          [&] { pending.emplace (port.request (target, std::move (parts), 1s)); }, container_bytes);
         assert (pending->await_ready ());
         const auto &terminal = pending->result ();
         assert (terminal && terminal.value ().terminal == zlink::request_result_t::not_connected);
