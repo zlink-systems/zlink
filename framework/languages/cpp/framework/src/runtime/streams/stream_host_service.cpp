@@ -1808,7 +1808,7 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             throw framework_exception_t (framework_error_kind_t::not_configured,
                                          "STREAM Actor dispatch MeshNode is not started");
         }
-        const auto local_node = _mesh_node->routing_id ();
+        const auto local_node = co_await _mesh_node->routing_id_async ();
         if (!local_node) {
             throw framework_exception_t (framework_error_kind_t::not_configured,
                                          "STREAM Actor dispatch MeshNode has no routing id");
@@ -1824,7 +1824,8 @@ class stream_host_service_t::listener_t : public std::enable_shared_from_this<li
             const auto native_actor = runtime::host::public_host_runtime_t::remote_actor_ref (
               actor_route->node_rid, std::string (actor.actor_id ().value ()),
               actor.object_generation ());
-            const auto resolved = _mesh_node->native_node ().resolve_actor (native_actor);
+            const auto resolved =
+              co_await _mesh_node->native_node ().resolve_actor_async (native_actor);
             if (!resolved) {
                 throw framework_exception_t (
                   framework_error_kind_t::unavailable,
