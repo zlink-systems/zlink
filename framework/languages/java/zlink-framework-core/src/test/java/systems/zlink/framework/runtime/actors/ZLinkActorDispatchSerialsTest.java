@@ -572,6 +572,312 @@ final class ZLinkActorDispatchSerialsTest {
     }
 
     @Test
+    void teardownResolvesRetargetedIncarnationAfterSourceSpotCloses() throws Exception {
+        var source = (ZLinkSpotSerialExecutor) actorTarget();
+        var target = (ZLinkSpotSerialExecutor) actorTarget();
+        var owner = new AtomicReference<ZLinkActorDispatchTarget>(source);
+        var dispatches = dispatches(owner);
+        try {
+            var sourceClaim =
+                    dispatches
+                            .prepareAsync("actor-1")
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+            dispatches
+                    .enqueue(sourceClaim, () -> CompletableFuture.completedFuture(null))
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            owner.set(target);
+            closeSpotExecutor(source);
+            var targetActivation =
+                    target.claimActorQueue("actor-1")
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+            var cleanupOnTarget = new AtomicReference<Boolean>();
+
+            dispatches
+                    .beginTeardown(
+                            "actor-1",
+                            () -> {
+                                cleanupOnTarget.set(targetActivation.isCurrent());
+                                return CompletableFuture.completedFuture(null);
+                            })
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+
+            assertEquals(Boolean.TRUE, cleanupOnTarget.get());
+            assertNotSame(
+                    targetActivation,
+                    target.claimActorQueue("actor-1")
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS));
+        } finally {
+            closeSpotExecutor(source);
+            closeSpotExecutor(target);
+        }
+    }
+
+    @Test
+    void teardownAfterRetargetWaitsForAcceptedSourceTurnsBeforeTargetCleanup() throws Exception {
+        var source = (ZLinkSpotSerialExecutor) actorTarget();
+        var target = (ZLinkSpotSerialExecutor) actorTarget();
+        var owner = new AtomicReference<ZLinkActorDispatchTarget>(source);
+        var dispatches = dispatches(owner);
+        var release = new CompletableFuture<Void>();
+        try {
+            var sourceClaim =
+                    dispatches
+                            .prepareAsync("actor-1")
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+            var active = dispatches.enqueue(sourceClaim, () -> release);
+            var acceptedCount = new AtomicInteger();
+            var accepted =
+                    dispatches.enqueue(
+                            sourceClaim,
+                            () -> {
+                                acceptedCount.incrementAndGet();
+                                return CompletableFuture.completedFuture(null);
+                            });
+            owner.set(target);
+            var targetActivation =
+                    target.claimActorQueue("actor-1")
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+            var cleanupCount = new AtomicInteger();
+            var cleanupOnTarget = new AtomicReference<Boolean>();
+            var acceptedCountAtCleanup = new AtomicInteger(-1);
+            var teardown =
+                    dispatches
+                            .registerTeardown(
+                                    "actor-1",
+                                    () -> CompletableFuture.completedFuture(null),
+                                    () -> {
+                                        acceptedCountAtCleanup.set(acceptedCount.get());
+                                        cleanupOnTarget.set(targetActivation.isCurrent());
+                                        cleanupCount.incrementAndGet();
+                                        return CompletableFuture.completedFuture(null);
+                                    })
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+            targetActivation
+                    .executeLifecycle(() -> CompletableFuture.completedFuture(null))
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+
+            assertFalse(teardown.toCompletableFuture().isDone());
+            assertEquals(0, acceptedCount.get());
+            assertEquals(0, cleanupCount.get());
+            release.complete(null);
+            CompletableFuture.allOf(
+                            active.toCompletableFuture(),
+                            accepted.toCompletableFuture(),
+                            teardown.toCompletableFuture())
+                    .get(3, TimeUnit.SECONDS);
+            assertEquals(1, acceptedCount.get());
+            assertEquals(1, acceptedCountAtCleanup.get());
+            assertEquals(1, cleanupCount.get());
+            assertEquals(Boolean.TRUE, cleanupOnTarget.get());
+        } finally {
+            release.complete(null);
+            closeSpotExecutor(source);
+            closeSpotExecutor(target);
+        }
+    }
+
+    @Test
+    void teardownStartedInsideRetargetedSourceTurnDoesNotWaitForItself() throws Exception {
+        var source = (ZLinkSpotSerialExecutor) actorTarget();
+        var target = (ZLinkSpotSerialExecutor) actorTarget();
+        var owner = new AtomicReference<ZLinkActorDispatchTarget>(source);
+        var dispatches = dispatches(owner);
+        try {
+            var targetActivation =
+                    target.claimActorQueue("actor-1")
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+            var cleanupCount = new AtomicInteger();
+            var cleanupOnTarget = new AtomicReference<Boolean>();
+            var sourceClaim =
+                    dispatches
+                            .prepareAsync("actor-1")
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+            var active =
+                    dispatches.enqueue(
+                            sourceClaim,
+                            () -> {
+                                owner.set(target);
+                                return dispatches.beginTeardown(
+                                        "actor-1",
+                                        () -> {
+                                            cleanupOnTarget.set(targetActivation.isCurrent());
+                                            cleanupCount.incrementAndGet();
+                                            return CompletableFuture.completedFuture(null);
+                                        });
+                            });
+
+            active.toCompletableFuture().get(3, TimeUnit.SECONDS);
+            dispatches.awaitTeardown("actor-1").toCompletableFuture().get(3, TimeUnit.SECONDS);
+            assertEquals(1, cleanupCount.get());
+            assertEquals(Boolean.TRUE, cleanupOnTarget.get());
+        } finally {
+            closeSpotExecutor(source);
+            closeSpotExecutor(target);
+        }
+    }
+
+    @Test
+    void teardownAfterRetargetRejectsLateSubmissionThroughSourceClaim() throws Exception {
+        var source = (ZLinkSpotSerialExecutor) actorTarget();
+        var target = (ZLinkSpotSerialExecutor) actorTarget();
+        var owner = new AtomicReference<ZLinkActorDispatchTarget>(source);
+        var dispatches = dispatches(owner);
+        var cleanupRelease = new CompletableFuture<Void>();
+        try {
+            var sourceClaim =
+                    dispatches
+                            .prepareAsync("actor-1")
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+            owner.set(target);
+            var cleanupEntered = new CompletableFuture<Void>();
+            var teardown =
+                    dispatches.beginTeardown(
+                            "actor-1",
+                            () -> {
+                                cleanupEntered.complete(null);
+                                return cleanupRelease;
+                            });
+            try {
+                cleanupEntered.get(3, TimeUnit.SECONDS);
+                var lateCalls = new AtomicInteger();
+                var late =
+                        dispatches.enqueue(
+                                sourceClaim,
+                                () -> {
+                                    lateCalls.incrementAndGet();
+                                    return CompletableFuture.completedFuture(null);
+                                });
+                var failure =
+                        assertThrows(
+                                CompletionException.class, () -> late.toCompletableFuture().join());
+                assertEquals(
+                        systems.zlink.framework.errors.ZLinkFrameworkErrorKind.REJECTED,
+                        ((systems.zlink.framework.errors.ZLinkFrameworkException)
+                                        failure.getCause())
+                                .kind());
+                assertEquals(0, lateCalls.get());
+                assertFalse(teardown.toCompletableFuture().isDone());
+            } finally {
+                cleanupRelease.complete(null);
+                teardown.toCompletableFuture().get(3, TimeUnit.SECONDS);
+            }
+        } finally {
+            cleanupRelease.complete(null);
+            closeSpotExecutor(source);
+            closeSpotExecutor(target);
+        }
+    }
+
+    @Test
+    void retargetTeardownRetiresSourceActivationBeforeActorIdIsReused() throws Exception {
+        var source = (ZLinkSpotSerialExecutor) actorTarget();
+        var target = (ZLinkSpotSerialExecutor) actorTarget();
+        var owner = new AtomicReference<ZLinkActorDispatchTarget>(source);
+        var dispatches = dispatches(owner);
+        try {
+            var old =
+                    dispatches
+                            .prepareAsync("actor-1")
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+            owner.set(target);
+            dispatches
+                    .beginTeardown("actor-1", () -> CompletableFuture.completedFuture(null))
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+
+            var recreated =
+                    source.claimActorQueue("actor-1")
+                            .toCompletableFuture()
+                            .get(3, TimeUnit.SECONDS);
+            assertNotSame(old.activation(), recreated);
+            var calls = new AtomicInteger();
+            recreated
+                    .executeActor(
+                            () -> {
+                                calls.incrementAndGet();
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            null)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            assertEquals(1, calls.get());
+        } finally {
+            closeSpotExecutor(source);
+            closeSpotExecutor(target);
+        }
+    }
+
+    @Test
+    void closedSpotAllowsIdentityRemovalButRejectsNewActorQueueClaims() throws Exception {
+        var spot = (ZLinkSpotSerialExecutor) actorTarget();
+        try {
+            var activation =
+                    spot.claimActorQueue("actor-1").toCompletableFuture().get(3, TimeUnit.SECONDS);
+            closeSpotExecutor(spot);
+            spot.removeActorQueueAsync("actor-1", activation)
+                    .toCompletableFuture()
+                    .get(3, TimeUnit.SECONDS);
+            var failure =
+                    assertThrows(
+                            RuntimeException.class,
+                            () -> spot.claimActorQueue("actor-1").toCompletableFuture().join());
+            var cause = failure instanceof CompletionException ? failure.getCause() : failure;
+            assertTrue(cause instanceof IllegalStateException);
+        } finally {
+            closeSpotExecutor(spot);
+        }
+    }
+
+    @Test
+    void identityRemovalDuringSpotCloseWaitsForCloseCompletion() throws Exception {
+        var spot = (ZLinkSpotSerialExecutor) actorTarget();
+        var release = new CompletableFuture<Void>();
+        try {
+            var activation =
+                    spot.claimActorQueue("actor-1").toCompletableFuture().get(3, TimeUnit.SECONDS);
+            var laneField = ZLinkSpotSerialExecutor.class.getDeclaredField("stateLane");
+            laneField.setAccessible(true);
+            var lane = (ZLinkStateLane) laneField.get(spot);
+            var entered = new CompletableFuture<Void>();
+            var held =
+                    lane.runAsync(
+                            () -> {
+                                entered.complete(null);
+                                release.join();
+                                return null;
+                            });
+            entered.get(3, TimeUnit.SECONDS);
+            var closing = closeSpotExecutorAsync(spot);
+            var removed = spot.removeActorQueueAsync("actor-1", activation);
+            assertFalse(closing.toCompletableFuture().isDone());
+            assertFalse(removed.toCompletableFuture().isDone());
+
+            release.complete(null);
+            CompletableFuture.allOf(
+                            held.toCompletableFuture(),
+                            closing.toCompletableFuture(),
+                            removed.toCompletableFuture())
+                    .get(3, TimeUnit.SECONDS);
+        } finally {
+            release.complete(null);
+            closeSpotExecutor(spot);
+        }
+    }
+
+    @Test
     void teardownRetargetUsesTheSealedActivationQueue() {
         ZLinkActorDispatchTarget source = actorTarget();
         ZLinkActorDispatchTarget target = actorTarget();
@@ -839,6 +1145,7 @@ final class ZLinkActorDispatchSerialsTest {
                         active.toCompletableFuture(),
                         accepted.toCompletableFuture(),
                         teardown.toCompletableFuture());
+        terminal.whenComplete((ignored, failure) -> ready.add(() -> {}));
         while (!terminal.isDone()) {
             java.util.Objects.requireNonNull(ready.poll(3, TimeUnit.SECONDS)).run();
         }
@@ -1074,6 +1381,17 @@ final class ZLinkActorDispatchSerialsTest {
                 Runnable::run,
                 ZLinkUserSpotExecutionMode.PER_ACTOR,
                 false);
+    }
+
+    private static void closeSpotExecutor(ZLinkSpotSerialExecutor executor) throws Exception {
+        closeSpotExecutorAsync(executor).toCompletableFuture().get(3, TimeUnit.SECONDS);
+    }
+
+    private static CompletionStage<?> closeSpotExecutorAsync(ZLinkSpotSerialExecutor executor)
+            throws Exception {
+        var close = ZLinkSpotSerialExecutor.class.getDeclaredMethod("closeAsync");
+        close.setAccessible(true);
+        return (CompletionStage<?>) close.invoke(executor);
     }
 
     private static void relocateAndRetire(
