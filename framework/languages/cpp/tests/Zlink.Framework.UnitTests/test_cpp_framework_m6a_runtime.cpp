@@ -18,6 +18,7 @@
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/Contracts/Sockets/message_socket_contracts.hpp>
 #include <zlink/Contracts/Sockets/routed_socket_contracts.hpp>
+#include <zlink/socket/api.h>
 #include "runtime/client_server/weighted_selector.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 
@@ -30,6 +31,8 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <cstdlib>
 #include <future>
 #include <filesystem>
 #include <fstream>
@@ -41,6 +44,40 @@
 #include <thread>
 #include <type_traits>
 #include <vector>
+#if !defined(_WIN32)
+#include <dlfcn.h>
+#endif
+
+#if !defined(_WIN32)
+// Linux interposes the Core C entry point to inject a binding failure.
+namespace
+{
+std::atomic_bool fail_next_disconnect_rid{false};
+std::atomic_int injected_disconnect_rid_calls{0};
+
+using disconnect_rid_fn_t = zlink_connect_result_t (*) (void *, const zlink_routing_id_t *);
+
+disconnect_rid_fn_t native_disconnect_rid ()
+{
+    static const auto function =
+      reinterpret_cast<disconnect_rid_fn_t> (dlsym (RTLD_NEXT, "zlink_disconnect_rid"));
+    if (!function)
+        std::abort ();
+    return function;
+}
+} // namespace
+
+extern "C" zlink_connect_result_t zlink_disconnect_rid (void *socket,
+                                                        const zlink_routing_id_t *peer_rid)
+{
+    if (fail_next_disconnect_rid.exchange (false, std::memory_order_acq_rel)) {
+        injected_disconnect_rid_calls.fetch_add (1, std::memory_order_relaxed);
+        errno = EIO;
+        return ZLINK_CONNECT_INTERNAL_ERROR;
+    }
+    return native_disconnect_rid () (socket, peer_rid);
+}
+#endif
 
 namespace mesh = zlink::framework::runtime::mesh;
 namespace locations = zlink::framework::runtime::locations;
@@ -3972,6 +4009,7 @@ void verify_liveness_without_selected_route ()
     source.close ();
 }
 
+#if !defined(_WIN32)
 void verify_liveness_propagates_binding_failure ()
 {
     auto context = std::make_shared<zlink::context_t> ();
@@ -3986,7 +4024,8 @@ void verify_liveness_propagates_binding_failure ()
             == mesh::peer_admission_result_t::admitted);
     const auto timeout_at =
       source.liveness ().connection (remote.node_routing_id)->deadline.load ();
-    context->shutdown ();
+    const auto prior_injections = injected_disconnect_rid_calls.load (std::memory_order_relaxed);
+    fail_next_disconnect_rid.store (true, std::memory_order_release);
     bool observed = false;
     try {
         (void) await_task (source.tick_liveness (timeout_at));
@@ -3994,11 +4033,13 @@ void verify_liveness_propagates_binding_failure ()
     catch (const zlink::connect_error_t &error) {
         observed = true;
         assert (error.result () == zlink::connect_result_t::internal_error);
-        assert (error.internal_errno () == ETERM);
+        assert (error.internal_errno () == EIO);
     }
     assert (observed);
+    assert (injected_disconnect_rid_calls.load (std::memory_order_relaxed) == prior_injections + 1);
     source.close ();
 }
+#endif
 
 
 // Do not pump the sender: its selected route has not completed admission.
@@ -4339,7 +4380,9 @@ int main (int argc, char **argv)
 
     if (argc == 2 && std::string_view (argv[1]) == "--liveness-not-found-contract") {
         verify_liveness_without_selected_route ();
+#if !defined(_WIN32)
         verify_liveness_propagates_binding_failure ();
+#endif
         return 0;
     }
     if (argc == 2 && std::string_view (argv[1]) == "--liveness-physical-close") {

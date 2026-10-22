@@ -283,7 +283,7 @@ pump_server_transport (std::shared_ptr<raw_client_server_server_t> server,
             application_permit =
               std::make_shared<application_job_queue_t::permit_t> (std::move (*next));
     }
-    (void) co_await server->enqueue_application_records (application_records);
+    (void) co_await server->enqueue_application_records (application_records, dispatch_options);
     const auto tick = co_await server->tick_liveness (now);
     co_return progressed || !tick.probes.empty () || !tick.timed_out_nodes.empty ();
 }
@@ -1432,36 +1432,38 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                     auto flow_scope = runtime::flow_context_t::enter (
                       request_envelope.flow_id, request_envelope.flow_origin, flow.mode (),
                       flow_origin_t::inbound, std::nullopt);
-                    flow.trace (message_flow_outcome_t::received, [&] {
-                        return message_flow_event_t{message_flow_outcome_t::received,
-                                                    dispatch_error_surface_t::channel,
-                                                    record.reply_token
-                                                      ? dispatch_message_kind_t::request
-                                                      : dispatch_message_kind_t::send,
-                                                    request_envelope.message_name,
-                                                    record.owner,
-                                                    std::nullopt,
-                                                    inbound.message.correlation_id,
-                                                    std::nullopt,
-                                                    std::nullopt,
-                                                    std::nullopt,
-                                                    std::nullopt};
-                    });
-                    flow.trace (message_flow_outcome_t::admitted, [&] {
-                        return message_flow_event_t{message_flow_outcome_t::admitted,
-                                                    dispatch_error_surface_t::channel,
-                                                    record.reply_token
-                                                      ? dispatch_message_kind_t::request
-                                                      : dispatch_message_kind_t::send,
-                                                    request_envelope.message_name,
-                                                    record.owner,
-                                                    std::nullopt,
-                                                    inbound.message.correlation_id,
-                                                    std::nullopt,
-                                                    std::nullopt,
-                                                    std::nullopt,
-                                                    std::nullopt};
-                    });
+                    if (flow.enabled_for (message_flow_outcome_t::dispatched)) {
+                        inbound.before_application_handler =
+                          [before = std::move (inbound.before_application_handler), &flow,
+                           &request_envelope, &record] {
+                              if (before)
+                                  before ();
+                              flow.trace (message_flow_outcome_t::dispatched,
+                                          request_envelope.flow_id
+                                            ? std::string_view (*request_envelope.flow_id)
+                                            : std::string_view{},
+                                          [&] {
+                                              message_flow_event_t event{
+                                                message_flow_outcome_t::dispatched,
+                                                dispatch_error_surface_t::channel,
+                                                request_envelope.kind
+                                                    == messaging::message_kind_t::request
+                                                  ? dispatch_message_kind_t::request
+                                                  : dispatch_message_kind_t::send,
+                                                request_envelope.message_name,
+                                                record.owner,
+                                                std::nullopt,
+                                                request_envelope.correlation_id,
+                                                std::nullopt,
+                                                std::nullopt,
+                                                std::nullopt,
+                                                std::nullopt};
+                                              event.flow_id = request_envelope.flow_id;
+                                              event.flow_origin = request_envelope.flow_origin;
+                                              return event;
+                                          });
+                          };
+                    }
                     auto scope = zlink::framework::detail::service_scope_t::create (
                       _services,
                       zlink::framework::detail::service_scope_kind_t::handler_invocation);
@@ -1492,19 +1494,27 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                             co_await _channel_runtime.dispatch_send_on_handler_executor (
                               record.owner, {}, request_envelope.message_name, scope.provider (),
                               *_serializers, *_handlers, message, inbound);
-                            flow.trace (message_flow_outcome_t::completed, [&] {
-                                return message_flow_event_t{message_flow_outcome_t::completed,
-                                                            dispatch_error_surface_t::channel,
-                                                            dispatch_message_kind_t::send,
-                                                            request_envelope.message_name,
-                                                            record.owner,
-                                                            std::nullopt,
-                                                            inbound.message.correlation_id,
-                                                            std::nullopt,
-                                                            std::nullopt,
-                                                            std::nullopt,
-                                                            std::nullopt};
-                            });
+                            flow.trace (message_flow_outcome_t::completed,
+                                        request_envelope.flow_id
+                                          ? std::string_view (*request_envelope.flow_id)
+                                          : std::string_view{},
+                                        [&] {
+                                            message_flow_event_t event{
+                                              message_flow_outcome_t::completed,
+                                              dispatch_error_surface_t::channel,
+                                              dispatch_message_kind_t::send,
+                                              request_envelope.message_name,
+                                              record.owner,
+                                              std::nullopt,
+                                              inbound.message.correlation_id,
+                                              std::nullopt,
+                                              std::nullopt,
+                                              std::nullopt,
+                                              std::nullopt};
+                                            event.flow_id = request_envelope.flow_id;
+                                            event.flow_origin = request_envelope.flow_origin;
+                                            return event;
+                                        });
                         }
                         catch (const framework_exception_t &error) {
                             report_client_server_dispatch_error (
@@ -1562,6 +1572,32 @@ boost::asio::awaitable<result_t<void>> client_server_location_runtime_t::drain_s
                         pending_reply.reset ();
                         pending_failure_reply = failure;
                     }
+                }
+                if (pending_reply || pending_failure_reply) {
+                    detail::message_flow_tracer_t flow (_channel_runtime.dispatch_options_ref ());
+                    const auto &header = record.envelope_header;
+                    flow.trace (message_flow_outcome_t::replied,
+                                header.flow_id ? std::string_view (*header.flow_id)
+                                               : std::string_view{},
+                                [&] {
+                                    message_flow_event_t event{
+                                      message_flow_outcome_t::replied,
+                                      dispatch_error_surface_t::channel,
+                                      header.kind == messaging::message_kind_t::request
+                                        ? dispatch_message_kind_t::request
+                                        : dispatch_message_kind_t::send,
+                                      header.message_name,
+                                      record.owner,
+                                      std::nullopt,
+                                      header.correlation_id,
+                                      std::nullopt,
+                                      std::nullopt,
+                                      std::nullopt,
+                                      std::nullopt};
+                                    event.flow_id = header.flow_id;
+                                    event.flow_origin = header.flow_origin;
+                                    return event;
+                                });
                 }
                 try {
                     if (pending_reply)

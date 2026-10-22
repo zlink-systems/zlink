@@ -460,13 +460,17 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             return;
         }
         traceFlow(ZLinkMessageFlowOutcome.RECEIVED, record, packetName);
+        CompletableFuture<Void> admission = null;
+        if (flow.enabled(ZLinkMessageFlowOutcome.ADMITTED)) {
+            admission = new CompletableFuture<>();
+            admission.thenRun(
+                    () -> traceFlow(ZLinkMessageFlowOutcome.ADMITTED, record, packetName));
+        }
         try {
             CompletionStage<Void> queued =
                     namespace.sendQueue.enqueue(
                             () -> {
                                 Message payload = record.parts().get(1);
-                                traceFlow(ZLinkMessageFlowOutcome.ADMITTED, record, packetName);
-                                traceFlow(ZLinkMessageFlowOutcome.DISPATCHED, record, packetName);
                                 CompletionStage<Void> invocation =
                                         route != null
                                                 ? invoker.executeHandler(
@@ -479,7 +483,17 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                                                 .sourceNodeRid(),
                                                                         payload,
                                                                         metadata,
-                                                                        contentType))
+                                                                        contentType,
+                                                                        flow.enabled(
+                                                                                        ZLinkMessageFlowOutcome
+                                                                                                .DISPATCHED)
+                                                                                ? () ->
+                                                                                        traceFlow(
+                                                                                                ZLinkMessageFlowOutcome
+                                                                                                        .DISPATCHED,
+                                                                                                record,
+                                                                                                packetName)
+                                                                                : null))
                                                 : invoker.executeHandler(
                                                         () ->
                                                                 invoker.invokeSendHandler(
@@ -488,10 +502,20 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                                         channel,
                                                                         payload,
                                                                         metadata,
-                                                                        contentType));
+                                                                        contentType,
+                                                                        flow.enabled(
+                                                                                        ZLinkMessageFlowOutcome
+                                                                                                .DISPATCHED)
+                                                                                ? () ->
+                                                                                        traceFlow(
+                                                                                                ZLinkMessageFlowOutcome
+                                                                                                        .DISPATCHED,
+                                                                                                record,
+                                                                                                packetName)
+                                                                                : null));
                                 return invocation;
                             },
-                            null);
+                            admission);
             queued.whenComplete(
                     (ignored, error) -> {
                         try {
@@ -580,20 +604,18 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
             return;
         }
         traceFlow(ZLinkMessageFlowOutcome.RECEIVED, record, packetName);
+        CompletableFuture<Void> admission = null;
+        if (flow.enabled(ZLinkMessageFlowOutcome.ADMITTED)) {
+            admission = new CompletableFuture<>();
+            admission.thenRun(
+                    () -> traceFlow(ZLinkMessageFlowOutcome.ADMITTED, record, packetName));
+        }
         try {
             CompletionStage<Void> queued =
                     namespace
                             .requestQueue
                             .enqueue(
                                     () -> {
-                                        traceFlow(
-                                                ZLinkMessageFlowOutcome.ADMITTED,
-                                                record,
-                                                packetName);
-                                        traceFlow(
-                                                ZLinkMessageFlowOutcome.DISPATCHED,
-                                                record,
-                                                packetName);
                                         try {
                                             CompletionStage<Message> invocation =
                                                     route != null
@@ -607,7 +629,18 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                                                                     .sourceNodeRid(),
                                                                                             payload,
                                                                                             metadata,
-                                                                                            contentType))
+                                                                                            contentType,
+                                                                                            flow
+                                                                                                            .enabled(
+                                                                                                                    ZLinkMessageFlowOutcome
+                                                                                                                            .DISPATCHED)
+                                                                                                    ? () ->
+                                                                                                            traceFlow(
+                                                                                                                    ZLinkMessageFlowOutcome
+                                                                                                                            .DISPATCHED,
+                                                                                                                    record,
+                                                                                                                    packetName)
+                                                                                                    : null))
                                                             : invoker.executeHandler(
                                                                     () ->
                                                                             invoker
@@ -617,7 +650,18 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                                                                             channel,
                                                                                             payload,
                                                                                             metadata,
-                                                                                            contentType));
+                                                                                            contentType,
+                                                                                            flow
+                                                                                                            .enabled(
+                                                                                                                    ZLinkMessageFlowOutcome
+                                                                                                                            .DISPATCHED)
+                                                                                                    ? () ->
+                                                                                                            traceFlow(
+                                                                                                                    ZLinkMessageFlowOutcome
+                                                                                                                            .DISPATCHED,
+                                                                                                                    record,
+                                                                                                                    packetName)
+                                                                                                    : null));
                                             return invocation.<Void>handle(
                                                     (reply, error) -> {
                                                         if (error == null) {
@@ -649,7 +693,7 @@ public final class ZLinkMeshApplicationDispatcher implements ZLinkMeshApplicatio
                                             return CompletableFuture.<Void>failedFuture(failure);
                                         }
                                     },
-                                    null)
+                                    admission)
                             .whenComplete((ignored, error) -> closeRecord(record, claim));
             queued.whenComplete(
                     (ignored, error) -> {

@@ -2758,7 +2758,7 @@ void spot_context_state_t::run_local_close_steps (
             [self, owner] () -> task_t<bool> {
                 const auto node = owner;
                 const auto context = self;
-                auto [members, native] = co_await node->lane.run_task ([node, context] {
+                auto [members, native, services] = co_await node->lane.run_task ([node, context] {
                     std::vector<actor_ref_t> result;
                     for (const auto &[id, type] : node->actor_types_by_id) {
                         const auto key = type + ":" + id;
@@ -2769,7 +2769,8 @@ void spot_context_state_t::run_local_close_steps (
                               context->node_rid, type, id, node->actor_generations.at (key)));
                         }
                     }
-                    return std::pair{std::move (result), node->native_node.lock ()};
+                    return std::tuple{std::move (result), node->native_node.lock (),
+                                      node->root_services};
                 });
                 spot_node_runtime_t runtime (node);
                 for (const auto &member : members) {
@@ -2785,9 +2786,9 @@ void spot_context_state_t::run_local_close_steps (
                               framework_error_kind_t::internal_failure,
                               "Host shutdown local Actor cleanup failed");
                     }
-                    if (node->root_services) {
+                    if (services) {
                         const auto cleaned =
-                          co_await node->root_services->get_required<actor_gateway_runtime_t> ()
+                          co_await services->get_required<actor_gateway_runtime_t> ()
                             .destroy_actor_async (member);
                         if (!cleaned)
                             co_return detail::propagate_failure<bool> (
@@ -14067,6 +14068,15 @@ void spot_node_runtime_t::release_native_handles () noexcept
             catch (...) {
             }
         }
+        _state->lane
+          .run ([&] {
+              std::atomic_store_explicit (&_state->route_client,
+                                          std::shared_ptr<const route_client_t>{},
+                                          std::memory_order_release);
+              _state->channel_runtime.reset ();
+              _state->root_services.reset ();
+          })
+          .get ();
     }
     catch (...) {
     }
