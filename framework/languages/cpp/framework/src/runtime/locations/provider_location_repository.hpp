@@ -7,6 +7,7 @@
 #include "runtime/locations/location_record_fields.hpp"
 #include "runtime/locations/aggregate_inventory.hpp"
 #include "runtime/locations/actor_authority_payload.hpp"
+#include "runtime/locations/relocation_authority_payload.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/location_store_limits.hpp"
 #include "runtime/execution/task_result.hpp"
@@ -661,7 +662,8 @@ class provider_location_repository_t final : public location_repository_t
                 co_return false;
             const auto spot = decode_authority (spot_row->value.bytes, spot_row->value.version,
                                                 spot_row->value.store_now);
-            const auto ready = decode_ready_user_spot_authority_payload (spot.payload);
+            const auto ready =
+              stateful::authority_relocation_payload_codec_t::decode_ready_user_spot (spot);
             if (!ready || ready->spot_id != member->current_spot_id
                 || spot.allocation.object_kind != placement_object_kind_t::user_spot
                 || spot.allocation.state != placement_allocation_state_t::active
@@ -907,7 +909,8 @@ class provider_location_repository_t final : public location_repository_t
                 throw framework_exception_t (framework_error_kind_t::unavailable,
                                              "Actor is not steady Ready");
             if (current.allocation.object_kind == placement_object_kind_t::user_spot) {
-                const auto spot = decode_ready_user_spot_authority_payload (current.payload);
+                const auto spot =
+                  stateful::authority_relocation_payload_codec_t::decode_ready_user_spot (current);
                 if (!spot || spot->spot_id != request->key.global_id
                     || spot->stable_type != request->intent.stable_type)
                     throw framework_exception_t (framework_error_kind_t::unavailable,
