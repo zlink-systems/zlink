@@ -87,6 +87,34 @@ test('service multipart writes borrowed slices once into the owned wire frame', 
   assert.throws(() => wire.decodeApplicationPayloadView(frame.subarray(0, frame.length - 1)));
 });
 
+// Spec 08 E1 allows the one write into the outbound frame. Every frame byte
+// is written by the encoder, so a small frame takes pooled storage: no zero
+// fill and no backing store per message. Unallocated pool bytes are dirtied
+// first, so a byte the encoder skipped would differ from the expected layout.
+test('small service frames take pooled storage and write every byte', () => {
+  const text8 = value => Buffer.concat([Buffer.from([Buffer.byteLength(value)]), Buffer.from(value)]);
+  const u32 = value => { const bytes = Buffer.alloc(4); bytes.writeUInt32BE(value); return bytes; };
+  const expected = (packetName, contentType, payload) => {
+    const body = Buffer.concat([text8(packetName), text8(contentType), u32(payload.length), payload]);
+    return Buffer.concat([Buffer.from([1]), u32(body.length), body]);
+  };
+  // Start where the pool has room for both frames.
+  let probe = Buffer.allocUnsafe(1);
+  while (probe.buffer.byteLength - probe.byteOffset < 1024) probe = Buffer.allocUnsafe(1);
+  new Uint8Array(probe.buffer, probe.byteOffset + 1).fill(0xa5);
+  const single = wire.encodeApplicationPayload({
+    packetName: 'Probe', contentType: 'application/json', payload: Buffer.from('{"body":1}')
+  });
+  const multipart = wire.encodeMultipartApplicationPayload(
+    [Buffer.from('header'), Buffer.from('body')], 'ZLinkFrameworkMultipart', 'application/x-zlink-multipart'
+  );
+  assert.deepEqual(single, expected('Probe', 'application/json', Buffer.from('{"body":1}')));
+  assert.deepEqual(multipart, expected('ZLinkFrameworkMultipart', 'application/x-zlink-multipart',
+    Buffer.concat([u32(2), u32(6), Buffer.from('header'), u32(4), Buffer.from('body')])));
+  assert.equal(single.buffer, probe.buffer, 'A small single frame owns no separate backing store.');
+  assert.equal(multipart.buffer, probe.buffer, 'A small multipart frame owns no separate backing store.');
+});
+
 test('service payload encoders retain canonical text and frame ownership at text boundaries', () => {
   for (const packetName of ['Probe', '가'.repeat(85), 'a'.repeat(255)]) {
     const payload = Uint8Array.from([1, 2, 3]);
