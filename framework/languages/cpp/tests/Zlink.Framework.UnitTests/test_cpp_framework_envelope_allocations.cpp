@@ -7,6 +7,7 @@
 #include <zlink/framework.hpp>
 #include <cstdio>
 #include "runtime/messaging/client_call_codec.hpp"
+#include "runtime/mesh/service_mailbox.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 #include <cstdlib>
 #include <new>
@@ -244,6 +245,26 @@ TEST (EnvelopeAllocations, DecodeDoesNotAllocateADiscardedJsonDefault)
     EXPECT_EQ (decoded->value ().channel_name, "c");
     EXPECT_EQ (decoded->value ().message_name, "m");
     EXPECT_EQ (allocations, 0u);
+}
+
+TEST (EnvelopeAllocations, MailboxRecordDoesNotConstructAnUnusedContentType)
+{
+    using record_t = fw::runtime::mesh::service_mailbox_record_t;
+    alignas (record_t) std::byte baseline_storage[sizeof (record_t)];
+    alignas (record_t) std::byte actual_storage[sizeof (record_t)];
+    record_t *baseline = nullptr;
+    record_t *actual = nullptr;
+    const auto container_allocations = count_allocations ([&] {
+        baseline = ::new (static_cast<void *> (baseline_storage))
+          record_t{.envelope_header = {.content_type = {}}};
+    });
+    const auto allocations =
+      count_allocations ([&] { actual = ::new (static_cast<void *> (actual_storage)) record_t{}; });
+    EXPECT_EQ (allocations, container_allocations);
+    EXPECT_TRUE (baseline->parts.empty ());
+    EXPECT_TRUE (actual->parts.empty ());
+    std::destroy_at (baseline);
+    std::destroy_at (actual);
 }
 
 TEST (EnvelopeAllocations, NodeSendOwnsOnlyTheSerializedContentType)

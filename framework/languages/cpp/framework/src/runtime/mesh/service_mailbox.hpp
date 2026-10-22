@@ -46,7 +46,7 @@ struct service_mailbox_record_t
     std::optional<service_bound_session_source_t> bound_session_source;
     std::function<void ()> before_application_handler;
     std::shared_ptr<host::local_application_dispatch_t> application;
-    messaging::envelope_header_t envelope_header;
+    messaging::envelope_header_t envelope_header{.content_type = {}};
 };
 
 struct service_mailbox_claim_t
