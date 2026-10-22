@@ -135,6 +135,9 @@ class framework_exception_t : public std::exception
     detail_with_failure_origin (framework_exception_t error,
                                 detail::failure_origin_t origin) noexcept;
 
+    friend framework_exception_t detail_with_message (framework_exception_t error,
+                                                      std::string message);
+
     framework_error_kind_t _kind;
     std::string _message;
     detail::boundary_error_t _boundary = detail::boundary_error_t::none;
@@ -142,6 +145,12 @@ class framework_exception_t : public std::exception
     detail::error_origin_t _error_origin = detail::error_origin_t::unspecified;
     std::uint32_t _failure_code = 0;
 };
+
+inline framework_exception_t detail_with_message (framework_exception_t error, std::string message)
+{
+    error._message = std::move (message);
+    return error;
+}
 
 inline framework_exception_t detail_make_boundary_exception (detail::boundary_error_t state,
                                                              std::string message)

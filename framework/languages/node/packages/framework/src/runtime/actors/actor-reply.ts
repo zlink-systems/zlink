@@ -1,7 +1,7 @@
 import { encodeFrameworkPayload } from '../messaging/payload-codec';
 import {
   decodeStreamHeader,
-  encodeStreamHeader,
+  encodeStreamFrame,
   streamCodecForContentType,
   ZLinkStreamHeaderFlags,
   ZLinkStreamMessageKind
@@ -16,23 +16,26 @@ export function encodeActorReply(
   flowEnabled: boolean
 ): readonly Buffer[] {
   const requestHeader = decodeStreamHeader(requestHeaderBytes, flowEnabled);
-  const encoded = encodeFrameworkPayload(payload, serializers);
+  const encoded =
+    kind === ZLinkStreamMessageKind.Response
+      ? encodeFrameworkPayload(payload, serializers, requestHeader.name, 'payload')
+      : encodeFrameworkPayload(payload);
   try {
-    const replyHeader = encodeStreamHeader({
-      kind,
-      codec: streamCodecForContentType(encoded.contentType),
-      flags: ZLinkStreamHeaderFlags.None,
-      requestSeq: requestHeader.requestSeq,
-      name: '',
-      metadata: new Map(),
-      correlationId: requestHeader.correlationId,
-      flowId: requestHeader.flowId,
-      flowOrigin: requestHeader.flowOrigin
-    });
-    return [
-      Buffer.from(replyHeader.buffer, replyHeader.byteOffset, replyHeader.byteLength),
-      Buffer.from(encoded.message.data())
-    ];
+    const frame = encodeStreamFrame(
+      {
+        kind,
+        codec: streamCodecForContentType(encoded.contentType),
+        flags: ZLinkStreamHeaderFlags.None,
+        requestSeq: requestHeader.requestSeq,
+        name: '',
+        metadata: new Map(),
+        correlationId: requestHeader.correlationId,
+        flowId: requestHeader.flowId,
+        flowOrigin: requestHeader.flowOrigin
+      },
+      encoded.message.data()
+    );
+    return [Buffer.from(frame.buffer, frame.byteOffset, frame.byteLength)];
   } finally {
     encoded.message.close();
   }
