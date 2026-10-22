@@ -159,12 +159,16 @@ internal sealed class ZLinkDeferredActorJoin(
 
     public void Discard()
     {
-        var barrier = Interlocked.Exchange(ref _barrier, null);
-        barrier?.Discard();
-        Interlocked.Exchange(ref _targetCompletion, null);
-        var replay = actorState.Handoff.EndDeferredJoinCapture();
-        actorState.ReleaseDeferredJoinBarrier();
-        ReplayDeferredJoinFrames(replay);
+        try
+        {
+            var barrier = Interlocked.Exchange(ref _barrier, null);
+            barrier?.Discard();
+            Interlocked.Exchange(ref _targetCompletion, null);
+        }
+        finally
+        {
+            actorState.ReleaseDeferredJoinBarrier();
+        }
     }
 
     private async ValueTask RunAsync(CancellationToken cancellationToken)
@@ -317,42 +321,14 @@ internal sealed class ZLinkDeferredActorJoin(
             try
             {
                 barrier?.Discard();
-                var replay = actorState.Handoff.EndDeferredJoinCapture();
                 actorState.ReleaseDeferredJoinBarrier();
-                ReplayDeferredJoinFrames(replay);
             }
             finally
             {
-                // The next Actor turn must observe the completed Join's claim
-                // released, including when the completion callback fails.
+                // Release the claim even when restoring a record is refused.
                 turn.Dispose();
             }
         }
-    }
-
-    private void ReplayDeferredJoinFrames(IReadOnlyList<ZLinkActorHandoffFrame> frames)
-    {
-        if (frames.Count == 0)
-            return;
-
-        var actorRef =
-            actorState.NativeActorRef
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Actor '{actorState.ActorId}' has no local Actor reference for Deferred Join replay."
-            );
-        var batch = ZLinkActorHandoffFrames.Restore(actorRef, frames);
-        if (
-            !runtime.TryRunDetached(
-                "actor-deferred-join-source-replay",
-                cancellationToken =>
-                    new ZLinkActorInboundPipeline(
-                        runtime,
-                        new ZLinkEntrySpotActorInboundEndpoint(runtime)
-                    ).DispatchAsync(batch, cancellationToken)
-            )
-        )
-            batch.Dispose();
     }
 
     private TimeSpan RemainingTimeout() =>
