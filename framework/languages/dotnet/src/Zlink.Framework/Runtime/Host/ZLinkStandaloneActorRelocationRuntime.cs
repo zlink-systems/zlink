@@ -5,6 +5,7 @@ using Zlink.Framework.Runtime.Actors;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Identifiers;
 using Zlink.Framework.Runtime.Locations;
+using Zlink.Framework.Runtime.Messaging;
 using Zlink.Framework.Runtime.Service;
 using Zlink.Framework.Runtime.Spots;
 using static Zlink.Framework.Runtime.Execution.ZLinkStateLaneWait;
@@ -686,8 +687,10 @@ internal sealed class ZLinkStandaloneActorRelocationRuntime(
                 cutoverTerminal?.Invoke();
             }
         }
-        catch (ZLinkFrameworkException exception)
-            when (exception.Kind == ZLinkFrameworkErrorKind.Unavailable)
+        catch (Exception exception)
+            when (exception is ZLinkFrameworkException { Kind: ZLinkFrameworkErrorKind.Unavailable }
+                || ZLinkDurableRequest.CanReplay(exception, out _)
+            )
         {
             // The selected-route observer owns the retransmission trigger.
         }
@@ -3914,62 +3917,14 @@ internal sealed partial class ZLinkFrameworkRuntime
         return deliveries;
     }
 
-    internal async ValueTask RestoreStandaloneActorRelocationSourceAsync(
+    internal ValueTask RestoreStandaloneActorRelocationSourceAsync(
         ZLinkActorRuntimeState actorState
     )
     {
-        var frames = actorState.Handoff.BeginAbortCaptureRestore();
-        if (frames.Count == 0)
-        {
-            actorState.Handoff.CompleteAbortCaptureRestore();
-            return;
-        }
-        var actorRef =
-            actorState.NativeActorRef
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Actor '{actorState.ActorId}' source reference is unavailable during rollback."
-            );
-        var pipeline = new ZLinkActorInboundPipeline(
-            this,
-            new ZLinkEntrySpotActorInboundEndpoint(this)
+        actorState.Handoff.AbortCapture(
+            (frame, start) => AdmitActorHandoffFrame(actorState, frame, start)
         );
-        var barrier = actorState.ReserveHandoffRestoreBarrier();
-        var turn = await barrier.ClaimAsync().ConfigureAwait(false);
-        var queued = new List<Task>(frames.Count);
-        try
-        {
-            foreach (var frame in frames)
-            {
-                var batch = ZLinkActorHandoffFrames.Restore(actorRef, [frame]);
-                try
-                {
-                    queued.Add(
-                        pipeline
-                            .DispatchSourceRestoreAsync(
-                                batch,
-                                static () => { },
-                                CancellationToken.None
-                            )
-                            .AsTask()
-                    );
-                }
-                catch
-                {
-                    batch.Dispose();
-                    throw;
-                }
-                actorState.Handoff.AcknowledgeAbortRestoreEnqueued(frame.ArrivalIndex);
-            }
-            actorState.Handoff.CompleteAbortCaptureRestore();
-        }
-        finally
-        {
-            // Releasing this barrier starts only records whose ownership was
-            // transferred to the application mailbox above.
-            turn.Dispose();
-        }
-        await Task.WhenAll(queued).ConfigureAwait(false);
+        return ValueTask.CompletedTask;
     }
 
     internal async ValueTask FailStandaloneActorRelocationSourceAsync(
