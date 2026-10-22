@@ -4,6 +4,7 @@
 #include <runtime/locations/location_repository.hpp>
 
 #include "runtime/execution/state_lane.hpp"
+#include "runtime/locations/relocation_authority_payload.hpp"
 #include "runtime/execution/task_result.hpp"
 #include "runtime/locations/authority_key_codec.hpp"
 #include "runtime/locations/location_key_codec.hpp"
@@ -254,8 +255,16 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
     bool invalidate_actor_address_if_matches (std::string_view actor_id,
                                               const spot_address_t &expected) override
     {
-        return _lane
-          .run ([&] {
+        return invalidate_actor_address_if_matches_async (std::string (actor_id), expected)
+          .result ()
+          .value ();
+    }
+
+    task_t<bool> invalidate_actor_address_if_matches_async (std::string actor_id,
+                                                            spot_address_t expected) override
+    {
+        return _lane.run_task (
+          [this, actor_id = std::move (actor_id), expected = std::move (expected)] {
               const auto found = _actor_routes.find (std::string (actor_id));
               if (found == _actor_routes.end ())
                   return false;
@@ -270,8 +279,7 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                   return false;
               _actor_routes.erase (found);
               return true;
-          })
-          .get ();
+          });
     }
 
     task_t<bool> is_peer_ready (std::string mesh_name,
@@ -350,62 +358,41 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
           .get ();
     }
 
-    struct authority_projection_t
-    {
-        std::string store_version;
-        std::uint64_t object_generation = 0;
-        std::uint64_t authority_owner_generation = 0;
-        location_owner_token_t owner;
-        placement_allocation_t allocation;
-        std::vector<std::byte> payload;
-    };
-
-    task_t<std::optional<authority_projection_t>>
+    task_t<std::optional<authority_snapshot_t>>
     read_ready_authority (bool actor, std::string object_id, bool instance_intent = false)
     {
         const auto key = actor ? actor_authority_key (object_id) : spot_authority_key (object_id);
-        const auto read = co_await _store->read_authority (key);
-        const auto *snapshot = std::get_if<authority_snapshot_t> (&read);
+        auto read = co_await _store->read_authority (key);
+        auto *snapshot = std::get_if<authority_snapshot_t> (&read);
         if (snapshot == nullptr)
             co_return std::nullopt;
-        const auto expected_kind =
-          actor ? placement_object_kind_t::actor : snapshot->allocation.object_kind;
+        const auto expected_kind = snapshot->allocation.object_kind;
         if (snapshot->allocation.state != placement_allocation_state_t::active
-            || (actor && expected_kind != placement_object_kind_t::actor)
             || (!actor && expected_kind != placement_object_kind_t::user_spot
                 && expected_kind != placement_object_kind_t::instance_spot)) {
             co_return std::nullopt;
         }
+        if (!actor)
+            stateful::authority_relocation_payload_codec_t::project_application_payload (*snapshot);
         if (!(co_await _store->owner_admission_lifetime (snapshot->owner))) {
             const auto instance =
               instance_intent && !actor && expected_kind == placement_object_kind_t::instance_spot
                 ? decode_instance_spot_authority_payload (snapshot->payload)
                 : std::nullopt;
-            if (instance && instance->state == instance_spot_authority_state_t::ready)
-                co_return authority_projection_t{
-                  {}, 0, 0, {}, snapshot->allocation, snapshot->payload};
+            if (instance && instance->state == instance_spot_authority_state_t::ready) {
+                snapshot->store_version.clear ();
+                snapshot->object_generation = 0;
+                snapshot->authority_owner_generation = 0;
+                snapshot->owner = {};
+                co_return std::move (*snapshot);
+            }
             throw framework_exception_t (framework_error_kind_t::unavailable,
                                          "Location authority owner lease is unavailable");
         }
-        co_return authority_projection_t{snapshot->store_version,
-                                         snapshot->object_generation,
-                                         snapshot->authority_owner_generation,
-                                         snapshot->owner,
-                                         snapshot->allocation,
-                                         snapshot->payload};
+        co_return std::move (*snapshot);
     }
 
-    static bool authority_matches (const authority_projection_t &authority,
-                                   const std::string &owner_id,
-                                   const std::string &mesh_name,
-                                   const zlink::routing_id_t &node_rid)
-    {
-        return authority.owner.owner_id == owner_id
-               && authority.allocation.target.mesh_name == mesh_name
-               && authority.allocation.target.node_rid.value () == node_rid.to_string ();
-    }
-
-    static void apply_authority (spot_address_t &address, const authority_projection_t &authority)
+    static void apply_authority (spot_address_t &address, const authority_snapshot_t &authority)
     {
         address.store_version = authority.store_version;
         address.object_generation = authority.object_generation;
@@ -425,31 +412,7 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
             return instance->spot_id;
         if (const auto closing = decode_instance_closing_state (payload))
             return closing->spot_id;
-        if (payload.size () < 5 || std::to_integer<unsigned char> (payload[0]) != 'Z'
-            || std::to_integer<unsigned char> (payload[1]) != 'L'
-            || std::to_integer<unsigned char> (payload[2]) != 'I'
-            || std::to_integer<unsigned char> (payload[3]) != 'R'
-            || std::to_integer<unsigned char> (payload[4]) != 1)
-            return std::nullopt;
-        std::size_t offset = 5;
-        const auto read_text = [&] () -> std::optional<std::string> {
-            if (offset + 4 > payload.size ())
-                return std::nullopt;
-            std::uint32_t size = 0;
-            for (int index = 0; index < 4; ++index)
-                size = (size << 8) | std::to_integer<std::uint8_t> (payload[offset++]);
-            if (offset + size > payload.size ())
-                return std::nullopt;
-            std::string value;
-            value.reserve (size);
-            for (std::uint32_t index = 0; index < size; ++index)
-                value.push_back (
-                  static_cast<char> (std::to_integer<unsigned char> (payload[offset++])));
-            return value;
-        };
-        if (!read_text ())
-            return std::nullopt;
-        return read_text ();
+        return std::nullopt;
     }
 
     static std::string router_channel_for (const location_options_t &options,
