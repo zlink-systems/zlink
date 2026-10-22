@@ -4371,7 +4371,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
     private <T> CompletionStage<T> withCurrentOutbound(
             DefaultSpotOutbound outbound, Supplier<CompletionStage<T>> action) {
         CompletableFuture<T> result = new CompletableFuture<>();
-        ZLinkSerialExecutionQueue.deferCurrentReleaseUntil(result);
         var flow = ZLinkFlowContext.current();
         try {
             outboundScope.run(
@@ -4732,7 +4731,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                 "Spot activation context is unavailable: "
                                         + spot.getClass().getName()));
             }
-            return context.runLifecycleExecution(
+            return context.enqueueLifecycle(
                     () ->
                             withCurrentOutbound(
                                     context.dispatchOutbound(),
@@ -4754,7 +4753,12 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                                     () ->
                                             ZLinkHandlerStages.fromStageSupplier(
                                                     () -> entrySpot.onJoinedActor(actor)))
-                    : ZLinkHandlerStages.fromStageSupplier(() -> entrySpot.onLeaveActor(actor));
+                    : entrySpotActivationFor(entrySpot.context().spotId())
+                            .context
+                            .enqueueLifecycle(
+                                    () ->
+                                            ZLinkHandlerStages.fromStageSupplier(
+                                                    () -> entrySpot.onLeaveActor(actor)));
         }
         return CompletableFuture.completedFuture(null);
     }
@@ -4790,11 +4794,6 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
         if (spotSurface == null) {
             return CompletableFuture.completedFuture(null);
         }
-        if (spotSurface instanceof ZLinkSpot<?> spot) {
-            return spotLifecycle
-                    .contextFor(spot)
-                    .enqueueLifecycle(() -> notifySpotActorLifecycle(spot, actor, false));
-        }
         return notifySpotActorLifecycle(spotSurface, actor, false);
     }
 
@@ -4806,20 +4805,7 @@ public final class ZLinkSpotRuntime extends ZLinkSpotContextHost
                             if (spotSurface == null) {
                                 return notifySourceActorLeftForRemoteMove(actor);
                             }
-                            if (spotSurface instanceof ZLinkEntrySpot<?> entry) {
-                                return entrySpotActivationFor(entry.context().spotId())
-                                        .context
-                                        .enqueueLifecycle(
-                                                () ->
-                                                        notifySpotActorLifecycle(
-                                                                entry, actor, false));
-                            }
-                            return spotLifecycle
-                                    .contextFor((ZLinkSpot<?>) spotSurface)
-                                    .enqueueLifecycle(
-                                            () ->
-                                                    notifySpotActorLifecycle(
-                                                            spotSurface, actor, false));
+                            return notifySpotActorLifecycle(spotSurface, actor, false);
                         })
                 .whenComplete(
                         (ignored, failure) -> {

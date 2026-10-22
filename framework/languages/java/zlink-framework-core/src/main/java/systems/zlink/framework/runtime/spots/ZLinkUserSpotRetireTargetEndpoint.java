@@ -1032,9 +1032,10 @@ final class ZLinkUserSpotRetireTargetEndpoint
                             //  step 8) lets the Session owner relay again. Otherwise the
                             //  first relay after the route switch is handed to the
                             //  closed queue and lost.
-                            return actorStaging
-                                    .replayDirectJoin(
-                                            replay, productionActorReplayer(target, request))
+                            return ZLinkSerialExecutionQueue.manageCurrent(
+                                            actorStaging.replayDirectJoin(
+                                                    replay,
+                                                    productionActorReplayer(target, request)))
                                     .thenCompose(
                                             terminal -> {
                                                 actorJoin.releasePrewarm(

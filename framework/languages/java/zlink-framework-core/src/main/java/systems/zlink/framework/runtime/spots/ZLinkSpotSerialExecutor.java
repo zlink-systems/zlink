@@ -5,6 +5,7 @@ import systems.zlink.framework.execution.ZLinkExecutionLanePolicy;
 import systems.zlink.framework.execution.ZLinkSerialExecutionQueue;
 import systems.zlink.framework.runtime.actors.ZLinkActorDispatchTarget;
 import systems.zlink.framework.runtime.actors.ZLinkActorSerialExecutor;
+import systems.zlink.framework.runtime.handlers.ZLinkHandlerStages;
 import systems.zlink.framework.runtime.internal.execution.ZLinkStateLane;
 import systems.zlink.framework.runtime.internal.relocation.ZLinkRetainedSerialQueueCommit;
 
@@ -471,10 +472,11 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     }
 
     CompletionStage<Void> executeLifecycle(Supplier<CompletionStage<Void>> operation) {
+        if (spotQueue.isCurrent()) {
+            return ZLinkHandlerStages.fromStageSupplier(operation);
+        }
         boolean ownsDependencyTurn =
-                spotQueue.isCurrent()
-                        || (!sharedSpotGate
-                                && ZLinkSerialExecutionQueue.isCurrentTimerOf(spotQueue));
+                !sharedSpotGate && ZLinkSerialExecutionQueue.isCurrentTimerOf(spotQueue);
         CompletionStage<Void> lifecycle = requestLifecycle(operation);
         return ownsDependencyTurn ? ZLinkSerialExecutionQueue.yieldCurrent(lifecycle) : lifecycle;
     }

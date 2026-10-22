@@ -98,6 +98,8 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
     private static final List<String> EVENTS = new CopyOnWriteArrayList<>();
     private static final AtomicReference<CompletableFuture<Void>> LEAVE_GATE =
             new AtomicReference<>();
+    private static final AtomicReference<CompletableFuture<Void>> LEAVE_ENTERED =
+            new AtomicReference<>();
     private static final AtomicReference<ZLinkActorJoinOperationId> ACCEPTED =
             new AtomicReference<>();
     private static final AtomicReference<CompletableFuture<ZLinkActorJoinOperationId>>
@@ -178,6 +180,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         PUSH_SUBMITTED.set(new CompletableFuture<>());
         PUSH_TERMINAL.set(new CompletableFuture<>());
         LEAVE_GATE.set(new CompletableFuture<>());
+        LEAVE_ENTERED.set(new CompletableFuture<>());
         RESTORE_ENTERED.set(new CompletableFuture<>());
         RESTORE_GATE.set(CompletableFuture.completedFuture(null));
         var locationStore = new ZLinkInMemoryLocationStore();
@@ -590,7 +593,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             targetSpotAuthority.authorityOwnerGeneration(),
                             targetDescriptor.leaseGeneration(),
                             targetSpot,
-                            actor -> ((TrackingSpot) targetSpot).onJoinedActor(actor),
+                            actor -> targetSpots.notifySpotActorLifecycle(targetSpot, actor, true),
                             "application/json",
                             new byte[0],
                             TIMEOUT);
@@ -1011,6 +1014,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                         "Message Follow retention must bound the source attempt even "
                                 + "while OnLeave remains pending");
             }
+            LEAVE_ENTERED.get().get(4, TimeUnit.SECONDS);
             assertEquals(
                     1,
                     EVENTS.stream().filter("source.leave"::equals).count(),
@@ -1476,6 +1480,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
 
     private enum Scenario {
         NORMAL(LeaveMode.DELIVER),
+        JOINED_YIELD(LeaveMode.DELIVER),
         TARGET_AUTHORITY_MISSING(LeaveMode.DELIVER),
         NEXT_DEFERRED_JOIN(LeaveMode.DELIVER),
         LEAVE_FAILED_FUTURE(LeaveMode.FAILED_FUTURE),
@@ -1881,7 +1886,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                             request.targetSpotId(),
                             records,
                             replay)
-                    .thenApply(
+                    .thenApplyAsync(
                             accepted -> {
                                 EVENTS.add("prefix.admitted");
                                 if (currentScenario == Scenario.NEXT_DEFERRED_JOIN
@@ -2080,6 +2085,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
         @Override
         public CompletionStage<Void> onLeaveActor(ZLinkActor actor) {
             EVENTS.add("source.leave");
+            LEAVE_ENTERED.get().complete(null);
             return LEAVE_GATE.get();
         }
     }
@@ -2117,6 +2123,12 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                 return nextJoinRelease;
             }
             EVENTS.add("target.joined");
+            if (currentScenario == Scenario.JOINED_YIELD) {
+                return context.runIoWorker(
+                                cancellation -> CompletableFuture.completedFuture("joined"))
+                        .yield()
+                        .thenAccept(value -> assertEquals("joined", value));
+            }
             RuntimeException failure = currentScenario.joinedFailure();
             return failure == null
                     ? CompletableFuture.completedFuture(null)
