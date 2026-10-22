@@ -115,6 +115,7 @@ struct application_payload_t
 
 // Shared inverse of application_payload_t::from_parts; used by dispatch and diagnostics.
 application_payload_t::multipart_t decode_application_parts (const application_payload_t &payload);
+zlink::message_t decode_application_header (const application_payload_t &payload);
 
 struct spot_route_fence_t
 {
@@ -447,6 +448,7 @@ struct frozen_record_t
     std::uint64_t source_binding_generation = 0;
     std::uint64_t source_session_sequence = 0;
     bool has_metadata = false;
+    std::uint8_t message_follow_hop_count = 0;
     wire_operation_id_t operation;
     std::uint32_t operation_kind = 0;
     std::optional<std::uint64_t> reply_route_id;
@@ -495,6 +497,7 @@ struct frozen_application_record_t
     std::optional<std::vector<std::uint8_t>> source_session_routing_id;
     std::uint64_t source_binding_generation = 0;
     std::uint64_t source_session_sequence = 0;
+    std::uint8_t message_follow_hop_count = 0;
     std::vector<frozen_metadata_entry_t> metadata;
     wire_operation_id_t operation;
     std::uint32_t operation_kind = 0;
