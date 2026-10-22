@@ -5088,6 +5088,42 @@ TEST (ActorMaintenanceJoin, DeferredTaskRetainsLifecyclePositionUntilCompletion)
     EXPECT_EQ (order, (std::vector<int>{1, 2, 3, 4}));
 }
 
+TEST (ActorMaintenanceJoin, DeferredTaskKeepsInlineCallableCapturesAcrossSuspension)
+{
+    // A one-reference capture is small and trivially copyable, so std::function
+    // keeps the closure in its own buffer on every supported standard library.
+    // The coroutine frame refers to that closure by address after it resumes.
+    struct deferred_state_t
+    {
+        fw::runtime::offload_executor_t &executor;
+        fw::task_completion_source_t<void> release;
+        std::promise<void> suspended;
+        int marker = 7;
+        int observed = 0;
+    };
+    fw::runtime::offload_executor_t executor (1);
+    deferred_state_t state{executor};
+    fw::runtime::serial_execution_queue_t queue (executor, {});
+    queue_drain_guard_t guard{queue};
+    auto suspension = state.suspended.get_future ();
+    queue.post ("handler", [&] {
+        EXPECT_TRUE (queue.try_post_deferred_task (
+          "read-capture-after-resume", [&state] () -> fw::task_t<void> {
+              // The nested FIFO markers run after the worker leaves the call that
+              // started this task, so the release below resumes a suspended frame.
+              auto &worker = state.executor;
+              worker.submit (
+                [&worker, &state] { worker.submit ([&state] { state.suspended.set_value (); }); });
+              co_await state.release.task ();
+              state.observed = state.marker;
+          }));
+    });
+    suspension.get ();
+    state.release.complete (fw::result_t<void>::success ());
+    queue.drain ();
+    EXPECT_EQ (state.observed, 7);
+}
+
 TEST (ActorMaintenanceJoin, CancelledReservedCaptureFinishes)
 {
     fw::runtime::offload_executor_t executor (2);

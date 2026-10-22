@@ -3,6 +3,7 @@
 #include "runtime/execution/serial_execution_queue.hpp"
 #include "runtime/execution/serial_application_record.hpp"
 #include "runtime/execution/serial_handler_participant.hpp"
+#include "runtime/dispatch/owned_task.hpp"
 
 #include <algorithm>
 #include <cassert>
@@ -311,11 +312,9 @@ class serial_deferred_barrier_t final
                 return;
             }
             try {
-                auto pending = std::make_shared<task_t<void>> ((*owned_work) ());
-                detail::observe_task_terminal (
-                  *pending, [source, settle, pending, owned_work] (const result_t<void> &result) {
-                      settle (source, result);
-                  });
+                start_owned_task<void> (
+                  owned_work,
+                  [source, settle] (const result_t<void> &result) { settle (source, result); });
             }
             catch (const framework_exception_t &error) {
                 settle (source, detail::result_access_t::failure<void> (error));
@@ -1066,14 +1065,11 @@ class serial_turn_handle_impl_t final
         const bool open = !_queue.closed ();
         for (auto &entry : entries) {
             if (open && (succeeded || entry.runs_after_failure)) {
+                auto work =
+                  std::make_shared<std::function<task_t<void> ()>> (std::move (entry.activate));
                 auto activated = entry.barrier->activate_async (
-                  [work = std::move (entry.activate)] (
-                    detail::deferred_barrier_t::async_completion_t complete) mutable {
-                      auto pending = std::make_shared<task_t<void>> (work ());
-                      detail::observe_task_terminal (
-                        *pending,
-                        [pending, work = std::move (work), complete = std::move (complete)] (
-                          const result_t<void> &result) mutable { complete (result); });
+                  [work] (detail::deferred_barrier_t::async_completion_t complete) {
+                      start_owned_task<void> (work, std::move (complete));
                   });
                 if (!activated) {
                     entry.barrier->cancel ();
