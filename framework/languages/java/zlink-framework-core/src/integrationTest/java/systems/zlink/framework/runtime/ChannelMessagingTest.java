@@ -1,6 +1,7 @@
 package systems.zlink.framework.runtime;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -83,6 +84,7 @@ import java.util.logging.Logger;
 import java.util.logging.SimpleFormatter;
 
 final class ChannelMessagingTest {
+    private static final long ASYNC_TIMEOUT_SECONDS = 2;
     private static final Duration RAW_REPLY_TIMEOUT = Duration.ofSeconds(2);
     private static final AtomicReference<CountDownLatch> FANOUT_LATCH = new AtomicReference<>();
     private static final AtomicReference<String> FANOUT_MESSAGE = new AtomicReference<>();
