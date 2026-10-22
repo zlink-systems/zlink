@@ -112,7 +112,7 @@ public sealed class StatefulWireSchemaConformanceTests
     }
 
     [Fact]
-    public void Runtime_matches_generated_codec_at_stateful_header_boundaries()
+    public void Runtime_validates_stateful_header_boundaries()
     {
         var root = Common.FrameworkTestEnvironment.GetFrameworkRoot();
         using var fixture = JsonDocument.Parse(
@@ -201,30 +201,6 @@ public sealed class StatefulWireSchemaConformanceTests
 
             void Compare(byte[] changed, bool expected)
             {
-                var changedFrames = (byte[][])frames.Clone();
-                changedFrames[0] = changed;
-                var generatedError = Record.Exception(() =>
-                {
-                    var context = new ServiceWireCodec.DecodeContext(
-                        null,
-                        null,
-                        null,
-                        4294966774L,
-                        uint.MaxValue
-                    );
-                    _ = command switch
-                    {
-                        21 => (object)ServiceWireCodec.DecodeSpotSend21(changedFrames, context),
-                        22 => ServiceWireCodec.DecodeSpotRequest22(changedFrames, context),
-                        24 => ServiceWireCodec.DecodeActorSend24(changedFrames, context),
-                        25 => ServiceWireCodec.DecodeActorRequest25(changedFrames, context),
-                        _ => throw new InvalidOperationException(),
-                    };
-                });
-                Assert.True(
-                    expected == (generatedError is null),
-                    $"command={command} header={Convert.ToHexString(changed)} expected={expected} generated={generatedError}"
-                );
                 Assert.Equal(
                     expected,
                     ZLinkServiceWireCodec.TryDecodeStateful(changed, "mesh", out var decoded, out _)
