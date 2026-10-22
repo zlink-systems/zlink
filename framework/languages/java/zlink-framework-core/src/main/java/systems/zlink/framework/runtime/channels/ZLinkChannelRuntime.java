@@ -1025,15 +1025,17 @@ public final class ZLinkChannelRuntime
     @Override
     public ZLinkSendCall sendToChannel(String channelName, Object message) {
         rejectAfterRelocationReady("Channel send");
-        ZLinkPayloadEncoding.EncodedPayload encoded = encodePayload(message);
+        String contentType = codecs.contentTypeFor(ZLinkPayloadEncoding.declaredType(message));
+        String packetName = ZLinkPayloadEncoding.resolvePacketName(message);
+        Message payload = ZLinkPayloadEncoding.encodeMessage(serializer, message, contentType);
         return new ChannelSendCall(
                 callRuntime,
                 channelName,
                 sockets,
                 defaultRequestTimeout,
-                encoded.payload(),
-                Optional.of(encoded.packetName()),
-                encoded.contentType(),
+                payload,
+                Optional.of(packetName),
+                contentType,
                 null);
     }
 
@@ -1120,15 +1122,17 @@ public final class ZLinkChannelRuntime
 
     @Override
     public ZLinkSendCall sendToNode(String meshName, RoutingId target, Object message) {
-        ZLinkPayloadEncoding.EncodedPayload encoded = encodePayload(message);
+        String contentType = codecs.contentTypeFor(ZLinkPayloadEncoding.declaredType(message));
+        String packetName = ZLinkPayloadEncoding.resolvePacketName(message);
+        Message payload = ZLinkPayloadEncoding.encodeMessage(serializer, message, contentType);
         return new RouteSendCall(
                 callRuntime,
                 meshName,
                 sockets,
                 target,
-                encoded.payload(),
-                Optional.of(encoded.packetName()),
-                encoded.contentType(),
+                payload,
+                Optional.of(packetName),
+                contentType,
                 null);
     }
 
