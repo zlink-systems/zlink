@@ -5458,7 +5458,7 @@ task_t<std::optional<zlink::message_t>> spot_manager_t::relay_actor_packet (
   const runtime::protocol::actor_route_fence_t *admitted_message_follow_target)
 {
     const auto actor_packet_relay =
-      _state->lane.run ([&] { return _state->actor_packet_relay; }).get ();
+      _state->lane.run_sync ([&] { return _state->actor_packet_relay; });
     if (actor_packet_relay) {
         co_return co_await actor_packet_relay (
           actor_ref, std::move (actor_context), message_kind, packet_name, message, services,
@@ -12208,15 +12208,12 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
     bool targets_current_authority = admitted_message_follow_target == nullptr;
     if (admitted_message_follow_target != nullptr) {
         const auto current_fence =
-          admission_token ? phase_authority_fence
-                          : _state->lane
-                              .run ([&] {
-                                  const auto current = _state->actor_authority_fences.find (key);
-                                  return current == _state->actor_authority_fences.end ()
-                                           ? std::optional<runtime::protocol::actor_route_fence_t>{}
-                                           : std::make_optional (current->second);
-                              })
-                              .get ();
+          admission_token ? phase_authority_fence : _state->lane.run_sync ([&] {
+              const auto current = _state->actor_authority_fences.find (key);
+              return current == _state->actor_authority_fences.end ()
+                       ? std::optional<runtime::protocol::actor_route_fence_t>{}
+                       : std::make_optional (current->second);
+          });
         targets_current_authority =
           current_fence ? *current_fence == *admitted_message_follow_target
                         : !_state->actor_transfer_coordinator.has_message_follow_route (key);
@@ -12237,8 +12234,7 @@ task_t<std::optional<zlink::message_t>> spot_node_runtime_t::relay_actor_packet 
         auto relay =
           admission_token
             ? admission_token->actor_message_follow_relay ()
-            : state_owner->lane.run ([&] { return state_owner->actor_message_follow_relay; })
-                .get ();
+            : state_owner->lane.run_sync ([&] { return state_owner->actor_message_follow_relay; });
         if (!relay)
             co_return result_t<std::optional<zlink::message_t>>::failure (
               framework_error_kind_t::unavailable, "Actor Message Follow relay is unavailable");
