@@ -3,8 +3,10 @@ using System.Runtime.CompilerServices;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit.Abstractions;
 using Zlink.Framework.AspNetCore;
+using Zlink.Framework.Runtime.Backend.Contracts;
 using Zlink.Framework.Runtime.Execution;
 using Zlink.Framework.Runtime.Service;
+using Zlink.Framework.Runtime.Spots;
 
 namespace Zlink.Framework.UnitTests.Runtime;
 
@@ -188,6 +190,91 @@ public sealed class RequestSerialCostTests(ITestOutputHelper output)
         {
             GC.KeepAlive(lane.RunAsync(static value => value, false).GetAwaiter().GetResult());
             lane.TryPost(static _ => { }, lane);
+        }
+    }
+
+    // Spec 05 「2」 / 08 E5: the caller reads the reply's service-wire header
+    // from the received part. Decoding it adds only the reply owner that keeps
+    // the parts and their payload view; it copies no header bytes.
+    [Fact]
+    public void Direct_reply_decode_allocates_only_its_reply_owner()
+    {
+        const ulong correlation = 41;
+        var body = new byte[1024];
+        for (var index = 0; index < 128; index++)
+        {
+            Decode();
+            Control();
+        }
+        var accepted = 0;
+        for (var sample = 0; sample < 12; sample++)
+        {
+            long actual = 0;
+            long baseline = 0;
+            var collection = Collections();
+            for (var index = 0; index < Iterations; index++)
+            {
+                actual += Decode();
+                baseline += Control();
+            }
+            if (collection != Collections())
+                continue;
+            output.WriteLine(
+                $"direct reply decode {actual / Iterations} B/op; reply owner control {baseline / Iterations} B/op"
+            );
+            Assert.Equal(baseline, actual);
+            accepted++;
+        }
+        Assert.True(accepted > 0);
+
+        long Decode()
+        {
+            var parts = CreateReply();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            var received = ZLinkManagedMeshNode.DecodeDirectApplicationReply(correlation, parts);
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            Assert.NotNull(received.ApplicationPayloadView);
+            received.Dispose();
+            return allocated;
+        }
+
+        long Control()
+        {
+            var parts = CreateReply();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            Assert.True(
+                ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(
+                    parts[1],
+                    out var view
+                )
+            );
+            var received = new ZLinkBackendRouteReceived(
+                parts,
+                null,
+                null,
+                null,
+                null,
+                applicationPayloadView: view
+            );
+            var allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+            received.Dispose();
+            return allocated;
+        }
+
+        Message[] CreateReply()
+        {
+            using var header = Message.From(Array.Empty<byte>());
+            using var payload = Message.From(body);
+            return
+            [
+                Message.From(
+                    ZLinkServiceWireCodec.EncodeReply(correlation, (int)RequestResult.Ok, 0)
+                ),
+                ZLinkApplicationPayloadEnvelopeCodec.EncodeFrameworkMultipartMessage([
+                    header,
+                    payload,
+                ]),
+            ];
         }
     }
 

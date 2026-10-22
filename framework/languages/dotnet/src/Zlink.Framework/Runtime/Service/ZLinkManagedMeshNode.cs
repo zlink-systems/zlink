@@ -10912,7 +10912,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    private static ZLinkBackendRouteReceived DecodeDirectApplicationReply(
+    internal static ZLinkBackendRouteReceived DecodeDirectApplicationReply(
         ulong correlation,
         IReadOnlyList<Message> replyParts
     )
@@ -10922,7 +10922,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             if (
                 replyParts.Count == 0
                 || !ZLinkServiceWireCodec.TryDecodeReply(
-                    replyParts[0].ToArray(),
+                    replyParts[0].AsReadOnlySpan(),
                     out var reply,
                     out _
                 )
