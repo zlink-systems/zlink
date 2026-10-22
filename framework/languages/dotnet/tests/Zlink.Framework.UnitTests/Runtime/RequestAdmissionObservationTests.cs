@@ -23,44 +23,60 @@ public sealed class RequestAdmissionObservationTests
     public async Task Accepted_pending_reply_allocates_only_admission_and_execution_storage()
     {
         const int count = 512;
+        // Every window gets fresh pending sources and reply slots, created outside the
+        // measured region. All replies stay pending until after measurement.
+        var baselineReplies = new List<ValueTask<int>[]>();
+        var actualReplies = new List<ValueTask<int>[]>();
+        var allSources = new List<TaskCompletionSource<int>>();
         var baseline = new ValueTask<int>[count];
         var actual = new ValueTask<int>[count];
-        var baselineSources = Enumerable
-            .Range(0, count)
-            .Select(_ => new TaskCompletionSource<int>())
-            .ToArray();
-        var actualSources = Enumerable
-            .Range(0, count)
-            .Select(_ => new TaskCompletionSource<int>())
-            .ToArray();
+        TaskCompletionSource<int>[] baselineSources = [];
+        TaskCompletionSource<int>[] actualSources = [];
+        void NewWindow(ref ValueTask<int>[] replies, ref TaskCompletionSource<int>[] sources)
+        {
+            replies = new ValueTask<int>[count];
+            sources = Enumerable
+                .Range(0, count)
+                .Select(_ => new TaskCompletionSource<int>())
+                .ToArray();
+            allSources.AddRange(sources);
+        }
         var source = new TaskCompletionSource<int>();
         // Both loops execute the same compiler-async operation and ordinary
-        // admission ctor. Retain all replies pending until after measurement.
+        // admission ctor.
         var warmBaseline = AcceptedReply(source.Task, new ZLinkRequestAdmission());
         var warmActual = Submit(source.Task);
-        var expected = PerCallAllocation.Steady(
+        var expected = PerCallAllocation.MinWindow(
             index =>
                 baseline[index] = AcceptedReply(
                     baselineSources[index].Task,
                     new ZLinkRequestAdmission()
                 ),
-            count
+            count,
+            beforeWindow: _ =>
+            {
+                NewWindow(ref baseline, ref baselineSources);
+                baselineReplies.Add(baseline);
+            }
         );
-        var measured = PerCallAllocation.Steady(
+        var measured = PerCallAllocation.MinWindow(
             index => actual[index] = Submit(actualSources[index].Task),
-            count
+            count,
+            beforeWindow: _ =>
+            {
+                NewWindow(ref actual, ref actualSources);
+                actualReplies.Add(actual);
+            }
         );
-        var pending = actual.All(reply => !reply.IsCompleted);
+        var pending = actualReplies.All(window => window.All(reply => !reply.IsCompleted));
         source.SetResult(7);
-        foreach (var pendingSource in baselineSources)
-            pendingSource.SetResult(7);
-        foreach (var pendingSource in actualSources)
+        foreach (var pendingSource in allSources)
             pendingSource.SetResult(7);
         Assert.Equal(7, await warmBaseline);
         Assert.Equal(7, await warmActual);
-        foreach (var reply in baseline)
+        foreach (var reply in baselineReplies.SelectMany(static window => window))
             Assert.Equal(7, await reply);
-        foreach (var reply in actual)
+        foreach (var reply in actualReplies.SelectMany(static window => window))
             Assert.Equal(7, await reply);
         Assert.True(pending);
         Assert.Equal(expected, measured);

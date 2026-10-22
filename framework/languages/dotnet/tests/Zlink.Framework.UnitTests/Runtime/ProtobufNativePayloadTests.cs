@@ -40,7 +40,7 @@ public sealed class ProtobufNativePayloadTests
         var encodedBytes = SteadyBytes(() => serializer.Serialize(value, typeof(BytesValue)));
         Assert.True(
             encodedBytes <= directBytes,
-            $"Public serialization allocated {encodedBytes} B/call; owned buffer control allocated {directBytes} B/call."
+            $"Public serialization allocated {encodedBytes} bytes; owned buffer control allocated {directBytes} bytes."
         );
     }
 
@@ -189,9 +189,9 @@ public sealed class ProtobufNativePayloadTests
         Assert.Equal(new byte[] { 0x0a, 0x02, 0x6f, 0x6b }, part.ToArray());
     }
 
-    // Steady per-call bytes after the same call path has been warmed.
+    // Smallest window of AllocationIterations calls after the same call path has been warmed.
     private static long SteadyBytes(Action call) =>
-        PerCallAllocation.Steady(call, AllocationIterations, AllocationWarmupIterations);
+        PerCallAllocation.MinWindow(call, AllocationIterations, warmup: AllocationWarmupIterations);
 
     private static ZLinkCodecRegistryBuilder Codecs()
     {

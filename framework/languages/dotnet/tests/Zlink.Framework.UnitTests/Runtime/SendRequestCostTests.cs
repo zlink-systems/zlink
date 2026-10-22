@@ -80,10 +80,10 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
             baselineSamples.Add(control);
         }
         Assert.NotEmpty(actualSamples);
-        var actual = PerCallAllocation.Mode(actualSamples);
-        var baseline = PerCallAllocation.Mode(baselineSamples);
+        var actual = PerCallAllocation.MinWindow(actualSamples);
+        var baseline = PerCallAllocation.MinWindow(baselineSamples);
         output.WriteLine(
-            $"channel send preamble {actual} B/op; single header {baseline} B/op; accepted {actualSamples.Count}"
+            $"channel send preamble {actual} B/window; single header {baseline} B/window; accepted {actualSamples.Count}"
         );
         Assert.Equal(baseline, actual);
 
@@ -148,11 +148,11 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
     {
         for (var index = 0; index < 128; index++)
             await OptimizedRaw(42);
-        var actual = await PerCallAllocation.SteadyAsync(
+        var actual = await PerCallAllocation.MinWindowAsync(
             async () => Assert.Same(ReplyParts, await OptimizedRaw(42)),
             Iterations
         );
-        var runtime = await PerCallAllocation.SteadyAsync(
+        var runtime = await PerCallAllocation.MinWindowAsync(
             async () => Assert.Same(ReplyParts, await ValueTask.FromResult(ReplyParts)),
             Iterations
         );
@@ -422,10 +422,10 @@ public sealed class SendRequestCostTests(ITestOutputHelper output)
                 actual();
                 control();
             }
-            var baseline = PerCallAllocation.Steady(control, Iterations);
-            var measured = PerCallAllocation.Steady(actual, Iterations);
+            var baseline = PerCallAllocation.MinWindow(control, Iterations);
+            var measured = PerCallAllocation.MinWindow(actual, Iterations);
             output.WriteLine(
-                $"component lookup {measured} B/op; owner lane control {baseline} B/op"
+                $"component lookup {measured} B/window; owner lane control {baseline} B/window"
             );
             Assert.Equal(baseline, measured);
             var missing = Assert.Throws<ZLinkConfigurationException>(() =>

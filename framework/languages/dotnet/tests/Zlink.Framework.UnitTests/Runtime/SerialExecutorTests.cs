@@ -79,7 +79,8 @@ public sealed class SerialExecutorTests
         };
         Func<CancellationToken, ValueTask> callback = static _ => ValueTask.CompletedTask;
         Func<bool> stateCallback = static () => false;
-        var pending = new Task[count + 2];
+        var pending = new Task[2];
+        var windowTasks = new List<Task[]>();
         pending[0] = executor
             .ExecuteActorAsync("actor-cost", operation, state, CancellationToken.None)
             .AsTask();
@@ -114,22 +115,28 @@ public sealed class SerialExecutorTests
                 GC.KeepAlive(new Func<CancellationToken, ValueTask>(callback.Invoke));
             }
             Baseline();
-            var admissionStorage = PerCallAllocation.Steady(Baseline, count);
-            var actual = PerCallAllocation.Steady(
+            var admissionStorage = PerCallAllocation.MinWindow(Baseline, count);
+            Task[] current = [];
+            var actual = PerCallAllocation.MinWindow(
                 i =>
-                    pending[i + 2] = executor
+                    current[i] = executor
                         .ExecuteActorAsync("actor-cost", operation, state, CancellationToken.None)
                         .AsTask(),
-                count
+                count,
+                beforeWindow: _ => windowTasks.Add(current = new Task[count])
             );
             Assert.Equal(admissionStorage, actual);
         }
         finally
         {
             release.Set();
-            await Task.WhenAll(pending.Where(static task => task is not null));
+            await Task.WhenAll(
+                pending
+                    .Concat(windowTasks.SelectMany(static window => window))
+                    .Where(static task => task is not null)
+            );
         }
-        Assert.Equal(count + 2, ((int[])state)[0]);
+        Assert.Equal(count * windowTasks.Count + 2, ((int[])state)[0]);
     }
 
     [Fact]
@@ -173,11 +180,11 @@ public sealed class SerialExecutorTests
         Func<CancellationToken, ValueTask> callback = static _ => ValueTask.CompletedTask;
         Func<ReadOnlyMemory<byte>> factory = static () => ReadOnlyMemory<byte>.Empty;
         _ = new ZLinkSerialWorkItem(callback, acceptedPayloadFactory: factory);
-        var baseline = PerCallAllocation.Steady(
+        var baseline = PerCallAllocation.MinWindow(
             () => GC.KeepAlive(new ZLinkSerialWorkItem(callback)),
             count
         );
-        var actual = PerCallAllocation.Steady(
+        var actual = PerCallAllocation.MinWindow(
             () => GC.KeepAlive(new ZLinkSerialWorkItem(callback, acceptedPayloadFactory: factory)),
             count
         );
@@ -215,8 +222,8 @@ public sealed class SerialExecutorTests
                     Baseline();
                     Actual();
                 }
-                var ambientStorage = PerCallAllocation.Steady(Baseline);
-                Assert.Equal(ambientStorage, PerCallAllocation.Steady(Actual));
+                var ambientStorage = PerCallAllocation.MinWindow(Baseline, 1000);
+                Assert.Equal(ambientStorage, PerCallAllocation.MinWindow(Actual, 1000));
             }
             catch (Exception exception)
             {
@@ -287,9 +294,12 @@ public sealed class SerialExecutorTests
         }
         Baseline();
         Assert.False(executor.HasRelocationBarrier);
-        var expected = PerCallAllocation.Steady(Baseline);
+        var expected = PerCallAllocation.MinWindow(Baseline, 1000);
         var hasBarrier = false;
-        var actual = PerCallAllocation.Steady(() => hasBarrier |= executor.HasRelocationBarrier);
+        var actual = PerCallAllocation.MinWindow(
+            () => hasBarrier |= executor.HasRelocationBarrier,
+            1000
+        );
         Assert.False(hasBarrier);
         Assert.Equal(expected, actual);
     }
@@ -304,7 +314,7 @@ public sealed class SerialExecutorTests
             CancellationToken.None
         );
         queue.PublishDrain(null);
-        Assert.Equal(0, PerCallAllocation.Steady(() => queue.PublishDrain(null)));
+        Assert.Equal(0, PerCallAllocation.MinWindow(() => queue.PublishDrain(null), 1000));
     }
 
     [Fact]
@@ -317,7 +327,7 @@ public sealed class SerialExecutorTests
             CancellationToken.None
         );
         queue.SchedulePendingWork();
-        Assert.Equal(0, PerCallAllocation.Steady(queue.SchedulePendingWork));
+        Assert.Equal(0, PerCallAllocation.MinWindow(queue.SchedulePendingWork, 1000));
     }
 
     [Fact]
@@ -333,8 +343,8 @@ public sealed class SerialExecutorTests
             baseline.RunAsync(static value => value, true).GetAwaiter().GetResult();
         }
         Baseline();
-        var laneStorage = PerCallAllocation.Steady(Baseline);
-        Assert.Equal(laneStorage, PerCallAllocation.Steady(() => gate.TryInvoke(reply)));
+        var laneStorage = PerCallAllocation.MinWindow(Baseline, 1000);
+        Assert.Equal(laneStorage, PerCallAllocation.MinWindow(() => gate.TryInvoke(reply), 1000));
     }
 
     [Fact]
@@ -364,15 +374,20 @@ public sealed class SerialExecutorTests
             await entered.Task;
             Assert.True(queue.TryPost(callback, out _));
             GC.KeepAlive(new ZLinkSerialWorkItem(callback));
-            var storage = PerCallAllocation.Steady(() =>
-                GC.KeepAlive(new ZLinkSerialWorkItem(callback))
+            var storage = PerCallAllocation.MinWindow(
+                () => GC.KeepAlive(new ZLinkSerialWorkItem(callback)),
+                1000
             );
             var admitted = 0;
-            var admissionStorage = PerCallAllocation.Steady(() =>
-            {
-                if (queue.TryPost(callback, out _))
-                    admitted++;
-            });
+            var admissionStorage = PerCallAllocation.MinWindow(
+                call =>
+                {
+                    if (queue.TryPost(callback, out _))
+                        admitted++;
+                },
+                1000,
+                beforeWindow: _ => admitted = 0
+            );
             Assert.Equal(1000, admitted);
             Assert.Equal(storage, admissionStorage);
         }
@@ -569,16 +584,22 @@ public sealed class SerialExecutorTests
         try
         {
             await entered.Task;
-            for (var i = 0; i < items.Length; i++)
-                Assert.True(queue.TryPost(static _ => ValueTask.CompletedTask, out items[i]));
             GC.KeepAlive(Baseline(queue, release));
-            var stateStorage = PerCallAllocation.Steady(
+            var stateStorage = PerCallAllocation.MinWindow(
                 () => GC.KeepAlive(Baseline(queue, release)),
                 items.Length
             );
-            var releaseStorage = PerCallAllocation.Steady(
+            // Every window releases onto freshly posted items, posted outside the window.
+            var releaseStorage = PerCallAllocation.MinWindow(
                 i => items[i].AddTerminalRelease(release),
-                items.Length
+                items.Length,
+                beforeWindow: _ =>
+                {
+                    for (var i = 0; i < items.Length; i++)
+                        Assert.True(
+                            queue.TryPost(static _ => ValueTask.CompletedTask, out items[i])
+                        );
+                }
             );
             Assert.Equal(stateStorage, releaseStorage);
         }
@@ -639,15 +660,18 @@ public sealed class SerialExecutorTests
     [Fact]
     public async Task ApplicationDrainSignalIsAllocatedOnlyWhenObserved()
     {
-        var signalStorage = PerCallAllocation.Steady(() =>
-            GC.KeepAlive(
-                new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
-            )
+        const int windowQueues = 32;
+        var signalStorage = PerCallAllocation.MinWindow(
+            () =>
+                GC.KeepAlive(
+                    new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
+                ),
+            windowQueues
         );
         // The signal is created by the first observation of a busy queue, so each
-        // sample observes its own fresh queue.
+        // sample observes its own fresh queue; a window is the samples of 32 queues.
         var observedSamples = new List<long>();
-        for (var round = 0; round < 64; round++)
+        for (var round = 0; round < windowQueues * PerCallAllocation.Windows; round++)
         {
             using var errors = new ZLinkRuntimeErrorSink();
             await using var queue = new ZLinkSerialExecutionQueue(
@@ -694,7 +718,7 @@ public sealed class SerialExecutorTests
                 await execution;
             }
         }
-        Assert.Equal(signalStorage, PerCallAllocation.Mode(observedSamples));
+        Assert.Equal(signalStorage, PerCallAllocation.MinWindow(observedSamples));
     }
 
     [Fact]

@@ -298,23 +298,31 @@ public sealed class SharedAsyncDisposalTests
         const int iterations = 128;
         var empty = new ZLinkScopedHandlerInstanceOwner[iterations];
         var resolved = new ZLinkScopedHandlerInstanceOwner[iterations];
-        for (var i = 0; i < iterations; i++)
-        {
-            empty[i] = new ZLinkScopedHandlerInstanceOwner(services);
-            resolved[i] = new ZLinkScopedHandlerInstanceOwner(services);
-            resolved[i].Resolve<NonDisposableCleanupHandler>();
-        }
-        var emptyBytes = PerCallAllocation.Steady(
+        // Every window disposes freshly created owners, created outside the window.
+        var emptyBytes = PerCallAllocation.MinWindow(
             index => empty[index].DisposeAsync().GetAwaiter().GetResult(),
-            iterations
+            iterations,
+            beforeWindow: _ =>
+            {
+                for (var i = 0; i < iterations; i++)
+                    empty[i] = new ZLinkScopedHandlerInstanceOwner(services);
+            }
         );
-        var resolvedBytes = PerCallAllocation.Steady(
+        var resolvedBytes = PerCallAllocation.MinWindow(
             index => resolved[index].DisposeAsync().GetAwaiter().GetResult(),
-            iterations
+            iterations,
+            beforeWindow: _ =>
+            {
+                for (var i = 0; i < iterations; i++)
+                {
+                    resolved[i] = new ZLinkScopedHandlerInstanceOwner(services);
+                    resolved[i].Resolve<NonDisposableCleanupHandler>();
+                }
+            }
         );
         Assert.True(
             resolvedBytes <= emptyBytes,
-            $"Empty owner cleanup {emptyBytes} B; non-disposable cleanup {resolvedBytes} B."
+            $"Empty owner cleanup {emptyBytes / iterations} B; non-disposable cleanup {resolvedBytes / iterations} B."
         );
         Assert.Throws<ObjectDisposedException>(() =>
             resolved[0].Resolve<NonDisposableCleanupHandler>()

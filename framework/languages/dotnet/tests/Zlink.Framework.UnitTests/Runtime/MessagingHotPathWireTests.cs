@@ -60,7 +60,7 @@ public sealed class MessagingHotPathWireTests
         for (var index = 0; index < 32; index++)
             ZLinkApplicationPayloadEnvelopeCodec.TryDecodeFrameworkMultipartView(frame, out _);
 
-        var allocated = PerCallAllocation.Steady(
+        var allocated = PerCallAllocation.MinWindow(
             () =>
             {
                 if (

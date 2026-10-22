@@ -347,7 +347,7 @@ public sealed class SubmitAdmissionRuntimeTests
 
         Assert.Equal(
             0,
-            PerCallAllocation.Steady(() => _ = submission.EnsureAcceptedAsync(), 10_000)
+            PerCallAllocation.MinWindow(() => _ = submission.EnsureAcceptedAsync(), 10_000)
         );
     }
 
@@ -364,9 +364,9 @@ public sealed class SubmitAdmissionRuntimeTests
         // Measure only the Framework submission adapter. The public binding's
         // allocations are counted separately inside Async on the same thread.
         // One submission is one call, so earlier submissions on fresh pairs supply the
-        // other samples and a one-time runtime allocation cannot decide the result.
+        // other samples, 32 per window, and a one-time runtime allocation cannot decide the result.
         var samples = new List<long>();
-        for (var round = 0; round < 31; round++)
+        for (var round = 0; round < 255; round++)
             if (await SampleFrameworkSubmissionAsync() is { } sample)
                 samples.Add(sample);
 
@@ -379,7 +379,7 @@ public sealed class SubmitAdmissionRuntimeTests
             samples.Add(main);
         Assert.Equal(1, operation.SubmissionCount);
         Assert.Equal(SubmitResult.Ok, operation.LastSubmission.Result);
-        Assert.Equal(0, PerCallAllocation.Mode(samples));
+        Assert.Equal(0, PerCallAllocation.MinWindow(samples));
         Assert.Equal(cancellation.Token, operation.SubmissionToken);
         Assert.Same(operation.LastSubmission.Reply, completion);
         Assert.True(requestResult.Admitted.IsCompletedSuccessfully);

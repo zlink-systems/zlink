@@ -20,20 +20,21 @@ public sealed class RequestAdmissionStageTests
             new ZLinkRequestAdmission().Complete();
             _ = ZLinkRequestAdmission.Run(execute);
         }
-        var sourceBytes = PerCallAllocation.Steady(
+        var sourceBytes = PerCallAllocation.MinWindow(
             () => new ZLinkRequestAdmission().Complete(),
             iterations
         );
         var admitted = true;
         var replies = 0;
-        var observedBytes = PerCallAllocation.Steady(
-            () =>
+        var observedBytes = PerCallAllocation.MinWindow(
+            _ =>
             {
                 var request = ZLinkRequestAdmission.Run(execute);
                 admitted &= request.Admitted.IsCompletedSuccessfully;
                 replies += request.Reply.GetAwaiter().GetResult();
             },
-            iterations
+            iterations,
+            beforeWindow: _ => replies = 0
         );
         Assert.True(admitted);
         Assert.Equal(replyValue * iterations, replies);

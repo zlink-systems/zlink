@@ -171,7 +171,7 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
             long successBytes = replayAllocatedBytes(success);
             long failureBytes = replayAllocatedBytes(failed);
             assertTrue(
-                    successBytes < packetName.length,
+                    successBytes < (long) packetName.length * REPLAYS_PER_WINDOW,
                     "Off must not decode or copy the diagnostic packet name: " + successBytes);
             assertEquals(
                     successBytes,
@@ -179,22 +179,26 @@ final class ZLinkUserSpotRetireTargetEndpointTest {
                     "Off must add zero diagnostic allocations for a failed replay");
             registration.dispatchOptions().messageFlow(ZLinkMessageFlowLogMode.ERRORS);
             assertTrue(
-                    replayAllocatedBytes(failed) > failureBytes + packetName.length,
+                    replayAllocatedBytes(failed)
+                            > failureBytes + (long) packetName.length * REPLAYS_PER_WINDOW,
                     "enabled diagnostics must construct the packet name and failure report");
         }
     }
 
-    // Minimum over several single replays. A diagnostic allocation adds to every replay,
-    // while a one-time runtime allocation lands in one replay only.
+    private static final int REPLAYS_PER_WINDOW = 32;
+    private static final int REPLAY_WINDOWS = 8;
+
+    // Smallest total over several windows of replays. A diagnostic allocation, even one every
+    // few replays, is in every window, while a one-time runtime allocation lands in one only.
     private static long replayAllocatedBytes(Runnable operation) {
         var bean =
                 (com.sun.management.ThreadMXBean)
                         java.lang.management.ManagementFactory.getThreadMXBean();
         long threadId = Thread.currentThread().threadId();
         long minimum = Long.MAX_VALUE;
-        for (int replay = 0; replay < 64; replay++) {
+        for (int window = 0; window < REPLAY_WINDOWS; window++) {
             long before = bean.getThreadAllocatedBytes(threadId);
-            operation.run();
+            for (int replay = 0; replay < REPLAYS_PER_WINDOW; replay++) operation.run();
             minimum = Math.min(minimum, bean.getThreadAllocatedBytes(threadId) - before);
         }
         return minimum;

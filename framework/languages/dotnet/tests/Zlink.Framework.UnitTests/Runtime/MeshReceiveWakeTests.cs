@@ -252,22 +252,20 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             const int iterations = 1000;
             var calls = router.Calls;
             var receiptsPerDrain = new int[iterations];
-            var actual = PerCallAllocation.Steady(
+            var drains = 0;
+            // Alternating windows give both sides the same JIT tiering state.
+            var (actual, baseline) = PerCallAllocation.MinWindowPair(
                 index =>
                 {
+                    drains++;
                     var before = router.Calls;
                     router.Remaining = 1;
                     do node.DrainRawSocket(CancellationToken.None);
                     while (router.Remaining != 0);
                     receiptsPerDrain[index] = router.Calls - before;
                 },
-                iterations
-            );
-            Assert.Equal(iterations, router.Accepted - 128);
-            Assert.True(router.Calls - calls >= iterations);
-            // Match the number of receipt containers each bounded drain really
-            // attempted; no platform-specific object size is embedded here.
-            var baseline = PerCallAllocation.Steady(
+                // Match the number of receipt containers each bounded drain really
+                // attempted; no platform-specific object size is embedded here.
                 index =>
                 {
                     for (
@@ -284,9 +282,11 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 },
                 iterations
             );
+            Assert.Equal(drains, router.Accepted - 128);
+            Assert.True(router.Calls - calls >= drains);
             Assert.True(
                 actual == baseline,
-                $"ingress={actual}B, receipt baseline={baseline}B, excess={actual - baseline}B/drain"
+                $"ingress={actual}B, receipt baseline={baseline}B, excess={actual - baseline}B/window"
             );
         }
         finally
@@ -434,14 +434,14 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 );
             }
             Assert.Equal(warmup + iterations, samples);
-            var actual = PerCallAllocation.Mode(actualSamples);
-            var baseline = PerCallAllocation.Mode(baselineSamples);
+            var actual = PerCallAllocation.MinWindow(actualSamples);
+            var baseline = PerCallAllocation.MinWindow(baselineSamples);
             output.WriteLine(
-                $"node ingress={actual}B, lane + owner baseline={baseline}B, excess={actual - baseline}B/message"
+                $"node ingress={actual}B, lane + owner baseline={baseline}B, excess={actual - baseline}B/window"
             );
             Assert.True(
                 actual == baseline,
-                $"node ingress={actual}B, lane + owner baseline={baseline}B, excess={actual - baseline}B/message"
+                $"node ingress={actual}B, lane + owner baseline={baseline}B, excess={actual - baseline}B/window"
             );
         }
         finally

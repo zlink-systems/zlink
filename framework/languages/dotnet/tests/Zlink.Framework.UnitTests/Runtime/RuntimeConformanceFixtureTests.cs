@@ -82,29 +82,31 @@ public sealed class RuntimeConformanceFixtureTests
         warmup.Enqueue(warmupItem);
         Assert.True(warmup.TryDequeue(out _));
 
-        // Each call appends to its own fresh queue.
+        // Each call appends to its own fresh queue; every window gets fresh queues.
         const int calls = 256;
         var queues = new ZLinkSerialWorkQueue[calls];
         var items = new ZLinkSerialWorkItem[calls][];
-        for (var index = 0; index < calls; index++)
-        {
-            queues[index] = new ZLinkSerialWorkQueue();
-            items[index] =
-            [
-                new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask),
-                new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask),
-                new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask),
-            ];
-        }
-
-        var allocated = PerCallAllocation.Steady(
+        var allocated = PerCallAllocation.MinWindow(
             index =>
             {
                 queues[index].Enqueue(items[index][0]);
                 queues[index].Enqueue(items[index][1]);
                 queues[index].Enqueue(items[index][2]);
             },
-            calls
+            calls,
+            beforeWindow: _ =>
+            {
+                for (var index = 0; index < calls; index++)
+                {
+                    queues[index] = new ZLinkSerialWorkQueue();
+                    items[index] =
+                    [
+                        new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask),
+                        new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask),
+                        new ZLinkSerialWorkItem(static _ => ValueTask.CompletedTask),
+                    ];
+                }
+            }
         );
 
         Assert.Equal(0L, allocated);

@@ -5636,7 +5636,7 @@ public sealed partial class EntrySpotActorDispatchTests
                 using var outer = runtime.EnterOperation();
                 using (runtime.EnterOperation()) { }
 
-                return PerCallAllocation.Steady(
+                return PerCallAllocation.MinWindow(
                     () =>
                     {
                         using var nested = runtime.EnterOperation();

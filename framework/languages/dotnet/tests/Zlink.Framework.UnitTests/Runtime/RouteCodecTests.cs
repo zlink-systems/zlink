@@ -52,9 +52,11 @@ public sealed class RouteCodecTests
 
         const int iterations = 128;
         var beforeInstances = AllocationHandler.Created;
-        var directBytes = PerCallAllocation.Steady(
+        var calls = 0;
+        var directBytes = PerCallAllocation.MinWindow(
             () =>
             {
+                calls++;
                 var scope = services.CreateAsyncScope();
                 ZLinkHandlerInvocationEngine
                     .InvokeAsync(
@@ -70,8 +72,10 @@ public sealed class RouteCodecTests
             },
             iterations
         );
-        var dispatchBytes = PerCallAllocation.Steady(
+        var dispatchBytes = PerCallAllocation.MinWindow(
             () =>
+            {
+                calls++;
                 dispatcher
                     .DispatchRouteAsync(
                         descriptor,
@@ -81,13 +85,14 @@ public sealed class RouteCodecTests
                         default
                     )
                     .GetAwaiter()
-                    .GetResult(),
+                    .GetResult();
+            },
             iterations
         );
-        Assert.Equal(iterations * 2, AllocationHandler.Created - beforeInstances);
+        Assert.Equal(calls, AllocationHandler.Created - beforeInstances);
         Assert.True(
-            dispatchBytes <= directBytes + 64L,
-            $"Dispatch allocated {dispatchBytes} B/call; owned scope and handler allocated {directBytes} B/call."
+            dispatchBytes <= directBytes + iterations * 64L,
+            $"Dispatch allocated {dispatchBytes} bytes; owned scope and handler allocated {directBytes} bytes."
         );
     }
 

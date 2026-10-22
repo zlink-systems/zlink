@@ -2345,16 +2345,17 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
         const int iterations = 1000;
         var matches = 0;
-        var allocated = PerCallAllocation.Steady(
-            () =>
+        var allocated = PerCallAllocation.MinWindow(
+            _ =>
             {
                 if (ZLinkClientServerControlProtocol.IsControl(parts))
                     matches++;
             },
-            iterations
+            iterations,
+            beforeWindow: _ => matches = 0
         );
 
-        output.WriteLine($"IsControl length={length} prefix={prefix}: {allocated} B/call");
+        output.WriteLine($"IsControl length={length} prefix={prefix}: {allocated} B/window");
         Assert.Equal(prefix && length >= 3 ? iterations : 0, matches);
         Assert.True(message.AsReadOnlySpan().SequenceEqual(bytes));
         Assert.Equal(0, allocated);
@@ -2387,8 +2388,8 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
 
         const int iterations = 1000;
         var matches = 0;
-        var allocated = PerCallAllocation.Steady(
-            () =>
+        var allocated = PerCallAllocation.MinWindow(
+            _ =>
             {
                 if (
                     ZLinkClientServerControlProtocol.TryDecodeLivenessProbe(probes, out var probeId)
@@ -2399,10 +2400,11 @@ public sealed class ClientServerChannelRuntimeTests(Xunit.Abstractions.ITestOutp
                 if (ZLinkClientServerControlProtocol.TryDecodeReject(rejects, out var reason))
                     matches += reason == 1 ? 1 : 0;
             },
-            iterations
+            iterations,
+            beforeWindow: _ => matches = 0
         );
 
-        output.WriteLine($"Control readers valid={valid}: {allocated} B/call");
+        output.WriteLine($"Control readers valid={valid}: {allocated} B/window");
         Assert.Equal(valid ? iterations * 3 : 0, matches);
         Assert.Equal(0, allocated);
     }

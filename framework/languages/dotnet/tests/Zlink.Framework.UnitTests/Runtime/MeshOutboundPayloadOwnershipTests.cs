@@ -21,7 +21,7 @@ public sealed class MeshOutboundPayloadOwnershipTests
             var warm = new ZLinkOneWayCallGate("MeshNode send");
             warm.Claim();
         }
-        var allocated = PerCallAllocation.Steady(
+        var allocated = PerCallAllocation.MinWindow(
             () =>
             {
                 var gate = new ZLinkOneWayCallGate("MeshNode send");

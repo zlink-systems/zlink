@@ -24,14 +24,14 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
             using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
         }
         const int iterations = 1024;
-        var directBytes = PerCallAllocation.Steady(
+        var directBytes = PerCallAllocation.MinWindow(
             () =>
             {
                 using var direct = Message.From(bytes);
             },
             iterations
         );
-        var encodedBytes = PerCallAllocation.Steady(
+        var encodedBytes = PerCallAllocation.MinWindow(
             () =>
             {
                 using var encoded = ZLinkEnvelopeCodec.EncodeHeader(header);
@@ -39,11 +39,11 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
             iterations
         );
         output.WriteLine(
-            $"request={request}: header={encodedBytes} B/message, native={directBytes} B/message"
+            $"request={request}: header={encodedBytes / iterations} B/message, native={directBytes / iterations} B/message"
         );
         Assert.True(
-            encodedBytes <= directBytes + 16L,
-            $"Warm encoding allocated {encodedBytes} B/call; owned Message allocated {directBytes} B/call."
+            encodedBytes <= directBytes + iterations * 16L,
+            $"Warm encoding allocated {encodedBytes} B per {iterations} calls; owned Message allocated {directBytes} B."
         );
     }
 
@@ -212,18 +212,25 @@ public sealed class EnvelopeHeaderCacheHotPathTests(Xunit.Abstractions.ITestOutp
             using var second = ZLinkEnvelopeCodec.EncodeHeader(large);
         }
 
-        var smallBytes = PerCallAllocation.Steady(() =>
-        {
-            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(small);
-        });
-        var largeBytes = PerCallAllocation.Steady(() =>
-        {
-            using var encoded = ZLinkEnvelopeCodec.EncodeHeader(large);
-        });
+        const int iterations = 128;
+        var smallBytes = PerCallAllocation.MinWindow(
+            () =>
+            {
+                using var encoded = ZLinkEnvelopeCodec.EncodeHeader(small);
+            },
+            iterations
+        );
+        var largeBytes = PerCallAllocation.MinWindow(
+            () =>
+            {
+                using var encoded = ZLinkEnvelopeCodec.EncodeHeader(large);
+            },
+            iterations
+        );
 
         Assert.True(
-            largeBytes <= smallBytes + 16L,
-            $"Dynamic values added {largeBytes - smallBytes} managed bytes per header."
+            largeBytes <= smallBytes + iterations * 16L,
+            $"Dynamic values added {largeBytes - smallBytes} managed bytes across {iterations} headers."
         );
     }
 

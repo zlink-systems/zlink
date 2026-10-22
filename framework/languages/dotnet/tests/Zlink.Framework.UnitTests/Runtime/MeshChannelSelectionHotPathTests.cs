@@ -220,8 +220,8 @@ public sealed class MeshChannelSelectionHotPathTests
         }
 
         const int iterations = 1024;
-        var synchronousBytes = PerCallAllocation.Steady(() => select("worker"), iterations);
-        var requestBytes = PerCallAllocation.Steady(
+        var synchronousBytes = PerCallAllocation.MinWindow(() => select("worker"), iterations);
+        var requestBytes = PerCallAllocation.MinWindow(
             () =>
                 wait("worker", TimeSpan.FromMinutes(1), cancellation.Token)
                     .GetAwaiter()
@@ -232,9 +232,9 @@ public sealed class MeshChannelSelectionHotPathTests
         // A linked CTS plus its deadline timer cannot fit in this allowance.
         // The reference path performs the same selector and peer lookup.
         Assert.True(
-            requestBytes <= synchronousBytes + 32L,
-            $"Ready request selection allocated {requestBytes} B/call; "
-                + $"synchronous selection allocated {synchronousBytes} B/call."
+            requestBytes <= synchronousBytes + iterations * 32L,
+            $"Ready request selection allocated {requestBytes} bytes; "
+                + $"synchronous selection allocated {synchronousBytes} bytes."
         );
 
         cancellation.Cancel();
@@ -340,7 +340,7 @@ public sealed class MeshChannelSelectionHotPathTests
                 SendFlags.None,
                 ReadOnlyMemory<byte>.Empty
             );
-            var offBytes = PerCallAllocation.Steady(
+            var offBytes = PerCallAllocation.MinWindow(
                 () =>
                     node.Publish(
                         "publisher",
@@ -354,7 +354,7 @@ public sealed class MeshChannelSelectionHotPathTests
             );
 
             registration.DispatchOptions.Diagnostics.SetLevel(ZLinkDiagnosticsLevel.Normal);
-            var normalBytes = PerCallAllocation.Steady(
+            var normalBytes = PerCallAllocation.MinWindow(
                 () =>
                     node.Publish(
                         "publisher",

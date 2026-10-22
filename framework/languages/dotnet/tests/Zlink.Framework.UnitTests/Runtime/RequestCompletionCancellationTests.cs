@@ -49,11 +49,15 @@ public sealed class RequestCompletionCancellationTests
             Baseline(token);
             using var completion = new ZLinkRequestCompletion<int>(token);
         }
-        var baseline = PerCallAllocation.Steady(() => Baseline(token));
-        var actual = PerCallAllocation.Steady(() =>
-        {
-            using var completion = new ZLinkRequestCompletion<int>(token);
-        });
+        const int count = 1024;
+        var baseline = PerCallAllocation.MinWindow(() => Baseline(token), count);
+        var actual = PerCallAllocation.MinWindow(
+            () =>
+            {
+                using var completion = new ZLinkRequestCompletion<int>(token);
+            },
+            count
+        );
         Assert.Equal(baseline, actual);
     }
 

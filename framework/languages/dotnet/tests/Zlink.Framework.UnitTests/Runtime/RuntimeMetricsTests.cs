@@ -802,9 +802,9 @@ public sealed class RuntimeMetricsTests
         }
 
         var enabledAfter = storeErrors.Enabled;
-        // The value most intervals allocate: an allocation per event moves every interval,
-        // while a one-time runtime allocation lands in one interval only.
-        var steadyAllocated = PerCallAllocation.Mode(allocations);
+        // The smallest interval: a cost paid on every event, or once every few events, is in
+        // every interval, while a one-time runtime allocation lands in one interval only.
+        var steadyAllocated = allocations.Min();
         var nonzeroIntervals = allocations
             .Select((bytes, index) => (Bytes: bytes, Number: index + 1))
             .Where(interval => interval.Bytes != 0)

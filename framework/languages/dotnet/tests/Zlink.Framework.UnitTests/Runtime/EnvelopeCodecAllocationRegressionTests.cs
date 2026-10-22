@@ -10,6 +10,7 @@ namespace Zlink.Framework.UnitTests.Runtime;
 public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper output)
 {
     private const int Iterations = 128;
+    private const int WindowCalls = 1024;
 
     [Fact]
     public void TypedActorReplyCopiesOnlyTheHeaderOverOneThousandDecodes()
@@ -81,16 +82,18 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
         using var large = ActorReply(65536);
         Message[] smallParts = [small];
         Message[] largeParts = [large];
-        var smallBytes = PerCallAllocation.Steady(() =>
-            ZLinkActorReplyDecoder.DecodeTerminal(smallParts)
+        var smallBytes = PerCallAllocation.MinWindow(
+            () => ZLinkActorReplyDecoder.DecodeTerminal(smallParts),
+            WindowCalls
         );
-        var largeBytes = PerCallAllocation.Steady(() =>
-            ZLinkActorReplyDecoder.DecodeTerminal(largeParts)
+        var largeBytes = PerCallAllocation.MinWindow(
+            () => ZLinkActorReplyDecoder.DecodeTerminal(largeParts),
+            WindowCalls
         );
-        output.WriteLine($"terminal small={smallBytes}, large={largeBytes} B/call");
+        output.WriteLine($"terminal small={smallBytes}, large={largeBytes} B/window");
         Assert.True(
             largeBytes <= smallBytes,
-            $"Payload growth added {largeBytes - smallBytes} managed B/call."
+            $"Payload growth added {largeBytes - smallBytes} managed B/window."
         );
     }
 
@@ -102,17 +105,23 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
         );
         var wire = ZLinkMeshMetadataCodec.Encode(values);
         ZLinkMessageMetadata? decoded = null;
-        var bytes = PerCallAllocation.Steady(() =>
-        {
-            if (!ZLinkMeshMetadataCodec.TryDecode(wire.Span, out decoded))
-                throw new InvalidOperationException("Invalid metadata fixture.");
-        });
+        var bytes = PerCallAllocation.MinWindow(
+            () =>
+            {
+                if (!ZLinkMeshMetadataCodec.TryDecode(wire.Span, out decoded))
+                    throw new InvalidOperationException("Invalid metadata fixture.");
+            },
+            WindowCalls
+        );
         Assert.Equal("한글", decoded!.Find("tenant"));
         Assert.Equal("abc", decoded.Find("trace"));
-        output.WriteLine($"metadata decode={bytes} B/call");
+        output.WriteLine($"metadata decode={bytes} B/window");
         // Two strings per entry and the immutable dictionary snapshot fit in
         // this budget; per-entry UTF8Encoding/fallback objects do not.
-        Assert.True(bytes <= 700, $"Metadata decode allocated {bytes} B/call.");
+        Assert.True(
+            bytes <= 700L * WindowCalls,
+            $"Metadata decode allocated {bytes} B/{WindowCalls} calls."
+        );
     }
 
     [Fact]
@@ -120,15 +129,25 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
     {
         var value = new Probe("wrapped");
         var wrapped = ZLinkMessage.From(value);
-        var directBytes = PerCallAllocation.Steady(() =>
-        {
-            using var encoded = ZLinkEnvelopeCodec.EncodeBody(value, typeof(Probe), null);
-        });
-        var wrappedBytes = PerCallAllocation.Steady(() =>
-        {
-            using var encoded = ZLinkEnvelopeCodec.EncodeBody(wrapped, typeof(ZLinkMessage), null);
-        });
-        output.WriteLine($"encode direct={directBytes}, wrapped={wrappedBytes} B/call");
+        var directBytes = PerCallAllocation.MinWindow(
+            () =>
+            {
+                using var encoded = ZLinkEnvelopeCodec.EncodeBody(value, typeof(Probe), null);
+            },
+            WindowCalls
+        );
+        var wrappedBytes = PerCallAllocation.MinWindow(
+            () =>
+            {
+                using var encoded = ZLinkEnvelopeCodec.EncodeBody(
+                    wrapped,
+                    typeof(ZLinkMessage),
+                    null
+                );
+            },
+            WindowCalls
+        );
+        output.WriteLine($"encode direct={directBytes}, wrapped={wrappedBytes} B/window");
         Assert.Equal(directBytes, wrappedBytes);
     }
 
@@ -181,11 +200,11 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
                         registry
                     )!;
         }
-        var explicitBytes = PerCallAllocation.Steady(() => Decode(codecs));
-        var defaultBytes = PerCallAllocation.Steady(() => Decode(null));
+        var explicitBytes = PerCallAllocation.MinWindow(() => Decode(codecs), WindowCalls);
+        var defaultBytes = PerCallAllocation.MinWindow(() => Decode(null), WindowCalls);
         Assert.Equal("wrapped", result!.Decode<Probe>().Text);
         output.WriteLine(
-            $"borrowed={borrowed}: explicit={explicitBytes}, default={defaultBytes} B/call"
+            $"borrowed={borrowed}: explicit={explicitBytes}, default={defaultBytes} B/window"
         );
         Assert.Equal(explicitBytes, defaultBytes);
     }

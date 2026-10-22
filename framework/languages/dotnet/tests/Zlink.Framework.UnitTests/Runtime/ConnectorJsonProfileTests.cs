@@ -338,8 +338,9 @@ public sealed class ConnectorJsonProfileTests
         {
             for (var i = 0; i < 1000; i++)
                 ZLinkFrameworkJsonDocument.ValidateDocument(bytes);
-            return PerCallAllocation.Steady(() =>
-                ZLinkFrameworkJsonDocument.ValidateDocument(bytes)
+            return PerCallAllocation.MinWindow(
+                () => ZLinkFrameworkJsonDocument.ValidateDocument(bytes),
+                1000
             );
         }
     }

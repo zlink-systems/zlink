@@ -1,74 +1,148 @@
 namespace Zlink.Framework.UnitTests;
 
 /// <summary>
-///     Measures the bytes one call allocates on the current thread. The result is the
-///     per-call value that most pause-free calls allocate, never a window total or mean.
-///     An extra allocation in the code under test adds to every call and moves that value.
-///     A one-time runtime allocation (tier-up, a lazy runtime table, storage growth) lands
-///     in one call only and cannot decide a strict comparison.
+///     Measures the bytes a window of calls allocates on the current thread, several times,
+///     and returns the smallest window total. A cost the code under test pays on every call,
+///     or once every few calls (storage growth, pooled array refill), is in every window and
+///     so is in the minimum. A one-time runtime allocation (tier-up, a lazy runtime table)
+///     lands in one window only and cannot decide a strict comparison.
 /// </summary>
 internal static class PerCallAllocation
 {
-    public const int Calls = 1000;
+    public const int Windows = 8;
 
-    public static long Steady(Action action, int calls = Calls, int warmup = 0)
+    // A window that overlapped a GC pause is discarded and measured again, up to this
+    // many attempts per requested window.
+    private const int AttemptsPerWindow = 4;
+
+    public static long MinWindow(
+        Action action,
+        int callsPerWindow,
+        int windows = Windows,
+        int warmup = 0
+    )
     {
         for (var index = 0; index < warmup; index++)
             action();
-        return Steady(_ => action(), calls);
-    }
-
-    public static long Steady(Action<int> action, int calls = Calls)
-    {
-        var counts = new Dictionary<long, int>();
-        for (var index = 0; index < calls; index++)
-        {
-            var pause = GC.GetTotalPauseDuration();
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            action(index);
-            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-            Record(counts, bytes, pause);
-        }
-        return Result(counts);
-    }
-
-    public static async Task<long> SteadyAsync(Func<ValueTask> action, int calls = Calls)
-    {
-        var counts = new Dictionary<long, int>();
-        for (var index = 0; index < calls; index++)
-        {
-            var pause = GC.GetTotalPauseDuration();
-            var before = GC.GetAllocatedBytesForCurrentThread();
-            await action();
-            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
-            Record(counts, bytes, pause);
-        }
-        return Result(counts);
-    }
-
-    // A GC pause inside a call can retire the thread allocation context and add its
-    // unused tail to the thread counter, so a call that overlapped a pause is skipped.
-    private static void Record(Dictionary<long, int> counts, long bytes, TimeSpan pauseBefore)
-    {
-        if (GC.GetTotalPauseDuration() != pauseBefore)
-            return;
-        counts[bytes] = counts.GetValueOrDefault(bytes) + 1;
+        return MinWindow(_ => action(), callsPerWindow, windows);
     }
 
     /// <summary>
-    ///     The most frequent value of per-call samples a test collected itself. On a tie, the
-    ///     larger value, so a real per-call cost is never hidden.
+    ///     <paramref name="action" /> receives the call index inside the window.
+    ///     <paramref name="beforeWindow" /> and <paramref name="afterWindow" /> run outside the
+    ///     measured region with the attempt number, to create and release per-window state.
     /// </summary>
-    public static long Mode(IEnumerable<long> samples)
+    public static long MinWindow(
+        Action<int> action,
+        int callsPerWindow,
+        int windows = Windows,
+        Action<int>? beforeWindow = null,
+        Action<int>? afterWindow = null
+    )
     {
-        var counts = new Dictionary<long, int>();
-        foreach (var bytes in samples)
-            counts[bytes] = counts.GetValueOrDefault(bytes) + 1;
-        return Result(counts);
+        var minimum = long.MaxValue;
+        var measured = 0;
+        for (var attempt = 0; measured < windows; attempt++)
+        {
+            if (attempt >= windows * AttemptsPerWindow)
+                throw new InvalidOperationException("Every measured window overlapped a GC pause.");
+            beforeWindow?.Invoke(attempt);
+            var pause = GC.GetTotalPauseDuration();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < callsPerWindow; index++)
+                action(index);
+            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            var paused = GC.GetTotalPauseDuration() != pause;
+            afterWindow?.Invoke(attempt);
+            if (paused)
+                continue;
+            minimum = Math.Min(minimum, bytes);
+            measured++;
+        }
+        return minimum;
     }
 
-    private static long Result(Dictionary<long, int> counts) =>
-        counts.Count == 0
-            ? throw new InvalidOperationException("Every measured call overlapped a GC pause.")
-            : counts.MaxBy(static entry => (entry.Value, entry.Key)).Key;
+    /// <summary>
+    ///     Two actions measured in alternating windows, so that both see the same JIT tiering
+    ///     and cache state, for tests that compare one against the other with Equal. A round
+    ///     counts only when neither window overlapped a GC pause.
+    /// </summary>
+    public static (long First, long Second) MinWindowPair(
+        Action<int> first,
+        Action<int> second,
+        int callsPerWindow,
+        int windows = Windows
+    )
+    {
+        var minimumFirst = long.MaxValue;
+        var minimumSecond = long.MaxValue;
+        var measured = 0;
+        for (var attempt = 0; measured < windows; attempt++)
+        {
+            if (attempt >= windows * AttemptsPerWindow)
+                throw new InvalidOperationException("Every measured window overlapped a GC pause.");
+            var pause = GC.GetTotalPauseDuration();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < callsPerWindow; index++)
+                first(index);
+            var firstBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            var middlePause = GC.GetTotalPauseDuration();
+            before = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < callsPerWindow; index++)
+                second(index);
+            var secondBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            if (middlePause != pause || GC.GetTotalPauseDuration() != pause)
+                continue;
+            minimumFirst = Math.Min(minimumFirst, firstBytes);
+            minimumSecond = Math.Min(minimumSecond, secondBytes);
+            measured++;
+        }
+        return (minimumFirst, minimumSecond);
+    }
+
+    public static async Task<long> MinWindowAsync(
+        Func<ValueTask> action,
+        int callsPerWindow,
+        int windows = Windows
+    )
+    {
+        var minimum = long.MaxValue;
+        var measured = 0;
+        for (var attempt = 0; measured < windows; attempt++)
+        {
+            if (attempt >= windows * AttemptsPerWindow)
+                throw new InvalidOperationException("Every measured window overlapped a GC pause.");
+            var pause = GC.GetTotalPauseDuration();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            for (var index = 0; index < callsPerWindow; index++)
+                await action();
+            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            if (GC.GetTotalPauseDuration() != pause)
+                continue;
+            minimum = Math.Min(minimum, bytes);
+            measured++;
+        }
+        return minimum;
+    }
+
+    /// <summary>
+    ///     For tests whose calls happen on another thread and are measured one by one there:
+    ///     the smallest sum over <paramref name="windows" /> equal runs of consecutive samples.
+    ///     The caller leaves out samples that overlapped a GC pause.
+    /// </summary>
+    public static long MinWindow(IReadOnlyList<long> samples, int windows = Windows)
+    {
+        var size = samples.Count / windows;
+        if (size == 0)
+            throw new InvalidOperationException("Too few samples for the requested windows.");
+        var minimum = long.MaxValue;
+        for (var window = 0; window < windows; window++)
+        {
+            long total = 0;
+            for (var index = 0; index < size; index++)
+                total += samples[window * size + index];
+            minimum = Math.Min(minimum, total);
+        }
+        return minimum;
+    }
 }

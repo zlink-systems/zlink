@@ -121,14 +121,14 @@ public sealed class ReceiveClaimCostTests(Xunit.Abstractions.ITestOutputHelper o
                 GC.EndNoGCRegion();
         }
         Assert.Equal(request ? batchSize * (warmup + iterations) : 0, replies);
-        var allocated = PerCallAllocation.Mode(actualSamples);
-        var baselineBytes = PerCallAllocation.Mode(baselineSamples);
+        var allocated = PerCallAllocation.MinWindow(actualSamples);
+        var baselineBytes = PerCallAllocation.MinWindow(baselineSamples);
         output.WriteLine(
-            $"request={request}, batchSize={batchSize}, claim={allocated}B, baseline={baselineBytes}B, excess={allocated - baselineBytes}B/batch"
+            $"request={request}, batchSize={batchSize}, claim={allocated}B, baseline={baselineBytes}B, excess={allocated - baselineBytes}B/window"
         );
         Assert.True(
             allocated == baselineBytes,
-            $"claim={allocated}B, routes + claim-sized list={baselineBytes}B, excess={allocated - baselineBytes}B/batch"
+            $"claim={allocated}B, routes + claim-sized list={baselineBytes}B, excess={allocated - baselineBytes}B/window"
         );
     }
 

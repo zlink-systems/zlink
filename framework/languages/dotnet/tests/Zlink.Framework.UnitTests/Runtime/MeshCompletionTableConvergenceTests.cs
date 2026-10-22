@@ -525,46 +525,56 @@ public sealed class MeshCompletionTableConvergenceTests
         await WarmTerminalPathsAsync();
 
         // One table per call: each call is the first terminal completion of its own table.
+        // Every window gets fresh tables, created outside the measured region.
         const int calls = 64;
+        var allTables = new List<ZLinkMeshCompletionTable>();
+        var allCancellations = new List<CancellationTokenSource>();
+        var allRegistrations = new List<IDisposable>();
+        var emptyParts = Array.Empty<Message>();
         var replyTables = new ZLinkMeshCompletionTable[calls];
         var replyRecords = new MeshReceiveRecord[calls];
-        for (var index = 0; index < calls; index++)
-        {
-            replyTables[index] = new ZLinkMeshCompletionTable();
-            var replyOperation = new MeshOperationId(16, (ulong)(2 + index * 2));
-            Assert.True(replyTables[index].Register(replyOperation, static (_, _) => { }));
-            replyRecords[index] = MeshReceiveRecord.CompletionFailure(
-                replyOperation,
-                RequestResult.Terminated
-            );
-        }
-        var emptyParts = Array.Empty<Message>();
-        var replyAllocation = PerCallAllocation.Steady(
+        var replyAllocation = PerCallAllocation.MinWindow(
             index => replyTables[index].Complete(replyRecords[index], emptyParts),
-            calls
+            calls,
+            beforeWindow: window =>
+            {
+                for (var index = 0; index < calls; index++)
+                {
+                    replyTables[index] = new ZLinkMeshCompletionTable();
+                    allTables.Add(replyTables[index]);
+                    var replyOperation = new MeshOperationId(16, (ulong)(2 + index * 2));
+                    Assert.True(replyTables[index].Register(replyOperation, static (_, _) => { }));
+                    replyRecords[index] = MeshReceiveRecord.CompletionFailure(
+                        replyOperation,
+                        RequestResult.Terminated
+                    );
+                }
+            }
         );
 
-        var cancellationTables = new ZLinkMeshCompletionTable[calls];
         var cancellations = new CancellationTokenSource[calls];
-        var registrations = new IDisposable[calls];
-        for (var index = 0; index < calls; index++)
-        {
-            cancellationTables[index] = new ZLinkMeshCompletionTable();
-            var cancellationOperation = new MeshOperationId(16, (ulong)(3 + index * 2));
-            Assert.True(
-                cancellationTables[index].Register(cancellationOperation, static (_, _) => { })
-            );
-            cancellations[index] = new CancellationTokenSource();
-            registrations[index] = cancellationTables[index]
-                .RegisterCancellation(
-                    cancellationOperation,
-                    cancellations[index].Token,
-                    static () => { }
-                );
-        }
-        var cancellationAllocation = PerCallAllocation.Steady(
+        var cancellationAllocation = PerCallAllocation.MinWindow(
             index => cancellations[index].Cancel(),
-            calls
+            calls,
+            beforeWindow: window =>
+            {
+                for (var index = 0; index < calls; index++)
+                {
+                    var table = new ZLinkMeshCompletionTable();
+                    allTables.Add(table);
+                    var cancellationOperation = new MeshOperationId(16, (ulong)(3 + index * 2));
+                    Assert.True(table.Register(cancellationOperation, static (_, _) => { }));
+                    cancellations[index] = new CancellationTokenSource();
+                    allCancellations.Add(cancellations[index]);
+                    allRegistrations.Add(
+                        table.RegisterCancellation(
+                            cancellationOperation,
+                            cancellations[index].Token,
+                            static () => { }
+                        )
+                    );
+                }
+            }
         );
 
         var closeTable = new ZLinkMeshCompletionTable();
@@ -573,14 +583,11 @@ public sealed class MeshCompletionTableConvergenceTests
         closeTable.FailAll(RequestResult.Terminated);
 
         await Task.WhenAll(
-            replyTables
-                .Concat(cancellationTables)
-                .Append(closeTable)
-                .Select(static table => table.CompletionDrained)
+            allTables.Append(closeTable).Select(static table => table.CompletionDrained)
         );
-        foreach (var registration in registrations)
+        foreach (var registration in allRegistrations)
             registration.Dispose();
-        foreach (var cancellation in cancellations)
+        foreach (var cancellation in allCancellations)
             cancellation.Dispose();
 
         Assert.Equal(0, replyAllocation);
