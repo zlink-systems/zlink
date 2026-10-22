@@ -20,7 +20,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
@@ -31,7 +31,7 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     private final Executor serialExecutor;
     private final boolean sharedSpotGate;
     private final ZLinkSerialExecutionQueue.SharedSpotGate sharedExecution;
-    private final AtomicBoolean closed = new AtomicBoolean();
+    private final AtomicReference<CompletableFuture<Void>> closeStage = new AtomicReference<>();
     // Named child queues are C2 state: clearing this map and completing its
     // queues must happen as one state-lane turn when Spot shutdown is wired.
     private final ZLinkStateLane stateLane = new ZLinkStateLane();
@@ -368,31 +368,43 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
 
     @Override
     public void removeActorQueue(String actorId) {
-        inStateLane(
-                () -> {
-                    actorQueues.remove(actorId);
-                    return null;
-                });
+        var removed = removeActorQueueAsync(actorId).toCompletableFuture();
+        assert removed.isDone() || ZLinkStateLane.assertMayBlock();
+        removed.join();
     }
 
     @Override
     public CompletionStage<Void> removeActorQueueAsync(String actorId) {
-        return stateLane.runNowOrQueue(
-                () -> {
-                    actorQueues.remove(actorId);
-                    return null;
-                });
+        return removeActorQueueAsync(actorId, null);
     }
 
     @Override
     public CompletionStage<Void> removeActorQueueAsync(
             String actorId, ZLinkActorSerialExecutor activation) {
-        activation.relocationLane().sealClosingAdmission();
-        return stateLane.runNowOrQueue(
-                () -> {
-                    actorQueues.remove(actorId, activation);
-                    return null;
+        if (activation != null) activation.relocationLane().sealClosingAdmission();
+        var removed = new CompletableFuture<Void>();
+        if (!stateLane.tryPost(
+                () ->
+                        ZLinkHandlerStages.fromRunnable(
+                                        () -> {
+                                            if (activation == null) actorQueues.remove(actorId);
+                                            else actorQueues.remove(actorId, activation);
+                                        })
+                                .whenComplete(
+                                        (ignored, failure) -> {
+                                            if (failure == null) removed.complete(null);
+                                            else removed.completeExceptionally(failure);
+                                        }))) {
+            return Objects.requireNonNull(closeStage.get(), "Spot close stage");
+        }
+        var published = new CompletableFuture<Void>();
+        ZLinkStateLane.publishOutsideLane(
+                removed,
+                (ignored, failure) -> {
+                    if (failure == null) published.complete(null);
+                    else published.completeExceptionally(failure);
                 });
+        return published;
     }
 
     @Override
@@ -630,32 +642,44 @@ public final class ZLinkSpotSerialExecutor implements ZLinkActorDispatchTarget {
     }
 
     CompletionStage<Void> closeAsync() {
-        if (!closed.compareAndSet(false, true)) {
-            return CompletableFuture.completedFuture(null);
-        }
-        CompletionStage<Runnable> prepared =
-                stateLane.runAsync(
+        var result = new CompletableFuture<Void>();
+        if (!closeStage.compareAndSet(null, result)) return closeStage.get();
+        ZLinkHandlerStages.fromStageSupplier(
                         () -> {
-                            List<ZLinkSerialExecutionQueue> timers =
-                                    List.copyOf(timerQueues.values());
-                            List<ZLinkActorSerialExecutor> actors =
-                                    List.copyOf(actorQueues.values());
-                            timerQueues.clear();
-                            actorQueues.clear();
-                            return (Runnable)
-                                    () -> {
-                                        timers.forEach(ZLinkSerialExecutionQueue::close);
-                                        actors.forEach(ZLinkActorSerialExecutor::close);
-                                        spotQueue.close();
-                                        infrastructureQueue.close();
-                                    };
+                            CompletionStage<Runnable> prepared =
+                                    stateLane.runAsync(
+                                            () -> {
+                                                List<ZLinkSerialExecutionQueue> timers =
+                                                        List.copyOf(timerQueues.values());
+                                                List<ZLinkActorSerialExecutor> actors =
+                                                        List.copyOf(actorQueues.values());
+                                                timerQueues.clear();
+                                                actorQueues.clear();
+                                                return (Runnable)
+                                                        () -> {
+                                                            timers.forEach(
+                                                                    ZLinkSerialExecutionQueue
+                                                                            ::close);
+                                                            actors.forEach(
+                                                                    ZLinkActorSerialExecutor
+                                                                            ::close);
+                                                            spotQueue.close();
+                                                            infrastructureQueue.close();
+                                                        };
+                                            });
+                            CompletionStage<Void> laneClosed = stateLane.closeAsync();
+                            return prepared.thenComposeAsync(
+                                    closeQueues -> {
+                                        closeQueues.run();
+                                        return laneClosed;
+                                    });
+                        })
+                .whenComplete(
+                        (ignored, failure) -> {
+                            if (failure == null) result.complete(null);
+                            else result.completeExceptionally(failure);
                         });
-        CompletionStage<Void> laneClosed = stateLane.closeAsync();
-        return prepared.thenComposeAsync(
-                closeQueues -> {
-                    closeQueues.run();
-                    return laneClosed;
-                });
+        return result;
     }
 
     Optional<ZLinkSerialExecutionQueue.ActiveTurnSealHandle> captureSpotActiveTurnSealHandle() {
