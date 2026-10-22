@@ -44,6 +44,155 @@ import java.util.concurrent.atomic.AtomicReference;
 final class ZLinkSerialExecutionQueueTest {
     private static final long LIFECYCLE_GATE_WAIT_SECONDS = 3;
 
+    @Test
+    void managedCompletionWithInlineExecutorLeavesTheForeignPhysicalFrame() throws Exception {
+        var owner = new ZLinkSerialExecutionQueue(Runnable::run, ZLinkExecutionLanePolicy.spot());
+        var foreign = new ZLinkSerialExecutionQueue();
+        var foreignFrame = ThreadLocal.withInitial(() -> false);
+        var remote = new CompletableFuture<Void>();
+        var entered = new CompletableFuture<Void>();
+        var callback = new CompletableFuture<Void>();
+        var release = new CompletableFuture<Void>();
+        var ownerTurn =
+                owner.enqueue(
+                                () -> {
+                                    var managed =
+                                            ZLinkSerialExecutionQueue.manageCurrentInTurn(remote)
+                                                    .thenRun(
+                                                            () -> {
+                                                                assertFalse(
+                                                                        foreignFrame.get(),
+                                                                        "managed completion must leave the foreign physical frame");
+                                                                assertTrue(owner.isCurrent());
+                                                                assertFalse(foreign.isCurrent());
+                                                            })
+                                                    .whenComplete(
+                                                            (value, error) -> {
+                                                                if (error == null)
+                                                                    callback.complete(null);
+                                                                else
+                                                                    callback.completeExceptionally(
+                                                                            error);
+                                                            });
+                                    entered.complete(null);
+                                    return managed.thenCompose(ignored -> release);
+                                },
+                                null)
+                        .toCompletableFuture();
+        try {
+            entered.get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+            foreign.enqueue(
+                            () -> {
+                                foreignFrame.set(true);
+                                try {
+                                    assertTrue(foreign.isCurrent());
+                                    remote.complete(null);
+                                } finally {
+                                    foreignFrame.remove();
+                                }
+                                return CompletableFuture.completedFuture(null);
+                            },
+                            null)
+                    .toCompletableFuture()
+                    .get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+            callback.get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+            var following =
+                    owner.enqueue(() -> CompletableFuture.completedFuture(null), null)
+                            .toCompletableFuture();
+            assertFalse(ownerTurn.isDone());
+            assertFalse(following.isDone(), "callback retains its gate until its stage completes");
+            release.complete(null);
+            ownerTurn.get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+            following.get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+        } finally {
+            remote.complete(null);
+            release.complete(null);
+            owner.close();
+            foreign.close();
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void managedCompletionRetainsTheCurrentContinuationAfterAnotherYield(boolean shared)
+            throws Exception {
+        var executor = new CountingExecutor();
+        var queue = new ZLinkSerialExecutionQueue(executor, ZLinkExecutionLanePolicy.spot());
+        if (shared) new ZLinkSerialExecutionQueue.SharedSpotGate(queue);
+        var prefix = new CompletableFuture<Void>();
+        var pending = new CompletableFuture<Void>();
+        var release = new CompletableFuture<Void>();
+        var resumed = new CompletableFuture<Void>();
+        var currentOwner = new AtomicBoolean();
+        var calls = new ArrayList<String>();
+        var turn =
+                queue.enqueueLifecycleBarrier(
+                                () ->
+                                        ZLinkSerialExecutionQueue.yieldCurrent(prefix)
+                                                .thenCompose(
+                                                        ignored -> {
+                                                            var managed =
+                                                                    ZLinkSerialExecutionQueue
+                                                                            .manageCurrentInTurn(
+                                                                                    pending)
+                                                                            .thenCompose(
+                                                                                    value -> {
+                                                                                        currentOwner
+                                                                                                .set(
+                                                                                                        queue
+                                                                                                                .isCurrent());
+                                                                                        calls.add(
+                                                                                                "callback");
+                                                                                        resumed
+                                                                                                .complete(
+                                                                                                        null);
+                                                                                        return release;
+                                                                                    });
+                                                            return ZLinkSerialExecutionQueue
+                                                                    .yieldCurrent(
+                                                                            CompletableFuture
+                                                                                    .completedFuture(
+                                                                                            null))
+                                                                    .thenCompose(
+                                                                            value -> {
+                                                                                pending.complete(
+                                                                                        null);
+                                                                                return managed;
+                                                                            });
+                                                        }))
+                        .toCompletableFuture();
+        try {
+            executor.take().run();
+            prefix.complete(null);
+            executor.runUntil(resumed);
+            assertTrue(currentOwner.get(), "managed completion must resume the live owner turn");
+            var following =
+                    queue.enqueue(
+                                    () -> {
+                                        calls.add("following");
+                                        return CompletableFuture.completedFuture(null);
+                                    },
+                                    null)
+                            .toCompletableFuture();
+            Runnable ready;
+            while ((ready = executor.pending.poll()) != null) ready.run();
+            assertFalse(turn.isDone());
+            assertFalse(following.isDone(), "ordinary asynchronous callback retains its gate");
+            assertEquals(List.of("callback"), calls);
+            release.complete(null);
+            executor.runUntil(following);
+            turn.get(LIFECYCLE_GATE_WAIT_SECONDS, TimeUnit.SECONDS);
+            following.join();
+            assertEquals(List.of("callback", "following"), calls);
+        } finally {
+            prefix.complete(null);
+            pending.complete(null);
+            release.complete(null);
+            executor.runUntil(turn);
+            queue.close();
+        }
+    }
+
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
     void lifecycleTransitionCompletesAfterOrdinaryAwaitThenYield(boolean shared) throws Exception {

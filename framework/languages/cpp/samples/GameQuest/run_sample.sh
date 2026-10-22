@@ -254,13 +254,33 @@ wait_for_exact_count "api-b Mission spot route readiness" 1 \
   "gamequest-ready kind=spot-route node=api-b mesh=gamequest" "$LOG_DIR/api-b.log"
 
 OWNER_LOSS_RELEASE_FILE="$RUN_DIR/owner-loss-release"
+CLOSE_REPLAY_RELEASE_FILE="$RUN_DIR/close-replay-release"
 start_role client "$BIN_DIR/sample_cpp_framework_gamequest_client" \
   --api-a-stream-endpoint "$GAMEQUEST_API_A_STREAM_ENDPOINT" \
   --api-b-stream-endpoint "$GAMEQUEST_API_B_STREAM_ENDPOINT" \
   --api-a-http-url "$GAMEQUEST_API_A_HTTP_URL" \
   --api-b-http-url "$GAMEQUEST_API_B_HTTP_URL" \
-  --owner-loss-release-file "$OWNER_LOSS_RELEASE_FILE"
+  --owner-loss-release-file "$OWNER_LOSS_RELEASE_FILE" \
+  --close-replay-release-file "$CLOSE_REPLAY_RELEASE_FILE"
 CLIENT_PID="${PIDS[$(( ${#PIDS[@]} - 1 ))]}"
+
+wait_for_exact_count "close replay client stage" 1 \
+  "gamequest-close-replay-armed player=player-alice" "$LOG_DIR/client.log"
+wait_for_prefix_exact_count "player-alice OnClosing" 1 \
+  "gamequest-owner closing-entered player=player-alice objectGeneration=" \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
+: >"$CLOSE_REPLAY_RELEASE_FILE"
+wait_for_prefix_minimum "player-alice replay" 1 \
+  "gamequest-mission replayed player=player-alice generation=" \
+  "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log"
+mapfile -t CLOSING_OBJECT_GENERATIONS < <(sed -nE 's/^gamequest-owner closing-entered player=player-alice objectGeneration=([1-9][0-9]*)$/\1/p' "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log")
+mapfile -t REPLAY_OBJECT_GENERATIONS < <(sed -nE 's/^gamequest-mission replayed player=player-alice generation=[1-9][0-9]* objectGeneration=([1-9][0-9]*)$/\1/p' "$LOG_DIR/mission-a.log" "$LOG_DIR/mission-b.log")
+if [[ "${#CLOSING_OBJECT_GENERATIONS[@]}" != 1 || "${#REPLAY_OBJECT_GENERATIONS[@]}" != 1 \
+  || "${CLOSING_OBJECT_GENERATIONS[0]}" == "${REPLAY_OBJECT_GENERATIONS[0]}" ]]; then
+  echo "Close replay must execute in a different runtime ObjectGeneration" >&2
+  dump_logs
+  exit 1
+fi
 
 wait_for_exact_count "owner-loss client stage" 1 \
   "gamequest-owner-loss-stage-ready player=player-owner-failure" "$LOG_DIR/client.log"
