@@ -29,18 +29,23 @@ int main (int argc, char **argv)
     const auto api_a_http = read_option (argc, argv, "--api-a-http-url");
     const auto api_b_http = read_option (argc, argv, "--api-b-http-url");
     const auto owner_loss_release_file = read_option (argc, argv, "--owner-loss-release-file");
+    const auto close_replay_release_file = read_option (argc, argv, "--close-replay-release-file");
     if (api_a_stream.empty () || api_b_stream.empty () || api_a_http.empty () || api_b_http.empty ()
-        || owner_loss_release_file.empty ()) {
+        || owner_loss_release_file.empty () || close_replay_release_file.empty ()) {
         const std::string line = std::format (
           "usage: {} --api-a-stream-endpoint <endpoint> --api-b-stream-endpoint <endpoint>"
           " --api-a-http-url <url> --api-b-http-url <url>"
-          " --owner-loss-release-file <path>\n",
+          " --owner-loss-release-file <path> --close-replay-release-file <path>\n",
           argv[0]);
         std::cerr << line;
         return 2;
     }
-    if (!zlink::samples::gamequest::gamequest_client_scenario_t{}.run (
-          api_a_stream, api_b_stream, api_a_http, api_b_http, owner_loss_release_file)) {
+    if (!zlink::samples::gamequest::gamequest_client_scenario_t{}.run (api_a_stream,
+                                                                       api_b_stream,
+                                                                       api_a_http,
+                                                                       api_b_http,
+                                                                       owner_loss_release_file,
+                                                                       close_replay_release_file)) {
         std::cerr << "gamequest=failed\n";
         return 1;
     }
