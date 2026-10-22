@@ -6,6 +6,7 @@
 #include "runtime_failure_fixture.hpp"
 
 #include <cstdio>
+#include <limits>
 #include <memory>
 #include <optional>
 
@@ -165,5 +166,141 @@ TEST (SendAllocations, StoppedNodeKeepsItsTaskFailureBoundary)
     EXPECT_FALSE (result);
     ASSERT_NE (result.error (), nullptr);
     EXPECT_EQ (result.error ()->kind (), fw::framework_error_kind_t::protocol_error);
+}
+TEST (SendAllocations, ReceiveTurnForwardsTheNativeTaskWithoutAnotherResult)
+{
+    detail::mesh_node_runtime_t node (mesh_state ());
+    node.start ();
+    const auto native = [&] {
+        return node.native_node ()
+          .dispatch_ready ([] (const auto &, const auto &, auto) {}, false)
+          .result ();
+    };
+    const auto forward = [&] {
+        return node.dispatch_ready ([] (const auto &, const auto &, auto) {}, false).result ();
+    };
+    ASSERT_TRUE (native ());
+    ASSERT_TRUE (forward ());
+    std::optional<fw::result_t<std::size_t>> expected;
+    std::optional<fw::result_t<std::size_t>> actual;
+    const auto baseline = fw::tests::measure_allocations ([&] { expected.emplace (native ()); });
+    const auto measured = fw::tests::measure_allocations ([&] { actual.emplace (forward ()); });
+    ASSERT_TRUE (*expected);
+    ASSERT_TRUE (*actual);
+    EXPECT_EQ (expected->value (), 0u);
+    EXPECT_EQ (actual->value (), expected->value ());
+    EXPECT_EQ (measured.count, baseline.count);
+    EXPECT_EQ (measured.bytes, baseline.bytes);
+    std::printf ("receive forwarding allocations: native=%zu/%zu forwarded=%zu/%zu\n",
+                 baseline.count, baseline.bytes, measured.count, measured.bytes);
+    node.stop ();
+}
+
+TEST (SendAllocations, ReceiveTurnValidationKeepsItsTaskFailureBoundary)
+{
+    detail::mesh_node_runtime_t node (mesh_state ());
+    node.start ();
+    auto invalid = node.dispatch_ready ({}, false);
+    EXPECT_TRUE (invalid.await_ready ());
+    const auto &result = invalid.result ();
+    ASSERT_FALSE (result);
+    ASSERT_NE (result.error (), nullptr);
+    EXPECT_EQ (result.error ()->kind (), fw::framework_error_kind_t::protocol_error);
+    EXPECT_STREQ (result.error ()->what (), "MeshNode dispatch callback is required");
+    node.stop ();
+}
+
+TEST (SendAllocations, ReceiveTurnRetainsCallbacksAcrossNativeSuspension)
+{
+    namespace host = fw::runtime::host;
+    namespace stateful = fw::runtime::stateful;
+    namespace wire = fw::runtime::protocol;
+    for (const bool forwarded : {false, true}) {
+        detail::mesh_node_runtime_t node (mesh_state ());
+        fw::task_completion_source_t<std::optional<fw::location_owner_token_t>> owner;
+        unsigned owner_calls = 0;
+        unsigned bind_calls = 0;
+        node.configure_bound_session_operations (
+          {.session_owner =
+             [&] (const auto &, auto) {
+                 ++owner_calls;
+                 return owner.task ();
+             },
+           .bind =
+             [&] (const auto &, const auto &, auto, const auto &, auto) {
+                 ++bind_calls;
+                 return host::bound_session_bind_operation_result_t{
+                   stateful::stateful_error_t::none, std::nullopt};
+             },
+           .send = [] (const auto &, auto) { return stateful::stateful_error_t::conflict; },
+           .replaced = [] (const auto &) { ADD_FAILURE () << "unexpected Session replacement"; },
+           .commit_relocation_route =
+             [] (const auto &, const auto &, const auto &) {
+                 ADD_FAILURE () << "unexpected relocation commit";
+                 return false;
+             },
+           .prepare_relocation_target_route =
+             [] (const auto &, auto) {
+                 ADD_FAILURE () << "unexpected relocation preparation";
+                 return false;
+             }});
+        node.start ();
+        auto &runtime = node.native_node ();
+        const auto descriptor = runtime.transport ().topology ().local_descriptor ();
+        const stateful::object_ref_t actor{
+          stateful::object_kind_t::actor,
+          "actor",
+          1,
+          1,
+          descriptor.mesh_name,
+          zlink::routing_id_t::from (descriptor.node_routing_id).to_string ()};
+        const auto created = runtime.objects ().begin_reserved_object (actor, "actor", {});
+        ASSERT_EQ (created.error, stateful::stateful_error_t::none);
+        ASSERT_EQ (runtime.objects ().commit_create (created.attempt),
+                   stateful::stateful_error_t::none);
+        const wire::bound_session_bind_t bind{
+          .correlation = 1,
+          .actor = {.actor_id = "actor",
+                    .object_generation = 1,
+                    .target_node_routing_id = descriptor.node_routing_id,
+                    .target_node_generation = descriptor.lifecycle_generation,
+                    .authority_owner_generation = 1,
+                    .owner_lease_generation = 1},
+          .session_routing_id = {'s'},
+          .binding = {.generation = 1}};
+        mesh::service_mailbox_record_t record;
+        record.owner = "control";
+        record.domain = mesh::service_mailbox_domain_t::infrastructure;
+        record.parts.push_back (zlink::message_t::from (wire::encode_bound_session_bind (bind)));
+        record.source_routing_id = {'s'};
+        record.source_node_generation = 1;
+        ASSERT_TRUE (runtime.transport ().mailbox ().try_enqueue (std::move (record)));
+        auto lifetime = std::make_shared<int> (1);
+        std::weak_ptr<int> held = lifetime;
+        auto callback = [lifetime] (const auto &, const auto &, auto) {
+            ADD_FAILURE () << "unexpected application callback";
+        };
+        auto next = [lifetime] { return false; };
+        auto running = forwarded
+                         ? node.dispatch_ready (std::move (callback), false, std::move (next))
+                         : runtime.dispatch_ready (std::move (callback), false, std::move (next));
+        lifetime.reset ();
+        EXPECT_FALSE (running.await_ready ());
+        EXPECT_EQ (owner_calls, 1u);
+        EXPECT_EQ (bind_calls, 0u);
+        EXPECT_FALSE (held.expired ());
+        EXPECT_TRUE (
+          owner.complete (fw::result_t<std::optional<fw::location_owner_token_t>>::success (
+            fw::location_owner_token_t{"session-owner", 1})));
+        const auto settled = running.result ();
+        ASSERT_TRUE (settled);
+        EXPECT_EQ (settled.value (), 1u);
+        EXPECT_EQ (bind_calls, 1u);
+        EXPECT_TRUE (runtime.transport ().mailbox ().try_claim_owner (
+                       mesh::service_mailbox_domain_t::infrastructure, "control", 1,
+                       std::numeric_limits<std::size_t>::max ())
+                     == std::nullopt);
+        node.stop ();
+    }
 }
 } // namespace

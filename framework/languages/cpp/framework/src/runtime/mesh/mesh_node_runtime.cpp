@@ -4333,11 +4333,16 @@ mesh_node_runtime_t::dispatch_ready (std::function<void (const host::ready_recor
                                      bool accept_application_receive,
                                      std::function<bool ()> next_application_receive)
 {
-    if (!dispatch)
-        throw configuration_error ("MeshNode dispatch callback is required");
+    try {
+        if (!dispatch)
+            throw configuration_error ("MeshNode dispatch callback is required");
 
-    co_return co_await _node->dispatch_ready (std::move (dispatch), accept_application_receive,
-                                              std::move (next_application_receive));
+        return _node->dispatch_ready (std::move (dispatch), accept_application_receive,
+                                      std::move (next_application_receive));
+    }
+    catch (...) {
+        return task_t<std::size_t> (current_exception_result<std::size_t> ());
+    }
 }
 
 host::node_status_t mesh_node_runtime_t::status () const
