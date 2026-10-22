@@ -8348,8 +8348,8 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         MailboxKey owner;
         MeshRecordKind kind;
         MeshOperationKind operationKind;
-        ActorRef sourceActor = stateful.SourceActor?.ActorId.Value is { } sourceActorId
-            ? new(sourceActorId, stateful.SourceActor.Generation!.Value, _meshName, sourceRid)
+        ActorRef sourceActor = stateful.SourceActor is { } sourceActorIdentity
+            ? new(sourceActorIdentity.ActorId, sourceActorIdentity.Generation, _meshName, sourceRid)
             : default;
         string sourceSpotId = stateful.SourceSpotId;
         ManagedActor? admittedActor = null;
