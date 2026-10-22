@@ -8397,8 +8397,12 @@ public sealed partial class EntrySpotActorDispatchTests
                 };
                 return
                 [
-                    Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(responseHeader).Span),
-                    Message.From(ZLinkEnvelopeCodec.EncodeJsonBytes(new ProbeReply("reply"))),
+                    Message.From(
+                        ZLinkStreamFrameCodec.Encode(
+                            ZLinkStreamProtocolDefaults.EncodeHeader(responseHeader).Span,
+                            ZLinkEnvelopeCodec.EncodeJsonBytes(new ProbeReply("reply"))
+                        )
+                    ),
                 ];
             },
         };
@@ -8468,17 +8472,19 @@ public sealed partial class EntrySpotActorDispatchTests
                 return
                 [
                     Message.From(
-                        ZLinkStreamProtocolDefaults
-                            .EncodeHeader(
-                                requestHeader with
-                                {
-                                    Kind = ZlinkStreamMessageKind.Response,
-                                    Name = string.Empty,
-                                }
-                            )
-                            .Span
+                        ZLinkStreamFrameCodec.Encode(
+                            ZLinkStreamProtocolDefaults
+                                .EncodeHeader(
+                                    requestHeader with
+                                    {
+                                        Kind = ZlinkStreamMessageKind.Response,
+                                        Name = string.Empty,
+                                    }
+                                )
+                                .Span,
+                            ZLinkEnvelopeCodec.EncodeJsonBytes(new ProbeReply("reply"))
+                        )
                     ),
-                    Message.From(ZLinkEnvelopeCodec.EncodeJsonBytes(new ProbeReply("reply"))),
                 ];
             },
         };

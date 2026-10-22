@@ -31,6 +31,50 @@ import java.util.Optional;
 
 final class ActorPacketFramesTest {
     @Test
+    void actorErrorEncoderFollowsSharedVectors() throws Exception {
+        var current = java.nio.file.Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        while (current != null
+                && !java.nio.file.Files.isRegularFile(
+                        current.resolve("runtime/conformance/actor-error-payload-v1.json")))
+            current = current.getParent();
+        if (current == null) throw new IllegalStateException("Actor Error fixture was not found");
+        var fixture =
+                new ObjectMapper()
+                        .readTree(
+                                java.nio.file.Files.readString(
+                                        current.resolve(
+                                                "runtime/conformance/actor-error-payload-v1.json")));
+        var request =
+                new ZLinkStreamHeader(
+                        ZLinkStreamMessageKind.REQUEST,
+                        ZLinkStreamCodec.MESSAGE_PACK,
+                        EnumSet.noneOf(ZLinkStreamHeaderFlag.class),
+                        Optional.of(1L),
+                        "ActorAsk",
+                        Map.of());
+        try (var headerPart = Message.from(ZLinkStreamHeaderCodec.encode(request))) {
+            var header = ActorPacketFrames.decode(actorReceived(headerPart));
+            for (var vector : fixture.get("cases")) {
+                if (!vector.get("valid").asBoolean()) continue;
+                var kind = ZLinkFrameworkErrorKind.fromValue(vector.get("expectedKind").asInt());
+                try (var reply =
+                        ActorPacketFrames.encodeError(
+                                header,
+                                new ZLinkFrameworkException(
+                                        kind, vector.get("message").asText()))) {
+                    var frame = ZLinkStreamFrameCodec.tryDecode(reply.toByteArray()).orElseThrow();
+                    assertEquals(
+                            ZLinkStreamCodec.JSON,
+                            ZLinkStreamHeaderCodec.decodeOrPlain(frame.header()).codec());
+                    var body = new ObjectMapper().readTree(frame.body());
+                    assertEquals(vector.get("code").asText(), body.get("code").asText());
+                    assertEquals(vector.get("message").asText(), body.get("message").asText());
+                }
+            }
+        }
+    }
+
+    @Test
     void actorHeaderRejectsPlainPacketNamesAndMalformedStreamHeaders() {
         for (byte[] bytes :
                 new byte[][] {
