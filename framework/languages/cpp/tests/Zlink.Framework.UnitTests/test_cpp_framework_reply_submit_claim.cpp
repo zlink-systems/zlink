@@ -615,6 +615,7 @@ void verify_claim_owner_can_expire ()
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     verify_source_wait_original (true, false, false);
     verify_source_wait_original (true, true, false);
     verify_source_wait_original (true, false, true);

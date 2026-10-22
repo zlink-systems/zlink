@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <exception>
 #include <functional>
@@ -471,30 +472,6 @@ TEST (ZLinkFrameworkRouteClientChannelRouting, RuntimeOwnsSpotResolverUntilRelea
     EXPECT_TRUE (lifetime.expired ());
 }
 
-TEST (ZLinkFrameworkRouteClientChannelRouting, SpotResolverObservesOnlyStaleFrameworkTerminals)
-{
-    using namespace zlink::framework;
-    admitted_spot_resolver_t resolver;
-    for (const auto kind : {framework_error_kind_t::not_found, framework_error_kind_t::unavailable,
-                            framework_error_kind_t::shutting_down}) {
-        const auto before = resolver.invalidations;
-        const auto application_error = detail::with_error_origin (
-          framework_exception_t (kind, "application"), detail::error_origin_t::application);
-        resolver.observe_terminal ("spot", &application_error);
-        EXPECT_EQ (resolver.invalidations, before);
-        const auto framework_error = detail::with_error_origin (
-          framework_exception_t (kind, "framework"), detail::error_origin_t::framework);
-        resolver.observe_terminal ("spot", &framework_error);
-        EXPECT_EQ (resolver.invalidations, before + 1);
-    }
-    const auto before = resolver.invalidations;
-    const framework_exception_t deadline_error (framework_error_kind_t::deadline_exceeded,
-                                                "deadline");
-    resolver.observe_terminal ("spot", &deadline_error);
-    EXPECT_EQ (resolver.invalidations, before);
-    EXPECT_THROW (resolver.observe_terminal ("spot", nullptr), framework_exception_t);
-}
-
 void verify_mesh_request_admission (bool to_spot)
 {
     using namespace zlink::framework;
@@ -538,8 +515,9 @@ void verify_mesh_request_admission (bool to_spot)
                                           EXPECT_EQ (generation, 1);
                                           return submit (std::move (parts));
                                       });
-    auto resolver = std::make_shared<admitted_spot_resolver_t> ();
-    runtime.bind_spot_address_resolver (resolver);
+    const auto resolver_owner = std::make_shared<admitted_spot_resolver_t> ();
+    auto &resolver = *resolver_owner;
+    runtime.bind_spot_address_resolver (resolver_owner);
     auto client = builder.route_client (serializers);
     auto pending = to_spot
                      ? client.request_to_spot (spot_id_t ("admission-spot"), route_request_t{7})
@@ -599,8 +577,9 @@ TEST (CppFrameworkRouteClientChannelRouting, SpotSenderLookupDoesNotEnterStateLa
     auto builder = test::runtime_failure_builder ();
     auto channel = detail::channel_runtime_t::from (builder.message_bus ());
     channel.bind_serializers (serializers);
-    auto resolver = std::make_shared<admitted_spot_resolver_t> ();
-    channel.bind_spot_address_resolver (resolver);
+    const auto resolver_owner = std::make_shared<admitted_spot_resolver_t> ();
+    auto &resolver = *resolver_owner;
+    channel.bind_spot_address_resolver (resolver_owner);
     runtime::offload_executor_t target_executor{1, "spot-target-admission"};
     runtime::state_lane_t target_lane{target_executor};
     unsigned lookup_lane_copies = 0, target_admissions = 0;
@@ -640,8 +619,9 @@ TEST (CppFrameworkRouteClientChannelRouting, PendingSpotSendRetainsTransportThro
     auto builder = test::runtime_failure_builder ();
     auto channel = detail::channel_runtime_t::from (builder.message_bus ());
     channel.bind_serializers (serializers);
-    auto resolver = std::make_shared<admitted_spot_resolver_t> ();
-    channel.bind_spot_address_resolver (resolver);
+    const auto resolver_owner = std::make_shared<admitted_spot_resolver_t> ();
+    auto &resolver = *resolver_owner;
+    channel.bind_spot_address_resolver (resolver_owner);
     auto lifetime = std::make_shared<int> (7);
     std::weak_ptr<int> retained = lifetime;
     task_completion_source_t<result_t<void>> target_admission;
@@ -691,8 +671,9 @@ TEST (CppFrameworkRouteClientChannelRouting, MissingSpotTransportRemainsUnavaila
     auto builder = test::runtime_failure_builder ();
     auto channel = detail::channel_runtime_t::from (builder.message_bus ());
     channel.bind_serializers (serializers);
-    auto resolver = std::make_shared<admitted_spot_resolver_t> ();
-    channel.bind_spot_address_resolver (resolver);
+    const auto resolver_owner = std::make_shared<admitted_spot_resolver_t> ();
+    auto &resolver = *resolver_owner;
+    channel.bind_spot_address_resolver (resolver_owner);
     const auto result = builder.route_client (serializers)
                           .send_to_spot ("admission-spot", route_event_t{7})
                           .async ()
@@ -880,8 +861,9 @@ TEST (CppFrameworkRouteClientChannelRouting, RoutePresenceKeepsPriorityOverRebou
     auto builder = test::runtime_failure_builder ();
     auto channel = detail::channel_runtime_t::from (builder.message_bus ());
     channel.bind_serializers (serializers);
-    auto resolver = std::make_shared<admitted_spot_resolver_t> ();
-    channel.bind_spot_address_resolver (resolver);
+    const auto resolver_owner = std::make_shared<admitted_spot_resolver_t> ();
+    auto &resolver = *resolver_owner;
+    channel.bind_spot_address_resolver (resolver_owner);
     auto manager = detail::channel_runtime_manager_t::from (builder);
     manager.initialize_route_channels (std::vector<std::string>{"admission-mesh"});
     // A stopped route gives an immediate, identifiable rejection without waiting
@@ -919,4 +901,189 @@ TEST (CppFrameworkRouteClientChannelRouting, RoutePresenceKeepsPriorityOverRebou
       client.send_to_spot ("admission-spot", route_event_t{7}).async ().result ().error_kind (),
       framework_error_kind_t::unavailable);
     EXPECT_EQ (mesh_calls, 0u);
+}
+
+namespace
+{
+/* #2385: a Spot request can end publicly before its own terminal. The probe
+ * counts the late terminal's invalidation through a counter that outlives it. */
+class late_terminal_resolver_probe_t final
+    : public zlink::framework::runtime::spot_address_resolver_t
+{
+  public:
+    explicit late_terminal_resolver_probe_t (std::shared_ptr<std::atomic<unsigned>> invalidations) :
+        _invalidations (std::move (invalidations))
+    {
+    }
+    zlink::framework::task_t<std::optional<zlink::framework::runtime::spot_address_t>>
+    resolve_spot_address (std::string, std::string spot_id) override
+    {
+        using namespace zlink::framework;
+        runtime::spot_address_t address;
+        address.mesh_name = "admission-mesh";
+        address.node_rid = zlink::routing_id_t::from ("target");
+        address.spot_id = std::move (spot_id);
+        address.spot_generation = 1;
+        return task_t<std::optional<runtime::spot_address_t>> (
+          result_t<std::optional<runtime::spot_address_t>>::success (std::move (address)));
+    }
+    void invalidate_spot_address (std::string_view) override { ++*_invalidations; }
+    void invalidate_all_routes_after_store_recovery () override {}
+
+  private:
+    std::shared_ptr<std::atomic<unsigned>> _invalidations;
+};
+
+/* The Spot mesh refuses admission first and leaves the physical reply open, so
+ * the public reply ends before the operation's own terminal. */
+void run_late_spot_terminal (
+  std::shared_ptr<zlink::framework::runtime::spot_address_resolver_t> resolver,
+  const std::function<void ()> &release_resolver)
+{
+    using namespace zlink::framework;
+    using runtime::messaging::message_parts_t;
+    serializer_registry_t serializers;
+    add_int_serializer<route_request_t> (serializers, "application/x-route-request");
+    add_int_serializer<route_reply_t> (serializers, "application/x-route-reply");
+    auto builder = test::runtime_failure_builder ();
+    auto channel = detail::channel_runtime_t::from (builder.message_bus ());
+    channel.bind_serializers (serializers);
+    channel.bind_spot_address_resolver (std::move (resolver));
+    task_completion_source_t<result_t<message_parts_t>> physical_reply;
+    channel.bind_spot_mesh_transport (
+      "admission-mesh", {},
+      [&physical_reply] (const zlink::routing_id_t &, const std::string &, std::uint64_t,
+                         message_parts_t, std::chrono::milliseconds) {
+          auto admitted = std::make_shared<task_completion_source_t<void>> ();
+          admitted->complete (
+            result_t<void>::failure (framework_error_kind_t::shutting_down, "admission closed"));
+          return request_task_t<result_t<message_parts_t>> (physical_reply.task (), admitted);
+      });
+    auto pending = builder.route_client (serializers)
+                     .request_to_spot ("late-spot", route_request_t{7})
+                     .async<route_reply_t> ();
+    EXPECT_EQ (pending.result ().error_kind (), framework_error_kind_t::shutting_down);
+    // The caller observed the terminal; the resolver owner may release it now.
+    channel.bind_spot_address_resolver (nullptr);
+    release_resolver ();
+    physical_reply.complete (
+      result_t<result_t<message_parts_t>>::success (result_t<message_parts_t>::failure (
+        framework_error_kind_t::unavailable, "late physical terminal")));
+    // Waits for the operation's own terminal (no sleep): the outer coroutine's
+    // catch block has run once this returns.
+    (void) detail::request_task_access_t::physical_reply (pending).result ();
+}
+} // namespace
+
+TEST (CppFrameworkRouteClientChannelRouting, LateSpotTerminalDoesNotReachReleasedResolver)
+{
+    const auto invalidations = std::make_shared<std::atomic<unsigned>> (0u);
+    auto resolver = std::make_shared<late_terminal_resolver_probe_t> (invalidations);
+    const std::weak_ptr<late_terminal_resolver_probe_t> observed = resolver;
+    bool owned_after_release = false;
+    run_late_spot_terminal (resolver, [&] {
+        resolver.reset ();
+        owned_after_release = !observed.expired ();
+    });
+    EXPECT_TRUE (owned_after_release)
+      << "the caller's release ended the resolver while its Spot operation still ran";
+    EXPECT_EQ (invalidations->load (), 1u);
+    EXPECT_TRUE (observed.expired ()) << "the terminal retained the resolver";
+}
+
+TEST (CppFrameworkRouteClientChannelRouting, LateSpotTerminalAfterResolverDestroyedAsan)
+{
+#if defined(__SANITIZE_ADDRESS__)
+    // The test drops its own reference once the caller observed the reply.
+    auto resolver = std::make_shared<admitted_spot_resolver_t> ();
+    run_late_spot_terminal (resolver, [&] { resolver.reset (); });
+#else
+    GTEST_SKIP () << "destroys the resolver; meaningful only under AddressSanitizer";
+#endif
+}
+
+TEST (CppFrameworkRouteClientChannelRouting, SpotTerminalInvalidatesOnlyStaleRoutes)
+{
+    using namespace zlink::framework;
+    using runtime::messaging::message_parts_t;
+    class cached_resolver_t final : public runtime::spot_address_resolver_t
+    {
+      public:
+        task_t<std::optional<runtime::spot_address_t>>
+        resolve_spot_address (std::string, std::string spot_id) override
+        {
+            if (!cached) {
+                ++store_reads;
+                cached = runtime::spot_address_t{
+                  "admission-mesh", zlink::routing_id_t::from ("target"), std::move (spot_id), 1};
+            }
+            return task_t<std::optional<runtime::spot_address_t>> (
+              result_t<std::optional<runtime::spot_address_t>>::success (cached));
+        }
+        void invalidate_spot_address (std::string_view) override
+        {
+            ++invalidations;
+            cached.reset ();
+        }
+        void invalidate_all_routes_after_store_recovery () override { cached.reset (); }
+        std::optional<runtime::spot_address_t> cached;
+        unsigned store_reads = 0;
+        unsigned invalidations = 0;
+    };
+
+    for (const auto kind :
+         {framework_error_kind_t::shutting_down, framework_error_kind_t::not_found,
+          framework_error_kind_t::unavailable}) {
+        for (const bool request : {false, true}) {
+            for (const auto origin :
+                 {detail::error_origin_t::unspecified, detail::error_origin_t::framework,
+                  detail::error_origin_t::application}) {
+                SCOPED_TRACE (static_cast<int> (kind));
+                SCOPED_TRACE (request);
+                SCOPED_TRACE (static_cast<int> (origin));
+                serializer_registry_t serializers;
+                add_int_serializer<route_event_t> (serializers, "application/x-route-event");
+                add_int_serializer<route_request_t> (serializers, "application/x-route-request");
+                add_int_serializer<route_reply_t> (serializers, "application/x-route-reply");
+                auto builder = test::runtime_failure_builder ();
+                auto channel = detail::channel_runtime_t::from (builder.message_bus ());
+                channel.bind_serializers (serializers);
+                const auto resolver_owner = std::make_shared<cached_resolver_t> ();
+                channel.bind_spot_address_resolver (resolver_owner);
+                channel.bind_spot_mesh_transport (
+                  "admission-mesh",
+                  [kind, origin] (const zlink::routing_id_t &, const std::string &, std::uint64_t,
+                                  message_parts_t) -> task_t<result_t<void>> {
+                      co_return detail::result_access_t::failure<void> (detail::with_error_origin (
+                        framework_exception_t (kind, "target terminal"), origin));
+                  },
+                  [kind, origin] (const zlink::routing_id_t &, const std::string &, std::uint64_t,
+                                  message_parts_t, std::chrono::milliseconds)
+                    -> request_task_t<result_t<message_parts_t>> {
+                      co_return detail::result_access_t::failure<message_parts_t> (
+                        detail::with_error_origin (framework_exception_t (kind, "target terminal"),
+                                                   origin));
+                  });
+                auto client = builder.route_client (serializers);
+                for (unsigned call = 0; call != 2; ++call) {
+                    if (request) {
+                        auto pending = client.request_to_spot ("cached-spot", route_request_t{7})
+                                         .async<route_reply_t> ();
+                        EXPECT_EQ (pending.result ().error_kind (), kind);
+                        (void) detail::request_task_access_t::physical_reply (pending).result ();
+                    } else {
+                        EXPECT_EQ (client.send_to_spot ("cached-spot", route_event_t{7})
+                                     .async ()
+                                     .result ()
+                                     .error_kind (),
+                                   kind);
+                    }
+                }
+                const bool stale = kind != framework_error_kind_t::shutting_down
+                                   && origin != detail::error_origin_t::application;
+                EXPECT_EQ (resolver_owner->store_reads, stale ? 2u : 1u);
+                EXPECT_EQ (resolver_owner->invalidations, stale ? 2u : 0u);
+            }
+        }
+    }
 }

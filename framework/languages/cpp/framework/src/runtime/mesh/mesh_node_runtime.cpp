@@ -1295,7 +1295,7 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
         || target.lease_generation <= 0)
         co_return blocked ();
     auto *maintenance = _node->maintenance ();
-    const auto source = _node->resolve_actor (actor);
+    const auto source = co_await _node->resolve_actor_async (actor);
     const auto status = _node->status ();
     if (!maintenance || !source || authority.object_generation != source->object_generation
         || authority.authority_owner_generation != source->authority_owner_generation
@@ -1450,35 +1450,35 @@ task_t<runtime::stateful::relocation_result_t> mesh_node_runtime_t::relocate_app
     co_return result;
 }
 
-bool mesh_node_runtime_t::application_actor_transfer_in_progress (const actor_ref_t &actor) const
+task_t<bool> mesh_node_runtime_t::application_actor_transfer_in_progress (actor_ref_t actor) const
 {
-    return spot_node_runtime_t (_state->spot_state).actor_transfer_in_progress (actor);
+    return spot_node_runtime_t (_state->spot_state).actor_transfer_in_progress_async (actor);
 }
 
-result_t<bool> mesh_node_runtime_t::destroy_application_actor (const actor_ref_t &actor)
+task_t<result_t<bool>> mesh_node_runtime_t::destroy_application_actor (actor_ref_t actor)
 {
-    const auto destroyed = spot_node_runtime_t (_state->spot_state).destroy_actor (actor);
+    const auto destroyed = co_await spot_node_runtime_t (_state->spot_state).destroy_actor (actor);
     if (!destroyed)
-        return destroyed;
-    const auto stateful = cleanup_application_actor_stateful (actor);
+        co_return destroyed;
+    const auto stateful = co_await cleanup_application_actor_stateful (actor);
     if (!stateful)
-        return result_t<bool>::failure (stateful.error_kind (),
-                                        stateful.error () ? stateful.error ()->what ()
-                                                          : "stateful Actor cleanup failed");
-    return result_t<bool>::success (true);
+        co_return result_t<bool>::failure (stateful.error_kind (),
+                                           stateful.error () ? stateful.error ()->what ()
+                                                             : "stateful Actor cleanup failed");
+    co_return result_t<bool>::success (true);
 }
 
-result_t<void> mesh_node_runtime_t::cleanup_application_actor_stateful (const actor_ref_t &actor)
+task_t<result_t<void>> mesh_node_runtime_t::cleanup_application_actor_stateful (actor_ref_t actor)
 {
     if (_node) {
-        const auto stateful =
-          _node->destroy_application_actor (actor.actor_id ().value (), actor.object_generation ());
+        const auto stateful = co_await _node->destroy_application_actor_async (
+          std::string (actor.actor_id ().value ()), actor.object_generation ());
         if (stateful != runtime::stateful::stateful_error_t::none
             && stateful != runtime::stateful::stateful_error_t::not_found)
-            return result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                            "stateful Actor cleanup failed");
+            co_return result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                               "stateful Actor cleanup failed");
     }
-    return result_t<void>::success ();
+    co_return result_t<void>::success ();
 }
 
 task_t<runtime::stateful::aggregate_relocation_result_t>
@@ -2075,17 +2075,17 @@ bool mesh_node_runtime_t::wait_for_peer_ready (const zlink::routing_id_t &target
     return _node->transport ().topology ().peer (routing_id) != nullptr;
 }
 
-host::spot_handle_t mesh_node_runtime_t::get_or_create_spot (std::string spot_id)
+task_t<host::spot_handle_t> mesh_node_runtime_t::get_or_create_spot_async (std::string spot_id)
 {
     if (!_node) {
         throw configuration_error ("MeshNode has not started");
     }
     const auto &key = spot_id;
     if (const auto found = _spots.find (key); found != _spots.end ())
-        return found->second;
-    auto spot = _node->get_or_create_spot (spot_id);
+        co_return found->second;
+    auto spot = co_await _node->get_or_create_spot_async (spot_id);
     _spots.emplace (key, spot);
-    return spot;
+    co_return spot;
 }
 
 task_t<zlink::submit_result_t>
@@ -2096,9 +2096,9 @@ mesh_node_runtime_t::send_to_spot (const std::string &source_spot_id,
                                    const std::vector<zlink::message_t> &parts,
                                    std::vector<std::uint8_t> metadata)
 {
-    co_return co_await get_or_create_spot (source_spot_id)
-      .send_to_spot (target_node_rid, target_spot_id, target_spot_generation, parts,
-                     zlink::send_flags_t::dontwait, metadata);
+    auto source = co_await get_or_create_spot_async (source_spot_id);
+    co_return co_await source.send_to_spot (target_node_rid, target_spot_id, target_spot_generation,
+                                            parts, zlink::send_flags_t::dontwait, metadata);
 }
 
 task_t<zlink::submit_result_t>
@@ -2111,9 +2111,10 @@ mesh_node_runtime_t::request_to_spot (const std::string &source_spot_id,
                                       std::chrono::milliseconds timeout,
                                       std::vector<std::uint8_t> metadata)
 {
-    co_return co_await get_or_create_spot (source_spot_id)
-      .request_to_spot (target_node_rid, target_spot_id, target_spot_generation, parts,
-                        operation_id, zlink::send_flags_t::none, timeout, metadata);
+    auto source = co_await get_or_create_spot_async (source_spot_id);
+    co_return co_await source.request_to_spot (target_node_rid, target_spot_id,
+                                               target_spot_generation, parts, operation_id,
+                                               zlink::send_flags_t::none, timeout, metadata);
 }
 
 host::actor_handle_t
@@ -2233,17 +2234,6 @@ host::public_host_runtime_t &mesh_node_runtime_t::native_node ()
     return *_node;
 }
 
-bool mesh_node_runtime_t::prepare_actor_transfer (const host::actor_transfer_prepare_t &prepare,
-                                                  std::chrono::milliseconds timeout,
-                                                  host::actor_transfer_token_t &token,
-                                                  host::actor_transfer_prepare_result_t &result)
-{
-    if (!_node) {
-        throw configuration_error ("MeshNode has not started");
-    }
-    (void) timeout;
-    return _node->prepare_actor_transfer (prepare, token, result);
-}
 
 result_t<actor_ref_t>
 mesh_node_runtime_t::create_application_actor (std::string actor_type,
@@ -2325,7 +2315,7 @@ mesh_node_runtime_t::join_application_actor_to_entry_spot (actor_ref_t actor,
     const auto source = spots.actor_spot (actor);
     auto joined = std::make_shared<task_completion_source_t<result_t<actor_join_reply_t>>> ();
     host::pending_operation_t operation;
-    const auto submitted = submit_application_actor_entry_spot_join (
+    const auto submitted = co_await submit_application_actor_entry_spot_join (
       actor, target_node, request, timeout, operation,
       [joined] (result_t<actor_join_reply_t> reply) mutable {
           joined->complete (result_t<result_t<actor_join_reply_t>>::success (std::move (reply)));
@@ -2366,21 +2356,23 @@ void mesh_node_runtime_t::settle_application_actor_creation (const actor_ref_t &
     });
 }
 
-result_t<void>
-mesh_node_runtime_t::submit_application_actor_entry_spot_join (const actor_ref_t &actor,
-                                                               const node_rid_t &target_node,
-                                                               const zlink::message_t &request,
+task_t<result_t<void>>
+mesh_node_runtime_t::submit_application_actor_entry_spot_join (actor_ref_t actor,
+                                                               node_rid_t target_node,
+                                                               zlink::message_t request,
                                                                std::chrono::milliseconds timeout,
                                                                host::pending_operation_t &operation,
                                                                actor_join_completion_t completion)
 {
     if (!completion)
-        return result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                        "Actor entry Spot join completion is required");
-    const auto current = _node ? _node->resolve_actor (actor) : std::nullopt;
+        co_return result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                           "Actor entry Spot join completion is required");
+    std::optional<runtime::stateful::object_ref_t> current;
+    if (_node)
+        current = co_await _node->resolve_actor_async (actor);
     if (!current)
-        return result_t<void>::failure (framework_error_kind_t::not_found,
-                                        "local Actor handle was not found");
+        co_return result_t<void>::failure (framework_error_kind_t::not_found,
+                                           "local Actor handle was not found");
 
     host::actor_handle_t handle (_node, actor, *current);
     auto pending = operation.completion->task ();
@@ -2396,12 +2388,12 @@ mesh_node_runtime_t::submit_application_actor_entry_spot_join (const actor_ref_t
                                                         result.value ().parts, actor, state));
       });
     const std::vector<zlink::message_t> parts{request};
-    const auto submitted = handle.join_entry_spot (
+    const auto submitted = co_await handle.join_entry_spot (
       zlink::routing_id_t::from (std::string (target_node.value ())), parts, operation, timeout);
     if (submitted != zlink::submit_result_t::ok)
-        return result_t<void>::failure (framework_error_kind_t::internal_failure,
-                                        "Actor entry Spot join was not submitted");
-    return result_t<void>::success ();
+        co_return result_t<void>::failure (framework_error_kind_t::internal_failure,
+                                           "Actor entry Spot join was not submitted");
+    co_return result_t<void>::success ();
 }
 
 task_t<runtime::messaging::message_parts_t>
@@ -2409,7 +2401,9 @@ mesh_node_runtime_t::request_actor_join_spot_route (const runtime::spot_address_
                                                     runtime::messaging::message_parts_t encoded,
                                                     std::chrono::milliseconds timeout)
 {
-    auto origin = get_or_create_spot ("__zlink-route-origin-" + routing_id ()->to_hex ());
+    const auto origin_rid = co_await routing_id_async ();
+    auto origin =
+      co_await get_or_create_spot_async ("__zlink-route-origin-" + origin_rid->to_hex ());
     host::pending_operation_t operation;
     const auto submitted = co_await origin.request_to_spot (
       target.node_rid, spot_id_t (target.spot_id), target.object_generation, encoded.items (),
@@ -2502,14 +2496,16 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
 {
     spot_node_runtime_t spot_runtime (_state->spot_state);
     const auto completion_source_spot = spot_runtime.actor_spot (actor);
-    const auto local_routing_id = routing_id ();
+    const auto local_routing_id = co_await routing_id_async ();
     const bool remote =
       local_routing_id && local_routing_id->to_hex () != target.node_rid.to_hex ();
     if (remote == false) {
         /* A canonical remote Join materializes the Actor in the target public
          * host. Rebind a handle to its current object so a later same-node
          * User-Spot Join uses the ordinary local membership lane. */
-        const auto current = _node ? _node->resolve_actor (actor) : std::nullopt;
+        std::optional<runtime::stateful::object_ref_t> current;
+        if (_node)
+            current = co_await _node->resolve_actor_async (actor);
         if (!current) {
             co_return result_t<actor_join_reply_t>::failure (framework_error_kind_t::not_found,
                                                              "current local Actor was not found");
@@ -2518,8 +2514,8 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::join_application_actor_to_spot (
         host::pending_operation_t operation;
         const std::vector<zlink::message_t> parts{request};
         const auto submitted =
-          handle.join_spot (target.node_rid, spot_id_t (target.spot_id), target.object_generation,
-                            parts, operation, timeout);
+          co_await handle.join_spot (target.node_rid, spot_id_t (target.spot_id),
+                                     target.object_generation, parts, operation, timeout);
         if (submitted != zlink::submit_result_t::ok) {
             co_return result_t<actor_join_reply_t>::failure (
               framework_error_kind_t::internal_failure, "Actor Spot join was not submitted");
@@ -2654,7 +2650,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
     s->target_completion_operation_id_low = s->completion_operation_id_low;
     s->deadline = std::chrono::steady_clock::now () + s->timeout;
     s->deadline_unix_ms = runtime::messaging::request_deadline_unix_ms (s->deadline);
-    const auto source = _node->resolve_actor (s->actor);
+    const auto source = co_await _node->resolve_actor_async (s->actor);
     if (!source || source->authority_owner_generation == 0) {
         const auto failed = result_t<actor_join_reply_t>::failure (
           framework_error_kind_t::not_found, "source Framework Actor authority is unavailable");
@@ -2850,7 +2846,7 @@ task_t<actor_join_reply_t> mesh_node_runtime_t::admit_remote_application_actor_j
           !_serializers ? "MeshNode serializers are not configured"
                         : "source Actor is not joined to a local Spot");
     }
-    const auto source = _node->resolve_actor (s->actor);
+    const auto source = co_await _node->resolve_actor_async (s->actor);
     if (!source || source->authority_owner_generation == 0) {
         co_return co_await fail_remote_actor_join (
           *s,
@@ -3568,7 +3564,7 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
 {
     try {
         spot_node_runtime_t spot_runtime (_state->spot_state);
-        const auto local_routing_id = routing_id ();
+        const auto local_routing_id = co_await routing_id_async ();
         if (!local_routing_id) {
             co_return result_t<std::optional<zlink::message_t>>::failure (
               framework_error_kind_t::internal_failure,
@@ -3666,7 +3662,8 @@ request_task_t<std::optional<zlink::message_t>> mesh_node_runtime_t::relay_appli
                   framework_error_kind_t::not_found,
                   "Actor message follow target Spot generation is unavailable");
             }
-            auto origin = get_or_create_spot ("__zlink-route-origin-" + routing_id ()->to_hex ());
+            auto origin = co_await get_or_create_spot_async ("__zlink-route-origin-"
+                                                             + local_routing_id->to_hex ());
             host::pending_operation_t operation;
             auto submission = origin.request_to_spot (
               target_node, follow_target.route.spot_id, *target_generation, request_parts.items (),
@@ -4382,7 +4379,21 @@ std::chrono::milliseconds mesh_node_runtime_t::default_request_timeout () const
 
 std::optional<zlink::routing_id_t> mesh_node_runtime_t::routing_id () const
 {
-    return _state->lane.run ([&] { return _state->routing_id; }).get ();
+    return routing_id_async ().result ().value ();
+}
+
+task_t<std::optional<zlink::routing_id_t>> mesh_node_runtime_t::routing_id_async () const
+{
+    const auto state = _state;
+    return state->lane.run_task ([state] { return state->routing_id; });
+}
+
+task_t<std::pair<std::string, std::optional<zlink::routing_id_t>>>
+mesh_node_runtime_t::identity_async () const
+{
+    const auto state = _state;
+    return state->lane.run_task (
+      [state] { return std::pair{state->mesh_name, state->routing_id}; });
 }
 
 std::string mesh_node_runtime_t::listen_endpoint () const

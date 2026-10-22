@@ -38,6 +38,44 @@
 namespace
 {
 
+TEST (ActorEntryPlacementRegression, ReadyContinuationAwaitsBusySpotInventory)
+{
+    namespace fw = zlink::framework;
+    auto node = fw::test::runtime_failure_fixture<fw::detail::spot_node_builder_state_t> (
+      "inventory-continuation");
+    fw::detail::spot_node_runtime_t runtime (node);
+    std::promise<void> ready, occupied, release, yielded;
+    auto ready_seen = ready.get_future ();
+    auto occupied_seen = occupied.get_future ().share ();
+    auto released = release.get_future ().share ();
+    auto suspended = yielded.get_future ();
+    std::optional<fw::task_t<std::size_t>> query;
+    auto count_after_ready = [&] () -> fw::task_t<std::size_t> {
+        (void) co_await runtime.relocation_ready_async ();
+        ready.set_value ();
+        occupied_seen.wait ();
+        node->lane_executor.submit ([&] { yielded.set_value (); });
+        co_return co_await runtime.active_user_spot_count_async ();
+    };
+    node->lane_executor.submit ([&] { query.emplace (count_after_ready ()); });
+    ready_seen.get ();
+    std::jthread holder ([&] {
+        node->lane
+          .run ([&] {
+              occupied.set_value ();
+              released.wait ();
+          })
+          .get ();
+    });
+    // The executor marker follows the inventory continuation after it yields.
+    // A blocking query aborts before that marker can run.
+    suspended.get ();
+    release.set_value ();
+    holder.join ();
+    ASSERT_TRUE (query.has_value ());
+    ASSERT_EQ (query->result ().value (), 0u);
+}
+
 // Spot timer §1: a native expiry must remain queued while creation is preparing.
 // A FIFO worker marker follows the expiry's runnable queue consumer. All fixtures
 // using this marker configure one worker, so observation does not stop the worker.

@@ -214,6 +214,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                           serial_work_options_t options,
                           std::function<bool ()> stop_requested = {});
     bool try_post_deferred (std::string name, std::function<void ()> work);
+    bool try_post_deferred_task (std::string name, std::function<task_t<void> ()> work);
     result_t<std::shared_ptr<detail::deferred_barrier_t>> reserve_deferred_barrier_next (
       std::string name,
       std::function<void ()> cancel = {},

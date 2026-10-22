@@ -5112,7 +5112,8 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
       service_lifetime_t::singleton);
     auto provider = services.build_provider ();
     owner.bind_service_provider (provider);
-    wire_join_spot_resolver_t resolver;
+    const auto resolver_owner = std::make_shared<wire_join_spot_resolver_t> ();
+    auto &resolver = *resolver_owner;
     resolver.address.node_rid = local_rid;
     resolver.address.spot_id = "target-spot";
     // Deliberately stale: canonical target admission must ignore this
@@ -5121,7 +5122,7 @@ bool verify_wire_actor_join_admission_is_approval_only_and_later_attempt_wins ()
     resolver.address.node_generation = 2;
     resolver.address.authority_owner_generation = 20;
     resolver.address.owner = location_owner_token_t{"stale-owner", 23};
-    owner.bind_spot_location_resolver (resolver);
+    owner.bind_spot_location_resolver (resolver_owner);
 
     const auto make_request = [&] (std::uint64_t correlation) {
         return runtime::protocol::actor_join_request_t{
@@ -7664,7 +7665,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
     target_spots.bind_relocation_authority (authority);
     const auto source_spot = source_spots.create_spot ("actor.cutover.spot");
     const auto target_spot_id = new_user_spot_id ();
-    auto source_native_spot = source.get_or_create_spot (std::string (source_spot.spot_id));
+    auto source_native_spot =
+      source.get_or_create_spot_async (std::string (source_spot.spot_id)).result ().value ();
     auto source_native_entry_spot = source.native_node ().entry_spot ();
 
     const object_reserve_request_t source_spot_reserve{
@@ -7740,7 +7742,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
     const auto target_spot = target_spots.get_or_create_spot (
       "actor.cutover.spot", target_spot_id, zlink::message_t{},
       target_spot_reserved->fence.object_generation, {}, local_target_spot_authority_generation);
-    auto target_native_spot = target.get_or_create_spot (std::string (target_spot.spot_id));
+    auto target_native_spot =
+      target.get_or_create_spot_async (std::string (target_spot.spot_id)).result ().value ();
     const auto target_context_authority_differs_from_committed_store =
       local_target_spot_authority_generation
       != target_spot_reserved->fence.authority_owner_generation;
@@ -7842,10 +7845,14 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
         target.stop ();
         return false;
     }
-    const auto [join_error, join] = source.native_node ().objects ().begin_membership_move (
-      *source_actor_object, *source_spot_object);
+    const auto [join_error, join] =
+      source.native_node ()
+        .objects ()
+        .begin_membership_move_async (*source_actor_object, *source_spot_object)
+        .result ()
+        .value ();
     const auto [commit_error, joined_actor] =
-      source.native_node ().objects ().commit_membership_move (join);
+      source.native_node ().objects ().commit_membership_move_async (join).result ().value ();
     if (join_error != stateful::stateful_error_t::none
         || commit_error != stateful::stateful_error_t::none) {
         std::cerr << "cutover production setup: Core membership failed\n";
@@ -8058,7 +8065,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
           source_state->spot_state->lane
             .run ([&] { return source_state->spot_state->pending_remote_actor_leaves.size (); })
             .get ();
-        const auto inventory = source.native_node ().objects ().inventory ();
+        const auto inventory =
+          source.native_node ().objects ().inventory_async ().result ().value ();
         const bool dispatch_closed =
           std::none_of (inventory.begin (), inventory.end (), [] (const auto &item) {
               return item.owner.kind == stateful::object_kind_t::actor
@@ -8124,8 +8132,10 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
                                                  "cutover source awaited target completion");
     bool target_actor_authority_matches_committed_store = false;
     if (joined_result) {
-        const auto target_actor =
-          target.native_node ().resolve_actor (joined_result.value ().actor);
+        const auto target_actor = target.native_node ()
+                                    .resolve_actor_async (joined_result.value ().actor)
+                                    .result ()
+                                    .value ();
         const auto committed_authority =
           authority->read (stateful::object_kind_t::actor,
                            std::string (joined_result.value ().actor.actor_id ().value ()));
@@ -8177,7 +8187,8 @@ bool verify_remote_actor_cutover_completion_is_target_owned (bool cancel_source_
             std::this_thread::sleep_for (1ms);
         }
         const auto local_spot = target_spots.create_spot ("actor.cutover.spot");
-        auto local_native_spot = target.get_or_create_spot (std::string (local_spot.spot_id));
+        auto local_native_spot =
+          target.get_or_create_spot_async (std::string (local_spot.spot_id)).result ().value ();
         const auto local_spot_generation = local_native_spot.status ().lifecycle_generation ();
         const runtime::spot_address_t local_address{.mesh_name = "actor-cutover-mesh",
                                                     .node_rid = target.status ().routing_id (),
@@ -11177,6 +11188,7 @@ bool verify_nested_barrier_phases (bool shared, bool cancel)
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     if (argc == 2 && std::string_view (argv[1]) == "--handler-origin-terminals")
         return verify_all_handler_origin_terminals () ? EXIT_SUCCESS : EXIT_FAILURE;
     if (argc == 1 && !verify_all_handler_origin_terminals ())

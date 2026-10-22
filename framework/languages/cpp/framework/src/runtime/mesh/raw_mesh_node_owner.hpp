@@ -173,10 +173,10 @@ class raw_mesh_node_owner_t
                                         std::vector<std::uint8_t> connection_id,
                                         service_liveness_registry_t::clock_t::time_point now);
     task_t<bool> send_to_node (const std::vector<std::uint8_t> &target_routing_id,
-                               const protocol::application_payload_t &application_payload);
+                               protocol::application_payload_t application_payload);
     task_t<zlink::submit_result_t>
     send_to_node_result (const std::vector<std::uint8_t> &target_routing_id,
-                         const protocol::application_payload_t &application_payload);
+                         protocol::application_payload_t application_payload);
     task_t<zlink::submit_result_t>
     send_logical_multicast (const std::vector<std::uint8_t> &target_routing_id,
                             const std::string &channel_name,
@@ -200,8 +200,17 @@ class raw_mesh_node_owner_t
                         std::uint32_t terminal_result,
                         std::uint32_t failure_code);
     std::size_t expire_requests (foundation::operation_registry_t::clock_t::time_point now);
-    std::uint64_t next_operation_sequence ();
-    std::optional<foundation::call_id_t> register_local_operation (
+    task_t<std::optional<std::uint64_t>> next_operation_sequence_async ();
+    using local_operation_reservation_t =
+      std::pair<foundation::call_id_t, std::shared_ptr<detail::backend::raw_route_port_t>>;
+    task_t<std::optional<local_operation_reservation_t>>
+    prepare_local_operation_async (std::optional<foundation::call_id_t> requested = std::nullopt);
+    bool register_prepared_local_operation (
+      const local_operation_reservation_t &reservation,
+      foundation::operation_registry_t::clock_t::time_point deadline,
+      foundation::operation_registry_t::callback_t callback,
+      mesh_request_surface_t request_surface = mesh_request_surface_t::none);
+    task_t<std::optional<foundation::call_id_t>> register_local_operation_async (
       foundation::operation_registry_t::clock_t::time_point deadline,
       foundation::operation_registry_t::callback_t callback,
       std::optional<foundation::call_id_t> requested = std::nullopt,
@@ -209,6 +218,8 @@ class raw_mesh_node_owner_t
     bool complete_local_operation (
       const foundation::call_id_t &operation,
       foundation::operation_registry_t::before_dispatch_t before_dispatch = {});
+    bool complete_local_operation_async (const foundation::call_id_t &operation,
+                                         std::function<task_t<void> ()> before_dispatch);
     bool
     fail_local_operation (const foundation::call_id_t &operation,
                           foundation::operation_terminal_t terminal,
@@ -224,22 +235,22 @@ class raw_mesh_node_owner_t
     bool operation_pending (const foundation::call_id_t &operation) const;
     std::size_t pending_operation_count () const;
     task_t<bool> send_to_channel (const std::string &channel_name,
-                                  const protocol::application_payload_t &application_payload);
+                                  protocol::application_payload_t application_payload);
     task_t<zlink::submit_result_t>
     send_to_channel_result (const std::string &channel_name,
-                            const protocol::application_payload_t &application_payload);
+                            protocol::application_payload_t application_payload);
     task_t<bool>
     send_to_spot (const std::vector<std::uint8_t> &target_routing_id,
                   const std::string &source_spot_id,
                   const protocol::spot_route_fence_t &target,
-                  const protocol::application_payload_t &application_payload,
+                  protocol::application_payload_t application_payload,
                   std::optional<protocol::wire_operation_id_t> operation = std::nullopt,
                   std::uint8_t message_follow_hop_count = 0);
     task_t<zlink::submit_result_t>
     send_to_spot_result (const std::vector<std::uint8_t> &target_routing_id,
                          const std::string &source_spot_id,
                          const protocol::spot_route_fence_t &target,
-                         const protocol::application_payload_t &application_payload,
+                         protocol::application_payload_t application_payload,
                          std::optional<protocol::wire_operation_id_t> operation = std::nullopt,
                          std::uint8_t message_follow_hop_count = 0);
     task_t<bool>
@@ -256,7 +267,7 @@ class raw_mesh_node_owner_t
       const std::vector<std::uint8_t> &target_routing_id,
       const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
       const protocol::actor_route_fence_t &target,
-      const protocol::application_payload_t &application_payload,
+      protocol::application_payload_t application_payload,
       std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source =
         std::nullopt,
       std::optional<protocol::wire_operation_id_t> operation = std::nullopt,
@@ -265,7 +276,7 @@ class raw_mesh_node_owner_t
       const std::vector<std::uint8_t> &target_routing_id,
       const std::optional<std::pair<std::string, std::uint64_t>> &source_actor,
       const protocol::actor_route_fence_t &target,
-      const protocol::application_payload_t &application_payload,
+      protocol::application_payload_t application_payload,
       std::optional<protocol::actor_message_header_t::bound_session_source_t> bound_session_source =
         std::nullopt,
       std::optional<protocol::wire_operation_id_t> operation = std::nullopt,
@@ -284,11 +295,11 @@ class raw_mesh_node_owner_t
       std::uint8_t message_follow_hop_count = 0);
     task_t<bool> send_bound_session (const std::vector<std::uint8_t> &session_owner_routing_id,
                                      const protocol::bound_session_send_t &record,
-                                     const protocol::application_payload_t &application_payload);
+                                     protocol::application_payload_t application_payload);
     task_t<zlink::submit_result_t>
     send_bound_session_result (const std::vector<std::uint8_t> &session_owner_routing_id,
                                const protocol::bound_session_send_t &record,
-                               const protocol::application_payload_t &application_payload,
+                               protocol::application_payload_t application_payload,
                                detail::backend::raw_send_stage_trace_t trace = {});
     task_t<bool>
     request_bound_session_bind (const std::vector<std::uint8_t> &actor_owner_routing_id,
@@ -443,10 +454,8 @@ class raw_mesh_node_owner_t
                                                std::uint64_t correlation);
     std::uint64_t
     take_reply_route_id_locked (std::optional<std::uint64_t> requested = std::nullopt);
+    std::optional<std::uint64_t> next_operation_sequence_on_lane ();
     std::uint64_t take_operation_sequence_locked ();
-    task_t<bool> send_with_header (const std::vector<std::uint8_t> &target_routing_id,
-                                   std::vector<std::uint8_t> header,
-                                   const protocol::application_payload_t &application_payload);
     enum class send_start_state_t
     {
         started,
@@ -468,9 +477,13 @@ class raw_mesh_node_owner_t
                                             bool needs_public_completion,
                                             detail::backend::raw_send_stage_trace_t trace);
     task_t<zlink::submit_result_t>
+    submit_owned_send_result (std::vector<std::uint8_t> target_routing_id,
+                              detail::backend::raw_message_t parts,
+                              detail::backend::raw_send_stage_trace_t trace);
+    task_t<zlink::submit_result_t>
     send_with_header_result (std::vector<std::uint8_t> target_routing_id,
                              std::vector<std::uint8_t> header,
-                             const protocol::application_payload_t &application_payload,
+                             protocol::application_payload_t application_payload,
                              detail::backend::raw_send_stage_trace_t trace = {},
                              bool target_claimed = false,
                              std::optional<std::vector<std::uint8_t>> metadata = {});

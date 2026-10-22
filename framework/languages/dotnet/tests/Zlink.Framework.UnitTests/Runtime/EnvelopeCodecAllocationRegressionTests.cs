@@ -81,8 +81,8 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
         using var large = ActorReply(65536);
         Message[] smallParts = [small];
         Message[] largeParts = [large];
-        var smallBytes = Allocated(() => ZLinkActorReplyDecoder.DecodeTerminal(smallParts));
-        var largeBytes = Allocated(() => ZLinkActorReplyDecoder.DecodeTerminal(largeParts));
+        var smallBytes = SteadyAllocated(() => ZLinkActorReplyDecoder.DecodeTerminal(smallParts));
+        var largeBytes = SteadyAllocated(() => ZLinkActorReplyDecoder.DecodeTerminal(largeParts));
         output.WriteLine($"terminal small={smallBytes}, large={largeBytes} B/call");
         Assert.True(
             largeBytes <= smallBytes,
@@ -226,6 +226,30 @@ public sealed class EnvelopeCodecAllocationRegressionTests(ITestOutputHelper out
             measured++;
         }
         return allocated / Iterations;
+    }
+
+    // Steady per-call bytes: the value most warmed, pause-free calls allocate. A
+    // payload copy adds to every call, while a one-time runtime allocation inside
+    // the window (tier-up, a lazy runtime table) adds to a single call only, so a
+    // size comparison must not average that one call into the result.
+    private static long SteadyAllocated(Action action)
+    {
+        for (var i = 0; i < Iterations; i++)
+            action();
+        var counts = new Dictionary<long, int>();
+        for (var measured = 0; measured < Iterations; )
+        {
+            var pause = GC.GetTotalPauseDuration();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            action();
+            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            if (GC.GetTotalPauseDuration() != pause)
+                continue;
+            counts[bytes] = counts.GetValueOrDefault(bytes) + 1;
+            measured++;
+        }
+        // On a tie, report the larger count so a real per-call cost is never hidden.
+        return counts.MaxBy(static entry => (entry.Value, entry.Key)).Key;
     }
 
     private static Message ActorReply(int size) => ActorReply(new byte[size]);

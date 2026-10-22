@@ -255,8 +255,16 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
     bool invalidate_actor_address_if_matches (std::string_view actor_id,
                                               const spot_address_t &expected) override
     {
-        return _lane
-          .run ([&] {
+        return invalidate_actor_address_if_matches_async (std::string (actor_id), expected)
+          .result ()
+          .value ();
+    }
+
+    task_t<bool> invalidate_actor_address_if_matches_async (std::string actor_id,
+                                                            spot_address_t expected) override
+    {
+        return _lane.run_task (
+          [this, actor_id = std::move (actor_id), expected = std::move (expected)] {
               const auto found = _actor_routes.find (std::string (actor_id));
               if (found == _actor_routes.end ())
                   return false;
@@ -271,8 +279,7 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                   return false;
               _actor_routes.erase (found);
               return true;
-          })
-          .get ();
+          });
     }
 
     task_t<bool> is_peer_ready (std::string mesh_name,

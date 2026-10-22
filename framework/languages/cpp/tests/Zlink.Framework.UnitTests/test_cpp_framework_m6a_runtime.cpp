@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #include "../support/runtime_failure_fixture.hpp"
+#include "../support/allocation_counter.hpp"
 
 #include "metric_test_reader.hpp"
 
@@ -38,6 +39,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 namespace mesh = zlink::framework::runtime::mesh;
@@ -105,6 +107,50 @@ mesh::service_node_descriptor_t descriptor (std::string rid,
                                            std::move (endpoint),
                                            {{"alpha", 100}, {"beta", 50}},
                                            mesh::service_node_state_t::preparing};
+}
+
+void verify_node_send_forwarding_allocations ()
+{
+    namespace fw = zlink::framework;
+    using fw::tests::count_allocations;
+    static_assert (std::is_nothrow_move_constructible_v<protocol::application_payload_t>);
+    mesh::raw_mesh_node_owner_t source (mesh::raw_mesh_node_options_t{
+      .descriptor = descriptor ("forwarding-source"),
+      .runtime_failures = std::make_shared<runtime::runtime_failure_collector_t> ()});
+    const auto target = bytes ("missing-forwarding-target");
+    protocol::application_payload_t payload{"Forwarding", "application/octet-stream", {}};
+    assert (count_allocations ([] {}) == 0);
+    assert (count_allocations ([] {
+                auto *allocation = ::operator new (64);
+                ::operator delete (allocation);
+            })
+            == 1);
+    std::vector<std::uint8_t> copied_target, encoded_header;
+    std::shared_ptr<const mesh::admitted_peer_t> peer;
+    const auto argument_allocations = count_allocations ([&] {
+        copied_target = target;
+        encoded_header = protocol::encode_node_send_header ();
+        peer = source.topology ().peer (target);
+    });
+    assert (copied_target == target && !encoded_header.empty () && !peer);
+    std::optional<fw::task_t<zlink::submit_result_t>> ready;
+    const auto result_allocations = count_allocations ([&] {
+        ready.emplace (
+          fw::result_t<zlink::submit_result_t>::success (zlink::submit_result_t::not_connected));
+    });
+    std::optional<fw::task_t<zlink::submit_result_t>> submission;
+    const auto observed = count_allocations (
+      [&] { submission.emplace (source.send_to_node_result (target, std::move (payload))); });
+    assert (submission->await_ready ());
+    assert (submission->result ().value () == zlink::submit_result_t::not_connected);
+    // The terminal owner needs at most one coroutine frame in addition to its
+    // result state; forwarding layers do not need another asynchronous result.
+    constexpr std::size_t maximum_terminal_frames = 1;
+    const auto allowed = argument_allocations + result_allocations + maximum_terminal_frames;
+    std::fprintf (stderr,
+                  "node send allocations observed=%zu allowed=%zu arguments=%zu result=%zu\n",
+                  observed, allowed, argument_allocations, result_allocations);
+    assert (observed <= allowed);
 }
 
 protocol::actor_create_header_t actor_create_request (const mesh::service_node_descriptor_t &source,
@@ -1331,6 +1377,16 @@ void verify_envelope_body_retains_native_storage ()
 
 void verify_application_owner_drain_transitions ()
 {
+    mesh::service_mailbox_t manual;
+    manual.begin_application_receive_turn ();
+    assert (manual.try_enqueue (mesh::service_mailbox_record_t{
+      "manual", mesh::service_mailbox_domain_t::application,
+      zlink::framework::detail::backend::materialize_binding_parts ({{1}})}));
+    manual.end_application_receive_turn ();
+    auto manual_claim = manual.try_claim (mesh::service_mailbox_domain_t::application, 1, 4096);
+    assert (manual_claim && manual_claim->records.size () == 1);
+    assert (manual.release (*manual_claim));
+
     mesh::service_mailbox_t mailbox;
     std::vector<std::string> ready;
     int prepared = 0;
@@ -2434,9 +2490,13 @@ void verify_raw_owner_node_send_and_liveness (
     assert (!probe_outstanding (second, first_descriptor.node_routing_id));
 
     std::atomic_int local_operation_callbacks{0};
-    const auto local_operation = first.register_local_operation (
-      foundation::operation_registry_t::clock_t::time_point::max (),
-      [&] (auto, auto) { local_operation_callbacks.fetch_add (1, std::memory_order_release); });
+    const auto local_operation =
+      first
+        .register_local_operation_async (
+          foundation::operation_registry_t::clock_t::time_point::max (),
+          [&] (auto, auto) { local_operation_callbacks.fetch_add (1, std::memory_order_release); })
+        .result ()
+        .value ();
     assert (local_operation);
 
     bool submitted = false;
@@ -2854,17 +2914,29 @@ void verify_raw_owner_node_send_and_liveness (
     // pending; dispatcher scheduling after an immediate admission cannot
     // produce this observation because terminal claim removes the entry.
     assert (first.pending_operation_count () == 0);
-    const protocol::application_payload_t saturated_payload{
-      "SaturatedControl", "application/octet-stream",
-      std::vector<std::uint8_t> (512u * 1024u, 0x5a)};
     std::vector<std::shared_ptr<zlink::framework::task_t<zlink::submit_result_t>>> saturated_sends;
     std::size_t saturated_received = 0;
     for (std::size_t index = 0; index < 128 && first.pending_operation_count () == 0; ++index) {
+        protocol::application_payload_t saturated_payload{
+          "SaturatedControl", "application/octet-stream",
+          std::vector<std::uint8_t> (512u * 1024u, 0x5a)};
         saturated_sends.push_back (
           std::make_shared<zlink::framework::task_t<zlink::submit_result_t>> (
-            first.send_to_node_result (second_descriptor.node_routing_id, saturated_payload)));
+            first.send_to_node_result (second_descriptor.node_routing_id,
+                                       std::move (saturated_payload))));
     }
     assert (first.pending_operation_count () != 0);
+    const auto verify_retained_payloads = [] (const mesh::service_mailbox_claim_t &claim) {
+        for (const auto &record : claim.records) {
+            const auto payload = protocol::decode_application_payload (
+              protocol::message_bytes (record->parts.back ()), false);
+            assert (payload.packet_name == "SaturatedControl");
+            const auto &body = payload.payload_bytes ();
+            assert (body.size () == 512u * 1024u);
+            assert (
+              std::all_of (body.begin (), body.end (), [] (auto byte) { return byte == 0x5a; }));
+        }
+    };
 
     // The reverse-direction probe itself is not behind the saturated route.
     // Claiming it starts one ACK binding operation, then I3 must return so the
@@ -2903,6 +2975,7 @@ void verify_raw_owner_node_send_and_liveness (
         auto claim = second.mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1,
                                                   1024u * 1024u);
         if (claim) {
+            verify_retained_payloads (*claim);
             saturated_received += claim->records.size ();
             assert (saturated_received <= saturated_sends.size ());
             assert (second.mailbox ().release (*claim));
@@ -2930,6 +3003,7 @@ void verify_raw_owner_node_send_and_liveness (
         assert (pumped_quiesce != mesh::raw_mesh_pump_result_t::protocol_error);
         while (auto quiesce_claim = second.mailbox ().try_claim (
                  mesh::service_mailbox_domain_t::application, 256, 16u * 1024u * 1024u)) {
+            verify_retained_payloads (*quiesce_claim);
             saturated_received += quiesce_claim->records.size ();
             assert (saturated_received <= saturated_sends.size ());
             assert (second.mailbox ().release (*quiesce_claim));
@@ -3823,21 +3897,106 @@ void verify_liveness_physical_close (bool receive, bool replacement)
 
 void verify_liveness_without_selected_route ()
 {
-    mesh::raw_mesh_node_owner_t source (zlink::framework::test::runtime_failure_options (
-      mesh::raw_mesh_node_options_t{descriptor ("liveness-missing-source")}));
+    auto context = std::make_shared<zlink::context_t> ();
+    mesh::raw_mesh_node_owner_t source (
+      zlink::framework::test::runtime_failure_options (
+        mesh::raw_mesh_node_options_t{descriptor ("liveness-missing-source")}),
+      context);
     source.start ();
     const auto remote = descriptor ("liveness-missing-target");
+    zlink::dealer_socket_t departed (*context);
+    departed.set_routing_id (zlink::routing_id_t::from (remote.node_routing_id));
+    departed.connect (source.endpoint ());
+    const auto selected_by = mesh::service_liveness_registry_t::clock_t::now () + 2s;
+    std::size_t selected = 0;
+    while (!selected && mesh::service_liveness_registry_t::clock_t::now () < selected_by)
+        selected += source.observe_routes ();
+    assert (selected == 1);
+    departed.close ();
+    (void) source.disconnect_peer (remote.node_routing_id, remote.advertised_endpoint);
+    while (source.peer_route (remote.node_routing_id).first != 0
+           && mesh::service_liveness_registry_t::clock_t::now () < selected_by)
+        (void) source.observe_routes ();
+    assert (source.peer_route (remote.node_routing_id).first == 0);
     const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+    // Preserve a stale logical admission after Core has ended the physical RID.
     assert (source.admit_peer (remote, bytes ("missing-route"), now)
             == mesh::peer_admission_result_t::admitted);
-    // Admission can outlive the Core selected route. Its absence is the
-    // binding's typed connect NotFound, rather than a failed liveness turn.
+    const protocol::application_payload_t payload{"LivenessAfterCleanup", "application/json",
+                                                  bytes ("delivered")};
+    // Mandatory directed SEND reports an absent route as NotConnected (Core ROUTER section 5).
+    // The logical admission remains for liveness to perform disconnect_rid cleanup.
+    const auto absent_route =
+      await_task (source.send_to_node_result (remote.node_routing_id, payload));
+    assert (absent_route == zlink::submit_result_t::not_connected);
+    assert (peer_ready (source, remote.node_routing_id));
     const auto expired = await_task (source.tick_liveness (now + 15s));
     assert (expired.timed_out_nodes
             == std::vector<std::vector<std::uint8_t>>{remote.node_routing_id});
     assert (!source.topology ().peer (remote.node_routing_id));
     assert (await_task (source.tick_liveness (now + 16s)).timed_out_nodes.empty ());
     assert (source.pending_operation_count () == 0);
+
+    mesh::raw_mesh_node_owner_t survivor (zlink::framework::test::runtime_failure_options (
+      mesh::raw_mesh_node_options_t{descriptor ("liveness-survivor")}));
+    survivor.start ();
+    const auto local = source.topology ().local_descriptor ();
+    const auto live = survivor.topology ().local_descriptor ();
+    survivor.expect_peer (local);
+    assert (source.connect_peer (survivor.endpoint (), live));
+    const auto deadline = mesh::service_liveness_registry_t::clock_t::now () + 2s;
+    while (
+      (!peer_ready (source, live.node_routing_id) || !peer_ready (survivor, local.node_routing_id))
+      && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+        (void) await_task (source.pump_one (now));
+        (void) await_task (survivor.pump_one (now));
+    }
+    assert (peer_ready (source, live.node_routing_id));
+    assert (peer_ready (survivor, local.node_routing_id));
+    assert (await_task (source.send_to_node (live.node_routing_id, payload)));
+    assert (await_task (survivor.send_to_node (local.node_routing_id, payload)));
+    for (auto *receiver : {&source, &survivor}) {
+        std::shared_ptr<mesh::service_mailbox_claim_t> claim;
+        while (!claim && mesh::service_liveness_registry_t::clock_t::now () < deadline) {
+            (void) await_task (receiver->pump_one (now));
+            claim =
+              receiver->mailbox ().try_claim (mesh::service_mailbox_domain_t::application, 1, 4096);
+        }
+        assert (claim && claim->records.size () == 1);
+        assert (protocol::decode_application_payload (
+                  protocol::message_bytes (claim->records.front ()->parts.at (1)))
+                == payload);
+        assert (receiver->mailbox ().release (*claim));
+    }
+    survivor.close ();
+    source.close ();
+}
+
+void verify_liveness_propagates_binding_failure ()
+{
+    auto context = std::make_shared<zlink::context_t> ();
+    mesh::raw_mesh_node_owner_t source (
+      zlink::framework::test::runtime_failure_options (
+        mesh::raw_mesh_node_options_t{descriptor ("liveness-terminated-source")}),
+      context);
+    source.start ();
+    const auto remote = descriptor ("liveness-terminated-target");
+    const auto now = mesh::service_liveness_registry_t::clock_t::now ();
+    assert (source.admit_peer (remote, bytes ("terminated-route"), now)
+            == mesh::peer_admission_result_t::admitted);
+    const auto timeout_at =
+      source.liveness ().connection (remote.node_routing_id)->deadline.load ();
+    context->shutdown ();
+    bool observed = false;
+    try {
+        (void) await_task (source.tick_liveness (timeout_at));
+    }
+    catch (const zlink::connect_error_t &error) {
+        observed = true;
+        assert (error.result () == zlink::connect_result_t::internal_error);
+        assert (error.internal_errno () == ETERM);
+    }
+    assert (observed);
     source.close ();
 }
 
@@ -4131,6 +4290,10 @@ void verify_unadmitted_route (bool repeat_hello)
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
+    verify_node_send_forwarding_allocations ();
+    if (argc == 2 && std::string_view (argv[1]) == "--send-forwarding-allocations")
+        return 0;
     if (argc == 4 && std::string_view (argv[1]) == "--only") {
         const std::string_view name (argv[2]);
         const int repetitions = std::stoi (argv[3]);
@@ -4174,6 +4337,11 @@ int main (int argc, char **argv)
         return 0;
     }
 
+    if (argc == 2 && std::string_view (argv[1]) == "--liveness-not-found-contract") {
+        verify_liveness_without_selected_route ();
+        verify_liveness_propagates_binding_failure ();
+        return 0;
+    }
     if (argc == 2 && std::string_view (argv[1]) == "--liveness-physical-close") {
         verify_liveness_without_selected_route ();
         verify_liveness_physical_close (true, false);

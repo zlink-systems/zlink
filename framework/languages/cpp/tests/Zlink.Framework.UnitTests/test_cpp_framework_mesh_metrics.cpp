@@ -822,8 +822,8 @@ void verify_public_host_local_spot_and_actor_requests ()
       zlink::message_t::from (std::string ("request"))};
     const std::vector<zlink::message_t> reply_parts{zlink::message_t::from (std::string ("reply"))};
 
-    auto source_spot = node.get_or_create_spot ("source-spot");
-    auto target_spot = node.get_or_create_spot ("target-spot");
+    auto source_spot = node.get_or_create_spot_async ("source-spot").result ().value ();
+    auto target_spot = node.get_or_create_spot_async ("target-spot").result ().value ();
     host::pending_operation_t spot_operation;
     require (await_task (source_spot.request_to_spot (
                node_id, target_spot.spot_id (), target_spot.status ().lifecycle_generation (),
@@ -895,6 +895,7 @@ void verify_public_host_local_spot_and_actor_requests ()
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     try {
         verify_topology_metrics_and_selection_reasons ();
         verify_not_required_peer_counts_as_configured ();

@@ -138,6 +138,7 @@ void relocation_target_restore_holds_admission_until_commit_or_abort ()
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     relocation_target_restore_holds_admission_until_commit_or_abort ();
     if (failures == 0)
         std::cout << "[activation-admission] passed\n";

@@ -25,7 +25,7 @@ import {
   submitBindingAsyncSend,
   submitBindingSend
 } from './node-backend-adapter-support';
-import { isEndpointCloseIgnorableError } from './node-socket-backend-adapter';
+import { disconnectSocketPeer, isEndpointCloseIgnorableError } from './node-socket-backend-adapter';
 import { SubmitResult } from '../runtime-values';
 import { ZLinkNodeEventLoopPoller } from './node-event-loop-poller';
 import { ZLinkBufferMessage } from '../runtime-message';
@@ -272,11 +272,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
 
   disconnectRid(routingId: string): void {
     this.requireOpen();
-    (
-      this.socket as RouterSocket & {
-        disconnectRid(value: BindingRoutingId): void;
-      }
-    ).disconnectRid(this.preparedRoutingId(routingId));
+    disconnectSocketPeer(this.socket, this.preparedRoutingId(routingId));
   }
 
   constructor(socket: RouterSocket, receiveTimeoutMs?: number) {

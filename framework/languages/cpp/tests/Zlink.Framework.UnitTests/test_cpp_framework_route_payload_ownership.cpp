@@ -20,6 +20,7 @@
 #include <filesystem>
 #include <fstream>
 #include <future>
+#include <optional>
 #include <sstream>
 #include <thread>
 #include <tuple>
@@ -41,6 +42,57 @@ struct payload_handler_t
         co_return value;
     }
 };
+
+struct send_payload_t
+{
+    static constexpr const char *packet_name = "p";
+    int value = 7;
+    std::shared_ptr<int> lifetime;
+};
+
+TEST (RoutePayloadOwnership, TypedSendRetainsPayloadWhenSerializerDestroysTheCall)
+{
+    std::optional<route_send_call_t> call;
+    std::weak_ptr<int> lifetime;
+    bool alive_during_serializer = false;
+    serializer_registry_t serializers;
+    serializers.add<send_payload_t> (
+      [&] (const send_payload_t &payload) -> encoded_payload_t {
+          EXPECT_EQ (7, payload.value);
+          call.reset ();
+          // The payload reference is no longer read after the call is destroyed.
+          alive_during_serializer = !lifetime.expired ();
+          throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                       "serializer rejected the payload");
+      },
+      [] (const encoded_payload_t &) { return send_payload_t{}; }, "x/y");
+    auto builder = test::runtime_failure_builder ();
+    auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    bool delivered = false;
+    runtime.bind_mesh_node_transport (
+      "m",
+      [&] (const zlink::routing_id_t &,
+           runtime::messaging::message_parts_t) -> task_t<result_t<void>> {
+          delivered = true;
+          co_return result_t<void>::success ();
+      },
+      {});
+    auto client = builder.route_client (serializers);
+    auto token = std::make_shared<int> (7);
+    lifetime = token;
+    call.emplace (client.send_to_node ("m", zlink::routing_id_t::from ("n"),
+                                       send_payload_t{7, std::move (token)}));
+    const auto submitted = call->async ();
+    const auto &result = submitted.result ();
+    EXPECT_FALSE (result);
+    ASSERT_NE (nullptr, result.error ());
+    EXPECT_EQ (framework_error_kind_t::protocol_error, result.error_kind ());
+    EXPECT_STREQ ("serializer rejected the payload", result.error ()->what ());
+    EXPECT_TRUE (alive_during_serializer);
+    EXPECT_TRUE (lifetime.expired ());
+    EXPECT_FALSE (delivered);
+}
 
 TEST (RoutePayloadOwnership, SendBorrowsPayloadForTheAwaitedHandler)
 {

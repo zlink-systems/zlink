@@ -2,12 +2,15 @@
 
 #include <zlink/locations/redis.hpp>
 
+#include "../support/aggregate_page_read_fixture.hpp"
+
 #include <sw/redis++/redis++.h>
 
 #include <gtest/gtest.h>
 
 #include <chrono>
 #include <cstdlib>
+#include <iterator>
 #include <string>
 #include <type_traits>
 #include <vector>
@@ -55,6 +58,25 @@ std::optional<redis_location_options_t> find_redis_options ()
     }
 #endif
     return std::nullopt;
+}
+
+TEST (ZLinkFrameworkLocationsRedis, AggregatePageReadKeepsSourceVersionUntilCommit)
+{
+    const auto options = find_redis_options ();
+    if (!options)
+        GTEST_SKIP () << "Redis is not reachable; set ZLINK_REDIS_TEST_ENDPOINT";
+    redis_location_store_t provider (*options);
+    sw::redis::Redis raw (
+      zlink::framework::redis::detail::normalize_connection_string (options->connection_string));
+    zlink::framework::test::scope_exit_t cleanup ([&] {
+        EXPECT_NO_THROW ({
+            std::vector<std::string> keys;
+            raw.keys (options->key_prefix + ":*", std::back_inserter (keys));
+            if (!keys.empty ())
+                raw.del (keys.begin (), keys.end ());
+        });
+    });
+    zlink::framework::test::aggregate_page_read_keeps_source_version_until_commit (provider, bytes);
 }
 
 TEST (ZLinkFrameworkLocationsRedis, PublicTypesImplementOnlyTheOpaqueStoreContracts)

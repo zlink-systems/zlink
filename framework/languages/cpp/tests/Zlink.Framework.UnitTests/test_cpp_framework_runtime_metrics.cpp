@@ -8,6 +8,7 @@
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/spots/activation_admission.hpp"
 #include "runtime/stateful/stateful_object_runtime.hpp"
+#include "runtime/stateful/public_host_runtime.hpp"
 #include <future>
 #include <zlink/framework.hpp>
 #include <cmath>
@@ -91,6 +92,32 @@ void require_one_current_host_state (metric_test::provider_t &provider)
     }
     require (total == 1, "host has more than one current state");
 }
+void host_close_does_not_wait_for_population_retirement ()
+{
+    metric_test::provider_t provider;
+    const auto rid = zlink::routing_id_t::from ("population-close-node");
+    auto node = std::make_shared<host::public_host_runtime_t> (
+      host::host_options_t{test::runtime_failure_options (
+        mesh::raw_mesh_node_options_t{.descriptor = {"population-close-mesh",
+                                                     rid.to_bytes (),
+                                                     1,
+                                                     1,
+                                                     "tcp://127.0.0.1:0",
+                                                     {},
+                                                     mesh::service_node_state_t::preparing}})});
+    node->start ();
+    (void) node->create_reserved_actor ("player", {stateful::object_kind_t::actor, "actor", 1, 1,
+                                                   "population-close-mesh", rid.to_string ()});
+    require (point (provider, "zlink.actor.count", {{"mesh_name", "population-close-mesh"}}) == 1,
+             "host Actor population was not recorded");
+    auto release = stateful::stateful_object_runtime_test_access_t::hold_lane (node->objects ());
+    node->close ();
+    release.set_value ();
+    (void) node->objects ().find (stateful::object_kind_t::actor, "actor");
+    require (point (provider, "zlink.actor.count", {{"mesh_name", "population-close-mesh"}}) == 0,
+             "closed host retained its Actor population after the object lane drained");
+}
+
 void population_retirement_orders_after_pending_configuration ()
 {
     metric_test::provider_t provider;
@@ -109,16 +136,10 @@ void population_retirement_orders_after_pending_configuration ()
              "Actor commit failed");
     auto release = stateful::stateful_object_runtime_test_access_t::hold_lane (objects);
     auto configured = objects.configure_population_metrics ("population-mesh");
-    std::promise<void> retiring;
-    auto retirement_started = retiring.get_future ();
-    auto retirement = std::async (std::launch::async, [&] {
-        retiring.set_value ();
-        objects.retire_population_metrics ();
-    });
-    retirement_started.wait ();
-    const bool ordered = retirement.wait_for (50ms) == std::future_status::timeout;
+    auto retirement = objects.retire_population_metrics_async ();
+    const bool ordered = !retirement.await_ready ();
     release.set_value ();
-    retirement.get ();
+    retirement.result ().value ();
     configured.result ().value ();
     require (point (provider, "zlink.actor.count", {{"mesh_name", "population-mesh"}}) == 0,
              "retirement left a population counter from pending configuration");
@@ -462,6 +483,7 @@ void contract_rejects_wrong_metadata ()
 int main ()
 {
     try {
+        host_close_does_not_wait_for_population_retirement ();
         population_retirement_orders_after_pending_configuration ();
         activation_metrics_configured_once ();
         host_lifecycle ();

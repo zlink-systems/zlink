@@ -183,37 +183,54 @@ encode_channel_payload_parts (runtime::messaging::envelope_header_t header,
 
 // The binding typed result owns the classification; errno only details the
 // same failure (Core errors §Result와 errno 대응), so it is never consulted here.
-std::exception_ptr map_native_exception (const std::exception &error, bool classic_publish = false)
+// Callers retain the active exception until the nested fallback captures it.
+std::exception_ptr map_native_exception (bool classic_publish = false)
 {
-    if (detail::is_cancellation_exception (error))
-        return std::current_exception ();
-    if (const auto *framework_error = dynamic_cast<const framework_exception_t *> (&error)) {
-        return std::current_exception ();
+    const char *message = "channel operation failed";
+    try {
+        throw;
     }
-    if (const auto *request_error = dynamic_cast<const zlink::request_error_t *> (&error);
-        request_error != nullptr) {
-        return std::make_exception_ptr (runtime::messaging::map_request_result_exception (
-          request_error->result (), request_error->what ()));
-    }
-    if (const auto *recv_error = dynamic_cast<const zlink::recv_error_t *> (&error);
-        recv_error != nullptr) {
-        if (recv_error->result () == zlink::recv_result_t::no_data) {
-            return std::make_exception_ptr (detail::make_boundary_exception (
-              detail::boundary_error_t::timed_out, "channel request timed out"));
+    catch (const std::exception &error) {
+        if (detail::is_cancellation_exception (error))
+            return std::current_exception ();
+        if (dynamic_cast<const framework_exception_t *> (&error) != nullptr) {
+            return std::current_exception ();
         }
-        return std::make_exception_ptr (
-          framework_exception_t (framework_error_kind_t::internal_failure, recv_error->what ()));
+        if (const auto *request_error = dynamic_cast<const zlink::request_error_t *> (&error);
+            request_error != nullptr) {
+            return std::make_exception_ptr (runtime::messaging::map_request_result_exception (
+              request_error->result (), request_error->what ()));
+        }
+        if (const auto *recv_error = dynamic_cast<const zlink::recv_error_t *> (&error);
+            recv_error != nullptr) {
+            if (recv_error->result () == zlink::recv_result_t::no_data) {
+                return std::make_exception_ptr (detail::make_boundary_exception (
+                  detail::boundary_error_t::timed_out, "channel request timed out"));
+            }
+            return std::make_exception_ptr (framework_exception_t (
+              framework_error_kind_t::internal_failure, recv_error->what ()));
+        }
+        if (const auto *submit_error = dynamic_cast<const zlink::submit_error_t *> (&error);
+            submit_error != nullptr) {
+            if (classic_publish && submit_error->result () == zlink::submit_result_t::backpressured)
+                return std::make_exception_ptr (detail::make_boundary_exception (
+                  detail::boundary_error_t::timed_out, submit_error->what ()));
+            return std::make_exception_ptr (
+              runtime::messaging::map_channel_submit_result_exception (submit_error->result (),
+                                                                       submit_error->what ()));
+        }
+        message = error.what ();
     }
-    if (const auto *submit_error = dynamic_cast<const zlink::submit_error_t *> (&error);
-        submit_error != nullptr) {
-        if (classic_publish && submit_error->result () == zlink::submit_result_t::backpressured)
-            return std::make_exception_ptr (detail::make_boundary_exception (
-              detail::boundary_error_t::timed_out, submit_error->what ()));
-        return std::make_exception_ptr (runtime::messaging::map_channel_submit_result_exception (
-          submit_error->result (), submit_error->what ()));
+    catch (...) {
+        // The active non-std exception is retained by the common nested fallback.
     }
-    return std::make_exception_ptr (
-      framework_exception_t (framework_error_kind_t::internal_failure, error.what ()));
+    try {
+        std::throw_with_nested (
+          framework_exception_t (framework_error_kind_t::internal_failure, message));
+    }
+    catch (...) {
+        return std::current_exception ();
+    }
 }
 
 void trace_channel_backpressure (const dispatch_options_t &dispatch,
@@ -373,8 +390,8 @@ class channel_native_client_t
             auto reply = co_await std::move (pending->reply);
             co_return runtime::messaging::message_parts_t (std::move (reply));
         }
-        catch (const std::exception &error) {
-            const auto mapped = map_native_exception (error);
+        catch (const std::exception &) {
+            const auto mapped = map_native_exception ();
             co_return detail::result_access_t::failure<runtime::messaging::message_parts_t> (
               mapped);
         }
@@ -439,11 +456,11 @@ class channel_native_client_t
                 trace_channel_backpressure (_runtime.dispatch_options_ref (), _channel_name,
                                             trace_packet_name, correlation_id);
             }
-            const auto mapped = map_native_exception (error);
+            const auto mapped = map_native_exception ();
             std::rethrow_exception (mapped);
         }
-        catch (const std::exception &error) {
-            std::rethrow_exception (map_native_exception (error));
+        catch (const std::exception &) {
+            std::rethrow_exception (map_native_exception ());
         }
     }
 
@@ -650,8 +667,8 @@ class channel_native_publisher_t
             try {
                 (void) _socket.publish (topic).message (header).message (body).submit ();
             }
-            catch (const std::exception &error) {
-                std::rethrow_exception (map_native_exception (error));
+            catch (const std::exception &) {
+                std::rethrow_exception (map_native_exception ());
             }
         }
         co_return;
@@ -966,9 +983,27 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                 }
                 const auto effective_timeout = std::chrono::ceil<std::chrono::milliseconds> (
                   deadline - std::chrono::steady_clock::now ());
-                auto reply = co_await detail::request_submission (
+                auto submission = detail::request_submission (
                   (*requester) (call_packet_name, std::move (serialized.content_type),
                                 std::move (payload), effective_timeout, metadata));
+                // Classify admission before publishing it, while retaining the
+                // request frame until the physical reply finishes cleanup.
+                detail::observe_task_terminal (
+                  submission.admitted, [admitted = co_await detail::request_admission_source_t{}] (
+                                         const result_t<void> &result) {
+                      if (result) {
+                          admitted->complete (result);
+                          return;
+                      }
+                      try {
+                          std::rethrow_exception (result.exception ());
+                      }
+                      catch (...) {
+                          admitted->complete (
+                            detail::result_access_t::failure<void> (map_native_exception ()));
+                      }
+                  });
+                auto reply = co_await std::move (submission.reply);
                 auto completion = runtime.complete_outbound_reply (reservation.value ());
                 if (!completion) {
                     co_return completion.error () != nullptr
@@ -989,7 +1024,7 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                     && submit_error->result () == zlink::submit_result_t::backpressured) {
                     terminal_trace.backpressured ();
                 }
-                const auto mapped = map_native_exception (error);
+                const auto mapped = map_native_exception ();
                 terminal_trace.failed_as (mapped);
                 auto failure = detail::result_access_t::failure<zlink::message_t> (mapped);
                 co_return failure;
@@ -1107,7 +1142,7 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                 && submit_error->result () == zlink::submit_result_t::backpressured) {
                 terminal_trace.backpressured ();
             }
-            const auto mapped = map_native_exception (error);
+            const auto mapped = map_native_exception ();
             terminal_trace.failed_as (mapped);
             auto failure = detail::result_access_t::failure<zlink::message_t> (mapped);
             co_return failure;
@@ -1183,7 +1218,7 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
                     && submit_error->result () == zlink::submit_result_t::backpressured) {
                     trace_channel_backpressure (state->dispatch, channel_name, call_packet_name);
                 }
-                std::rethrow_exception (map_native_exception (error));
+                std::rethrow_exception (map_native_exception ());
             }
         }
         try {
@@ -1234,8 +1269,8 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
         catch (const framework_exception_t &) {
             throw;
         }
-        catch (const std::exception &error) {
-            std::rethrow_exception (map_native_exception (error));
+        catch (const std::exception &) {
+            std::rethrow_exception (map_native_exception ());
         }
     }
     co_return;
@@ -1291,8 +1326,8 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
             catch (const framework_exception_t &) {
                 throw;
             }
-            catch (const std::exception &error) {
-                std::rethrow_exception (map_native_exception (error, true));
+            catch (const std::exception &) {
+                std::rethrow_exception (map_native_exception (true));
             }
         }
         try {
@@ -1327,8 +1362,8 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
         catch (const framework_exception_t &) {
             throw;
         }
-        catch (const std::exception &error) {
-            std::rethrow_exception (map_native_exception (error, true));
+        catch (const std::exception &) {
+            std::rethrow_exception (map_native_exception (true));
         }
     }
     co_return;

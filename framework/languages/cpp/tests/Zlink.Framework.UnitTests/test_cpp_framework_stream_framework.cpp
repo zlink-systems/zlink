@@ -1617,6 +1617,7 @@ int transport_bound_close (bool tls, bool remote = false)
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     if (argc == 2 && std::string_view (argv[1]) == "--reader-retirement-tracked")
         return reader_retirement_is_tracked_until_complete ();
     if (argc == 2 && std::string_view (argv[1]) == "--connection-registry-lifetime") {

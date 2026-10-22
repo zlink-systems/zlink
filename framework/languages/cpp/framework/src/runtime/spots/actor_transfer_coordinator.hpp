@@ -249,6 +249,7 @@ class actor_transfer_coordinator_t
                         std::function<void (std::vector<handoff_packet_t>)> accept_prefix = {},
                         std::string expected_source_transfer = {});
     bool blocks_dispatch (const std::string &actor_key) const;
+    task_t<bool> blocks_dispatch_async (std::string actor_key) const;
     std::optional<actor_move_phase_t> phase (const std::string &actor_key) const;
     std::optional<std::string> transfer_id (const std::string &actor_key) const;
     bool matches_source_remote_transfer (const std::string &actor_key,

@@ -45,24 +45,22 @@ stateful_object_runtime_t::stateful_object_runtime_t () = default;
 
 stateful_object_runtime_t::~stateful_object_runtime_t ()
 {
-    retire_population_metrics ();
+    retire_population_metrics_async ().result ().value ();
     _lane.close ();
 }
 
-void stateful_object_runtime_t::retire_population_metrics ()
+task_t<void> stateful_object_runtime_t::retire_population_metrics_async ()
 {
-    _lane
-      .run ([this] {
-          if (!_actor_metric)
-              return;
-          // Lifecycle teardown may visit retained objects. Observable collection
-          // never enumerates this population, and closed handles cannot keep a
-          // stopped host in the process's current Actor count.
-          for (const auto &[key, object] : _objects)
-              record_actor_population (object, -1);
-          _actor_metric.reset ();
-      })
-      .get ();
+    return _lane.run_task ([this] {
+        if (!_actor_metric)
+            return;
+        // Lifecycle teardown may visit retained objects. Observable collection
+        // never enumerates this population, and closed handles cannot keep a
+        // stopped host in the process's current Actor count.
+        for (const auto &[key, object] : _objects)
+            record_actor_population (object, -1);
+        _actor_metric.reset ();
+    });
 }
 
 std::size_t stateful_object_runtime_t::retained_bytes (const turn_record_t &record) noexcept
@@ -145,78 +143,79 @@ void stateful_object_runtime_t::replace_placement_candidates (
 
 create_result_t stateful_object_runtime_t::begin_create (const create_request_t &request)
 {
-    return _lane
-      .run ([&, this] () -> create_result_t {
-          if (!valid_text (request.key) || !valid_text (request.stable_type)
-              || request.creation_request.size () > protocol::creationIntentBytes) {
-              return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
-          }
-          if (_maintenance_inventory_active) {
-              return {create_status_t::failed, stateful_error_t::moving, 0, {}, false};
-          }
-          if (request.kind == object_kind_t::instance_spot && !request.instance_intent) {
-              return {create_status_t::failed,
-                      stateful_error_t::instance_manager_create_forbidden,
-                      0,
-                      {},
-                      false};
-          }
-          if (request.kind != object_kind_t::instance_spot && request.instance_intent) {
-              return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
-          }
+    return begin_create_async (request).result ().value ();
+}
 
-          const object_key_t key{request.kind, request.key};
-          const auto existing = _objects.find (key);
-          if (existing != _objects.end ()) {
-              const auto &record = existing->second;
-              if (record.stable_type != request.stable_type) {
-                  return {create_status_t::failed, stateful_error_t::type_mismatch, 0, {}, false};
-              }
-              if (record.state == object_state_t::creating) {
-                  return {create_status_t::joined, stateful_error_t::none, record.attempt,
-                          record.reference, false};
-              }
-              if (state_on_lane (record) == object_state_t::moving
-                  || record.state == object_state_t::recovering) {
-                  return {create_status_t::failed, stateful_error_t::moving, 0, {}, false};
-              }
-              if (request.exclusive) {
-                  return {create_status_t::failed, stateful_error_t::already_exists, 0, {}, false};
-              }
-              return {create_status_t::existing, stateful_error_t::none, 0, record.reference,
-                      false};
-          }
+task_t<create_result_t> stateful_object_runtime_t::begin_create_async (create_request_t request)
+{
+    return _lane.run_task ([this, request = std::move (request)] () -> create_result_t {
+        if (!valid_text (request.key) || !valid_text (request.stable_type)
+            || request.creation_request.size () > protocol::creationIntentBytes) {
+            return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
+        }
+        if (_maintenance_inventory_active) {
+            return {create_status_t::failed, stateful_error_t::moving, 0, {}, false};
+        }
+        if (request.kind == object_kind_t::instance_spot && !request.instance_intent) {
+            return {create_status_t::failed,
+                    stateful_error_t::instance_manager_create_forbidden,
+                    0,
+                    {},
+                    false};
+        }
+        if (request.kind != object_kind_t::instance_spot && request.instance_intent) {
+            return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
+        }
 
-          auto candidate = select_candidate_locked (request);
-          if (!candidate) {
-              return {create_status_t::failed, stateful_error_t::backpressured, 0, {}, false};
-          }
-          const auto generation = ++_last_generation[key];
-          const auto attempt = _next_attempt++;
-          if (generation == 0 || generation > std::numeric_limits<std::int64_t>::max ()
-              || attempt == 0) {
-              return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
-          }
-          object_record_t record;
-          record.reference = {request.kind,         request.key,       generation, 1,
-                              candidate->mesh_name, candidate->node_id};
-          record.stable_type = request.stable_type;
-          record.attempt = attempt;
-          if (request.kind == object_kind_t::actor) {
-              record.membership = "entry:" + candidate->node_id;
-          }
-          _objects.emplace (key, record);
-          _attempts.emplace (attempt, key);
-          for (auto &entry : _candidates) {
-              if (entry.mesh_name == candidate->mesh_name && entry.node_id == candidate->node_id) {
-                  ++entry.pending_count;
-                  break;
-              }
-          }
-          return {create_status_t::reserved, stateful_error_t::none, attempt, record.reference,
-                  true};
-      })
-      .get ();
+        const object_key_t key{request.kind, request.key};
+        const auto existing = _objects.find (key);
+        if (existing != _objects.end ()) {
+            const auto &record = existing->second;
+            if (record.stable_type != request.stable_type) {
+                return {create_status_t::failed, stateful_error_t::type_mismatch, 0, {}, false};
+            }
+            if (record.state == object_state_t::creating) {
+                return {create_status_t::joined, stateful_error_t::none, record.attempt,
+                        record.reference, false};
+            }
+            if (state_on_lane (record) == object_state_t::moving
+                || record.state == object_state_t::recovering) {
+                return {create_status_t::failed, stateful_error_t::moving, 0, {}, false};
+            }
+            if (request.exclusive) {
+                return {create_status_t::failed, stateful_error_t::already_exists, 0, {}, false};
+            }
+            return {create_status_t::existing, stateful_error_t::none, 0, record.reference, false};
+        }
+
+        auto candidate = select_candidate_locked (request);
+        if (!candidate) {
+            return {create_status_t::failed, stateful_error_t::backpressured, 0, {}, false};
+        }
+        const auto generation = ++_last_generation[key];
+        const auto attempt = _next_attempt++;
+        if (generation == 0 || generation > std::numeric_limits<std::int64_t>::max ()
+            || attempt == 0) {
+            return {create_status_t::failed, stateful_error_t::invalid, 0, {}, false};
+        }
+        object_record_t record;
+        record.reference = {request.kind,         request.key,       generation, 1,
+                            candidate->mesh_name, candidate->node_id};
+        record.stable_type = request.stable_type;
+        record.attempt = attempt;
+        if (request.kind == object_kind_t::actor) {
+            record.membership = "entry:" + candidate->node_id;
+        }
+        _objects.emplace (key, record);
+        _attempts.emplace (attempt, key);
+        for (auto &entry : _candidates) {
+            if (entry.mesh_name == candidate->mesh_name && entry.node_id == candidate->node_id) {
+                ++entry.pending_count;
+                break;
+            }
+        }
+        return {create_status_t::reserved, stateful_error_t::none, attempt, record.reference, true};
+    });
 }
 
 create_result_t
@@ -384,24 +383,27 @@ stateful_error_t stateful_object_runtime_t::reconcile_relocation_restore_authori
 
 stateful_error_t stateful_object_runtime_t::commit_create (std::uint64_t attempt)
 {
-    return _lane
-      .run ([&, this] () -> stateful_error_t {
-          const auto attempt_entry = _attempts.find (attempt);
-          if (attempt_entry == _attempts.end ()) {
-              return stateful_error_t::conflict;
-          }
-          auto record = _objects.find (attempt_entry->second);
-          if (record == _objects.end () || record->second.state != object_state_t::creating
-              || record->second.attempt != attempt) {
-              return stateful_error_t::conflict;
-          }
-          release_pending_capacity_locked (record->second);
-          activate_object_on_lane (record->second);
-          record->second.attempt = 0;
-          _attempts.erase (attempt_entry);
-          return stateful_error_t::none;
-      })
-      .get ();
+    return commit_create_async (attempt).result ().value ();
+}
+
+task_t<stateful_error_t> stateful_object_runtime_t::commit_create_async (std::uint64_t attempt)
+{
+    return _lane.run_task ([this, attempt] () -> stateful_error_t {
+        const auto attempt_entry = _attempts.find (attempt);
+        if (attempt_entry == _attempts.end ()) {
+            return stateful_error_t::conflict;
+        }
+        auto record = _objects.find (attempt_entry->second);
+        if (record == _objects.end () || record->second.state != object_state_t::creating
+            || record->second.attempt != attempt) {
+            return stateful_error_t::conflict;
+        }
+        release_pending_capacity_locked (record->second);
+        activate_object_on_lane (record->second);
+        record->second.attempt = 0;
+        _attempts.erase (attempt_entry);
+        return stateful_error_t::none;
+    });
 }
 
 void stateful_object_runtime_t::activate_object_on_lane (object_record_t &object)
@@ -555,11 +557,6 @@ stateful_object_runtime_t::find (object_kind_t kind,
     return find_async (kind, std::move (key), required_state, retained).result ().value ();
 }
 
-std::optional<object_ref_t> stateful_object_runtime_t::resolve_spot (
-  const std::string &key, std::optional<retained_relocation_source_t> *retained) const
-{
-    return resolve_spot_async (key, retained).result ().value ();
-}
 
 task_t<std::optional<object_ref_t>>
 stateful_object_runtime_t::find_async (object_kind_t kind,
@@ -659,133 +656,138 @@ task_t<bool> stateful_object_runtime_t::contains_async (object_ref_t reference) 
     });
 }
 
-std::pair<stateful_error_t, membership_token_t>
-stateful_object_runtime_t::begin_membership_move (const object_ref_t &actor,
-                                                  const object_ref_t &target_spot)
+
+task_t<std::pair<stateful_error_t, membership_token_t>>
+stateful_object_runtime_t::begin_membership_move_async (const object_ref_t &actor,
+                                                        const object_ref_t &target_spot)
 {
-    return _lane
-      .run ([&, this] () -> std::pair<stateful_error_t, membership_token_t> {
-          stateful_error_t actor_error = stateful_error_t::none;
-          auto *actor_record = find_record_locked (actor, actor_error);
-          if (actor_record == nullptr) {
-              return {actor_error, {}};
-          }
-          stateful_error_t spot_error = stateful_error_t::none;
-          auto *spot_record = find_record_locked (target_spot, spot_error);
-          if (spot_record == nullptr) {
-              return {spot_error, {}};
-          }
-          if (actor.kind != object_kind_t::actor || target_spot.kind != object_kind_t::user_spot) {
-              return {stateful_error_t::invalid, {}};
-          }
-          if (state_on_lane (*actor_record) == object_state_t::moving) {
-              return {stateful_error_t::moving, {}};
-          }
-          if (actor_record->queue.application_active) {
-              return {stateful_error_t::conflict, {}};
-          }
-          if (actor_record->state != object_state_t::ready
-              || state_on_lane (*spot_record) != object_state_t::ready) {
-              return {stateful_error_t::conflict, {}};
-          }
-          membership_token_t token{_next_membership_token++, actor_record->reference,
-                                   spot_record->reference};
-          actor_record->state = object_state_t::moving;
-          _membership_moves.emplace (token.value,
-                                     membership_move_t{token, actor_record->membership});
-          return {stateful_error_t::none, token};
-      })
-      .get ();
+    return _lane.run_task ([this, actor,
+                            target_spot] () -> std::pair<stateful_error_t, membership_token_t> {
+        stateful_error_t actor_error = stateful_error_t::none;
+        auto *actor_record = find_record_locked (actor, actor_error);
+        if (actor_record == nullptr) {
+            return {actor_error, {}};
+        }
+        stateful_error_t spot_error = stateful_error_t::none;
+        auto *spot_record = find_record_locked (target_spot, spot_error);
+        if (spot_record == nullptr) {
+            return {spot_error, {}};
+        }
+        if (actor.kind != object_kind_t::actor || target_spot.kind != object_kind_t::user_spot) {
+            return {stateful_error_t::invalid, {}};
+        }
+        if (state_on_lane (*actor_record) == object_state_t::moving) {
+            return {stateful_error_t::moving, {}};
+        }
+        if (actor_record->queue.application_active) {
+            return {stateful_error_t::conflict, {}};
+        }
+        if (actor_record->state != object_state_t::ready
+            || state_on_lane (*spot_record) != object_state_t::ready) {
+            return {stateful_error_t::conflict, {}};
+        }
+        membership_token_t token{_next_membership_token++, actor_record->reference,
+                                 spot_record->reference};
+        actor_record->state = object_state_t::moving;
+        _membership_moves.emplace (token.value, membership_move_t{token, actor_record->membership});
+        return {stateful_error_t::none, token};
+    });
 }
 
-std::pair<stateful_error_t, membership_token_t>
-stateful_object_runtime_t::begin_remote_membership_move (const object_ref_t &actor,
-                                                         object_ref_t target_spot)
+task_t<std::pair<stateful_error_t, membership_token_t>>
+stateful_object_runtime_t::begin_remote_membership_move_async (const object_ref_t &actor,
+                                                               object_ref_t target_spot)
 {
-    return _lane
-      .run ([&, this] () -> std::pair<stateful_error_t, membership_token_t> {
-          stateful_error_t actor_error = stateful_error_t::none;
-          auto *actor_record = find_record_locked (actor, actor_error);
-          if (actor_record == nullptr)
-              return {actor_error, {}};
-          if (actor.kind != object_kind_t::actor || target_spot.kind != object_kind_t::user_spot
-              || target_spot.key.empty () || target_spot.object_generation == 0
-              || target_spot.mesh_name.empty () || target_spot.node_id.empty ()
-              || target_spot.node_id == actor_record->reference.node_id)
-              return {stateful_error_t::invalid, {}};
-          if (state_on_lane (*actor_record) == object_state_t::moving)
-              return {stateful_error_t::moving, {}};
-          if (actor_record->queue.application_active
-              || actor_record->state != object_state_t::ready)
-              return {stateful_error_t::conflict, {}};
-          membership_token_t token{_next_membership_token++, actor_record->reference,
-                                   std::move (target_spot)};
-          actor_record->state = object_state_t::moving;
-          _membership_moves.emplace (token.value,
-                                     membership_move_t{token, actor_record->membership});
-          return {stateful_error_t::none, token};
-      })
-      .get ();
+    return _lane.run_task ([this, actor, target_spot = std::move (target_spot)] () mutable
+                           -> std::pair<stateful_error_t, membership_token_t> {
+        stateful_error_t actor_error = stateful_error_t::none;
+        auto *actor_record = find_record_locked (actor, actor_error);
+        if (actor_record == nullptr)
+            return {actor_error, {}};
+        if (actor.kind != object_kind_t::actor || target_spot.kind != object_kind_t::user_spot
+            || target_spot.key.empty () || target_spot.object_generation == 0
+            || target_spot.mesh_name.empty () || target_spot.node_id.empty ()
+            || target_spot.node_id == actor_record->reference.node_id)
+            return {stateful_error_t::invalid, {}};
+        if (state_on_lane (*actor_record) == object_state_t::moving)
+            return {stateful_error_t::moving, {}};
+        if (actor_record->queue.application_active || actor_record->state != object_state_t::ready)
+            return {stateful_error_t::conflict, {}};
+        membership_token_t token{_next_membership_token++, actor_record->reference,
+                                 std::move (target_spot)};
+        actor_record->state = object_state_t::moving;
+        _membership_moves.emplace (token.value, membership_move_t{token, actor_record->membership});
+        return {stateful_error_t::none, token};
+    });
+}
+
+task_t<std::pair<stateful_error_t, object_ref_t>>
+stateful_object_runtime_t::commit_membership_move_async (membership_token_t token)
+{
+    return _lane.run_task (
+      [this, token = std::move (token)] { return commit_membership_move_on_lane (token); });
 }
 
 std::pair<stateful_error_t, object_ref_t>
-stateful_object_runtime_t::commit_membership_move (const membership_token_t &token)
+stateful_object_runtime_t::commit_membership_move_on_lane (const membership_token_t &token)
 {
-    return _lane
-      .run ([&, this] () -> std::pair<stateful_error_t, object_ref_t> {
-          const auto move = _membership_moves.find (token.value);
-          if (move == _membership_moves.end () || move->second.token != token) {
-              return {stateful_error_t::conflict, {}};
-          }
-          stateful_error_t actor_error = stateful_error_t::none;
-          auto *actor_record = find_record_locked (token.actor, actor_error);
-          const bool remote_target = token.target_spot.node_id != token.actor.node_id;
-          stateful_error_t spot_error = stateful_error_t::none;
-          auto *spot_record =
-            remote_target ? nullptr : find_record_locked (token.target_spot, spot_error);
-          if (actor_record == nullptr || actor_record->state != object_state_t::moving
-              || (!remote_target
-                  && (spot_record == nullptr || spot_record->state != object_state_t::ready))) {
-              return {actor_record == nullptr ? actor_error : spot_error, {}};
-          }
-          actor_record->membership = token.target_spot.key;
-          if (actor_record->reference.node_id != token.target_spot.node_id
-              || actor_record->reference.mesh_name != token.target_spot.mesh_name) {
-              actor_record->reference.node_id = token.target_spot.node_id;
-              actor_record->reference.mesh_name = token.target_spot.mesh_name;
-              ++actor_record->reference.authority_owner_generation;
-          }
-          actor_record->state = object_state_t::ready;
-          move_held_application_locked (*actor_record);
-          const auto current = actor_record->reference;
-          _membership_moves.erase (move);
-          return {stateful_error_t::none, current};
-      })
-      .get ();
+    const auto move = _membership_moves.find (token.value);
+    if (move == _membership_moves.end () || move->second.token != token) {
+        return {stateful_error_t::conflict, {}};
+    }
+    stateful_error_t actor_error = stateful_error_t::none;
+    auto *actor_record = find_record_locked (token.actor, actor_error);
+    const bool remote_target = token.target_spot.node_id != token.actor.node_id;
+    stateful_error_t spot_error = stateful_error_t::none;
+    auto *spot_record =
+      remote_target ? nullptr : find_record_locked (token.target_spot, spot_error);
+    if (actor_record == nullptr || actor_record->state != object_state_t::moving
+        || (!remote_target
+            && (spot_record == nullptr || spot_record->state != object_state_t::ready))) {
+        return {actor_record == nullptr ? actor_error : spot_error, {}};
+    }
+    actor_record->membership = token.target_spot.key;
+    if (actor_record->reference.node_id != token.target_spot.node_id
+        || actor_record->reference.mesh_name != token.target_spot.mesh_name) {
+        actor_record->reference.node_id = token.target_spot.node_id;
+        actor_record->reference.mesh_name = token.target_spot.mesh_name;
+        ++actor_record->reference.authority_owner_generation;
+    }
+    actor_record->state = object_state_t::ready;
+    move_held_application_locked (*actor_record);
+    const auto current = actor_record->reference;
+    _membership_moves.erase (move);
+    return {stateful_error_t::none, current};
 }
 
-stateful_error_t stateful_object_runtime_t::abort_membership_move (const membership_token_t &token)
+
+task_t<stateful_error_t>
+stateful_object_runtime_t::abort_membership_move_async (membership_token_t token)
 {
-    return _lane
-      .run ([&, this] () -> stateful_error_t {
-          const auto move = _membership_moves.find (token.value);
-          if (move == _membership_moves.end () || move->second.token != token) {
-              return stateful_error_t::conflict;
-          }
-          const auto actor_entry = _objects.find (key_for (token.actor));
-          if (actor_entry == _objects.end ()
-              || !same_exact_ref (actor_entry->second.reference, token.actor)
-              || actor_entry->second.state != object_state_t::moving) {
-              return stateful_error_t::generation_stale;
-          }
-          actor_entry->second.membership = move->second.previous_membership;
-          actor_entry->second.state = object_state_t::ready;
-          move_held_application_locked (actor_entry->second);
-          _membership_moves.erase (move);
-          return stateful_error_t::none;
-      })
-      .get ();
+    return _lane.run_task (
+      [this, token = std::move (token)] { return abort_membership_move_on_lane (token); });
 }
+
+stateful_error_t
+stateful_object_runtime_t::abort_membership_move_on_lane (const membership_token_t &token)
+{
+    const auto move = _membership_moves.find (token.value);
+    if (move == _membership_moves.end () || move->second.token != token) {
+        return stateful_error_t::conflict;
+    }
+    const auto actor_entry = _objects.find (key_for (token.actor));
+    if (actor_entry == _objects.end ()
+        || !same_exact_ref (actor_entry->second.reference, token.actor)
+        || actor_entry->second.state != object_state_t::moving) {
+        return stateful_error_t::generation_stale;
+    }
+    actor_entry->second.membership = move->second.previous_membership;
+    actor_entry->second.state = object_state_t::ready;
+    move_held_application_locked (actor_entry->second);
+    _membership_moves.erase (move);
+    return stateful_error_t::none;
+}
+
 
 std::optional<std::string>
 stateful_object_runtime_t::actor_membership (const object_ref_t &actor) const
@@ -804,35 +806,38 @@ stateful_object_runtime_t::actor_membership (const object_ref_t &actor) const
 
 stateful_error_t stateful_object_runtime_t::destroy_actor (const object_ref_t &actor)
 {
-    return _lane
-      .run ([&, this] () -> stateful_error_t {
-          if (_maintenance_inventory_active)
-              return stateful_error_t::moving;
-          stateful_error_t error = stateful_error_t::none;
-          auto *record = find_record_locked (actor, error);
-          if (record == nullptr) {
-              return error;
-          }
-          if (actor.kind != object_kind_t::actor) {
-              return stateful_error_t::invalid;
-          }
-          if (state_on_lane (*record) == object_state_t::moving
-              || record->state == object_state_t::recovering) {
-              return stateful_error_t::moving;
-          }
-          auto candidate =
-            std::find_if (_candidates.begin (), _candidates.end (), [&] (const auto &value) {
-                return value.mesh_name == record->reference.mesh_name
-                       && value.node_id == record->reference.node_id;
-            });
-          if (candidate == _candidates.end () || candidate->active_count == 0) {
-              return stateful_error_t::conflict;
-          }
-          --candidate->active_count;
-          erase_object_on_lane (key_for (actor));
-          return stateful_error_t::none;
-      })
-      .get ();
+    return destroy_actor_async (actor).result ().value ();
+}
+
+task_t<stateful_error_t> stateful_object_runtime_t::destroy_actor_async (object_ref_t actor)
+{
+    return _lane.run_task ([this, actor] () -> stateful_error_t {
+        if (_maintenance_inventory_active)
+            return stateful_error_t::moving;
+        stateful_error_t error = stateful_error_t::none;
+        auto *record = find_record_locked (actor, error);
+        if (record == nullptr) {
+            return error;
+        }
+        if (actor.kind != object_kind_t::actor) {
+            return stateful_error_t::invalid;
+        }
+        if (state_on_lane (*record) == object_state_t::moving
+            || record->state == object_state_t::recovering) {
+            return stateful_error_t::moving;
+        }
+        auto candidate =
+          std::find_if (_candidates.begin (), _candidates.end (), [&] (const auto &value) {
+              return value.mesh_name == record->reference.mesh_name
+                     && value.node_id == record->reference.node_id;
+          });
+        if (candidate == _candidates.end () || candidate->active_count == 0) {
+            return stateful_error_t::conflict;
+        }
+        --candidate->active_count;
+        erase_object_on_lane (key_for (actor));
+        return stateful_error_t::none;
+    });
 }
 
 const stateful_object_runtime_t::object_record_t *
@@ -866,39 +871,42 @@ stateful_object_runtime_t::find_closeable_spot_locked (const object_ref_t &spot,
     return record;
 }
 
-std::pair<stateful_error_t, bool>
-stateful_object_runtime_t::can_close_spot (const object_ref_t &spot) const
+task_t<std::pair<stateful_error_t, bool>>
+stateful_object_runtime_t::can_close_spot_async (const object_ref_t &spot) const
 {
-    return _lane
-      .run ([&, this] {
-          stateful_error_t error = stateful_error_t::none;
-          const auto *record = find_closeable_spot_locked (spot, error);
-          return std::pair{error, record != nullptr};
-      })
-      .get ();
+    return _lane.run_task ([this, spot] {
+        stateful_error_t error = stateful_error_t::none;
+        const auto *record = find_closeable_spot_locked (spot, error);
+        return std::pair{error, record != nullptr};
+    });
 }
+
 
 std::pair<stateful_error_t, bool> stateful_object_runtime_t::close_spot (const object_ref_t &spot)
 {
-    return _lane
-      .run ([&, this] () -> std::pair<stateful_error_t, bool> {
-          stateful_error_t error = stateful_error_t::none;
-          const auto *record = find_closeable_spot_locked (spot, error);
-          if (!record)
-              return {error, false};
-          for (auto &candidate : _candidates) {
-              if (candidate.mesh_name == record->reference.mesh_name
-                  && candidate.node_id == record->reference.node_id
-                  && candidate.active_count != 0) {
-                  --candidate.active_count;
-                  break;
-              }
-          }
-          erase_object_on_lane (key_for (spot));
-          return {stateful_error_t::none, true};
-      })
-      .get ();
+    return close_spot_async (spot).result ().value ();
 }
+
+task_t<std::pair<stateful_error_t, bool>>
+stateful_object_runtime_t::close_spot_async (const object_ref_t &spot)
+{
+    return _lane.run_task ([this, spot] () -> std::pair<stateful_error_t, bool> {
+        stateful_error_t error = stateful_error_t::none;
+        const auto *record = find_closeable_spot_locked (spot, error);
+        if (!record)
+            return {error, false};
+        for (auto &candidate : _candidates) {
+            if (candidate.mesh_name == record->reference.mesh_name
+                && candidate.node_id == record->reference.node_id && candidate.active_count != 0) {
+                --candidate.active_count;
+                break;
+            }
+        }
+        erase_object_on_lane (key_for (spot));
+        return {stateful_error_t::none, true};
+    });
+}
+
 
 stateful_object_runtime_t::posted_enqueue_t stateful_object_runtime_t::post_enqueue (
   const object_ref_t &owner, turn_domain_t domain, turn_record_t record, bool restored)
@@ -1352,9 +1360,10 @@ std::vector<logical_timer_t> stateful_object_runtime_t::timers (const object_ref
       .get ();
 }
 
-std::vector<object_inventory_t> stateful_object_runtime_t::inventory () const
+
+task_t<std::vector<object_inventory_t>> stateful_object_runtime_t::inventory_async () const
 {
-    return _lane.run ([this] { return inventory_on_lane (false); }).get ();
+    return _lane.run_task ([this] { return inventory_on_lane (false); });
 }
 
 task_t<std::vector<object_inventory_t>> stateful_object_runtime_t::actor_inventory () const

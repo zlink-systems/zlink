@@ -920,6 +920,18 @@ namespace zlink::framework
 namespace
 {
 
+void invalidate_stale_spot_route (runtime::spot_address_resolver_t &resolver,
+                                  std::string_view target,
+                                  const framework_exception_t *error)
+{
+    // Routing §2.2: only a stale route result invalidates the next call's cache.
+    if (error
+        && (error->kind () == framework_error_kind_t::not_found
+            || error->kind () == framework_error_kind_t::unavailable)
+        && detail::error_origin (*error) != detail::error_origin_t::application)
+        resolver.invalidate_spot_address (target);
+}
+
 channel_capability_snapshot_t &capability_snapshot (detail::capability_builder_state_t &state)
 {
     return state.target == nullptr ? state.snapshot : *state.target;
@@ -2214,7 +2226,10 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
      * unwind while this coroutine is suspended: keep a frame-owned copy
      * (session-reconnect-and-coroutine-lifetime doc). */
     const auto state = state_ref;
-    if (!state || !state->runtime || state->runtime->spot_resolver == nullptr) {
+    /* The frame owns the resolver it starts with: a late terminal may run after
+     * the caller observed its result and released the resolver's owner. */
+    const auto resolver = state && state->runtime ? state->runtime->spot_resolver : nullptr;
+    if (!resolver) {
         co_return result_t<void>::failure (framework_error_kind_t::not_configured,
                                            "Spot location resolver is not configured");
     }
@@ -2222,8 +2237,7 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
         co_return result_t<void>::failure (framework_error_kind_t::not_configured,
                                            "in_mesh requires Instance Spot intent");
     }
-    const auto address =
-      co_await state->runtime->spot_resolver->resolve_spot_address ({}, target, intent.instance);
+    const auto address = co_await resolver->resolve_spot_address ({}, target, intent.instance);
 
     auto submitted = result_t<void>::success ();
     if (intent.instance) {
@@ -2250,8 +2264,7 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
           address->spot_generation, packet_name, message_type, std::move (encode_payload),
           metadata);
     }
-    if (!submitted)
-        state->runtime->spot_resolver->observe_terminal (target, submitted.error ());
+    invalidate_stale_spot_route (*resolver, target, submitted.error ());
     co_return submitted;
 }
 
@@ -2268,7 +2281,9 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_me
     /* Frame-owned copy: the referenced shared_ptr lives in the call object's
      * closure, which can unwind while the request is suspended. */
     const auto state = state_ref;
-    if (!state || !state->runtime || state->runtime->spot_resolver == nullptr) {
+    // Frame-owned resolver, as in submit_spot_id_send_erased.
+    const auto resolver = state && state->runtime ? state->runtime->spot_resolver : nullptr;
+    if (!resolver) {
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "Spot location resolver is not configured");
     }
@@ -2276,8 +2291,7 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_me
         throw framework_exception_t (framework_error_kind_t::not_configured,
                                      "in_mesh requires Instance Spot intent");
     }
-    const auto address =
-      co_await state->runtime->spot_resolver->resolve_spot_address ({}, target, intent.instance);
+    const auto address = co_await resolver->resolve_spot_address ({}, target, intent.instance);
 
     try {
         if (intent.instance) {
@@ -2296,6 +2310,7 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_me
                                              ? timeout
                                              : state->runtime->default_request_timeout;
             const auto deadline = std::chrono::steady_clock::now () + effective_timeout;
+            const auto admission = (co_await detail::request_admission_source_t{})->task ();
             std::optional<framework_exception_t> refused;
             try {
                 co_return co_await detail::request_submission (
@@ -2306,8 +2321,12 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_me
                 /* spotMoving is the owner's refusal of a stale Ready owner fence,
                  * made before admission. Every other terminal, including one for a
                  * message the owner accepted, ends the operation; an accepted
-                 * message is never placed again. */
-                if (!address || error.kind () != framework_error_kind_t::unavailable
+                 * message is never placed again. The refusal continues as cold
+                 * activation only while the public reply still waits for this
+                 * operation: once admission failed, the refusal is already the
+                 * caller's terminal (Spot address messaging §5, terminal-once). */
+                if (!address || !admission.await_ready () || !admission.result ()
+                    || error.kind () != framework_error_kind_t::unavailable
                     || detail::failure_code (error)
                          != static_cast<std::uint32_t> (
                            runtime::protocol::framework_error_code::spotMoving))
@@ -2318,8 +2337,8 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_me
              * Instance intent message cold-activates. One authority read decides:
              * Missing continues as cold activation within the operation deadline;
              * any other authority keeps the refusal. */
-            state->runtime->spot_resolver->observe_terminal (target, &*refused);
-            if (co_await state->runtime->spot_resolver->resolve_spot_address ({}, target))
+            resolver->invalidate_spot_address (target);
+            if (co_await resolver->resolve_spot_address ({}, target))
                 throw *refused;
             const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds> (
               deadline - std::chrono::steady_clock::now ());
@@ -2340,7 +2359,7 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_me
           std::move (encode_payload), timeout, std::move (metadata)));
     }
     catch (const framework_exception_t &error) {
-        state->runtime->spot_resolver->observe_terminal (target, &error);
+        invalidate_stale_spot_route (*resolver, target, &error);
         throw;
     }
 }

@@ -41,16 +41,6 @@ class spot_address_resolver_t
     {
         return resolve_spot_address (std::move (mesh_name), std::move (spot_id));
     }
-    void observe_terminal (std::string_view spot_id, const framework_exception_t *error)
-    {
-        const auto kind = detail::result_error_kind (error);
-        if ((kind == framework_error_kind_t::not_found
-             || kind == framework_error_kind_t::unavailable
-             || kind == framework_error_kind_t::shutting_down)
-            && detail::error_origin (*error) != detail::error_origin_t::application)
-            invalidate_spot_address (spot_id);
-    }
-
     virtual void invalidate_spot_address (std::string_view spot_id) = 0;
     virtual bool invalidate_spot_address_if_matches (std::string_view spot_id,
                                                      const spot_address_t &expected)
@@ -74,6 +64,12 @@ class actor_address_resolver_t
         (void) actor_id;
         (void) expected;
         return false;
+    }
+    virtual task_t<bool> invalidate_actor_address_if_matches_async (std::string actor_id,
+                                                                    spot_address_t expected)
+    {
+        return task_t<bool> (
+          result_t<bool>::success (invalidate_actor_address_if_matches (actor_id, expected)));
     }
 };
 
