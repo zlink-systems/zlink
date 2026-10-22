@@ -24,7 +24,7 @@ std::shared_ptr<host::public_host_runtime_t> make_host ()
                               .node_routing_id = {'n'},
                               .lifecycle_generation = 1,
                               .descriptor_revision = 1,
-                              .advertised_endpoint = "tcp://127.0.0.1:0"},
+                              .advertised_endpoint = "tcp://127.0.0.1:7182"},
                .runtime_failures = std::make_shared<fw::runtime::runtime_failure_collector_t> ()},
       .object_stable_types = {"framework.spot", "player"}});
     runtime->configure_spot_route_fence_resolver (
