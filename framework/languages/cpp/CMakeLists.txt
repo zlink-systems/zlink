@@ -2448,6 +2448,21 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     tests/support/allocation_counter.cpp)
   target_include_directories(test_cpp_framework_envelope_allocations PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  if(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    add_executable(test_cpp_framework_ready_task
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_ready_task.cpp)
+    target_compile_features(test_cpp_framework_ready_task PRIVATE cxx_std_20)
+    target_link_libraries(test_cpp_framework_ready_task PRIVATE
+      zlink::framework_provider_abstractions Threads::Threads)
+    target_link_options(test_cpp_framework_ready_task PRIVATE
+      "LINKER:--wrap=pthread_mutex_lock"
+      "LINKER:--wrap=_ZNSt18condition_variable10notify_allEv")
+    zlink_framework_cpp_add_test(
+      NAME test_cpp_framework_ready_task
+      COMMAND test_cpp_framework_ready_task
+      LABELS "framework-unit;framework-foundation;execution"
+      TIMEOUT 30)
+  endif()
   target_sources(test_cpp_framework_completion_allocations PRIVATE
     tests/support/allocation_counter.cpp)
   add_zlink_framework_test(

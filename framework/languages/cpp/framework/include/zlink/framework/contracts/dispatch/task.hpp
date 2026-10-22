@@ -495,6 +495,9 @@ class task_shared_state_t : public std::enable_shared_from_this<task_shared_stat
     };
 
   public:
+    task_shared_state_t () = default;
+    explicit task_shared_state_t (result_t<T> result) : _result (std::move (result)) {}
+
     virtual ~task_shared_state_t () = default;
 
     bool complete (result_t<T> result)
@@ -798,9 +801,8 @@ template <typename T> class task_t
     };
 
     explicit task_t (result_t<T> result) :
-        _state (std::make_shared<detail::task_shared_state_t<T>> ())
+        _state (std::make_shared<detail::task_shared_state_t<T>> (std::move (result)))
     {
-        _state->complete (std::move (result));
     }
 
     task_t (task_t &&) noexcept = default;
@@ -866,9 +868,8 @@ template <> class task_t<void>
     };
 
     explicit task_t (result_t<void> result) :
-        _state (std::make_shared<detail::task_shared_state_t<void>> ())
+        _state (std::make_shared<detail::task_shared_state_t<void>> (std::move (result)))
     {
-        _state->complete (std::move (result));
     }
 
     task_t (task_t &&) noexcept = default;
