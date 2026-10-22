@@ -19,7 +19,9 @@ internal sealed class ZLinkChannelCommandDispatchPipeline(
     )
     {
         var scope = new ZLinkDispatchFlowScope(
-            ZLinkDispatchErrorSurface.Channel,
+            sourceNodeRid is null
+                ? ZLinkDispatchErrorSurface.Channel
+                : ZLinkDispatchErrorSurface.RouteMeshChannel,
             dispatchErrors.Flow.CaptureEnabled,
             ZLinkDispatchMessageKind.Send,
             header.MessageName,
@@ -76,16 +78,20 @@ internal sealed class ZLinkChannelCommandDispatchPipeline(
                 );
             try
             {
-                await dispatcher
-                    .DispatchAsync(
-                        endpoint,
-                        message,
-                        context,
-                        ZLinkHandlerDispatchKind.ChannelSend,
-                        cancellationToken
-                    )
-                    .ConfigureAwait(false);
-                scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
+                if (
+                    (
+                        await dispatcher
+                            .DispatchAsync(
+                                endpoint,
+                                message,
+                                context,
+                                ZLinkHandlerDispatchKind.ChannelSend,
+                                cancellationToken
+                            )
+                            .ConfigureAwait(false)
+                    ).HandlerInvoked
+                )
+                    scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Completed);
             }
             catch (Exception ex)
             {
@@ -108,7 +114,9 @@ internal sealed class ZLinkChannelCommandDispatchPipeline(
     )
     {
         var scope = new ZLinkDispatchFlowScope(
-            ZLinkDispatchErrorSurface.Channel,
+            sourceNodeRid is null
+                ? ZLinkDispatchErrorSurface.Channel
+                : ZLinkDispatchErrorSurface.RouteMeshChannel,
             dispatchErrors.Flow.CaptureEnabled,
             ZLinkDispatchMessageKind.Send,
             header.MessageName,
@@ -162,17 +170,20 @@ internal sealed class ZLinkChannelCommandDispatchPipeline(
             );
         try
         {
-            await dispatcher
-                .DispatchAsync(
-                    endpoint,
-                    message,
-                    context,
-                    ZLinkHandlerDispatchKind.ChannelSend,
-                    cancellationToken
-                )
-                .ConfigureAwait(false);
-
-            scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
+            if (
+                (
+                    await dispatcher
+                        .DispatchAsync(
+                            endpoint,
+                            message,
+                            context,
+                            ZLinkHandlerDispatchKind.ChannelSend,
+                            cancellationToken
+                        )
+                        .ConfigureAwait(false)
+                ).HandlerInvoked
+            )
+                scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Completed);
         }
         catch (Exception ex)
         {

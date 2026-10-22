@@ -114,7 +114,8 @@ class raw_client_server_server_t
               std::vector<received_application_record_t> *application_records = nullptr,
               const dispatch_options_t *dispatch_options = nullptr);
     task_t<client_server_pump_result_t>
-    enqueue_application_records (std::vector<received_application_record_t> &records);
+    enqueue_application_records (std::vector<received_application_record_t> &records,
+                                 const dispatch_options_t *dispatch_options = nullptr);
     task_t<mesh::service_liveness_tick_t>
     tick_liveness (mesh::service_liveness_registry_t::clock_t::time_point now);
     task_t<std::optional<mesh::service_liveness_registry_t::clock_t::time_point>>
@@ -130,7 +131,8 @@ class raw_client_server_server_t
       messaging::envelope_header_t envelope,
       std::shared_ptr<application_job_queue_t::permit_t> application_permit,
       std::vector<received_application_record_t> *application_records,
-      mesh::service_liveness_registry_t::clock_t::time_point received_at);
+      mesh::service_liveness_registry_t::clock_t::time_point received_at,
+      const dispatch_options_t *dispatch_options);
 
   public:
   private:

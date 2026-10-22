@@ -14,13 +14,17 @@ internal sealed class ZLinkClientServerDispatcher(
         Received received,
         ZLinkChannelReplyGate replyGate,
         uint maximumMessageBytes,
-        CancellationToken cancellationToken
+        CancellationToken cancellationToken,
+        (ZLinkEnvelopeHeader? Header, ZLinkEnvelopeProtocolException? Error)? decodedEnvelope = null
     )
     {
+        var envelope = decodedEnvelope ?? ReadHeader(received.Parts);
         ZLinkEnvelopeHeader header;
         try
         {
-            header = ZLinkEnvelopeCodec.DecodeHeader(received.Parts, flowCaptureEnabled());
+            if (envelope.Error is { } error)
+                throw error;
+            header = envelope.Header!;
             if (!StringComparer.Ordinal.Equals(header.ChannelName, channelName))
                 throw new ZLinkEnvelopeProtocolException(
                     header,
@@ -112,6 +116,57 @@ internal sealed class ZLinkClientServerDispatcher(
                     maximumMessageBytes
                 );
                 break;
+        }
+    }
+
+    internal (ZLinkEnvelopeHeader? Header, ZLinkEnvelopeProtocolException? Error) ReadHeader(
+        IReadOnlyList<Message> parts,
+        string? channelName = null,
+        ZLinkApplicationJobQueueLease? admission = null
+    )
+    {
+        try
+        {
+            var header = ZLinkEnvelopeCodec.DecodeHeader(parts, flowCaptureEnabled());
+            if (
+                admission is not null
+                && header.ChannelName == channelName
+                && header.Kind is ZLinkMessageKind.Command or ZLinkMessageKind.Request
+            )
+            {
+                using var flow = ZLinkFlowContext.Enter(
+                    header.FlowId,
+                    header.FlowOrigin,
+                    flowCaptureEnabled(),
+                    ZLinkFlowOrigin.Inbound
+                );
+                if (ZLinkFlowContext.Current is { } current)
+                {
+                    header.FlowId = current.FlowId;
+                    header.FlowOrigin = current.Origin;
+                }
+                var scope = new ZLinkDispatchFlowScope(
+                    ZLinkDispatchErrorSurface.Channel,
+                    flowCaptureEnabled(),
+                    header.Kind == ZLinkMessageKind.Request
+                        ? ZLinkDispatchMessageKind.Request
+                        : ZLinkDispatchMessageKind.Send,
+                    header.MessageName,
+                    channelName,
+                    header.ContentType,
+                    header.CorrelationId
+                );
+                if (dispatchErrors is not null)
+                    scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Received);
+                admission.MarkQueued();
+                if (dispatchErrors is not null)
+                    scope.Trace(dispatchErrors, ZLinkMessageFlowOutcome.Admitted);
+            }
+            return (header, null);
+        }
+        catch (ZLinkEnvelopeProtocolException error)
+        {
+            return (null, error);
         }
     }
 

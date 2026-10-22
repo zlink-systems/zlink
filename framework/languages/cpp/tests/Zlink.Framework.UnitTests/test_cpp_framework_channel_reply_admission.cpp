@@ -8,6 +8,7 @@
 
 #include "runtime/channels/channel_host_service.hpp"
 #include "runtime/channels/channel_runtime.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
 #include <zlink/Contracts/Core/context.hpp>
@@ -91,6 +92,8 @@ class blocking_request_handler_t
         _changed.notify_all ();
         return {request.value + 1};
     }
+
+    void handle_send (const request_t &request) { (void) handle (request); }
 
     bool wait_until_entered (std::chrono::milliseconds timeout)
     {
@@ -283,5 +286,137 @@ TEST (ChannelHostReplyAdmission, MissingRouteTerminatesOnceWithOrdinaryEnvelopeO
     // Discard the reply waiter at scope exit; this test observes lease release.
     (void) pending_request;
 }
+
+class ChannelMessageFlow : public ::testing::TestWithParam<bool>
+{
+};
+
+TEST_P (ChannelMessageFlow, ClientServerRequestAndSendRecordAllReceiverStages)
+{
+    const bool request = GetParam ();
+    auto context = std::make_shared<zlink::context_t> ();
+    context->options ().auto_hwm_enabled (false);
+
+    const std::string endpoint = unique_inproc_endpoint ();
+    const auto server_rid = zlink::routing_id_t::from ("framework-channel-reply-server");
+    const auto source_rid = zlink::routing_id_t::from ("framework-channel-reply-source");
+
+    std::mutex events_mutex;
+    std::vector<zlink::framework::message_flow_event_t> events;
+    zlink::framework::dispatch_options_t options;
+    options.message_flow (zlink::framework::message_flow_log_mode_t::normal);
+    zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+      options, [&] (const auto &event) {
+          std::lock_guard lock (events_mutex);
+          events.push_back (event);
+      });
+    zlink::framework::zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
+    zlink::framework::detail::apply_dispatch_options (builder, options);
+    builder.channel ("reply-admission")
+      .enable_server ()
+      .set_routing_id (server_rid)
+      .bind (endpoint);
+    auto runtime = zlink::framework::detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_core_context (context);
+
+    zlink::framework::serializer_registry_t serializers;
+    serializers.add<request_t> (
+      [] (const request_t &request) {
+          return zlink::framework::encoded_payload_t::from_string (std::to_string (request.value));
+      },
+      [] (const zlink::framework::encoded_payload_t &payload) {
+          return request_t{std::stoi (payload.to_string ())};
+      },
+      "application/json");
+    serializers.add<reply_t> (
+      [] (const reply_t &reply) {
+          return zlink::framework::encoded_payload_t::from_string (std::to_string (reply.value));
+      },
+      [] (const zlink::framework::encoded_payload_t &payload) {
+          return reply_t{std::stoi (payload.to_string ())};
+      },
+      "application/x-zlink-test-channel-reply");
+    runtime.bind_serializers (serializers);
+
+    zlink::framework::service_collection_t services;
+    services.add_singleton<blocking_request_handler_t> ();
+    auto provider = services.build_provider ();
+    auto &handler = provider.get_required<blocking_request_handler_t> ();
+    zlink::framework::handler_registry_t handlers;
+    if (request)
+        handlers.on_request<blocking_request_handler_t, request_t, reply_t> (
+          "reply-admission", "request", &blocking_request_handler_t::handle,
+          {.packet_name = request_t::packet_name});
+
+    if (!request)
+        handlers.on_send<blocking_request_handler_t, request_t> (
+          "reply-admission", "request", &blocking_request_handler_t::handle_send,
+          {.packet_name = request_t::packet_name});
+
+    zlink::framework::runtime::channel_host_service_t host (
+      std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> (),
+      builder.message_bus (), runtime.channel_snapshots (), handlers, serializers, {});
+    host.start (provider);
+
+    zlink::router_socket_t source (*context);
+    runtime_cleanup_t cleanup (handler, host, source);
+    zlink::framework::test::completion_poller_driver_t completion_owner (source);
+    source.set_routing_id (source_rid);
+    auto source_monitor = source.monitor_open (zlink::monitor_event::connection_ready
+                                               | zlink::monitor_event::disconnected);
+    source.connect (endpoint);
+    ASSERT_TRUE (
+      wait_for_monitor_event (source_monitor, zlink::monitor_event::connection_ready, 2s));
+
+    zlink::framework::runtime::messaging::envelope_header_t header;
+    header.kind = request ? zlink::framework::runtime::messaging::message_kind_t::request
+                          : zlink::framework::runtime::messaging::message_kind_t::command;
+    header.flow_id = "01890a5d-ac96-774b-bcce-b302099a8057";
+    header.flow_origin = zlink::framework::flow_origin_t::application;
+    header.channel_name = "reply-admission";
+    header.message_name = request_t::packet_name;
+    header.topic = "request";
+    header.correlation_id = "reply-admission-correlation";
+    auto request_parts = zlink::framework::runtime::messaging::envelope_codec_t{}.encode_parts (
+      header, request_t{41}, serializers);
+    zlink::message_t request_header = request_parts[0];
+    zlink::message_t request_body = request_parts[1];
+    if (request) {
+        (void) source.request (server_rid)
+          .message (request_header)
+          .message (request_body)
+          .timeout (5s)
+          .async ();
+    } else {
+        std::move (source.send (server_rid).message (request_header).message (request_body))
+          .submit ();
+    }
+
+    ASSERT_TRUE (handler.wait_until_entered (2s));
+    using phase_t = zlink::framework::message_flow_outcome_t;
+    {
+        std::lock_guard lock (events_mutex);
+        ASSERT_EQ (3u, events.size ());
+        EXPECT_EQ (phase_t::received, events[0].outcome);
+        EXPECT_EQ (phase_t::admitted, events[1].outcome);
+        EXPECT_EQ (phase_t::dispatched, events[2].outcome);
+    }
+    handler.release ();
+    ASSERT_TRUE (wait_until (
+      [&] {
+          std::lock_guard lock (events_mutex);
+          return events.size () == 4;
+      },
+      2s));
+    std::lock_guard lock (events_mutex);
+    EXPECT_EQ (request ? phase_t::replied : phase_t::completed, events.back ().outcome);
+    for (const auto &event : events) {
+        EXPECT_EQ (header.flow_id, event.flow_id);
+        EXPECT_EQ (header.correlation_id, event.correlation_id);
+    }
+}
+
+
+INSTANTIATE_TEST_SUITE_P (Modes, ChannelMessageFlow, ::testing::Values (false, true));
 
 } // namespace
