@@ -148,7 +148,7 @@ final class RouteSendCall
             return ZLinkOneWayCalls.adaptOneWay(
                     ZLinkOneWayCalls.closeAfterAdmission(router.send(target, parts), parts));
         } catch (RuntimeException | Error failure) {
-            Message.closeAll(parts);
+            ZLinkFrameworkMultipartView.closeAll(parts);
             return CompletableFuture.failedFuture(failure);
         }
     }
@@ -179,7 +179,7 @@ final class RouteSendCall
             }
             Optional<Integer> classified = node.classifyNodeSendTarget(target);
             if (classified.isPresent()) {
-                Message.closeAll(sendParts);
+                ZLinkFrameworkMultipartView.closeAll(sendParts);
                 return ZLinkOneWayCalls.oneWayStatus(classified.orElseThrow());
             }
             CompletionStage<Void> submission =
@@ -187,7 +187,7 @@ final class RouteSendCall
             return ZLinkOneWayCalls.adaptOneWay(
                     ZLinkOneWayCalls.closeAfterAdmission(submission, sendParts));
         } catch (RuntimeException | Error failure) {
-            Message.closeAll(sendParts);
+            ZLinkFrameworkMultipartView.closeAll(sendParts);
             return CompletableFuture.failedFuture(failure);
         }
     }
@@ -406,7 +406,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
             ZLinkCompletionBridge.forwardCancellation(result, operation);
             operation.whenComplete(
                     (reply, failure) -> {
-                        requestParts.forEach(Message::close);
+                        ZLinkFrameworkMultipartView.closeAll(requestParts);
                         if (failure != null) {
                             result.completeExceptionally(
                                     ZLinkChannelCallRuntime.requestFailure(failure));
@@ -425,7 +425,7 @@ final class RouteRequestCall implements ZLinkRequestCall {
                         }
                     });
         } catch (RuntimeException | Error failure) {
-            requestParts.forEach(Message::close);
+            ZLinkFrameworkMultipartView.closeAll(requestParts);
             result.completeExceptionally(failure);
         }
         return result;
@@ -712,7 +712,7 @@ final class ChannelSendCall
         try {
             return ZLinkOneWayCalls.closeAfterAdmission(client.send(parts), parts);
         } catch (RuntimeException | Error failure) {
-            Message.closeAll(parts);
+            ZLinkFrameworkMultipartView.closeAll(parts);
             return CompletableFuture.failedFuture(failure);
         }
     }
@@ -738,7 +738,7 @@ final class ChannelSendCall
             return ZLinkOneWayCalls.closeAfterAdmission(
                     node.sendToChannel(channelName, metadata.encode(), parts), parts);
         } catch (RuntimeException | Error failure) {
-            Message.closeAll(parts);
+            ZLinkFrameworkMultipartView.closeAll(parts);
             return CompletableFuture.failedFuture(failure);
         }
     }
@@ -938,7 +938,7 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                         payload,
                         contentType,
                         metadata == null ? Map.of() : metadata.values());
-        result.whenComplete((ignored, error) -> requestParts.forEach(Message::close));
+        result.whenComplete((ignored, error) -> ZLinkFrameworkMultipartView.closeAll(requestParts));
         try {
             Duration remaining = timeout;
             if (remaining.isZero() || remaining.isNegative()) {
@@ -1025,7 +1025,7 @@ final class ChannelRequestCall implements ZLinkRequestCall {
             ZLinkCompletionBridge.forwardCancellation(result, operation);
             operation.whenComplete(
                     (reply, failure) -> {
-                        parts.forEach(Message::close);
+                        ZLinkFrameworkMultipartView.closeAll(parts);
                         if (failure != null) {
                             result.completeExceptionally(
                                     ZLinkChannelCallRuntime.requestFailure(failure));
@@ -1040,7 +1040,7 @@ final class ChannelRequestCall implements ZLinkRequestCall {
                         }
                     });
         } catch (RuntimeException | Error failure) {
-            parts.forEach(Message::close);
+            ZLinkFrameworkMultipartView.closeAll(parts);
             result.completeExceptionally(failure);
         }
         return result;

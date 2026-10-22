@@ -7,6 +7,7 @@ import systems.zlink.contracts.sockets.SubmitResult;
 import systems.zlink.framework.errors.ZLinkFrameworkErrorKind;
 import systems.zlink.framework.errors.ZLinkFrameworkException;
 import systems.zlink.framework.runtime.internal.backend.ZLinkBackendRequestResult;
+import systems.zlink.framework.runtime.internal.service.ZLinkFrameworkMultipartView;
 import systems.zlink.framework.runtime.messaging.ZLinkFrameworkErrorOrigin;
 
 import java.util.List;
@@ -98,10 +99,11 @@ public final class ZLinkOneWayCalls {
     public static <T> CompletionStage<T> closeAfterAdmission(
             CompletionStage<T> submission, List<Message> messages) {
         if (isImmediateAdmission(submission)) {
-            Message.closeAll(messages);
+            ZLinkFrameworkMultipartView.closeAll(messages);
             return submission;
         }
-        return submission.whenComplete((ignored, failure) -> Message.closeAll(messages));
+        return submission.whenComplete(
+                (ignored, failure) -> ZLinkFrameworkMultipartView.closeAll(messages));
     }
 
     public static CompletionStage<Void> adaptOneWay(CompletionStage<Void> submission) {

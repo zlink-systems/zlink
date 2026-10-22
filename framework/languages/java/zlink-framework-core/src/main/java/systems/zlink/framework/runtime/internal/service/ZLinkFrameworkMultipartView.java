@@ -91,7 +91,7 @@ public final class ZLinkFrameworkMultipartView extends AbstractList<Message>
                         "retained message parts could not be closed", failure);
             }
         } else {
-            parts.forEach(Message::close);
+            Message.closeAll(parts);
         }
     }
 
