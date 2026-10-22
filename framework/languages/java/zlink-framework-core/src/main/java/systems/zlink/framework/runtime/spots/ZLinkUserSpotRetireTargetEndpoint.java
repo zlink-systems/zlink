@@ -1032,7 +1032,8 @@ final class ZLinkUserSpotRetireTargetEndpoint
                             //  step 8) lets the Session owner relay again. Otherwise the
                             //  first relay after the route switch is handed to the
                             //  closed queue and lost.
-                            return ZLinkSerialExecutionQueue.manageCurrent(
+                            // Prefix admission may post to this gate after Actor preparation.
+                            return ZLinkSerialExecutionQueue.yieldCurrent(
                                             actorStaging.replayDirectJoin(
                                                     replay,
                                                     productionActorReplayer(target, request)))

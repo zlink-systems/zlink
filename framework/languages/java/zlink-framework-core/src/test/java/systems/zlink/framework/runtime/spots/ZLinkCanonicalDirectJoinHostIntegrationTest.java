@@ -1481,6 +1481,7 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
     private enum Scenario {
         NORMAL(LeaveMode.DELIVER),
         JOINED_YIELD(LeaveMode.DELIVER),
+        ASYNC_PREFIX_ADMISSION(LeaveMode.DELIVER),
         TARGET_AUTHORITY_MISSING(LeaveMode.DELIVER),
         NEXT_DEFERRED_JOIN(LeaveMode.DELIVER),
         LEAVE_FAILED_FUTURE(LeaveMode.FAILED_FUTURE),
@@ -1880,12 +1881,18 @@ final class ZLinkCanonicalDirectJoinHostIntegrationTest {
                                 CompletableFuture<Void>,
                                 java.util.function.Supplier<CompletionStage<Void>>>
                         replay) {
-            return spots.admitActorRelocationPrefix(
-                            actors,
-                            (ZLinkActorRuntime.PreparedTransferredActor) actor,
-                            request.targetSpotId(),
-                            records,
-                            replay)
+            java.util.function.Supplier<CompletionStage<List<CompletableFuture<Void>>>> admission =
+                    () ->
+                            spots.admitActorRelocationPrefix(
+                                    actors,
+                                    (ZLinkActorRuntime.PreparedTransferredActor) actor,
+                                    request.targetSpotId(),
+                                    records,
+                                    replay);
+            return (currentScenario == Scenario.ASYNC_PREFIX_ADMISSION
+                            ? CompletableFuture.completedFuture((Void) null)
+                                    .thenComposeAsync(ignored -> admission.get())
+                            : admission.get())
                     .thenApplyAsync(
                             accepted -> {
                                 EVENTS.add("prefix.admitted");
