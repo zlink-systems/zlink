@@ -8,6 +8,92 @@ namespace Zlink.Framework.UnitTests.Runtime;
 
 public sealed class JoinCallbackSendTests
 {
+    [Theory]
+    [InlineData(ZLinkDiagnosticsLevel.Normal)]
+    [InlineData(ZLinkDiagnosticsLevel.Off)]
+    public async Task Committed_join_lifecycle_failure_reports_original_exception(
+        ZLinkDiagnosticsLevel diagnosticsLevel
+    )
+    {
+        var actorId = $"join-failure-{Guid.NewGuid():N}";
+        var errors =
+            new System.Collections.Concurrent.ConcurrentQueue<System.Diagnostics.Activity>();
+        using var listener = new System.Diagnostics.ActivityListener
+        {
+            ShouldListenTo = source => source.Name == ZLinkTelemetry.ActivitySourceName,
+            Sample = (
+                ref System.Diagnostics.ActivityCreationOptions<System.Diagnostics.ActivityContext> _
+            ) => System.Diagnostics.ActivitySamplingResult.AllData,
+            ActivityStopped = activity =>
+            {
+                if (
+                    activity.GetTagItem(ZLinkTraceFormat.ActorIdField)?.ToString() == actorId
+                    && activity.GetTagItem(ZLinkTraceFormat.ErrorTypeField) is not null
+                )
+                    errors.Enqueue(activity);
+            },
+        };
+        System.Diagnostics.ActivitySource.AddActivityListener(listener);
+        var trace = new RelocationBehaviorTrace { ExpectedJoinAccepted = false };
+        trace.ReleaseJoinHandler.SetResult();
+        trace.ReleaseSourceLeave.SetResult();
+        trace.ReleaseTargetLifecycle.SetResult();
+        trace.OnTargetJoined = _ =>
+            throw new InvalidOperationException("target lifecycle sentinel");
+        var store = new RecordingLocationStore(new ZLinkInMemoryProviderLocationStore(), trace);
+        var relocationStore = new SynchronizedRelocationStore();
+        await using var source = await RelocationBehaviorHost.StartAsync(
+            "source",
+            trace,
+            store,
+            relocationStore,
+            registerTargetSpot: false
+        );
+        source.Runtime.Registration.DispatchOptions.Diagnostics.SetLevel(
+            ZLinkDiagnosticsLevel.Normal
+        );
+        _ = await source
+            .Services.GetRequiredService<IZLinkActorManager>()
+            .GetOrCreate(actorId, RelocationBehaviorHost.ActorType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Request(new BehaviorCreate(7))
+            .Async();
+        await using var target = await RelocationBehaviorHost.StartAsync(
+            "target",
+            trace,
+            store,
+            relocationStore,
+            registerTargetSpot: true
+        );
+        target.Runtime.Registration.DispatchOptions.Diagnostics.SetLevel(diagnosticsLevel);
+        var spot = await source
+            .Services.GetRequiredService<IZLinkSpotManager>()
+            .GetOrCreate($"failure-spot-{Guid.NewGuid():N}", RelocationBehaviorHost.SpotType)
+            .InMesh(RelocationBehaviorHost.MeshName)
+            .Async();
+        _ = await source
+            .Services.GetRequiredService<IZLinkActorClient>()
+            .RequestToActor(actorId, new BeginBehaviorJoin(spot.Spot.SpotId))
+            .Async<BehaviorAck>();
+        await trace.WaitAsync("publicJoinCompleted");
+        Assert.IsType<ZLinkActorJoinCompletion.Failed>(
+            Assert.Single(trace.JoinCompletions).Completion
+        );
+        if (diagnosticsLevel == ZLinkDiagnosticsLevel.Off)
+        {
+            Assert.Empty(errors);
+            return;
+        }
+        Assert.Contains(
+            errors,
+            error =>
+                error.GetTagItem(ZLinkTraceFormat.ErrorTypeField)?.ToString()
+                    == nameof(InvalidOperationException)
+                && error.GetTagItem(ZLinkTraceFormat.ErrorMessageField)?.ToString()
+                    == "target lifecycle sentinel"
+        );
+    }
+
     [Fact]
     public async Task Preserve_after_relay_readiness_releases_source_session_seal_without_completion()
     {
