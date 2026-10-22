@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
+#include <zlink/framework/contracts/dispatch/task.hpp>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -9,16 +11,46 @@
 #include <unordered_map>
 #include <mutex>
 #include <optional>
+#include <type_traits>
 #include <utility>
 #include <string>
+#include <variant>
 #include <vector>
 
 #include <zlink/Contracts/Messaging/received.hpp>
 #include "runtime/dispatch/application_record.hpp"
 #include "runtime/messaging/envelope_codec.hpp"
 
+namespace zlink::framework
+{
+struct location_owner_token_t;
+struct mesh_node_descriptor_t;
+} // namespace zlink::framework
+
 namespace zlink::framework::runtime::mesh
 {
+
+struct service_node_descriptor_t;
+
+struct local_request_source_t
+{
+    std::shared_ptr<const location_owner_token_t> lease;
+    std::shared_ptr<const service_node_descriptor_t> node;
+};
+
+// Location runtime §9.3: the source original accepted with a record. A peer's is the
+// live polling original read at acceptance; a local one is this node's lease observation.
+struct request_source_lookup_state_t
+{
+    using descriptor_t = std::shared_ptr<const mesh_node_descriptor_t>;
+    using start_t = std::function<void (const std::shared_ptr<request_source_lookup_state_t> &)>;
+    task_completion_source_t<descriptor_t> completion;
+    start_t start;
+};
+using request_source_lookup_t = std::shared_ptr<request_source_lookup_state_t>;
+using request_source_t = std::variant<local_request_source_t,
+                                      std::shared_ptr<const mesh_node_descriptor_t>,
+                                      request_source_lookup_t>;
 
 enum class service_mailbox_domain_t
 {
@@ -31,6 +63,32 @@ struct service_bound_session_source_t
     std::vector<std::uint8_t> session_routing_id;
     std::uint64_t binding_generation = 0;
     std::uint64_t session_sequence = 0;
+};
+
+struct service_mailbox_claim_t;
+class service_mailbox_t;
+
+// Claim credit of one claimed original. The claim mints it into the slot, so only the
+// take that moves the original out holds it; a completion that lost the take holds none
+// and cannot settle.
+class service_mailbox_settlement_t
+{
+  public:
+    service_mailbox_settlement_t () = default;
+
+    explicit operator bool () const noexcept { return static_cast<bool> (_claim); }
+    bool operator() () const;
+
+  private:
+    friend class service_mailbox_t;
+    service_mailbox_settlement_t (std::shared_ptr<service_mailbox_claim_t> claim,
+                                  std::size_t index) noexcept :
+        _claim (std::move (claim)), _index (index)
+    {
+    }
+
+    std::shared_ptr<service_mailbox_claim_t> _claim;
+    std::size_t _index = 0;
 };
 
 struct service_mailbox_record_t
@@ -47,23 +105,24 @@ struct service_mailbox_record_t
     std::function<void ()> before_application_handler;
     std::shared_ptr<host::local_application_dispatch_t> application;
     messaging::envelope_header_t envelope_header{.content_type = {}};
+    service_mailbox_settlement_t transferred;
+    // Read once by the publication owner before the mailbox accepts the record.
+    std::optional<request_source_t> source_original = std::nullopt;
 };
 
-struct service_mailbox_claim_t
+// A claimed slot: the claim and the slot's position in the claimed prefix.
+struct service_mailbox_slot_t
 {
-    std::string owner;
-    service_mailbox_domain_t domain;
-    std::uint64_t serial;
-    std::vector<service_mailbox_record_t> records;
-    std::vector<std::size_t> record_bytes;
-    std::size_t claimed_messages = 0;
-    std::size_t claimed_bytes = 0;
+    std::shared_ptr<service_mailbox_claim_t> claim;
+    std::size_t index = 0;
 };
 
 class service_mailbox_t
 {
   public:
     service_mailbox_t () = default;
+    service_mailbox_t (const service_mailbox_t &) = delete;
+    service_mailbox_t &operator= (const service_mailbox_t &) = delete;
 
     static std::string application_owner (host::owner_kind_t kind, std::string_view id = {});
     static std::string application_owner (const host::ready_record_t &owner);
@@ -88,20 +147,86 @@ class service_mailbox_t
     // claim can see it.
     bool try_enqueue (service_mailbox_record_t &&record,
                       const std::function<void ()> &admitted = {});
-    std::optional<service_mailbox_claim_t> try_claim (service_mailbox_domain_t domain,
-                                                      std::size_t message_budget,
-                                                      std::size_t byte_budget);
-    std::optional<service_mailbox_claim_t> try_claim_owner (service_mailbox_domain_t domain,
-                                                            const std::string &owner,
-                                                            std::size_t message_budget,
-                                                            std::size_t byte_budget);
-    bool release (const service_mailbox_claim_t &claim);
+    // The consumer may move ordinary originals into its batch before the claim lock
+    // is released. It must not reenter the mailbox. Relocation originals
+    // stay in their slots until their individual producer take.
+    using claimed_t = std::function<void (const std::shared_ptr<service_mailbox_claim_t> &)>;
+    std::shared_ptr<service_mailbox_claim_t> try_claim (service_mailbox_domain_t domain,
+                                                        std::size_t message_budget,
+                                                        std::size_t byte_budget,
+                                                        const claimed_t &claimed = {});
+    std::shared_ptr<service_mailbox_claim_t> try_claim_owner (service_mailbox_domain_t domain,
+                                                              const std::string &owner,
+                                                              std::size_t message_budget,
+                                                              std::size_t byte_budget,
+                                                              const claimed_t &claimed = {});
+    using claim_handle_t = service_mailbox_slot_t;
+    // A missing source belongs to its original. Claims and cut share one lookup; the
+    // existing producer mutex transfers its starter, and Store work runs outside it.
+    void start_source_lookup (const request_source_lookup_t &lookup) const;
+    // Query preparation and original transfer share the existing producer boundary.
+    template <class Prepare>
+    auto prepare (const claim_handle_t &handle, Prepare prepare) const
+      -> std::optional<std::invoke_result_t<Prepare, service_mailbox_record_t &>>
+    {
+        std::lock_guard lock (_state->mutex);
+        auto *slot = slot_locked (handle);
+        if (!slot)
+            return std::nullopt;
+        return prepare (*slot);
+    }
+    // One boundary step: a value from keep leaves the original in its slot for a later
+    // take; otherwise the original transfers now. monostate means it is gone or not next.
+    template <class Keep>
+    auto take_unless (const claim_handle_t &handle, Keep keep)
+      -> std::variant<std::monostate,
+                      service_mailbox_record_t,
+                      typename std::invoke_result_t<Keep, service_mailbox_record_t &>::value_type>
+    {
+        std::lock_guard lock (_state->mutex);
+        auto *slot = slot_locked (handle);
+        if (!slot)
+            return std::monostate{};
+        if (auto kept = keep (*slot))
+            return std::move (*kept);
+        if (!next_locked (handle))
+            return std::monostate{};
+        return transfer_locked (*slot);
+    }
+    std::optional<service_mailbox_record_t> take (const claim_handle_t &handle);
+    // Relocation flow §4.2: observe runs in the producer step that transfers the original,
+    // so a seal cut of its owner is wholly before or after this take.
+    template <class Observe>
+    std::optional<service_mailbox_record_t> take (const claim_handle_t &handle, Observe observe)
+    {
+        std::lock_guard lock (_state->mutex);
+        auto *slot = slot_locked (handle);
+        if (!slot || !next_locked (handle))
+            return std::nullopt;
+        observe ();
+        return transfer_locked (*slot);
+    }
+    // Relocation flow §4.2 producer cut: in one producer step, takes every original of the
+    // owners not taken yet, claimed or not, in FIFO order, then runs cut. A claimed original
+    // carries its claim credit. A record enqueued afterwards stays for the ordinary claim.
+    // Nothing is taken and cut does not run when admits refuses one of the originals.
+    using cut_admits_t = std::function<bool (const service_mailbox_record_t &)>;
+    std::optional<std::vector<std::vector<service_mailbox_record_t>>>
+    cut_owners (const std::vector<std::string> &owners,
+                const cut_admits_t &admits,
+                const std::function<void ()> &cut);
+    // Settles every credit of the claim still outstanding under one lock. Originals not
+    // yet taken are discarded.
+    bool release (service_mailbox_claim_t &claim);
     void close ();
 
     std::size_t pending_messages (service_mailbox_domain_t domain) const;
     std::size_t pending_bytes (service_mailbox_domain_t domain) const;
 
   private:
+    friend class service_mailbox_settlement_t;
+    friend struct service_mailbox_claim_t;
+
     enum class owner_phase_t
     {
         idle,
@@ -110,6 +235,8 @@ class service_mailbox_t
         retained
     };
 
+    // A claim is the front prefix of records; it leaves the FIFO when its last
+    // credit settles.
     struct owner_queue_t
     {
         std::deque<service_mailbox_record_t> records;
@@ -118,7 +245,6 @@ class service_mailbox_t
         std::size_t active_messages = 0;
         std::size_t active_bytes = 0;
         owner_phase_t phase = owner_phase_t::idle;
-        std::uint64_t claim_serial = 0;
     };
 
     struct domain_t
@@ -133,26 +259,68 @@ class service_mailbox_t
 
     domain_t &domain (service_mailbox_domain_t value);
     const domain_t &domain (service_mailbox_domain_t value) const;
-    std::optional<service_mailbox_claim_t>
+    std::shared_ptr<service_mailbox_claim_t>
     claim_owner_locked (domain_t &source,
                         service_mailbox_domain_t domain_value,
                         const std::string &owner,
                         std::size_t message_budget,
-                        std::size_t byte_budget);
+                        std::size_t byte_budget,
+                        const claimed_t &claimed,
+                        std::unique_lock<std::mutex> &lock);
     static std::size_t retained_bytes (const service_mailbox_record_t &record);
+    static service_mailbox_record_t *slot_locked (const claim_handle_t &handle);
+    static bool next_locked (const claim_handle_t &handle);
+    static service_mailbox_record_t transfer_locked (service_mailbox_record_t &slot);
 
     void notify_application_ready ();
 
-    mutable std::mutex _mutex;
-    domain_t _application;
-    domain_t _infrastructure;
-    std::uint64_t _next_claim_serial = 1;
-    bool _closed = false;
-    application_prepare_t _application_prepare;
-    application_ready_t _application_ready;
-    stateful_ready_t _stateful_ready;
-    bool _application_receive_turn = false;
+    struct state_t
+    {
+        mutable std::mutex mutex;
+        domain_t application;
+        domain_t infrastructure;
+        bool closed = false;
+        application_prepare_t application_prepare;
+        application_ready_t application_ready;
+        stateful_ready_t stateful_ready;
+        bool application_receive_turn = false;
+    };
+    static bool settle (const service_mailbox_settlement_t &settlement);
+    static bool settle_once (service_mailbox_claim_t &claim, std::size_t index) noexcept;
+    static bool settles_last (service_mailbox_claim_t &claim, std::size_t count) noexcept;
+    static bool finish_locked (state_t &state, const service_mailbox_claim_t &claim);
+    static void notify_application_ready_owned (const std::shared_ptr<state_t> &state);
+    std::shared_ptr<state_t> _state = std::make_shared<state_t> ();
 };
+
+// One claim of an owner's FIFO prefix. records views the claimed slots until the
+// claim settles; read them only before their take. Each slot credit settles once.
+struct service_mailbox_claim_t
+{
+    std::string owner;
+    service_mailbox_domain_t domain;
+    std::vector<service_mailbox_record_t *> records;
+    std::vector<std::size_t> record_bytes;
+    std::size_t claimed_messages = 0;
+    std::size_t claimed_bytes = 0;
+
+    // Slot credits not yet settled.
+    std::size_t outstanding () const noexcept
+    {
+        return _remaining.load (std::memory_order_acquire);
+    }
+
+  private:
+    friend class service_mailbox_t;
+    std::weak_ptr<service_mailbox_t::state_t> _mailbox;
+    std::unique_ptr<std::atomic_bool[]> _settled;
+    std::atomic_size_t _remaining{0};
+};
+
+inline bool service_mailbox_settlement_t::operator() () const
+{
+    return _claim && service_mailbox_t::settle (*this);
+}
 
 inline std::string service_mailbox_t::application_owner (const host::ready_record_t &owner)
 {
