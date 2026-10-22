@@ -6,12 +6,14 @@
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/transport/listener_identity.hpp"
+#include "runtime/utils/weak_runtime_owner.hpp"
 
 #include <zlink/framework.hpp>
 
 #include <gtest/gtest.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <map>
@@ -138,6 +140,32 @@ bool wait_for_application_messages (mesh::raw_mesh_node_owner_t &source,
         std::this_thread::sleep_for (1ms);
     }
     return false;
+}
+
+TEST (ListenerIdentity, TopologyNotificationCanSignalNativeActivity)
+{
+    std::atomic_size_t notifications{0};
+    auto source = std::make_shared<mesh::raw_mesh_node_owner_t> (
+      mesh_options ("notification-source", "tcp://127.0.0.1:0"));
+    mesh::raw_mesh_node_owner_t target (mesh_options ("notification-target", "tcp://127.0.0.1:0"));
+    source->topology ().set_change_handler ([weak_source = std::weak_ptr (source), &notifications] {
+        const auto owner = framework::detail::lock_runtime_owner (weak_source);
+        owner->signal_activity ();
+        notifications.fetch_add (1, std::memory_order_relaxed);
+    });
+    auto before = notifications.load (std::memory_order_relaxed);
+    source->start ();
+    EXPECT_GT (notifications.load (std::memory_order_relaxed), before);
+    target.start ();
+    const auto target_descriptor = target.topology ().local_descriptor ();
+    before = notifications.load (std::memory_order_relaxed);
+    ASSERT_TRUE (source->connect_peer (target.endpoint (), target_descriptor));
+    ASSERT_TRUE (wait_for_ready_pair (*source, target));
+    EXPECT_GT (notifications.load (std::memory_order_relaxed), before);
+    before = notifications.load (std::memory_order_relaxed);
+    (void) source->disconnect_peer (target_descriptor.node_routing_id, target.endpoint ());
+    EXPECT_GT (notifications.load (std::memory_order_relaxed), before);
+    source->topology ().set_change_handler ({});
 }
 
 TEST (ListenerIdentity, OmittedAdvertiseHostMapsWildcardsToFamilyLoopback)
