@@ -317,12 +317,25 @@ class player_quest_spot_t : public instance_spot_t
         std::cerr << owner_ready_line;
         if (!projection.empty ()) {
             const std::string replayed_line = std::format (
-              "gamequest-mission replayed player={} generation={}\n", _player_id, generation);
+              "gamequest-mission replayed player={} generation={} objectGeneration={}\n",
+              _player_id,
+              generation,
+              _context.object_generation ());
             std::cerr << replayed_line;
         }
         co_return;
     }
     // --8<-- [end:doc-gq-spot-init]
+
+    task_t<void> on_closing (const spot_closing_context_t &, std::stop_token) override
+    {
+        const std::string line = std::format (
+          "gamequest-owner closing-entered player={} objectGeneration={}\n",
+          _player_id,
+          _context.object_generation ());
+        std::cerr << line;
+        co_return;
+    }
 
     /* 공통 sample spec §11.2: gameplay event는 응답 없는 one-way다. 진행 notify는 player의 현재
      * session binding이 가리키는 노드의 entry spot으로 route한다 — binding이 없으면 생략(§12). */

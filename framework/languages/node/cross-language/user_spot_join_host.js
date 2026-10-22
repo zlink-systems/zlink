@@ -602,6 +602,7 @@ async function userSpotJoinTarget() {
       RelocationActorAdapter,
       RelocationEntrySpot,
       RelocationUserSpot,
+      BeginUserSpotJoinHandler,
       TargetProbeHandler
     ]
   })(UserSpotJoinTargetModule);
