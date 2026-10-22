@@ -1189,50 +1189,47 @@ task_t<bool> raw_mesh_node_owner_t::request_with_header (
           std::make_shared<task_completion_source_t<void>> ();
         bool registered = false;
     };
-    auto start =
-      _lane
-        .run ([this, &header, &request_metric, request = std::move (request), requested_correlation,
-               timeout, callback = std::move (callback),
-               &target_routing_id,
-               encoded_payload = std::move (encoded_payload),
-               admission = std::move (admission)] () mutable {
-            std::shared_ptr<detail::backend::raw_route_port_t> port;
-            {
-                std::lock_guard lifecycle_lock (_lifecycle_mutex);
-                port = _port;
+    auto start = _lane.run_sync ([this, &header, &request_metric, &target_routing_id,
+                                  request = std::move (request), requested_correlation, timeout,
+                                  callback = std::move (callback),
+                                  encoded_payload = std::move (encoded_payload),
+                                  admission = std::move (admission)] () mutable {
+        std::shared_ptr<detail::backend::raw_route_port_t> port;
+        {
+            std::lock_guard lifecycle_lock (_lifecycle_mutex);
+            port = _port;
+        }
+        if (!port)
+            return std::optional<request_start_t>{};
+        request_start_t value;
+        value.correlation = take_reply_route_id_locked (requested_correlation);
+        value.operation =
+          operation_id (_options.descriptor.lifecycle_generation, value.correlation);
+        detail::backend::raw_message_t wire;
+        wire.reserve (2);
+        wire.push_back (header (value.correlation));
+        wire.push_back (std::move (encoded_payload));
+        if (request && request->operation == foundation::call_id_t{})
+            request->operation = value.operation;
+        value.registered = _operations->register_operation (
+          value.operation, foundation::operation_registry_t::clock_t::now () + timeout,
+          std::move (callback), {}, std::move (request_metric), std::move (request));
+        if (value.registered) {
+            try {
+                trace_mesh ("request-submit correlation=" + std::to_string (value.correlation)
+                            + " targetBytes=" + std::to_string (target_routing_id.size ()));
+                value.running =
+                  std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
+                    port->request (target_routing_id, std::move (wire), timeout,
+                                   std::move (admission), value.admitted));
             }
-            if (!port)
-                return std::optional<request_start_t>{};
-            request_start_t value;
-            value.correlation = take_reply_route_id_locked (requested_correlation);
-            value.operation =
-              operation_id (_options.descriptor.lifecycle_generation, value.correlation);
-            detail::backend::raw_message_t wire;
-            wire.reserve (2);
-            wire.push_back (header (value.correlation));
-            wire.push_back (std::move (encoded_payload));
-            if (request && request->operation == foundation::call_id_t{})
-                request->operation = value.operation;
-            value.registered = _operations->register_operation (
-              value.operation, foundation::operation_registry_t::clock_t::now () + timeout,
-              std::move (callback), {}, std::move (request_metric), std::move (request));
-            if (value.registered) {
-                try {
-                    trace_mesh ("request-submit correlation=" + std::to_string (value.correlation)
-                                + " targetBytes=" + std::to_string (target_routing_id.size ()));
-                    value.running =
-                      std::make_shared<task_t<detail::backend::raw_request_completion_t>> (
-                        port->request (target_routing_id, std::move (wire), timeout,
-                                       std::move (admission), value.admitted));
-                }
-                catch (...) {
-                    (void) _operations->unregister (value.operation);
-                    throw;
-                }
+            catch (...) {
+                (void) _operations->unregister (value.operation);
+                throw;
             }
-            return std::optional<request_start_t>{std::move (value)};
-        })
-        .get ();
+        }
+        return std::optional<request_start_t>{std::move (value)};
+    });
     if (!start)
         co_return false;
     if (!start->registered) {
