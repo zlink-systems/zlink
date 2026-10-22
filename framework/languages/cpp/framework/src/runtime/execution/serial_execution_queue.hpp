@@ -25,6 +25,10 @@
 namespace zlink::framework::runtime
 {
 
+namespace stateful
+{
+struct relocation_seal_binding_t;
+}
 struct serial_application_record_t;
 class serial_handler_participant_t;
 class serial_turn_handle_impl_t;
@@ -106,6 +110,11 @@ class serial_lane_policy_t
         return spot && spot->execution == spot_lane_execution_t::spot_wide;
     }
 
+    bool owns_spot_gate () const noexcept
+    {
+        return std::holds_alternative<spot_lane_policy_t> (_value);
+    }
+
     const value_t &value () const noexcept { return _value; }
 
   private:
@@ -171,8 +180,21 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     void notify_control (std::string name, std::function<void ()> control);
     task_t<bool>
     adopt_application_prefix (std::function<std::vector<serial_prefix_work_t> ()> take);
+    // Takes the accepted, unstarted application records. seal runs in the step that fixes
+    // the producer boundary. A relocation cut (relocation flow §4.2) passes producer_cut,
+    // which encloses that step in its own producer boundary (mailbox before this queue's
+    // producer mutex) and returns false when it does not run it; published records not yet
+    // imported are taken from their nodes too.
+    using producer_cut_t = std::function<bool (const std::function<void ()> &)>;
     task_t<std::vector<std::shared_ptr<serial_application_record_t>>>
-    take_application_suffix (std::function<void ()> seal = {});
+    take_application_suffix (std::function<void ()> seal = {},
+                             producer_cut_t producer_cut = {},
+                             std::shared_ptr<stateful::relocation_seal_binding_t> binding = {});
+    // The native handoff and relocation cut share the actual execution owner.
+    task_t<std::shared_ptr<stateful::relocation_seal_binding_t>>
+    admit_native_application (std::function<void (bool)> publish);
+    task_t<bool>
+    release_relocation_seal (std::shared_ptr<stateful::relocation_seal_binding_t> binding);
     bool try_post (std::string name, std::function<void ()> work);
     bool try_post (std::string name, std::function<void ()> work, serial_work_options_t options);
     bool try_post_async (std::string name, async_work_t work);
@@ -192,6 +214,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                           serial_work_options_t options,
                           std::function<bool ()> stop_requested = {});
     bool try_post_deferred (std::string name, std::function<void ()> work);
+    bool try_post_deferred_task (std::string name, std::function<task_t<void> ()> work);
     result_t<std::shared_ptr<detail::deferred_barrier_t>> reserve_deferred_barrier_next (
       std::string name,
       std::function<void ()> cancel = {},
@@ -236,6 +259,34 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
   private:
     friend class serial_turn_handle_impl_t;
 
+    struct new_handler_t
+    {
+        std::shared_ptr<serial_turn_chain_t> handler;
+    };
+    struct handler_resume_t
+    {
+        std::shared_ptr<serial_turn_handle_impl_t> handler;
+    };
+    struct borrowed_callback_t
+    {
+        std::shared_ptr<serial_turn_chain_t> fifo;
+        std::shared_ptr<serial_turn_chain_t> handler;
+    };
+    struct barrier_origin_t
+    {
+        std::shared_ptr<serial_deferred_barrier_t> barrier;
+        std::shared_ptr<serial_turn_chain_t> handler;
+    };
+    struct readiness_barrier_origin_t
+    {
+        std::shared_ptr<serial_turn_chain_t> handler;
+    };
+    using item_origin_t = std::variant<new_handler_t,
+                                       handler_resume_t,
+                                       borrowed_callback_t,
+                                       barrier_origin_t,
+                                       readiness_barrier_origin_t>;
+
     struct work_item_t
     {
         std::string name;
@@ -247,10 +298,6 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
         std::shared_ptr<serial_turn_handle_impl_t> turn;
         bool cancel_requested = false;
         std::optional<std::function<void ()>> suspended_completion;
-        // The handler this item continues after a Yield; empty otherwise.
-        std::shared_ptr<serial_turn_chain_t> chain;
-        // The deferred-work position this item holds; empty otherwise.
-        std::shared_ptr<serial_deferred_barrier_t> barrier;
         std::shared_ptr<const void> retained_message;
         std::shared_ptr<serial_application_record_t> application_record;
         std::shared_ptr<serial_execution_queue_t> actor_mailbox;
@@ -261,12 +308,6 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
         std::atomic<publication_node_t *> next{nullptr};
         std::optional<work_item_t> item;
         std::function<void ()> control;
-    };
-
-    struct item_origin_t
-    {
-        std::shared_ptr<serial_turn_chain_t> chain;
-        std::shared_ptr<serial_deferred_barrier_t> barrier;
     };
 
     struct lane_state_t
@@ -284,6 +325,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
         async_work_t ready_continuation;
         bool cancel_requested = false;
     };
+    active_turn_t *current_turn_locked () noexcept;
     bool schedule_drain_locked ();
     bool publish_locked (std::unique_ptr<publication_node_t> node);
     void import_publications ();
@@ -362,6 +404,11 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                          serial_submission_id_t submission_id = 0,
                          std::function<void ()> cancel = {},
                          item_origin_t origin = {});
+    result_t<serial_submission_id_t> try_post_cancellable_async (std::string name,
+                                                                 async_work_t work,
+                                                                 std::function<void ()> cancel,
+                                                                 serial_work_options_t options,
+                                                                 item_origin_t origin);
     /* A lifecycle operation that released its turn (Yield) keeps the lifecycle
      * lane until its terminal (§7): only its own continuation runs there. */
     void hold_lifecycle (std::shared_ptr<serial_turn_chain_t> chain);
@@ -372,12 +419,20 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
                  serial_work_lane_t lane,
                  item_origin_t origin,
                  bool holds_application_while_waiting = false);
+    bool try_post_resume (std::string name,
+                          async_work_t work,
+                          const std::shared_ptr<serial_turn_handle_impl_t> &handler,
+                          bool holds_application_while_waiting);
     void activate_turn_locked (work_item_t &item) noexcept;
     std::deque<work_item_t>::iterator next_lifecycle_locked () noexcept;
     bool has_queued_locked () const noexcept;
     bool has_ready_locked () noexcept;
-    std::deque<work_item_t>::iterator next_application_locked () noexcept;
-    bool application_ready_locked () noexcept;
+    struct application_selection_t
+    {
+        std::deque<work_item_t>::iterator next;
+        bool ready;
+    };
+    application_selection_t next_application_locked () noexcept;
     work_item_t take_next_locked (std::optional<serial_work_lane_t> forced_lane = {});
     serial_work_lane_t select_next_lane_locked () noexcept;
     void report_deferred_error (const std::string &name,
@@ -395,6 +450,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     // Derived FIFO membership indexes; mutable barrier phases are read by
     // the readiness decision and never copied here.
     std::weak_ptr<serial_application_record_t> _application_tail_record;
+    std::shared_ptr<stateful::relocation_seal_binding_t> _relocation_seal;
     std::size_t _application_barriers = 0;
     // P changes tail; the shared-gate consumer changes cursor. The cursor
     // node is retained while the producer tail can still point to it.
@@ -410,7 +466,7 @@ class serial_execution_queue_t : public std::enable_shared_from_this<serial_exec
     // idle -> scheduled is the single uncontended successful gate CAS.
     std::atomic<gate_state_t> _gate_state{gate_state_t::idle};
     std::shared_ptr<serial_turn_chain_t> _lifecycle_hold;
-    std::optional<active_turn_t> _active_turn;
+    std::vector<active_turn_t> _handler_turns;
     std::optional<work_item_t> _suspended_lifecycle;
     std::optional<serial_work_lane_t> _active_lane;
     std::size_t _active_bytes = 0;

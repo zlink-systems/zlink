@@ -839,9 +839,9 @@ std::size_t server_receive_turn_records (std::uint32_t queue_capacity,
       server->mailbox ().try_claim (service_mailbox_domain_t::application, records, 1024 * 1024);
     assert (claim && claim->records.size () == records);
     for (std::size_t index = 0; index < records; ++index) {
-        const auto &payload = claim->records[index].parts[1];
+        const auto &payload = claim->records[index]->parts[1];
         assert (payload.to_string () == std::to_string (index));
-        claim->records[index].before_application_handler ();
+        claim->records[index]->before_application_handler ();
     }
     assert (jobs->snapshot ().permits_in_use == 0);
     assert (server->mailbox ().release (*claim));
@@ -962,7 +962,7 @@ void verify_client_server_closed_reply_finishes_without_server_lane ()
     const auto claim =
       server.mailbox ().try_claim (service_mailbox_domain_t::application, 1, 1024 * 1024);
     assert (claim && claim->records.size () == 1);
-    const auto request = claim->records.front ();
+    const auto request = (*claim->records.front ());
     server.close ();
 
     const protocol::application_payload_t payload{"closed.reply", "application/json", bytes ("{}")};
@@ -1899,6 +1899,7 @@ void verify_fanout_first_observation_is_complete ()
 
 int main ()
 {
+    zlink::framework::completion_owner_t completion_owner;
     verify_zero_weight_target_stays_ready ();
     verify_first_observation_contains_current_status ();
     verify_reconnecting_target_status ();

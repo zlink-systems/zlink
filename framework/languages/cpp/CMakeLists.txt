@@ -1154,6 +1154,20 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     LABELS "framework-unit;framework-foundation;protocol"
     TIMEOUT 30)
 
+  add_executable(test_cpp_framework_receive_role
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role.cpp
+    framework/src/runtime/dispatch/offload_executor.cpp)
+  target_compile_features(test_cpp_framework_receive_role PRIVATE cxx_std_20)
+  target_include_directories(test_cpp_framework_receive_role PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+  target_link_libraries(test_cpp_framework_receive_role PRIVATE Threads::Threads)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_receive_role
+    COMMAND test_cpp_framework_receive_role
+    LABELS "framework-unit;execution;resource"
+    TIER unit
+    TIMEOUT 30)
+
   add_executable(test_cpp_framework_operation_registry
     tests/Zlink.Framework.UnitTests/test_cpp_framework_operation_registry.cpp
     framework/src/runtime/foundation/operation_registry.cpp)
@@ -1173,9 +1187,21 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     COMMAND test_cpp_framework_operation_registry
     LABELS "framework-unit;framework-foundation;operation;resource"
     TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_completion_dispatcher_shutdown
+    COMMAND test_cpp_framework_operation_registry --dispatcher-shutdown
+    LABELS "framework-unit;framework-foundation;operation;resource"
+    TIMEOUT 30)
+
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_completion_dispatcher_lifetime
+    COMMAND test_cpp_framework_operation_registry --dispatcher-lifetime
+    LABELS "framework-unit;framework-regression;framework-foundation;operation;resource"
+    TIMEOUT 30)
 
   add_executable(test_cpp_framework_m6a_runtime
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6a_runtime.cpp
+    tests/support/allocation_counter.cpp)
   target_compile_features(test_cpp_framework_m6a_runtime PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_m6a_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
@@ -1271,7 +1297,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_m6b_runtime
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp)
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_m6b_runtime.cpp
+    tests/support/allocation_counter.cpp)
   target_compile_features(test_cpp_framework_m6b_runtime PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_m6b_runtime PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
@@ -1367,7 +1394,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     tests/Zlink.Framework.UnitTests/test_cpp_framework_host_lifecycle.cpp)
   target_compile_features(test_cpp_framework_host_lifecycle PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_host_lifecycle PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_link_libraries(test_cpp_framework_host_lifecycle PRIVATE
     zlink_framework
     Threads::Threads)
@@ -1375,6 +1403,23 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
     NAME test_cpp_framework_host_lifecycle
     COMMAND test_cpp_framework_host_lifecycle
     LABELS "framework-unit;framework-m6-runtime;maintenance;relocation;termination"
+    TIMEOUT 30)
+
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_relocated_actor_shutdown
+    COMMAND test_cpp_framework_host_lifecycle relocated-actor-shutdown
+    LABELS "framework-contract;relocation;termination"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_relocated_aggregate_shutdown
+    COMMAND test_cpp_framework_host_lifecycle relocated-aggregate-shutdown
+    LABELS "framework-contract;relocation;termination"
+    TIMEOUT 30)
+
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_relocation_missing_source
+    COMMAND test_cpp_framework_host_lifecycle relocation-missing-source
+    LABELS "framework-contract;relocation"
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_host_startup_failure
@@ -1550,6 +1595,17 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     COMMAND test_cpp_framework_contract_headers
     LABELS "framework-contract;framework-unit;async"
     TIER unit
+    TIMEOUT 30)
+
+  add_executable(test_cpp_framework_completion_dispatcher_owner
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_completion_dispatcher_owner.cpp)
+  target_include_directories(test_cpp_framework_completion_dispatcher_owner PRIVATE framework/src)
+  target_link_libraries(test_cpp_framework_completion_dispatcher_owner PRIVATE
+    zlink::framework_provider_abstractions Threads::Threads)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_completion_dispatcher_owner
+    COMMAND test_cpp_framework_completion_dispatcher_owner
+    LABELS "framework-unit;framework-regression;async"
     TIMEOUT 30)
 
   add_executable(test_cpp_framework_provider_task
@@ -1766,6 +1822,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       TIMEOUT 30)
   endforeach()
   add_zlink_framework_test(
+    test_cpp_framework_maintenance_failure
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_maintenance_failure.cpp
+    "framework-unit;framework-contract;framework-actor;relocation"
+    unit)
+  target_use_zlink_gtest_main(test_cpp_framework_maintenance_failure)
+  target_include_directories(test_cpp_framework_maintenance_failure PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_relocation_seal_contract
     tests/Zlink.Framework.UnitTests/test_cpp_framework_relocation_seal_contract.cpp
     "framework-unit;framework-contract;framework-actor;stream;relocation"
@@ -1828,6 +1892,11 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     NAME test_cpp_framework_http_integration
     COMMAND test_cpp_framework_app_host
     LABELS "framework-integration;framework-http;framework-http-e2e;http"
+    TIMEOUT 30)
+  zlink_framework_cpp_add_test(
+    NAME test_cpp_framework_completion_dispatcher_hosts
+    COMMAND test_cpp_framework_app_host --dispatcher-hosts
+    LABELS "framework-unit;framework-regression;framework-host;resource"
     TIMEOUT 30)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_http_sync_submit
@@ -1935,6 +2004,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_actor_join_handoff_id PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_receive_role_completion
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_role_completion.cpp
+    "framework-unit;execution;operation;resource"
+    unit)
+  target_include_directories(test_cpp_framework_receive_role_completion PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  zlink_framework_cpp_add_boost_headers(test_cpp_framework_receive_role_completion)
+  add_zlink_framework_test(
     test_cpp_framework_execution
     tests/Zlink.Framework.UnitTests/test_cpp_framework_execution.cpp
     "framework-unit;framework-contract;framework-regression;execution;spot;yield"
@@ -1947,6 +2024,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   add_executable(test_cpp_framework_state_lane
     tests/Zlink.Framework.UnitTests/test_cpp_framework_state_lane.cpp)
   target_use_zlink_gtest_main(test_cpp_framework_state_lane)
+  target_sources(test_cpp_framework_state_lane PRIVATE
+    tests/support/allocation_counter.cpp)
   target_link_libraries(test_cpp_framework_state_lane PRIVATE
     zlink::framework)
   target_include_directories(test_cpp_framework_state_lane PRIVATE
@@ -2026,7 +2105,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     zlink::framework)
   target_include_directories(test_cpp_framework_in_memory_location_store PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
-    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src)
+    ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_in_memory_location_store
     COMMAND test_cpp_framework_in_memory_location_store
@@ -2337,6 +2417,30 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     opentelemetry-cpp::metrics)
   target_include_directories(test_cpp_framework_mesh_metrics PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_claim_dispatch_cost
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_dispatch_cost.cpp
+    "framework-unit;framework-contract;framework-regression;messaging"
+    "unit")
+  target_sources(test_cpp_framework_claim_dispatch_cost PRIVATE tests/support/allocation_counter.cpp)
+  target_include_directories(test_cpp_framework_claim_dispatch_cost PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_actor_header_allocations
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_header_allocations.cpp
+    "framework-unit;framework-regression;messaging")
+  target_use_zlink_gtest_main(test_cpp_framework_actor_header_allocations)
+  target_sources(test_cpp_framework_actor_header_allocations PRIVATE
+    tests/support/allocation_counter.cpp)
+  add_zlink_framework_test(
+    test_cpp_framework_envelope_allocations
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_envelope_allocations.cpp
+    "framework-unit;framework-regression;messaging")
+  target_use_zlink_gtest_main(test_cpp_framework_envelope_allocations)
+  target_sources(test_cpp_framework_envelope_allocations PRIVATE
+    tests/support/allocation_counter.cpp)
+  target_sources(test_cpp_framework_completion_allocations PRIVATE
+    tests/support/allocation_counter.cpp)
   add_zlink_framework_test(
     test_cpp_framework_messaging
     tests/Zlink.Framework.UnitTests/test_cpp_framework_messaging.cpp
