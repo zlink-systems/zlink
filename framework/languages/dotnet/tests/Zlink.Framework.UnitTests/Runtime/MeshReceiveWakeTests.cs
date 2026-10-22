@@ -285,6 +285,74 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         }
     }
 
+    // Spec 08 §4.2: a receive rotation runs its management work once. With no
+    // peer activity due, that work is the two uncontended node turns that read
+    // liveness and operation deadlines; it creates no empty result container.
+    [Fact]
+    public async Task IdleReceiveRotationManagementAddsNoAllocationBeyondItsNodeTurns()
+    {
+        const int warmup = 128;
+        const int iterations = 1000;
+        var poller = new ControlledReceivePoller();
+        await using var context = Systems.Zlink.Zlink.CreateContext();
+        var node = new ZLinkManagedMeshNode(
+            context,
+            "idle-rotation-allocation",
+            receivePollerFactory: () => poller
+        );
+        node.SetRoutingId(RoutingId.From("idle-rotation-allocation"));
+        await using var lane = new ZLinkStateLane();
+        long actual = 0;
+        long baseline = 0;
+        var rotations = 0;
+        long last = 0;
+        SemaphoreSlim rotated = new(0);
+        // The window opens after the controlled poller returns and closes before
+        // its next wait, so it holds only the node's own rotation.
+        poller.AfterWait = () => last = GC.GetAllocatedBytesForCurrentThread();
+        poller.BeforeWait = () =>
+        {
+            var now = GC.GetAllocatedBytesForCurrentThread();
+            var measured = now - last;
+            var start = GC.GetAllocatedBytesForCurrentThread();
+            _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
+            _ = lane.RunAsync(static value => value, 0).GetAwaiter().GetResult();
+            var control = GC.GetAllocatedBytesForCurrentThread() - start;
+            if (rotations > warmup)
+            {
+                actual += measured;
+                baseline += control;
+            }
+            rotations++;
+            rotated.Release();
+        };
+        node.Start();
+        try
+        {
+            await poller.FirstWait.Task.WaitAsync(CompletionBound);
+            poller.AllowWait();
+            await rotated.WaitAsync(CompletionBound);
+            for (var index = 0; index < warmup + iterations; index++)
+            {
+                poller.Tick();
+                Assert.True(await rotated.WaitAsync(CompletionBound));
+            }
+            output.WriteLine(
+                $"idle rotation={actual}B, node turns={baseline}B, excess={actual - baseline}B/{iterations}"
+            );
+            Assert.True(
+                actual == baseline,
+                $"idle rotation={actual}B, node turns={baseline}B, excess={actual - baseline}B/{iterations}"
+            );
+        }
+        finally
+        {
+            var shutdown = node.DisposeAsync();
+            poller.ReleaseWait();
+            await shutdown;
+        }
+    }
+
     [Fact]
     public async Task NodeIngressSourceGenerationAddsNoAllocationBeyondItsOwners()
     {
@@ -561,6 +629,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
             TaskCreationOptions.RunContinuationsAsynchronously
         );
         internal Action? BeforeWait;
+        internal Action? AfterWait;
         internal int OwnerThread { get; private set; }
         internal int ResumeThread { get; private set; }
         internal bool FailRearm { get; init; }
@@ -574,6 +643,9 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
         internal ControlledReceivePoller() => _inner.Add(_control, ControlSlot);
 
         internal void AllowWait() => _allowWait.Set();
+
+        // One controlled wake: the owner runs a rotation with no ready source.
+        internal void Tick() => _control.Start(TimeSpan.FromTicks(1), 1);
 
         // Node disposal can wake the owner, which then disposes this poller before
         // the test's fallback release runs. A disposed poller has no Wait to release.
@@ -619,6 +691,7 @@ public sealed class MeshReceiveWakeTests(ITestOutputHelper output)
                 else
                     destination[written++] = ready;
             }
+            AfterWait?.Invoke();
             return written;
         }
 

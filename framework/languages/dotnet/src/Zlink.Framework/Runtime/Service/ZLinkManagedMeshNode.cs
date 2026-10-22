@@ -10072,23 +10072,24 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             }
         }
 
-        foreach (var activity in activities ?? [])
-        {
-            if (activity.Closed is { } closedRid)
-                Publish(MeshMonitorEventKind.PeerClosed, peerRid: closedRid);
-            if (activity.ProbeId != 0)
+        if (activities is not null)
+            foreach (var activity in activities)
             {
-                SendControl(
-                    activity.Target,
-                    activity.Generation,
-                    ServiceWireConstants.Command.LivenessProbe,
-                    ZLinkServiceWireCodec.EncodeLiveness(
+                if (activity.Closed is { } closedRid)
+                    Publish(MeshMonitorEventKind.PeerClosed, peerRid: closedRid);
+                if (activity.ProbeId != 0)
+                {
+                    SendControl(
+                        activity.Target,
+                        activity.Generation,
                         ServiceWireConstants.Command.LivenessProbe,
-                        activity.ProbeId
-                    )
-                );
+                        ZLinkServiceWireCodec.EncodeLiveness(
+                            ServiceWireConstants.Command.LivenessProbe,
+                            activity.ProbeId
+                        )
+                    );
+                }
             }
-        }
         return nextLiveness == Timeout.InfiniteTimeSpan
             ? TimeSpan.MaxValue
             : Stopwatch.GetElapsedTime(0, now) + nextLiveness;
@@ -10132,20 +10133,21 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     nextLiveness = remaining;
             }
         }
-        foreach (var peer in expired ?? [])
-        {
-            if (
-                !_peersByRid.TryGetValue(peer.RoutingId, out var current)
-                || !ReferenceEquals(current, peer)
-            )
-                continue;
-            var physicalRid = peer.PhysicalRoutingId;
-            var closed = EndRouteAdmissionUnderLock(
-                new RouterRoute(peer.RoutingId, peer.RouteGeneration)
-            );
-            DisconnectTransport(peer, physicalRid);
-            (activities ??= []).Add((closed, default, 0, 0));
-        }
+        if (expired is not null)
+            foreach (var peer in expired)
+            {
+                if (
+                    !_peersByRid.TryGetValue(peer.RoutingId, out var current)
+                    || !ReferenceEquals(current, peer)
+                )
+                    continue;
+                var physicalRid = peer.PhysicalRoutingId;
+                var closed = EndRouteAdmissionUnderLock(
+                    new RouterRoute(peer.RoutingId, peer.RouteGeneration)
+                );
+                DisconnectTransport(peer, physicalRid);
+                (activities ??= []).Add((closed, default, 0, 0));
+            }
         return (intents, activities, nextLiveness);
     }
 
