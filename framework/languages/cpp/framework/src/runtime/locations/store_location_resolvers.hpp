@@ -247,8 +247,6 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
                    && address.owner.lease_generation > 0;
         };
         const auto actor_id = std::string (actor.actor_id ().value ());
-        if (auto cached = cached_route (_actor_routes, actor_id); cached && matches_actor (*cached))
-            co_return cached;
         auto address = co_await read_actor_address (actor_id);
         if (!address || !matches_actor (*address))
             co_return std::nullopt;
