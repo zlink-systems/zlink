@@ -19,10 +19,12 @@ import systems.zlink.framework.runtime.internal.service.ZLinkServiceSendHeaderAl
 import systems.zlink.framework.runtime.messaging.ZLinkPayloadEncoding;
 
 import java.nio.file.Files;
+import java.util.Optional;
 import java.util.concurrent.CompletionException;
 
 /** Public send preparation consumes codec output without an intermediate payload tuple. */
 public final class ZLinkSendPayloadPreparationAllocationTest {
+    private static volatile Object observed;
     private static final int SENDS = 100;
     private static final byte[] PAYLOAD = new byte[1024];
     private static final String CONTENT_TYPE = "application/json";
@@ -66,6 +68,7 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
                 new ZLinkChannelRuntime(
                         new ZLinkJavaChannelBackendAdapter(), options.registration(), serializer)) {
             long total = 0;
+            long totalOptionals = 0;
             for (boolean direct : new boolean[] {false, true}) {
                 var calls = new ZLinkSendCall[SENDS];
                 var outputs = new Message[SENDS];
@@ -73,7 +76,7 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
                     reject(prepare(runtime, direct));
                     assertThrows(IllegalStateException.class, serializer.output::refCount);
                 }
-                long control =
+                long[] control =
                         tuples(
                                 () -> {
                                     for (int i = 0; i < SENDS; i++) {
@@ -83,7 +86,12 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
                                         encoded.payload().close();
                                     }
                                 });
-                long actual;
+                long[] optionalControl =
+                        tuples(
+                                () -> {
+                                    for (int i = 0; i < SENDS; i++) observed = Optional.of(VALUE);
+                                });
+                long[] actual;
                 try {
                     actual =
                             tuples(
@@ -101,15 +109,21 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
                         }
                 }
                 System.out.printf(
-                        "direct=%s sends=%d controlTuples=%d prepareTuples=%d%n",
-                        direct, SENDS, control, actual);
+                        "direct=%s sends=%d controlTuples=%d prepareTuples=%d controlOptionals=%d prepareOptionals=%d%n",
+                        direct, SENDS, control[0], actual[0], optionalControl[1], actual[1]);
                 assertEquals(
                         SENDS,
-                        control,
+                        control[0],
                         "the explicit composite codec result is the positive control");
-                total += actual;
+                assertEquals(
+                        SENDS,
+                        optionalControl[1],
+                        "Optional allocation recording has a positive control");
+                total += actual[0];
+                totalOptionals += actual[1];
             }
             assertEquals(0, total, "the send calls directly own the codec output");
+            assertEquals(0, totalOptionals, "send preparation keeps packet names as strings");
         } finally {
             options.registration().applicationJobQueue().close();
         }
@@ -131,7 +145,7 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
                 failure.getCause());
     }
 
-    private static long tuples(Runnable action) throws Exception {
+    private static long[] tuples(Runnable action) throws Exception {
         var file = Files.createTempFile("zlink-send-prepare-", ".jfr");
         try {
             try (var recording = new Recording()) {
@@ -142,16 +156,17 @@ public final class ZLinkSendPayloadPreparationAllocationTest {
                 recording.stop();
                 recording.dump(file);
             }
-            long count = 0;
+            long[] count = new long[2];
             try (var events = new RecordingFile(file)) {
                 while (events.hasMoreEvents()) {
                     var event = events.readEvent();
                     assertNotEquals("jdk.DataLoss", event.getEventType().getName());
-                    if (event.getEventType().getName().equals("jdk.ObjectAllocationOutsideTLAB")
-                            && event.getClass("objectClass")
-                                    .getName()
-                                    .equals(ZLinkPayloadEncoding.EncodedPayload.class.getName()))
-                        count++;
+                    if (event.getEventType().getName().equals("jdk.ObjectAllocationOutsideTLAB")) {
+                        String allocated = event.getClass("objectClass").getName();
+                        if (allocated.equals(ZLinkPayloadEncoding.EncodedPayload.class.getName()))
+                            count[0]++;
+                        if (allocated.equals(Optional.class.getName())) count[1]++;
+                    }
                 }
             }
             return count;

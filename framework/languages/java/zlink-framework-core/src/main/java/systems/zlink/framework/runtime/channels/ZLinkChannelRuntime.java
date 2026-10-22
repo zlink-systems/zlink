@@ -1034,7 +1034,7 @@ public final class ZLinkChannelRuntime
                 sockets,
                 defaultRequestTimeout,
                 payload,
-                Optional.of(packetName),
+                packetName,
                 contentType,
                 null);
     }
@@ -1126,14 +1126,7 @@ public final class ZLinkChannelRuntime
         String packetName = ZLinkPayloadEncoding.resolvePacketName(message);
         Message payload = ZLinkPayloadEncoding.encodeMessage(serializer, message, contentType);
         return new RouteSendCall(
-                callRuntime,
-                meshName,
-                sockets,
-                target,
-                payload,
-                Optional.of(packetName),
-                contentType,
-                null);
+                callRuntime, meshName, sockets, target, payload, packetName, contentType, null);
     }
 
     @Override

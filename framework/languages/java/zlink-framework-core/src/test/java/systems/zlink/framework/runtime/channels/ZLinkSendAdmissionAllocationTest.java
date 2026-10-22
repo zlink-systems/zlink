@@ -491,7 +491,7 @@ public final class ZLinkSendAdmissionAllocationTest {
                                         sockets,
                                         Duration.ofSeconds(1),
                                         payload,
-                                        Optional.empty());
+                                        null);
                         default ->
                                 new RouteSendCall(
                                         runtime,
@@ -499,7 +499,7 @@ public final class ZLinkSendAdmissionAllocationTest {
                                         sockets,
                                         TARGET,
                                         payload,
-                                        Optional.empty(),
+                                        null,
                                         ZLinkChannelContentTypeFrame.DEFAULT_CONTENT_TYPE,
                                         null);
                     };

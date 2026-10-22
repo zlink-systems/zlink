@@ -40,7 +40,7 @@ final class RouteSendCall implements ZLinkSendCall {
     private final ZLinkChannelSocketRegistry sockets;
     private final RoutingId target;
     private final Message payload;
-    private final Optional<String> packetName;
+    private final String packetName;
     private final String contentType;
     private final ZLinkApplicationMetadata metadata;
 
@@ -50,7 +50,7 @@ final class RouteSendCall implements ZLinkSendCall {
             ZLinkChannelSocketRegistry sockets,
             RoutingId target,
             Message payload,
-            Optional<String> packetName,
+            String packetName,
             String contentType,
             ZLinkApplicationMetadata metadata) {
         this(
@@ -71,7 +71,7 @@ final class RouteSendCall implements ZLinkSendCall {
             ZLinkChannelSocketRegistry sockets,
             RoutingId target,
             Message payload,
-            Optional<String> packetName,
+            String packetName,
             String contentType,
             ZLinkApplicationMetadata metadata,
             AtomicBoolean submitGate) {
@@ -84,19 +84,6 @@ final class RouteSendCall implements ZLinkSendCall {
         this.packetName = packetName;
         this.contentType = contentType;
         this.metadata = metadata;
-    }
-
-    public ZLinkSendCall packetName(String name) {
-        return new RouteSendCall(
-                runtime,
-                channelName,
-                sockets,
-                target,
-                payload,
-                Optional.of(name),
-                contentType,
-                metadata,
-                submitGate);
     }
 
     @Override
@@ -207,7 +194,7 @@ final class RouteSendCall implements ZLinkSendCall {
                             ZLinkMessageFlowOutcome.SENT,
                             ZLinkDispatchErrorSurface.ROUTE_MESH_CHANNEL,
                             ZLinkDispatchMessageKind.SEND,
-                            packetName.orElse(null),
+                            packetName,
                             null,
                             null,
                             null,
@@ -586,7 +573,7 @@ final class ChannelSendCall implements ZLinkSendCall {
     private final ZLinkChannelSocketRegistry sockets;
     private final Duration defaultTimeout;
     private final Message payload;
-    private final Optional<String> packetName;
+    private final String packetName;
     private final String contentType;
     private final ZLinkApplicationMetadata metadata;
 
@@ -596,7 +583,7 @@ final class ChannelSendCall implements ZLinkSendCall {
             ZLinkChannelSocketRegistry sockets,
             Duration defaultTimeout,
             Message payload,
-            Optional<String> packetName) {
+            String packetName) {
         this(
                 runtime,
                 channelName,
@@ -614,7 +601,7 @@ final class ChannelSendCall implements ZLinkSendCall {
             ZLinkChannelSocketRegistry sockets,
             Duration defaultTimeout,
             Message payload,
-            Optional<String> packetName,
+            String packetName,
             String contentType,
             ZLinkApplicationMetadata metadata) {
         this(
@@ -635,7 +622,7 @@ final class ChannelSendCall implements ZLinkSendCall {
             ZLinkChannelSocketRegistry sockets,
             Duration defaultTimeout,
             Message payload,
-            Optional<String> packetName,
+            String packetName,
             String contentType,
             ZLinkApplicationMetadata metadata,
             AtomicBoolean submitGate) {
@@ -648,19 +635,6 @@ final class ChannelSendCall implements ZLinkSendCall {
         this.packetName = packetName;
         this.contentType = contentType;
         this.metadata = metadata;
-    }
-
-    public ZLinkSendCall packetName(String name) {
-        return new ChannelSendCall(
-                runtime,
-                channelName,
-                sockets,
-                defaultTimeout,
-                payload,
-                Optional.of(name),
-                contentType,
-                metadata,
-                submitGate);
     }
 
     @Override
@@ -717,7 +691,7 @@ final class ChannelSendCall implements ZLinkSendCall {
                             ZLinkMessageFlowOutcome.SENT,
                             ZLinkDispatchErrorSurface.CHANNEL,
                             ZLinkDispatchMessageKind.SEND,
-                            packetName.orElse(null),
+                            packetName,
                             null,
                             null,
                             null,

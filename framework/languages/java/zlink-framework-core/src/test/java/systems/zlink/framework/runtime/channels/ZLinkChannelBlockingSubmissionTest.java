@@ -453,7 +453,7 @@ final class ZLinkChannelBlockingSubmissionTest {
                             sockets,
                             Duration.ofSeconds(5),
                             sendPayload,
-                            Optional.of("packet"));
+                            "packet");
             request =
                     new ChannelRequestCall(
                             runtime,

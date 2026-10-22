@@ -357,12 +357,7 @@ final class ZLinkChannelSubmitTurnTest {
 
         ZLinkSendCall send() {
             return new ChannelSendCall(
-                    runtime,
-                    "orders",
-                    sockets,
-                    DEFAULT_TIMEOUT,
-                    Message.from("send"),
-                    Optional.of("packet"));
+                    runtime, "orders", sockets, DEFAULT_TIMEOUT, Message.from("send"), "packet");
         }
 
         ZLinkInternalSpotNode node(
