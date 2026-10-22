@@ -7,6 +7,7 @@
 #include "runtime/diagnostics/instance_spot_metrics.hpp"
 #include "runtime/dispatch/application_record.hpp"
 #include "runtime/dispatch/application_job_queue.hpp"
+#include "runtime/dispatch/receive_batch_budget.hpp"
 #include "runtime/dispatch/blocking_task.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include <runtime/locations/location_repository.hpp>
@@ -956,6 +957,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              foundation::operation_terminal_t terminal,
                              zlink::message_t payload);
     task_t<std::size_t> dispatch_user_spot_operations ();
+    task_t<std::size_t>
+    dispatch_user_spot_operations (mesh::service_mailbox_claim_t &&first_claim,
+                                   receive_batch_budget_t infrastructure_budget);
     struct application_claim_owner_t;
     using application_claim_result_t = std::variant<std::size_t, task_t<std::size_t>>;
     application_claim_result_t

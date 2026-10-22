@@ -43,6 +43,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 namespace zlink::framework::runtime::host
@@ -5765,6 +5766,61 @@ task_t<void> public_host_runtime_t::dispatch_instance_spot_activation_core (
 
 task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
 {
+    try {
+        const auto now = std::chrono::steady_clock::now ();
+        if (relocation_management_due (now)) {
+            std::vector<pending_relocation_assembly_t> expired_relocation_assemblies;
+            _relocation_session_terminal_lane
+              .run ([&] {
+                  for (auto pending = _relocation_assemblies.begin ();
+                       pending != _relocation_assemblies.end ();) {
+                      if (pending->second.expires_at > now) {
+                          ++pending;
+                          continue;
+                      }
+                      expired_relocation_assemblies.push_back (std::move (pending->second));
+                      pending = _relocation_assemblies.erase (pending);
+                  }
+              })
+              .get ();
+            for (const auto &expired : expired_relocation_assemblies)
+                reply_relocation_assembly_failure (
+                  expired, protocol::framework_error_code::relocationDataLost);
+            poll_relocation_target_attempts ();
+            flush_pending_session_relocation_seals ();
+            _relocation_session_terminal_lane
+              .run ([this] { publish_relocation_next_due_on_lane (); })
+              .get ();
+        }
+        receive_batch_budget_t infrastructure_budget;
+        auto claim = _transport->mailbox ().try_claim (
+          mesh::service_mailbox_domain_t::infrastructure, dispatch_limits::receive_batch_messages,
+          dispatch_limits::receive_batch_bytes);
+        if (!claim)
+            return task_t<std::size_t> (result_t<std::size_t>::success (0));
+        try {
+            return dispatch_user_spot_operations (std::move (*claim), infrastructure_budget);
+        }
+        catch (...) {
+            // The coroutine takes the claim in its first instruction. If its
+            // frame or promise cannot be created, this scope still owns it.
+            (void) _transport->mailbox ().release (*claim);
+            throw;
+        }
+    }
+    catch (...) {
+        return task_t<std::size_t> (detail::current_exception_result<std::size_t> ());
+    }
+}
+
+task_t<std::size_t>
+public_host_runtime_t::dispatch_user_spot_operations (mesh::service_mailbox_claim_t &&first_claim,
+                                                      receive_batch_budget_t infrastructure_budget)
+{
+    // task_t starts synchronously. Own the claim before any suspension; the
+    // reference parameter is never read again after this transfer.
+    static_assert (std::is_nothrow_move_constructible_v<mesh::service_mailbox_claim_t>);
+    std::optional<mesh::service_mailbox_claim_t> claim (std::move (first_claim));
     std::shared_ptr<zlink::framework::location_repository_t> store;
     user_spot_materializer_t materializer;
     user_spot_closer_t user_spot_closer;
@@ -5796,35 +5852,8 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
           })
           .get ();
     };
-    const auto now = std::chrono::steady_clock::now ();
-    if (relocation_management_due (now)) {
-        std::vector<pending_relocation_assembly_t> expired_relocation_assemblies;
-        _relocation_session_terminal_lane
-          .run ([&] {
-              for (auto pending = _relocation_assemblies.begin ();
-                   pending != _relocation_assemblies.end ();) {
-                  if (pending->second.expires_at > now) {
-                      ++pending;
-                      continue;
-                  }
-                  expired_relocation_assemblies.push_back (std::move (pending->second));
-                  pending = _relocation_assemblies.erase (pending);
-              }
-          })
-          .get ();
-        for (const auto &expired : expired_relocation_assemblies)
-            reply_relocation_assembly_failure (expired,
-                                               protocol::framework_error_code::relocationDataLost);
-        poll_relocation_target_attempts ();
-        flush_pending_session_relocation_seals ();
-        _relocation_session_terminal_lane.run ([this] { publish_relocation_next_due_on_lane (); })
-          .get ();
-    }
     std::size_t count = 0;
-    receive_batch_budget_t infrastructure_budget;
-    while (auto claim = _transport->mailbox ().try_claim (
-             mesh::service_mailbox_domain_t::infrastructure,
-             dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes)) {
+    do {
         load_configuration ();
         for (auto &mailbox_record : claim->records) {
             std::size_t record_bytes = 0;
@@ -6992,7 +7021,10 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations ()
         (void) _transport->mailbox ().release (*claim);
         if (infrastructure_budget.exhausted ())
             break;
-    }
+        claim.reset ();
+    } while ((claim = _transport->mailbox ().try_claim (
+                mesh::service_mailbox_domain_t::infrastructure,
+                dispatch_limits::receive_batch_messages, dispatch_limits::receive_batch_bytes)));
     co_return count;
 }
 
