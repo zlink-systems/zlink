@@ -181,6 +181,7 @@ void fanout_location_runtime_t::start ()
         _application_supply = std::make_unique<application_supply_slot_t> (
           _application_jobs, [this] { _wake_timer.signal (); });
         for (const auto &channel : _channels) {
+            _locations->register_metric_scope ("channel", channel.name);
             if (channel.publisher.enabled && channel.publisher.discovery)
                 start_publisher (channel, owner);
             if (channel.subscriber.enabled && channel.subscriber.discovery)
@@ -273,7 +274,7 @@ void fanout_location_runtime_t::run ()
                 publish_snapshot_changes ();
             }
             catch (...) {
-                _locations->record_store_error ();
+                _channel_runtime.runtime_failures ()->report (std::current_exception ());
             }
             next_reconcile = now + _locations->options ().polling_interval;
         }

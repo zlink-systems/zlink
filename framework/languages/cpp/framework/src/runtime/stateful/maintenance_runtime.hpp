@@ -2,6 +2,7 @@
 #pragma once
 
 #include "runtime/protocol/relocation_envelope_codec.hpp"
+#include "runtime/diagnostics/relocation_metrics.hpp"
 #include "runtime/protocol/service_wire_codec.hpp"
 #include "runtime/execution/state_lane.hpp"
 #include "runtime/stateful/relocation_transfer.hpp"
@@ -541,6 +542,10 @@ class maintenance_runtime_t
     void attach_unavailable_terminal (std::function<void (const object_ref_t &)> terminal) noexcept;
     void attach_committed_terminal (committed_terminal_t terminal) noexcept;
 
+    void configure_metrics (std::shared_ptr<runtime::relocation_metrics_t> metrics)
+    {
+        _metrics = std::move (metrics);
+    }
     relocation_gate_snapshot_t gate_snapshot () const;
 
     /* Optional source-local metric (25 §"zlink.relocation.route_convergence"):
@@ -594,6 +599,8 @@ class maintenance_runtime_t
     compute_inventory_digest (const std::vector<object_ref_t> &participants);
 
   private:
+    std::shared_ptr<runtime::relocation_metrics_t> _metrics;
+
     struct relocation_terminal_state_t;
     class relocation_metric_operation_t;
 
