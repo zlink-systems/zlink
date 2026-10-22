@@ -1003,7 +1003,8 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_FOUNDATION_TESTS)
 
   add_executable(test_cpp_framework_raw_route_port_contract
     tests/Zlink.Framework.ContractTests/test_cpp_framework_raw_route_port_contract.cpp
-    framework/src/runtime/backend/raw_route_port.cpp)
+    framework/src/runtime/backend/raw_route_port.cpp
+    tests/support/allocation_counter.cpp)
   target_compile_features(test_cpp_framework_raw_route_port_contract PRIVATE cxx_std_20)
   target_include_directories(test_cpp_framework_raw_route_port_contract PRIVATE
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/include
