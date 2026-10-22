@@ -44,7 +44,7 @@ void route_channel_runtime_t::default_request_timeout (std::chrono::milliseconds
 
 std::chrono::milliseconds route_channel_runtime_t::default_request_timeout () const
 {
-    return _lane.run ([&, this] { return _default_request_timeout; }).get ();
+    return _lane.run_sync ([&, this] { return _default_request_timeout; });
 }
 
 void route_channel_runtime_t::start ()

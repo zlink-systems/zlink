@@ -4368,12 +4368,12 @@ void mesh_node_runtime_t::configure_relocation_metric_context (
 
 std::string mesh_node_runtime_t::mesh_name () const
 {
-    return _state->lane.run ([&] { return _state->mesh_name; }).get ();
+    return _state->lane.run_sync ([&] { return _state->mesh_name; });
 }
 
 std::chrono::milliseconds mesh_node_runtime_t::default_request_timeout () const
 {
-    return _state->lane.run ([&] { return _state->default_request_timeout; }).get ();
+    return _state->lane.run_sync ([&] { return _state->default_request_timeout; });
 }
 
 std::optional<zlink::routing_id_t> mesh_node_runtime_t::routing_id () const
