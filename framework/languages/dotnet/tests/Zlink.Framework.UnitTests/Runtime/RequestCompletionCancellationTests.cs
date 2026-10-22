@@ -44,23 +44,40 @@ public sealed class RequestCompletionCancellationTests
     {
         using var source = new CancellationTokenSource();
         var token = cancellable ? source.Token : CancellationToken.None;
-        const int count = 1024;
         for (var index = 0; index < 256; index++)
         {
             Baseline(token);
             using var completion = new ZLinkRequestCompletion<int>(token);
         }
-        var before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < count; index++)
-            Baseline(token);
-        var baseline = GC.GetAllocatedBytesForCurrentThread() - before;
-        before = GC.GetAllocatedBytesForCurrentThread();
-        for (var index = 0; index < count; index++)
+        var baseline = SteadyAllocated(() => Baseline(token));
+        var actual = SteadyAllocated(() =>
         {
             using var completion = new ZLinkRequestCompletion<int>(token);
-        }
-        var actual = GC.GetAllocatedBytesForCurrentThread() - before;
+        });
         Assert.Equal(baseline, actual);
+    }
+
+    // Steady per-call bytes: the value most pause-free calls allocate. An extra
+    // allocation in the completion adds to every call, while a one-time runtime
+    // allocation in either window (registration storage growth, tier-up) adds to
+    // one call only and must not decide the comparison.
+    private static long SteadyAllocated(Action action)
+    {
+        const int count = 1024;
+        var counts = new Dictionary<long, int>();
+        for (var measured = 0; measured < count; )
+        {
+            var pause = GC.GetTotalPauseDuration();
+            var before = GC.GetAllocatedBytesForCurrentThread();
+            action();
+            var bytes = GC.GetAllocatedBytesForCurrentThread() - before;
+            if (GC.GetTotalPauseDuration() != pause)
+                continue;
+            counts[bytes] = counts.GetValueOrDefault(bytes) + 1;
+            measured++;
+        }
+        // On a tie, report the larger count so a real per-call cost is never hidden.
+        return counts.MaxBy(static entry => (entry.Value, entry.Key)).Key;
     }
 
     private static void Baseline(CancellationToken token)
