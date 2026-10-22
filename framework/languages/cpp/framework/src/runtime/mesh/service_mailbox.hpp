@@ -81,6 +81,10 @@ class service_mailbox_t
     bool has_application_dispatch () const;
     void begin_application_receive_turn ();
     void end_application_receive_turn ();
+    using application_ready_batch_t =
+      std::optional<std::pair<std::deque<std::string>, application_ready_t>>;
+    application_ready_batch_t take_application_receive_turn ();
+    static void notify_application_ready (application_ready_batch_t &ready);
     bool begin_application_drain (const std::string &owner);
     void end_application_drain (const std::string &owner);
 
@@ -142,6 +146,7 @@ class service_mailbox_t
     static std::size_t retained_bytes (const service_mailbox_record_t &record);
 
     void notify_application_ready ();
+    application_ready_batch_t take_application_ready_locked ();
 
     mutable std::mutex _mutex;
     domain_t _application;

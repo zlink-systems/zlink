@@ -1989,6 +1989,17 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   if(CMAKE_SYSTEM_NAME STREQUAL "Linux"
      AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU"
      AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+    add_zlink_framework_test(
+      test_cpp_framework_receive_handoff_turn
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_receive_handoff_turn.cpp
+      "framework-unit;framework-regression;execution;resource"
+      unit)
+    target_include_directories(test_cpp_framework_receive_handoff_turn PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    zlink_framework_cpp_add_boost_headers(test_cpp_framework_receive_handoff_turn)
+    target_link_options(test_cpp_framework_receive_handoff_turn PRIVATE
+      "LINKER:--wrap=zlink_router_recv"
+      "LINKER:--wrap=_ZN5zlink9framework7runtime18offload_executor_t15try_assign_roleESt10shared_ptrINS2_6role_tEE")
     set(ZLINK_TEST_RECEIVE_WAIT_SYMBOL
       "_ZN5zlink9framework7runtime4host21public_host_runtime_t26wait_for_dispatch_activityENSt6chrono8durationIlSt5ratioILl1ELl1000EEEEbSt8optionalINS4_10time_pointINS4_3_V212steady_clockENS5_IlS6_ILl1ELl1000000000EEEEEEE")
     target_compile_definitions(test_cpp_framework_receive_role_completion PRIVATE

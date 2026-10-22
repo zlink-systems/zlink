@@ -279,24 +279,42 @@ void service_mailbox_t::begin_application_receive_turn ()
 
 void service_mailbox_t::end_application_receive_turn ()
 {
-    {
-        std::lock_guard lock (_mutex);
-        _application_receive_turn = false;
+    auto ready = take_application_receive_turn ();
+    notify_application_ready (ready);
+}
+
+service_mailbox_t::application_ready_batch_t service_mailbox_t::take_application_receive_turn ()
+{
+    std::lock_guard lock (_mutex);
+    _application_receive_turn = false;
+    return take_application_ready_locked ();
+}
+
+service_mailbox_t::application_ready_batch_t service_mailbox_t::take_application_ready_locked ()
+{
+    if (_application_receive_turn || !_application_ready || _application.ready.empty ())
+        return std::nullopt;
+    application_ready_batch_t ready (std::in_place);
+    ready->second = _application_ready;
+    ready->first.swap (_application.ready);
+    return ready;
+}
+
+void service_mailbox_t::notify_application_ready (application_ready_batch_t &ready)
+{
+    while (ready && !ready->first.empty ()) {
+        auto owner = std::move (ready->first.front ());
+        ready->first.pop_front ();
+        ready->second (owner);
     }
-    notify_application_ready ();
 }
 
 void service_mailbox_t::notify_application_ready ()
 {
     std::unique_lock lock (_mutex);
-    if (_application_receive_turn || !_application_ready || _application.ready.empty ())
-        return;
-    std::deque<std::string> ready;
-    ready.swap (_application.ready);
-    auto notify = _application_ready;
+    auto ready = take_application_ready_locked ();
     lock.unlock ();
-    for (const auto &owner : ready)
-        notify (owner);
+    notify_application_ready (ready);
 }
 
 void service_mailbox_t::close ()
