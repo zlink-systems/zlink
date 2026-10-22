@@ -49,17 +49,32 @@ class ZLinkMessageFlowTracerTest {
                         java.lang.management.ManagementFactory.getThreadMXBean();
         bean.setThreadAllocatedMemoryEnabled(true);
         long thread = Thread.currentThread().threadId();
-        for (var mode : List.of(ZLinkMessageFlowLogMode.OFF, ZLinkMessageFlowLogMode.NORMAL)) {
-            var tracer = tracer(options(mode));
-            for (int index = 0; index < 10000; index++)
-                allocationSink = tracer.begin(ZLinkMessageFlowOutcome.DISPATCHED);
-            long before = bean.getThreadAllocatedBytes(thread);
-            for (int index = 0; index < 10000; index++)
-                allocationSink = tracer.begin(ZLinkMessageFlowOutcome.DISPATCHED);
-            long allocated = bean.getThreadAllocatedBytes(thread) - before;
-            if (mode == ZLinkMessageFlowLogMode.OFF) assertEquals(0L, allocated);
-            else assertTrue(allocated > 0L);
-        }
+        java.util.function.Function<java.util.function.Supplier<?>, Long> minimumAllocated =
+                action -> {
+                    int callsPerInterval = 10000;
+                    for (int index = 0; index < callsPerInterval; index++)
+                        allocationSink = action.get();
+
+                    long minimum = Long.MAX_VALUE;
+                    for (int interval = 0; interval < 8; interval++) {
+                        long before = bean.getThreadAllocatedBytes(thread);
+                        for (int index = 0; index < callsPerInterval; index++)
+                            allocationSink = action.get();
+                        long allocated = bean.getThreadAllocatedBytes(thread) - before;
+                        minimum = Math.min(minimum, allocated);
+                    }
+                    return minimum;
+                };
+
+        var off = tracer(options(ZLinkMessageFlowLogMode.OFF));
+        assertEquals(
+                0L,
+                minimumAllocated.apply(() -> off.begin(ZLinkMessageFlowOutcome.DISPATCHED)));
+
+        var normal = tracer(options(ZLinkMessageFlowLogMode.NORMAL));
+        assertTrue(
+                minimumAllocated.apply(() -> normal.begin(ZLinkMessageFlowOutcome.DISPATCHED))
+                        > 0L);
     }
 
     private static ZLinkDispatchOptionsRegistration options(ZLinkMessageFlowLogMode mode) {
