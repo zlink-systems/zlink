@@ -131,6 +131,7 @@ message ObserveBingoEventsReq {
   string room_id = 1;
 }
 
+// Subscribed acknowledges the observation request; membership completes asynchronously.
 message ObserveBingoEventsRes {
   bool subscribed = 1;
   reserved 2;
@@ -214,4 +215,14 @@ message BingoPlayerState {
   int32 completed_lines = 7;
   int32 wins = 8;
   int32 losses = 9;
+}
+
+// A snapshot read after observer membership commits includes a finished room's reward.
+message GetBingoObservationReq {}
+message GetBingoObservationRes {
+  BingoRoomState state = 1;
+  optional BingoRewardAcquiredEvent reward = 2;
+}
+message BingoObservationStateNotify {
+  BingoRoomState state = 1;
 }

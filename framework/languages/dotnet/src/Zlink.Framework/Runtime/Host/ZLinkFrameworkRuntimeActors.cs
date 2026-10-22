@@ -1488,10 +1488,7 @@ internal sealed partial class ZLinkFrameworkRuntime
                         .CompleteAsync(request.HandoffId)
                         .ConfigureAwait(false);
                 }
-                LogActorHandoff(
-                    $"handoff_completion_failed_after_commit actor={request.ActorId} "
-                        + $"kind={MapPostCommitActorJoinFailure(lifecycleFailure)}"
-                );
+
                 return;
             }
             var canonicalMaintenance = actorState.Handoff.IsCanonicalMaintenanceHandoff(
@@ -2951,10 +2948,6 @@ internal sealed partial class ZLinkFrameworkRuntime
                 .ConfigureAwait(false);
             await _actorHandoffAdmissions.CompleteAsync(request.HandoffId).ConfigureAwait(false);
         }
-        LogActorHandoff(
-            $"handoff_completion_failed_after_commit actor={request.ActorId} "
-                + $"kind={MapPostCommitActorJoinFailure(lifecycleFailure)}"
-        );
     }
 
     private async ValueTask DeliverFailedTransferredActorJoinAsync(
@@ -2964,6 +2957,18 @@ internal sealed partial class ZLinkFrameworkRuntime
         CancellationToken cancellationToken
     )
     {
+        if (Flow.DispatchErrorsEnabled)
+            Flow.TraceDispatchError(
+                new ZLinkDispatchFailure(
+                    ZLinkDispatchErrorSurface.ActorRelocation,
+                    ZLinkDispatchMessageKind.Control,
+                    ZLinkDispatchErrorReporter.ReasonFrom(failure),
+                    ZLinkDispatchErrorAction.FailCaller,
+                    "OnJoinedActor",
+                    ActorId: request.ActorId,
+                    Exception: failure
+                )
+            );
         if (request.OperationIdHigh == 0 && request.OperationIdLow == 0)
             return;
 
@@ -3023,71 +3028,71 @@ internal sealed partial class ZLinkFrameworkRuntime
     )
     {
         var start = actorState.Handoff.TargetActivation;
+        _ = actorState.Handoff.AdmitDurablePrefix(
+            handoffId,
+            frame => AdmitActorHandoffFrame(actorState, frame, start, dispatch)
+        );
+    }
+
+    // Both a restored source and a committed target transfer record ownership
+    // through this existing Actor FIFO admission. The returned Task is its
+    // handler terminal, which the restoring lifecycle turn must not await.
+    internal Task AdmitActorHandoffFrame(
+        ZLinkActorRuntimeState actorState,
+        ZLinkActorHandoffFrame frame,
+        Task start,
+        Func<ZLinkActorHandoffFrame, Task>? dispatch = null
+    )
+    {
         var hostQueue = GetOrStartState().ApplicationJobQueue;
-        var reportFailure = ErrorSink.CaptureGenerationReporter();
         var actorRef =
             actorState.NativeActorRef
             ?? throw new ZLinkRelocationDataLostException(
-                "Target Actor reference is missing during FIFO admission."
+                "Actor reference is missing during FIFO admission."
             );
-        var pipeline = new ZLinkActorInboundPipeline(
-            this,
-            new ZLinkEntrySpotActorInboundEndpoint(this)
-        );
-        dispatch ??= frame =>
-            actorState.LiveActivation is { } activation
-                ? activation.DispatchOwnedActorFrameAsync(actorRef, frame, null, ShutdownToken)
-                : pipeline.DispatchOwnedFrameAsync(
-                    ZLinkActorHandoffFrames.Restore(actorRef, [frame]),
-                    null,
-                    ShutdownToken
-                );
-        var terminal = actorState.Handoff.AdmitDurablePrefix(
-            handoffId,
-            frame =>
+        ZLinkApplicationJobQueueLease? prepared = null;
+        var record = new ZLinkActorDurableRecord(
+            async ct =>
             {
-                ZLinkApplicationJobQueueLease? prepared = null;
-                var record = new ZLinkActorDurableRecord(
-                    async ct =>
-                    {
-                        actorState.Handoff.ClaimDurableFrame(frame);
-                        using var dispatchScope = actorState.EnterDispatch();
-                        using var invocation = ZLinkApplicationJobQueueInvocation.Enter(prepared!);
-                        await dispatch(frame).ConfigureAwait(false);
-                    },
-                    async ct =>
-                    {
-                        await start.WaitAsync(ct).ConfigureAwait(false);
-                        var acquired = await hostQueue
-                            .AcquireAsync(ct, frame.Origin)
-                            .ConfigureAwait(false);
-                        Interlocked.Exchange(ref prepared, acquired);
-                        if (ct.IsCancellationRequested)
-                        {
-                            Interlocked.Exchange(ref prepared, null)?.Dispose();
-                            ct.ThrowIfCancellationRequested();
-                        }
-                        acquired.MarkQueued();
-                    },
-                    () => Interlocked.Exchange(ref prepared, null)?.Dispose(),
-                    OnWithdrawable: withdraw => frame.Withdraw = withdraw,
-                    Ready: () => actorState.Handoff.DurablePrefixCanRun,
-                    ReportFailure: reportFailure
-                );
-                return actorState.AdmitDurablePrefix([record])[0];
-            }
-        );
-        // Each FIFO item reports its failure through the captured runtime sink.
-        // Observe the aggregate without tying activation to handler terminals.
-        _ = terminal.ContinueWith(
-            static task =>
-            {
-                _ = task.Exception;
+                actorState.Handoff.ClaimDurableFrame(frame);
+                using var dispatchScope = actorState.EnterDispatch();
+                using var invocation = ZLinkApplicationJobQueueInvocation.Enter(prepared!);
+                if (dispatch is not null)
+                    await dispatch(frame).ConfigureAwait(false);
+                else if (actorState.LiveActivation is { } activation)
+                    await activation
+                        .DispatchOwnedActorFrameAsync(actorRef, frame, null, ShutdownToken)
+                        .ConfigureAwait(false);
+                else
+                    await new ZLinkActorInboundPipeline(
+                        this,
+                        new ZLinkEntrySpotActorInboundEndpoint(this)
+                    )
+                        .DispatchOwnedFrameAsync(
+                            ZLinkActorHandoffFrames.Restore(actorRef, [frame]),
+                            null,
+                            ShutdownToken
+                        )
+                        .ConfigureAwait(false);
             },
-            CancellationToken.None,
-            TaskContinuationOptions.OnlyOnFaulted,
-            TaskScheduler.Default
+            async ct =>
+            {
+                await start.WaitAsync(ct).ConfigureAwait(false);
+                var acquired = await hostQueue.AcquireAsync(ct, frame.Origin).ConfigureAwait(false);
+                Interlocked.Exchange(ref prepared, acquired);
+                if (ct.IsCancellationRequested)
+                {
+                    Interlocked.Exchange(ref prepared, null)?.Dispose();
+                    ct.ThrowIfCancellationRequested();
+                }
+                acquired.MarkQueued();
+            },
+            () => Interlocked.Exchange(ref prepared, null)?.Dispose(),
+            OnWithdrawable: withdraw => frame.Withdraw = withdraw,
+            Ready: () => actorState.Handoff.DurablePrefixCanRun,
+            ReportFailure: ErrorSink.CaptureGenerationReporter()
         );
+        return actorState.AdmitDurablePrefix([record])[0];
     }
 
     private readonly record struct ActorHandoffTarget(
