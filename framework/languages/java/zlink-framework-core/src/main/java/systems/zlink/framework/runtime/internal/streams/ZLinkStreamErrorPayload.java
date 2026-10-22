@@ -27,7 +27,7 @@ public final class ZLinkStreamErrorPayload {
                         : ZLinkChannelEnvelope.errorCodeName(
                                 ZLinkFrameworkErrorKind.INTERNAL_FAILURE);
         String message = error.getMessage();
-        if (message == null || message.isBlank()) {
+        if (message == null) {
             message = error.getClass().getSimpleName();
         }
         try {
@@ -56,10 +56,9 @@ public final class ZLinkStreamErrorPayload {
                     || !codeNode.isTextual()
                     || messageNode == null
                     || !messageNode.isTextual()
-                    || codeNode.textValue().isBlank()
-                    || messageNode.textValue().isBlank()) {
+                    || codeNode.textValue().isBlank()) {
                 throw new IllegalArgumentException(
-                        "STREAM error payload requires non-empty code and message strings");
+                        "STREAM error payload requires a non-empty code and a message string");
             }
             String code = codeNode.textValue();
             ZLinkFrameworkErrorKind frameworkKind = frameworkKind(code);
