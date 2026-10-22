@@ -3,6 +3,8 @@
 
 #include <zlink/framework/contracts/errors/error.hpp>
 
+#include "runtime/diagnostics/mesh_request_metrics.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -23,6 +25,33 @@ namespace zlink::framework::detail
 class activation_admission_t : public std::enable_shared_from_this<activation_admission_t>
 {
   public:
+    void configure_metrics (std::string mesh_name)
+    {
+        if (_active_metric || _limit_metric)
+            return;
+        _metric_mesh = std::move (mesh_name);
+        auto provider = opentelemetry::metrics::Provider::GetMeterProvider ();
+        if (dynamic_cast<opentelemetry::metrics::NoopMeterProvider *> (provider.get ()))
+            return;
+        auto meter = provider->GetMeter ("zlink.framework");
+        if (!meter)
+            return;
+        _active_metric =
+          meter->CreateDoubleObservableGauge ("zlink.object.activation.active", "", "{activation}");
+        _limit_metric =
+          meter->CreateDoubleObservableGauge ("zlink.object.activation.limit", "", "{activation}");
+        if (_active_metric)
+            _active_metric->AddCallback (&observe_active, this);
+        if (_limit_metric)
+            _limit_metric->AddCallback (&observe_limit, this);
+    }
+    ~activation_admission_t ()
+    {
+        if (_active_metric)
+            _active_metric->RemoveCallback (&observe_active, this);
+        if (_limit_metric)
+            _limit_metric->RemoveCallback (&observe_limit, this);
+    }
     static constexpr std::int32_t default_limit = 128;
 
     // The limit is fixed before the MeshNode starts (MeshNode §5.1).
@@ -104,6 +133,28 @@ class activation_admission_t : public std::enable_shared_from_this<activation_ad
     }
 
   private:
+    static void observe (opentelemetry::metrics::ObserverResult result,
+                         activation_admission_t &admission,
+                         double value)
+    {
+        auto observer = opentelemetry::nostd::get<
+          opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObserverResultT<double>>> (
+          result);
+        observer->Observe (value, {{"mesh_name", admission._metric_mesh}});
+    }
+    static void observe_active (opentelemetry::metrics::ObserverResult result, void *context)
+    {
+        auto &admission = *static_cast<activation_admission_t *> (context);
+        observe (result, admission, admission.active ());
+    }
+    static void observe_limit (opentelemetry::metrics::ObserverResult result, void *context)
+    {
+        auto &admission = *static_cast<activation_admission_t *> (context);
+        observe (result, admission, admission.limit ());
+    }
+    std::string _metric_mesh;
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument> _active_metric;
+    opentelemetry::nostd::shared_ptr<opentelemetry::metrics::ObservableInstrument> _limit_metric;
     mutable std::mutex _mutex;
     std::int32_t _limit = default_limit;
     std::set<std::string> _admitted;
