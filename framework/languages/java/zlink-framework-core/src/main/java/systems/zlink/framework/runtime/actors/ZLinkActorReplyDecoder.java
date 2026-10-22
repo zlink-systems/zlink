@@ -32,37 +32,32 @@ final class ZLinkActorReplyDecoder {
 
     private static <TReply> TReply decodeCore(
             List<Message> reply, Class<TReply> replyType, ZLinkMessageSerializer serializer) {
-        if (reply == null || reply.isEmpty()) {
+        if (reply == null || reply.size() != 1) {
             //  Spec 32-framework-error-model:40,83-92 — an unprocessable reply
             //  contract is a ProtocolError, not a configuration error.
             throw new ZLinkFrameworkException(
-                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR, "Actor request reply is empty.");
+                    ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
+                    "Actor request reply must contain one STREAM frame.");
         }
-        if (reply.size() == 1) {
-            byte[] frame = reply.get(0).toByteArray();
-            Optional<ZLinkStreamFrameCodec.DecodedFrame> decoded =
-                    ZLinkStreamFrameCodec.tryDecode(frame);
-            if (decoded.isPresent()) {
-                ZLinkStreamFrameCodec.DecodedFrame decodedFrame = decoded.get();
-                Message payload = Message.from(decodedFrame.body());
-                try {
-                    return decodePayload(
-                            ZLinkStreamHeaderCodec.decodeOrPlain(decodedFrame.header()),
-                            payload,
-                            replyType,
-                            serializer);
-                } finally {
-                    payload.close();
-                }
-            }
-        }
-        if (reply.size() < 2) {
+        byte[] frame = reply.get(0).toByteArray();
+        Optional<ZLinkStreamFrameCodec.DecodedFrame> decoded =
+                ZLinkStreamFrameCodec.tryDecode(frame);
+        if (decoded.isEmpty()) {
             throw new ZLinkFrameworkException(
                     ZLinkFrameworkErrorKind.PROTOCOL_ERROR,
-                    "Actor request reply payload is missing.");
+                    "Actor request reply frame is invalid.");
         }
-        ZLinkStreamHeader header = ZLinkStreamHeaderCodec.decodeOrPlain(reply.get(0).toByteArray());
-        return decodePayload(header, reply.get(1), replyType, serializer);
+        ZLinkStreamFrameCodec.DecodedFrame decodedFrame = decoded.get();
+        Message payload = Message.from(decodedFrame.body());
+        try {
+            return decodePayload(
+                    ZLinkStreamHeaderCodec.decodeOrPlain(decodedFrame.header()),
+                    payload,
+                    replyType,
+                    serializer);
+        } finally {
+            payload.close();
+        }
     }
 
     private static <TReply> TReply decodePayload(

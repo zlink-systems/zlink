@@ -8076,8 +8076,48 @@ int actor_typed_wire_header_contract ()
     return 0;
 }
 
+int actor_reply_framing_vectors ()
+{
+    auto root = std::filesystem::path (__FILE__).parent_path ();
+    const auto relative = "framework/runtime/conformance/actor-reply-framing-v1.json";
+    while (!root.empty () && !std::filesystem::is_regular_file (root / relative)) {
+        const auto parent = root.parent_path ();
+        if (parent == root)
+            return 1;
+        root = parent;
+    }
+    std::ifstream input (root / relative);
+    if (!input)
+        return 1;
+    const auto fixture = nlohmann::json::parse (input);
+    for (const auto &vector : fixture.at ("cases")) {
+        std::vector<zlink::message_t> parts;
+        for (const auto &part : vector.at ("parts")) {
+            const auto hex = part.get<std::string> ();
+            std::vector<std::uint8_t> bytes;
+            for (std::size_t i = 0; i < hex.size (); i += 2)
+                bytes.push_back (
+                  static_cast<std::uint8_t> (std::stoul (hex.substr (i, 2), nullptr, 16)));
+            parts.push_back (zlink::message_t::from (bytes));
+        }
+        const auto reply = zlink::framework::detail::decode_actor_reply (
+          zlink::framework::runtime::messaging::message_parts_t (std::move (parts)));
+        if (static_cast<bool> (reply) != vector.at ("accepted").get<bool> ())
+            return 2;
+        if (!reply
+            && reply.error_kind () != zlink::framework::framework_error_kind_t::protocol_error)
+            return 3;
+        if (reply && (!reply.value () || reply.value ()->to_string () != "{\"value\":\"pong\"}"))
+            return 4;
+    }
+    return 0;
+}
+
 int main (int argc, char **argv)
 {
+    if (const auto framing = actor_reply_framing_vectors (); framing != 0)
+        return 500 + framing;
+
     zlink::framework::completion_owner_t completion_owner;
     if (argc == 2 && std::string (argv[1]) == "--actor-typed-wire")
         return actor_typed_wire_header_contract ();

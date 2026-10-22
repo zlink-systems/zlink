@@ -791,13 +791,9 @@ function decodeActorReply<TReply>(
         }
       }
     }
-    if (reply.length >= 2) {
-      const header = decodeStreamHeader(reply[0].data());
-      return decodeActorReplyPayload<TReply>(header.kind, reply[1], serializers, packetName);
-    }
     throw createInternalFrameworkException(
       ZLinkFrameworkInternalErrorKind.RequestProtocolError,
-      'Actor request reply is empty.'
+      'Actor request reply must contain one valid STREAM frame.'
     );
   } finally {
     closeMessages(reply);

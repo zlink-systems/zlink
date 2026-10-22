@@ -8,6 +8,57 @@ namespace Zlink.Framework.UnitTests;
 
 public sealed class ActorClientTests
 {
+    [Fact]
+    public void ActorReplyDecoder_FollowsSharedFramingVectors()
+    {
+        const string relative = "framework/runtime/conformance/actor-reply-framing-v1.json";
+        var root = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+        while (
+            root is not null
+            && !System.IO.File.Exists(System.IO.Path.Combine(root.FullName, relative))
+        )
+            root = root.Parent;
+        Assert.NotNull(root);
+        using var fixture = System.Text.Json.JsonDocument.Parse(
+            System.IO.File.ReadAllText(System.IO.Path.Combine(root.FullName, relative))
+        );
+        foreach (var vector in fixture.RootElement.GetProperty("cases").EnumerateArray())
+        {
+            var parts = vector
+                .GetProperty("parts")
+                .EnumerateArray()
+                .Select(part => Message.From(Convert.FromHexString(part.GetString()!)))
+                .ToArray();
+            try
+            {
+                if (vector.GetProperty("accepted").GetBoolean())
+                {
+                    Assert.Equal(
+                        "pong",
+                        ZLinkActorReplyDecoder.Decode<DecodedActorReply>(parts).Value
+                    );
+                    ZLinkActorReplyDecoder.DecodeTerminal(parts);
+                }
+                else
+                {
+                    var typed = Assert.Throws<ZLinkFrameworkException>(() =>
+                        ZLinkActorReplyDecoder.Decode<object>(parts)
+                    );
+                    Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, typed.Kind);
+                    var terminal = Assert.Throws<ZLinkFrameworkException>(() =>
+                        ZLinkActorReplyDecoder.DecodeTerminal(parts)
+                    );
+                    Assert.Equal(ZLinkFrameworkErrorKind.ProtocolError, terminal.Kind);
+                }
+            }
+            finally
+            {
+                foreach (var part in parts)
+                    part.Dispose();
+            }
+        }
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("not-json")]
@@ -326,8 +377,12 @@ public sealed class ActorClientTests
         );
         return
         [
-            Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
-            Message.From(payload),
+            Message.From(
+                ZLinkStreamFrameCodec.Encode(
+                    ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
+                    System.Text.Encoding.UTF8.GetBytes(payload)
+                )
+            ),
         ];
     }
 

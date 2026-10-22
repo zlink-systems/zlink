@@ -2343,12 +2343,13 @@ test('ZLinkSpotManager replies routed actor request dispatch errors', async () =
       }
     );
 
-    assert.equal(replyParts.length, 2);
+    assert.equal(replyParts.length, 1);
+    const replyFrame = streamProtocol.decodeStreamFrame(replyParts[0]);
     assert.equal(
-      streamProtocol.decodeStreamHeader(replyParts[0]).kind,
+      streamProtocol.decodeStreamHeader(replyFrame.header).kind,
       streamProtocol.ZLinkStreamMessageKind.Error
     );
-    assert.match(JSON.parse(replyParts[1].toString()).message, /not active|not found|registered/i);
+    assert.match(JSON.parse(Buffer.from(replyFrame.payload).toString()).message, /not active|not found|registered/i);
     const errorEvents = dispatchEvents.filter((event) => event.outcome === 'failed');
     assert.equal(errorEvents.length, 1);
     assert.equal(errorEvents[0].surface, 'actor');
@@ -2434,11 +2435,13 @@ test('ZLinkSpotManager does not bind formal Mesh actor packets as remote session
 
     assert.equal(boundSessions.length, 0);
     assert.equal(replies.length, 1);
+    assert.equal(replies[0].length, 1);
+    const replyFrame = streamProtocol.decodeStreamFrame(replies[0][0]);
     assert.equal(
-      streamProtocol.decodeStreamHeader(replies[0][0]).kind,
+      streamProtocol.decodeStreamHeader(replyFrame.header).kind,
       streamProtocol.ZLinkStreamMessageKind.Response
     );
-    assert.deepEqual(JSON.parse(replies[0][1].toString()), { value: 'ping:actor-1' });
+    assert.deepEqual(JSON.parse(Buffer.from(replyFrame.payload).toString()), { value: 'ping:actor-1' });
 
     const backendParts = createActorSendParts('ActorAsk', { value: 'backend' });
     try {
@@ -2585,11 +2588,13 @@ test('ZLinkSpotManager replies formal Mesh actor handler exceptions as HandlerEx
 
     assert.equal(boundSessions.length, 0);
     assert.equal(replies.length, 1);
+    assert.equal(replies[0].length, 1);
+    const replyFrame = streamProtocol.decodeStreamFrame(replies[0][0]);
     assert.equal(
-      streamProtocol.decodeStreamHeader(replies[0][0]).kind,
+      streamProtocol.decodeStreamHeader(replyFrame.header).kind,
       streamProtocol.ZLinkStreamMessageKind.Error
     );
-    assert.deepEqual(JSON.parse(replies[0][1].toString()), {
+    assert.deepEqual(JSON.parse(Buffer.from(replyFrame.payload).toString()), {
       message: 'handler boom',
       kind: framework.ZLinkFrameworkErrorKind.InternalFailure
     });
