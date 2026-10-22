@@ -14,6 +14,39 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
     );
 
     [Fact]
+    public void Stateful_messages_use_shared_schema_bytes()
+    {
+        using var fixture = ReadJson("golden/stateful-message-v1.json");
+        Assert.Equal(8, fixture.RootElement.GetProperty("valid").GetArrayLength());
+        Assert.Equal(4, fixture.RootElement.GetProperty("invalid").GetArrayLength());
+        foreach (var vector in fixture.RootElement.GetProperty("valid").EnumerateArray())
+        {
+            var frames = vector
+                .GetProperty("framesHex")
+                .EnumerateArray()
+                .Select(value => Convert.FromHexString(value.GetString()!))
+                .ToArray();
+            Assert.Equal(
+                frames,
+                GeneratedCommandRoundTrip(vector.GetProperty("commandId").GetInt32(), frames)
+            );
+        }
+        foreach (var vector in fixture.RootElement.GetProperty("invalid").EnumerateArray())
+        {
+            var frames = vector
+                .GetProperty("framesHex")
+                .EnumerateArray()
+                .Select(value => Convert.FromHexString(value.GetString()!))
+                .ToArray();
+            Assert.NotNull(
+                Record.Exception(() =>
+                    GeneratedStatefulDecode(vector.GetProperty("commandId").GetInt32(), frames)
+                )
+            );
+        }
+    }
+
+    [Fact]
     public void Bound_session_close_uses_the_shared_cross_language_bytes()
     {
         using var fixture = ReadJson("golden/bound-session-close-v1.json");
@@ -771,9 +804,35 @@ public sealed class GeneratedServiceWireCommandCodecConformanceTests
             throw new ConformanceHarnessException($"wire shape {name}");
     }
 
+    private static object GeneratedStatefulDecode(int commandId, byte[][] frames) =>
+        commandId switch
+        {
+            21 => ServiceWireCodec.DecodeSpotSend21(frames, Context),
+            22 => ServiceWireCodec.DecodeSpotRequest22(frames, Context),
+            24 => ServiceWireCodec.DecodeActorSend24(frames, Context),
+            25 => ServiceWireCodec.DecodeActorRequest25(frames, Context),
+            _ => throw new InvalidDataException($"unhandled stateful command {commandId}"),
+        };
+
     private static byte[][] GeneratedCommandRoundTrip(int commandId, byte[][] frames) =>
         commandId switch
         {
+            21 => ServiceWireCodec.EncodeSpotSend21(
+                ServiceWireCodec.DecodeSpotSend21(frames, Context),
+                Context
+            ),
+            22 => ServiceWireCodec.EncodeSpotRequest22(
+                ServiceWireCodec.DecodeSpotRequest22(frames, Context),
+                Context
+            ),
+            24 => ServiceWireCodec.EncodeActorSend24(
+                ServiceWireCodec.DecodeActorSend24(frames, Context),
+                Context
+            ),
+            25 => ServiceWireCodec.EncodeActorRequest25(
+                ServiceWireCodec.DecodeActorRequest25(frames, Context),
+                Context
+            ),
             28 => ServiceWireCodec.EncodeActorJoin28(
                 ServiceWireCodec.DecodeActorJoin28(frames, Context),
                 Context
