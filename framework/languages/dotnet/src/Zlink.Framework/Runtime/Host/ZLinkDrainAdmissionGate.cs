@@ -120,7 +120,12 @@ internal sealed class ZLinkDrainAdmissionGate
     //  (no new peer admission). A relocation fence also seals application
     //  admission but is not a shutdown, so the owner decides.
     internal bool IsSealedForShutdown =>
-        RunState(() => _sealed != 0 && _owner == ZLinkDrainOwner.Shutdown);
+        AwaitStateLane(
+            _lane.RunAsync(
+                static gate => gate._sealed != 0 && gate._owner == ZLinkDrainOwner.Shutdown,
+                this
+            )
+        );
 
     public void Seal() => RunState(() => _sealed = 1);
 
