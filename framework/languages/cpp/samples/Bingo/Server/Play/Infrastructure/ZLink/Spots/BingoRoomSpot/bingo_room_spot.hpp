@@ -76,11 +76,24 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
 
     void configure () override
     {
+        _context->handlers ().add_handler<&bingo_room_spot_t::observation> ();
         _context->handlers ().add_actor_request<&bingo_room_spot_t::submit_card> ();
         _context->handlers ().add_actor_request<&bingo_room_spot_t::observe_events> ();
         _context->handlers ().add_actor_request<&bingo_room_spot_t::stop_observing_events> ();
         _context->handlers ().add_subscribe<&bingo_room_spot_t::on_reward_acquired> (
           sample_names_t::room_spot_mesh, sample_names_t::reward_topic);
+    }
+
+    get_bingo_observation_res_t observation (const get_bingo_observation_req_t &) const
+    {
+        if (_is_observer)
+            throw std::runtime_error ("Observer room does not own game state.");
+        const auto &state = _game.snapshot ();
+        get_bingo_observation_res_t response;
+        write_message (state, *response.mutable_state ());
+        if (auto reward = reward_for (state))
+            *response.mutable_reward () = std::move (*reward);
+        return response;
     }
 
     task_t<spot_create_response_t> on_create (const message_t &request) override
@@ -172,9 +185,27 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
         if (request.observe_only ()) {
             _pending_joins.erase (pending);
             observers[actor.actor_id] = &actor;
-            // Observer membership is complete, so this turn is a safe
-            // application-signaled relocation boundary.
-            _context->relocation_ready ().defer ();
+            _announced_reward_draw_seq.reset ();
+            // Observation receives results only while the game room is alive.
+            get_bingo_observation_res_t snapshot;
+            try {
+                snapshot = co_await _context
+                             ->request_to_spot (spot_id_t (request.room_id ()),
+                                                get_bingo_observation_req_t{})
+                             .async<get_bingo_observation_res_t> ();
+            }
+            catch (const framework_exception_t &error) {
+                if (error.kind () == framework_error_kind_t::not_found)
+                    co_return;
+                throw;
+            }
+            bingo_observation_state_notify_t notification;
+            *notification.mutable_state () = snapshot.state ();
+            actor.push (notification);
+            if (snapshot.has_reward ())
+                co_await on_reward_acquired (snapshot.reward ());
+            else
+                _context->relocation_ready ().defer ();
         } else {
             // --8<-- [start:doc-bingo-room-join]
             get_player_record_res_t record;
@@ -238,7 +269,7 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
         }
         actors.erase (actor.actor_id);
         observers.erase (actor.actor_id);
-        _game.leave (actor.actor_id);
+        // Membership is tracked above; the game snapshot retains the round's players.
         std::cout << "bingo-lifecycle room-leave actor=" << actor.actor_id << std::endl;
         if (actors.empty () && observers.empty ()) {
             // Close runs after this leave callback ends, so request it without
@@ -274,21 +305,27 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
 
     task_t<void> handle_draw_tick (const timer_tick_t &);
 
+    static std::optional<bingo_reward_acquired_event_t> reward_for (const bingo_room_state_t &state)
+    {
+        if (state.status != bingo_room_status_t::finished || state.winners.empty ())
+            return std::nullopt;
+        bingo_reward_acquired_event_t reward;
+        reward.set_room_id (state.room_id);
+        reward.set_actor_id (state.winners.front ());
+        reward.set_draw_seq (state.draw_seq);
+        reward.set_item_id (bingo_reward_items_t::golden_dauber_id);
+        reward.set_item_name (bingo_reward_items_t::golden_dauber_name);
+        reward.set_rarity (bingo_reward_items_t::legendary_rarity);
+        return reward;
+    }
+
     void publish_reward (const bingo_number_drawn_t &drawn)
     {
-        if (drawn.state.winners.empty ()) {
+        const auto reward = reward_for (drawn.state);
+        if (!reward)
             return;
-        }
         // --8<-- [start:doc-bingo-reward-publish]
-        bingo_reward_acquired_event_t reward_event;
-        reward_event.set_room_id (drawn.state.room_id);
-        reward_event.set_actor_id (drawn.state.winners.front ());
-        reward_event.set_draw_seq (drawn.state.draw_seq);
-        reward_event.set_item_id (bingo_reward_items_t::golden_dauber_id);
-        reward_event.set_item_name (bingo_reward_items_t::golden_dauber_name);
-        reward_event.set_rarity (bingo_reward_items_t::legendary_rarity);
-        _context
-          ->publish (sample_names_t::room_spot_mesh, sample_names_t::reward_topic, reward_event)
+        _context->publish (sample_names_t::room_spot_mesh, sample_names_t::reward_topic, *reward)
           .async ();
         // --8<-- [end:doc-bingo-reward-publish]
     }
@@ -330,6 +367,7 @@ class bingo_room_spot_t : public spot_t<player_actor_t>
     std::map<std::string, player_actor_t *> actors;
     std::map<std::string, player_actor_t *> observers;
     std::map<std::string, bingo_room_join_req_t> _pending_joins;
+    std::optional<int> _announced_reward_draw_seq;
     bool _is_observer = false;
     std::string _observed_room_id;
     bool cleanup_started = false;
