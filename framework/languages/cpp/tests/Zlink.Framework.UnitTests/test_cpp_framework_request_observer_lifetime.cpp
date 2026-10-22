@@ -503,6 +503,9 @@ extern "C" ZLINK_OBSERVER_EXPORT int zlink_request_observer_verify ()
 #else
 int main ()
 {
+    // Asynchronous completions require a live owner (#1867); it exists before any
+    // allocation is measured.
+    zlink::framework::completion_owner_t completion_owner;
     const auto measured = verify_all (1000);
     std::cout << "public-request-submit iterations=1000 allocations=" << measured.allocations
               << '\n';
