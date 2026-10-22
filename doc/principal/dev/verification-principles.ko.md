@@ -75,6 +75,7 @@
 | Host가 정상 정산했나 | GTest 단언 통과와 exit 0 | 종료 로그에 `force_stopping`이 있으면 정상 drain의 증거가 아니다. pending·active callback 정산과 정상 종료 transition을 함께 확인한다 | #1786 · #1771 |
 | WSL 시험이 실패를 종료 코드로 알렸나 | PowerShell에서 띄운 inline `bash -c`의 `$?`·`$code`가 0 | PowerShell이 변수를 먼저 펼쳐 gtest 실패에도 바깥 명령이 0으로 보였다. `.sh` 파일이나 subprocess의 returncode로 판정하고 로그의 실제 시험 수를 함께 확인한다 | #2119 |
 | 생성 codec이 올바른 frame을 받나 | GCC 빌드의 golden 시험 통과 | 함수 인자 평가 순서에 기대는 코드(`batch_end(b, at, batch_r16(b, at))`)는 GCC에서만 통과하고 Clang에서는 정상 frame을 거부했다. 생성 코드는 GCC와 Clang으로 함께 빌드해 시험한다 | #2119 |
+| JFR 할당 계수가 대상 encode 경로를 포함하나 | 양성 대조100개와 제품 경로0개 | 계측기의 source owner filter가 codec을 제외해도 양성 대조는 통과한다. 수정 전 동일 제품 경로에서 실제 할당이 잡히는 RED를 먼저 확인한다 | #1673 |
 
 ## 4. 무엇이 실제로 답을 줬나
 
