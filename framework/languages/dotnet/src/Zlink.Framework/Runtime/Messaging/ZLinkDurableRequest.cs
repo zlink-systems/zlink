@@ -104,7 +104,7 @@ internal static class ZLinkDurableRequest
         }
     }
 
-    private static bool CanReplay(Exception error, out bool admitted)
+    internal static bool CanReplay(Exception error, out bool admitted)
     {
         if (error is ZLinkFrameworkException { InnerException: { } cause })
             error = cause;

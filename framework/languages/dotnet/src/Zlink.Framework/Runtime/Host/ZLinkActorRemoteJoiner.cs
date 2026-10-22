@@ -411,7 +411,9 @@ internal sealed class ZLinkActorRemoteJoiner(
         {
             try
             {
-                await ReplayAbortedSourceHandoffAsync(actorState).ConfigureAwait(false);
+                actorState.Handoff.AbortCapture(
+                    (frame, start) => runtime.AdmitActorHandoffFrame(actorState, frame, start)
+                );
             }
             catch (Exception exception)
             {
@@ -1381,38 +1383,6 @@ internal sealed class ZLinkActorRemoteJoiner(
                         sourceAuthoritySnapshot,
                         cancellationToken
                     )
-            )
-            .ConfigureAwait(false);
-    }
-
-    private async ValueTask ReplayAbortedSourceHandoffAsync(ZLinkActorRuntimeState actorState)
-    {
-        var frames = actorState.Handoff.AbortCapture();
-        if (frames.Count == 0)
-            return;
-
-        if (actorState.LiveActivation is { } activation)
-        {
-            await activation
-                .ReplayAbortedActorHandoffAsync(actorState, frames, CancellationToken.None)
-                .ConfigureAwait(false);
-            return;
-        }
-
-        var actorRef =
-            actorState.NativeActorRef
-            ?? throw new ZLinkFrameworkException(
-                ZLinkFrameworkErrorKind.NotFound,
-                $"Actor '{actorState.ActorId}' does not have a native Actor ref during handoff rollback."
-            );
-        var pipeline = new ZLinkActorInboundPipeline(
-            runtime,
-            new ZLinkEntrySpotActorInboundEndpoint(runtime)
-        );
-        await pipeline
-            .DispatchAsync(
-                ZLinkActorHandoffFrames.Restore(actorRef, frames),
-                CancellationToken.None
             )
             .ConfigureAwait(false);
     }
