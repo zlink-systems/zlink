@@ -235,23 +235,24 @@ class state_lane_t
 
         auto completion = std::make_shared<std::promise<stored_t>> ();
         auto result = bridge_t::make_future (completion->get_future ());
-        if (!enqueue (
-              [completion, work = std::forward<Work> (work)] () mutable {
-                  try {
-                      if constexpr (std::is_void_v<result_t>) {
-                          std::invoke (work);
-                          completion->set_value ();
-                      } else {
-                          completion->set_value (bridge_t::store (std::invoke (work)));
-                      }
-                  }
-                  catch (...) {
-                      completion->set_exception (std::current_exception ());
-                  }
-              },
-              [completion] (std::exception_ptr error) {
-                  completion->set_exception (std::move (error));
-              })) {
+        auto invoke_work = [completion, work = std::forward<Work> (work)] () mutable {
+            try {
+                if constexpr (std::is_void_v<result_t>) {
+                    std::invoke (work);
+                    completion->set_value ();
+                } else {
+                    completion->set_value (bridge_t::store (std::invoke (work)));
+                }
+            }
+            catch (...) {
+                completion->set_exception (std::current_exception ());
+            }
+        };
+        if (schedule_drain (true, [&] { invoke_work (); }))
+            return result;
+        if (!enqueue (std::move (invoke_work), [completion] (std::exception_ptr error) {
+                completion->set_exception (std::move (error));
+            })) {
             throw std::runtime_error ("state lane is closed");
         }
         schedule_drain (true);
@@ -283,8 +284,8 @@ class state_lane_t
                     return result_t<value_t>::success (std::invoke (work));
                 }
             }
-            catch (const framework_exception_t &error) {
-                return result_t<value_t>::failure (error.kind (), error.what ());
+            catch (const framework_exception_t &) {
+                return detail::result_access_t::failure<value_t> (std::current_exception ());
             }
             catch (const std::exception &error) {
                 return result_t<value_t>::failure (framework_error_kind_t::internal_failure,

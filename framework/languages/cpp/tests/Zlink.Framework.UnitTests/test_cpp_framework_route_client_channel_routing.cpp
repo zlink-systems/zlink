@@ -450,9 +450,26 @@ class admitted_spot_resolver_t final : public zlink::framework::runtime::spot_ad
         return task_t<std::optional<runtime::spot_address_t>> (
           result_t<std::optional<runtime::spot_address_t>>::success (std::move (address)));
     }
-    void invalidate_spot_address (std::string_view) override {}
+    void invalidate_spot_address (std::string_view) override { ++invalidations; }
+    int invalidations = 0;
     void invalidate_all_routes_after_store_recovery () override {}
 };
+
+TEST (ZLinkFrameworkRouteClientChannelRouting, RuntimeOwnsSpotResolverUntilReleased)
+{
+    using namespace zlink::framework;
+    std::weak_ptr<runtime::spot_address_resolver_t> lifetime;
+    {
+        auto builder = test::runtime_failure_builder ();
+        auto channel = detail::channel_runtime_t::from (builder.message_bus ());
+        auto resolver = std::make_shared<admitted_spot_resolver_t> ();
+        lifetime = resolver;
+        channel.bind_spot_address_resolver (resolver);
+        resolver.reset ();
+        EXPECT_FALSE (lifetime.expired ());
+    }
+    EXPECT_TRUE (lifetime.expired ());
+}
 
 void verify_mesh_request_admission (bool to_spot)
 {

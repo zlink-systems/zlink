@@ -14,6 +14,7 @@
 // call resolve through the same import, so there is one registry.
 
 #include <gtest/gtest.h>
+#include <zlink/framework/contracts/dispatch/task.hpp>
 
 #if defined(ZLINK_TEST_CHECK_CORE_CONTEXTS) && defined(__linux__)
 #include <filesystem>
@@ -83,6 +84,7 @@ class core_context_listener_t final : public testing::EmptyTestEventListener
 
 int main (int argc, char **argv)
 {
+    zlink::framework::completion_owner_t completion_owner;
     testing::InitGoogleTest (&argc, argv);
 #if defined(ZLINK_TEST_CHECK_CORE_CONTEXTS) && defined(__linux__)
     testing::UnitTest::GetInstance ()->listeners ().Append (new core_context_listener_t);
