@@ -2463,6 +2463,15 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
       COMMAND test_cpp_framework_ready_task
       LABELS "framework-unit;framework-foundation;execution"
       TIMEOUT 30)
+    add_zlink_framework_test(
+      test_cpp_framework_raw_send_sync
+      tests/Zlink.Framework.UnitTests/test_cpp_framework_raw_send_sync.cpp
+      "framework-unit;framework-regression;messaging;resource")
+    target_sources(test_cpp_framework_raw_send_sync PRIVATE
+      framework/src/runtime/mesh/raw_mesh_node_owner.cpp)
+    target_include_directories(test_cpp_framework_raw_send_sync PRIVATE
+      ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+    target_link_options(test_cpp_framework_raw_send_sync PRIVATE "LINKER:--wrap=pthread_mutex_lock")
     # Compile the real codec here so wrapping observes its libc calls with both
     # static and shared Framework packages, as in the DI synchronization probe.
     add_zlink_framework_test(

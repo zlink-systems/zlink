@@ -618,6 +618,7 @@ void raw_mesh_node_owner_t::close ()
     }
     _lane
       .run ([this, &resources, &failure] {
+          std::lock_guard lifecycle_lock (_lifecycle_mutex);
           std::tie (_port, _ingress_poller, _router) = std::move (resources);
           _closed = !failure;
       })
@@ -1237,19 +1238,14 @@ raw_mesh_node_owner_t::start_send_on_lane (const std::vector<std::uint8_t> &targ
         std::shared_ptr<task_t<zlink::submit_result_t>> public_completion;
         bool registered = false;
     };
-    std::shared_ptr<detail::backend::raw_route_port_t> port;
-    {
-        std::lock_guard lifecycle_lock (_lifecycle_mutex);
-        port = _port;
-    }
+    const auto &port = _port;
     if (!port) {
         if (trace)
             trace ("router_admission_submit", "terminated");
         return send_start_result_t{send_start_state_t::terminated, std::nullopt, {}};
     }
-    // `port` is a lifetime-safe snapshot: close cannot take it out from
-    // under this owner turn, and raw_route_port_t serializes close versus
-    // native submission with its socket gate.
+    // The owner turn keeps the port in place until submission returns.
+    // raw_route_port_t serializes native submission versus close with its socket gate.
     auto submission = port->submit_send (target_routing_id, std::move (parts), std::move (trace));
     if (submission.state == detail::backend::raw_send_submission_state_t::immediate) {
         return send_start_result_t{
