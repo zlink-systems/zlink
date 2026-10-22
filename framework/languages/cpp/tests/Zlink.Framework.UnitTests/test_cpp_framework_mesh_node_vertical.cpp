@@ -3154,8 +3154,6 @@ int run_cross_process_delivery ()
     race_node.stop ();
     submit_race.store (false, std::memory_order_release);
     race_submitter.join ();
-    std::cerr << "local-close-race accepted=" << accepted_race_requests.load ()
-              << " terminals=" << terminal_race_callbacks.load () << '\n';
     assert (accepted_race_requests.load (std::memory_order_relaxed)
             == terminal_race_callbacks.load (std::memory_order_relaxed));
 

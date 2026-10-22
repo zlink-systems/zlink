@@ -6017,6 +6017,46 @@ INSTANTIATE_TEST_SUITE_P (LocalAndRemote,
                                            std::make_tuple (true, rejected_spot),
                                            std::make_tuple (true, factory_failed_spot)));
 
+TEST (ActorMaintenanceJoin, NotifyFailureDoesNotChangeSuccessfulJoinCompletion)
+{
+    native_intake_fixture_t fixture;
+    const auto native = fixture.host;
+    const auto actor = native->create_actor (actor_type, actor_id).ref ();
+    auto node =
+      fw::test::runtime_failure_fixture<fw::detail::spot_node_builder_state_t> (mesh_name);
+    node->native_node = native;
+    node->actor_instances.emplace (std::string (actor_type) + ":" + actor_id,
+                                   std::make_shared<int> (0));
+    fw::detail::spot_node_builder_state_t::actor_factory_registration_t factory;
+    node->actor_factories.emplace (actor_type, std::move (factory));
+    std::promise<std::exception_ptr> reported;
+    auto failure = reported.get_future ();
+    node->runtime_failures ()->bind_runtime_reporter (
+      [&reported] (std::exception_ptr error) { reported.set_value (std::move (error)); });
+    native->transport ().mailbox ().bind_application_dispatch (
+      {}, {}, [] (const auto &, auto) -> fw::task_t<bool> {
+          throw std::runtime_error ("notify failed");
+          co_return false;
+      });
+    fw::detail::spot_node_runtime_t runtime (node);
+    const auto result =
+      runtime
+        .deliver_actor_join_completion (actor, fw::actor_join_accepted_t{1, 2, actor, std::nullopt},
+                                        std::nullopt)
+        .result ()
+        .value ();
+    native->close ();
+    ASSERT_TRUE (result) << (result.error () ? result.error ()->what () : "");
+    const auto error = failure.get ();
+    ASSERT_TRUE (error);
+    try {
+        std::rethrow_exception (error);
+    }
+    catch (const std::runtime_error &error) {
+        EXPECT_STREQ (error.what (), "notify failed");
+    }
+}
+
 TEST (ActorMaintenanceJoin, CompletionCallbackPreservesStandardException)
 {
     auto node =

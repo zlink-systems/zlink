@@ -9742,8 +9742,15 @@ void spot_node_runtime_t::deliver_actor_join_completion_async (
         });
         if (native) {
             const auto owner = co_await native->resolve_actor_async (actor);
-            if (owner)
-                (void) co_await native->notify_stateful_owner (*owner);
+            if (owner) {
+                auto notified = native->notify_stateful_owner (*owner);
+                detail::observe_task_completion (
+                  notified,
+                  [native, failures = node->runtime_failures ()] (const result_t<bool> &terminal) {
+                      if (!terminal)
+                          failures->report (terminal.exception ());
+                  });
+            }
         }
         co_return result;
     };

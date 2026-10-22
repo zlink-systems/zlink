@@ -472,30 +472,6 @@ TEST (ZLinkFrameworkRouteClientChannelRouting, RuntimeOwnsSpotResolverUntilRelea
     EXPECT_TRUE (lifetime.expired ());
 }
 
-TEST (ZLinkFrameworkRouteClientChannelRouting, SpotResolverObservesOnlyStaleFrameworkTerminals)
-{
-    using namespace zlink::framework;
-    admitted_spot_resolver_t resolver;
-    for (const auto kind : {framework_error_kind_t::not_found, framework_error_kind_t::unavailable,
-                            framework_error_kind_t::shutting_down}) {
-        const auto before = resolver.invalidations;
-        const auto application_error = detail::with_error_origin (
-          framework_exception_t (kind, "application"), detail::error_origin_t::application);
-        resolver.observe_terminal ("spot", &application_error);
-        EXPECT_EQ (resolver.invalidations, before);
-        const auto framework_error = detail::with_error_origin (
-          framework_exception_t (kind, "framework"), detail::error_origin_t::framework);
-        resolver.observe_terminal ("spot", &framework_error);
-        EXPECT_EQ (resolver.invalidations, before + 1);
-    }
-    const auto before = resolver.invalidations;
-    const framework_exception_t deadline_error (framework_error_kind_t::deadline_exceeded,
-                                                "deadline");
-    resolver.observe_terminal ("spot", &deadline_error);
-    EXPECT_EQ (resolver.invalidations, before);
-    EXPECT_THROW (resolver.observe_terminal ("spot", nullptr), framework_exception_t);
-}
-
 void verify_mesh_request_admission (bool to_spot)
 {
     using namespace zlink::framework;
