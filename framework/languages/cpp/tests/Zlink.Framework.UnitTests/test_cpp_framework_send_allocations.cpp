@@ -46,6 +46,8 @@ TEST (SendAllocations, TypedRouteEncoderUsesOnlyTheBorrowedFunctionContainer)
     const auto target = zlink::routing_id_t::from ("n");
     const auto payload = std::make_shared<route_payload_t> ();
     const fw::dispatch_options_t dispatch;
+    fw::task_completion_source_t<void> encoded;
+    ASSERT_TRUE (encoded.complete (fw::result_t<void>::success ()));
     // Both public calls create the same two task layers and encode the same envelope.
     // The baseline uses the standard allocation-free reference_wrapper target.
     auto baseline_submit = [&] (const std::string &packet_name,
@@ -57,6 +59,7 @@ TEST (SendAllocations, TypedRouteEncoderUsesOnlyTheBorrowedFunctionContainer)
         fw::runtime::messaging::client_call_codec_t codec;
         (void) codec.encode_node_send_parts ("m", packet_name, target, metadata, dispatch,
                                              serializers, borrowed);
+        co_await encoded.task ();
         co_return fw::result_t<void>::success ();
     };
     fw::route_send_call_t baseline ("p", baseline_submit);
