@@ -519,7 +519,8 @@ bool maintenance_runtime_t::register_terminal_source (
 }
 
 task_t<stateful_error_t> maintenance_runtime_t::abort_relocation_before_cutover (
-  std::uint64_t token, const eligible_relocation_unit_t::canonical_wire_context_t &context,
+  std::uint64_t token,
+  const eligible_relocation_unit_t::canonical_wire_context_t &context,
   relocation_metric_operation_t *preserved_metric)
 {
     const auto aborted = _objects.abort_relocation_before_cutover (token);
@@ -827,7 +828,7 @@ maintenance_runtime_t::apply_relocation_settlement (
              * post-boundary records, return to the source queue in original
              * acceptance order and dispatch reopens. */
             (void) co_await abort_relocation_before_cutover (token, state->context,
-                                                            &*state->metric);
+                                                             &*state->metric);
             co_return std::pair{relocation_terminal_t::blocked,
                                 relocation_reason_t::restore_failed};
         default:
