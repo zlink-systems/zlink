@@ -127,9 +127,9 @@ TEST (ZLinkStateLane, UncontendedRunOnlyAllocatesItsReturnedFuture)
                    ::operator delete (allocation);
                }));
     const auto returned_future_allocations = count_allocations ([] {
-        auto completion = std::make_shared<std::promise<int>> ();
-        auto result = completion->get_future ();
-        completion->set_value (42);
+        std::promise<int> completion;
+        auto result = completion.get_future ();
+        completion.set_value (42);
         (void) result.get ();
     });
     int observed = 0;
@@ -137,6 +137,56 @@ TEST (ZLinkStateLane, UncontendedRunOnlyAllocatesItsReturnedFuture)
       count_allocations ([&] { observed = lane.run (work).get (); });
     EXPECT_EQ (42, observed);
     EXPECT_EQ (returned_future_allocations, submission_allocations);
+}
+
+TEST (ZLinkStateLane, IdleRunPreservesVoidReferenceAndOriginalException)
+{
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    bool called = false;
+    lane.run ([&] { called = true; }).get ();
+    EXPECT_TRUE (called);
+    int value = 42;
+    EXPECT_EQ (&value, &lane.run ([&] () -> int & { return value; }).get ());
+    struct original_error_t : std::runtime_error
+    {
+        original_error_t () : std::runtime_error ("original lane error") {}
+    };
+    auto failed = lane.run ([] () -> int { throw original_error_t{}; });
+    EXPECT_THROW (failed.get (), original_error_t);
+    EXPECT_EQ (42, lane.run ([] { return 42; }).get ());
+}
+
+TEST (ZLinkStateLane, FailedFutureAllocationDoesNotClaimTheLane)
+{
+    using namespace zlink::framework::tests;
+    offload_executor_t executor (1);
+    state_lane_t lane (executor);
+    const auto future_allocations = count_allocations ([] {
+        std::promise<int> completion;
+        auto result = completion.get_future ();
+        completion.set_value (42);
+        (void) result.get ();
+    });
+    for (std::size_t admitted_allocations = 0; admitted_allocations < future_allocations;
+         ++admitted_allocations) {
+        bool called = false;
+        bool failed = false;
+        allocations_before_failure = admitted_allocations;
+        try {
+            (void) lane.run ([&] {
+                called = true;
+                return 42;
+            });
+        }
+        catch (const std::bad_alloc &) {
+            failed = true;
+        }
+        allocations_before_failure.reset ();
+        EXPECT_TRUE (failed);
+        EXPECT_FALSE (called);
+        EXPECT_EQ (42, lane.run ([] { return 42; }).get ());
+    }
 }
 
 TEST (ZLinkStateLaneDeathTest, CleanupContinuationReleasesWorkerForPendingLaneAndAttachment)
