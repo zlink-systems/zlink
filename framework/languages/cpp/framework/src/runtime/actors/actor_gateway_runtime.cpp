@@ -608,12 +608,18 @@ decode_actor_packet_header (const runtime::messaging::message_parts_t &parts,
                             stream_message_kind_t expected_kind,
                             bool capture_flow)
 {
+    if (parts.size () != 2)
+        return result_t<runtime::messaging::envelope_header_t>::failure (
+          framework_error_kind_t::protocol_error, "Actor typed message requires two parts");
+    return decode_actor_packet_header (parts[0], expected_kind, capture_flow);
+}
+
+result_t<runtime::messaging::envelope_header_t> decode_actor_packet_header (
+  const zlink::message_t &header_part, stream_message_kind_t expected_kind, bool capture_flow)
+{
     using runtime::messaging::envelope_header_t;
     using runtime::messaging::message_kind_t;
-    if (parts.size () != 2)
-        return result_t<envelope_header_t>::failure (framework_error_kind_t::protocol_error,
-                                                     "Actor typed message requires two parts");
-    auto decoded = stream_runtime_t::decode_header (parts[0].to_bytes (), capture_flow);
+    auto decoded = stream_runtime_t::decode_header (header_part.to_bytes (), capture_flow);
     if (!decoded)
         return result_t<envelope_header_t>::failure (decoded.error_kind (),
                                                      decoded.error ()->what ());
@@ -2760,26 +2766,34 @@ result_t<void> actor_gateway_runtime_t::update_actor_ref (const actor_ref_t &act
 
 result_t<void> actor_gateway_runtime_t::destroy_actor (const actor_ref_t &actor_ref)
 {
-    return _state->sync ([this, &actor_ref] {
-        if (::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
-            return result_t<void>::failure (framework_error_kind_t::not_found,
-                                            "actor ref is empty");
-        }
-        const auto found = _state->actors_by_id.find (std::string (actor_ref.actor_id ().value ()));
-        if (found == _state->actors_by_id.end ()) {
-            return result_t<void>::success ();
-        }
-        if (!actor_types_compatible (found->second.ref, actor_ref)) {
-            return result_t<void>::failure (framework_error_kind_t::type_mismatch,
-                                            "actor id is already bound to another type");
-        }
-        if (found->second.ref.object_generation () != actor_ref.object_generation ()) {
-            return result_t<void>::success ();
-        }
-        _state->bound_session_sinks.erase (std::string (actor_ref.actor_id ().value ()));
-        _state->actors_by_id.erase (found);
+    return _state->sync ([&] { return destroy_actor_on_lane (actor_ref); });
+}
+
+task_t<result_t<void>> actor_gateway_runtime_t::destroy_actor_async (actor_ref_t actor_ref)
+{
+    co_return co_await _state->lane.run_task (
+      [this, actor_ref] { return destroy_actor_on_lane (actor_ref); });
+}
+
+result_t<void> actor_gateway_runtime_t::destroy_actor_on_lane (const actor_ref_t &actor_ref)
+{
+    if (::zlink::framework::detail::actor_ref_access_t::empty (actor_ref)) {
+        return result_t<void>::failure (framework_error_kind_t::not_found, "actor ref is empty");
+    }
+    const auto found = _state->actors_by_id.find (std::string (actor_ref.actor_id ().value ()));
+    if (found == _state->actors_by_id.end ()) {
         return result_t<void>::success ();
-    });
+    }
+    if (!actor_types_compatible (found->second.ref, actor_ref)) {
+        return result_t<void>::failure (framework_error_kind_t::type_mismatch,
+                                        "actor id is already bound to another type");
+    }
+    if (found->second.ref.object_generation () != actor_ref.object_generation ()) {
+        return result_t<void>::success ();
+    }
+    _state->bound_session_sinks.erase (std::string (actor_ref.actor_id ().value ()));
+    _state->actors_by_id.erase (found);
+    return result_t<void>::success ();
 }
 
 actor_session_binding_snapshot_t
