@@ -152,7 +152,9 @@ class mesh_node_runtime_t
     mesh_node_runtime_t (const mesh_node_runtime_t &) = delete;
     mesh_node_runtime_t &operator= (const mesh_node_runtime_t &) = delete;
 
-    void start ();
+    void start (host::public_host_runtime_t::relocation_gate_t relocation_gate = {},
+                host::public_host_runtime_t::native_spot_target_t native_spot_target = {},
+                runtime::mesh::service_mailbox_t::application_dispatch_t relocation_resume = {});
     void request_stop () noexcept;
     void stop ();
     void cancel_pending_dispatch_waits () noexcept;
@@ -188,9 +190,9 @@ class mesh_node_runtime_t
                                 const mesh_node_descriptor_t &target,
                                 const authority_snapshot_t &authority,
                                 std::chrono::steady_clock::time_point restore_deadline);
-    bool application_actor_transfer_in_progress (const actor_ref_t &actor) const;
-    result_t<void> cleanup_application_actor_stateful (const actor_ref_t &actor);
-    result_t<bool> destroy_application_actor (const actor_ref_t &actor);
+    task_t<bool> application_actor_transfer_in_progress (actor_ref_t actor) const;
+    task_t<result_t<void>> cleanup_application_actor_stateful (actor_ref_t actor);
+    task_t<result_t<bool>> destroy_application_actor (actor_ref_t actor);
     task_t<runtime::stateful::aggregate_relocation_result_t>
     relocate_application_unit (std::vector<runtime::stateful::object_ref_t> sources,
                                std::vector<std::string> stable_types,
@@ -207,8 +209,9 @@ class mesh_node_runtime_t
         const runtime::stateful::object_ref_t &)> resolver);
     using stateful_dispatch_configuration_t =
       std::variant<runtime::stateful::accepted_record_authority_resolver_t,
-                   std::function<std::optional<location_owner_token_t> ()>>;
-    void configure_stateful_dispatch (stateful_dispatch_configuration_t configuration);
+                   std::function<std::shared_ptr<const location_owner_token_t> ()>>;
+    void configure_stateful_dispatch (stateful_dispatch_configuration_t configuration,
+                                      runtime::live_location_reader_t *sources = nullptr);
     void configure_bound_session_operations (host::bound_session_operations_t operations);
     void configure_late_session_route_update (
       std::function<void (const runtime::protocol::session_relocation_route_t &)> reporter);
@@ -233,14 +236,12 @@ class mesh_node_runtime_t
                        const std::string &endpoint,
                        std::uint64_t expected_lifecycle_generation = 0,
                        std::string security_identity = "default",
-                       bool automatic = false,
-                       location_owner_token_t owner = {});
+                       bool automatic = false);
     void connect_peer (const std::string &endpoint, std::string security_identity = "default");
     void expect_peer (const zlink::routing_id_t &expected_routing_id,
                       const std::string &endpoint,
                       std::uint64_t expected_lifecycle_generation,
-                      std::string security_identity,
-                      location_owner_token_t owner = {});
+                      std::string security_identity);
     void forget_peer (const zlink::routing_id_t &expected_routing_id, const std::string &endpoint);
     void disconnect_peer (const std::string &endpoint) noexcept;
     void disconnect_peer (const zlink::routing_id_t &expected_routing_id,
@@ -288,7 +289,7 @@ class mesh_node_runtime_t
                         host::pending_operation_t &operation_id,
                         std::chrono::milliseconds timeout,
                         const std::map<std::string, std::string> &metadata);
-    host::spot_handle_t get_or_create_spot (std::string spot_id);
+    task_t<host::spot_handle_t> get_or_create_spot_async (std::string spot_id);
     task_t<zlink::submit_result_t> send_to_spot (const std::string &source_spot_id,
                                                  const zlink::routing_id_t &target_node_rid,
                                                  const std::string &target_spot_id,
@@ -327,10 +328,6 @@ class mesh_node_runtime_t
         bound_session_source = std::nullopt);
     zlink::context_t &native_context ();
     host::public_host_runtime_t &native_node ();
-    bool prepare_actor_transfer (const host::actor_transfer_prepare_t &prepare,
-                                 std::chrono::milliseconds timeout,
-                                 host::actor_transfer_token_t &token,
-                                 host::actor_transfer_prepare_result_t &result);
     result_t<actor_ref_t>
     create_application_actor (std::string actor_type,
                               std::string actor_id,
@@ -348,12 +345,13 @@ class mesh_node_runtime_t
                                           node_rid_t target_node,
                                           zlink::message_t request,
                                           std::chrono::milliseconds timeout);
-    result_t<void> submit_application_actor_entry_spot_join (const actor_ref_t &actor,
-                                                             const node_rid_t &target_node,
-                                                             const zlink::message_t &request,
-                                                             std::chrono::milliseconds timeout,
-                                                             host::pending_operation_t &operation,
-                                                             actor_join_completion_t completion);
+    task_t<result_t<void>>
+    submit_application_actor_entry_spot_join (actor_ref_t actor,
+                                              node_rid_t target_node,
+                                              zlink::message_t request,
+                                              std::chrono::milliseconds timeout,
+                                              host::pending_operation_t &operation,
+                                              actor_join_completion_t completion);
 
     void settle_application_actor_creation (const actor_ref_t &actor, bool ready);
 
@@ -472,6 +470,8 @@ class mesh_node_runtime_t
     std::string mesh_name () const;
     std::chrono::milliseconds default_request_timeout () const;
     std::optional<zlink::routing_id_t> routing_id () const;
+    task_t<std::optional<zlink::routing_id_t>> routing_id_async () const;
+    task_t<std::pair<std::string, std::optional<zlink::routing_id_t>>> identity_async () const;
     std::string listen_endpoint () const;
     object_role_t object_role () const;
     std::vector<std::string> channel_names () const;
@@ -650,6 +650,7 @@ class mesh_node_runtime_t
       const runtime::stateful::object_ref_t &)>
       _bound_session_relocation_resolver;
     stateful_dispatch_configuration_t _stateful_dispatch_configuration;
+    runtime::live_location_reader_t *_request_sources = nullptr;
     std::optional<host::bound_session_operations_t> _bound_session_operations;
     std::function<void (const runtime::protocol::session_relocation_route_t &)>
       _late_session_route_update_reporter;

@@ -225,7 +225,7 @@ TEST (ReceiveAllocations, InfrastructureFrameFailureReleasesTheClaim)
         auto next =
           mailbox.try_claim_owner (mesh::service_mailbox_domain_t::infrastructure, "control", 1,
                                    std::numeric_limits<std::size_t>::max ());
-        ASSERT_TRUE (next.has_value ()) << "allocation failure retained the previous claim";
+        ASSERT_TRUE (next != nullptr) << "allocation failure retained the previous claim";
         EXPECT_TRUE (mailbox.release (*next));
         runtime->close ();
     }
