@@ -674,7 +674,6 @@ class mesh_node_runtime_t
     std::map<std::string, std::uint64_t> _peer_connection_intents;
     std::mutex _completion_mutex;
     std::condition_variable _completion_ready;
-    std::atomic_bool _stopping{false};
 };
 
 // actorJoin(28) receiver admission, extracted so unit tests can pin its

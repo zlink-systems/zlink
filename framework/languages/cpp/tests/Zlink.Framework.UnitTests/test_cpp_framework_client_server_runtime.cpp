@@ -6,6 +6,7 @@
 #include "runtime/client_server/client_server_failure_mapper.hpp"
 #include "runtime/channels/channel_runtime.hpp"
 #include "runtime/diagnostics/listener_status_registry.hpp"
+#include "runtime/diagnostics/dispatch_options_access.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/host/hosted_service_lifecycle.hpp"
 #include "runtime/diagnostics/topology_projection.hpp"
@@ -29,6 +30,7 @@
 #include <future>
 #include <fstream>
 #include <memory>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -121,6 +123,10 @@ void verify_client_server_send_does_not_wait_on_infrastructure_worker ()
     while (!runtime.snapshot ("slow-send").is_ready && std::chrono::steady_clock::now () < deadline)
         std::this_thread::sleep_for (1ms);
     assert (runtime.snapshot ("slow-send").is_ready);
+    auto &concrete = dynamic_cast<client_server::client_server_location_runtime_t &> (runtime);
+    concrete.stop ();
+    concrete.start ();
+    assert (&provider.get_required<zlink::framework::client_server_runtime_t> () == &runtime);
     const auto submitted =
       channels.send ("slow-send", network_probe_message_t{}).async ().result ();
     assert (submitted);
@@ -236,8 +242,23 @@ void verify_client_server_owner_gate_and_budget ()
     budget_owner_send_handler_t::calls.store (0);
     owner_gate_request_handler_t::first =
       std::make_shared<zlink::framework::task_completion_source_t<std::string>> ();
+    std::mutex flow_mutex;
+    std::vector<zlink::framework::message_flow_event_t> events;
     auto app = zlink::framework::app_t::create ();
-    app.add_zlink_framework ([] (zlink::framework::zlink_framework_options_t &options) {
+    app.add_zlink_framework ([&] (zlink::framework::zlink_framework_options_t &options) {
+        options.configure_dispatch ().message_flow (
+          zlink::framework::message_flow_log_mode_t::normal);
+        zlink::framework::detail::dispatch_options_access_t::set_observer_for_tests (
+          options.configure_dispatch (), [&] (const auto &event) {
+              using phase_t = zlink::framework::message_flow_outcome_t;
+              if (event.channel_name == "owner-gate-a"
+                  && (event.outcome == phase_t::received || event.outcome == phase_t::admitted
+                      || event.outcome == phase_t::dispatched || event.outcome == phase_t::completed
+                      || event.outcome == phase_t::replied)) {
+                  std::lock_guard lock (flow_mutex);
+                  events.push_back (event);
+              }
+          });
         options.handlers ()
           .group ("owner-gate-a")
           .add<owner_gate_request_handler_t> ()
@@ -280,6 +301,27 @@ void verify_client_server_owner_gate_and_budget ()
     assert (owner_gate_request_handler_t::starts.load (std::memory_order_acquire) == 1);
     assert (owner_gate_send_handler_t::calls.load (std::memory_order_acquire) == 0);
 
+    using phase_t = zlink::framework::message_flow_outcome_t;
+    for (;;) {
+        {
+            std::lock_guard lock (flow_mutex);
+            if (std::count_if (
+                  events.begin (), events.end (),
+                  [] (const auto &event) { return event.outcome == phase_t::admitted; })
+                == 3)
+                break;
+        }
+        assert (std::chrono::steady_clock::now () < deadline);
+        std::this_thread::yield ();
+    }
+    {
+        std::lock_guard lock (flow_mutex);
+        assert (
+          std::count_if (events.begin (), events.end (),
+                         [] (const auto &event) { return event.outcome == phase_t::dispatched; })
+          == 1);
+    }
+
     constexpr int budget_records = 24;
     for (int i = 0; i < budget_records; ++i)
         assert (channels.send ("budget-owner", budget_owner_send_t{}).async ().result ());
@@ -300,6 +342,25 @@ void verify_client_server_owner_gate_and_budget ()
     assert (owner_gate_send_handler_t::calls.load (std::memory_order_acquire) == 1);
     app.stop ();
     app_thread.join ();
+    std::map<std::pair<std::string, std::string>,
+             std::vector<zlink::framework::message_flow_event_t>>
+      by_flow;
+    for (const auto &event : events) {
+        assert (event.flow_id && !event.flow_id->empty ());
+        by_flow[{*event.flow_id, event.correlation_id.value_or ("")}].push_back (event);
+    }
+    assert (by_flow.size () == 3);
+    for (const auto &[id, records] : by_flow) {
+        assert (records.size () == 4);
+        assert (records[0].outcome == phase_t::received && records[1].outcome == phase_t::admitted
+                && records[2].outcome == phase_t::dispatched);
+        assert (records[3].outcome
+                == (records[0].message_kind == zlink::framework::dispatch_message_kind_t::request
+                      ? phase_t::replied
+                      : phase_t::completed));
+        for (const auto &event : records)
+            assert (event.correlation_id.value_or ("") == records[0].correlation_id.value_or (""));
+    }
     owner_gate_request_handler_t::first.reset ();
 }
 

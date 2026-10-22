@@ -1,6 +1,8 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 #pragma once
 
+#include <variant>
+
 #include "runtime/foundation/operation_registry.hpp"
 #include "runtime/diagnostics/instance_spot_metrics.hpp"
 #include "runtime/dispatch/application_record.hpp"
@@ -859,8 +861,6 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     std::optional<stateful::object_ref_t> resolve_spot (const std::string &spot_id) const;
 
   private:
-    class application_claim_owner_t;
-
     std::optional<stateful::object_ref_t> resolve_actor (std::string_view actor_id) const;
 
     struct instance_activation_ready_t
@@ -956,10 +956,15 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
                              foundation::operation_terminal_t terminal,
                              zlink::message_t payload);
     task_t<std::size_t> dispatch_user_spot_operations ();
-    task_t<std::size_t> dispatch_application_claim (
-      mesh::service_mailbox_claim_t claim,
-      const std::function<void (
-        const ready_record_t &, const receive_record_t &, std::vector<zlink::message_t>)> dispatch);
+    struct application_claim_owner_t;
+    using application_claim_result_t = std::variant<std::size_t, task_t<std::size_t>>;
+    application_claim_result_t
+    dispatch_application_claim (const std::shared_ptr<application_claim_owner_t> &operation);
+    task_t<std::size_t>
+    continue_application_claim (std::shared_ptr<application_claim_owner_t> operation,
+                                task_t<void> pending);
+    void fail_application_claim (const std::shared_ptr<application_claim_owner_t> &operation,
+                                 std::exception_ptr error);
     task_t<bool> notify_stateful_owner (const stateful::object_ref_t &owner);
     bool claim_stateful_owner (const stateful::object_ref_t &object,
                                const mesh::service_mailbox_t::application_dispatch_t &dispatch);

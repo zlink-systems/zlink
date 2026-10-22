@@ -4,13 +4,17 @@ namespace Zlink.Framework.Runtime.Handlers;
 
 internal sealed class ZLinkHandlerDispatcher(
     IServiceScopeFactory scopeFactory,
-    ZLinkFrameworkRegistration registration
+    ZLinkFrameworkRegistration registration,
+    ZLinkDispatchErrorReporter? channelDispatchErrors = null
 )
 {
     // Every scope of this factory shares one DI service catalog, so the
     // dispatcher looks the catalog up once and each dispatch reads the handler
     // factory from it (spec 08 §4.3, construction decided before dispatch).
+    private static readonly object HandlerNotInvoked = new();
     private ZLinkScopedHandlerInstanceOwner.DispatchCatalog? _catalog;
+    private readonly ZLinkDispatchErrorReporter _channelDispatchErrors =
+        channelDispatchErrors ?? new ZLinkDispatchErrorReporter(registration.DispatchOptions);
 
     public ValueTask<ZLinkHandlerDispatchResult> DispatchAsync(
         ZLinkHandlerEndpointDescriptor endpoint,
@@ -66,6 +70,7 @@ internal sealed class ZLinkHandlerDispatcher(
                 argumentPlan,
                 message,
                 context,
+                dispatchKind,
                 cancellationToken
             )
             : InvokeFilteredAsync(
@@ -84,6 +89,7 @@ internal sealed class ZLinkHandlerDispatcher(
         IReadOnlyList<ZLinkHandlerArgumentKind> argumentPlan,
         object? message,
         IZLinkMessageContext context,
+        ZLinkHandlerDispatchKind dispatchKind,
         CancellationToken cancellationToken
     )
     {
@@ -96,6 +102,27 @@ internal sealed class ZLinkHandlerDispatcher(
         var handler = catalog.Create(services, handlerType);
         try
         {
+            if (
+                dispatchKind
+                    is ZLinkHandlerDispatchKind.ChannelRequest
+                        or ZLinkHandlerDispatchKind.ChannelSend
+                && _channelDispatchErrors.Flow.Enabled(ZLinkMessageFlowOutcome.Dispatched)
+            )
+            {
+                new ZLinkDispatchFlowScope(
+                    context is ZLinkRouteMessageContext
+                        ? ZLinkDispatchErrorSurface.RouteMeshChannel
+                        : ZLinkDispatchErrorSurface.Channel,
+                    _channelDispatchErrors.Flow.CaptureEnabled,
+                    dispatchKind == ZLinkHandlerDispatchKind.ChannelRequest
+                        ? ZLinkDispatchMessageKind.Request
+                        : ZLinkDispatchMessageKind.Send,
+                    context.PacketName,
+                    context.ChannelName,
+                    context.ContentType,
+                    context.CorrelationId
+                ).Trace(_channelDispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
+            }
             var result = await ZLinkHandlerInvocationEngine
                 .InvokeAsync(handler, invoker, argumentPlan, message, context, cancellationToken)
                 .ConfigureAwait(false);
@@ -123,24 +150,46 @@ internal sealed class ZLinkHandlerDispatcher(
         await using var scope = scopeFactory.CreateAsyncScope();
         await using var instances = new ZLinkScopedHandlerInstanceOwner(scope.ServiceProvider);
 
-        object? result = null;
-        var handlerInvoked = false;
+        object? result = HandlerNotInvoked;
         var filterContext = new ZLinkHandlerFilterContext(context, dispatchKind);
         var pipeline = BuildPipeline(
             filterContext,
             instances,
             async ct =>
             {
-                handlerInvoked = true;
+                result = null;
                 var handler = instances.Resolve(handlerType);
+                if (
+                    filterContext.DispatchKind
+                        is ZLinkHandlerDispatchKind.ChannelRequest
+                            or ZLinkHandlerDispatchKind.ChannelSend
+                    && _channelDispatchErrors.Flow.Enabled(ZLinkMessageFlowOutcome.Dispatched)
+                )
+                {
+                    new ZLinkDispatchFlowScope(
+                        filterContext.Message is ZLinkRouteMessageContext
+                            ? ZLinkDispatchErrorSurface.RouteMeshChannel
+                            : ZLinkDispatchErrorSurface.Channel,
+                        _channelDispatchErrors.Flow.CaptureEnabled,
+                        filterContext.DispatchKind == ZLinkHandlerDispatchKind.ChannelRequest
+                            ? ZLinkDispatchMessageKind.Request
+                            : ZLinkDispatchMessageKind.Send,
+                        filterContext.PacketName,
+                        filterContext.ChannelName,
+                        filterContext.ContentType,
+                        filterContext.CorrelationId
+                    ).Trace(_channelDispatchErrors, ZLinkMessageFlowOutcome.Dispatched);
+                }
                 result = await ZLinkHandlerInvocationEngine
-                    .InvokeAsync(handler, invoker, argumentPlan, message, context, ct)
+                    .InvokeAsync(handler, invoker, argumentPlan, message, filterContext.Message, ct)
                     .ConfigureAwait(false);
             },
             cancellationToken
         );
         await pipeline().ConfigureAwait(false);
-        return new ZLinkHandlerDispatchResult(handlerInvoked, result);
+        return ReferenceEquals(result, HandlerNotInvoked)
+            ? new ZLinkHandlerDispatchResult(false, null)
+            : new ZLinkHandlerDispatchResult(true, result);
     }
 
     private ZLinkHandlerFilterNext BuildPipeline(

@@ -2181,6 +2181,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     ${ZLINK_FRAMEWORK_CPP_DIR}/framework/src
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   target_compile_definitions(test_cpp_framework_spot_close_conformance PRIVATE
+    ZLINK_TEST_CHECK_CORE_CONTEXTS
     ZLINK_SPOT_CLOSE_CONFORMANCE_PATH="${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/conformance/spot-close-v1.json")
   zlink_framework_cpp_add_test(
     NAME test_cpp_framework_spot_close_conformance
@@ -2395,6 +2396,14 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_include_directories(test_cpp_framework_mesh_metrics PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
   add_zlink_framework_test(
+    test_cpp_framework_claim_dispatch_cost
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_dispatch_cost.cpp
+    "framework-unit;framework-contract;framework-regression;messaging"
+    "unit")
+  target_sources(test_cpp_framework_claim_dispatch_cost PRIVATE tests/support/allocation_counter.cpp)
+  target_include_directories(test_cpp_framework_claim_dispatch_cost PRIVATE
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
+  add_zlink_framework_test(
     test_cpp_framework_actor_header_allocations
     tests/Zlink.Framework.UnitTests/test_cpp_framework_actor_header_allocations.cpp
     "framework-unit;framework-regression;messaging")
@@ -2418,17 +2427,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
   target_sources(test_cpp_framework_request_reply_cost PRIVATE
     tests/support/allocation_counter.cpp)
   target_include_directories(test_cpp_framework_request_reply_cost PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-  add_zlink_framework_test(
-    test_cpp_framework_claim_owner_cost
-    tests/Zlink.Framework.UnitTests/test_cpp_framework_claim_owner_cost.cpp
-    "framework-unit;framework-contract;framework-regression;messaging"
-    "unit")
-  target_sources(test_cpp_framework_claim_owner_cost PRIVATE
-    tests/support/allocation_counter.cpp)
-  target_include_directories(test_cpp_framework_claim_owner_cost PRIVATE
-    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
-  add_zlink_framework_test(
+    ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)  add_zlink_framework_test(
     test_cpp_framework_ambient_scope_cost
     tests/Zlink.Framework.UnitTests/test_cpp_framework_ambient_scope_cost.cpp
     "framework-unit;framework-contract;framework-regression;messaging"

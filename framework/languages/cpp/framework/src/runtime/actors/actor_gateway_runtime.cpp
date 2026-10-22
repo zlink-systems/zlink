@@ -2200,6 +2200,9 @@ task_t<void> detail::session_actor_manager_access_t::disconnect_async (
         }
         binding_context->stream.reset ();
         binding_context->stream_state.reset ();
+        binding_context->native_binder = {};
+        binding_context->disconnect_snapshot = {};
+        binding_context->disconnect_cleanup = {};
     }
     struct issued_disconnect_t
     {

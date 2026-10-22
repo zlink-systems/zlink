@@ -322,6 +322,8 @@ final class ZLinkMeshApplicationDispatcherTest {
 
     @Test
     void routeMeshRequestPreservesInboundFlowAcrossServerTraces() throws Exception {
+        FlowChannelRequestHandler.release = new CompletableFuture<>();
+        AtomicInteger terminalCount = new AtomicInteger();
         List<String> traces = new CopyOnWriteArrayList<>();
         CompletableFuture<String> repliedTrace = new CompletableFuture<>();
         Logger logger = Logger.getLogger(ZLinkMessageFlowTracer.class.getName());
@@ -335,7 +337,8 @@ final class ZLinkMeshApplicationDispatcherTest {
                             return;
                         }
                         traces.add(message);
-                        if (message.contains("phase=replied")) {
+                        if (message.contains("phase=replied")
+                                && terminalCount.incrementAndGet() == 2) {
                             repliedTrace.complete(message);
                         }
                     }
@@ -365,9 +368,19 @@ final class ZLinkMeshApplicationDispatcherTest {
                             (token, parts) -> {});
 
             dispatcher.accept(recordWithFlow());
-
+            FlowChannelRequestHandler.received.get(2, TimeUnit.SECONDS);
+            dispatcher.accept(recordWithFlow());
+            assertEquals(
+                    2L,
+                    traces.stream().filter(line -> line.contains("phase=admitted")).count(),
+                    traces.toString());
+            assertEquals(
+                    1L,
+                    traces.stream().filter(line -> line.contains("phase=dispatched")).count(),
+                    traces.toString());
+            FlowChannelRequestHandler.release.complete(null);
             repliedTrace.get(2, TimeUnit.SECONDS);
-            for (String phase : List.of("received", "dispatched", "replied")) {
+            for (String phase : List.of("received", "admitted", "dispatched", "replied")) {
                 assertTrue(
                         traces.stream()
                                 .anyMatch(
@@ -378,6 +391,8 @@ final class ZLinkMeshApplicationDispatcherTest {
                         () -> "missing inbound flow on " + phase + ": " + traces);
             }
         } finally {
+            FlowChannelRequestHandler.release.complete(null);
+            FlowChannelRequestHandler.release = CompletableFuture.completedFuture(null);
             logger.removeHandler(traceHandler);
             logger.setLevel(previousLevel);
         }
@@ -979,11 +994,12 @@ final class ZLinkMeshApplicationDispatcherTest {
     public static final class FlowChannelRequestHandler
             implements ZLinkRequestHandler<String, String> {
         private static CompletableFuture<String> received;
+        private static CompletableFuture<Void> release = CompletableFuture.completedFuture(null);
 
         @Override
         public CompletionStage<String> handle(String message, ZLinkMessageContext context) {
             received.complete(message);
-            return CompletableFuture.completedFuture("reply");
+            return release.thenApply(ignored -> "reply");
         }
     }
 
