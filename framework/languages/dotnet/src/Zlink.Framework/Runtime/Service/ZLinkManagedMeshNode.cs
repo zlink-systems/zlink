@@ -4607,7 +4607,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 authority.AuthorityOwnerGeneration,
                 authority.OwnerLeaseGeneration,
                 !metadata.IsEmpty,
-                0,
                 0
             );
         await SendDirectWireAsync(
@@ -4709,8 +4708,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 authority.AuthorityOwnerGeneration,
                 authority.OwnerLeaseGeneration,
                 !metadata.IsEmpty,
-                0,
-                checked((ulong)DateTimeOffset.UtcNow.Add(timeout).ToUnixTimeMilliseconds())
+                0
             );
         var reply = await RequestDirectWireAsync(
                 peer.PhysicalRoutingId,
@@ -4961,14 +4959,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
             authority.AuthorityOwnerGeneration,
             authority.OwnerLeaseGeneration,
             !metadata.IsEmpty,
-            messageFollowRoute?.MessageFollowHopCount ?? 0,
-            request
-                ? messageFollowRoute?.DeadlineUnixMs
-                    ?? operation?.DeadlineUnixMs
-                    ?? throw new InvalidOperationException(
-                        "Spot requests require an absolute deadline."
-                    )
-                : 0
+            messageFollowRoute?.MessageFollowHopCount ?? 0
         );
         return SubmitResult.Ok;
     }
@@ -5028,8 +5019,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 authority.TargetNodeGeneration,
                 authority.AuthorityOwnerGeneration,
                 authority.OwnerLeaseGeneration,
-                hasMetadata: false,
-                deadlineUnixMs: 0
+                hasMetadata: false
             );
             await SendDirectWireAsync(
                     peer.PhysicalRoutingId,
@@ -5091,13 +5081,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                     authority.TargetNodeGeneration,
                     authority.AuthorityOwnerGeneration,
                     authority.OwnerLeaseGeneration,
-                    hasMetadata: false,
-                    deadlineUnixMs: request
-                        ? operation?.DeadlineUnixMs
-                            ?? throw new InvalidOperationException(
-                                "Actor requests require an absolute deadline."
-                            )
-                        : 0
+                    hasMetadata: false
                 );
                 return SubmitStatefulWire(
                     peer,
@@ -8350,20 +8334,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 );
             return false;
         }
-        if (
-            request
-            && stateful.DeadlineUnixMs != 0
-            && stateful.DeadlineUnixMs
-                <= checked((ulong)DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
-        )
-        {
-            Reply(
-                RequestResult.InternalError,
-                (uint)ServiceWireConstants.FrameworkErrorCode.WorkerTimedOut,
-                Array.Empty<Message>()
-            );
-            return false;
-        }
         var payloadOffset = stateful.HasMetadata ? 2 : 1;
         if (received.Parts.Count != payloadOffset + 1)
         {
@@ -8378,7 +8348,9 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         MailboxKey owner;
         MeshRecordKind kind;
         MeshOperationKind operationKind;
-        ActorRef sourceActor = default;
+        ActorRef sourceActor = stateful.SourceActor?.ActorId.Value is { } sourceActorId
+            ? new(sourceActorId, stateful.SourceActor.Generation!.Value, _meshName, sourceRid)
+            : default;
         string sourceSpotId = stateful.SourceSpotId;
         ManagedActor? admittedActor = null;
         if (
@@ -8499,7 +8471,7 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                         stateful.AuthorityOwnerGeneration,
                         stateful.OwnerLeaseGeneration,
                         stateful.MessageFollowHopCount,
-                        stateful.DeadlineUnixMs,
+                        0,
                         ReadOnlyMemory<byte>.Empty,
                         Array.Empty<Message>(),
                         messageFollowReply
@@ -8594,7 +8566,6 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
                 ownerLeaseGeneration: stateful.OwnerLeaseGeneration,
                 messageFollowHopCount: stateful.MessageFollowHopCount,
                 replyRouteId: stateful.Correlation,
-                deadlineUnixMs: stateful.DeadlineUnixMs,
                 instanceIntent: stateful.InstanceIntent
             ),
             parts,
