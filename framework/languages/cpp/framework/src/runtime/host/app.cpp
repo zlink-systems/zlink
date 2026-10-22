@@ -42,6 +42,7 @@
 #include "runtime/diagnostics/flow_context.hpp"
 #include "runtime/diagnostics/message_flow_tracer.hpp"
 #include "runtime/diagnostics/runtime_metrics.hpp"
+#include "runtime/diagnostics/host_state_metric.hpp"
 #include "runtime/diagnostics/runtime_observation.hpp"
 #include "runtime/diagnostics/listener_status_registry.hpp"
 #include "runtime/locations/store_location_resolvers.hpp"
@@ -438,6 +439,7 @@ class app_state_t
     struct relocation_operation_t
     {
         std::mutex mutex;
+        std::chrono::steady_clock::time_point metric_started{};
         bool started = false;
         bool terminal = false;
         bool shutdown_requested = false;
@@ -473,6 +475,7 @@ class app_state_t
     struct termination_operation_t
     {
         std::mutex mutex;
+        std::chrono::steady_clock::time_point metric_started{};
         bool started = false;
         bool terminal = false;
         termination_result_t result{};
@@ -490,7 +493,7 @@ class app_state_t
     };
 
     std::shared_ptr<std::atomic_bool> draining = std::make_shared<std::atomic_bool> (false);
-    std::atomic<framework_runtime_state_t> runtime_state = framework_runtime_state_t::preparing;
+    runtime::host_state_metric_t runtime_state;
     std::function<task_t<bool> ()> startup_publication = [] {
         return task_t<bool> (result_t<bool>::success (true));
     };
@@ -1282,20 +1285,20 @@ void app_t::_apply_zlink_framework ()
     if (_state->services.contains (std::type_index (typeid (relocation_store_t)))
         && !_state->services.contains (std::type_index (typeid (relocation_repository_t)))) {
         _state->services.add_factory<relocation_repository_t> (
-          [] (service_provider_t &provider) {
+          [monitoring = _state->monitoring] (service_provider_t &provider) {
               return std::static_pointer_cast<relocation_repository_t> (
                 std::make_shared<runtime::provider_relocation_repository_t> (
-                  provider.get_required<relocation_store_t> ()));
+                  provider.get_required<relocation_store_t> (), monitoring));
           },
           service_lifetime_t::singleton);
     }
     if (_state->services.contains (std::type_index (typeid (location_store_t)))
         && !_state->services.contains (std::type_index (typeid (location_repository_t)))) {
         _state->services.add_factory<location_repository_t> (
-          [] (service_provider_t &provider) {
+          [monitoring = _state->monitoring] (service_provider_t &provider) {
               return std::static_pointer_cast<location_repository_t> (
                 std::make_shared<runtime::provider_location_repository_t> (
-                  provider.get_required<location_store_t> ()));
+                  provider.get_required<location_store_t> (), monitoring));
           },
           service_lifetime_t::singleton);
     }
@@ -3057,15 +3060,6 @@ try {
         _state->start_hosted_services (provider, started);
         (void) detail::app_state_t::enter_serving_after_publication (
           _state->status_access, _state->startup_publication ());
-        try {
-            runtime::runtime_metrics_t drain_metrics (_state->monitoring);
-            if (drain_metrics.enabled ()) {
-                drain_metrics.observable ("zlink.drain.state", "{state}", 1,
-                                          {{"state", "serving"}});
-            }
-        }
-        catch (...) {
-        }
         while (!_state->stop_requested.load (std::memory_order_acquire)) {
             _state->delays.reap_completed ();
             if (g_stop_signal_requested != 0) {
@@ -3148,21 +3142,6 @@ struct shutdown_forced_t
 };
 
 using shutdown_progress_t = std::variant<shutdown_completed_t, shutdown_forced_t>;
-
-const char *drain_state_name (detail::drain_state_t state) noexcept
-{
-    switch (state) {
-        case detail::drain_state_t::serving:
-            return "serving";
-        case detail::drain_state_t::draining:
-            return "draining";
-        case detail::drain_state_t::stopped:
-            return "stopped";
-        case detail::drain_state_t::force_stopping:
-            return "force_stopping";
-    }
-    return "unknown";
-}
 
 bool capacity_available_for_relocation (const capacity_usage_t &usage)
 {
@@ -3497,6 +3476,41 @@ void cancel_application_relocation_readiness (detail::app_state_t &state,
 
 } // namespace
 
+namespace
+{
+void record_host_relocation (detail::app_state_t &state,
+                             const relocation_result_t &result,
+                             std::chrono::steady_clock::time_point started)
+{
+    runtime::runtime_metrics_t metrics (state.monitoring);
+    if (!metrics.enabled ())
+        return;
+    const char *mode = result.mode == relocation_mode_t::planned_maintenance ? "planned_maintenance"
+                                                                             : "rolling_update";
+    metrics.histogram (
+      "zlink.host.relocation.duration", "s",
+      std::chrono::duration<double> (std::chrono::steady_clock::now () - started).count (),
+      {{"mode", mode},
+       {"outcome", result.outcome == relocation_outcome_t::relocated ? "relocated" : "blocked"}});
+    if (result.outcome == relocation_outcome_t::blocked) {
+        constexpr const char *reasons[] = {"none",
+                                           "target_unavailable",
+                                           "store_unavailable",
+                                           "relocation_disabled",
+                                           "state_incompatible",
+                                           "deadline_exceeded",
+                                           "relocation_failed",
+                                           "runtime_not_ready",
+                                           "manual_topology_unsupported",
+                                           "shutdown_requested",
+                                           "operation_in_progress"};
+        metrics.counter (
+          "zlink.host.relocation.blocked", "{operation}", 1,
+          {{"mode", mode}, {"reason", reasons[static_cast<unsigned> (result.reason)]}});
+    }
+}
+} // namespace
+
 bool app_t::is_ready () const noexcept
 {
     return runtime_state () == framework_runtime_state_t::serving;
@@ -3528,6 +3542,11 @@ task_t<relocation_result_t> app_t::relocate (relocation_options_t options,
 task_t<relocation_result_t> app_t::relocate_async (relocation_options_t options,
                                                    std::stop_token wait_cancellation)
 {
+    const auto metric_started = std::chrono::steady_clock::now ();
+    const auto rejected = [&] (relocation_result_t result) {
+        record_host_relocation (*_state, result, metric_started);
+        return result_t<relocation_result_t>::success (result);
+    };
     detail::app_state_t::relocation_preflight_guard_t preflight_guard (*_state);
     const auto preflight_deadline_at = std::chrono::steady_clock::now () + *options.deadline;
 
@@ -3578,35 +3597,35 @@ task_t<relocation_result_t> app_t::relocate_async (relocation_options_t options,
                 // requests the source application version.
                 const auto rejected_effective_target = relocation_target_application_version (
                   options, operation.source_application_version);
-                co_return result_t<relocation_result_t>::success (
-                  {options.mode, rejected_effective_target, relocation_outcome_t::blocked,
-                   relocation_reason_t::operation_in_progress});
+                co_return rejected ({options.mode, rejected_effective_target,
+                                     relocation_outcome_t::blocked,
+                                     relocation_reason_t::operation_in_progress});
             }
         } else if (operation.terminal) {
             co_return result_t<relocation_result_t>::success (operation.result);
         } else {
             if (preflight.blocker) {
-                co_return result_t<relocation_result_t>::success (
-                  {options.mode, preflight.effective_target_application_version,
-                   relocation_outcome_t::blocked, *preflight.blocker});
+                co_return rejected ({options.mode, preflight.effective_target_application_version,
+                                     relocation_outcome_t::blocked, *preflight.blocker});
             }
             const auto readiness_meshes = begin_application_relocation_readiness (*_state);
             if (!publish_mesh_descriptor_state (*_state, framework_runtime_state_t::relocating)) {
                 (void) publish_mesh_descriptor_state (*_state, framework_runtime_state_t::serving);
                 cancel_application_relocation_readiness (*_state, readiness_meshes);
-                co_return result_t<relocation_result_t>::success (
-                  {options.mode, preflight.effective_target_application_version,
-                   relocation_outcome_t::blocked, relocation_reason_t::store_unavailable});
+                co_return rejected ({options.mode, preflight.effective_target_application_version,
+                                     relocation_outcome_t::blocked,
+                                     relocation_reason_t::store_unavailable});
             }
             operation.deadline = std::chrono::duration_cast<std::chrono::milliseconds> (
               preflight_deadline_at - std::chrono::steady_clock::now ());
             if (operation.deadline <= std::chrono::milliseconds::zero ()) {
                 (void) publish_mesh_descriptor_state (*_state, framework_runtime_state_t::serving);
                 cancel_application_relocation_readiness (*_state, readiness_meshes);
-                co_return result_t<relocation_result_t>::success (
-                  {options.mode, preflight.effective_target_application_version,
-                   relocation_outcome_t::blocked, relocation_reason_t::target_unavailable});
+                co_return rejected ({options.mode, preflight.effective_target_application_version,
+                                     relocation_outcome_t::blocked,
+                                     relocation_reason_t::target_unavailable});
             }
+            operation.metric_started = metric_started;
             operation.started = true;
             operation.options = options;
             operation.source_application_version = preflight.source_application_version;
@@ -3689,6 +3708,7 @@ task_t<void> app_t::run_shared_relocation (detail::app_state_t &state)
             operation.shutdown_requested = false;
             operation.deadline_at.reset ();
         }
+        record_host_relocation (state, result, operation.metric_started);
         operation.result = result;
         waiters = std::move (operation.waiters);
         operation.waiters.clear ();
@@ -3976,6 +3996,7 @@ task_t<termination_result_t> app_t::shutdown (std::chrono::milliseconds deadline
               result_t<termination_result_t>::success (operation.result));
         }
         if (!operation.started) {
+            operation.metric_started = std::chrono::steady_clock::now ();
             operation.started = true;
             operation.deadline = deadline;
             operation.deadline_at = std::chrono::system_clock::now () + deadline;
@@ -4002,11 +4023,6 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
     auto emit_state = [&] (detail::drain_state_t drain_state) {
         try {
             monitoring.publish_drain (detail::drain_event_t{drain_state});
-            runtime::runtime_metrics_t drain_metrics (state.monitoring);
-            if (drain_metrics.enabled ()) {
-                drain_metrics.observable ("zlink.drain.state", "{state}", 1,
-                                          {{"state", drain_state_name (drain_state)}});
-            }
         }
         catch (...) {
         }
@@ -4207,10 +4223,6 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
             for (const auto &service : state.hosted_services) {
                 if (auto *lifecycle = detail::lifecycle_of (service.get ())) {
                     lifecycle->force_close_sessions ();
-                    runtime::runtime_metrics_t metrics (state.monitoring);
-                    if (metrics.enabled ()) {
-                        metrics.counter ("zlink.drain.forced", "{event}", 1, {{"kind", "session"}});
-                    }
                 }
             }
         }
@@ -4219,19 +4231,6 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
     }
     if (!force_stopped)
         emit_state (detail::drain_state_t::stopped);
-    try {
-        runtime::runtime_metrics_t drain_metrics (state.monitoring);
-        if (drain_metrics.enabled ()) {
-            const auto elapsed =
-              std::chrono::duration<double> (std::chrono::steady_clock::now () - started_at)
-                .count ();
-            drain_metrics.histogram ("zlink.drain.duration", "s", elapsed,
-                                     {{"outcome", force_stopped ? "force_stopped" : "drained"}});
-        }
-    }
-    catch (...) {
-    }
-
     termination_reason_t terminal_reason = termination_reason_t::none;
     if (const auto *forced = std::get_if<shutdown_forced_t> (&result)) {
         switch (forced->reason) {
@@ -4258,6 +4257,21 @@ void app_t::run_shared_shutdown (detail::app_state_t &state) noexcept
     if (!teardown_completed && terminal.outcome == termination_outcome_t::stopped) {
         terminal.outcome = termination_outcome_t::force_stopped;
         terminal.reason = termination_reason_t::deadline_exceeded;
+    }
+    runtime::runtime_metrics_t metrics (state.monitoring);
+    if (metrics.enabled ()) {
+        metrics.histogram (
+          "zlink.host.shutdown.duration", "s",
+          std::chrono::duration<double> (std::chrono::steady_clock::now ()
+                                         - state.termination_operation.metric_started)
+            .count (),
+          {{"outcome",
+            terminal.outcome == termination_outcome_t::stopped ? "stopped" : "force_stopped"}});
+        if (terminal.outcome == termination_outcome_t::force_stopped)
+            metrics.counter ("zlink.host.shutdown.forced", "{operation}", 1,
+                             {{"reason", terminal.reason == termination_reason_t::deadline_exceeded
+                                           ? "deadline_exceeded"
+                                           : "teardown_failed"}});
     }
     std::vector<std::shared_ptr<detail::app_state_t::termination_waiter_t>> waiters;
     {

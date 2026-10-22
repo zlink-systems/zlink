@@ -476,8 +476,12 @@ public sealed class ErrorReplyWireConvergenceTests
         );
         return
         [
-            Message.From(ZLinkStreamProtocolDefaults.EncodeHeader(header).Span),
-            Message.From(payload),
+            Message.From(
+                ZLinkStreamFrameCodec.Encode(
+                    ZLinkStreamProtocolDefaults.EncodeHeader(header).Span,
+                    System.Text.Encoding.UTF8.GetBytes(payload)
+                )
+            ),
         ];
     }
 }

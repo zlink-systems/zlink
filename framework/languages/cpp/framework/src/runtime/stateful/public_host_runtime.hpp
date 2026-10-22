@@ -16,6 +16,7 @@
 #include "runtime/stateful/stream_session_registry.hpp"
 #include "runtime/operations/exactly_once_table.hpp"
 #include "runtime/operations/call_id.hpp"
+#include "runtime/diagnostics/instance_spot_metrics.hpp"
 
 #include <zlink/Contracts/Core/routing_id.hpp>
 #include <zlink/Contracts/Messaging/message.hpp>
@@ -461,6 +462,8 @@ struct instance_spot_activation_materializer_t
     std::function<bool (const protocol::instance_spot_activation_header_t &,
                         const authority_snapshot_t &)>
       matches_local;
+
+    std::vector<std::string> metric_types;
 
     explicit operator bool () const noexcept
     {
@@ -1258,6 +1261,9 @@ class public_host_runtime_t : public std::enable_shared_from_this<public_host_ru
     /* Cutover wait measured from the relay-ready reply
      * (relocation_cutover_wait_timeout snapshot, default 1000 ms). */
     std::chrono::milliseconds _relocation_cutover_wait{1000};
+    std::shared_ptr<runtime::relocation_metrics_t> _relocation_metrics;
+    std::map<std::string, std::shared_ptr<runtime::instance_spot_admission_metrics_t>>
+      _instance_admission_metrics;
     relocation_target_metrics_t _relocation_target_metrics;
     struct user_spot_terminal_record_t
     {
