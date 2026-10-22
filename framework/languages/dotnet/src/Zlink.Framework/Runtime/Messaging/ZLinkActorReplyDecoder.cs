@@ -42,43 +42,18 @@ internal static class ZLinkActorReplyDecoder
         ReadOnlySpan<byte> payload;
         try
         {
-<<<<<<< HEAD
-            if (reply.Count == 1)
-            {
-                var frameMemory = reply[0].AsReadOnlyMemory();
-                if (
-                    !ZLinkStreamFrameCodec.TryDecode(
-                        frameMemory.Span,
-                        out var headerBytes,
-                        out payload
-                    )
-                )
-                    throw new InvalidOperationException("Actor request reply frame is invalid.");
-                // The header always sits at PrefixSize inside the frame, so
-                // re-slicing the frame memory decodes without copying the
-                // header bytes out first.
-                header = ZLinkStreamProtocolDefaults.DecodeHeader(
-                    frameMemory.Slice(ZLinkStreamFrameCodec.PrefixSize, headerBytes.Length),
-                    captureFlow
-                );
-            }
-            else
-            {
-                header = ZLinkStreamProtocolDefaults.DecodeHeader(
-                    reply[0].AsReadOnlyMemory(),
-                    captureFlow
-                );
-                payload = reply[1].AsReadOnlySpan();
-            }
-=======
-            var frame = reply[0].AsReadOnlySpan();
-            if (!ZLinkStreamFrameCodec.TryDecode(frame, out var headerBytes, out payload))
+            var frameMemory = reply[0].AsReadOnlyMemory();
+            if (
+                !ZLinkStreamFrameCodec.TryDecode(frameMemory.Span, out var headerBytes, out payload)
+            )
                 throw new InvalidOperationException("Actor request reply frame is invalid.");
-            // The header decoder requires managed memory. Copy only that
-            // header; the reply retains the native payload until the caller
-            // finishes this synchronous decode.
-            header = ZLinkStreamProtocolDefaults.DecodeHeader(headerBytes.ToArray(), captureFlow);
->>>>>>> e9d44d5 (fix(framework): Actor reply를 STREAM frame 1 part와 스펙 Error payload로 맞춤 (#2507) (#2513))
+            // The header always sits at PrefixSize inside the frame, so
+            // re-slicing the frame memory decodes without copying the
+            // header bytes out first.
+            header = ZLinkStreamProtocolDefaults.DecodeHeader(
+                frameMemory.Slice(ZLinkStreamFrameCodec.PrefixSize, headerBytes.Length),
+                captureFlow
+            );
         }
         catch (Exception error)
             when (error is not OperationCanceledException and not ZLinkFrameworkException)
