@@ -207,7 +207,7 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     public byte[] encodeNodeSendHeader(int flags) {
-        return prefix(ServiceWireConstants.COMMAND_NODE_SEND, flags, 0).array();
+        return prefixBytes(ServiceWireConstants.COMMAND_NODE_SEND, flags, 0);
     }
 
     public byte[] encodeNodeRequestHeader(long correlation, int flags) {
@@ -230,10 +230,19 @@ public final class ZLinkServiceM6AWireCodec {
 
     public byte[] encodeChannelSendHeader(String channelName, int flags) {
         byte[] channel = Writer.text8Bytes(channelName, "channelName");
-        return prefix(ServiceWireConstants.COMMAND_CHANNEL_SEND, flags, Byte.BYTES + channel.length)
-                .put((byte) channel.length)
-                .put(channel)
-                .array();
+        byte[] header =
+                prefixBytes(
+                        ServiceWireConstants.COMMAND_CHANNEL_SEND,
+                        flags,
+                        Byte.BYTES + channel.length);
+        header[ZLinkServiceWireCodec.PREFIX_BYTES] = (byte) channel.length;
+        System.arraycopy(
+                channel,
+                0,
+                header,
+                ZLinkServiceWireCodec.PREFIX_BYTES + Byte.BYTES,
+                channel.length);
+        return header;
     }
 
     public String decodeChannelSendHeader(byte[] frame) {
@@ -563,16 +572,22 @@ public final class ZLinkServiceM6AWireCodec {
     }
 
     private static ByteBuffer prefix(int command, int flags, int bodySize) {
+        return ByteBuffer.wrap(prefixBytes(command, flags, bodySize))
+                .order(ByteOrder.BIG_ENDIAN)
+                .position(ZLinkServiceWireCodec.PREFIX_BYTES);
+    }
+
+    private static byte[] prefixBytes(int command, int flags, int bodySize) {
         if ((flags & ~ServiceWireConstants.FLAG_METADATA) != 0) {
             throw protocol("M6A application header contains an unknown flag");
         }
-        return ByteBuffer.allocate(ZLinkServiceWireCodec.PREFIX_BYTES + bodySize)
-                .order(ByteOrder.BIG_ENDIAN)
-                .put((byte) ServiceWireConstants.MAGIC_0)
-                .put((byte) ServiceWireConstants.MAGIC_1)
-                .put((byte) ServiceWireConstants.WIRE_MAJOR)
-                .put((byte) command)
-                .put((byte) flags);
+        byte[] bytes = new byte[ZLinkServiceWireCodec.PREFIX_BYTES + bodySize];
+        bytes[0] = (byte) ServiceWireConstants.MAGIC_0;
+        bytes[1] = (byte) ServiceWireConstants.MAGIC_1;
+        bytes[2] = (byte) ServiceWireConstants.WIRE_MAJOR;
+        bytes[3] = (byte) command;
+        bytes[4] = (byte) flags;
+        return bytes;
     }
 
     private static void validateReply(long correlation, int terminal, int failure) {
