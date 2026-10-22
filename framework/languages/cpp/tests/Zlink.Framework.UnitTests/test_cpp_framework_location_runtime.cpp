@@ -158,7 +158,12 @@ void check_discovery_reconcile_without_periodic_wait (bool request_during_initia
       std::make_shared<runtime_failure_collector_t> (), builder.message_bus (),
       zlink::framework::detail::channel_runtime_t::from (builder.message_bus ())
         .channel_snapshots (),
-      handlers, serializers, {}, {}, {}, {}, [&] (location_write_intent_t) {
+      handlers, serializers,
+      [&provider] {
+          return provider.get_required<zlink::framework::framework_runtime_t> ().status ().state;
+      },
+      {}, {}, {}, {},
+      [&] (location_write_intent_t) {
           if (++publications == 1) {
               initial_publication.set_value ();
           } else if (publications == 2) {

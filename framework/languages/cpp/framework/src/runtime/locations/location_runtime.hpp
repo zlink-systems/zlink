@@ -185,10 +185,16 @@ class location_runtime_t
 
     std::optional<location_owner_token_t> current_owner_token () const
     {
+        const auto observation = current_owner_observation ();
+        return observation ? std::make_optional (*observation) : std::nullopt;
+    }
+
+    std::shared_ptr<const location_owner_token_t> current_owner_observation () const
+    {
         const auto lease = std::atomic_load_explicit (&_owner_lease, std::memory_order_acquire);
-        return owner_lease_usable (*lease, std::chrono::steady_clock::now ())
-                 ? lease->token
-                 : std::optional<location_owner_token_t>{};
+        if (!owner_lease_usable (*lease, std::chrono::steady_clock::now ()))
+            return {};
+        return {lease, &*lease->token};
     }
 
     task_t<std::optional<location_owner_token_t>> current_owner_token_task () const
@@ -581,7 +587,7 @@ class location_runtime_t
               }
           });
         attempt.reset ();
-        auto result = co_await ready;
+        auto result = co_await std::move (ready);
         if (auto active = weak_attempt.lock ()) {
             if (auto heartbeat = active->heartbeat.lock ()) {
                 std::lock_guard lock (heartbeat->gate);

@@ -72,11 +72,12 @@ TEST (RoutePayloadOwnership, TypedSendRetainsPayloadWhenSerializerDestroysTheCal
     bool delivered = false;
     runtime.bind_mesh_node_transport (
       "m",
-      [&] (const zlink::routing_id_t &, runtime::messaging::message_parts_t)
-        -> task_t<result_t<void>> {
+      [&] (const zlink::routing_id_t &,
+           runtime::messaging::message_parts_t) -> task_t<result_t<void>> {
           delivered = true;
           co_return result_t<void>::success ();
-      }, {});
+      },
+      {});
     auto client = builder.route_client (serializers);
     auto token = std::make_shared<int> (7);
     lifetime = token;
