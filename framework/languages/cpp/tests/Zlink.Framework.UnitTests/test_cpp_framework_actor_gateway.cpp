@@ -4708,15 +4708,15 @@ int reconcile_deadline_fast_fails_without_target_commit (
                .runtime_failures =
                  std::make_shared<zlink::framework::runtime::runtime_failure_collector_t> ()}});
     const auto make_reply_token = [reply_host] (std::shared_ptr<std::atomic_int> calls,
-                                             std::shared_ptr<std::atomic_bool> was_unavailable) {
+                                                std::shared_ptr<std::atomic_bool> was_unavailable) {
         host::reply_token_t token;
         token.host = reply_host;
         token.local_reply = [calls, was_unavailable] (const std::vector<zlink::message_t> &parts) {
             const auto reply =
               detail::decode_actor_reply (runtime::messaging::message_parts_t (parts));
             was_unavailable->store (!reply
-                                     && reply.error_kind () == framework_error_kind_t::unavailable,
-                                   std::memory_order_release);
+                                      && reply.error_kind () == framework_error_kind_t::unavailable,
+                                    std::memory_order_release);
             calls->fetch_add (1, std::memory_order_acq_rel);
             return true;
         };
@@ -8201,7 +8201,8 @@ int main (int argc, char **argv)
         return 450 + route;
     if (const auto route = local_relay_preserves_handoff_request_route (false); route != 0)
         return 455 + route;
-    if (const auto deadline = local_relay_preserves_handoff_request_route (false, true); deadline != 0)
+    if (const auto deadline = local_relay_preserves_handoff_request_route (false, true);
+        deadline != 0)
         return 465 + deadline;
     if (const auto failure = local_relay_failure_returns_without_waiting_for_handoff_deadline ();
         failure != 0)
