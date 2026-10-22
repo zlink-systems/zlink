@@ -238,14 +238,21 @@ class store_location_resolvers_t final : public spot_address_resolver_t,
     task_t<std::optional<spot_address_t>>
     resolve_actor_session_binding_address (actor_ref_t actor) override
     {
-        auto address = co_await read_actor_address (std::string (actor.actor_id ().value ()));
-        if (!address || address->object_generation != actor.object_generation ()
-            || address->node_rid
-                 != zlink::routing_id_t::from (std::string (actor.node_rid ().value ()))
-            || (!actor.mesh_name ().empty () && address->mesh_name != actor.mesh_name ())
-            || address->authority_owner_generation == 0 || address->node_generation == 0
-            || address->owner.lease_generation <= 0)
+        const auto matches_actor = [&actor] (const spot_address_t &address) {
+            return address.object_generation == actor.object_generation ()
+                   && address.node_rid
+                        == zlink::routing_id_t::from (std::string (actor.node_rid ().value ()))
+                   && (actor.mesh_name ().empty () || address.mesh_name == actor.mesh_name ())
+                   && address.authority_owner_generation != 0 && address.node_generation != 0
+                   && address.owner.lease_generation > 0;
+        };
+        const auto actor_id = std::string (actor.actor_id ().value ());
+        if (auto cached = cached_route (_actor_routes, actor_id); cached && matches_actor (*cached))
+            co_return cached;
+        auto address = co_await read_actor_address (actor_id);
+        if (!address || !matches_actor (*address))
             co_return std::nullopt;
+        co_await cache_ready_route (_actor_routes, actor_id, *address);
         co_return address;
     }
 
