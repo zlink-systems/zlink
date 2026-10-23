@@ -190,10 +190,9 @@ public final class ZLinkChannelEnvelope {
                 request == null ? null : request.flowOrigin());
     }
 
-    private static long writeMetadata(Map<String, String> metadata, ByteBuffer json) {
-        if (metadata.isEmpty()) return ascii(json, "{}");
-        long size = 2;
-        ascii(json, "{");
+    private static long writeMetadata(Map<String, String> metadata, byte[] json, long offset) {
+        if (metadata.isEmpty()) return ascii(json, offset, "{}");
+        long size = ascii(json, offset, "{");
         try {
             for (Map.Entry<String, String> entry : metadata.entrySet()) {
                 String key = entry.getKey();
@@ -206,18 +205,15 @@ public final class ZLinkChannelEnvelope {
                 if (key.indexOf('\0') >= 0 || value.indexOf('\0') >= 0) {
                     throw protocolError("ZLink envelope metadata must not contain NUL", null);
                 }
-                if (size > 2) {
-                    size++;
-                    ascii(json, ",");
-                }
-                size += jsonString(json, key, true) + 1;
-                ascii(json, ":");
-                size += jsonString(json, value, true);
+                if (size > 1) size += ascii(json, offset + size, ",");
+                size += jsonString(json, offset + size, key, true);
+                size += ascii(json, offset + size, ":");
+                size += jsonString(json, offset + size, value, true);
             }
         } catch (IOException ex) {
             throw protocolError("ZLink envelope metadata must be valid UTF-8", ex);
         }
-        ascii(json, "}");
+        size += ascii(json, offset + size, "}");
         if (size > ServiceWireConstants.METADATA_BYTES) {
             throw protocolError(
                     "ZLink envelope metadata exceeds "
@@ -228,20 +224,20 @@ public final class ZLinkChannelEnvelope {
         return size;
     }
 
-    private static int ascii(ByteBuffer json, String text) {
+    private static int ascii(byte[] json, long offset, String text) {
         if (json != null) {
+            int position = (int) offset;
             for (int index = 0; index < text.length(); index++) {
-                json.put((byte) text.charAt(index));
+                json[position + index] = (byte) text.charAt(index);
             }
         }
         return text.length();
     }
 
-    private static long jsonString(ByteBuffer json, String value, boolean metadata)
+    private static long jsonString(byte[] json, long offset, String value, boolean metadata)
             throws IOException {
-        if (value == null) return ascii(json, "null");
-        long size = 2;
-        ascii(json, "\"");
+        if (value == null) return ascii(json, offset, "null");
+        long size = ascii(json, offset, "\"");
         for (int index = 0; index < value.length(); index++) {
             char c = value.charAt(index);
             String escape =
@@ -256,15 +252,15 @@ public final class ZLinkChannelEnvelope {
                         default -> null;
                     };
             if (escape != null) {
-                size += ascii(json, escape);
+                size += ascii(json, offset + size, escape);
             } else if (c < 0x20) {
-                size += unicodeEscape(json, c, metadata);
+                size += unicodeEscape(json, offset + size, c, metadata);
             } else {
                 int codePoint = c;
                 if (Character.isSurrogate(c)) {
                     // UTF8JsonGenerator escapes each UTF-16 surrogate in header fields.
                     if (!metadata) {
-                        size += unicodeEscape(json, c, false);
+                        size += unicodeEscape(json, offset + size, c, false);
                         continue;
                     }
                     if (!Character.isHighSurrogate(c)
@@ -277,78 +273,83 @@ public final class ZLinkChannelEnvelope {
                 }
                 int length =
                         codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4;
-                size += length;
                 if (json != null) {
+                    int position = (int) (offset + size);
                     if (length == 1) {
-                        json.put((byte) codePoint);
+                        json[position] = (byte) codePoint;
                     } else {
-                        json.put(
+                        json[position++] =
                                 (byte)
                                         ((0xff << (8 - length))
-                                                | (codePoint >>> (6 * (length - 1)))));
+                                                | (codePoint >>> (6 * (length - 1))));
                         for (int shift = 6 * (length - 2); shift >= 0; shift -= 6) {
-                            json.put((byte) (0x80 | ((codePoint >>> shift) & 0x3f)));
+                            json[position++] = (byte) (0x80 | ((codePoint >>> shift) & 0x3f));
                         }
                     }
                 }
+                size += length;
             }
         }
-        ascii(json, "\"");
-        return size;
+        return size + ascii(json, offset + size, "\"");
     }
 
-    private static int unicodeEscape(ByteBuffer json, char value, boolean metadata) {
-        ascii(json, "\\u");
+    private static int unicodeEscape(byte[] json, long offset, char value, boolean metadata) {
+        ascii(json, offset, "\\u");
         if (json != null) {
+            int position = (int) offset + 2;
             for (int shift = Character.SIZE - 4; shift >= 0; shift -= 4) {
                 char digit = Character.forDigit((value >>> shift) & 0xf, 16);
-                json.put((byte) (metadata ? digit : Character.toUpperCase(digit)));
+                json[position++] = (byte) (metadata ? digit : Character.toUpperCase(digit));
             }
         }
         return 6;
     }
 
-    private static int jsonInt(ByteBuffer json, int value) {
+    private static int jsonInt(byte[] json, long offset, int value) {
         long magnitude = Math.abs((long) value);
         int digits = 1;
         for (long rest = magnitude; rest >= 10; rest /= 10) digits++;
         int size = digits + (value < 0 ? 1 : 0);
         if (json != null) {
-            int end = json.position() + size;
+            int end = (int) offset + size;
             for (int index = end - 1; index >= end - digits; index--) {
-                json.put(index, (byte) ('0' + magnitude % 10));
+                json[index] = (byte) ('0' + magnitude % 10);
                 magnitude /= 10;
             }
-            if (value < 0) json.put((byte) '-');
-            json.position(end);
+            if (value < 0) json[(int) offset] = (byte) '-';
         }
         return size;
     }
 
-    private static long field(ByteBuffer json, String prefix, String value) throws IOException {
-        return ascii(json, prefix) + jsonString(json, value, false);
+    private static long field(byte[] json, long offset, String prefix, String value)
+            throws IOException {
+        int size = ascii(json, offset, prefix);
+        return size + jsonString(json, offset + size, value, false);
     }
 
-    private static long writeHeader(Header header, ByteBuffer json) throws IOException {
-        long size = ascii(json, "{\"formatMarker\":") + jsonInt(json, FORMAT_MARKER);
-        size += field(json, ",\"flowId\":", header.flowId());
-        size += ascii(json, ",\"flowOrigin\":");
+    private static long writeHeader(Header header, byte[] json) throws IOException {
+        long size = ascii(json, 0, "{\"formatMarker\":");
+        size += jsonInt(json, size, FORMAT_MARKER);
+        size += field(json, size, ",\"flowId\":", header.flowId());
+        size += ascii(json, size, ",\"flowOrigin\":");
         size +=
                 header.flowId() == null
-                        ? ascii(json, "null")
-                        : jsonInt(json, flowOriginWireValue(header.flowOrigin()));
-        size += ascii(json, ",\"kind\":") + jsonInt(json, header.kind());
-        size += field(json, ",\"channelName\":", header.channelName());
-        size += field(json, ",\"messageName\":", header.messageName());
-        size += field(json, ",\"contentType\":", header.contentType());
-        size += field(json, ",\"correlationId\":", header.correlationId());
-        size += field(json, ",\"deadline\":", header.deadline());
-        size += field(json, ",\"topic\":", header.topic());
-        size += field(json, ",\"errorCode\":", header.errorCode());
-        size += field(json, ",\"errorMessage\":", header.errorMessage());
-        size += field(json, ",\"source\":", header.source());
-        size += ascii(json, ",\"metadata\":") + writeMetadata(header.metadata(), json);
-        return size + ascii(json, "}");
+                        ? ascii(json, size, "null")
+                        : jsonInt(json, size, flowOriginWireValue(header.flowOrigin()));
+        size += ascii(json, size, ",\"kind\":");
+        size += jsonInt(json, size, header.kind());
+        size += field(json, size, ",\"channelName\":", header.channelName());
+        size += field(json, size, ",\"messageName\":", header.messageName());
+        size += field(json, size, ",\"contentType\":", header.contentType());
+        size += field(json, size, ",\"correlationId\":", header.correlationId());
+        size += field(json, size, ",\"deadline\":", header.deadline());
+        size += field(json, size, ",\"topic\":", header.topic());
+        size += field(json, size, ",\"errorCode\":", header.errorCode());
+        size += field(json, size, ",\"errorMessage\":", header.errorMessage());
+        size += field(json, size, ",\"source\":", header.source());
+        size += ascii(json, size, ",\"metadata\":");
+        size += writeMetadata(header.metadata(), json, size);
+        return size + ascii(json, size, "}");
     }
 
     public static Message encodeHeader(Header header) {
@@ -363,7 +364,7 @@ public final class ZLinkChannelEnvelope {
             if (size > Integer.MAX_VALUE)
                 throw new IOException("ZLink envelope header is too large");
             byte[] encoded = new byte[(int) size];
-            writeHeader(header, ByteBuffer.wrap(encoded));
+            writeHeader(header, encoded);
             return encoded;
         } catch (IOException ex) {
             throw new ZLinkFrameworkException(
@@ -759,7 +760,7 @@ public final class ZLinkChannelEnvelope {
             if (!metadataIsValid) {
                 throw protocolError("ZLink envelope metadata values must be strings", null);
             }
-            writeMetadata(metadata, null);
+            writeMetadata(metadata, null, 0);
 
             ZLinkFlowOrigin flowOrigin = null;
             if (captureFlow) {
