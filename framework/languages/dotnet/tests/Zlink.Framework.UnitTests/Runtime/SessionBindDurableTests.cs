@@ -237,10 +237,11 @@ public sealed partial class EntrySpotActorDispatchTests
         }
     }
 
-    // Session-Actor binding §5: a cached row that already describes the submitted ActorRef
-    // supplies the fence without a Store read (#2507).
+    // Session-Actor binding §5: the fence always comes from the Store's current row. An Actor
+    // that relocates away and back keeps its ActorRef while its authority generation advances,
+    // so a cached row of the same ActorRef still carries the old authority (#2507).
     [Fact]
-    public async Task SessionBind_CachedRowOfTheSubmittedActorRef_IsUsedWithoutAStoreRead()
+    public async Task SessionBind_FenceCarriesCurrentAuthority_AfterReturningToTheSameNode()
     {
         var node = new CapturingSpotNode();
         Systems.Zlink.Framework.Runtime.Protocol.ServiceWireCodec.BoundSessionBind38? sent = null;
@@ -259,28 +260,40 @@ public sealed partial class EntrySpotActorDispatchTests
             var cachedRow = await rows.ResolveActorRowAsync(key);
             Assert.NotNull(cachedRow);
 
-            // The Store moves on; a Store read would now return a row for another owner,
-            // which does not describe the submitted ActorRef and fails the bind before send.
+            // The Actor leaves and returns: the Store row names the same ActorRef with a
+            // newer authority generation, while the route cache still holds the old row.
             var store = new ZLinkProviderLocationRepository(
                 runtime.Registration.Locations.StoreInstance!
             );
-            var newOwner = RoutingId.From("relocated-owner");
-            Assert.NotNull(
-                await AuthorityLocationTestFixture.PublishActorAsync(
-                    store,
-                    cachedRow with
-                    {
-                        ActorRef = cachedRow.ActorRef with { NodeRid = newOwner },
-                        OwnerNodeRid = newOwner,
-                        OwnerNodeGeneration = 7,
-                    },
-                    replace: true
+            var authorityKey = ZLinkActorAuthorityPayloadCodec.AuthorityKey(actor.ActorId);
+            var before = Assert
+                .IsType<ZLinkAuthorityReadResult.Found>(await store.ReadAuthorityAsync(authorityKey))
+                .Snapshot;
+            var current = Assert
+                .IsType<ZLinkAuthorityCompareExchangeResult.Stored>(
+                    await store.CompareExchangeAuthorityAsync(
+                        authorityKey,
+                        before.StoreVersion,
+                        new ZLinkAuthorityMutation.Put(
+                            before.Payload,
+                            ZLinkAuthorityGenerationTransition.NewOwner,
+                            new ZLinkLocationOwnerToken(before.OwnerId, before.OwnerLeaseGeneration),
+                            before.Allocation,
+                            before.AuthorityOwnerGeneration + 2
+                        )
+                    )
                 )
+                .Snapshot;
+            Assert.Equal(before.ObjectGeneration, current.ObjectGeneration);
+            Assert.NotEqual(cachedRow.AuthorityOwnerGeneration, current.AuthorityOwnerGeneration);
+            Assert.Equal(
+                cachedRow.AuthorityOwnerGeneration,
+                (await rows.ResolveActorRowAsync(key))!.AuthorityOwnerGeneration
             );
 
             var context = new ZLinkSessionContext(
                 runtime,
-                new RetainedOutboundCapturingStream(RoutingId.From("cached-session")),
+                new RetainedOutboundCapturingStream(RoutingId.From("returned-session")),
                 new RelaySessionHandlerRegistry(),
                 static () => ValueTask.CompletedTask,
                 static _ => ValueTask.CompletedTask
@@ -294,17 +307,9 @@ public sealed partial class EntrySpotActorDispatchTests
             );
 
             Assert.NotNull(sent);
-            var fence = sent.Actor;
-            Assert.Equal(cachedRow.ActorRef.NodeRid, RoutingId.From(fence.TargetNodeRid.Value));
-            Assert.Equal(cachedRow.OwnerNodeGeneration, fence.TargetNodeGeneration.Value);
             Assert.Equal(
-                cachedRow.AuthorityOwnerGeneration,
-                fence.ExpectedAuthorityOwnerGeneration.Value
-            );
-            // The cache still holds the row the bind used: no Store read replaced it.
-            Assert.Equal(
-                cachedRow.ActorRef.NodeRid,
-                (await rows.ResolveActorRowAsync(key))!.ActorRef.NodeRid
+                current.AuthorityOwnerGeneration,
+                sent.Actor.ExpectedAuthorityOwnerGeneration.Value
             );
         }
         finally
