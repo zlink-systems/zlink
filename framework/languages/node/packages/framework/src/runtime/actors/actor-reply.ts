@@ -18,7 +18,7 @@ export function encodeActorReply(
   const requestHeader = decodeStreamHeader(requestHeaderBytes, flowEnabled);
   const encoded =
     kind === ZLinkStreamMessageKind.Response
-      ? encodeFrameworkPayload(payload, serializers, requestHeader.name, 'payload')
+      ? encodeFrameworkPayload(payload, serializers, requestHeader.name, 'reply')
       : encodeFrameworkPayload(payload);
   try {
     const frame = encodeStreamFrame(
