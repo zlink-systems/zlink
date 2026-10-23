@@ -116,7 +116,11 @@ public final class ZLinkTypedSendReceiveCostTest {
                     baselineAddresses = 0,
                     baselineEncoders = 0,
                     baselineMessages = 0;
-            long targetBytes = 0, targetObjects = 0, callerBytes = 0, callerObjects = 0;
+            long targetBytes = 0,
+                    targetObjects = 0,
+                    callerBytes = 0,
+                    callerObjects = 0,
+                    instanceOwners = 0;
             var classes = new TreeMap<String, Long>();
             try (var events = new RecordingFile(path)) {
                 while (events.hasMoreEvents()) {
@@ -177,6 +181,7 @@ public final class ZLinkTypedSendReceiveCostTest {
                     if (targetPath && type.equals(BytesValue.class.getName())) payloadDecodes++;
                     if (targetPath && type.endsWith(".ZLinkSpringHandlerFactory$SpringActivation"))
                         activations++;
+                    if (targetPath && type.endsWith(".ZLinkHandlerInstanceOwner")) instanceOwners++;
                     if (targetPath) {
                         targetObjects++;
                         targetBytes += e.getLong("allocationSize");
@@ -234,6 +239,11 @@ public final class ZLinkTypedSendReceiveCostTest {
                     "payloadDecodes=%d springActivations=%d%n", payloadDecodes, activations);
             assertEquals(SENDS, payloadDecodes, "one typed payload decode per accepted send");
             assertEquals(SENDS, activations, "one Spring dependency scope per dispatch");
+            System.out.printf("unfilteredInstanceOwners=%d%n", instanceOwners);
+            assertEquals(
+                    0,
+                    instanceOwners,
+                    "a single unfiltered handler needs only its activation scope");
             assertEquals(SENDS, headers, "one header decode per accepted send");
             assertEquals(SENDS, encoders, "one codec writer per payload");
             assertEquals(SENDS, messages, "one owned codec Message per payload");
