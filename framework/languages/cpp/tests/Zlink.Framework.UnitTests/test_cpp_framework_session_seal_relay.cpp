@@ -834,3 +834,192 @@ TEST (FrameworkSessionSealRelay, different_sessions_do_not_share_replies_for_sam
     EXPECT_EQ (low_result.value ()->to_string (), "other-low-result");
     EXPECT_EQ (executions.load (std::memory_order_relaxed), 4u);
 }
+
+// An Actor that just relocated to this node is bound with its new exact route
+// while this node's Location cache can still hold the previous owner's entry.
+// The bound request keeps the binding's fence; the stale cache entry must not
+// replace it, or the local owner rejects the request as a stale fence.
+TEST (FrameworkSessionSealRelay, bound_request_to_relocated_local_actor_keeps_binding_fence)
+{
+    namespace host = runtime::host;
+    namespace protocol = runtime::protocol;
+    runtime::in_memory_location_repository_t authority_repository;
+    const auto target_owner = std::get<owner_lease_claimed_t> (
+                                authority_repository.claim_owner_lease ("relocated-owner", 30s)
+                                  .result ()
+                                  .value ())
+                                .token;
+    auto source_state = zlink::framework::test::runtime_failure_fixture<
+      zlink::framework::detail::mesh_node_builder_state_t> ("relocated-mesh");
+    source_state->core_context = std::make_shared<zlink::context_t> ();
+    source_state->listen_endpoint = "tcp://127.0.0.1:0";
+    source_state->routing_id = zlink::routing_id_t::from ("relocated-owner");
+    auto node = source_state->spot_state;
+    node->snapshot.actor_types.push_back ("player");
+    node->worker_executor = std::make_shared<runtime::offload_executor_t> (1, "relocated-worker");
+    serializer_registry_t serializers;
+    node->channel_runtime =
+      zlink::framework::test::runtime_failure_fixture<channel_runtime_state_t> ();
+    node->channel_runtime->serializers = &serializers;
+    auto spot = std::make_shared<spot_context_state_t> ();
+    spot->node = node;
+    spot->node_rid = node_rid_t::from_string ("relocated-owner");
+    spot->spot_id = spot_id_t ("relocated-user");
+    spot->spot_name = "user";
+    spot->spot_instance = std::make_shared<int> (1);
+    spot->channel_runtime = node->channel_runtime;
+    spot->serial_executor = node->worker_executor;
+    node->spot_contexts_by_id.emplace (spot->spot_id, spot_context_access_t::create (spot));
+    spot_node_builder_state_t::actor_factory_registration_t factory;
+    factory.actor_type = std::type_index (typeid (int));
+    factory.create_instance = [] (std::string) { return std::make_shared<int> (7); };
+    factory.configure_instance = [] (void *, const actor_ref_t &, void *) {};
+    node->actor_factories.emplace ("player", std::move (factory));
+    const auto actor = actor_ref_access_t::make (node_rid_t::from_string ("relocated-owner"),
+                                                 "player", "relocated-actor", 1);
+    const std::string actor_key = "player:relocated-actor";
+    node->actor_instances.emplace (actor_key, std::make_shared<int> (7));
+    node->actor_spot_ids.emplace (actor_key, spot->spot_id);
+    node->actor_generations.emplace (actor_key, 1);
+    node->actor_types_by_id.emplace ("relocated-actor", "player");
+    spot->handlers.push_back (
+      spot_handler_descriptor_t{spot_handler_kind_t::actor_request, "RelocatedRequest", "",
+                                std::type_index (typeid (int)), std::type_index (typeid (void)),
+                                std::type_index (typeid (int)), std::type_index (typeid (void))});
+    spot->handler_invokers.push_back (
+      [] (void *, void *, service_provider_t &, serializer_registry_t &,
+          const zlink::message_t &payload,
+          const spot_inbound_message_t &) -> task_t<zlink::message_t> { co_return payload; });
+    service_collection_t services;
+    services.add_singleton<actor_gateway_runtime_t> ();
+    services.add_singleton<serializer_registry_t> ();
+    node->root_services = services.build_provider ();
+    mesh_node_runtime_t source (source_state);
+    // The owner accepts only its current authority; its lease fence is checked
+    // against the header as for any accepted record.
+    auto current_authority = std::make_shared<std::atomic_uint64_t> (0);
+    source.configure_stateful_dispatch (
+      [target_owner, current_authority] (stateful::accepted_record_authority_query_t query)
+        -> task_t<std::optional<stateful::accepted_record_authority_t>> {
+          if (query.requested_authority_owner_generation != current_authority->load ())
+              co_return std::nullopt;
+          co_return stateful::accepted_record_authority_t{
+            {"relocated-source-owner", 17, query.source_node_routing_id,
+             query.source_node_generation},
+            static_cast<std::uint64_t> (target_owner.lease_generation)};
+      });
+    // The Location cache answers with the current route until the relocation
+    // binding exists, then with the previous owner's entry (its node and lease
+    // fence) it still holds.
+    std::optional<runtime::spot_address_t> current_address;
+    std::atomic_bool cache_holds_previous_owner{false};
+    source.configure_actor_route_resolver (
+      [&] (actor_ref_t) -> task_t<std::optional<runtime::spot_address_t>> {
+          auto address = current_address;
+          if (address && cache_holds_previous_owner.load ()) {
+              address->node_rid = zlink::routing_id_t::from ("relocated-previous-owner");
+              address->owner = {"relocated-previous-owner-lease",
+                                address->owner.lease_generation + 1};
+          }
+          co_return address;
+      });
+    source.start ();
+    const auto native_actor = source.create_actor ("player", "relocated-actor", {}, 2s);
+    ASSERT_EQ (native_actor.ref ().object_generation (), actor.object_generation ());
+    const auto native_object =
+      source.native_node ().resolve_actor_async (native_actor.ref ()).result ().value ();
+    ASSERT_TRUE (native_object);
+    current_authority->store (native_object->authority_owner_generation);
+    const auto status = source.status ();
+    current_address = runtime::spot_address_t{"relocated-mesh",
+                                              status.routing_id (),
+                                              source.native_node ().entry_spot ().spot_id (),
+                                              status.lifecycle_generation (),
+                                              {},
+                                              native_object->object_generation,
+                                              native_object->authority_owner_generation,
+                                              target_owner,
+                                              status.lifecycle_generation ()};
+    spot_node_runtime_t spots (node);
+    spots.record_actor_spot (actor, spot->spot_id);
+    std::mutex received_mutex;
+    std::optional<protocol::actor_route_fence_t> received_actor_route;
+    dispatch_loop_t source_loop (
+      source.native_node (),
+      [&] (const host::ready_record_t &owner, const host::receive_record_t &record,
+           std::vector<zlink::message_t> parts) {
+          if (record.kind != host::record_kind_t::actor_request)
+              return;
+          ASSERT_TRUE (record.application_record);
+          ASSERT_TRUE (record.application_record->payload ());
+          ASSERT_TRUE (record.application_record->payload ()->application_record);
+          const auto *accepted_body = std::get_if<protocol::frozen_actor_application_body_t> (
+            &record.application_record->payload ()->application_record->body);
+          ASSERT_NE (accepted_body, nullptr);
+          {
+              std::lock_guard lock (received_mutex);
+              received_actor_route = accepted_body->target;
+          }
+          const auto header = runtime::decode_mesh_record_header (record, parts, true);
+          ASSERT_TRUE (header);
+          ASSERT_TRUE (header.value ());
+          const auto complete = [record] {
+              if (record.complete_stateful_dispatch)
+                  record.complete_stateful_dispatch ();
+          };
+          bool deferred = false;
+          EXPECT_TRUE (spots.dispatch_mesh_record (owner, record, parts, header.value (),
+                                                   *node->root_services, serializers, complete,
+                                                   &deferred, record.before_application_handler));
+          if (!deferred)
+              complete ();
+      },
+      [] {});
+    // As the application gateway does, the relay carries the native Session
+    // binding's exact route: the Actor on this node with its new fence.
+    const protocol::actor_route_fence_t binding_route{
+      std::string (actor.actor_id ().value ()), native_object->object_generation,
+      status.routing_id ().to_bytes (),         status.lifecycle_generation (),
+      native_object->authority_owner_generation,
+      static_cast<std::uint64_t> (target_owner.lease_generation)};
+    actor_gateway_runtime_t gateway;
+    gateway.on_relay ([&] (const actor_ref_t &target, const actor_context_t &,
+                           const stream_header_t &header, const zlink::message_t &payload,
+                           std::optional<bound_session_relay_source_t> relay_source,
+                           std::chrono::milliseconds timeout) {
+        return source.relay_application_actor (target, header, payload, timeout, true,
+                                               std::move (relay_source), binding_route);
+    });
+    zlink_builder_t builder = zlink::framework::test::runtime_failure_builder ();
+    builder.stream ("relocated-stream").bind ("tcp://127.0.0.1:0");
+    auto streams = stream_runtime_t::from (builder);
+    auto stream = streams.open_session ("relocated-stream");
+    streams.attach_transport_writer (stream,
+                                     [] (const stream_header_t &, const zlink::message_t &) {
+                                         return task_t<void> (result_t<void>::success ());
+                                     });
+    auto manager = gateway.manager ();
+    session_actor_manager_access_t::attach (manager, std::move (stream));
+    auto binding = manager.bind (actor).async ().result ();
+    ASSERT_TRUE (binding) << (binding.error () ? binding.error ()->what () : "");
+    cache_holds_previous_owner.store (true);
+    stream_header_t header (stream_message_kind_t::request, stream_codec_t::json,
+                            stream_header_flags_t::none, 17, "RelocatedRequest");
+    header.with_correlation_id ("relocated-correlation");
+    const auto reply = [&] {
+        const stream_relay_dispatch_scope_t scope (header);
+        return binding.value ()
+          .relay_request (zlink::message_t::from ("relocated-result"))
+          .timeout (2s)
+          .async ()
+          .result ();
+    }();
+    ASSERT_TRUE (reply) << (reply.error () ? reply.error ()->what () : "");
+    EXPECT_EQ (reply.value ().to_string (), "relocated-result");
+    std::lock_guard lock (received_mutex);
+    ASSERT_TRUE (received_actor_route);
+    EXPECT_EQ (received_actor_route->authority_owner_generation,
+               native_object->authority_owner_generation);
+    EXPECT_EQ (received_actor_route->owner_lease_generation,
+               static_cast<std::uint64_t> (target_owner.lease_generation));
+}
