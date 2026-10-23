@@ -6212,11 +6212,10 @@ internal sealed class ZLinkManagedMeshNode : IMeshNode
         }
     }
 
-    // One node-lane turn decides the record's source authority and records
-    // its liveness (mesh-node/transport-liveness). The state travels as a
+    // One node-lane turn reads the source peer for the whole record: whether
+    // its route is current, its liveness (mesh-node/transport-liveness) and
+    // the lifecycle generation the record carries. The state travels as a
     // value, so the per-record check creates no closure or delegate.
-    // One node turn reads the source peer for the whole record: whether its
-    // route is current, and the lifecycle generation the record carries.
     private bool HasCurrentSource(
         RoutingId sourceRid,
         ulong routeGeneration,
