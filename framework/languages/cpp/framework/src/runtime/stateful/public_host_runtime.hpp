@@ -450,7 +450,8 @@ struct instance_spot_activation_materializer_t
       prepare;
     std::function<task_t<instance_spot_activation_result_t> (
       std::shared_ptr<const protocol::instance_activation_recovery_t>,
-      std::function<task_t<zlink::message_t> (std::function<void ()> &)>)>
+      std::function<task_t<zlink::message_t> (std::function<void ()> &)>,
+      std::function<void ()>)>
       dispatch;
     std::function<task_t<result_t<protocol::instance_spot_activation_header_t>> (
       protocol::instance_spot_activation_header_t)>
