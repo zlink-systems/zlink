@@ -139,11 +139,12 @@ final class ZLinkJavaSocketSupport {
             if (requestAdmission != null) requestAdmission.complete(null);
         } else {
             admitted = admission(submitResult, submission::admitted);
-            admitted.whenComplete(
-                    (ignored, failure) -> {
-                        if (failure == null && requestAdmission != null)
-                            requestAdmission.complete(null);
-                    });
+            if (requestAdmission != null) {
+                admitted.whenComplete(
+                        (ignored, failure) -> {
+                            if (failure == null) requestAdmission.complete(null);
+                        });
+            }
         }
         // Binding completes reply with the same cause when admission fails. Reply is the
         // single terminal source, including the payload cleanup performed by its observer.
