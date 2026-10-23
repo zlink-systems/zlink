@@ -313,17 +313,18 @@ internal sealed class ZLinkSessionActorCoordinator(
             );
         var sessionOwnerId = sessionOwner.OwnerId;
         var sessionOwnerLeaseGeneration = sessionOwner.LeaseGeneration;
-        // Session-Actor binding §5: the bind routes by the caller's ActorRef, so every fence
-        // value comes from a row that describes that same ActorRef. A cached row for another
-        // owner or generation does not describe it; the Store row is read instead, and when
-        // that row names another ActorRef as well, this ActorRef has no route.
+        // Session-Actor binding §5: every fence value comes from the Store's current row, never
+        // from the route cache: an Actor that returns to the same node keeps its ActorRef while
+        // its authority generation advances. When that row names another ActorRef, this
+        // ActorRef has no route.
         var rows = runtime.Services.GetService<ZLinkStoreLocationResolvers>();
-        var key = new ZLinkActorLocationKey(actor.ActorId);
         var route = rows is null
             ? null
-            : await rows.ResolveActorRowAsync(key, cancellationToken).ConfigureAwait(false);
-        if (route is not null && !ActorRefsEqual(route.ActorRef, actor))
-            route = await rows!.ReadActorRowAsync(key, cancellationToken).ConfigureAwait(false);
+            : await rows.ReadActorRowAsync(
+                    new ZLinkActorLocationKey(actor.ActorId),
+                    cancellationToken
+                )
+                .ConfigureAwait(false);
         if (
             route is null
             || !ActorRefsEqual(route.ActorRef, actor)
