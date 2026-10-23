@@ -443,11 +443,6 @@ public final class ZLinkChannelEnvelope {
         public Message payload() {
             return parts.get(payloadIndex);
         }
-
-        /** Borrows the payload bytes while the received parts stay open. */
-        public ByteBuffer payloadBuffer() {
-            return ZLinkFrameworkMultipartView.buffer(parts, payloadIndex);
-        }
     }
 
     public static DispatchPacket decodeDispatchPacket(List<Message> parts, Header decodedHeader) {
