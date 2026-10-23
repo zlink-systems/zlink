@@ -16,14 +16,13 @@ struct submissions_t
     size_t admission_checks = 0;
     bool admitted = true;
 
-    template <typename T>
-    bool submit (int window, clock_type::time_point now = before_close)
+    template <typename T> bool submit (int window, clock_type::time_point now = before_close)
     {
-        if (!zlink_cpp_bench::can_submit_framework_task<T> (
-              now, close_time, in_flight, window, [&] {
-                  ++admission_checks;
-                  return admitted;
-              }))
+        if (!zlink_cpp_bench::can_submit_framework_task<T> (now, close_time, in_flight, window,
+                                                            [&] {
+                                                                ++admission_checks;
+                                                                return admitted;
+                                                            }))
             return false;
         ++in_flight;
         ++submitted;
@@ -65,10 +64,12 @@ int main ()
     submissions_t requests;
     expect (requests.submit<int> (unlimited_request_window), "uncapped request starts");
     requests.admitted = false;
-    expect (!requests.submit<int> (unlimited_request_window), "uncapped request still waits for admission");
+    expect (!requests.submit<int> (unlimited_request_window),
+            "uncapped request still waits for admission");
     requests.admitted = true;
     for (int request = 0; request < 101; ++request)
-        expect (requests.submit<int> (unlimited_request_window), "admitted uncapped requests have no reply limit");
+        expect (requests.submit<int> (unlimited_request_window),
+                "admitted uncapped requests have no reply limit");
     expect (requests.in_flight == 102, "uncapped requests exceed the finite request window");
 
     submissions_t windowed;

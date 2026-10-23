@@ -3151,13 +3151,13 @@ try {
     operation.id = next_operation ();
     const auto host = shared_from_this ();
     auto target_bytes = target.to_bytes ();
-    auto accepted = _transport->request_to_node (
-      target_bytes, encode_application (std::move (parts)), timeout,
-      [host, operation] (foundation::operation_terminal_t terminal,
-                         zlink::message_t payload) mutable {
-          host->complete_operation (operation, operation_kind_t::none, terminal,
-                                    std::move (payload));
-      });
+    auto accepted =
+      _transport->request_to_node (target_bytes, encode_application (std::move (parts)), timeout,
+                                   [host, operation] (foundation::operation_terminal_t terminal,
+                                                      zlink::message_t payload) mutable {
+                                       host->complete_operation (operation, operation_kind_t::none,
+                                                                 terminal, std::move (payload));
+                                   });
     auto classify = [host, target_bytes = std::move (target_bytes)] (const result_t<bool> &result) {
         if (!result)
             return detail::result_access_t::failure<zlink::submit_result_t> (result.exception ());
