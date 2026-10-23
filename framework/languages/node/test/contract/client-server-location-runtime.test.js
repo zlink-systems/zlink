@@ -2126,7 +2126,7 @@ test('ClientServer outbound readiness stays pending for send and request keeps i
   const send = manager.send('orders', 'Notice', { id: 1 });
   const shutdown = assert.rejects(send, { kind: framework.ZLinkFrameworkErrorKind.ShuttingDown });
   try {
-    await assert.rejects(() => mapZLinkRequestReply(manager.request('orders', 'Lookup', { id: 1 }, 5)), { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded });
+    await assert.rejects(() => mapZLinkRequestReply(manager.request(new ZLinkRequestResult(), 'orders', 'Lookup', { id: 1 }, 5)), { kind: framework.ZLinkFrameworkErrorKind.DeadlineExceeded });
     await manager.dispose();
     await shutdown;
   } finally { await manager.dispose(); }
@@ -2153,7 +2153,7 @@ test('ClientServer outbound reports a missing Client role as NotConfigured', asy
       && error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
   );
   await assert.rejects(
-    () => mapZLinkRequestReply(manager.request('orders', 'Lookup', { id: 1 }, 60)),
+    () => mapZLinkRequestReply(manager.request(new ZLinkRequestResult(), 'orders', 'Lookup', { id: 1 }, 60)),
     (error) => error instanceof framework.ZLinkFrameworkException
       && error.kind === framework.ZLinkFrameworkErrorKind.NotConfigured
   );

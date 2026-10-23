@@ -367,8 +367,8 @@ test('request failure terminals remain visible at Errors level', () => {
   assert.equal(telemetryRecords[0].attributes.outcome, 'failed');
 });
 
-for (const deliver of [mapZLinkRequestReply, (result) => createZLinkRequest(() => result)]) {
-test(`node direct request records one source flow with sent and reply terminal (${deliver === mapZLinkRequestReply ? 'yield' : 'submit'})`, async () => {
+for (const deliver of [(start) => mapZLinkRequestReply(start(new ZLinkRequestResult())), createZLinkRequest]) {
+test(`node direct request records one source flow with sent and reply terminal (${deliver === createZLinkRequest ? 'submit' : 'yield'})`, async () => {
   const { tracer } = makeTracer(diagnostics('normal'));
   let requestParts;
   let failure = false;
@@ -395,7 +395,7 @@ return resultOwner.observe((async () => {
     undefined, undefined, undefined, undefined, () => true, () => tracer
   );
 
-  assert.deepEqual(await deliver(transport.request('mesh', 'target', 'Probe', { value: 1 }, 1000)), { ok: true });
+  assert.deepEqual(await deliver((entry) => transport.request(entry, 'mesh', 'target', 'Probe', { value: 1 }, 1000)), { ok: true });
   assert.deepEqual(telemetryRecords.map(record => record.attributes.phase), ['sent', 'reply_received']);
   assert.match(telemetryRecords[0].attributes.flow_id, /^[0-9a-f-]{36}$/i);
   assert.match(telemetryRecords[0].attributes.correlation_id, /^[0-9a-f]{32}$/i);
@@ -406,7 +406,7 @@ return resultOwner.observe((async () => {
 
   telemetryRecords.length = 0;
   failure = true;
-  await assert.rejects(() => deliver(transport.request('mesh', 'target', 'Probe', { value: 2 }, 1000)));
+  await assert.rejects(() => deliver((entry) => transport.request(entry, 'mesh', 'target', 'Probe', { value: 2 }, 1000)));
   assert.deepEqual(telemetryRecords.map(record => record.attributes.phase), ['sent', 'reply_received']);
   assert.equal(telemetryRecords[1].attributes.outcome, 'failed');
   assert.equal(telemetryRecords[0].attributes.flow_id, telemetryRecords[1].attributes.flow_id);

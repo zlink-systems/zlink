@@ -495,7 +495,7 @@ return resultOwner.observe((async () => {
     const transport = new ZLinkRuntimeRouteTransport(() => undefined, undefined,
       () => ({ meshNode: () => node, meshCompletionTable: () => table }),
       undefined, undefined, undefined, metrics, () => false);
-    const pending = mapZLinkRequestReply(transport.requestToChannel('mesh', 'orders', 'Probe', { value: 1 }, 1000, caller.signal));
+    const pending = mapZLinkRequestReply(transport.requestToChannel(new ZLinkRequestResult(), 'mesh', 'orders', 'Probe', { value: 1 }, 1000, caller.signal));
     if (outcome === 'completed') assert.deepEqual(await pending, { ok: true });
     else await assert.rejects(pending);
   }
