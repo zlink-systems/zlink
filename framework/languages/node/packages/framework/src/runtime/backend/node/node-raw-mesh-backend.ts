@@ -2401,8 +2401,8 @@ function completionRecord(
         : payload.contentType === MULTIPART_CONTENT_TYPE
           ? decodeMultipart(payload.payload)
           : [ZLinkBufferMessage.from(payload.payload)],
-    reply: () => SubmitResult.InvalidState,
-    replyActorJoin: () => SubmitResult.NotSupported
+    reply: replyInvalidState,
+    replyActorJoin: replyActorJoinNotSupported
   };
 }
 
@@ -2458,7 +2458,7 @@ function decodeMultipartRecord(
         );
         return SubmitResult.Ok;
       },
-      replyActorJoin: () => SubmitResult.NotSupported
+      replyActorJoin: replyActorJoinNotSupported
     };
   }
   const header = record.parts[0]!;
@@ -2529,6 +2529,10 @@ function releaseRecordApplicationJob(this: {
       | import('../../application-jobs/application-ingress-record-owner').ApplicationJobRecordLease
       | undefined
   )?.close();
+}
+
+function replyInvalidState(): SubmitResultValue {
+  return SubmitResult.InvalidState;
 }
 
 function replyActorJoinNotSupported(): SubmitResultValue {
