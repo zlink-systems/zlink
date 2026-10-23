@@ -1369,50 +1369,25 @@ route_send_call_t::route_send_call_t (std::string packet_name, submit_fn_t submi
 {
 }
 
-route_send_call_t::route_send_call_t (std::string packet_name, async_submit_fn_t submit) :
-    _packet_name (std::move (packet_name)), _async_submit (std::move (submit))
-{
-}
-
 route_send_call_t &route_send_call_t::metadata (std::string key, std::string value)
 {
     _metadata[std::move (key)] = std::move (value);
     return *this;
 }
 
-result_t<void> route_send_call_t::submit_now ()
-{
-    if (!_submit) {
-        return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                        "route send call is not bound to a route client");
-    }
-    return _submit (_packet_name, _metadata);
-}
-
 task_t<void> route_send_call_t::async ()
 {
     if (!_submission->try_claim ()) {
-        throw framework_exception_t (framework_error_kind_t::protocol_error,
-                                     "route send call has already been submitted");
+        return task_t<void> (result_t<void>::failure (
+          framework_error_kind_t::protocol_error, "route send call has already been submitted"));
     }
-    if (_async_submit) {
-        const auto submitted = co_await _async_submit (_packet_name, _metadata);
-        if (!submitted)
-            throw submitted.error ()
-              ? *submitted.error ()
-              : framework_exception_t (framework_error_kind_t::internal_failure,
-                                       "route send failed without an error");
-        co_return;
+    if (!_submit) {
+        return task_t<void> (
+          result_t<void>::failure (framework_error_kind_t::protocol_error,
+                                   "route send call is not bound to a route client"));
     }
-    co_await detail::submit_one_way_task (
-      [packet_name = _packet_name, metadata = _metadata, submit = _submit] () {
-          if (!submit) {
-              return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                              "route send call is not bound to a route client");
-          }
-          return submit (packet_name, metadata);
-      });
-    co_return;
+    // The bound transport boundary completes this task with the public result.
+    return _submit (_packet_name, _metadata);
 }
 
 route_client_t::route_client_t () = default;
@@ -1429,7 +1404,7 @@ route_client_t::route_client_t (route_client_t &&) noexcept = default;
 
 route_client_t &route_client_t::operator= (route_client_t &&) noexcept = default;
 
-task_t<result_t<void>>
+task_t<void>
 route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_state_t> &state,
                                     const std::string &router_channel_id,
                                     const zlink::routing_id_t &target_node_rid,
@@ -1443,46 +1418,41 @@ route_client_t::submit_send_erased (const std::shared_ptr<detail::route_client_s
       state && state->runtime ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
                               : message_flow_log_mode_t::off);
     if (!state || !state->runtime || state->serializers == nullptr) {
-        co_return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                           "route client is not configured");
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "route client is not configured");
     }
-    runtime::messaging::message_parts_t parts;
     const auto transport = detail::resolve_node_transport (state->runtime, router_channel_id);
-    if (!transport)
-        co_return detail::propagate_failure<void> (transport, "node transport lookup failed");
     if (std::holds_alternative<std::monostate> (transport.value ())) {
-        co_return result_t<void>::failure (framework_error_kind_t::unavailable,
-                                           "route channel or SPOT mesh '" + router_channel_id
-                                             + "' is not registered");
+        throw framework_exception_t (framework_error_kind_t::unavailable,
+                                     "route channel or SPOT mesh '" + router_channel_id
+                                       + "' is not registered");
     }
+    // The transport boundary: this task is the public route send result. The encoder
+    // runs before the first suspension, so callers may pass a borrowed encoder.
     try {
         runtime::messaging::client_call_codec_t codec;
-        parts = codec.encode_node_send_parts (router_channel_id, packet_name, target_node_rid,
-                                              metadata, state->runtime->dispatch,
-                                              *state->serializers, encode_payload);
-    }
-    catch (const framework_exception_t &error) {
-        co_return detail::result_access_t::failure<void> (error);
-    }
-    try {
+        auto parts = codec.encode_node_send_parts (router_channel_id, packet_name, target_node_rid,
+                                                   metadata, state->runtime->dispatch,
+                                                   *state->serializers, encode_payload);
         if (const auto mesh =
               std::get_if<detail::channel_runtime_state_t::mesh_node_transport_ptr_t> (
                 &transport.value ())) {
-            co_return co_await (*mesh)->send (target_node_rid, std::move (parts));
+            (co_await (*mesh)->send (target_node_rid, std::move (parts))).value ();
+            co_return;
         }
         auto &runtime =
           *std::get<std::shared_ptr<detail::route_channel_runtime_t>> (transport.value ());
-        co_return runtime.submit_send_parts (target_node_rid, std::move (parts));
+        runtime.submit_send_parts (target_node_rid, std::move (parts)).value ();
     }
-    catch (const framework_exception_t &error) {
-        co_return detail::result_access_t::failure<void> (error);
+    catch (const framework_exception_t &) {
+        throw;
     }
     catch (const std::exception &error) {
-        co_return result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ());
+        throw framework_exception_t (framework_error_kind_t::internal_failure, error.what ());
     }
 }
 
-task_t<result_t<void>> route_client_t::submit_channel_send_erased (
+task_t<void> route_client_t::submit_channel_send_erased (
   const std::shared_ptr<detail::route_client_state_t> &state,
   const std::string &channel_name,
   const std::string &packet_name,
@@ -1495,16 +1465,18 @@ task_t<result_t<void>> route_client_t::submit_channel_send_erased (
       state && state->runtime ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
                               : message_flow_log_mode_t::off);
     if (!state || !state->runtime || state->serializers == nullptr) {
-        co_return result_t<void>::failure (framework_error_kind_t::protocol_error,
-                                           "route client is not configured");
+        throw framework_exception_t (framework_error_kind_t::protocol_error,
+                                     "route client is not configured");
     }
     const auto channel_transport = detail::resolve_route_client_channel_transport (
       state->runtime, channel_name, state->runtime->client_server_senders,
       state->runtime->mesh_channel_senders);
     if (!channel_transport) {
-        co_return result_t<void>::failure (framework_error_kind_t::not_found,
-                                           "ChannelName '" + channel_name + "' is not registered");
+        throw framework_exception_t (framework_error_kind_t::not_found,
+                                     "ChannelName '" + channel_name + "' is not registered");
     }
+    // The transport boundary: this task is the public route send result. Both paths
+    // run the encoder before the first suspension, so callers may pass a borrowed encoder.
     try {
         if (const auto *client_server = std::get_if<0> (&*channel_transport)) {
             auto serialized = encode_payload (*state->serializers);
@@ -1520,7 +1492,7 @@ task_t<result_t<void>> route_client_t::submit_channel_send_erased (
                                               .channel_name = channel_name,
                                               .channel_route_kind = std::string ("client_server")};
               });
-            co_return result_t<void>::success ();
+            co_return;
         }
         const auto &sender = std::get<1> (*channel_transport);
         runtime::messaging::client_call_codec_t codec;
@@ -1543,13 +1515,13 @@ task_t<result_t<void>> route_client_t::submit_channel_send_erased (
           });
         auto parts =
           codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
-        co_return co_await sender (std::move (parts));
+        (co_await sender (std::move (parts))).value ();
     }
-    catch (const framework_exception_t &error) {
-        co_return detail::result_access_t::failure<void> (error);
+    catch (const framework_exception_t &) {
+        throw;
     }
     catch (const std::exception &error) {
-        co_return result_t<void>::failure (framework_error_kind_t::internal_failure, error.what ());
+        throw framework_exception_t (framework_error_kind_t::internal_failure, error.what ());
     }
 }
 
@@ -2293,7 +2265,7 @@ catch (...) {
     return request_task_t<zlink::message_t> (detail::current_exception_result<zlink::message_t> ());
 }
 
-task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
+task_t<void> route_client_t::submit_spot_id_send_erased (
   const std::shared_ptr<detail::route_client_state_t> &state_ref,
   spot_id_t target,
   detail::spot_activation_intent_t intent,
@@ -2311,42 +2283,51 @@ task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
      * the caller observed its result and released the resolver's owner. */
     const auto resolver = state && state->runtime ? state->runtime->spot_resolver : nullptr;
     if (!resolver) {
-        co_return result_t<void>::failure (framework_error_kind_t::not_configured,
-                                           "Spot location resolver is not configured");
+        throw framework_exception_t (framework_error_kind_t::not_configured,
+                                     "Spot location resolver is not configured");
     }
     if (intent.mesh_name && !intent.instance) {
-        co_return result_t<void>::failure (framework_error_kind_t::not_configured,
-                                           "in_mesh requires Instance Spot intent");
+        throw framework_exception_t (framework_error_kind_t::not_configured,
+                                     "in_mesh requires Instance Spot intent");
     }
-    const auto address = co_await resolver->resolve_spot_address ({}, target, intent.instance);
+    // The transport boundary: this task is the public Spot send result.
+    try {
+        const auto address = co_await resolver->resolve_spot_address ({}, target, intent.instance);
 
-    auto submitted = result_t<void>::success ();
-    if (intent.instance) {
-        detail::channel_runtime_state_t::instance_spot_send_t activate;
-        activate = state->runtime->lane
-                     .run_checked ([&] {
-                         activate = state->runtime->instance_spot_sender;
-                         return activate;
-                     })
-                     .get ();
-        if (!activate) {
-            co_return result_t<void>::failure (
-              framework_error_kind_t::not_configured,
-              "Instance Spot activation runtime is not configured");
+        auto submitted = result_t<void>::success ();
+        if (intent.instance) {
+            detail::channel_runtime_state_t::instance_spot_send_t activate;
+            activate = state->runtime->lane
+                         .run_checked ([&] {
+                             activate = state->runtime->instance_spot_sender;
+                             return activate;
+                         })
+                         .get ();
+            if (!activate) {
+                throw framework_exception_t (framework_error_kind_t::not_configured,
+                                             "Instance Spot activation runtime is not configured");
+            }
+            submitted = co_await activate (target, intent, address, packet_name, message_type,
+                                           std::move (encode_payload), metadata, started_at);
+        } else if (!address) {
+            throw framework_exception_t (framework_error_kind_t::not_found,
+                                         "Spot route was not found");
+        } else {
+            submitted = co_await submit_spot_send_erased (
+              state, address->mesh_name, address->node_rid, spot_id_t (address->spot_id),
+              address->spot_generation, packet_name, message_type, std::move (encode_payload),
+              metadata);
         }
-        submitted = co_await activate (target, intent, address, packet_name, message_type,
-                                       std::move (encode_payload), metadata, started_at);
-    } else if (!address) {
-        co_return result_t<void>::failure (framework_error_kind_t::not_found,
-                                           "Spot route was not found");
-    } else {
-        submitted = co_await submit_spot_send_erased (
-          state, address->mesh_name, address->node_rid, spot_id_t (address->spot_id),
-          address->spot_generation, packet_name, message_type, std::move (encode_payload),
-          metadata);
+        invalidate_stale_spot_route (*resolver, target, submitted.error ());
+        // The resolved transport already classified its failure; publish it unchanged.
+        submitted.value ();
     }
-    invalidate_stale_spot_route (*resolver, target, submitted.error ());
-    co_return submitted;
+    catch (const framework_exception_t &) {
+        throw;
+    }
+    catch (const std::exception &error) {
+        throw framework_exception_t (framework_error_kind_t::internal_failure, error.what ());
+    }
 }
 
 request_task_t<zlink::message_t> route_client_t::submit_spot_id_request_reply_message_erased (

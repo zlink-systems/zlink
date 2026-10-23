@@ -651,23 +651,23 @@ class route_send_call_t
 {
   public:
     using metadata_map_t = std::map<std::string, std::string>;
-    using submit_fn_t = std::function<result_t<void> (const std::string &, const metadata_map_t &)>;
-    using async_submit_fn_t =
-      std::function<task_t<result_t<void>> (const std::string &, const metadata_map_t &)>;
-
-    route_send_call_t (std::string packet_name, submit_fn_t submit);
-    route_send_call_t (std::string packet_name, async_submit_fn_t submit);
 
     route_send_call_t &metadata (std::string key, std::string value);
     task_t<void> async ();
 
   private:
-    result_t<void> submit_now ();
+    friend class route_client_t;
+    friend class spot_send_call_t;
+
+    /* Only the route runtime binds a call. Its transport boundary completes the
+     * returned task with the public Framework result. */
+    using submit_fn_t = std::function<task_t<void> (const std::string &, const metadata_map_t &)>;
+
+    route_send_call_t (std::string packet_name, submit_fn_t submit);
 
     std::string _packet_name;
     metadata_map_t _metadata;
     submit_fn_t _submit;
-    async_submit_fn_t _async_submit;
     std::shared_ptr<detail::submit_once_t> _submission = std::make_shared<detail::submit_once_t> ();
 };
 
@@ -684,22 +684,6 @@ struct spot_activation_intent_t
 class spot_send_call_t : public route_send_call_t
 {
   public:
-    spot_send_call_t (std::string packet_name,
-                      submit_fn_t submit,
-                      std::shared_ptr<detail::spot_activation_intent_t> intent) :
-        route_send_call_t (std::move (packet_name), std::move (submit)),
-        _intent (std::move (intent))
-    {
-    }
-
-    spot_send_call_t (std::string packet_name,
-                      async_submit_fn_t submit,
-                      std::shared_ptr<detail::spot_activation_intent_t> intent) :
-        route_send_call_t (std::move (packet_name), std::move (submit)),
-        _intent (std::move (intent))
-    {
-    }
-
     spot_send_call_t &metadata (std::string key, std::string value)
     {
         route_send_call_t::metadata (std::move (key), std::move (value));
@@ -721,6 +705,16 @@ class spot_send_call_t : public route_send_call_t
     }
 
   private:
+    friend class route_client_t;
+
+    spot_send_call_t (std::string packet_name,
+                      submit_fn_t submit,
+                      std::shared_ptr<detail::spot_activation_intent_t> intent) :
+        route_send_call_t (std::move (packet_name), std::move (submit)),
+        _intent (std::move (intent))
+    {
+    }
+
     spot_send_call_t &set_instance (std::optional<std::string> stable_type)
     {
         if (_intent->instance) {
@@ -737,15 +731,6 @@ class spot_send_call_t : public route_send_call_t
 class spot_request_call_t : public channel_request_call_t
 {
   public:
-    spot_request_call_t (std::string packet_name,
-                         serializer_registry_t *serializers,
-                         submit_fn_t submit,
-                         std::shared_ptr<detail::spot_activation_intent_t> intent) :
-        channel_request_call_t (std::move (packet_name), serializers, std::move (submit)),
-        _intent (std::move (intent))
-    {
-    }
-
     spot_request_call_t &timeout (std::chrono::milliseconds value)
     {
         channel_request_call_t::timeout (value);
@@ -772,6 +757,17 @@ class spot_request_call_t : public channel_request_call_t
     }
 
   private:
+    friend class route_client_t;
+
+    spot_request_call_t (std::string packet_name,
+                         serializer_registry_t *serializers,
+                         submit_fn_t submit,
+                         std::shared_ptr<detail::spot_activation_intent_t> intent) :
+        channel_request_call_t (std::move (packet_name), serializers, std::move (submit)),
+        _intent (std::move (intent))
+    {
+    }
+
     spot_request_call_t &set_instance (std::optional<std::string> stable_type)
     {
         if (_intent->instance) {
@@ -810,7 +806,7 @@ class route_client_t
           [state, router_channel_id = std::move (router_channel_id),
            target_node_rid = std::move (target_node_rid), message_value] (
             const std::string &packet_name,
-            const route_send_call_t::metadata_map_t &metadata) -> task_t<result_t<void>> {
+            const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
               auto encode_payload = [message_value] (serializer_registry_t &serializers) {
                   return serializers.template get<TMessage> ().serialize_with_content_type (
                     *message_value);
@@ -831,7 +827,7 @@ class route_client_t
           detail::message_name<TMessage> (),
           [state, channel_name = std::move (channel_name), message_value] (
             const std::string &packet_name,
-            const route_send_call_t::metadata_map_t &metadata) -> task_t<result_t<void>> {
+            const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
               auto encode_payload = [message_value] (serializer_registry_t &serializers) {
                   return serializers.template get<TMessage> ().serialize_with_content_type (
                     *message_value);
@@ -849,9 +845,9 @@ class route_client_t
         auto intent = std::make_shared<detail::spot_activation_intent_t> ();
         return spot_send_call_t (
           detail::message_name<TMessage> (),
-          [state, target = std::move (target), intent, message_value] (
-            const std::string &packet_name,
-            const route_send_call_t::metadata_map_t &metadata) -> task_t<result_t<void>> {
+          [state, target = std::move (target), intent,
+           message_value] (const std::string &packet_name,
+                           const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
               return submit_spot_id_send_erased (
                 state, target, *intent, packet_name, std::type_index (typeid (TMessage)),
                 [message_value] (serializer_registry_t &serializers) {
@@ -940,7 +936,7 @@ class route_client_t
     explicit route_client_t (std::shared_ptr<detail::route_client_state_t> state,
                              serializer_registry_t &serializers);
 
-    static task_t<result_t<void>>
+    static task_t<void>
     submit_send_erased (const std::shared_ptr<detail::route_client_state_t> &state,
                         const std::string &router_channel_id,
                         const zlink::routing_id_t &target_node_rid,
@@ -949,7 +945,7 @@ class route_client_t
                         payload_encoder_t encode_payload,
                         const route_send_call_t::metadata_map_t &metadata);
 
-    static task_t<result_t<void>>
+    static task_t<void>
     submit_channel_send_erased (const std::shared_ptr<detail::route_client_state_t> &state,
                                 const std::string &channel_name,
                                 const std::string &packet_name,
@@ -1020,7 +1016,7 @@ class route_client_t
       std::chrono::milliseconds timeout,
       std::map<std::string, std::string> metadata);
 
-    static task_t<result_t<void>>
+    static task_t<void>
     submit_spot_id_send_erased (const std::shared_ptr<detail::route_client_state_t> &state,
                                 spot_id_t target,
                                 detail::spot_activation_intent_t intent,

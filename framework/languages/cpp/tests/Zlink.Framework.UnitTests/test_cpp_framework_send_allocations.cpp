@@ -48,10 +48,10 @@ TEST (SendAllocations, TypedRouteEncoderUsesOnlyTheBorrowedFunctionContainer)
     const fw::dispatch_options_t dispatch;
     fw::task_completion_source_t<void> encoded;
     ASSERT_TRUE (encoded.complete (fw::result_t<void>::success ()));
-    // Both public calls create the same two task layers and encode the same envelope.
+    // Both paths create one transport-boundary task and encode the same envelope.
     // The baseline uses the standard allocation-free reference_wrapper target.
     auto baseline_submit = [&] (const std::string &packet_name,
-                                const auto &metadata) -> fw::task_t<fw::result_t<void>> {
+                                const auto &metadata) -> fw::task_t<void> {
         auto encode = [payload] (fw::serializer_registry_t &registry) {
             return registry.get<route_payload_t> ().serialize_with_content_type (*payload);
         };
@@ -60,14 +60,14 @@ TEST (SendAllocations, TypedRouteEncoderUsesOnlyTheBorrowedFunctionContainer)
         (void) codec.encode_node_send_parts ("m", packet_name, target, metadata, dispatch,
                                              serializers, borrowed);
         co_await encoded.task ();
-        co_return fw::result_t<void>::success ();
     };
-    fw::route_send_call_t baseline ("p", baseline_submit);
+    const std::string packet_name = "p";
+    const fw::route_send_call_t::metadata_map_t metadata;
     auto actual = client.send_to_node ("m", target, route_payload_t{});
-    fw::route_send_call_t warmup ("p", baseline_submit);
-    warmup.async ().result ().value ();
+    baseline_submit (packet_name, metadata).result ().value ();
     client.send_to_node ("m", target, route_payload_t{}).async ().result ().value ();
-    (void) fw::tests::count_allocations ([&] { baseline.async ().result ().value (); });
+    (void) fw::tests::count_allocations (
+      [&] { baseline_submit (packet_name, metadata).result ().value (); });
     const auto expected = before_serializer;
     (void) fw::tests::count_allocations ([&] { actual.async ().result ().value (); });
     EXPECT_EQ (before_serializer, expected);
