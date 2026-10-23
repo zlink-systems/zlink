@@ -162,3 +162,47 @@ for (const terminal of ['timeout', 'cancellation']) {
     reply.resolve([]);
   });
 }
+
+for (const failReading of [false, true]) {
+  test(`binding reply retention closes indexed parts without iterators (read failure=${failReading})`, async t => {
+    let iterations = 0;
+    const closed = [];
+    const failure = new Error('payload read failed');
+    const bytes = [Buffer.from('header'), Buffer.alloc(1024, 7)];
+    const messages = bytes.map((body, index) => ({
+      data() { if (failReading && index === 0) throw failure; return body; },
+      close() { closed.push(index); }
+    }));
+    messages[Symbol.iterator] = function () {
+      iterations++;
+      return Array.prototype[Symbol.iterator].call(this);
+    };
+    const fixture = requestFixture(t, {
+      result: zlink.SubmitResult.Ok,
+      admitted: Promise.resolve(),
+      reply: Promise.resolve(messages)
+    });
+    if (failReading) await assert.rejects(fixture.router(), error => error === failure);
+    else {
+      const retained = await fixture.router();
+      assert.equal(retained[0], bytes[0]);
+      assert.equal(retained[1], bytes[1]);
+    }
+    assert.deepEqual(closed, [0, 1]);
+    assert.equal(iterations, 0, 'indexed message storage needs no iterator to release its parts');
+  });
+}
+
+test('completion cleanup closes each indexed part without allocating an iterator', () => {
+  const { closeMeshCompletion } = require('../../packages/framework/dist/runtime/backend/mesh-completion-table');
+  const closed = [];
+  let iterations = 0;
+  const parts = [0, 1].map(index => ({ close() { closed.push(index); } }));
+  parts[Symbol.iterator] = function () {
+    iterations++;
+    return Array.prototype[Symbol.iterator].call(this);
+  };
+  closeMeshCompletion({ parts });
+  assert.deepEqual(closed, [0, 1]);
+  assert.equal(iterations, 0);
+});

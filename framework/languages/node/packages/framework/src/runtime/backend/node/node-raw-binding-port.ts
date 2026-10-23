@@ -592,9 +592,12 @@ function retainAndClose(
 ): readonly Buffer[] {
   try {
     recordReceived?.();
-    return messages.map((message) => ZLinkBufferMessage.retainPayload(message));
+    const retained = new Array<Buffer>(messages.length);
+    for (let index = 0; index < messages.length; index++)
+      retained[index] = ZLinkBufferMessage.retainPayload(messages[index]!);
+    return retained;
   } finally {
-    for (const message of messages) message.close();
+    for (let index = 0; index < messages.length; index++) messages[index]!.close();
   }
 }
 

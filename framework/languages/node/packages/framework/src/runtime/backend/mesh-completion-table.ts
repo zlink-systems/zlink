@@ -265,7 +265,5 @@ export function closeMeshCompletion(completion: ZLinkMeshCompletion): void {
 }
 
 function closeParts(parts: readonly Message[]): void {
-  for (const part of parts) {
-    part.close();
-  }
+  for (let index = 0; index < parts.length; index++) parts[index]!.close();
 }
