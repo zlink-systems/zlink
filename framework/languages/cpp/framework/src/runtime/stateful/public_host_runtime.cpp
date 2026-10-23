@@ -1084,41 +1084,53 @@ void public_host_runtime_t::configure_stateful_dispatch (
             [this, resolver = std::move (resolver)] (
               const stateful::accepted_record_authority_query_t &query)
               -> task_t<std::optional<stateful::accepted_record_authority_t>> {
-                auto accepted = co_await _relocation_session_terminal_lane.run_task (
-                  [&] () -> std::optional<stateful::accepted_record_authority_t> {
-                      for (const auto &[key, attempt] : _relocation_target_attempts) {
-                          const auto &prepare = attempt.prepare;
-                          if (prepare.source_node_routing_id != query.source_node_routing_id
-                              || prepare.source_node_generation != query.source_node_generation
-                              || prepare.target.target_node_routing_id
-                                   != query.target_node_routing_id
-                              || prepare.target.target_node_generation
-                                   != query.target_node_generation)
-                              continue;
-                          const auto target = std::find (attempt.targets.begin (),
-                                                         attempt.targets.end (), query.target);
-                          if (target == attempt.targets.end ())
-                              continue;
-                          const auto index = static_cast<std::size_t> (
-                            std::distance (attempt.targets.begin (), target));
-                          // A post-boundary relay can cross target CAS in flight (§4.4).
-                          // Its exact source attempt remains valid alongside the committed fence.
-                          if (query.requested_authority_owner_generation
-                                != target->authority_owner_generation
-                              && (index >= attempt.sources.size ()
-                                  || query.requested_authority_owner_generation
-                                       != attempt.sources[index].authority_owner_generation))
-                              continue;
-                          return stateful::accepted_record_authority_t{
-                            {prepare.coordinator.owner_id, prepare.coordinator.lease_generation,
-                             prepare.source_node_routing_id, prepare.source_node_generation},
-                            prepare.target.target_owner_lease_generation};
-                      }
-                      return std::nullopt;
-                  });
-                if (accepted)
-                    co_return accepted;
-                co_return co_await resolver (query);
+                using authority_t = std::optional<stateful::accepted_record_authority_t>;
+                try {
+                    auto accepted = _relocation_session_terminal_lane.run_task ([&] ()
+                                                                                  -> authority_t {
+                        for (const auto &[key, attempt] : _relocation_target_attempts) {
+                            const auto &prepare = attempt.prepare;
+                            if (prepare.source_node_routing_id != query.source_node_routing_id
+                                || prepare.source_node_generation != query.source_node_generation
+                                || prepare.target.target_node_routing_id
+                                     != query.target_node_routing_id
+                                || prepare.target.target_node_generation
+                                     != query.target_node_generation)
+                                continue;
+                            const auto target = std::find (attempt.targets.begin (),
+                                                           attempt.targets.end (), query.target);
+                            if (target == attempt.targets.end ())
+                                continue;
+                            const auto index = static_cast<std::size_t> (
+                              std::distance (attempt.targets.begin (), target));
+                            // A post-boundary relay can cross target CAS in flight (§4.4).
+                            // Its exact source attempt remains valid alongside the committed fence.
+                            if (query.requested_authority_owner_generation
+                                  != target->authority_owner_generation
+                                && (index >= attempt.sources.size ()
+                                    || query.requested_authority_owner_generation
+                                         != attempt.sources[index].authority_owner_generation))
+                                continue;
+                            return stateful::accepted_record_authority_t{
+                              {prepare.coordinator.owner_id, prepare.coordinator.lease_generation,
+                               prepare.source_node_routing_id, prepare.source_node_generation},
+                              prepare.target.target_owner_lease_generation};
+                        }
+                        return std::nullopt;
+                    });
+                    // resolve_accepted_authority owns query until this task completes;
+                    // the configured dispatch owns resolver for the same lifetime.
+                    return continue_task<authority_t> (
+                      std::move (accepted), [&resolver, &query] (authority_t authority) {
+                          if (authority)
+                              return task_t<authority_t> (
+                                result_t<authority_t>::success (std::move (authority)));
+                          return resolver (query);
+                      });
+                }
+                catch (...) {
+                    return task_t<authority_t> (detail::current_exception_result<authority_t> ());
+                }
             });
           /* flow-correlation §4: the ingest path gates flow capture on the host's
            * provider; the host outlives the dispatch it owns. */
@@ -1167,58 +1179,77 @@ public_host_runtime_t::accepted_record_authority (
   std::shared_ptr<const location_owner_token_t> owner,
   live_location_reader_t *sources) const
 {
-    const auto &local = _options.mesh.descriptor;
-    // The execution owner checks a Spot's current incarnation. Actor admission
-    // validates the native object fence here, independently of sender availability.
-    if ((query.target.kind == stateful::object_kind_t::actor
-         && query.requested_authority_owner_generation != query.target.authority_owner_generation)
-        || query.target_node_routing_id != local.node_routing_id
-        || query.target_node_generation != local.lifecycle_generation)
-        throw detail_make_boundary_exception (detail::boundary_error_t::stale_generation,
-                                              "accepted target fence is stale");
-    if (query.source_original)
-        if (const auto *lookup =
-              std::get_if<mesh::request_source_lookup_t> (&*query.source_original)) {
-            _transport->mailbox ().start_source_lookup (*lookup);
-            auto descriptor = co_await (*lookup)->completion.task ();
-            query.source_original = mesh::request_source_t{std::move (descriptor)};
-        }
     using authority_t = std::optional<stateful::accepted_record_authority_t>;
-    authority_t accepted;
-    // Location §9.3: the first accepting owner resolves once; forwarded records keep it.
-    if (!query.source_original && sources) {
-        auto cached = sources->cached_request_source (local.mesh_name, query.source_node_routing_id,
-                                                      query.source_node_generation);
-        std::shared_ptr<const mesh_node_descriptor_t> descriptor;
-        if (cached)
-            descriptor = std::move (*cached);
-        else
-            descriptor = co_await sources->request_source (
+    using descriptor_t = std::shared_ptr<const mesh_node_descriptor_t>;
+    try {
+        const auto &local = _options.mesh.descriptor;
+        // The execution owner checks a Spot's current incarnation. Actor admission
+        // validates the native object fence here, independently of sender availability.
+        if ((query.target.kind == stateful::object_kind_t::actor
+             && query.requested_authority_owner_generation
+                  != query.target.authority_owner_generation)
+            || query.target_node_routing_id != local.node_routing_id
+            || query.target_node_generation != local.lifecycle_generation)
+            throw detail_make_boundary_exception (detail::boundary_error_t::stale_generation,
+                                                  "accepted target fence is stale");
+        const auto finish =
+          [owner = std::move (owner)] (stateful::accepted_record_authority_query_t query) {
+              authority_t accepted;
+              if (owner && !owner->owner_id.empty () && owner->lease_generation > 0
+                  && query.source_original) {
+                  protocol::request_source_fence_t source;
+                  if (const auto *reference =
+                        std::get_if<mesh::local_request_source_t> (&*query.source_original)) {
+                      source = {reference->lease->owner_id,
+                                static_cast<std::uint64_t> (reference->lease->lease_generation),
+                                query.source_node_routing_id, query.source_node_generation};
+                  } else {
+                      const auto &descriptor = std::get<descriptor_t> (*query.source_original);
+                      if (!descriptor)
+                          return task_t<authority_t> (
+                            result_t<authority_t>::success (std::move (accepted)));
+                      source = {descriptor->owner_id,
+                                static_cast<std::uint64_t> (descriptor->lease_generation),
+                                query.source_node_routing_id, query.source_node_generation};
+                  }
+                  accepted = stateful::accepted_record_authority_t{
+                    std::move (source), static_cast<std::uint64_t> (owner->lease_generation)};
+              }
+              return task_t<authority_t> (result_t<authority_t>::success (std::move (accepted)));
+          };
+        if (query.source_original)
+            if (const auto *lookup =
+                  std::get_if<mesh::request_source_lookup_t> (&*query.source_original)) {
+                _transport->mailbox ().start_source_lookup (*lookup);
+                auto pending = (*lookup)->completion.task ();
+                return continue_task<authority_t> (
+                  std::move (pending),
+                  [query = std::move (query), finish] (descriptor_t descriptor) mutable {
+                      query.source_original = mesh::request_source_t{std::move (descriptor)};
+                      return finish (std::move (query));
+                  });
+            }
+        // Location §9.3: the first accepting owner resolves once; forwarded records keep it.
+        if (!query.source_original && sources) {
+            auto cached = sources->cached_request_source (
               local.mesh_name, query.source_node_routing_id, query.source_node_generation);
-        if (descriptor)
-            query.source_original = mesh::request_source_t{std::move (descriptor)};
-    }
-    if (owner && !owner->owner_id.empty () && owner->lease_generation > 0
-        && query.source_original) {
-        protocol::request_source_fence_t source;
-        if (const auto *reference =
-              std::get_if<mesh::local_request_source_t> (&*query.source_original)) {
-            source = {reference->lease->owner_id,
-                      static_cast<std::uint64_t> (reference->lease->lease_generation),
-                      query.source_node_routing_id, query.source_node_generation};
-        } else {
-            const auto &descriptor =
-              std::get<std::shared_ptr<const mesh_node_descriptor_t>> (*query.source_original);
-            if (!descriptor)
-                co_return accepted;
-            source = {descriptor->owner_id,
-                      static_cast<std::uint64_t> (descriptor->lease_generation),
-                      query.source_node_routing_id, query.source_node_generation};
+            if (!cached) {
+                auto pending = sources->request_source (
+                  local.mesh_name, query.source_node_routing_id, query.source_node_generation);
+                return continue_task<authority_t> (
+                  std::move (pending),
+                  [query = std::move (query), finish] (descriptor_t descriptor) mutable {
+                      query.source_original = mesh::request_source_t{std::move (descriptor)};
+                      return finish (std::move (query));
+                  });
+            }
+            query.source_original = mesh::request_source_t{std::move (*cached)};
         }
-        accepted = stateful::accepted_record_authority_t{
-          std::move (source), static_cast<std::uint64_t> (owner->lease_generation)};
+        return finish (std::move (query));
     }
-    co_return accepted;
+    catch (...) {
+        return task_t<authority_t> (detail::current_exception_result<authority_t> ());
+    }
 }
 
 void public_host_runtime_t::forward_relocation_application (

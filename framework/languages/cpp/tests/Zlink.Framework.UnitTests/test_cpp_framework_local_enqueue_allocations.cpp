@@ -426,6 +426,210 @@ TEST (LocalEnqueueAllocations, StatefulOwnerClaimWithoutQueuedTurnNeedsNoContinu
     EXPECT_LE (dispatch_cost.largest, result_storage.largest);
 }
 
+TEST (LocalEnqueueAllocations, RecordedAuthorityUsesOnlyReadyResultStorage)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    using authority_t = std::optional<stateful::accepted_record_authority_t>;
+    auto runtime = make_host ();
+    const auto lease =
+      std::make_shared<const location_owner_token_t> (location_owner_token_t{"local-owner", 3});
+    stateful::accepted_record_authority_query_t query;
+    query.target = {stateful::object_kind_t::user_spot, "spot", 1, 1, "local-allocation", "n"};
+    query.source_node_routing_id = {'n'};
+    query.source_node_generation = 1;
+    query.target_node_routing_id = {'n'};
+    query.target_node_generation = 1;
+    query.source_original = mesh::local_request_source_t{lease, {}};
+    const authority_t expected =
+      stateful::accepted_record_authority_t{{lease->owner_id, 3, {'n'}, 1}, 3};
+    const auto storage = tests::measure_allocations ([&] {
+        const task_t<authority_t> result (result_t<authority_t>::success (expected));
+        EXPECT_TRUE (result.await_ready ());
+    });
+    const auto input = tests::measure_allocations ([&] {
+        const auto copy = query;
+        EXPECT_EQ (copy.target, query.target);
+    });
+    const auto resolve = [&] {
+        auto result = runtime->accepted_record_authority (query, lease);
+        ASSERT_TRUE (result.await_ready ());
+        const auto &authority = result.result ().value ();
+        ASSERT_TRUE (authority.has_value ());
+        EXPECT_EQ (authority->source.owner_id, lease->owner_id);
+        EXPECT_EQ (authority->source.node_routing_id, query.source_node_routing_id);
+        EXPECT_EQ (authority->target_owner_lease_generation, 3u);
+    };
+    resolve ();
+    const auto measured = tests::measure_allocations (resolve);
+    std::printf ("recorded authority: allocations=%zu bytes=%zu largest=%zu; ready storage=%zu\n",
+                 measured.count, measured.bytes, measured.largest, storage.largest);
+    EXPECT_LE (measured.largest, storage.largest);
+    EXPECT_LE (measured.count, storage.count + input.count);
+    EXPECT_LE (measured.bytes, storage.bytes + input.bytes);
+}
+
+TEST (LocalEnqueueAllocations, ReadyAuthorityResolverAddsOnlyItsLaneResult)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    using authority_t = std::optional<stateful::accepted_record_authority_t>;
+    auto runtime = make_host ();
+    const stateful::object_ref_t object{
+      stateful::object_kind_t::user_spot, "spot", 1, 1, "local-allocation", "n"};
+    protocol::spot_message_header_t header;
+    header.target = {object.key, 1, {'n'}, 1, 1, 3};
+    unsigned calls = 0;
+    const stateful::accepted_record_authority_resolver_t resolver = [&] (const auto &) {
+        ++calls;
+        return task_t<authority_t> (result_t<authority_t>::success (
+          stateful::accepted_record_authority_t{{"source", 2, {'s'}, 1}, 3}));
+    };
+    runtime->configure_stateful_dispatch (resolver);
+    stateful::raw_stateful_dispatch_t direct (runtime->objects (), runtime->transport (), resolver);
+    auto &wrapped = host::public_host_runtime_test_access_t::stateful_dispatch (*runtime);
+    const auto resolve = [&] (stateful::raw_stateful_dispatch_t &dispatch) {
+        const auto previous_calls = calls;
+        auto result =
+          dispatch.accepted_spot_authority (object, header, {'s'}, 1, std::nullopt, std::nullopt);
+        ASSERT_TRUE (result.await_ready ());
+        const auto &authority = result.result ().value ();
+        EXPECT_EQ (authority.first, stateful::stateful_error_t::none);
+        ASSERT_TRUE (authority.second.has_value ());
+        EXPECT_EQ (authority.second->source.owner_id, "source");
+        EXPECT_EQ (authority.second->target_owner_lease_generation, 3u);
+        EXPECT_EQ (calls - previous_calls, 1u);
+    };
+    resolve (direct);
+    resolve (wrapped);
+    const auto baseline = tests::measure_allocations ([&] { resolve (direct); });
+    const auto lane_result = tests::measure_allocations ([] {
+        const task_t<authority_t> result (result_t<authority_t>::success (std::nullopt));
+        EXPECT_TRUE (result.await_ready ());
+    });
+    const auto measured = tests::measure_allocations ([&] { resolve (wrapped); });
+    std::printf ("authority resolver: direct=%zu/%zu lane=%zu/%zu wrapped=%zu/%zu\n",
+                 baseline.count, baseline.bytes, lane_result.count, lane_result.bytes,
+                 measured.count, measured.bytes);
+    EXPECT_LE (measured.count, baseline.count + lane_result.count);
+    EXPECT_LE (measured.bytes, baseline.bytes + lane_result.bytes);
+}
+
+TEST (LocalEnqueueAllocations, PendingAuthorityResolverKeepsItsInputAndErrorClassification)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    using authority_t = std::optional<stateful::accepted_record_authority_t>;
+    for (unsigned outcome = 0; outcome != 4; ++outcome) {
+        auto runtime = make_host ();
+        task_completion_source_t<authority_t> completion;
+        unsigned calls = 0;
+        const stateful::accepted_record_authority_query_t *observed = nullptr;
+        runtime->configure_stateful_dispatch (
+          [&] (const stateful::accepted_record_authority_query_t &query) {
+              ++calls;
+              observed = &query;
+              return completion.task ();
+          });
+        auto &dispatch = host::public_host_runtime_test_access_t::stateful_dispatch (*runtime);
+        // The original arguments are gone while the configured resolver still awaits.
+        auto pending = [&] {
+            const stateful::object_ref_t object{stateful::object_kind_t::user_spot,
+                                                "spot-with-owned-query-storage",
+                                                1,
+                                                1,
+                                                "local-allocation",
+                                                "n"};
+            protocol::spot_message_header_t header;
+            header.target = {object.key, 1, {'n'}, 1, 1, 3};
+            return dispatch.accepted_spot_authority (object, header, {'s'}, 1, std::nullopt,
+                                                     std::nullopt);
+        }();
+        ASSERT_FALSE (pending.await_ready ());
+        ASSERT_EQ (calls, 1u);
+        ASSERT_NE (observed, nullptr);
+        EXPECT_EQ (observed->target.key, "spot-with-owned-query-storage");
+        EXPECT_EQ (observed->source_node_routing_id, std::vector<std::uint8_t>{'s'});
+        if (outcome == 0)
+            completion.complete (result_t<authority_t>::success (
+              stateful::accepted_record_authority_t{{"source", 2, {'s'}, 1}, 3}));
+        else if (outcome == 3)
+            completion.complete (detail::result_access_t::failure<authority_t> (
+              std::make_exception_ptr (detail::make_boundary_exception (
+                detail::boundary_error_t::stale_generation, "pending stale generation"))));
+        else
+            completion.complete (result_t<authority_t>::failure (
+              outcome == 1 ? framework_error_kind_t::unavailable
+                           : framework_error_kind_t::internal_failure,
+              "pending authority failure"));
+        const auto terminal = pending.result_for (std::chrono::seconds (5));
+        ASSERT_TRUE (terminal.has_value ());
+        if (outcome == 2) {
+            EXPECT_FALSE (*terminal);
+            EXPECT_EQ (terminal->error_kind (), framework_error_kind_t::internal_failure);
+        } else {
+            ASSERT_TRUE (*terminal);
+            EXPECT_EQ (terminal->value ().first, outcome == 0 ? stateful::stateful_error_t::none
+                                                 : outcome == 3
+                                                   ? stateful::stateful_error_t::conflict
+                                                   : stateful::stateful_error_t::unavailable);
+            EXPECT_EQ (terminal->value ().second.has_value (), outcome == 0);
+        }
+        EXPECT_EQ (calls, 1u);
+    }
+}
+
+TEST (LocalEnqueueAllocations, PendingRecordedSourceKeepsItsInputAndFailure)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    using descriptor_t = std::shared_ptr<const mesh_node_descriptor_t>;
+    for (const bool fail : {false, true}) {
+        auto runtime = make_host ();
+        const auto lookup = std::make_shared<mesh::request_source_lookup_state_t> ();
+        unsigned starts = 0;
+        lookup->start = [&] (const auto &) { ++starts; };
+        auto pending = [&] {
+            stateful::accepted_record_authority_query_t query;
+            query.target = {
+              stateful::object_kind_t::user_spot, "spot", 1, 1, "local-allocation", "n"};
+            query.target_node_routing_id = {'n'};
+            query.target_node_generation = 1;
+            query.source_node_routing_id = {'s'};
+            query.source_node_generation = 7;
+            query.source_original = lookup;
+            return runtime->accepted_record_authority (
+              std::move (query),
+              std::make_shared<const location_owner_token_t> (location_owner_token_t{"target", 3}));
+        }();
+        ASSERT_FALSE (pending.await_ready ());
+        EXPECT_EQ (starts, 1u);
+        if (fail)
+            lookup->completion.complete (result_t<descriptor_t>::failure (
+              framework_error_kind_t::unavailable, "pending source failure"));
+        else {
+            auto source = std::make_shared<mesh_node_descriptor_t> ();
+            source->owner_id = "source";
+            source->lease_generation = 2;
+            lookup->completion.complete (result_t<descriptor_t>::success (std::move (source)));
+        }
+        const auto terminal = pending.result_for (std::chrono::seconds (5));
+        ASSERT_TRUE (terminal.has_value ());
+        if (fail) {
+            EXPECT_FALSE (*terminal);
+            EXPECT_EQ (terminal->error_kind (), framework_error_kind_t::unavailable);
+        } else {
+            ASSERT_TRUE (*terminal);
+            ASSERT_TRUE (terminal->value ().has_value ());
+            EXPECT_EQ (terminal->value ()->source.owner_id, "source");
+            EXPECT_EQ (terminal->value ()->source.node_routing_id, std::vector<std::uint8_t>{'s'});
+            EXPECT_EQ (terminal->value ()->source.node_generation, 7u);
+            EXPECT_EQ (terminal->value ()->target_owner_lease_generation, 3u);
+        }
+        EXPECT_EQ (starts, 1u);
+    }
+}
+
 TEST (LocalEnqueueAllocations, StatefulSpotDrainRecordContinuationStaysWithinRecordStorage)
 {
     using namespace fw;
