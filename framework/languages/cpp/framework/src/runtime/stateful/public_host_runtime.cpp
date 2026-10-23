@@ -7609,12 +7609,12 @@ bool public_host_runtime_t::dispatch_stateful_delivery (
 }
 
 task_t<bool> public_host_runtime_t::dispatch_native_spot (
-  stateful::object_ref_t object,
+  const stateful::object_ref_t &object,
   mesh::service_mailbox_t::claim_handle_t slot,
-  stateful::claimed_ingress_t query,
+  stateful::claimed_ingress_t &&query,
   std::shared_ptr<const local_application_dispatch_t> application,
   std::optional<stateful::retained_relocation_source_t> retained,
-  mesh::service_mailbox_t::application_dispatch_t dispatch)
+  const mesh::service_mailbox_t::application_dispatch_t &dispatch)
 {
     if (retained)
         co_return false; // The existing source proof owns hold and Message Follow ingress.
@@ -7837,94 +7837,137 @@ public_host_runtime_t::dispatch_application_claim (
             if (auto *kept = std::get_if<kept_t> (&step)) {
                 // Only stateful ingress needs a suspended cursor. The canonical
                 // slot remains the original owner throughout authority preparation.
-                auto pending = [] (std::shared_ptr<public_host_runtime_t> self,
-                                   std::shared_ptr<application_claim_batch_t> batch,
-                                   kept_t kept) -> task_t<void> {
-                    auto &claim = batch->claim;
-                    const auto index = batch->index;
-                    const mesh::service_mailbox_t::claim_handle_t slot{claim, index};
-                    auto &entry = batch->entries[index];
-                    const mesh::service_mailbox_t::application_dispatch_t dispatch =
-                      [batch] (const auto &ready, const auto &record, auto parts) {
-                          batch->handoff (ready, record, std::move (parts));
-                      };
-                    if (auto *local = std::get_if<kept_local_t> (&kept)) {
-                        if (!is_actor_application (local->application->record.kind)) {
+                // Each kept form suspends in its own continuation, which holds only
+                // that form's locals and then continues this claim's cursor.
+                using dispatch_t = mesh::service_mailbox_t::application_dispatch_t;
+                const auto local_fallback = [] (std::shared_ptr<public_host_runtime_t> self,
+                                                std::shared_ptr<application_claim_batch_t> batch,
+                                                kept_local_t local) -> task_t<void> {
+                    const mesh::service_mailbox_t::claim_handle_t slot{batch->claim, batch->index};
+                    auto &entry = batch->entries[batch->index];
+                    const dispatch_t dispatch = [batch] (const auto &ready, const auto &record,
+                                                         auto parts) {
+                        batch->handoff (ready, record, std::move (parts));
+                    };
+                    auto query = local_application_query (*local.application);
+                    const auto object = co_await self->accept_local_application (
+                      slot, std::move (query), std::move (local.application),
+                      std::move (local.source_original), entry.original);
+                    if (object) {
+                        (void) co_await self->dispatch_stateful_owner (*object, dispatch);
+                        ++batch->count;
+                    }
+                };
+                const auto local_owner =
+                  [] (std::shared_ptr<public_host_runtime_t> self,
+                      std::shared_ptr<application_claim_batch_t> batch, kept_local_t local,
+                      decltype (local_fallback) fallback) -> task_t<std::size_t> {
+                    std::exception_ptr failure;
+                    try {
+                        bool native = false;
+                        if (!is_actor_application (local.application->record.kind)) {
+                            const mesh::service_mailbox_t::claim_handle_t slot{batch->claim,
+                                                                               batch->index};
+                            const dispatch_t dispatch = [batch] (const auto &ready,
+                                                                 const auto &record, auto parts) {
+                                batch->handoff (ready, record, std::move (parts));
+                            };
                             std::optional<stateful::retained_relocation_source_t> retained;
                             const auto owner = co_await self->_objects.resolve_spot_async (
-                              local->application->owner.spot_id, &retained);
-                            stateful::claimed_ingress_t query;
-                            query.source_original = local->source_original;
-                            query.source_routing_id =
-                              local->application->record.source_node_rid.to_bytes ();
-                            query.source_node_generation =
-                              self->_options.mesh.descriptor.lifecycle_generation;
+                              local.application->owner.spot_id, &retained);
                             if (owner) {
-                                const bool native = co_await self->dispatch_native_spot (
-                                  *owner, slot, std::move (query), local->application,
+                                stateful::claimed_ingress_t query;
+                                query.source_original = local.source_original;
+                                query.source_routing_id =
+                                  local.application->record.source_node_rid.to_bytes ();
+                                query.source_node_generation =
+                                  self->_options.mesh.descriptor.lifecycle_generation;
+                                native = co_await self->dispatch_native_spot (
+                                  *owner, slot, std::move (query), local.application,
                                   std::move (retained), dispatch);
-                                if (native) {
-                                    ++batch->count;
-                                    ++batch->index;
-                                    co_return;
-                                }
                             }
                         }
-                        auto query = local_application_query (*local->application);
-                        const auto object = co_await self->accept_local_application (
-                          slot, std::move (query), std::move (local->application),
-                          std::move (local->source_original), entry.original);
-                        if (object) {
-                            (void) co_await self->dispatch_stateful_owner (*object, dispatch);
+                        if (native)
                             ++batch->count;
-                        }
+                        else
+                            co_await fallback (self, batch, std::move (local));
                         ++batch->index;
-                        co_return;
                     }
-                    std::optional<stateful::object_ref_t> native_owner;
-                    std::optional<stateful::retained_relocation_source_t> retained;
-                    const auto owner_kind = stateful_application_owner (claim->owner);
-                    if (owner_kind == owner_kind_t::actor)
-                        native_owner = co_await self->_objects.find_async (
-                          stateful::object_kind_t::actor,
-                          claim->owner.substr (
-                            detail::activation_admission_t::actor_key_prefix.size ()),
-                          std::nullopt, &retained);
-                    else if (owner_kind == owner_kind_t::spot) {
-                        const auto key = claim->owner.substr (
-                          detail::activation_admission_t::spot_key_prefix.size ());
-                        native_owner = co_await self->_objects.resolve_spot_async (key, &retained);
+                    catch (...) {
+                        failure = std::current_exception ();
                     }
-                    if (native_owner) {
-                        auto &query = std::get<stateful::claimed_ingress_t> (kept);
-                        std::optional<stateful::claimed_ingress_t> prepared;
-                        if (native_owner->kind != stateful::object_kind_t::actor) {
-                            const bool native = co_await self->dispatch_native_spot (
-                              *native_owner, slot, std::move (query), {}, retained, dispatch);
-                            if (native) {
-                                ++batch->count;
-                                ++batch->index;
-                                co_return;
+                    co_return co_await self->continue_application_claim (batch,
+                                                                         std::move (failure));
+                };
+                const auto ingress_owner =
+                  [] (std::shared_ptr<public_host_runtime_t> self,
+                      std::shared_ptr<application_claim_batch_t> batch,
+                      stateful::claimed_ingress_t query) -> task_t<std::size_t> {
+                    std::exception_ptr failure;
+                    try {
+                        auto &claim = batch->claim;
+                        const auto index = batch->index;
+                        const mesh::service_mailbox_t::claim_handle_t slot{claim, index};
+                        auto &entry = batch->entries[index];
+                        const dispatch_t dispatch = [batch] (const auto &ready, const auto &record,
+                                                             auto parts) {
+                            batch->handoff (ready, record, std::move (parts));
+                        };
+                        std::optional<stateful::object_ref_t> native_owner;
+                        std::optional<stateful::retained_relocation_source_t> retained;
+                        const auto owner_kind = stateful_application_owner (claim->owner);
+                        if (owner_kind == owner_kind_t::actor)
+                            native_owner = co_await self->_objects.find_async (
+                              stateful::object_kind_t::actor,
+                              claim->owner.substr (
+                                detail::activation_admission_t::actor_key_prefix.size ()),
+                              std::nullopt, &retained);
+                        else if (owner_kind == owner_kind_t::spot) {
+                            const auto key = claim->owner.substr (
+                              detail::activation_admission_t::spot_key_prefix.size ());
+                            native_owner =
+                              co_await self->_objects.resolve_spot_async (key, &retained);
+                        }
+                        bool native = false;
+                        if (native_owner) {
+                            std::optional<stateful::claimed_ingress_t> prepared;
+                            if (native_owner->kind != stateful::object_kind_t::actor) {
+                                native = co_await self->dispatch_native_spot (
+                                  *native_owner, slot, std::move (query), {}, retained, dispatch);
+                                // A cut or rejection keeps the original; only this cold
+                                // ingress prepares its immutable query again from that slot.
+                            } else {
+                                prepared.emplace (std::move (query));
                             }
-                            // A cut or rejection keeps the original; only this cold ingress
-                            // prepares its immutable query again from that same slot.
+                            if (!native) {
+                                const auto accepted =
+                                  co_await self->_stateful_dispatch->ingest_claimed (
+                                    *native_owner, slot, std::move (retained),
+                                    std::move (prepared));
+                                if (accepted == stateful::stateful_error_t::none)
+                                    (void) co_await self->dispatch_stateful_owner (*native_owner,
+                                                                                   dispatch);
+                                self->_transport->signal_activity ();
+                            }
+                            ++batch->count;
+                            ++batch->index;
                         } else {
-                            prepared.emplace (std::move (query));
+                            entry.original = self->_transport->mailbox ().take (slot);
+                            if (!entry.original)
+                                ++batch->index;
                         }
-                        const auto accepted = co_await self->_stateful_dispatch->ingest_claimed (
-                          *native_owner, slot, std::move (retained), std::move (prepared));
-                        if (accepted == stateful::stateful_error_t::none)
-                            (void) co_await self->dispatch_stateful_owner (*native_owner, dispatch);
-                        self->_transport->signal_activity ();
-                        ++batch->count;
-                        ++batch->index;
-                        co_return;
                     }
-                    entry.original = self->_transport->mailbox ().take (slot);
-                    if (!entry.original)
-                        ++batch->index;
-                }(shared_from_this (), batch, std::move (*kept));
-                return continue_application_claim (batch, std::move (pending));
+                    catch (...) {
+                        failure = std::current_exception ();
+                    }
+                    co_return co_await self->continue_application_claim (batch,
+                                                                         std::move (failure));
+                };
+                if (auto *local = std::get_if<kept_local_t> (kept))
+                    return local_owner (shared_from_this (), batch, std::move (*local),
+                                        local_fallback);
+                return ingress_owner (shared_from_this (), batch,
+                                      std::get<stateful::claimed_ingress_t> (std::move (*kept)));
             }
             if (auto *taken = std::get_if<mesh::service_mailbox_record_t> (&step))
                 entry.original.emplace (std::move (*taken));
@@ -8152,19 +8195,23 @@ void public_host_runtime_t::fail_application_claim (
 
 task_t<std::size_t>
 public_host_runtime_t::continue_application_claim (std::shared_ptr<application_claim_batch_t> batch,
-                                                   task_t<void> pending)
+                                                   std::exception_ptr failure)
 {
+    // The suspended record's continuation calls this; a ready rest of the claim
+    // returns its count without another frame.
     try {
-        co_await pending;
+        if (failure) {
+            fail_application_claim (batch, std::move (failure));
+            ++batch->index;
+        }
+        auto next = dispatch_application_claim (batch);
+        if (const auto count = std::get_if<std::size_t> (&next))
+            return task_t<std::size_t> (result_t<std::size_t>::success (*count));
+        return std::get<task_t<std::size_t>> (std::move (next));
     }
     catch (...) {
-        fail_application_claim (batch, std::current_exception ());
-        ++batch->index;
+        return task_t<std::size_t> (detail::current_exception_result<std::size_t> ());
     }
-    auto next = dispatch_application_claim (batch);
-    if (const auto count = std::get_if<std::size_t> (&next))
-        co_return *count;
-    co_return co_await std::get<task_t<std::size_t>> (std::move (next));
 }
 
 task_t<bool> public_host_runtime_t::dispatch_application_owner (

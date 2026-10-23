@@ -4,6 +4,8 @@
 #include "runtime/stateful/raw_stateful_dispatch.hpp"
 #include "runtime/actors/actor_ref_access.hpp"
 #include <algorithm>
+#include <iterator>
+#include <tuple>
 #include <array>
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime/locations/live_location_reader.hpp"
@@ -407,4 +409,93 @@ TEST (LocalEnqueueAllocations, StatefulOwnerClaimWithoutQueuedTurnNeedsNoContinu
     EXPECT_LE (dispatch_cost.largest, result_storage.largest);
 }
 
+TEST (LocalEnqueueAllocations, StatefulSpotDrainRecordContinuationStaysWithinRecordStorage)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    // A gate whose admission completes in the caller's turn keeps the whole drain on
+    // this thread, so every frame of the record path is counted.
+    stateful_spot_fixture_t fixture (serial_lane_policy_t::session ());
+    auto &runtime = fixture.runtime;
+    auto spot = runtime->get_or_create_spot ("stateful");
+    std::vector<zlink::message_t> parts;
+    parts.push_back (zlink::message_t::from ("payload"));
+    unsigned handled = 0;
+    std::array<tests::allocation_event_t, 256> events{};
+    const auto drain_once = [&] {
+        std::size_t count = 0;
+        tests::allocation_event_log_t log{events.data (), events.size ()};
+        const auto previous_log = tests::allocation_event_log;
+        tests::allocation_event_log = &log;
+        const auto cost = tests::measure_allocations ([&] {
+            auto drained = runtime->dispatch_ready ([&] (const auto &, const auto &record, auto) {
+                ++handled;
+                if (record.reply_token.local_reply)
+                    EXPECT_TRUE (record.reply_token.local_reply (parts));
+                if (record.application_record)
+                    record.application_record->release_native_claim ();
+            });
+            ASSERT_TRUE (drained.await_ready ());
+            count = drained.result ().value ();
+        });
+        tests::allocation_event_log = previous_log;
+        EXPECT_FALSE (log.overflow);
+        std::vector<std::size_t> sizes;
+        for (std::size_t index = 0; index != log.count; ++index)
+            sizes.push_back (events[index].size);
+        std::sort (sizes.begin (), sizes.end ());
+        return std::tuple{count, cost, sizes};
+    };
+    const auto request = [&] {
+        host::pending_operation_t operation;
+        EXPECT_EQ (spot
+                     .request_to_spot (fixture.rid, "stateful", fixture.object.object_generation,
+                                       parts, operation, zlink::send_flags_t::none,
+                                       std::chrono::seconds (30))
+                     .result ()
+                     .value (),
+                   zlink::submit_result_t::ok);
+        return operation;
+    };
+    {
+        auto warm = request ();
+        while (std::get<0> (drain_once ()) != 0) {
+        }
+        ASSERT_TRUE (warm.completion->task ().result_for (std::chrono::seconds (5)).has_value ());
+    }
+    // The receive turn alone: dispatch_ready with no record pending.
+    const auto [idle_count, idle, idle_sizes] = drain_once ();
+    EXPECT_EQ (idle_count, 0u);
+    handled = 0;
+    auto operation = request ();
+    const auto [record_count, record, record_sizes] = drain_once ();
+    EXPECT_EQ (record_count, 1u);
+    EXPECT_EQ (handled, 1u);
+    const auto complete = operation.completion->task ().result_for (std::chrono::seconds (5));
+    ASSERT_TRUE (complete.has_value ());
+    EXPECT_TRUE (*complete);
+    // The record's own storage is what the drain allocates beyond the idle receive turn.
+    std::vector<std::size_t> extra;
+    std::set_difference (record_sizes.begin (), record_sizes.end (), idle_sizes.begin (),
+                         idle_sizes.end (), std::back_inserter (extra));
+    std::printf ("stateful Spot request drain on caller turn: allocations=%zu bytes=%zu; "
+                 "idle allocations=%zu bytes=%zu; record allocations:",
+                 record.count, record.bytes, idle.count, idle.bytes);
+    for (const auto size : extra)
+        std::printf (" %zu", size);
+    std::printf ("\n");
+    // Published storage the record needs anyway; a continuation frame that holds
+    // a whole record path is larger, so it shows above this bound on any ABI.
+    const auto storage = tests::measure_allocations ([] {
+        auto application = std::make_shared<host::local_application_dispatch_t> ();
+        auto mailbox = std::make_shared<mesh::service_mailbox_record_t> ();
+        auto accepted = std::make_shared<serial_application_record_t> ();
+        EXPECT_NE (application.get (), nullptr);
+        EXPECT_NE (mailbox.get (), nullptr);
+        EXPECT_NE (accepted.get (), nullptr);
+    });
+    ASSERT_FALSE (extra.empty ());
+    std::printf ("record storage=%zu\n", storage.largest);
+    EXPECT_LE (extra.back (), storage.largest);
+}
 } // namespace
