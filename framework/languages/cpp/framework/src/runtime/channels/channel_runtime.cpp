@@ -2102,31 +2102,28 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_request_reply_messa
   payload_encoder_t encode_payload,
   std::chrono::milliseconds timeout,
   std::map<std::string, std::string> metadata)
-{
-    /* Frame-owned copy: the referenced shared_ptr lives in the call object's
-     * closure, which can unwind while the request is suspended. */
+try {
+    // The reply owns this copy: the referenced state lives in the caller.
     const auto state = state_ref;
-    const auto metrics_channel = router_channel_id;
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application,
       state && state->runtime ? detail::message_flow_tracer_t (state->runtime->dispatch).mode ()
                               : message_flow_log_mode_t::off);
     const auto ambient_context = detail::capture_ambient_context ();
     if (!state || !state->runtime || state->serializers == nullptr) {
-        co_return result_t<zlink::message_t>::failure (framework_error_kind_t::protocol_error,
-                                                       "route client is not configured");
+        return result_t<zlink::message_t>::failure (framework_error_kind_t::protocol_error,
+                                                    "route client is not configured");
     }
     runtime::messaging::message_parts_t parts;
     auto effective_timeout = timeout;
-    const auto &spot_id = target_spot_id;
     const auto use_route_channel = detail::has_route_channel (state->runtime, router_channel_id);
-    const auto mesh_requester = use_route_channel
-                                  ? std::nullopt
-                                  : detail::spot_mesh_requester (state->runtime, router_channel_id);
+    auto mesh_requester = use_route_channel
+                            ? std::nullopt
+                            : detail::spot_mesh_requester (state->runtime, router_channel_id);
     if (!use_route_channel && !mesh_requester) {
-        co_return result_t<zlink::message_t>::failure (
-          framework_error_kind_t::unavailable,
-          "route channel or SPOT mesh '" + router_channel_id + "' is not registered");
+        return result_t<zlink::message_t>::failure (framework_error_kind_t::unavailable,
+                                                    "route channel or SPOT mesh '"
+                                                      + router_channel_id + "' is not registered");
     }
     try {
         if (use_route_channel) {
@@ -2152,7 +2149,7 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_request_reply_messa
                                           std::nullopt,
                                           header.correlation_id,
                                           target_node_rid.to_string (),
-                                          spot_id,
+                                          target_spot_id,
                                           std::nullopt,
                                           std::nullopt};
           });
@@ -2160,20 +2157,24 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_request_reply_messa
           codec.encode_payload_parts (std::move (header), encode_payload (*state->serializers));
     }
     catch (const framework_exception_t &error) {
-        co_return detail::result_access_t::failure<zlink::message_t> (error);
+        return detail::result_access_t::failure<zlink::message_t> (error);
     }
+    // A selected transport may borrow its target until the physical terminal.
+    const auto target = std::make_shared<const std::pair<zlink::routing_id_t, spot_id_t>> (
+      std::move (target_node_rid), std::move (target_spot_id));
+    const auto &target_rid = target->first;
+    const auto &spot_id = target->second;
     const auto ambient_guard = detail::enter_ambient_context (ambient_context);
     try {
-        runtime::messaging::envelope_codec_t envelope;
-        auto admitted = co_await detail::request_admission_source_t{};
         auto reply_task = [&] () -> request_task_t<result_t<runtime::messaging::message_parts_t>> {
             if (mesh_requester)
-                return (*mesh_requester) (target_node_rid, spot_id, target_spot_generation,
+                return (*mesh_requester) (target_rid, spot_id, target_spot_generation,
                                           std::move (parts), effective_timeout);
+            auto admitted = std::make_shared<task_completion_source_t<void>> ();
             return request_task_t<result_t<runtime::messaging::message_parts_t>> (
               detail::offload_route_reply (
                 state->runtime->route_client_executor,
-                [runtime_state = state->runtime, router_channel_id, target_node_rid,
+                [runtime_state = state->runtime, router_channel_id, target_node_rid = target_rid,
                  spot_id = std::string (spot_id), packet_name, parts = std::move (parts),
                  effective_timeout, ambient_context, admitted] () mutable {
                     const auto worker_context = detail::enter_ambient_context (ambient_context);
@@ -2188,81 +2189,108 @@ request_task_t<zlink::message_t> route_client_t::submit_spot_request_reply_messa
                 }),
               admitted);
         }();
-        const auto reply = co_await detail::request_submission (std::move (reply_task));
-        if (!reply) {
-            if (reply.error_kind () == framework_error_kind_t::not_found) {
-                detail::dispatch_error_reporter_t (state->runtime->dispatch).report_lazy ([&] {
-                    return message_dispatch_error_event_t{
-                      dispatch_error_surface_t::spot_route,
-                      dispatch_message_kind_t::request,
-                      dispatch_error_reason_t::handler_missing,
-                      dispatch_error_action_t::reply_error,
-                      packet_name,
-                      router_channel_id,
-                      std::nullopt,
-                      spot_id,
-                      std::nullopt,
-                      target_node_rid.to_string (),
-                      std::nullopt,
-                      reply.error () ? std::make_exception_ptr (*reply.error ())
-                                     : std::exception_ptr{}};
-                });
-            }
-            co_return detail::propagate_failure<zlink::message_t> (reply,
-                                                                   "route spot request failed");
-        }
-        auto reply_header = envelope.decode_header (reply.value (), false);
-        if (!reply_header) {
-            co_return result_t<zlink::message_t>::failure (
-              reply_header.error_kind (), reply_header.error ()
-                                            ? reply_header.error ()->what ()
-                                            : "route spot reply header decode failed");
-        }
-        if (reply_header.value ().kind == runtime::messaging::message_kind_t::error) {
-            runtime::messaging::request_failure_mapper_t failure_mapper;
-            /* Stale-route contract: only framework-generated remote errors
-             * (zlink.origin=framework marker) may drive route-cache
-             * invalidation. Unmarked remote errors came from the application
-             * handler and are classified so the caller skips invalidation. */
-            co_return detail::result_access_t::failure<zlink::message_t> (
-              detail::with_error_origin (
-                failure_mapper.error_header_exception (
-                  reply_header.value ().error_code.value_or ("request_failed"),
-                  reply_header.value ().error_message.value_or ("route spot request failed"),
-                  "route spot request"),
-                runtime::messaging::has_framework_origin (reply_header.value ().metadata)
-                  ? detail::error_origin_t::framework
-                  : detail::error_origin_t::application));
-        }
-        auto body = envelope.decode_body (reply.value ());
-        if (!body) {
-            co_return result_t<zlink::message_t>::failure (
-              body.error_kind (),
-              body.error () ? body.error ()->what () : "route spot reply body decode failed");
-        }
-        detail::message_flow_tracer_t (state->runtime->dispatch)
-          .trace (message_flow_outcome_t::reply_received, [&] {
-              return message_flow_event_t{message_flow_outcome_t::reply_received,
-                                          dispatch_error_surface_t::spot_route,
-                                          dispatch_message_kind_t::response,
-                                          packet_name,
-                                          router_channel_id,
-                                          std::nullopt,
-                                          reply_header.value ().correlation_id,
-                                          target_node_rid.to_string (),
-                                          spot_id,
-                                          std::nullopt,
-                                          std::nullopt};
+        // The reply decodes the selected operation's terminal once (hot path
+        // E5) and owns the selected callable and its target until that terminal.
+        return detail::project_request_reply<zlink::message_t> (
+          reply_task,
+          [state, requester = std::move (mesh_requester), packet_name = std::move (packet_name),
+           router_channel_id = std::move (router_channel_id),
+           target] (const result_t<result_t<runtime::messaging::message_parts_t>> &terminal)
+            -> result_t<zlink::message_t> {
+              (void) requester;
+              const auto &target_node_rid = target->first;
+              const auto &spot_id = target->second;
+              try {
+                  const auto &reply = terminal.value ();
+                  runtime::messaging::envelope_codec_t envelope;
+                  if (!reply) {
+                      if (reply.error_kind () == framework_error_kind_t::not_found) {
+                          detail::dispatch_error_reporter_t (state->runtime->dispatch)
+                            .report_lazy ([&] {
+                                return message_dispatch_error_event_t{
+                                  dispatch_error_surface_t::spot_route,
+                                  dispatch_message_kind_t::request,
+                                  dispatch_error_reason_t::handler_missing,
+                                  dispatch_error_action_t::reply_error,
+                                  packet_name,
+                                  router_channel_id,
+                                  std::nullopt,
+                                  spot_id,
+                                  std::nullopt,
+                                  target_node_rid.to_string (),
+                                  std::nullopt,
+                                  reply.error () ? std::make_exception_ptr (*reply.error ())
+                                                 : std::exception_ptr{}};
+                            });
+                      }
+                      return detail::propagate_failure<zlink::message_t> (
+                        reply, "route spot request failed");
+                  }
+                  auto reply_header = envelope.decode_header (reply.value (), false);
+                  if (!reply_header) {
+                      return result_t<zlink::message_t>::failure (
+                        reply_header.error_kind (), reply_header.error ()
+                                                      ? reply_header.error ()->what ()
+                                                      : "route spot reply header decode failed");
+                  }
+                  if (reply_header.value ().kind == runtime::messaging::message_kind_t::error) {
+                      runtime::messaging::request_failure_mapper_t failure_mapper;
+                      /* Stale-route contract: only framework-generated remote errors
+                       * (zlink.origin=framework marker) may drive route-cache
+                       * invalidation. Unmarked remote errors came from the application
+                       * handler and are classified so the caller skips invalidation. */
+                      return detail::result_access_t::failure<zlink::message_t> (
+                        detail::with_error_origin (
+                          failure_mapper.error_header_exception (
+                            reply_header.value ().error_code.value_or ("request_failed"),
+                            reply_header.value ().error_message.value_or (
+                              "route spot request failed"),
+                            "route spot request"),
+                          runtime::messaging::has_framework_origin (reply_header.value ().metadata)
+                            ? detail::error_origin_t::framework
+                            : detail::error_origin_t::application));
+                  }
+                  auto body = envelope.decode_body (reply.value ());
+                  if (!body) {
+                      return result_t<zlink::message_t>::failure (
+                        body.error_kind (), body.error () ? body.error ()->what ()
+                                                          : "route spot reply body decode failed");
+                  }
+                  detail::message_flow_tracer_t (state->runtime->dispatch)
+                    .trace (message_flow_outcome_t::reply_received, [&] {
+                        return message_flow_event_t{message_flow_outcome_t::reply_received,
+                                                    dispatch_error_surface_t::spot_route,
+                                                    dispatch_message_kind_t::response,
+                                                    packet_name,
+                                                    router_channel_id,
+                                                    std::nullopt,
+                                                    reply_header.value ().correlation_id,
+                                                    target_node_rid.to_string (),
+                                                    spot_id,
+                                                    std::nullopt,
+                                                    std::nullopt};
+                    });
+                  return result_t<zlink::message_t>::success (body.value ());
+              }
+              catch (const framework_exception_t &error) {
+                  return detail::result_access_t::failure<zlink::message_t> (error);
+              }
+              catch (const std::exception &error) {
+                  return result_t<zlink::message_t>::failure (
+                    framework_error_kind_t::internal_failure, error.what ());
+              }
           });
-        co_return body.value ();
     }
     catch (const framework_exception_t &error) {
-        co_return detail::result_access_t::failure<zlink::message_t> (error);
+        return detail::result_access_t::failure<zlink::message_t> (error);
     }
     catch (const std::exception &error) {
-        co_return result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
-                                                       error.what ());
+        return result_t<zlink::message_t>::failure (framework_error_kind_t::internal_failure,
+                                                    error.what ());
     }
+}
+catch (...) {
+    return request_task_t<zlink::message_t> (detail::current_exception_result<zlink::message_t> ());
 }
 
 task_t<result_t<void>> route_client_t::submit_spot_id_send_erased (
