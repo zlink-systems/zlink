@@ -4,6 +4,8 @@
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/locations/in_memory_location_store.hpp"
 #include "runtime_failure_fixture.hpp"
+#include "runtime/channels/channel_runtime.hpp"
+#include "runtime/messaging/client_call_codec.hpp"
 
 #include <cstdio>
 #include <limits>
@@ -15,6 +17,102 @@ namespace
 namespace fw = zlink::framework;
 namespace detail = fw::detail;
 namespace mesh = fw::runtime::mesh;
+
+struct route_payload_t
+{
+    static constexpr const char *packet_name = "p";
+    int value = 7;
+};
+
+TEST (SendAllocations, TypedRouteEncoderUsesOnlyTheBorrowedFunctionContainer)
+{
+    fw::serializer_registry_t serializers;
+    std::size_t before_serializer = 0;
+    serializers.add<route_payload_t> (
+      [&] (const route_payload_t &payload) {
+          before_serializer = fw::tests::tracked_allocation_count;
+          return fw::encoded_payload_t::from_string (std::to_string (payload.value));
+      },
+      [] (const fw::encoded_payload_t &) { return route_payload_t{}; }, "x/y");
+    auto builder = fw::test::runtime_failure_builder ();
+    auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
+    runtime.bind_serializers (serializers);
+    runtime.bind_mesh_node_transport ("m",
+                                      [] (const auto &, auto) -> fw::task_t<fw::result_t<void>> {
+                                          co_return fw::result_t<void>::success ();
+                                      },
+                                      {});
+    auto client = builder.route_client (serializers);
+    const auto target = zlink::routing_id_t::from ("n");
+    const auto payload = std::make_shared<route_payload_t> ();
+    const fw::dispatch_options_t dispatch;
+    fw::task_completion_source_t<void> encoded;
+    ASSERT_TRUE (encoded.complete (fw::result_t<void>::success ()));
+    // Both public calls create the same two task layers and encode the same envelope.
+    // The baseline uses the standard allocation-free reference_wrapper target.
+    auto baseline_submit = [&] (const std::string &packet_name,
+                                const auto &metadata) -> fw::task_t<fw::result_t<void>> {
+        auto encode = [payload] (fw::serializer_registry_t &registry) {
+            return registry.get<route_payload_t> ().serialize_with_content_type (*payload);
+        };
+        fw::route_client_t::payload_encoder_t borrowed (std::ref (encode));
+        fw::runtime::messaging::client_call_codec_t codec;
+        (void) codec.encode_node_send_parts ("m", packet_name, target, metadata, dispatch,
+                                             serializers, borrowed);
+        co_await encoded.task ();
+        co_return fw::result_t<void>::success ();
+    };
+    fw::route_send_call_t baseline ("p", baseline_submit);
+    auto actual = client.send_to_node ("m", target, route_payload_t{});
+    fw::route_send_call_t warmup ("p", baseline_submit);
+    warmup.async ().result ().value ();
+    client.send_to_node ("m", target, route_payload_t{}).async ().result ().value ();
+    (void) fw::tests::count_allocations ([&] { baseline.async ().result ().value (); });
+    const auto expected = before_serializer;
+    (void) fw::tests::count_allocations ([&] { actual.async ().result ().value (); });
+    EXPECT_EQ (before_serializer, expected);
+    std::printf ("route encoder allocations before serializer: baseline=%zu typed=%zu\n", expected,
+                 before_serializer);
+}
+
+TEST (SendAllocations, TypedSendEncodesBeforePendingTransportAndPreservesItsFailure)
+{
+    for (const bool channel_send : {false, true}) {
+        fw::serializer_registry_t serializers;
+        unsigned encoded = 0;
+        serializers.add<route_payload_t> (
+          [&] (const route_payload_t &payload) {
+              ++encoded;
+              return fw::encoded_payload_t::from_string (std::to_string (payload.value));
+          },
+          [] (const fw::encoded_payload_t &) { return route_payload_t{}; }, "x/y");
+        auto builder = fw::test::runtime_failure_builder ();
+        auto runtime = detail::channel_runtime_t::from (builder.message_bus ());
+        runtime.bind_serializers (serializers);
+        fw::task_completion_source_t<void> release;
+        const auto transport = [&] (auto) -> fw::task_t<fw::result_t<void>> {
+            co_await release.task ();
+            throw std::runtime_error ("delayed send failure");
+            co_return fw::result_t<void>::success ();
+        };
+        runtime.bind_mesh_channel_transport ("c", transport, {});
+        runtime.bind_mesh_node_transport (
+          "m", [&] (const auto &, auto parts) { return transport (std::move (parts)); }, {});
+        auto client = builder.route_client (serializers);
+        auto call = channel_send ? client.send_to_channel ("c", route_payload_t{})
+                                 : client.send_to_node ("m", zlink::routing_id_t::from ("n"),
+                                                        route_payload_t{});
+        auto pending = call.async ();
+        EXPECT_EQ (encoded, 1u);
+        EXPECT_FALSE (pending.await_ready ());
+        EXPECT_TRUE (release.complete (fw::result_t<void>::success ()));
+        const auto &result = pending.result ();
+        EXPECT_EQ (result.error_kind (), fw::framework_error_kind_t::internal_failure);
+        ASSERT_NE (result.error (), nullptr);
+        EXPECT_STREQ (result.error ()->what (), "delayed send failure");
+        EXPECT_EQ (encoded, 1u);
+    }
+}
 
 std::shared_ptr<detail::mesh_node_builder_state_t> mesh_state ()
 {

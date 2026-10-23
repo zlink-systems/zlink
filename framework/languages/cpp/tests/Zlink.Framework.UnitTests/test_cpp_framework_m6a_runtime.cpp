@@ -163,6 +163,8 @@ void verify_node_send_forwarding_allocations ()
             })
             == 1);
     std::vector<std::uint8_t> copied_target, encoded_header;
+    const auto target_copy_allocations = count_allocations ([&] { copied_target = target; });
+    std::vector<std::uint8_t> ().swap (copied_target);
     std::shared_ptr<const mesh::admitted_peer_t> peer;
     const auto argument_allocations = count_allocations ([&] {
         copied_target = target;
@@ -188,6 +190,21 @@ void verify_node_send_forwarding_allocations ()
                   "node send allocations observed=%zu allowed=%zu arguments=%zu result=%zu\n",
                   observed, allowed, argument_allocations, result_allocations);
     assert (observed <= allowed);
+    // Synchronous forwarding borrows the routing id until native submission;
+    // only the encoded header and the terminal task own new storage here.
+    const auto borrowed_arguments = argument_allocations - target_copy_allocations;
+    assert (observed == borrowed_arguments + result_allocations);
+    auto temporary_target = source.send_to_node_result (
+      bytes ("missing-forwarding-temporary"), {"Forwarding", "application/octet-stream", {}});
+    assert (temporary_target.await_ready ());
+    assert (temporary_target.result ().value () == zlink::submit_result_t::not_connected);
+    const auto admitted = descriptor ("temporary-admitted-target");
+    assert (source.topology ().admit (admitted, admitted.node_routing_id)
+            == mesh::peer_admission_result_t::admitted);
+    auto temporary_admitted_target = source.send_to_node_result (
+      bytes ("temporary-admitted-target"), {"Forwarding", "application/octet-stream", {}});
+    assert (temporary_admitted_target.await_ready ());
+    assert (temporary_admitted_target.result ().value () == zlink::submit_result_t::terminated);
 }
 
 void verify_node_request_submit_cost ()

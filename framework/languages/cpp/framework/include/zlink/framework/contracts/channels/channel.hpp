@@ -811,14 +811,14 @@ class route_client_t
            target_node_rid = std::move (target_node_rid), message_value] (
             const std::string &packet_name,
             const route_send_call_t::metadata_map_t &metadata) -> task_t<result_t<void>> {
-              return submit_send_erased (
-                state, router_channel_id, target_node_rid, packet_name,
-                std::type_index (typeid (TMessage)),
-                [message_value] (serializer_registry_t &serializers) {
-                    return serializers.template get<TMessage> ().serialize_with_content_type (
-                      *message_value);
-                },
-                metadata);
+              auto encode_payload = [message_value] (serializer_registry_t &serializers) {
+                  return serializers.template get<TMessage> ().serialize_with_content_type (
+                    *message_value);
+              };
+              // Erased submit consumes this encoder before its first suspension.
+              return submit_send_erased (state, router_channel_id, target_node_rid, packet_name,
+                                         std::type_index (typeid (TMessage)),
+                                         std::ref (encode_payload), metadata);
           });
     }
 
@@ -832,13 +832,13 @@ class route_client_t
           [state, channel_name = std::move (channel_name), message_value] (
             const std::string &packet_name,
             const route_send_call_t::metadata_map_t &metadata) -> task_t<result_t<void>> {
-              return submit_channel_send_erased (
-                state, channel_name, packet_name, std::type_index (typeid (TMessage)),
-                [message_value] (serializer_registry_t &serializers) {
-                    return serializers.template get<TMessage> ().serialize_with_content_type (
-                      *message_value);
-                },
-                metadata);
+              auto encode_payload = [message_value] (serializer_registry_t &serializers) {
+                  return serializers.template get<TMessage> ().serialize_with_content_type (
+                    *message_value);
+              };
+              return submit_channel_send_erased (state, channel_name, packet_name,
+                                                 std::type_index (typeid (TMessage)),
+                                                 std::ref (encode_payload), metadata);
           });
     }
 

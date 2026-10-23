@@ -1,10 +1,10 @@
 /* SPDX-License-Identifier: LicenseRef-zlink-License-1.0 */
 
 #include "../support/allocation_counter.hpp"
+
 #include "runtime/backend/raw_dealer_port.hpp"
 #include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/backend/raw_route_port.hpp"
-#include "runtime/backend/raw_binding_adapter.hpp"
 #include "runtime/messaging/request_deadline.hpp"
 #include "runtime/messaging/submit_result_mapper.hpp"
 #include "runtime/dispatch/coroutine_executor.hpp"
@@ -17,6 +17,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstdio>
 #include <atomic>
 #include <future>
 #include <chrono>
@@ -560,6 +561,48 @@ void verify_completion_only_wait_keeps_ordinary_record_unclaimed ()
     monitor.close ();
 }
 
+void verify_raw_send_uses_binding_owned_message_list ()
+{
+    using zlink::framework::tests::count_allocations;
+    zlink::context_t context;
+    zlink::router_socket_t source (context);
+    source.options ().linger (0ms);
+    backend::raw_route_port_t port (source);
+    const auto target = zlink::routing_id_t::from ("allocation-missing-peer");
+    const auto target_bytes = target.to_bytes ();
+    std::size_t direct_allocations = 0;
+    std::size_t framework_allocations = 0;
+    // The first pair warms the binding's existing operation storage. Both
+    // measurements then use the same parts and native failure outcome.
+    for (int pass = 0; pass < 2; ++pass) {
+        backend::raw_message_t direct_parts{{'h', 'e', 'a', 'd', 'e', 'r'}, {'b', 'o', 'd', 'y'}};
+        bool direct_not_connected = false;
+        direct_allocations = count_allocations ([&] {
+            try {
+                (void) source.send (target)
+                  .message (backend::materialize_binding_part (std::move (direct_parts[0])))
+                  .message (backend::materialize_binding_part (std::move (direct_parts[1])))
+                  .async ();
+            }
+            catch (const zlink::submit_error_t &error) {
+                direct_not_connected = error.result () == zlink::submit_result_t::not_connected;
+            }
+        });
+        assert (direct_not_connected);
+        backend::raw_message_t framework_parts{{'h', 'e', 'a', 'd', 'e', 'r'},
+                                               {'b', 'o', 'd', 'y'}};
+        framework_allocations = count_allocations ([&] {
+            auto submitted = port.submit_send (target_bytes, std::move (framework_parts));
+            assert (submitted.state == backend::raw_send_submission_state_t::immediate);
+            assert (submitted.immediate_result->value () == zlink::submit_result_t::not_connected);
+        });
+    }
+    std::fprintf (stderr, "raw send allocations direct=%zu framework=%zu\n", direct_allocations,
+                  framework_allocations);
+    assert (framework_allocations == direct_allocations);
+    port.close ();
+}
+
 void verify_ok_send_submissions_keep_unfinished_depth_at_zero ()
 {
     zlink::context_t context;
@@ -1001,6 +1044,7 @@ int main ()
 {
     zlink::framework::completion_owner_t completion_owner;
     verify_request_materializes_only_the_binding_message_list ();
+    verify_raw_send_uses_binding_owned_message_list ();
     verify_request_deadline_preserves_timeout_boundary ();
     verify_pending_send_route_removal_and_shutdown ();
     verify_immediate_request_has_no_framework_deadline ();
