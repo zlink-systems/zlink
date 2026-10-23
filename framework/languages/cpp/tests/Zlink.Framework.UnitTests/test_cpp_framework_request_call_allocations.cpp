@@ -6,6 +6,10 @@
 #include "runtime/locations/spot_address_resolvers.hpp"
 #include "runtime/mesh/mesh_node_runtime.hpp"
 #include "runtime/mesh/raw_mesh_node_owner.hpp"
+#include "runtime/locations/in_memory_store_providers.hpp"
+#include <zlink/framework.hpp>
+#include <thread>
+#include <atomic>
 #include "runtime_failure_fixture.hpp"
 #include <array>
 #include <cstdio>
@@ -44,6 +48,7 @@ struct layer_sizes_t
     std::size_t payload_state = 0;
     std::size_t message_state = 0;
     std::size_t admission_state = 0;
+    std::size_t transport_state = 0;
 };
 
 std::size_t only_allocation_size (const auto &action)
@@ -66,6 +71,8 @@ layer_sizes_t calibrate_layer_sizes ()
       only_allocation_size ([] { (void) fw::task_completion_source_t<zlink::message_t> (); });
     sizes.admission_state =
       only_allocation_size ([] { (void) fw::task_completion_source_t<void> (); });
+    sizes.transport_state =
+      only_allocation_size ([] { (void) fw::task_completion_source_t<transport_reply_t> (); });
     return sizes;
 }
 
@@ -75,6 +82,7 @@ struct layer_counts_t
     std::size_t payload_states = 0;
     std::size_t message_states = 0;
     std::size_t admission_sources = 0;
+    std::size_t transport_states = 0;
 };
 
 template <typename TAction>
@@ -91,6 +99,7 @@ layer_counts_t count_layers (const layer_sizes_t &sizes, TAction &&action)
         counts.payload_states += events[i].size == sizes.payload_state;
         counts.message_states += events[i].size == sizes.message_state;
         counts.admission_sources += events[i].size == sizes.admission_state;
+        counts.transport_states += events[i].size == sizes.transport_state;
     }
     return counts;
 }
@@ -499,4 +508,138 @@ TEST (RequestCallAllocations, HostNodeRequestAddsNoCoroutineAboveTheRawTask)
     EXPECT_EQ (pending->result ().value (), zlink::submit_result_t::not_found);
 }
 
+struct allocation_codec_t
+{
+    void register_framework_codecs (fw::codec_registration_context_t &context) const
+    {
+        context.add_serializer<payload_t> (
+          [] (const payload_t &payload) {
+              return fw::encoded_payload_t::from_string (std::to_string (payload.value));
+          },
+          [] (const fw::encoded_payload_t &payload) {
+              return payload_t{std::stoi (payload.to_string ())};
+          },
+          "x/y");
+    }
+};
+
+struct allocation_host_capture_t final : fw::hosted_service_t
+{
+    fw::route_client_t *client = nullptr;
+    fw::route_mesh_runtime_t *mesh = nullptr;
+    fw::framework_runtime_t *runtime = nullptr;
+    fw::task_t<void> start (fw::service_provider_t &services) override
+    {
+        client = &services.get_required<fw::route_client_t> ();
+        mesh = &services.get_required<fw::route_mesh_runtime_t> ();
+        runtime = &services.get_required<fw::framework_runtime_t> ();
+        co_return;
+    }
+    void stop () noexcept override {}
+};
+
+// The real app transport must not allocate an operation or a coroutine when
+// topology has already classified an Object Client as an invalid Node target.
+// Compare the reply-state sizes with the same route layer over an immediate
+// transport; this excludes codec/container sizes specific to this build.
+TEST (RequestCallAllocations, AppClassifiedNodeFailureAddsNoTransportReplyState)
+{
+    struct app_host_t
+    {
+        fw::app_t app = fw::app_t::create ();
+        allocation_host_capture_t *capture;
+        std::thread runner;
+        std::atomic<bool> exited{false};
+        app_host_t ()
+        {
+            auto service = std::make_unique<allocation_host_capture_t> ();
+            capture = service.get ();
+            app.add_hosted_service (std::move (service));
+        }
+        void start ()
+        {
+            runner = std::thread ([this] {
+                app.run (0, nullptr);
+                exited = true;
+            });
+            const auto deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+            while (!app.is_ready () && !exited.load ()
+                   && std::chrono::steady_clock::now () < deadline)
+                std::this_thread::yield ();
+            if (!app.is_ready ())
+                throw std::runtime_error ("allocation host failed to start");
+        }
+        ~app_host_t ()
+        {
+            if (runner.joinable ()) {
+                app.request_stop ();
+                runner.join ();
+            }
+        }
+    } target_host, source_host;
+    const auto target = zlink::routing_id_t::from ("allocation-client");
+    auto &target_options = target_host.app.add_zlink_framework ();
+    target_options.add_location_store (
+      std::make_shared<fw::runtime::in_memory_location_store_t> ());
+    target_options.add_route_mesh ("m")
+      .set_object_role (fw::object_role_t::client)
+      .listen ("tcp://127.0.0.1:7482")
+      .set_routing_id (target);
+    target_host.start ();
+    const auto endpoint =
+      target_host.capture->runtime->listener_status (fw::listener_kind_t::route_mesh, "m").endpoint;
+    auto &options = source_host.app.add_zlink_framework ();
+    options.codecs ().use (allocation_codec_t{});
+    options.add_route_mesh ("m")
+      .set_object_role (fw::object_role_t::none)
+      .listen ("tcp://127.0.0.1:7483")
+      .set_routing_id (zlink::routing_id_t::from ("allocation-source"))
+      .peer_connections ()
+      .connect (target, endpoint);
+    source_host.start ();
+    bool known_client = false;
+    const auto peer_deadline = std::chrono::steady_clock::now () + std::chrono::seconds (5);
+    while (std::chrono::steady_clock::now () < peer_deadline) {
+        const auto snapshot = source_host.capture->mesh->snapshot ("m");
+        if (std::any_of (snapshot.peers.begin (), snapshot.peers.end (), [&] (const auto &peer) {
+                return peer.node_rid == target && peer.state == fw::peer_state_t::ready;
+            })) {
+            known_client = true;
+            break;
+        }
+        std::this_thread::yield ();
+    }
+    ASSERT_TRUE (known_client);
+    auto *host = source_host.capture;
+    fw::serializer_registry_t serializers;
+    add_payload (serializers);
+    auto builder = fw::test::runtime_failure_builder ();
+    auto channel = fw::detail::channel_runtime_t::from (builder.message_bus ());
+    channel.bind_serializers (serializers);
+    channel.bind_mesh_node_transport ("m", {}, [] (const auto &, auto, auto) {
+        return fw::request_task_t<transport_reply_t> (
+          fw::result_t<transport_reply_t>::success (transport_reply_t::failure (
+            fw::framework_error_kind_t::not_found, "MeshNode request target was not found")));
+    });
+    auto reference = builder.route_client (serializers);
+    const auto sizes = calibrate_layer_sizes ();
+    std::optional<fw::request_task_t<payload_t>> pending;
+    auto measure = [&] (fw::route_client_t &client) {
+        auto call = client.request_to_node ("m", target, payload_t{});
+        auto counts = count_layers (sizes, [&] { pending.emplace (call.async<payload_t> ()); });
+        EXPECT_EQ (pending->result ().error_kind (), fw::framework_error_kind_t::not_found);
+        return counts;
+    };
+    (void) measure (reference);
+    (void) measure (*host->client);
+    const auto baseline = measure (reference);
+    const auto actual = measure (*host->client);
+    std::printf (
+      "app classified transport: states=%zu reference=%zu total=%zu reference_total=%zu\n",
+      actual.transport_states, baseline.transport_states, actual.total, baseline.total);
+    EXPECT_EQ (actual.transport_states, baseline.transport_states);
+    EXPECT_EQ (actual.message_states, baseline.message_states);
+    EXPECT_EQ (actual.payload_states, baseline.payload_states);
+    EXPECT_EQ (actual.admission_sources, baseline.admission_sources);
+}
 } // namespace

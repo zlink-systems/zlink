@@ -260,6 +260,13 @@ class mesh_node_runtime_t
     send_to_node (const zlink::routing_id_t &target,
                   const std::vector<zlink::message_t> &parts,
                   const std::map<std::string, std::string> &metadata);
+    request_task_t<result_t<runtime::messaging::message_parts_t>>
+    compose_node_request_reply (host::pending_operation_t operation,
+                                task_t<zlink::submit_result_t> submission);
+    request_task_t<result_t<runtime::messaging::message_parts_t>>
+    request_node_reply (const zlink::routing_id_t &target,
+                        std::vector<zlink::message_t> parts,
+                        std::chrono::milliseconds timeout);
     task_t<zlink::submit_result_t> request_to_node (const zlink::routing_id_t &target,
                                                     std::vector<zlink::message_t> parts,
                                                     host::pending_operation_t &operation_id,
@@ -607,10 +614,29 @@ class mesh_node_runtime_t
     classify_node_target_from_topology (const zlink::routing_id_t &target, bool &unknown) const;
     task_t<std::optional<zlink::submit_result_t>>
     classify_unknown_node_target (const zlink::routing_id_t &target) const;
-    task_t<zlink::submit_result_t> request_to_unknown_node (const zlink::routing_id_t &target,
-                                                            std::vector<zlink::message_t> parts,
-                                                            host::pending_operation_t &operation_id,
-                                                            std::chrono::milliseconds timeout);
+    task_t<std::optional<zlink::submit_result_t>>
+    lookup_unknown_node_target (zlink::routing_id_t target) const;
+    template <typename Classified, typename Known, typename Unknown>
+    auto dispatch_node_request (const zlink::routing_id_t &target,
+                                Classified &&classified,
+                                Known &&known,
+                                Unknown &&unknown) -> decltype (known ());
+    request_task_t<result_t<runtime::messaging::message_parts_t>>
+    request_unknown_node_reply (zlink::routing_id_t target,
+                                std::vector<zlink::message_t> parts,
+                                host::pending_operation_t operation,
+                                std::chrono::milliseconds timeout,
+                                task_t<std::optional<zlink::submit_result_t>> classification);
+    request_task_t<result_t<runtime::messaging::message_parts_t>>
+    await_node_request_submission (host::pending_operation_t operation,
+                                   task_t<zlink::submit_result_t> submission);
+
+    task_t<zlink::submit_result_t>
+    request_to_unknown_node (const zlink::routing_id_t &target,
+                             std::vector<zlink::message_t> parts,
+                             host::pending_operation_t &operation_id,
+                             std::chrono::milliseconds timeout,
+                             task_t<std::optional<zlink::submit_result_t>> classification);
     void configure_relocation_metric_context (
       runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t &wire,
       runtime::stateful::object_kind_t kind,

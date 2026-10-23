@@ -2529,6 +2529,7 @@ if(ZLINK_FRAMEWORK_CPP_BUILD_TESTS)
     "unit")
   target_use_zlink_gtest_main(test_cpp_framework_request_call_allocations)
   target_sources(test_cpp_framework_request_call_allocations PRIVATE
+    tests/Zlink.Framework.UnitTests/test_cpp_framework_request_transport.cpp
     tests/support/allocation_counter.cpp)
   target_include_directories(test_cpp_framework_request_call_allocations PRIVATE
     ${ZLINK_FRAMEWORK_CPP_RUNTIME_DIR}/protocol/generated/cpp)
