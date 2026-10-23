@@ -127,6 +127,44 @@ class SpotSubscribe : public testing::Test
     fw::serializer_registry_t serializers;
 };
 
+TEST_F (SpotSubscribe, ClosedTurnDoesNotEnterApplicationHandler)
+{
+    subscribe (channel, "closed-turn");
+    state->serial_queue =
+      std::make_shared<fw::runtime::serial_execution_queue_t> (*state->serial_executor);
+    std::latch worker_started{1};
+    std::latch release_worker{1};
+    ASSERT_TRUE (state->serial_executor->try_submit_internal ([&] {
+        worker_started.count_down ();
+        release_worker.wait ();
+    }));
+    worker_started.wait ();
+    std::shared_ptr<void> release_on_exit (nullptr, [&] (void *) { release_worker.count_down (); });
+
+    messaging::envelope_header_t header;
+    header.kind = messaging::message_kind_t::publish;
+    header.channel_name = channel;
+    header.topic = "closed-turn";
+    header.message_name = event_t::packet_name;
+    header.content_type = messaging::envelope_codec_t::default_content_type;
+    auto parts = messaging::envelope_codec_t{}.encode_raw_body_parts (
+      header, zlink::message_t::from (std::string ("{\"value\":1}")));
+    std::atomic_int handler_entries{0};
+    auto submitted = detail::spot_node_runtime_t (node).dispatch_subscription (
+      context, "closed-turn", parts.items (), provider, serializers,
+      [&] { handler_entries.fetch_add (1, std::memory_order_relaxed); });
+    node->lane.run ([this] { state->closed = true; }).get ();
+    // The admitted turn must observe the closed incarnation before handler entry.
+    release_on_exit.reset ();
+    ASSERT_TRUE (submitted);
+    ASSERT_TRUE (submitted.value ());
+    const auto result = submitted.value ()->result ();
+    EXPECT_EQ (0, handler_entries.load (std::memory_order_relaxed));
+    EXPECT_TRUE (subscriber->values.empty ());
+    ASSERT_FALSE (result);
+    EXPECT_EQ (fw::framework_error_kind_t::not_found, result.error_kind ());
+}
+
 TEST_F (SpotSubscribe, RuntimeTopicReachesNamedChannel)
 {
     const auto topic = std::string ("spot:") + std::to_string (7);
