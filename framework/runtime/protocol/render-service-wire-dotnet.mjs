@@ -61,6 +61,11 @@ const unwrapped = (reference, expression) =>
   main(types.get(reference.$ref)).op === "conditional-union"
     ? `${expression}!`
     : `${expression}.Value`;
+// The schema's `rid` bytes are a binding RoutingId on .NET (schema rid,
+// public binding RoutingId), so generated values keep the RoutingId that owns
+// the bytes instead of a second copy.
+const ROUTING_ID_TYPE = "rid";
+const isRoutingId = (t) => t.name === ROUTING_ID_TYPE;
 const optional = (f) => Boolean(f.when) || f.required === false;
 const fieldsDecl = (fs) =>
   fs.map((f) => `${typeOf(f.type, optional(f))} ${id(f.name)}`).join(", ");
@@ -83,7 +88,7 @@ function declaration(t) {
     case "enum":
       return `internal enum ${n} : ${intType(o.encoding)}\n{\n${o.values.map((v) => `    ${id(v.name)} = ${v.value}`).join(",\n")}\n}`;
     case "length-prefixed":
-      if (t.name === "rid")
+      if (isRoutingId(t))
         return `internal readonly record struct ${n}(RoutingId RoutingId) { internal ${n}(byte[] value) : this(global::Systems.Zlink.RoutingId.From(value)) {} internal ReadOnlySpan<byte> Value => RoutingId.ToBytes(); }`;
       return `internal readonly record struct ${n}(${o.content === "text" ? "string" : "byte[]"}${o.zeroLengthMeaning ? "?" : ""} Value);`;
     case "struct":
@@ -1338,14 +1343,14 @@ function typeMethods(t) {
       o.zeroLengthMeaning ? `if (length == 0) return new(null);` : "",
       o.content === "text"
         ? `if (bytes.Contains((byte)0)) throw Error("${t.name}: NUL");\n        return new(Utf8.GetString(bytes));`
-        : t.name === "rid"
+        : isRoutingId(t)
           ? `return new(RoutingId.From(bytes));`
           : `return new(bytes.ToArray());`,
     ].filter(Boolean);
     write = [
       o.content === "text"
         ? `var length = value.Value is null ? 0 : Utf8.GetByteCount(value.Value);`
-        : t.name === "rid"
+        : isRoutingId(t)
           ? `var bytes = value.Value; var length = bytes.Length;`
           : `var bytes = value.Value ?? Array.Empty<byte>(); var length = bytes.Length;`,
       o.content === "text"
