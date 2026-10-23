@@ -576,9 +576,10 @@ TEST (CppFrameworkRouteClientChannelRouting, NodeEnvelopeConversionDoesNotSuspen
     node_request_resumptions = 0;
     detail::set_runtime_execution_hooks (&hooks);
     verify_mesh_request_admission (false);
-    // The public typed decoder still awaits the physical reply. Envelope
-    // conversion propagates that same terminal without a second suspension.
-    EXPECT_EQ (node_request_resumptions.load (), 1u);
+    // Envelope and typed decoding both project the physical terminal where it
+    // completes (hot path E5): no Framework layer above the transport resumes
+    // through the runtime scheduler; only the caller's own await would.
+    EXPECT_EQ (node_request_resumptions.load (), 0u);
 }
 
 TEST (CppFrameworkRouteClientChannelRouting, SpotRequestPublishesItsOwnAdmissionBeforeReply)

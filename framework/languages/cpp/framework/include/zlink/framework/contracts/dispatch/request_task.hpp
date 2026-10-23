@@ -17,6 +17,15 @@ struct request_admission_source_t
 {
 };
 
+// Select the request_task_t constructors that project a selected request:
+// for an internal layer, and for the public reply of a request call.
+struct request_projection_t
+{
+};
+struct public_request_projection_t
+{
+};
+
 // This signal connects only the selected submission of the same operation.
 // Ordinary nested request awaits do not publish admission to their caller.
 template <typename T> struct request_submission_t
@@ -121,11 +130,7 @@ template <typename TReply> class request_task_t : public task_t<TReply>
                   admitted->complete (result_t<void>::success ());
               reply->complete (result);
           });
-        auto stage = _admitted->task ();
-        detail::observe_task_terminal (stage, [reply = this->_state] (const auto &result) {
-            if (!result)
-                reply->complete (detail::result_access_t::failure<TReply> (result.exception ()));
-        });
+        end_at_admission_failure ();
     }
 
     request_task_t (request_task_t reply,
@@ -142,6 +147,73 @@ template <typename TReply> class request_task_t : public task_t<TReply>
   private:
     friend struct detail::request_task_access_t;
     template <typename> friend class request_task_t;
+
+    /* The reply of a selected request in this reply type (hot path E4·E5:
+     * one operation, one terminal). The selected request keeps its admission;
+     * its physical terminal completes this reply through `project`, which owns
+     * what the selected producer borrows until that terminal. This reply is
+     * also the physical reply: no producer of its own outlives it. */
+    template <typename TInput, typename TProject>
+    request_task_t (detail::request_projection_t,
+                    request_task_t<TInput> &selected,
+                    TProject &&project) :
+        task_t<TReply> (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
+        _physical_reply (this->_state),
+        _admitted (selected._admitted)
+    {
+        detail::observe_task_terminal (
+          selected._physical_reply,
+          [reply = this->_state,
+           project = std::forward<TProject> (project)] (const auto &result) mutable {
+              try {
+                  reply->complete (project (result));
+              }
+              catch (...) {
+                  reply->complete (detail::current_exception_result<TReply> ());
+              }
+          });
+    }
+
+    /* The public reply of a request call over a selected request. Its physical
+     * reply is the selected terminal in this reply type, so a nested owner can
+     * still wait for the whole operation; the public reply also ends at an
+     * admission failure (submit/completion §9). One observer completes both. */
+    template <typename TInput, typename TProject>
+    request_task_t (detail::public_request_projection_t,
+                    request_task_t<TInput> &selected,
+                    TProject &&project) :
+        task_t<TReply> (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
+        _physical_reply (std::make_shared<detail::application_task_shared_state_t<TReply>> ()),
+        _admitted (selected._admitted)
+    {
+        detail::observe_task_terminal (
+          selected._physical_reply,
+          [reply = this->_state, physical = _physical_reply._state,
+           project = std::forward<TProject> (project)] (const auto &result) mutable {
+              auto projected = [&] () -> result_t<TReply> {
+                  try {
+                      return project (result);
+                  }
+                  catch (...) {
+                      return detail::current_exception_result<TReply> ();
+                  }
+              }();
+              physical->complete (projected);
+              reply->complete (std::move (projected));
+          });
+        end_at_admission_failure ();
+    }
+
+    // Submit/completion §9: an admission failure ends the public reply before
+    // the physical terminal. A later terminal finds the reply already complete.
+    void end_at_admission_failure ()
+    {
+        auto stage = _admitted->task ();
+        detail::observe_task_terminal (stage, [reply = this->_state] (const auto &result) {
+            if (!result)
+                reply->complete (detail::result_access_t::failure<TReply> (result.exception ()));
+        });
+    }
 
     task_t<TReply> physical_reply () const
     {
@@ -170,6 +242,21 @@ struct request_task_access_t
         return task._admitted;
     }
 
+    template <typename TOutput, typename TInput, typename TProject>
+    static request_task_t<TOutput> project (request_task_t<TInput> &selected, TProject &&project)
+    {
+        return request_task_t<TOutput> (request_projection_t{}, selected,
+                                        std::forward<TProject> (project));
+    }
+
+    template <typename TOutput, typename TInput, typename TProject>
+    static request_task_t<TOutput> project_public (request_task_t<TInput> &selected,
+                                                   TProject &&project)
+    {
+        return request_task_t<TOutput> (public_request_projection_t{}, selected,
+                                        std::forward<TProject> (project));
+    }
+
     template <typename T>
     static request_task_t<T> reschedule (request_task_t<T> task, task_scheduler_t scheduler)
     {
@@ -188,6 +275,22 @@ template <typename T> request_submission_t<T> request_submission (request_task_t
 {
     auto admitted = pending.admitted ();
     return {request_task_access_t::physical_reply (pending), std::move (admitted)};
+}
+
+/* Projects the selected request's physical terminal into another reply type
+ * without a coroutine or a second admission source. Internal layers return
+ * this projection; the public call adds its public reply once. */
+template <typename TOutput, typename TInput, typename TProject>
+request_task_t<TOutput> project_request_reply (request_task_t<TInput> &selected, TProject &&project)
+{
+    return request_task_access_t::project<TOutput> (selected, std::forward<TProject> (project));
+}
+
+template <typename TOutput, typename TInput, typename TProject>
+request_task_t<TOutput> public_request_reply (request_task_t<TInput> &selected, TProject &&project)
+{
+    return request_task_access_t::project_public<TOutput> (selected,
+                                                           std::forward<TProject> (project));
 }
 
 template <typename T>
