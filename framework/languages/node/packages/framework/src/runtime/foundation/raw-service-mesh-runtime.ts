@@ -112,7 +112,7 @@ export interface RawServiceIngressRecord {
   readonly sourceNodeGeneration?: bigint;
   readonly sourceRoute?: Uint8Array;
   readonly requestSequence?: bigint;
-  readonly reply?: (parts: readonly Uint8Array[]) => void;
+  readonly reply?: (parts: readonly (Uint8Array | string)[]) => void;
   readonly parts: readonly Buffer[];
   readonly applicationJobOwner?: ApplicationIngressRecordOwner;
 }
@@ -798,7 +798,7 @@ export class RawServiceMeshRuntime {
       RawServiceIngressRecord,
       'sourceRoutingId' | 'sourceRoute' | 'requestSequence' | 'reply'
     >,
-    parts: readonly Uint8Array[]
+    parts: readonly (Uint8Array | string)[]
   ): void {
     if (record.requestSequence === undefined) {
       throw new TypeError('Service reply requires a request sequence.');

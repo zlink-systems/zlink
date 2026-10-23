@@ -126,6 +126,7 @@ import {
   decodeMultipartApplicationParts,
   decodeMultipartParts,
   encodeMultipartApplicationPayload,
+  encodeMultipartPayload,
   ServiceWireProtocolError,
   type ServiceApplicationPayload
 } from '../../foundation/service-wire-m6a-codec';
@@ -2454,7 +2455,7 @@ function decodeMultipartRecord(
         if (values.length === 0) return SubmitResult.InvalidState;
         runtime.replyService(
           record as Parameters<RawServiceMeshRuntime['replyService']>[0],
-          values.map(messageBytesView)
+          values.map(messagePartView)
         );
         return SubmitResult.Ok;
       },
@@ -2768,20 +2769,7 @@ export function requestFailureResult(error: unknown): RawServiceRequestResult {
 function encodeMultipart(parts: MessageLike | readonly MessageLike[]) {
   const values = Array.isArray(parts) ? parts : [parts];
   if (values.length === 0) throw new TypeError('Multipart payload must contain at least one part.');
-  //  messageBytesView aliases the caller's buffer; the parts are consumed
-  //  synchronously by the copy loop below and never retained.
-  const bytes = values.map(messageBytesView);
-  let size = 4;
-  for (const part of bytes) size += 4 + part.byteLength;
-  const payload = Buffer.alloc(size);
-  payload.writeUInt32BE(bytes.length, 0);
-  let offset = 4;
-  for (const part of bytes) {
-    payload.writeUInt32BE(part.byteLength, offset);
-    offset += 4;
-    payload.set(part, offset);
-    offset += part.byteLength;
-  }
+  const payload = encodeMultipartPayload(values.map(messagePartView));
   return {
     packetName: MULTIPART_PACKET_NAME,
     contentType: MULTIPART_CONTENT_TYPE,
@@ -2793,7 +2781,7 @@ function encodeMultipartApplicationFrame(parts: MessageLike | readonly MessageLi
   const values = Array.isArray(parts) ? parts : [parts];
   if (values.length === 0) throw new TypeError('Multipart payload must contain at least one part.');
   return encodeMultipartApplicationPayload(
-    values.map(messageBytesView),
+    values.map(messagePartView),
     MULTIPART_PACKET_NAME,
     MULTIPART_CONTENT_TYPE
   );
@@ -2811,11 +2799,10 @@ function borrowMultipartPart(part: Buffer): Buffer {
   return part;
 }
 
-function messageBytesView(value: MessageLike): Uint8Array {
+function messagePartView(value: MessageLike): Uint8Array | string {
   if (typeof value === 'object' && 'data' in value) {
     return value.data();
   }
-  if (typeof value === 'string') return Buffer.from(value);
   return value;
 }
 

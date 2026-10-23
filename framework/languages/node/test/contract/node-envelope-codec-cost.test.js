@@ -65,9 +65,9 @@ test('channel request and reply stay within the final parts allocation budget', 
       1, 'codec', 'Packet', data, 2000000000000, undefined, codecs,
       '00112233445566778899aabbccddeeff', false
     );
-    const request = codec.decodeChannelHeader(parts.map(part => ZLinkBufferMessage.fromOwned(part)), false);
+    const request = codec.decodeChannelHeader(parts.map(part => typeof part === 'string' ? ZLinkBufferMessage.from(part) : ZLinkBufferMessage.fromOwned(part)), false);
     const reply = codec.encodeChannelReplyParts(request, data, codecs);
-    const response = codec.decodeChannelEnvelope(reply.map(part => ZLinkBufferMessage.fromOwned(part)), undefined, false);
+    const response = codec.decodeChannelEnvelope(reply.map(part => typeof part === 'string' ? ZLinkBufferMessage.from(part) : ZLinkBufferMessage.fromOwned(part)), undefined, false);
     return codec.decodeChannelPayload(response);
   };
   for (let index = 0; index < 1000; index++) roundtrip();

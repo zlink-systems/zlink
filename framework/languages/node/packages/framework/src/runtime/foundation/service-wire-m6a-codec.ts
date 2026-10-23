@@ -200,31 +200,56 @@ export function encodeApplicationPayload(payload: ServiceApplicationPayload): Bu
  * the single ownership copy needed for the outbound frame.
  */
 export function encodeMultipartApplicationPayload(
-  parts: readonly Uint8Array[],
+  parts: readonly (Uint8Array | string)[],
   packetName: string,
   contentType: string
 ): Buffer {
+  const multipartLength = multipartPayloadLength(parts);
+  const result = allocateApplicationPayload(packetName, contentType, multipartLength);
+  writeMultipartPayload(result, result.byteLength - multipartLength, parts);
+  return result;
+}
+
+/** Encodes bare multipart bytes with the same writer as application frames. */
+export function encodeMultipartPayload(parts: readonly (Uint8Array | string)[]): Buffer {
+  const result = Buffer.alloc(multipartPayloadLength(parts));
+  writeMultipartPayload(result, 0, parts);
+  return result;
+}
+
+function multipartPartLength(part: Uint8Array | string): number {
+  return typeof part === 'string' ? Buffer.byteLength(part, 'utf8') : part.byteLength;
+}
+
+function multipartPayloadLength(parts: readonly (Uint8Array | string)[]): number {
   if (parts.length === 0) fail('Multipart payload must contain at least one part.');
   if (parts.length > MAX_U32) fail('Multipart part count exceeds u32.');
-  let multipartLength = 4;
+  let length = 4;
   for (let index = 0; index < parts.length; index += 1) {
-    const part = parts[index]!;
-    if (part.byteLength > MAX_U32) fail('Multipart part exceeds u32.');
-    multipartLength += 4 + part.byteLength;
-    if (multipartLength > MAX_U32) fail('Multipart payload exceeds u32.');
+    const partLength = multipartPartLength(parts[index]!);
+    if (partLength > MAX_U32) fail('Multipart part exceeds u32.');
+    length += 4 + partLength;
+    if (length > MAX_U32) fail('Multipart payload exceeds u32.');
   }
-  const result = allocateApplicationPayload(packetName, contentType, multipartLength);
-  let offset = result.byteLength - multipartLength;
+  return length;
+}
+
+function writeMultipartPayload(
+  result: Buffer,
+  offset: number,
+  parts: readonly (Uint8Array | string)[]
+): void {
   result.writeUInt32BE(parts.length, offset);
   offset += 4;
   for (let index = 0; index < parts.length; index += 1) {
     const part = parts[index]!;
-    result.writeUInt32BE(part.byteLength, offset);
+    const length = multipartPartLength(part);
+    result.writeUInt32BE(length, offset);
     offset += 4;
-    result.set(part, offset);
-    offset += part.byteLength;
+    if (typeof part === 'string') result.write(part, offset, length, 'utf8');
+    else result.set(part, offset);
+    offset += length;
   }
-  return result;
 }
 
 function allocateApplicationPayload(

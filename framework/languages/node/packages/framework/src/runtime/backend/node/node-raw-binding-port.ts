@@ -240,7 +240,7 @@ class NodeRawRouterPort extends NodeRawSocketPort<RouterSocket> implements ZLink
   private readonly replyParts = (
     targetRid: BindingRoutingId,
     replyToken: ReplyToken,
-    parts: readonly Uint8Array[]
+    parts: readonly (Uint8Array | string)[]
   ) => {
     // The receive record keeps the binding RoutingId it was delivered with,
     // so the reply addresses that route without rebuilding the identity.
@@ -446,7 +446,7 @@ function appendRequestParts(
 
 function appendReplyParts(
   operation: ReplyOperation,
-  parts: readonly Uint8Array[]
+  parts: readonly (Uint8Array | string)[]
 ): ReplySubmitOperation {
   requireParts(parts);
   let next = operation.message(parts[0]);
@@ -456,16 +456,16 @@ function appendReplyParts(
   return next;
 }
 
-function requireParts(parts: readonly Uint8Array[]): [Uint8Array, ...Uint8Array[]] {
+function requireParts<T extends Uint8Array | string>(parts: readonly T[]): [T, ...T[]] {
   if (parts.length === 0)
     throw new TypeError('Raw multipart operation requires at least one part.');
-  return parts as [Uint8Array, ...Uint8Array[]];
+  return parts as [T, ...T[]];
 }
 
 type RawReceivedReply = (
   targetRid: BindingRoutingId,
   replyToken: ReplyToken,
-  parts: readonly Uint8Array[]
+  parts: readonly (Uint8Array | string)[]
 ) => void;
 
 const EMPTY_SOURCE_ROUTE = Buffer.alloc(0);
@@ -480,7 +480,7 @@ class NodeRawReceivedRecord implements ZLinkRawReceivedRecord {
   readonly sourceRoute: Uint8Array;
   readonly routeGeneration: bigint;
   readonly requestSeq?: bigint;
-  readonly reply?: (parts: readonly Uint8Array[]) => void;
+  readonly reply?: (parts: readonly (Uint8Array | string)[]) => void;
   readonly parts: readonly Buffer[];
 
   constructor(
