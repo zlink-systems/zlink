@@ -23,6 +23,7 @@ struct outcome
 {
     bool accepted{};
     codec::error_code error{codec::error_code::ok};
+    bool decoded{};
 };
 
 codec::codec_context_t maximum_codec_context ()
@@ -150,9 +151,9 @@ exact_frames (Result decoded, Encode encode, const std::vector<std::vector<std::
         return {false, decoded.error};
     const auto encoded = encode (decoded.value);
     if (!encoded)
-        return {false, encoded.error};
+        return {false, encoded.error, true};
     return {encoded.value == input,
-            encoded.value == input ? codec::error_code::ok : codec::error_code::constraint};
+            encoded.value == input ? codec::error_code::ok : codec::error_code::constraint, true};
 }
 
 template <class Result> outcome encoded (Result result, const std::vector<std::uint8_t> &input)
@@ -172,6 +173,25 @@ outcome command (std::uint8_t id,
             return exact_frames (
               codec::decode_nodeSend_16_frames (frames, context),
               [&] (const auto &value) { return codec::encode_nodeSend_16_frames (value, context); },
+              frames);
+        case 21:
+            return exact_frames (
+              codec::decode_spotSend_21_frames (frames, context),
+              [&] (const auto &value) { return codec::encode_spotSend_21_frames (value, context); },
+              frames);
+        case 22:
+            return exact_frames (
+              codec::decode_spotRequest_22_frames (frames, context),
+              [&] (const auto &value) {
+                  return codec::encode_spotRequest_22_frames (value, context);
+              },
+              frames);
+        case 25:
+            return exact_frames (
+              codec::decode_actorRequest_25_frames (frames, context),
+              [&] (const auto &value) {
+                  return codec::encode_actorRequest_25_frames (value, context);
+              },
               frames);
         case 24:
             return exact_frames (
@@ -590,6 +610,21 @@ int main ()
     const auto protocolRoot = indexPath.parent_path ().parent_path ().parent_path ();
     bool passed = true;
     const auto context = maximum_codec_context ();
+
+    const auto stateful = load_json (protocolRoot / "golden/stateful-message-v1.json");
+    if (stateful.at ("valid").size () != 8 || stateful.at ("invalid").size () != 4)
+        throw std::runtime_error ("stateful fixture coverage mismatch");
+    for (const char *section : {"valid", "invalid"}) {
+        for (const auto &vector : stateful.at (section)) {
+            const auto result = command (vector.at ("commandId").get<std::uint8_t> (),
+                                         bytes (stateful, vector), context);
+            const bool expected_valid = std::string_view (section) == "valid";
+            if (expected_valid ? !result.accepted : result.decoded) {
+                std::cerr << "stateful vector failed: " << vector.at ("name") << '\n';
+                passed = false;
+            }
+        }
+    }
 
     const auto close_fixture = load_json (protocolRoot / "golden/bound-session-close-v1.json");
     const auto close_bytes =
