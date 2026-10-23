@@ -624,7 +624,6 @@ class mesh_node_runtime_t
     request_task_t<result_t<runtime::messaging::message_parts_t>>
     request_unknown_node_reply (zlink::routing_id_t target,
                                 std::vector<zlink::message_t> parts,
-                                host::pending_operation_t operation,
                                 std::chrono::milliseconds timeout,
                                 task_t<std::optional<zlink::submit_result_t>> classification);
     request_task_t<result_t<runtime::messaging::message_parts_t>>

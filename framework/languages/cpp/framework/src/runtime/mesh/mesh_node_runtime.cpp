@@ -4314,7 +4314,7 @@ try {
           return compose_node_request_reply (operation, std::move (submission));
       },
       [&] (auto classification) {
-          return request_unknown_node_reply (target, std::move (parts), {}, timeout,
+          return request_unknown_node_reply (target, std::move (parts), timeout,
                                              std::move (classification));
       });
 }
@@ -4325,12 +4325,12 @@ catch (...) {
 request_task_t<node_reply_t> mesh_node_runtime_t::request_unknown_node_reply (
   zlink::routing_id_t target,
   std::vector<zlink::message_t> parts,
-  host::pending_operation_t operation,
   std::chrono::milliseconds timeout,
   task_t<std::optional<zlink::submit_result_t>> classification)
 {
     if (const auto classified = co_await classification)
         co_return node_submission_failure (*classified);
+    host::pending_operation_t operation;
     auto submission = _node->request_to_node (target, std::move (parts), operation, timeout);
     co_return co_await detail::request_submission (
       compose_node_request_reply (operation, std::move (submission)));
