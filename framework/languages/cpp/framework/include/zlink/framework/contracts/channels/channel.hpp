@@ -804,9 +804,9 @@ class route_client_t
         return route_send_call_t (
           detail::message_name<TMessage> (),
           [state, router_channel_id = std::move (router_channel_id),
-           target_node_rid = std::move (target_node_rid), message_value] (
-            const std::string &packet_name,
-            const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
+           target_node_rid = std::move (target_node_rid),
+           message_value] (const std::string &packet_name,
+                           const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
               auto encode_payload = [message_value] (serializer_registry_t &serializers) {
                   return serializers.template get<TMessage> ().serialize_with_content_type (
                     *message_value);
@@ -825,9 +825,9 @@ class route_client_t
         auto message_value = std::make_shared<TMessage> (std::move (message));
         return route_send_call_t (
           detail::message_name<TMessage> (),
-          [state, channel_name = std::move (channel_name), message_value] (
-            const std::string &packet_name,
-            const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
+          [state, channel_name = std::move (channel_name),
+           message_value] (const std::string &packet_name,
+                           const route_send_call_t::metadata_map_t &metadata) -> task_t<void> {
               auto encode_payload = [message_value] (serializer_registry_t &serializers) {
                   return serializers.template get<TMessage> ().serialize_with_content_type (
                     *message_value);
