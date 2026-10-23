@@ -630,6 +630,76 @@ TEST (LocalEnqueueAllocations, PendingRecordedSourceKeepsItsInputAndFailure)
     }
 }
 
+TEST (LocalEnqueueAllocations, IdleActorNotificationAddsOnlyMailboxAndClaimStorage)
+{
+    using namespace fw;
+    using namespace fw::runtime;
+    stateful_spot_fixture_t fixture (serial_lane_policy_t::spot_wide ());
+    auto &runtime = fixture.runtime;
+    auto &objects = runtime->objects ();
+    auto &dispatch = host::public_host_runtime_test_access_t::stateful_dispatch (*runtime);
+    const auto idle = [&] {
+        auto pending = runtime->dispatch_ready ([] (const auto &, const auto &, auto) {});
+        ASSERT_TRUE (pending.await_ready ());
+        EXPECT_EQ (pending.result ().value (), 0u);
+    };
+    const auto inventory = [&] {
+        auto pending = objects.inventory_async ();
+        ASSERT_TRUE (pending.await_ready ());
+        const auto owners = pending.await_resume ();
+        EXPECT_FALSE (owners.empty ());
+    };
+    idle ();
+    inventory ();
+    const auto empty = tests::measure_allocations (idle);
+    const auto inventory_before = tests::measure_allocations (inventory);
+    auto actor = runtime->create_actor ("player", "actor");
+    const auto owners = objects.inventory_async ().result ().value ();
+    const auto found = std::find_if (owners.begin (), owners.end (), [] (const auto &owner) {
+        return owner.owner.kind == stateful::object_kind_t::actor && owner.owner.key == "actor";
+    });
+    ASSERT_NE (found, owners.end ());
+    const auto object = found->owner;
+    idle ();
+    inventory ();
+    const auto inventory_after = tests::measure_allocations (inventory);
+    const auto measured = tests::measure_allocations (idle);
+    // Calibrate the owning APIs and the callback's captured input on this ABI.
+    // Forwarding their ready result must not add another coroutine or result state.
+    const auto claim = tests::measure_allocations ([&] {
+        std::function<void ()> before;
+        std::string stable_type;
+        const auto result = dispatch.try_claim (object, &before, &stable_type);
+        EXPECT_EQ (result.first, stateful::stateful_error_t::none);
+        EXPECT_FALSE (result.second.has_value ());
+    });
+    const auto notification = tests::measure_allocations ([&] {
+        auto pending = runtime->transport ().mailbox ().notify_stateful_ready (
+          object.key, [weak = runtime->weak_from_this (), object] (const auto &callback) {
+              return weak.lock () && !object.key.empty () && static_cast<bool> (callback);
+          });
+        ASSERT_TRUE (pending.await_ready ());
+        EXPECT_FALSE (pending.result ().value ());
+    });
+    const auto result = tests::measure_allocations ([] {
+        const task_t<bool> ready (result_t<bool>::success (false));
+        EXPECT_TRUE (ready.await_ready ());
+    });
+    const auto expected_count =
+      empty.count + inventory_after.count + claim.count + notification.count + result.count;
+    const auto expected_bytes =
+      empty.bytes + inventory_after.bytes + claim.bytes + notification.bytes + result.bytes;
+    std::printf ("idle Actor notification: actual=%zu/%zu expected=%zu/%zu; "
+                 "inventory delta=%zu/%zu claim=%zu/%zu mailbox=%zu/%zu result=%zu/%zu\n",
+                 measured.count, measured.bytes, expected_count - inventory_before.count,
+                 expected_bytes - inventory_before.bytes,
+                 inventory_after.count - inventory_before.count,
+                 inventory_after.bytes - inventory_before.bytes, claim.count, claim.bytes,
+                 notification.count, notification.bytes, result.count, result.bytes);
+    EXPECT_LE (measured.count + inventory_before.count, expected_count);
+    EXPECT_LE (measured.bytes + inventory_before.bytes, expected_bytes);
+}
+
 TEST (LocalEnqueueAllocations, StatefulSpotDrainRecordContinuationStaysWithinRecordStorage)
 {
     using namespace fw;

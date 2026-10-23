@@ -7363,13 +7363,18 @@ task_t<std::size_t> public_host_runtime_t::dispatch_ready (
 
 task_t<bool> public_host_runtime_t::notify_stateful_owner (const stateful::object_ref_t &object)
 {
-    if (object.kind != stateful::object_kind_t::actor)
-        co_return false;
-    co_return co_await _transport->mailbox ().notify_stateful_ready (
-      object.key, [weak = weak_from_this (), object] (const auto &dispatch) {
-          const auto host = weak.lock ();
-          return host && host->claim_stateful_owner (object, dispatch);
-      });
+    try {
+        if (object.kind != stateful::object_kind_t::actor)
+            return task_t<bool> (result_t<bool>::success (false));
+        return _transport->mailbox ().notify_stateful_ready (
+          object.key, [weak = weak_from_this (), object] (const auto &dispatch) {
+              const auto host = weak.lock ();
+              return host && host->claim_stateful_owner (object, dispatch);
+          });
+    }
+    catch (...) {
+        return task_t<bool> (detail::current_exception_result<bool> ());
+    }
 }
 
 task_t<bool> public_host_runtime_t::dispatch_stateful_owner (
