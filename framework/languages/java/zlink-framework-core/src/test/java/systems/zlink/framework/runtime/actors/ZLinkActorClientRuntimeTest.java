@@ -49,6 +49,7 @@ import systems.zlink.framework.runtime.locations.ZLinkRegisteredLocationStores;
 import systems.zlink.framework.runtime.locations.ZLinkStoreLocationResolvers;
 import systems.zlink.framework.runtime.messaging.OneWayTestStatus;
 import systems.zlink.framework.runtime.messaging.ZLinkJsonMessageSerializer;
+import systems.zlink.framework.runtime.streams.ZLinkStreamFrameCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeader;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderCodec;
 import systems.zlink.framework.runtime.streams.ZLinkStreamHeaderFlag;
@@ -69,6 +70,100 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Consumer;
 
 final class ZLinkActorClientRuntimeTest {
+    @Test
+    void actorErrorPayloadFollowsSharedVectors() throws Exception {
+        var current = java.nio.file.Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        while (current != null
+                && !java.nio.file.Files.isRegularFile(
+                        current.resolve("runtime/conformance/actor-error-payload-v1.json")))
+            current = current.getParent();
+        if (current == null) throw new IllegalStateException("Actor Error fixture was not found");
+        var fixture =
+                new com.fasterxml.jackson.databind.ObjectMapper()
+                        .readTree(
+                                java.nio.file.Files.readString(
+                                        current.resolve(
+                                                "runtime/conformance/actor-error-payload-v1.json")));
+        for (var vector : fixture.get("cases")) {
+            var parts = new java.util.ArrayList<Message>();
+            for (var part : vector.get("parts"))
+                parts.add(Message.from(java.util.HexFormat.of().parseHex(part.asText())));
+            var expected = ZLinkFrameworkErrorKind.fromValue(vector.get("expectedKind").asInt());
+            try {
+                var typed =
+                        assertThrows(
+                                ZLinkFrameworkException.class,
+                                () ->
+                                        ZLinkActorReplyDecoder.decode(
+                                                parts,
+                                                new ZLinkJsonMessageSerializer(),
+                                                Pong.class));
+                assertEquals(expected, typed.kind(), vector.get("id").asText());
+                var terminal =
+                        assertThrows(
+                                ZLinkFrameworkException.class,
+                                () -> ZLinkActorReplyDecoder.decodeTerminal(parts));
+                assertEquals(expected, terminal.kind(), vector.get("id").asText());
+                if (vector.get("valid").asBoolean()) {
+                    assertEquals(vector.get("message").asText(), typed.getMessage());
+                    assertEquals(vector.get("message").asText(), terminal.getMessage());
+                }
+            } finally {
+                parts.forEach(Message::close);
+            }
+        }
+    }
+
+    @Test
+    void actorReplyDecoderFollowsSharedFramingVectors() throws Exception {
+        var current = java.nio.file.Path.of(System.getProperty("user.dir")).toAbsolutePath();
+        while (current != null
+                && !java.nio.file.Files.isRegularFile(
+                        current.resolve("runtime/conformance/actor-reply-framing-v1.json"))) {
+            current = current.getParent();
+        }
+        if (current == null) throw new IllegalStateException("Actor reply fixture was not found");
+        var fixture =
+                new com.fasterxml.jackson.databind.ObjectMapper()
+                        .readTree(
+                                java.nio.file.Files.readString(
+                                        current.resolve(
+                                                "runtime/conformance/actor-reply-framing-v1.json")));
+        for (var vector : fixture.get("cases")) {
+            var parts = new java.util.ArrayList<Message>();
+            for (var part : vector.get("parts")) {
+                parts.add(Message.from(java.util.HexFormat.of().parseHex(part.asText())));
+            }
+            try {
+                if (vector.get("accepted").asBoolean()) {
+                    assertEquals(
+                            "pong",
+                            ZLinkActorReplyDecoder.decode(
+                                            parts, new ZLinkJsonMessageSerializer(), Pong.class)
+                                    .value());
+                    ZLinkActorReplyDecoder.decodeTerminal(parts);
+                } else {
+                    var typed =
+                            assertThrows(
+                                    ZLinkFrameworkException.class,
+                                    () ->
+                                            ZLinkActorReplyDecoder.decode(
+                                                    parts,
+                                                    new ZLinkJsonMessageSerializer(),
+                                                    Pong.class));
+                    assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, typed.kind());
+                    var terminal =
+                            assertThrows(
+                                    ZLinkFrameworkException.class,
+                                    () -> ZLinkActorReplyDecoder.decodeTerminal(parts));
+                    assertEquals(ZLinkFrameworkErrorKind.PROTOCOL_ERROR, terminal.kind());
+                }
+            } finally {
+                parts.forEach(Message::close);
+            }
+        }
+    }
+
     @Test
     void disconnectedApplicationRequestPreservesTerminalWithoutResubmission() {
         RequestFailingSpotNode node = new RequestFailingSpotNode(RequestResult.NOT_CONNECTED);
@@ -702,8 +797,9 @@ final class ZLinkActorClientRuntimeTest {
                         "Pong",
                         Map.of());
         return List.of(
-                Message.from(ZLinkStreamHeaderCodec.encode(header)),
-                Message.from(serializer.serialize(new Pong(value)).bytes()));
+                Message.from(
+                        ZLinkStreamFrameCodec.encode(
+                                header, serializer.serialize(new Pong(value)).bytes())));
     }
 
     private static List<Message> streamReply(ZLinkStreamCodec codec, String value) {
@@ -716,8 +812,9 @@ final class ZLinkActorClientRuntimeTest {
                         "Pong",
                         Map.of());
         return List.of(
-                Message.from(ZLinkStreamHeaderCodec.encode(header)),
-                Message.from(value.getBytes(StandardCharsets.UTF_8)));
+                Message.from(
+                        ZLinkStreamFrameCodec.encode(
+                                header, value.getBytes(StandardCharsets.UTF_8))));
     }
 
     private static List<Message> errorReply(String body) {
@@ -730,8 +827,9 @@ final class ZLinkActorClientRuntimeTest {
                         "",
                         Map.of());
         return List.of(
-                Message.from(ZLinkStreamHeaderCodec.encode(header)),
-                Message.from(body.getBytes(StandardCharsets.UTF_8)));
+                Message.from(
+                        ZLinkStreamFrameCodec.encode(
+                                header, body.getBytes(StandardCharsets.UTF_8))));
     }
 
     private record Ping(String value) {}
