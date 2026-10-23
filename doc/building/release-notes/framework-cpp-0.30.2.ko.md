@@ -4,6 +4,10 @@
 
 Framework 0.30.2은 C++ binding 1.20.0과 Core 1.20.0을 사용합니다.
 
+## 호환성 변경
+
+- 자기 RouteMesh의 `is_ready`는 host가 `serving`일 때만 `true`입니다. 0.30.1은 이 값을 Location Store row로 판정해 hosted service가 시작하는 동안에도 `true`가 될 수 있었습니다. hosted service 시작은 host가 `serving`으로 가기 전에 끝나야 하므로, `start()` 안에서 자기 mesh의 준비를 기다리면 startup이 끝나지 않습니다. 준비를 확인하는 코드는 `start()`가 기다리지 않는 별도 작업에서 실행합니다. (#2207)
+
 ## 변경
 
 - request의 수락과 reply 완료를 구분해, 수락 후 응답을 기다리지 않고 후속 작업을 진행할 수 있게 했습니다. Join과 deferred 작업의 완료도 Actor FIFO 순서로 전달합니다. (#2069, #2040, #2119)

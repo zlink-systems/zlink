@@ -4,6 +4,10 @@
 
 Framework 0.30.2 uses C++ binding 1.20.0 and Core 1.20.0.
 
+## Compatibility changes
+
+- The `is_ready` value of the host's own RouteMesh is `true` only while the host is `serving`. Version 0.30.1 read it from the Location Store row, so it could be `true` while hosted services were still starting. Hosted services must finish starting before the host becomes `serving`, so a `start()` that waits for its own mesh to become ready never lets startup finish. Run the readiness check in separate work that `start()` does not wait for. (#2207)
+
 ## Changes
 
 - Request admission is distinct from reply completion, so callers can continue after acceptance without waiting for a reply. Join and deferred work completion is also delivered in Actor FIFO order. (#2069, #2040, #2119)
