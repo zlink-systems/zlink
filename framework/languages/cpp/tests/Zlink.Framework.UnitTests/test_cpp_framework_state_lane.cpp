@@ -143,7 +143,6 @@ TEST (ZLinkStateLaneDeathTest, CleanupContinuationReleasesWorkerForPendingLaneAn
 {
     // A failed self-wait cannot unwind the executor. Isolate it so the bounded
     // observation reports a failure without joining the blocked worker.
-    ::testing::FLAGS_gtest_death_test_style = "threadsafe";
     ASSERT_EXIT (
       ([] {
           using namespace zlink::framework;
@@ -407,7 +406,7 @@ zlink::framework::task_t<int> wrap_completion_task (zlink::framework::task_t<int
     co_return co_await task;
 }
 
-class stopped_completion_executor_t final : public offload_executor_t
+class drain_only_executor_t final : public offload_executor_t
 {
   public:
     bool try_submit_internal (std::function<void ()> work) override
@@ -499,44 +498,46 @@ TEST (ZLinkStateLane, TaskReturningTurnPreservesInnerAndInvocationFailureFacets)
     }
 }
 
-TEST (ZLinkStateLane, TaskReturningQueuedTurnKeepsShutdownCompletionOutsideTheLane)
+TEST (ZLinkStateLane, TaskReturningQueuedTurnDeliversWithoutResubmittingToLaneExecutor)
 {
     using namespace zlink::framework;
     using namespace zlink::framework::runtime;
     configure_handler_coroutine_executor (1);
     install_host_context_hooks ();
-    stopped_completion_executor_t executor;
+    drain_only_executor_t executor;
     state_lane_t lane (executor);
     ASSERT_TRUE (lane.try_post ([] {}));
     auto pending = lane.run_task ([] { return task_t<int> (result_t<int>::success (42)); });
     auto caller = wrap_completion_task (std::move (pending));
-    bool resumed_inside_lane = false;
-    detail::observe_task_terminal (
-      caller, [&] (const auto &) { resumed_inside_lane = state_lane_t::current () != nullptr; });
+    std::promise<bool> resumed_inside_lane;
+    detail::observe_task_terminal (caller, [&] (const auto &) {
+        resumed_inside_lane.set_value (state_lane_t::current () != nullptr);
+    });
     executor.finish_accepted_drain ();
+    EXPECT_FALSE (resumed_inside_lane.get_future ().get ());
     shutdown_handler_coroutine_executor ();
-    EXPECT_FALSE (resumed_inside_lane);
-    EXPECT_EQ (framework_error_kind_t::shutting_down, caller.result ().error_kind ());
+    EXPECT_EQ (caller.result ().value (), 42);
 }
 
-TEST (ZLinkStateLane, RejectedCompletionDoesNotResumeCallerInsideTheLane)
+TEST (ZLinkStateLane, QueuedTurnDeliversWithoutResubmittingToLaneExecutor)
 {
     using namespace zlink::framework;
     using namespace zlink::framework::runtime;
     configure_handler_coroutine_executor (1);
     install_host_context_hooks ();
-    stopped_completion_executor_t executor;
+    drain_only_executor_t executor;
     state_lane_t lane (executor);
     ASSERT_TRUE (lane.try_post ([] {}));
     auto pending = lane.run_task ([] { return 42; });
     auto caller = wrap_completion_task (std::move (pending));
-    bool resumed_inside_lane = false;
-    detail::observe_task_terminal (
-      caller, [&] (const auto &) { resumed_inside_lane = state_lane_t::current () != nullptr; });
+    std::promise<bool> resumed_inside_lane;
+    detail::observe_task_terminal (caller, [&] (const auto &) {
+        resumed_inside_lane.set_value (state_lane_t::current () != nullptr);
+    });
     executor.finish_accepted_drain ();
+    EXPECT_FALSE (resumed_inside_lane.get_future ().get ());
     shutdown_handler_coroutine_executor ();
-    EXPECT_FALSE (resumed_inside_lane);
-    EXPECT_EQ (framework_error_kind_t::shutting_down, caller.result ().error_kind ());
+    EXPECT_EQ (caller.result ().value (), 42);
 }
 
 TEST (ZLinkStateLane, PendingResultOutsideLaneDoesNotWaitForAnotherExecutor)
@@ -568,8 +569,11 @@ TEST (ZLinkStateLane, PendingResultOutsideLaneDoesNotWaitForAnotherExecutor)
     }));
     lane_entered.get_future ().wait ();
     auto caller = wrap_completion_task (lane.run_task ([] { return 42; }));
+    std::promise<void> completed;
+    detail::observe_task_terminal (caller, [&] (const auto &) { completed.set_value (); });
     lane_release.set_value ();
     executor.drain ();
+    completed.get_future ().wait ();
     const auto ready = caller.result_for (std::chrono::milliseconds::zero ());
     host_pool.run ();
     ASSERT_TRUE (ready.has_value ());
@@ -707,6 +711,51 @@ TEST (ZLinkStateLane, StandaloneTaskCompletionAllowsLaneReentry)
     open_lane ();
     ASSERT_EQ (std::future_status::ready, result.wait_for (completion_timeout));
     EXPECT_EQ (42, result.get ());
+}
+
+TEST (ZLinkStateLane, QueuedCompletionReleasesTheOnlyWorkerBeforeDependentLaneWait)
+{
+    using namespace zlink::framework;
+    for (const bool asynchronous_work : {false, true}) {
+        offload_executor_t executor (1);
+        state_lane_t lane (executor);
+        std::promise<std::thread::id> entered;
+        std::promise<void> release;
+        auto released = release.get_future ().share ();
+        ASSERT_TRUE (lane.try_post ([&] {
+            entered.set_value (std::this_thread::get_id ());
+            released.wait ();
+        }));
+        const auto worker = entered.get_future ().get ();
+        auto pending = asynchronous_work
+                         ? lane.run_task ([] { return task_t<int> (result_t<int>::success (42)); })
+                         : lane.run_task ([] { return 42; });
+        std::promise<void> observed;
+        detail::observe_task_terminal (pending, [&] (const result_t<int> &result) {
+            const bool on_worker = std::this_thread::get_id () == worker;
+            EXPECT_FALSE (on_worker);
+            EXPECT_EQ (state_lane_t::current (), nullptr);
+            // RED reports the forbidden worker placement without entering a deadlock.
+            // GREEN exercises the same pending lane wait as the ZW-C2 continuation.
+            if (!on_worker) {
+                std::promise<void> nested_entered, nested_release;
+                auto nested_released = nested_release.get_future ().share ();
+                EXPECT_TRUE (lane.try_post ([&] {
+                    nested_entered.set_value ();
+                    nested_released.wait ();
+                }));
+                nested_entered.get_future ().wait ();
+                auto next = lane.run ([&] { return result.value (); });
+                EXPECT_EQ (next.wait_for (std::chrono::seconds::zero ()),
+                           std::future_status::timeout);
+                nested_release.set_value ();
+                EXPECT_EQ (next.get (), 42);
+            }
+            observed.set_value ();
+        });
+        release.set_value ();
+        observed.get_future ().wait ();
+    }
 }
 
 #ifdef ZLINK_FRAMEWORK_DEBUG_WAIT_GUARD
