@@ -149,10 +149,15 @@ class raw_stateful_dispatch_t
     try_claim (const object_ref_t &owner,
                std::function<void ()> *before_application_handler = nullptr,
                std::string *stable_type = nullptr);
-    task_t<std::pair<stateful_error_t, std::optional<stateful_delivery_t>>>
-    try_claim_async (object_ref_t owner,
-                     std::function<void ()> *before_application_handler = nullptr,
-                     std::string *stable_type = nullptr);
+    // The claim's outputs travel in its result, so a ready claim needs no caller frame.
+    struct owner_delivery_t
+    {
+        stateful_error_t error = stateful_error_t::none;
+        std::optional<stateful_delivery_t> delivery;
+        std::function<void ()> before_application_handler;
+        std::string stable_type;
+    };
+    task_t<owner_delivery_t> try_claim_async (object_ref_t owner);
     task_t<stateful_error_t> transfer_application_claim_async (object_ref_t owner,
                                                                std::uint64_t sequence);
     // taken receives the original when this admission takes it; its caller replies from
