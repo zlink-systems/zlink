@@ -371,3 +371,39 @@ test('default JSON encoding adds no unused custom-replacer context', async t => 
   assert.equal(encode(), control());
   assert.ok(actual <= expected, `${actual} strict allocations exceed ${expected} native allocations`);
 });
+
+test('custom JSON validation adds no carrier per property', async t => {
+  if (runAllocationTest(t)) return;
+  const json = require('../../packages/stream-wire/dist/internal/framework-json-v1');
+  const small = { body: 1 };
+  const large = Object.fromEntries(Array.from({ length: 32 }, (_, index) => [`p${index}`, index]));
+  const encode = value => json.stringifyFrameworkJsonV1(value, undefined, identityJsonValue);
+  for (let index = 0; index < 1000; index++) { encode(small); encode(large); }
+  const smallAllocations = await trackedCodecAllocations('/internal/framework-json-v1.js', () => encode(small));
+  const largeAllocations = await trackedCodecAllocations('/internal/framework-json-v1.js', () => encode(large));
+  const smaller = allocationTotal(smallAllocations);
+  const larger = allocationTotal(largeAllocations);
+  t.diagnostic(`1000 calls: one-property=${smaller}, 32-properties=${larger} objects`);
+  assert.equal(encode(large), JSON.stringify(large));
+  assert.ok(larger <= smaller, `${larger} allocations grow with properties from ${smaller}`);
+});
+
+test('custom JSON replacement preserves holder, key order and strict value validation', () => {
+  const json = require('../../packages/stream-wire/dist/internal/framework-json-v1');
+  const source = { finite: NaN, integer: 7n, bytes: Uint8Array.from([0, 255]) };
+  const keys = [];
+  const encoded = json.stringifyFrameworkJsonV1(source, undefined, function (key, value) {
+    keys.push(key);
+    if (key !== '') assert.equal(this, source);
+    return key === 'finite' ? 3 : value;
+  });
+  assert.deepEqual(keys, ['', 'finite', 'integer', 'bytes']);
+  assert.equal(encoded, '{"finite":3,"integer":"7","bytes":"AP8="}');
+  for (const invalid of [Infinity, new Date(0), { toJSON() { return 1; } }]) {
+    assert.throws(() => json.stringifyFrameworkJsonV1(0, undefined, () => invalid), TypeError);
+  }
+  assert.throws(() => json.stringifyFrameworkJsonV1(0, undefined, () => 1n << 64n), RangeError);
+  const failure = new Error('custom replacer failed');
+  assert.throws(() => json.stringifyFrameworkJsonV1(0, undefined, () => { throw failure; }),
+    error => error === failure);
+});

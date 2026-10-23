@@ -34,7 +34,7 @@ function stringifyWithReplacer(
 ): string {
   return JSON.stringify(value, function (key, item) {
     const transformed = replacer.call(this, key, item);
-    return frameworkJsonV1Replacer.call({ [key]: transformed }, key, transformed);
+    return frameworkJsonV1Value(transformed, transformed);
   });
 }
 
@@ -46,7 +46,10 @@ function frameworkJsonV1Replacer(
   key: string,
   item: unknown
 ): unknown {
-  const source = this[key];
+  return frameworkJsonV1Value(this[key], item);
+}
+
+function frameworkJsonV1Value(source: unknown, item: unknown): unknown {
   if (typeof source === 'number' && !Number.isFinite(source)) {
     throw new TypeError('framework-json-v1 only accepts finite JSON numbers.');
   }
