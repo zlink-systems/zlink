@@ -771,14 +771,14 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const pending = this.requireRuntime().requestToNode(
       String(targetRid),
       encodeMultipartApplicationFrame(parts),
-      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      options?.onAdmitted,
+      options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      options.onAdmitted,
       this.requestObserver,
       OperationKind.NodeRequest,
       options.requestEntry
     );
     const id = { high: 1n, low: pending.id };
-    if (options.requestEntry?.deadlineMs !== undefined) {
+    if (options.requestEntry.deadlineMs !== undefined) {
       this.scheduleMaintenance();
     }
     return id;
@@ -809,14 +809,14 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     const pending = this.requireRuntime().requestToChannel(
       channelName,
       encodeMultipartApplicationFrame(parts),
-      options?.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
-      options?.onAdmitted,
+      options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS,
+      options.onAdmitted,
       this.requestObserver,
       OperationKind.ChannelRequest,
       options.requestEntry
     );
     const id = { high: 1n, low: pending.id };
-    if (options.requestEntry?.deadlineMs !== undefined) {
+    if (options.requestEntry.deadlineMs !== undefined) {
       this.scheduleMaintenance();
     }
     return id;
@@ -1487,11 +1487,7 @@ export class ZLinkNodeRawMeshBackend implements ZLinkBackendMeshNode {
     source: ZLinkBackendActorRef,
     target: ZLinkBackendActorRef,
     parts: MessageLike | readonly MessageLike[],
-    options: {
-      readonly timeoutMs?: number;
-      readonly onAdmitted?: () => void;
-      readonly requestEntry: ZLinkRequestResult<any>;
-    }
+    options?: { readonly timeoutMs?: number; readonly onAdmitted?: () => void }
   ): MeshOperationId {
     return this.observeStateful(
       OperationKind.ActorRequest,
