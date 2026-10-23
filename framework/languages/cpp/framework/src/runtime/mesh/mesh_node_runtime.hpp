@@ -636,6 +636,8 @@ class mesh_node_runtime_t
                              host::pending_operation_t &operation_id,
                              std::chrono::milliseconds timeout,
                              task_t<std::optional<zlink::submit_result_t>> classification);
+    task_t<zlink::submit_result_t> send_to_unknown_node (zlink::routing_id_t target,
+                                                         std::vector<zlink::message_t> parts);
     void configure_relocation_metric_context (
       runtime::stateful::eligible_relocation_unit_t::canonical_wire_context_t &wire,
       runtime::stateful::object_kind_t kind,

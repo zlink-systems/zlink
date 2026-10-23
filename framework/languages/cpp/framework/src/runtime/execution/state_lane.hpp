@@ -244,26 +244,32 @@ class state_lane_t
             throw std::runtime_error ("state lane is closed");
         }
 
-        auto completion = std::make_shared<std::promise<stored_t>> ();
-        auto result = bridge_t::make_future (completion->get_future ());
-        auto invoke_work = [completion, work = std::forward<Work> (work)] () mutable {
-            try {
-                if constexpr (std::is_void_v<result_t>) {
-                    std::invoke (work);
-                    completion->set_value ();
-                } else {
-                    completion->set_value (bridge_t::store (std::invoke (work)));
-                }
-            }
-            catch (...) {
-                completion->set_exception (std::current_exception ());
-            }
-        };
-        if (schedule_drain (true, [&] { invoke_work (); }))
+        std::promise<stored_t> completion;
+        auto result = bridge_t::make_future (completion.get_future ());
+        auto invoke_work =
+          [work = std::forward<Work> (work)] (std::promise<stored_t> &completion) mutable {
+              try {
+                  if constexpr (std::is_void_v<result_t>) {
+                      std::invoke (work);
+                      completion.set_value ();
+                  } else {
+                      completion.set_value (bridge_t::store (std::invoke (work)));
+                  }
+              }
+              catch (...) {
+                  completion.set_exception (std::current_exception ());
+              }
+          };
+        if (schedule_drain (true, [&] { invoke_work (completion); }))
             return result;
-        if (!enqueue (std::move (invoke_work), [completion] (std::exception_ptr error) {
-                completion->set_exception (std::move (error));
-            })) {
+        auto pending_completion = std::make_shared<std::promise<stored_t>> (std::move (completion));
+        if (!enqueue (
+              [pending_completion, invoke_work = std::move (invoke_work)] () mutable {
+                  invoke_work (*pending_completion);
+              },
+              [pending_completion] (std::exception_ptr error) {
+                  pending_completion->set_exception (std::move (error));
+              })) {
             throw std::runtime_error ("state lane is closed");
         }
         schedule_drain (true);

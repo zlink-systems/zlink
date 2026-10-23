@@ -25,6 +25,7 @@
 #include <stdexcept>
 #include <string>
 #include <thread>
+#include <type_traits>
 #include <vector>
 
 #include <arpa/inet.h>
@@ -39,6 +40,26 @@
 
 namespace zlink_cpp_bench
 {
+
+inline constexpr int unlimited_request_window = 0;
+
+// Admission sequences requests; the pattern window bounds unfinished operations.
+template <typename T, typename AdmissionReady>
+inline bool can_submit_framework_task (std::chrono::steady_clock::time_point now,
+                                       std::chrono::steady_clock::time_point deadline,
+                                       size_t in_flight,
+                                       int window,
+                                       AdmissionReady admission_ready)
+{
+    const bool ready = [&] {
+        if constexpr (std::is_void_v<T>)
+            return true;
+        else
+            return admission_ready ();
+    }();
+    return now < deadline && ready
+           && (window == unlimited_request_window || in_flight < static_cast<size_t> (window));
+}
 
 // ---------------------------------------------------------------------------
 // clocks

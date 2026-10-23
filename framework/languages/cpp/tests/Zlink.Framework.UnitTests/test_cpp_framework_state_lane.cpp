@@ -127,9 +127,9 @@ TEST (ZLinkStateLane, UncontendedRunOnlyAllocatesItsReturnedFuture)
                    ::operator delete (allocation);
                }));
     const auto returned_future_allocations = count_allocations ([] {
-        auto completion = std::make_shared<std::promise<int>> ();
-        auto result = completion->get_future ();
-        completion->set_value (42);
+        std::promise<int> completion;
+        auto result = completion.get_future ();
+        completion.set_value (42);
         (void) result.get ();
     });
     int observed = 0;

@@ -105,50 +105,43 @@ bool can_wait_for_client_endpoint (const std::shared_ptr<channel_runtime_state_t
     if (!capability->discovery) {
         return false;
     }
-    return state->lane.run ([&] { return state->auto_connect_active; }).get ();
+    return state->lane.run_sync ([&] { return state->auto_connect_active; });
 }
 
 std::optional<channel_runtime_state_t::client_server_send_t>
 client_server_sender (const std::shared_ptr<channel_runtime_state_t> &state,
                       const std::string &channel_name)
 {
-    return state->lane
-      .run ([&] {
-          const auto found = state->client_server_senders.find (channel_name);
-          return found == state->client_server_senders.end ()
-                   ? std::nullopt
-                   : std::optional<channel_runtime_state_t::client_server_send_t> (found->second);
-      })
-      .get ();
+    return state->lane.run_sync ([&] {
+        const auto found = state->client_server_senders.find (channel_name);
+        return found == state->client_server_senders.end ()
+                 ? std::nullopt
+                 : std::optional<channel_runtime_state_t::client_server_send_t> (found->second);
+    });
 }
 
 std::optional<channel_runtime_state_t::client_server_request_t>
 client_server_requester (const std::shared_ptr<channel_runtime_state_t> &state,
                          const std::string &channel_name)
 {
-    return state->lane
-      .run ([&] {
-          const auto found = state->client_server_requesters.find (channel_name);
-          return found == state->client_server_requesters.end ()
-                   ? std::nullopt
-                   : std::optional<channel_runtime_state_t::client_server_request_t> (
-                       found->second);
-      })
-      .get ();
+    return state->lane.run_sync ([&] {
+        const auto found = state->client_server_requesters.find (channel_name);
+        return found == state->client_server_requesters.end ()
+                 ? std::nullopt
+                 : std::optional<channel_runtime_state_t::client_server_request_t> (found->second);
+    });
 }
 
 std::optional<channel_runtime_state_t::fanout_publish_t>
 fanout_publisher (const std::shared_ptr<channel_runtime_state_t> &state,
                   const std::string &channel_name)
 {
-    return state->lane
-      .run ([&] {
-          const auto found = state->fanout_publishers.find (channel_name);
-          return found == state->fanout_publishers.end ()
-                   ? std::nullopt
-                   : std::optional<channel_runtime_state_t::fanout_publish_t> (found->second);
-      })
-      .get ();
+    return state->lane.run_sync ([&] {
+        const auto found = state->fanout_publishers.find (channel_name);
+        return found == state->fanout_publishers.end ()
+                 ? std::nullopt
+                 : std::optional<channel_runtime_state_t::fanout_publish_t> (found->second);
+    });
 }
 
 bool channel_runtime_accepts_outbound_locked (const channel_runtime_state_t &state) noexcept
@@ -265,15 +258,13 @@ resolve_channel_wait_timeout (const std::shared_ptr<channel_runtime_state_t> &st
     if (timeout > std::chrono::milliseconds::zero ()) {
         return timeout;
     }
-    return state->lane
-      .run ([&] {
-          const auto found = state->channels.find (channel_name);
-          if (found != state->channels.end () && found->second.default_request_timeout) {
-              return *found->second.default_request_timeout;
-          }
-          return state->default_request_timeout;
-      })
-      .get ();
+    return state->lane.run_sync ([&] {
+        const auto found = state->channels.find (channel_name);
+        if (found != state->channels.end () && found->second.default_request_timeout) {
+            return *found->second.default_request_timeout;
+        }
+        return state->default_request_timeout;
+    });
 }
 
 std::function<channel_endpoint_snapshot_t ()>
@@ -281,14 +272,12 @@ make_client_endpoint_provider (std::shared_ptr<channel_runtime_state_t> state,
                                std::string channel_name)
 {
     return [state = std::move (state), channel_name = std::move (channel_name)] {
-        return state->lane
-          .run ([&] {
-              detail::channel_runtime_manager_t manager (state);
-              auto &bundle = manager.get_or_create_client_bundle (channel_name);
-              return channel_endpoint_snapshot_t{.endpoints = bundle.list_manual_connections (),
-                                                 .version = bundle.connection_version ()};
-          })
-          .get ();
+        return state->lane.run_sync ([&] {
+            detail::channel_runtime_manager_t manager (state);
+            auto &bundle = manager.get_or_create_client_bundle (channel_name);
+            return channel_endpoint_snapshot_t{.endpoints = bundle.list_manual_connections (),
+                                               .version = bundle.connection_version ()};
+        });
     };
 }
 
@@ -1062,24 +1051,21 @@ channel_outbound_exchange_t::submit_request (std::string channel_name,
                   framework_error_kind_t::internal_failure,
                   "channel message exceeds configured max message size");
             }
-            auto native_selection =
-              state->lane
-                .run ([&] {
-                    if (!channel_runtime_accepts_outbound_locked (*state)) {
-                        const auto error = detail::make_boundary_exception (
-                          channel_runtime_outbound_error_state_locked (*state),
-                          channel_runtime_outbound_error_message_locked (*state));
-                        return result_t<std::shared_ptr<channel_native_client_t>>::failure (
-                          error.kind (), error.what ());
-                    }
-                    auto &slot = state->native_clients[channel_name];
-                    if (!slot) {
-                        slot = std::make_shared<channel_native_client_t> (
-                          channel_name, *client, runtime, state->core_context);
-                    }
-                    return result_t<std::shared_ptr<channel_native_client_t>>::success (slot);
-                })
-                .get ();
+            auto native_selection = state->lane.run_sync ([&] {
+                if (!channel_runtime_accepts_outbound_locked (*state)) {
+                    const auto error = detail::make_boundary_exception (
+                      channel_runtime_outbound_error_state_locked (*state),
+                      channel_runtime_outbound_error_message_locked (*state));
+                    return result_t<std::shared_ptr<channel_native_client_t>>::failure (
+                      error.kind (), error.what ());
+                }
+                auto &slot = state->native_clients[channel_name];
+                if (!slot) {
+                    slot = std::make_shared<channel_native_client_t> (channel_name, *client,
+                                                                      runtime, state->core_context);
+                }
+                return result_t<std::shared_ptr<channel_native_client_t>>::success (slot);
+            });
             if (!native_selection) {
                 co_return native_selection.error () != nullptr
                   ? detail::result_access_t::failure<zlink::message_t> (*native_selection.error ())
@@ -1165,15 +1151,13 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application, detail::message_flow_tracer_t (state->dispatch).mode ());
     const auto call_packet_name = std::move (packet_name);
-    state->lane
-      .run ([&] {
-          if (!channel_runtime_accepts_outbound_locked (*state)) {
-              throw detail::make_boundary_exception (
-                channel_runtime_outbound_error_state_locked (*state),
-                channel_runtime_outbound_error_message_locked (*state));
-          }
-      })
-      .get ();
+    state->lane.run_sync ([&] {
+        if (!channel_runtime_accepts_outbound_locked (*state)) {
+            throw detail::make_boundary_exception (
+              channel_runtime_outbound_error_state_locked (*state),
+              channel_runtime_outbound_error_message_locked (*state));
+        }
+    });
     const auto *client = client_capability (*state, channel_name);
     if (client == nullptr || !client->enabled) {
         throw framework_exception_t (framework_error_kind_t::not_configured,
@@ -1233,22 +1217,19 @@ channel_outbound_exchange_t::submit_send (std::string channel_name,
                 throw framework_exception_t (framework_error_kind_t::internal_failure,
                                              "channel message exceeds configured max message size");
             }
-            auto native_client =
-              state->lane
-                .run ([&] {
-                    if (!channel_runtime_accepts_outbound_locked (*state)) {
-                        throw detail::make_boundary_exception (
-                          channel_runtime_outbound_error_state_locked (*state),
-                          channel_runtime_outbound_error_message_locked (*state));
-                    }
-                    auto &slot = state->native_clients[channel_name];
-                    if (!slot) {
-                        slot = std::make_shared<channel_native_client_t> (
-                          channel_name, *client, channel_runtime_t (state), state->core_context);
-                    }
-                    return slot;
-                })
-                .get ();
+            auto native_client = state->lane.run_sync ([&] {
+                if (!channel_runtime_accepts_outbound_locked (*state)) {
+                    throw detail::make_boundary_exception (
+                      channel_runtime_outbound_error_state_locked (*state),
+                      channel_runtime_outbound_error_message_locked (*state));
+                }
+                auto &slot = state->native_clients[channel_name];
+                if (!slot) {
+                    slot = std::make_shared<channel_native_client_t> (
+                      channel_name, *client, channel_runtime_t (state), state->core_context);
+                }
+                return slot;
+            });
             auto endpoints = make_client_endpoint_provider (state, channel_name);
             co_await native_client->send (parts, endpoints, call_packet_name,
                                           header.correlation_id.empty ()
@@ -1291,15 +1272,13 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
     auto submit_flow = runtime::flow_context_t::enter_current_or_create (
       flow_origin_t::application, detail::message_flow_tracer_t (state->dispatch).mode ());
     const auto call_packet_name = std::move (packet_name);
-    state->lane
-      .run ([&] {
-          if (!channel_runtime_accepts_outbound_locked (*state)) {
-              throw detail::make_boundary_exception (
-                channel_runtime_outbound_error_state_locked (*state),
-                channel_runtime_outbound_error_message_locked (*state));
-          }
-      })
-      .get ();
+    state->lane.run_sync ([&] {
+        if (!channel_runtime_accepts_outbound_locked (*state)) {
+            throw detail::make_boundary_exception (
+              channel_runtime_outbound_error_state_locked (*state),
+              channel_runtime_outbound_error_message_locked (*state));
+        }
+    });
     const auto *publisher = publisher_capability (*state, channel_name);
     if (!has_connection (publisher)) {
         throw framework_exception_t (framework_error_kind_t::unavailable,
@@ -1341,22 +1320,19 @@ channel_outbound_exchange_t::submit_publish (std::string channel_name,
                 throw framework_exception_t (framework_error_kind_t::internal_failure,
                                              "channel message exceeds configured max message size");
             }
-            auto native_publisher =
-              state->lane
-                .run ([&] {
-                    if (!channel_runtime_accepts_outbound_locked (*state)) {
-                        throw detail::make_boundary_exception (
-                          channel_runtime_outbound_error_state_locked (*state),
-                          channel_runtime_outbound_error_message_locked (*state));
-                    }
-                    const auto found = state->native_publishers.find (channel_name);
-                    if (found == state->native_publishers.end ()) {
-                        throw framework_exception_t (framework_error_kind_t::unavailable,
-                                                     "channel publisher has not started");
-                    }
-                    return found->second;
-                })
-                .get ();
+            auto native_publisher = state->lane.run_sync ([&] {
+                if (!channel_runtime_accepts_outbound_locked (*state)) {
+                    throw detail::make_boundary_exception (
+                      channel_runtime_outbound_error_state_locked (*state),
+                      channel_runtime_outbound_error_message_locked (*state));
+                }
+                const auto found = state->native_publishers.find (channel_name);
+                if (found == state->native_publishers.end ()) {
+                    throw framework_exception_t (framework_error_kind_t::unavailable,
+                                                 "channel publisher has not started");
+                }
+                return found->second;
+            });
             co_await native_publisher->publish (topic, parts);
         }
         catch (const framework_exception_t &) {

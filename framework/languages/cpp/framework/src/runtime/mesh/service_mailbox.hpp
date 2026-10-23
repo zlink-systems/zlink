@@ -104,7 +104,7 @@ struct service_mailbox_record_t
     std::optional<service_bound_session_source_t> bound_session_source;
     std::function<void ()> before_application_handler;
     std::shared_ptr<host::local_application_dispatch_t> application;
-    messaging::envelope_header_t envelope_header;
+    messaging::envelope_header_t envelope_header{.content_type = {}};
     service_mailbox_settlement_t transferred;
     // Read once by the publication owner before the mailbox accepts the record.
     std::optional<request_source_t> source_original = std::nullopt;
@@ -140,6 +140,10 @@ class service_mailbox_t
     bool has_application_dispatch () const;
     void begin_application_receive_turn ();
     void end_application_receive_turn ();
+    using application_ready_batch_t =
+      std::optional<std::pair<std::deque<std::string>, application_ready_t>>;
+    application_ready_batch_t take_application_receive_turn ();
+    static void notify_application_ready (application_ready_batch_t &ready);
     bool begin_application_drain (const std::string &owner);
     void end_application_drain (const std::string &owner);
 
@@ -290,6 +294,7 @@ class service_mailbox_t
     static bool settles_last (service_mailbox_claim_t &claim, std::size_t count) noexcept;
     static bool finish_locked (state_t &state, const service_mailbox_claim_t &claim);
     static void notify_application_ready_owned (const std::shared_ptr<state_t> &state);
+    static application_ready_batch_t take_application_ready_locked (state_t &state);
     std::shared_ptr<state_t> _state = std::make_shared<state_t> ();
 };
 

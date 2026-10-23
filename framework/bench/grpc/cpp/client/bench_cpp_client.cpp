@@ -176,7 +176,6 @@ struct counters_t
 class driver_t
 {
   public:
-    static constexpr int unlimited_request_window = 0;
     virtual ~driver_t () = default;
     virtual int request_window () const = 0;
     std::function<void ()> boundary;
@@ -832,7 +831,7 @@ class framework_driver_t final : public driver_t
 
     framework_driver_t (const options_t &options, int window, bool command) :
         _options (options),
-        _window (command ? unlimited_request_window : window),
+        _window (window),
         _command (command),
         _host (std::vector<int>{}, bench_http_callback_t{})
     {
@@ -944,15 +943,9 @@ class framework_driver_t final : public driver_t
         auto completion_signal = std::make_shared<completion_signal_t> ();
         const auto hard_stop = deadline + std::chrono::milliseconds (_options.drain_bound_ms);
         const auto can_submit = [&] (clock_t_::time_point now) {
-            const bool admission_ready = [&] {
-                if constexpr (std::is_void_v<T>)
-                    return in_flight == 0;
-                else
-                    return !preceding_admission || preceding_admission->await_ready ();
-            }();
-            return now < deadline && admission_ready
-                   && (_window == unlimited_request_window
-                       || in_flight < static_cast<size_t> (_window));
+            return can_submit_framework_task<T> (
+              now, deadline, in_flight, _window,
+              [&] { return !preceding_admission || preceding_admission->await_ready (); });
         };
         do {
             close_window (deadline);
@@ -1048,7 +1041,7 @@ int pattern_window (const std::string &pattern)
     if (pattern == "request-window")
         return 100;
     if (pattern == "request-backpressure")
-        return 0;
+        return unlimited_request_window;
     if (pattern == "send-saturation")
         return 8;
     throw std::runtime_error ("unknown pattern: " + pattern);

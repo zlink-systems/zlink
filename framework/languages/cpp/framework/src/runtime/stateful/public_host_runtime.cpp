@@ -2975,12 +2975,10 @@ public_host_runtime_t::resolve_spot_route_fence (zlink::routing_id_t target_node
 {
     spot_route_fence_resolver_t resolver;
     std::shared_ptr<zlink::framework::location_repository_t> store;
-    _lifecycle_configuration_lane
-      .run ([&] {
-          resolver = _spot_route_fence_resolver;
-          store = _user_spot_store;
-      })
-      .get ();
+    _lifecycle_configuration_lane.run_sync ([&] {
+        resolver = _spot_route_fence_resolver;
+        store = _user_spot_store;
+    });
     if (resolver) {
         auto resolved = co_await await_result (
           resolver (target_node_rid, target_spot_id, target_spot_generation));
@@ -5989,30 +5987,21 @@ task_t<std::size_t> public_host_runtime_t::dispatch_user_spot_operations (
     bound_session_operations_t bound_session_operations;
     std::function<void (const protocol::session_relocation_route_t &)>
       late_session_route_update_reporter;
-    // The configured operations are read only when an infrastructure record
-    // needs them; a rotation without one takes no configuration turn.
-    bool configuration_loaded = false;
-    const auto load_configuration = [&] {
-        if (configuration_loaded)
-            return;
-        configuration_loaded = true;
-        _lifecycle_configuration_lane
-          .run ([&] {
-              store = _user_spot_store;
-              materializer = _user_spot_materializer;
-              user_spot_closer = _user_spot_closer;
-              actor_create_target = _actor_create_target;
-              actor_join_target = _actor_join_target;
-              session_route_owner_resolver = _session_route_owner_resolver;
-              message_follow_handler = _message_follow_handler;
-              bound_session_operations = _bound_session_operations;
-              late_session_route_update_reporter = _late_session_route_update_reporter;
-          })
-          .get ();
-    };
+    _lifecycle_configuration_lane
+      .run ([&] {
+          store = _user_spot_store;
+          materializer = _user_spot_materializer;
+          user_spot_closer = _user_spot_closer;
+          actor_create_target = _actor_create_target;
+          actor_join_target = _actor_join_target;
+          session_route_owner_resolver = _session_route_owner_resolver;
+          message_follow_handler = _message_follow_handler;
+          bound_session_operations = _bound_session_operations;
+          late_session_route_update_reporter = _late_session_route_update_reporter;
+      })
+      .get ();
     std::size_t count = 0;
     do {
-        load_configuration ();
         for (std::size_t index = 0; index < claim->claimed_messages; ++index) {
             auto original = _transport->mailbox ().take ({claim, index});
             if (!original)
@@ -7203,7 +7192,7 @@ bool public_host_runtime_t::dispatch_bound_session_send (
         || mailbox_record.source_node_generation != record.actor.target_node_generation)
         return false;
     bound_session_operations_t operations;
-    _lifecycle_configuration_lane.run ([&] { operations = _bound_session_operations; }).get ();
+    _lifecycle_configuration_lane.run_sync ([&] { operations = _bound_session_operations; });
     if (!operations.capture_send && !operations.send)
         return false;
     const auto application = protocol::decode_application_payload (
@@ -8131,17 +8120,14 @@ public_host_runtime_t::dispatch_application_claim (
                     record.source_session_sequence =
                       mailbox_record.bound_session_source->session_sequence;
                 }
-                const auto actor_type = _spot_actor_index_lane
-                                          .run ([&] {
-                                              std::string actor_type;
-                                              const auto found =
-                                                _actors.find (actor.target.actor_id);
-                                              if (found != _actors.end ()) {
-                                                  actor_type = found->second.first;
-                                              }
-                                              return actor_type;
-                                          })
-                                          .get ();
+                const auto actor_type = _spot_actor_index_lane.run_sync ([&] {
+                    std::string actor_type;
+                    const auto found = _actors.find (actor.target.actor_id);
+                    if (found != _actors.end ()) {
+                        actor_type = found->second.first;
+                    }
+                    return actor_type;
+                });
                 owner.actor = ::zlink::framework::detail::actor_ref_access_t::make (
                   node_rid_t::from_string (status ().routing_id ().to_string ()),
                   std::move (actor_type), actor.target.actor_id, actor.target.object_generation);

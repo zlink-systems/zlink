@@ -50,7 +50,8 @@ envelope_header_t client_call_codec_t::create_envelope (message_kind_t kind,
                                                         std::string message_name,
                                                         std::chrono::milliseconds timeout,
                                                         std::optional<std::string> topic,
-                                                        std::optional<std::string> source) const
+                                                        std::optional<std::string> source,
+                                                        std::string content_type) const
 {
     // One prvalue: a named local could be moved on return (no NRVO), and a
     // moved std::map allocates a new head node in MSVC's STL.
@@ -58,6 +59,7 @@ envelope_header_t client_call_codec_t::create_envelope (message_kind_t kind,
       .kind = kind,
       .channel_name = std::move (channel_name),
       .message_name = std::move (message_name),
+      .content_type = std::move (content_type),
       .correlation_id = kind == message_kind_t::request ? next_correlation_id () : std::string{},
       .deadline = timeout.count () > 0 ? std::optional<std::string>{format_utc_deadline (
                                            std::chrono::system_clock::now () + timeout)}

@@ -34,7 +34,7 @@ void route_channel_runtime_t::routing_id (zlink::routing_id_t routing_id)
 
 std::optional<zlink::routing_id_t> route_channel_runtime_t::routing_id () const
 {
-    return _lane.run ([&, this] { return _routing_id; }).get ();
+    return _lane.run_sync ([&, this] { return _routing_id; });
 }
 
 void route_channel_runtime_t::default_request_timeout (std::chrono::milliseconds timeout)
@@ -66,7 +66,7 @@ void route_channel_runtime_t::stop ()
 
 bool route_channel_runtime_t::running () const
 {
-    return _lane.run ([&, this] { return _running; }).get ();
+    return _lane.run_sync ([&, this] { return _running; });
 }
 
 bool route_channel_runtime_t::connect (std::string endpoint)
@@ -462,34 +462,30 @@ route_channel_runtime_t::wait_until_peer_ready (const zlink::routing_id_t &targe
       framework_error_kind_t::unavailable,
       "route channel peer '" + target_node_rid.to_string () + "' is not ready");
     for (;;) {
-        auto observed =
-          _lane
-            .run ([&, this] () -> std::optional<result_t<void>> {
-                const auto targets = _connections.targets ();
-                if (!_running) {
-                    return last;
-                }
-                const bool has_ready_peer =
-                  _ready_peer_rids.contains (target_node_rid.to_string ());
-                if (has_ready_peer) {
-                    return result_t<void>::success ();
-                }
-                const bool has_explicit_peer = std::any_of (
-                  targets.begin (), targets.end (), [&target_node_rid] (const auto &target) {
-                      return target.peer_rid && *target.peer_rid == target_node_rid;
-                  });
-                const bool target_is_self = _routing_id && *_routing_id == target_node_rid;
-                const bool has_unknown_remote_endpoint =
-                  std::any_of (targets.begin (), targets.end (), [this] (const auto &target) {
-                      return !target.peer_rid && target.endpoint != _bind_endpoint;
-                  });
-                if (!has_explicit_peer
-                    && (_bind_endpoint.empty () || target_is_self || has_unknown_remote_endpoint)) {
-                    return result_t<void>::success ();
-                }
-                return std::nullopt;
-            })
-            .get ();
+        auto observed = _lane.run_sync ([&, this] () -> std::optional<result_t<void>> {
+            const auto targets = _connections.targets ();
+            if (!_running) {
+                return last;
+            }
+            const bool has_ready_peer = _ready_peer_rids.contains (target_node_rid.to_string ());
+            if (has_ready_peer) {
+                return result_t<void>::success ();
+            }
+            const bool has_explicit_peer = std::any_of (
+              targets.begin (), targets.end (), [&target_node_rid] (const auto &target) {
+                  return target.peer_rid && *target.peer_rid == target_node_rid;
+              });
+            const bool target_is_self = _routing_id && *_routing_id == target_node_rid;
+            const bool has_unknown_remote_endpoint =
+              std::any_of (targets.begin (), targets.end (), [this] (const auto &target) {
+                  return !target.peer_rid && target.endpoint != _bind_endpoint;
+              });
+            if (!has_explicit_peer
+                && (_bind_endpoint.empty () || target_is_self || has_unknown_remote_endpoint)) {
+                return result_t<void>::success ();
+            }
+            return std::nullopt;
+        });
         if (observed)
             return std::move (*observed);
         if (timeout <= std::chrono::milliseconds::zero ()
@@ -509,18 +505,16 @@ route_channel_runtime_t::wait_until_connected (std::chrono::milliseconds timeout
     result_t<void> last = result_t<void>::failure (framework_error_kind_t::unavailable,
                                                    "route channel is not connected");
     for (;;) {
-        auto observed = _lane
-                          .run ([&, this] () -> std::optional<result_t<void>> {
-                              last = ensure_connected ();
-                              if (!_running) {
-                                  return last;
-                              }
-                              if (last) {
-                                  return last;
-                              }
-                              return std::nullopt;
-                          })
-                          .get ();
+        auto observed = _lane.run_sync ([&, this] () -> std::optional<result_t<void>> {
+            last = ensure_connected ();
+            if (!_running) {
+                return last;
+            }
+            if (last) {
+                return last;
+            }
+            return std::nullopt;
+        });
         if (observed)
             return std::move (*observed);
         if (timeout <= std::chrono::milliseconds::zero ()
