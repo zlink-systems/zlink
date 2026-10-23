@@ -120,7 +120,8 @@ public final class ZLinkTypedSendReceiveCostTest {
                     targetObjects = 0,
                     callerBytes = 0,
                     callerObjects = 0,
-                    instanceOwners = 0;
+                    instanceOwners = 0,
+                    planCallbacks = 0;
             var classes = new TreeMap<String, Long>();
             try (var events = new RecordingFile(path)) {
                 while (events.hasMoreEvents()) {
@@ -135,7 +136,8 @@ public final class ZLinkTypedSendReceiveCostTest {
                             targetPath = false,
                             baselineSend = false,
                             baselineReceive = false,
-                            address = false;
+                            address = false,
+                            planLookup = false;
                     for (var frame : e.getStackTrace().getFrames()) {
                         String owner = frame.getMethod().getType().getName();
                         String method = frame.getMethod().getName();
@@ -151,6 +153,9 @@ public final class ZLinkTypedSendReceiveCostTest {
                         decode |=
                                 owner.endsWith(".ZLinkChannelEnvelope")
                                         && method.equals("decodeDispatchHeader");
+                        planLookup |=
+                                owner.endsWith(".ZLinkSpringHandlerFactory")
+                                        && method.equals("handlerPlan");
                         activation |=
                                 owner.endsWith(".ZLinkSpringHandlerFactory$SpringActivation")
                                         && method.equals("create");
@@ -182,6 +187,10 @@ public final class ZLinkTypedSendReceiveCostTest {
                     if (targetPath && type.endsWith(".ZLinkSpringHandlerFactory$SpringActivation"))
                         activations++;
                     if (targetPath && type.endsWith(".ZLinkHandlerInstanceOwner")) instanceOwners++;
+                    if (planLookup
+                            && type.startsWith(
+                                    ZLinkSpringHandlerFactory.class.getName() + "$$Lambda"))
+                        planCallbacks++;
                     if (targetPath) {
                         targetObjects++;
                         targetBytes += e.getLong("allocationSize");
@@ -244,6 +253,9 @@ public final class ZLinkTypedSendReceiveCostTest {
                     0,
                     instanceOwners,
                     "a single unfiltered handler needs only its activation scope");
+            System.out.printf("springPlanCallbacks=%d%n", planCallbacks);
+            assertEquals(
+                    0, planCallbacks, "registration-time factory is already the plan callback");
             assertEquals(SENDS, headers, "one header decode per accepted send");
             assertEquals(SENDS, encoders, "one codec writer per payload");
             assertEquals(SENDS, messages, "one owned codec Message per payload");

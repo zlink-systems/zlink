@@ -81,9 +81,14 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
 
     @Override
     public void prepare(Class<?> handlerType) {
-        ZLinkHandlerActivator.super.prepare(handlerType);
+        HandlerPlan plan = handlerPlan(handlerType);
+        for (ConstructorPlan constructor : plan.constructors()) {
+            for (ParameterPlan parameter : constructor.parameters()) {
+                preparedShortcut(parameter)
+                        .ifPresent(shortcut -> parameter.shortcut().compareAndSet(null, shortcut));
+            }
+        }
         if (isZLinkManagedType(handlerType)) {
-            HandlerPlan plan = handlerPlan(handlerType);
             RuntimeException failure = null;
             for (ConstructorPlan constructor : plan.constructors()) {
                 try {
@@ -450,18 +455,7 @@ final class ZLinkSpringHandlerFactory implements ZLinkHandlerActivator {
     }
 
     private HandlerPlan handlerPlan(Class<?> handlerType) {
-        return handlerPlans.computeIfAbsent(handlerType, this::createHandlerPlan);
-    }
-
-    private HandlerPlan createHandlerPlan(Class<?> handlerType) {
-        HandlerPlan plan = HandlerPlan.create(handlerType);
-        for (ConstructorPlan constructor : plan.constructors()) {
-            for (ParameterPlan parameter : constructor.parameters()) {
-                preparedShortcut(parameter)
-                        .ifPresent(shortcut -> parameter.shortcut().compareAndSet(null, shortcut));
-            }
-        }
-        return plan;
+        return handlerPlans.computeIfAbsent(handlerType, HandlerPlan::create);
     }
 
     private Optional<String> preparedShortcut(ParameterPlan parameter) {
